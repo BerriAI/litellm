@@ -936,7 +936,7 @@ def init_verbose_loggers():
             verbose_proxy_logger.setLevel(level=logging.DEBUG)  # set proxy logs to debug
         elif debug is False and detailed_debug is False:
             # users can control proxy debugging using env variable = 'LITELLM_LOG'
-            litellm_log_setting: Final = os.environ.get("LITELLM_LOG", "")
+            litellm_log_setting: Final = os.environ.get("LITELLM_LOG", "").strip()
             if litellm_log_setting is not None:
                 if litellm_log_setting.upper() == "INFO":
                     import logging

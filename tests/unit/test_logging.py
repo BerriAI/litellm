@@ -36,6 +36,7 @@ from litellm._logging import (
     _stdout_truncation_marker,
     print_startup_message,
     print_startup_warning,
+    resolve_log_level,
     turn_on_json,
     format_base64_size,
     session_id_var,
@@ -62,6 +63,29 @@ class CacheHitCustomLogger(CustomLogger):
         standard_logging_payload = kwargs.get("standard_logging_object", None)
         if standard_logging_payload:
             self.logged_standard_logging_payloads.append(standard_logging_payload)
+
+
+@pytest.mark.parametrize(
+    ("configured_level", "expected_level"),
+    [
+        ("DEBUG ", logging.DEBUG),
+        (" info", logging.INFO),
+        ("\twArNiNg\n", logging.WARNING),
+        (" ERROR ", logging.ERROR),
+        (" CRITICAL ", logging.CRITICAL),
+        (" NOTSET ", logging.NOTSET),
+        (" WARN ", logging.WARNING),
+        (" FATAL ", logging.CRITICAL),
+    ],
+)
+def test_resolve_log_level_accepts_surrounding_whitespace(configured_level: str, expected_level: int) -> None:
+    assert resolve_log_level(configured_level) == expected_level
+
+
+@pytest.mark.parametrize("configured_level", ["", "   ", " DE BUG ", " invalid ", " 10 "])
+def test_resolve_log_level_rejects_invalid_levels(configured_level: str) -> None:
+    with pytest.raises(AttributeError):
+        resolve_log_level(configured_level)
 
 
 def test_json_mode_emits_one_record_per_logger(capfd):
@@ -94,7 +118,7 @@ def test_json_mode_emits_one_record_per_logger(capfd):
 
 @pytest.mark.parametrize(
     ("litellm_log", "want_info_lines"),
-    [("INFO", 2), ("DEBUG", 2), (None, 0)],
+    [("INFO", 2), ("DEBUG", 2), ("DEBUG ", 2), ("\tinfo\n", 2), (None, 0)],
 )
 def test_json_mode_root_logger_honours_litellm_log(monkeypatch, capfd, litellm_log, want_info_lines):
     root: Final = logging.getLogger()
@@ -1664,24 +1688,34 @@ def test_uvicorn_access_logger_redacts_a_credential_it_is_handed():
     assert "REDACTED" in emitted
 
 
-def test_access_redaction_survives_the_uvicorn_json_log_config():
+@pytest.mark.parametrize(
+    ("configured_level", "expected_level"),
+    [("DEBUG", logging.DEBUG), ("DEBUG ", logging.DEBUG), ("\tinfo\n", logging.INFO)],
+)
+def test_access_redaction_survives_the_uvicorn_json_log_config(
+    monkeypatch: pytest.MonkeyPatch, configured_level: str, expected_level: int
+) -> None:
     """litellm hands uvicorn a dictConfig when json_logs is on. dictConfig clears a
     logger's handlers but not its filters, so redaction has to still be attached."""
     import logging.config
 
-    names = ("uvicorn", "uvicorn.error", "uvicorn.access")
-    saved = tuple((logging.getLogger(n), logging.getLogger(n).handlers[:], logging.getLogger(n).level) for n in names)
+    monkeypatch.setattr("litellm._logging.log_level", configured_level)
+    names: Final = ("uvicorn", "uvicorn.error", "uvicorn.access")
+    loggers: Final = tuple(logging.getLogger(name) for name in names)
+    saved: Final = tuple((lg, tuple(lg.handlers), lg.level, lg.propagate, lg.disabled) for lg in loggers)
     try:
         logging.config.dictConfig(_get_uvicorn_json_log_config())
+        assert tuple(lg.level for lg in loggers) == (expected_level,) * len(loggers)
         emitted = _emit_access_line(f"/key/info?key={_LEAKED_KEY}")
 
         assert _LEAKED_KEY not in emitted
         assert "REDACTED" in emitted
     finally:
-        for lg, handlers, level in saved:
+        for lg, handlers, level, propagate, disabled in saved:
             lg.handlers[:] = handlers
             lg.setLevel(level)
-            lg.propagate = True
+            lg.propagate = propagate
+            lg.disabled = disabled
 
 
 _DISABLED_ACCESS_LOG_PATHS_RAW = " /health/liveliness , ,/metrics/"
