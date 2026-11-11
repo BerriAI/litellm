@@ -775,8 +775,8 @@ class ResetBudgetJob:
         """The window each tier closes, which its end-user resets stamp. A tier
         with no reset time gets one pinned before any page commits, so the retry
         after a failed window advance reads back the same window. A pin later
-        than ours means another sweep already advanced the tier, so the tier is
-        left out and this sweep resets nothing for it."""
+        than ours means another sweep already pinned or advanced the tier, so
+        the tier is left out and this sweep resets nothing for it."""
         pin_at: Final = now.replace(microsecond=now.microsecond - now.microsecond % 1000)
         unset: Final = tuple(
             b.budget_id for b in budgets_to_reset if b.budget_id is not None and b.budget_reset_at is None
@@ -864,7 +864,9 @@ class ResetBudgetJob:
             {
                 b.budget_id: cap
                 for b in budgets_to_reset
-                if b.budget_id is not None and (cap := _rollover_cap(b.max_budget)) is not None
+                if b.budget_id is not None
+                and b.budget_id in windows
+                and (cap := _rollover_cap(b.max_budget)) is not None
             }
             if _rollover_enabled()
             else {}

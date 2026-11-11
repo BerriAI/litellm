@@ -1,7 +1,7 @@
 import asyncio
+import itertools
 import json
 import sys
-import itertools
 import types
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime, timedelta, timezone
@@ -159,11 +159,11 @@ class _PinningBudgetTable:
     def __init__(self):
         self.pinned_at: datetime | None = None
 
-    async def update_many(self, where: Dict[str, Any], data: Dict[str, Any]) -> int:
+    async def update_many(self, where: dict[str, Any], data: dict[str, Any]) -> int:
         self.pinned_at = data["budget_reset_at"]
         return len(where["budget_id"]["in"])
 
-    async def find_many(self, where: Dict[str, Any]) -> List[Any]:
+    async def find_many(self, where: dict[str, Any]) -> list[Any]:
         return [
             types.SimpleNamespace(budget_id=budget_id, budget_reset_at=self.pinned_at)
             for budget_id in where["budget_id"]["in"]
@@ -3695,6 +3695,7 @@ class _EndUserLedger:
         self,
         budgets: dict[str, tuple[float | None, datetime | None]],
         endusers: dict[str, tuple[str, float, datetime | None]],
+        orgs: dict[str, tuple[str, float]] | None = None,
     ):
         self.budgets = {
             budget_id: types.SimpleNamespace(
@@ -3708,6 +3709,10 @@ class _EndUserLedger:
         self.rows: dict[str, dict[str, _Cell]] = {
             user_id: {"user_id": user_id, "budget_id": budget_id, "spend": spend, "spend_reset_window": stamp}
             for user_id, (budget_id, spend, stamp) in endusers.items()
+        }
+        self.orgs: dict[str, dict[str, _Cell]] = {
+            org_id: {"organization_id": org_id, "budget_id": budget_id, "spend": spend}
+            for org_id, (budget_id, spend) in (orgs or {}).items()
         }
         self.fail_commit: int | None = None
         self.commits = 0
@@ -3740,6 +3745,9 @@ class _EndUserLedger:
 
     def spend(self) -> dict[str, _Cell]:
         return {user_id: row["spend"] for user_id, row in self.rows.items()}
+
+    def org_spend(self) -> dict[str, _Cell]:
+        return {org_id: row["spend"] for org_id, row in self.orgs.items()}
 
     def window_ends(self) -> dict[str, datetime | None]:
         return {budget_id: budget.budget_reset_at for budget_id, budget in self.budgets.items()}
@@ -3796,9 +3804,10 @@ class _EndUserLedger:
             self.budgets[call["where"]["budget_id"]].budget_reset_at = call["data"]["budget_reset_at"]
             self.advances += 1
             return
-        if call["table"] != "enduser":
+        rows = {"enduser": self.rows, "org": self.orgs}.get(call["table"])
+        if rows is None:
             return
-        for row in self.rows.values():
+        for row in rows.values():
             if not _row_matches(row, call["where"]):
                 continue
             for column, value in call["data"].items():
@@ -3921,23 +3930,30 @@ def test_a_sweep_that_read_an_unset_reset_time_resets_in_the_window_another_swee
 def test_a_sweep_that_read_an_unset_reset_time_leaves_a_tier_another_sweep_already_advanced(
     rollover_enabled, ticking_reset_clock, monkeypatch
 ):
-    """The late pod must not reset the tier again or stamp the advanced
-    reset time, which would skip the end user when that next window closes."""
+    """The late pod must not reset the tier's end users or orgs again, even
+    while it still sweeps another tier, nor stamp the advanced reset time,
+    which would skip the end user when that next window closes."""
     _make_counter_invalidation_job(monkeypatch)
-    ledger: Final = _EndUserLedger(budgets={"capped": (10.0, None)}, endusers={"over-cap": ("capped", 15.0, None)})
+    ledger: Final = _EndUserLedger(
+        budgets={"other-tier": (10.0, _OTHER_TIER_WINDOW), "capped": (10.0, None)},
+        endusers={"over-cap": ("capped", 15.0, None)},
+        orgs={"org-over-cap": ("capped", 15.0)},
+    )
     read_before_the_pin: Final = [types.SimpleNamespace(**vars(budget)) for budget in ledger.budgets.values()]
     job: Final = ResetBudgetJob(proxy_logging_obj=MockProxyLogging(), prisma_client=ledger.client)
     asyncio.run(job.reset_budget_for_litellm_budget_table())
     next_window: Final = ledger.budgets["capped"].budget_reset_at
+    assert ledger.org_spend() == {"org-over-cap": 5.0}
 
     ledger.stale_due_budgets = read_before_the_pin
     asyncio.run(job.reset_budget_for_litellm_budget_table())
-    assert ledger.advances == 1
     assert ledger.spend() == {"over-cap": 5.0}
+    assert ledger.org_spend() == {"org-over-cap": 5.0}
+    assert ledger.budgets["capped"].budget_reset_at == next_window
 
     ledger.add_spend("over-cap", 17.0)
     ledger.stale_due_budgets = [
-        types.SimpleNamespace(**{**vars(read_before_the_pin[0]), "budget_reset_at": next_window})
+        types.SimpleNamespace(**{**vars(ledger.budgets["capped"]), "budget_reset_at": next_window})
     ]
     asyncio.run(job.reset_budget_for_litellm_budget_table())
     assert ledger.spend() == {"over-cap": 12.0}
