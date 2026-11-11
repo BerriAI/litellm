@@ -39,6 +39,9 @@ class FakeBatch:
         self.litellm_projecttable = FakeBatchTable("litellm_projecttable", self.calls)
         self.litellm_endusertable = FakeBatchTable("litellm_endusertable", self.calls)
 
+    def execute_raw(self, query: str, *args: object) -> None:
+        self.calls.append(("execute_raw", {"query": query}, {"args": args}))
+
     async def commit(self) -> None:
         self.commit_count += 1
 
