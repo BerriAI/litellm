@@ -16,8 +16,7 @@ To report a security vulnerability, please submit a report through our vulnerabi
 
 These reports are submitted to HackerOne and are triaged there, though no account is needed.
 
-_Please do not submit vulnerabilities as draft GHSAs.
-Vulnerability disclosure via GHSA submissions after November 10 will be closed._
+**Please do not submit vulnerabilities as draft GHSAs. As of 2026-11-11 these will be closed.**
 
 ### Vulnerability Categories
 
