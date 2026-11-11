@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Final
 
@@ -253,6 +254,42 @@ def test_short_prompt_reserves_the_deployments_billed_input_minimum(deployment_m
     billed_tokens: Final = built_in_minimum if deployment_minimum is None else max(prompt_tokens, deployment_minimum)
     assert reserved is not None
     assert math.isclose(reserved, billed_tokens * input_cost_per_token)
+
+
+@pytest.mark.parametrize("reserve", [estimate_request_input_cost, estimate_request_max_cost])
+def test_a_minimum_past_a_cheaper_tier_reserves_at_the_short_prompts_tier(
+    reserve: Callable[..., float | None],
+) -> None:
+    short_prompt_rate: Final = 1e-03
+    long_prompt_rate: Final = 1e-09
+    minimum: Final = 600
+    router: Final = Router(
+        model_list=[
+            Deployment(
+                model_name="tiered-minimum-group",
+                litellm_params=LiteLLM_Params(model="dashscope/qwen3-max", api_key="sk-fake"),
+                model_info=ModelInfo(
+                    id="tiered-minimum-deployment",
+                    max_output_tokens=1,
+                    min_billed_input_tokens=minimum,
+                    tiered_pricing=[
+                        {"input_cost_per_token": short_prompt_rate, "output_cost_per_token": 0.0, "range": [0, 500]},
+                        {"input_cost_per_token": long_prompt_rate, "output_cost_per_token": 0.0, "range": [500, 128000]},
+                    ],
+                ),
+            ).model_dump()
+        ]
+    )
+
+    reserved: Final = reserve(
+        request_body={"model": "tiered-minimum-group", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1},
+        route="/chat/completions",
+        llm_router=router,
+        input_token_counts={"tiered-minimum-group": 12},
+    )
+
+    assert reserved is not None
+    assert reserved >= minimum * short_prompt_rate
 
 
 @pytest.mark.parametrize("sibling_minimum", [0, None])

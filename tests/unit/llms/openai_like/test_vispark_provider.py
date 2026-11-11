@@ -227,6 +227,36 @@ def test_vispark_keeps_a_schema_property_named_additional_properties():
     }
 
 
+def test_vispark_keeps_additional_properties_keys_inside_schema_literals():
+    literal: Final = {"additionalProperties": {"color": "red"}}
+    settings: Final = {
+        "type": "object",
+        "properties": {"additionalProperties": {"type": "object"}},
+        "default": literal,
+        "enum": [literal],
+        "examples": [literal],
+    }
+    flag: Final = {"const": {"additionalProperties": True}}
+    schema: Final = {
+        "type": "object",
+        "properties": {"settings": {**settings, "additionalProperties": False}, "flag": flag},
+        "additionalProperties": False,
+    }
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://api.lab.vispark.in/v1/chat/completions").respond(
+            200, json=_CHAT_COMPLETION
+        )
+        litellm.completion(
+            model="vispark/vision-medium",
+            messages=[{"role": "user", "content": "Describe the settings as JSON"}],
+            response_format={"type": "json_schema", "json_schema": {"name": "Settings", "schema": schema}},
+            api_key="vispark-test-key",
+        )
+
+    sent_schema: Final = json.loads(route.calls.last.request.content)["response_format"]["json_schema"]["schema"]
+    assert sent_schema == {"type": "object", "properties": {"settings": settings, "flag": flag}}
+
+
 def _file_id_messages() -> list[dict[str, object]]:
     return [
         {

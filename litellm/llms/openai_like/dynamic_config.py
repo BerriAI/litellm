@@ -30,6 +30,7 @@ from .json_loader import SimpleProviderConfig
 _JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _REQUESTED_PARAMS_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _SCHEMA_MAP_KEYWORDS: Final = frozenset({"properties", "patternProperties", "$defs", "definitions", "dependentSchemas"})
+_SCHEMA_LITERAL_KEYWORDS: Final = frozenset({"const", "default", "enum", "examples"})
 
 if TYPE_CHECKING:
     from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
@@ -100,10 +101,20 @@ def _without_additional_properties(
     if not isinstance(node, dict):
         return node
     return {
-        key: _without_additional_properties(item, keep, not is_schema_map and key in _SCHEMA_MAP_KEYWORDS)
+        key: _schema_child_without_additional_properties(key, item, keep, is_schema_map)
         for key, item in node.items()
         if is_schema_map or key != "additionalProperties" or keep(item)
     }
+
+
+def _schema_child_without_additional_properties(
+    key: str, item: JsonValue, keep: Callable[[JsonValue], bool], parent_is_schema_map: bool
+) -> JsonValue:
+    if parent_is_schema_map:
+        return _without_additional_properties(item, keep)
+    if key in _SCHEMA_LITERAL_KEYWORDS:
+        return item
+    return _without_additional_properties(item, keep, key in _SCHEMA_MAP_KEYWORDS)
 
 
 def _response_format_without_additional_properties(

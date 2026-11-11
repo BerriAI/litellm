@@ -20,6 +20,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
+from litellm.litellm_core_utils.llm_cost_calc.utils import billed_input_token_minimum
 from litellm.proxy._types import (
     Litellm_EntityType,
     LiteLLM_TeamMembership,
@@ -1402,15 +1403,16 @@ def _input_cost_for_cost_info(
     )
     if estimated_input_tokens is None:
         return None
+    billed_input_tokens: Final = _billed_input_tokens(estimated_input_tokens, model_info)
     tiered_pricing: Final = model_info.get("tiered_pricing")
     if isinstance(tiered_pricing, list) and tiered_pricing:
         tier: Final = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=estimated_input_tokens)
         if tier is not None:
-            return estimated_input_tokens * tier_rate(tier, "input_cost_per_token")
+            return billed_input_tokens * tier_rate(tier, "input_cost_per_token")
     input_cost_per_token: Final = _to_float(model_info.get("input_cost_per_token"))
     if input_cost_per_token is None:
         return None
-    return estimated_input_tokens * input_cost_per_token
+    return billed_input_tokens * input_cost_per_token
 
 
 def _estimate_request_max_cost_for_model(
@@ -1463,6 +1465,7 @@ def _max_cost_for_cost_info(
     if estimated_input_tokens is None or output_tokens is None:
         return None
 
+    billed_input_tokens: Final = _billed_input_tokens(estimated_input_tokens, model_info)
     output_multiplier: Final = _get_output_multiplier(request_body=request_body)
     tiered_pricing: Final = model_info.get("tiered_pricing")
     if isinstance(tiered_pricing, list) and tiered_pricing:
@@ -1472,7 +1475,7 @@ def _max_cost_for_cost_info(
                 tier_rate(tier, "output_cost_per_token"),
                 tier_rate(tier, "output_cost_per_reasoning_token"),
             )
-            return (estimated_input_tokens * tier_rate(tier, "input_cost_per_token")) + (
+            return (billed_input_tokens * tier_rate(tier, "input_cost_per_token")) + (
                 output_tokens * output_multiplier * output_rate
             )
 
@@ -1481,8 +1484,8 @@ def _max_cost_for_cost_info(
     output_cost_per_reasoning_token: Final = _to_float(model_info.get("output_cost_per_reasoning_token"))
     cost = 0.0
     if input_cost_per_token is not None:
-        cost += estimated_input_tokens * input_cost_per_token
-    elif estimated_input_tokens > 0:
+        cost += billed_input_tokens * input_cost_per_token
+    elif billed_input_tokens > 0:
         return None
 
     # The reasoning-token share is unknown before the request runs, so reserve every
@@ -1572,9 +1575,7 @@ def _get_model_cost_infos(
             exc_info=True,
         )
         return []
-    billing_minimums: Final = tuple(
-        _to_int(deployment_info.get("min_billed_input_tokens")) or 0 for deployment_info in deployment_infos
-    )
+    billing_minimums: Final = tuple(billed_input_token_minimum(deployment_info) for deployment_info in deployment_infos)
     base: Final = (
         {**group_info, "min_billed_input_tokens": group_billing_minimum(billing_minimums)}
         if any(billing_minimums)
@@ -1683,10 +1684,11 @@ def _estimate_input_tokens(
         if input_tokens is not None
         else count_input_tokens_for_model(request_body=request_body, model=model)
     )
-    estimated: Final = counted if counted is not None else _to_int(model_info.get("max_input_tokens"))
-    if estimated is None:
-        return None
-    return max(estimated, _to_int(model_info.get("min_billed_input_tokens")) or 0)
+    return counted if counted is not None else _to_int(model_info.get("max_input_tokens"))
+
+
+def _billed_input_tokens(estimated_input_tokens: int, model_info: Mapping[str, object]) -> int:
+    return max(estimated_input_tokens, billed_input_token_minimum(model_info))
 
 
 DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK: Final = 16384
