@@ -35,6 +35,7 @@ from litellm.proxy.vector_store_files_endpoints.endpoints import (
     _with_managed_file_list_ids,
     _with_provider_file_id_cursors,
 )
+from litellm.router_rust.invoke.endpoints import PINNED_DEPLOYMENT_KEY
 from litellm.types.utils import CredentialItem, SpecialEnums
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 from litellm.types.vector_store_files import (
@@ -1173,13 +1174,13 @@ async def test_a_team_model_routing_hint_from_another_team_is_rejected(team_id: 
 
 
 @pytest.mark.parametrize(
-    "team_id, key_models, api_key",
-    [("team-a", [], "team-a-key"), ("team-b", [], None), ("team-a", ["other-model"], None)],
+    "team_id, key_models, pinned_deployment_id",
+    [("team-a", [], "team-a-deployment"), ("team-b", [], None), ("team-a", ["other-model"], None)],
     ids=["caller-team", "other-team", "key-not-granted-the-model"],
 )
 @pytest.mark.asyncio
-async def test_a_managed_file_on_a_team_model_routes_with_the_caller_team_credentials(
-    team_id: str, key_models: list[str], api_key: str | None
+async def test_a_managed_file_on_a_team_model_routes_to_the_caller_team_deployment(
+    team_id: str, key_models: list[str], pinned_deployment_id: str | None
 ):
     managed_file_id: Final = _unified_file_id(target_model_name="team-gpt")
 
@@ -1193,7 +1194,11 @@ async def test_a_managed_file_on_a_team_model_routes_with_the_caller_team_creden
             llm_router=_team_a_router(),
         )
 
-    assert (data["file_id"], data.get("api_key")) == (RAW_FILE_ID, api_key)
+    assert (data["file_id"], data.get("api_key"), data.get(PINNED_DEPLOYMENT_KEY)) == (
+        RAW_FILE_ID,
+        None,
+        pinned_deployment_id,
+    )
 
 
 @pytest.mark.parametrize("store_check_status, routed_file_id", [(200, RAW_FILE_ID), (404, "file-team-copy")])
@@ -1219,3 +1224,48 @@ async def test_a_managed_file_on_a_team_model_keeps_the_upload_copy_its_store_ho
 
     assert store_check.calls.last.request.headers["Authorization"] == "Bearer team-a-key"
     assert data["file_id"] == routed_file_id
+
+
+@pytest.mark.asyncio
+async def test_a_managed_file_whose_deployment_was_re_added_on_the_team_routes_through_the_team_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _SuccessRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    caller: Final = UserAPIKeyAuth(api_key="sk-test", user_id="caller-user", team_id="team-b")
+    router: Final = litellm.Router(
+        model_list=[
+            dict(_gpt_4o_mini_deployment("team-b-readded", "https://team-b-readded.example/v1", 1, "team-b")),
+        ]
+    )
+    managed_file_id: Final = _unified_file_id()
+
+    data, _ = await _update_request_data_with_managed_file_id(
+        data={"vector_store_id": "vs-test", "file_id": managed_file_id},
+        file_id=managed_file_id,
+        request=MagicMock(headers={}, query_params={}),
+        user_api_key_dict=caller,
+        managed_files_obj=ManagedResourceAccessCheckerStub(file_access="allow"),
+        llm_router=router,
+    )
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.get(
+            f"https://team-b-readded.example/v1/vector_stores/vs-test/files/{RAW_FILE_ID}"
+        ).mock(return_value=httpx.Response(200, json=dict(_vector_store_file_row(RAW_FILE_ID))))
+        await (
+            await route_request(
+                {**data, "custom_llm_provider": "openai", "metadata": {"user_api_key_team_id": caller.team_id}},
+                router,
+                None,
+                "avector_store_file_retrieve",
+                user_api_key_dict=caller,
+            )
+        )
+        await asyncio.wait_for(recorder.logged.wait(), timeout=10)
+
+    assert upstream.calls.last.request.headers["Authorization"] == "Bearer team-b-readded-key"
+    logged: Final = recorder.standard_logging_objects[-1]
+    assert isinstance(logged, dict), logged
+    assert (logged["model_group"], logged["model_id"]) == ("gpt-4o-mini", "team-b-readded")
+    assert "api_key" not in data

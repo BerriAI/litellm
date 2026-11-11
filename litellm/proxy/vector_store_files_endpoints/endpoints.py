@@ -223,6 +223,15 @@ def _public_model_name_reaching(llm_router: "Router", deployment: Deployment, te
     return public_model_name if deployment.model_info.id in reachable_ids else None
 
 
+def _caller_team_deployment_id(
+    llm_router: Optional["Router"], model_name: str | None, team_id: str | None
+) -> str | None:
+    if llm_router is None or model_name is None or team_id is None:
+        return None
+    deployment: Final = llm_router.registry().credentials(model_name, form="deployment", team_id=team_id)
+    return deployment.model_info.id if deployment is not None and deployment.model_info.team_id == team_id else None
+
+
 async def _update_request_data_with_managed_file_id(
     data: dict,
     file_id: str,
@@ -347,7 +356,12 @@ async def _update_request_data_with_managed_file_id(
                     llm_router,
                 )
             )
-            routing_deployment_id: Final = team_copy.deployment_id if team_copy is not None else upload_deployment_id
+            routing_deployment_id: Final = (
+                team_copy.deployment_id
+                if team_copy is not None
+                else upload_deployment_id
+                or _caller_team_deployment_id(llm_router, upload_routing_model, user_api_key_dict.team_id)
+            )
             routing_deployment: Final = (
                 llm_router.registry().credentials(routing_deployment_id, form="deployment")
                 if llm_router and routing_deployment_id
