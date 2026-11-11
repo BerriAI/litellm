@@ -34,6 +34,7 @@ from litellm.llms.vertex_ai.common_utils import (
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.router import BaselineRouteStamp
 from litellm.types.utils import StandardCallbackDynamicParams
+from litellm.types.vector_stores import RETRIEVAL_QUERY_PARAMS
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
@@ -464,7 +465,7 @@ def _redact_responses_api_output_dict(output_items: Sequence[object], redacted_s
     return [_redacted_responses_api_output_item(item, redacted_str) for item in output_items]
 
 
-_REDACTED_REQUEST_FIELDS: Final = ("instructions", "query_image", "retrievalQuery")
+_REDACTED_REQUEST_FIELDS: Final = ("instructions", "query_image", *RETRIEVAL_QUERY_PARAMS)
 _NESTED_REQUEST_FIELDS: Final = ("extra_body", "additional_args", "complete_input_dict")
 
 

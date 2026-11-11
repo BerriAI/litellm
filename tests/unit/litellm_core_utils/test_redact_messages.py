@@ -2041,6 +2041,18 @@ def test_redaction_removes_a_query_image_sent_inside_extra_body() -> None:
     assert SECRET not in json.dumps(details, default=str)
 
 
+@pytest.mark.parametrize("retrieval_query_param", ["retrievalQuery", "retrieval_query"])
+def test_redaction_removes_a_raw_retrieval_query_sent_inside_extra_body(retrieval_query_param: str) -> None:
+    retrieval_query: Final = {"type": "IMAGE", "image": {"format": "jpeg", "inlineContent": SECRET}}
+    details: Final[dict[str, object]] = {
+        "litellm_params": {"proxy_server_request": {"body": {"extra_body": {retrieval_query_param: retrieval_query}}}},
+    }
+
+    perform_redaction(details, result=None)
+
+    assert SECRET not in json.dumps(details, default=str)
+
+
 def test_redaction_removes_the_image_from_the_provider_request_copy() -> None:
     retrieval_query: Final = {"type": "IMAGE", "image": {"format": "jpeg", "inlineContent": SECRET}}
     details: Final[dict[str, object]] = {

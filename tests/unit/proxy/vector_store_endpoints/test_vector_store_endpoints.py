@@ -16,6 +16,7 @@ from litellm.llms.base_llm.vector_store.transformation import (
     RouterVectorStoreEmbeddingExecutor,
 )
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
+from litellm.vector_stores.search_query import with_caller_query_params
 from litellm.proxy.vector_store_endpoints.endpoints import (
     _update_request_data_with_litellm_managed_vector_store_registry,
     build_request_data_from_managed_vector_store,
@@ -3169,6 +3170,17 @@ def test_a_raw_retrieval_query_in_a_stores_extra_body_never_reaches_the_search_r
     )
 
     assert request_data == {"custom_llm_provider": "bedrock", "extra_body": {"kept": "value"}}
+
+
+@pytest.mark.parametrize("caller_param", ["query_image", "retrievalQuery", "retrieval_query"])
+def test_a_callers_query_survives_a_stores_own_extra_body(caller_param: str):
+    caller_value: Final = {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}
+    request_data: Final = with_caller_query_params(
+        {"custom_llm_provider": "bedrock", "extra_body": {"retrievalConfiguration": "from the store"}},
+        {caller_param: caller_value, "retrievalConfiguration": "from the caller", "other": "from the caller"},
+    )
+
+    assert request_data["extra_body"] == {"retrievalConfiguration": "from the store", caller_param: caller_value}
 
 
 class TestConfigOwnedVectorStores:

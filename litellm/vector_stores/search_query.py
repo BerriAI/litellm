@@ -14,6 +14,7 @@ from litellm.types.vector_stores import RETRIEVAL_QUERY_PARAMS, VectorStoreSearc
 
 _QUERY_IMAGE: Final = TypeAdapter(VectorStoreSearchQueryImage)
 _Query: Final = TypeVar("_Query", bound=str | Sequence[str])
+_CALLER_QUERY_PARAMS: Final = ("query_image", *RETRIEVAL_QUERY_PARAMS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +113,15 @@ def store_search_params(litellm_params: Mapping[str, object]) -> Mapping[str, ob
             **({} if extra_body is None else {"extra_body": _without_retrieval_query(extra_body)}),
         }
     )
+
+
+def with_caller_query_params(request: Mapping[str, object], caller_extra_body: object) -> Mapping[str, object]:
+    caller: Final = as_str_mapping(caller_extra_body)
+    store: Final = as_str_mapping(request.get("extra_body"))
+    if caller is None or store is None:
+        return request
+    query_params: Final = {key: caller[key] for key in _CALLER_QUERY_PARAMS if key in caller}
+    return {**request, "extra_body": {**store, **query_params}}
 
 
 def resolve_search_query(

@@ -498,11 +498,15 @@ def test_vector_store_ids_to_run_reads_every_store_id_a_malformed_vector_store_i
 
 
 @pytest.mark.parametrize(
-    ("tool_field", "tool_value"),
-    [("query_image", {"type": "base64", "media_type": "image/jpeg", "data": "/9j/"}), ("rewrite_query", True)],
+    ("tool_field", "tool_value", "searched_params"),
+    [
+        ("query_image", {"type": "base64", "media_type": "image/jpeg", "data": "/9j/"}, {"max_num_results": 3}),
+        ("rewrite_query", True, {"max_num_results": 3, "rewrite_query": True}),
+        ("rewrite_query", False, {"max_num_results": 3, "rewrite_query": False}),
+    ],
 )
-def test_file_search_tool_with_a_field_the_store_search_does_not_take_still_runs_its_store(
-    tool_field: str, tool_value: object
+def test_file_search_tool_passes_its_store_only_the_fields_a_store_search_takes(
+    tool_field: str, tool_value: object, searched_params: dict[str, object]
 ) -> None:
     now: Final = datetime.now(timezone.utc)
     registry: Final = VectorStoreRegistry(
@@ -513,7 +517,7 @@ def test_file_search_tool_with_a_field_the_store_search_does_not_take_still_runs
     to_run: Final = registry.pop_vector_stores_to_run(non_default_params={}, tools=tools)
 
     assert [store["vector_store_id"] for store in to_run] == ["vs_kb"]
-    assert to_run[0]["litellm_params"] == {"max_num_results": 3}
+    assert to_run[0]["litellm_params"] == searched_params
 
 
 @pytest.mark.parametrize(

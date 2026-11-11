@@ -36,7 +36,7 @@ from litellm.proxy.vector_store_endpoints.utils import (
 from litellm.repositories.table_repositories import ManagedVectorStoreIndexRepository
 from litellm.types.utils import LlmProviders
 from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse
-from litellm.vector_stores.search_query import store_search_params
+from litellm.vector_stores.search_query import store_search_params, with_caller_query_params
 from litellm.vector_stores.utils import VectorStoreWriteBody, callers_metadata_snapshot
 from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
 
@@ -188,8 +188,13 @@ async def vector_store_search(
     caller_body: Final = JSON_OBJECT_ADAPTER.validate_python(data)
 
     # Check for legacy vector store registry (non-managed vector stores)
-    data = await _update_request_data_with_litellm_managed_vector_store_registry(
-        data=data, vector_store_id=vector_store_id, user_api_key_dict=user_api_key_dict
+    data = dict(  # rebind-ok: pre-existing rebinding of the request body
+        with_caller_query_params(
+            await _update_request_data_with_litellm_managed_vector_store_registry(
+                data=data, vector_store_id=vector_store_id, user_api_key_dict=user_api_key_dict
+            ),
+            caller_body.get("extra_body"),
+        )
     )
     reject_caller_opensearch_index_name(
         caller_body=caller_body,
