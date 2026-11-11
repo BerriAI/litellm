@@ -790,9 +790,15 @@ impl Core {
         if !skip_order {
             // A routing group's members, with a priority group's priorities as their order.
             let listing_team = request.listing_team_id.as_deref();
-            let mut orders: Vec<i64> = group_members(snapshot, order_group, listing_team)
-                .iter()
+            let members: Vec<_> = group_members(snapshot, order_group, listing_team)
+                .into_iter()
                 .filter(|d| d.listed_for_team(listing_team))
+                .collect();
+            let batch_levels_only =
+                request.batch_create && members.iter().any(|d| d.is_batch_capable());
+            let mut orders: Vec<i64> = members
+                .iter()
+                .filter(|d| !batch_levels_only || !d.cannot_run_batches())
                 .filter_map(|d| d.order())
                 .collect();
             orders.sort_unstable();
@@ -1037,8 +1043,13 @@ impl Core {
                 self.log_retry(target, at, 0, &failed.error);
             }
             let named = failure.failed_deployment_id.as_ref();
-            if let (Some(status), Some(id)) =
-                (failure.status, named.or(failed.deployment_id.as_ref()))
+            let failed_on = named.or(failed.deployment_id.as_ref());
+            if let Some(id) = failed_on
+                && !inputs.failed_ids.contains(id)
+            {
+                inputs.failed_ids.push(id.clone());
+            }
+            if let (Some(status), Some(id)) = (failure.status, failed_on)
                 && !should_retry_status(status)
                 && !inputs.skipped_ids.contains(id)
             {

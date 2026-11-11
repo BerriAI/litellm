@@ -26,7 +26,7 @@ import litellm
 from litellm.constants import AWS_SIGNING_MAX_THREADS
 from litellm.cost_calculator import get_response_cost_from_hidden_params
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded, refetch_model_cost_map
+from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded, install_model_cost_map
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.azure_ai.common_utils import get_azure_ai_auth_headers
 from litellm.llms.bedrock.base_aws_llm import AWS_SIGNING_EXECUTOR
@@ -3963,13 +3963,8 @@ CatalogLoader: TypeAlias = Callable[[Mapping[str, Mapping[str, object]]], Awaita
 def load_catalog_with(monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None) -> Iterator[CatalogLoader]:
     async def load(rows: Mapping[str, Mapping[str, object]]) -> None:
         catalog: Final = {**litellm.get_model_cost_map(url=""), **rows}
-        transport: Final = httpx.MockTransport(lambda _: httpx.Response(200, json=catalog))
-        monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP")
-        async with httpx.AsyncClient(transport=transport) as client:
-            loaded: Final = await refetch_model_cost_map(url="https://catalog.example/prices.json", client=client)
-        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-        assert isinstance(loaded, ModelCostMapReloaded)
-        monkeypatch.setattr(litellm, "model_cost", loaded.model_cost_map)
+        monkeypatch.setattr(litellm, "model_cost", litellm.model_cost)
+        assert isinstance(install_model_cost_map(json.dumps(catalog).encode()), ModelCostMapReloaded)
         litellm.get_model_info.cache_clear()
 
     yield load

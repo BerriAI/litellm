@@ -222,6 +222,7 @@ async def test_tier_pin_joins_pending_reads_without_reusing_request_state(mode: 
     )
     client: Final = Redis(connection_pool=pool)
     client_key: Final = redis._get_async_client_cache_key()
+    litellm.in_memory_llm_clients_cache.flush_cache()
     litellm.in_memory_llm_clients_cache.set_cache(key=client_key, value=client)
     cache: Final = DualCache(redis_cache=redis)
     key: Final = redis.check_and_fix_namespace("pin")

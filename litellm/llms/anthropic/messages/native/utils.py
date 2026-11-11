@@ -1,3 +1,4 @@
+import json
 from collections.abc import Iterable, Mapping, Sequence
 from functools import lru_cache
 from typing import TYPE_CHECKING, Final, cast, get_type_hints
@@ -13,7 +14,10 @@ from litellm.llms.anthropic.common_utils import (
 )
 from litellm.llms.anthropic.messages.utils import is_reasoning_auto_summary_enabled
 from litellm.types.llms.anthropic import (
+    MESSAGE_THREAD_NOT_FOUND_ERROR_CODE,
+    MESSAGE_THREAD_UNSUPPORTED_ERROR_CODE,
     AnthropicMessagesRequestOptionalParams,
+    AnthropicMessageThread,
     AnthropicStopDetails,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
@@ -279,6 +283,39 @@ def prepare_native_messages(
     )
 
 
+_THREAD_ADAPTER: Final = TypeAdapter(AnthropicMessageThread)
+
+
+def continues_message_thread(thread: object) -> bool:
+    """True when ``thread`` is a well-formed ``{"type": "continue", ...}`` body field."""
+    try:
+        return _THREAD_ADAPTER.validate_python(thread)["type"] == "continue"
+    except ValidationError:
+        return False
+
+
+def continued_message_id(thread: object) -> str | None:
+    try:
+        validated: Final = _THREAD_ADAPTER.validate_python(thread)
+    except ValidationError:
+        return None
+    return validated.get("previous_message_id") if validated["type"] == "continue" else None
+
+
+def _message_thread_error_body(error_type: str, error_code: str, message: str) -> str:
+    return json.dumps(
+        {"type": "error", "error": {"type": error_type, "message": message, "details": {"error_code": error_code}}}
+    )
+
+
+def message_thread_not_found_body(message: str) -> str:
+    return _message_thread_error_body("not_found_error", MESSAGE_THREAD_NOT_FOUND_ERROR_CODE, message)
+
+
+def message_thread_unsupported_body(message: str) -> str:
+    return _message_thread_error_body("invalid_request_error", MESSAGE_THREAD_UNSUPPORTED_ERROR_CODE, message)
+
+
 @lru_cache(maxsize=1)
 def anthropic_messages_optional_param_keys() -> frozenset[str]:
     """
@@ -299,6 +336,7 @@ class AnthropicMessagesRequestUtils:
         model: str | None = None,
         drop_params: bool = False,
         custom_llm_provider: str | None = None,
+        additional_drop_params: Iterable[str] = (),
     ) -> AnthropicMessagesRequestOptionalParams:
         """
         Filter parameters to only include those defined in AnthropicMessagesRequestOptionalParams.
@@ -308,11 +346,13 @@ class AnthropicMessagesRequestUtils:
             model: Resolved model id; when set, unsupported params may be dropped
             drop_params: Per-request drop_params flag (also respects litellm.drop_params)
             custom_llm_provider: Routed provider; fast mode is gated to direct Anthropic
+            additional_drop_params: Paths the deployment drops. A listed top-level key is left out
+                before the unsupported-param checks run, so it never raises
 
         Returns:
             AnthropicMessagesRequestOptionalParams instance with only the valid parameters
         """
-        valid_keys: Final = anthropic_messages_optional_param_keys()
+        valid_keys: Final = anthropic_messages_optional_param_keys().difference(additional_drop_params)
         filtered_params: Final = {k: v for k, v in params.items() if k in valid_keys and v is not None}
         if model is not None:
             from litellm.llms.anthropic.chat.transformation import AnthropicConfig

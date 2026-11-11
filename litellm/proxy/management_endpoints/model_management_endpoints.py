@@ -295,7 +295,9 @@ class _TxModelTables(Protocol):
 
 @runtime_checkable
 class _TransactionFactory(Protocol):
-    def __call__(self, *, timeout: datetime.timedelta = ...) -> AbstractAsyncContextManager[_TxModelTables]: ...
+    def __call__(
+        self, *, timeout: datetime.timedelta = ..., max_wait: datetime.timedelta = ...
+    ) -> AbstractAsyncContextManager[_TxModelTables]: ...
 
 
 class _ModelTransactionClient(LiteLLMBaseModel):
@@ -2449,7 +2451,8 @@ async def delete_team_models(
     """
     deleted_model_ids: Final[list[str]] = []
     transaction_client: Final = _ModelTransactionClient.model_validate(prisma_client.db)
-    async with transaction_client.tx(timeout=datetime.timedelta(seconds=TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS)) as tx:
+    tx_budget: Final = datetime.timedelta(seconds=TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS)
+    async with transaction_client.tx(max_wait=tx_budget, timeout=tx_budget) as tx:
         for team_id in team_ids:
             rows = await _get_team_deployments(team_id, prisma_client, table=tx.litellm_proxymodeltable)
             model_ids = [row.model_id for row in rows]
@@ -4043,8 +4046,8 @@ async def clear_cache() -> ReconcileOutcome:
     raise_if_reload_degraded_serving.
 
     Runs under DB_RECONCILE_LOCK for its whole extent, not just the reload at the
-    end, so the auto-router reset and the reload that rebuilds those routers are atomic
-    to any other reconcile. The inner call is _add_deployment_locked because
+    end, so concurrent model writes cannot interleave their reconciles.
+    The inner call is _add_deployment_locked because
     add_deployment would re-acquire the same non-reentrant lock and deadlock.
     """
     from litellm.proxy.proxy_server import (
@@ -4062,74 +4065,21 @@ async def clear_cache() -> ReconcileOutcome:
 
     async with DB_RECONCILE_LOCK:
         try:
-            # Only clear DB models, preserve config models
-            verbose_proxy_logger.debug("Clearing only DB models, preserving config models")
+            verbose_proxy_logger.debug("Reconciling DB models, preserving config models")
 
             # Get current models and filter out DB models
             current_models: Final = llm_router.registry().all().copy()
             config_models: Final = []
             db_model_ids: Final = []
 
-            db_router_names: Final = set()
-
             for model in as_object_list(current_models) or ():
                 deployment = decoded_json_object(model)
                 model_info = decoded_json_object(deployment.get("model_info", {}))
                 if model_info.get("db_model", False):
                     db_model_ids.append(model_info.get("id"))
-                    # Auto-router deployments (and only those) are wiped here, in the
-                    # same pass, so the reload rebuilds them -- see the comment below.
-                    deployment_name = deployment.get("model_name")
-                    if isinstance(deployment_name, str) and str(
-                        decoded_json_object(deployment.get("litellm_params", {})).get("model", "")
-                    ).startswith("auto_router/"):
-                        db_router_names.add(deployment_name)
-                        router_model_id = model_info.get("id")
-                        if isinstance(router_model_id, str):
-                            llm_router.apply(ChangeSet(delete=[router_model_id]))
                 else:
                     # This is a config model, preserved by the reconcile below
                     config_models.append(model)
-
-            # ORDINARY db deployments are deliberately NOT wiped. This used to
-            # delete_deployment() every db model before the reload put them back, which
-            # left the router serving ZERO db models for the whole width of the reload
-            # -- a real data-plane hole that every inference request landing in it fell
-            # into. It was also redundant for them: the reload's _delete_deployment
-            # evicts exactly the ids the db no longer lists, and upsert_deployment
-            # pops-and-re-adds a deployment whose params changed while no-opping one
-            # that did not, so the reconcile converges on its own. Every mutation is
-            # visible to that comparison -- `blocked` and (for premium) `updated_at`
-            # are written into model_info.
-            #
-            # AUTO-ROUTER db deployments are the exception and ARE wiped -- in the
-            # classification pass above, together with the strategy entries popped
-            # just below. Their strategy registries are keyed
-            # by model_name, which no deployment-id reconcile touches, so they have to
-            # be popped and rebuilt here. But the rebuild only happens on the ADD path:
-            # Router.upsert_deployment returns early when a deployment is unchanged and
-            # never reaches add_deployment -> _add_deployment ->
-            # init_auto_router_deployment, which is what repopulates the registries.
-            # Popping without deleting would therefore strip every db-backed auto,
-            # complexity, adaptive and quality router on this pod and never put it back,
-            # so ANY unrelated model write would leave them unroutable until a restart.
-            # Deleting the deployment forces upsert down the add path, which rebuilds
-            # both the deployment and its strategy entry.
-            #
-            # That pass restricts the wipe to deployments whose model is actually an
-            # auto_router/* so a config router that merely shares a model_name with a
-            # regular db model isn't evicted -- config routers are never re-added by the
-            # reload (it only reloads db models) and would be permanently unroutable.
-            # The auto_router/ prefix also covers quality_router/ and adaptive_router/,
-            # so pop the name from every registry (no-op where absent); a missing
-            # quality/adaptive entry would otherwise make init raise "already exists"
-            # on reload and abort it.
-            for model_name in db_router_names:
-                llm_router.registry().plugins("auto").pop(model_name, None)
-                llm_router.registry().plugins("complexity").pop(model_name, None)
-                llm_router.registry().plugins("adaptive").pop(model_name, None)
-                llm_router.registry().plugins("quality").pop(model_name, None)
-                llm_router.registry().plugins("switchyard").pop(model_name, None)
 
             # Reload only DB models. _add_deployment_locked, not add_deployment: this
             # coroutine already holds DB_RECONCILE_LOCK and asyncio.Lock is not

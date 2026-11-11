@@ -15,6 +15,7 @@ from pydantic import (
     Field,
     Json,
     JsonValue,
+    NonNegativeInt,
     PositiveInt,
     TypeAdapter,
     field_validator,
@@ -712,6 +713,7 @@ class LiteLLMRoutes(enum.Enum):
             # model
             "/model/new",
             "/model/update",
+            "/model/{model_id}/update",
             "/model/delete",
             "/model/info",
             "/model/{model_id}/kubernetes_pods",
@@ -1826,6 +1828,14 @@ class BudgetNewRequest(LiteLLMPydanticObjectBase):
         default=None,
         description="Max budget for each model (e.g. {'gpt-4o': {'max_budget': '0.0000001', 'budget_duration': '1d', 'tpm_limit': 1000, 'rpm_limit': 1000}})",
     )
+    model_tpm_limit: Mapping[str, NonNegativeInt] | None = Field(
+        default=None,
+        description="Max tokens per minute per model for this budget id, shared by every key, team and customer on it (e.g. {'gpt-4o': 400000})",
+    )
+    model_rpm_limit: Mapping[str, NonNegativeInt] | None = Field(
+        default=None,
+        description="Max requests per minute per model for this budget id, shared by every key, team and customer on it (e.g. {'gpt-4o': 200})",
+    )
     budget_reset_at: datetime | None = Field(
         default=None,
         description="Datetime when the budget is reset",
@@ -1851,6 +1861,21 @@ class CustomerBase(LiteLLMPydanticObjectBase):
     blocked: bool = False
 
 
+def reject_unknown_customer_fields(request: type[BaseModel], values: object) -> object:
+    if not isinstance(values, dict):
+        return values
+    unknown: Final = tuple(sorted(str(key) for key in values if key not in request.model_fields))  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]  # raw request body
+    if not unknown:
+        return values
+    on_budget: Final = tuple(field for field in unknown if field in BudgetNewRequest.model_fields)
+    hint: Final = (
+        f" {', '.join(on_budget)}: these live on the customer's budget object, update it with /budget/update."
+        if on_budget
+        else ""
+    )
+    raise ValueError(f"Unknown fields: {', '.join(unknown)}.{hint}")
+
+
 class NewCustomerRequest(BudgetNewRequest):
     """
     Create a new customer, allocate a budget to them
@@ -1867,6 +1892,11 @@ class NewCustomerRequest(BudgetNewRequest):
     default_model: str | None = None  # if no equivalent model in allowed region - default all requests to this model
     models: list[str] | None = None
     object_permission: LiteLLM_ObjectPermissionBase | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_unknown_fields(cls, values: object) -> object:
+        return reject_unknown_customer_fields(cls, values)
 
     @model_validator(mode="before")
     @classmethod
@@ -1894,6 +1924,11 @@ class UpdateCustomerRequest(LiteLLMPydanticObjectBase):
     default_model: str | None = None  # if no equivalent model in allowed region - default all requests to this model
     models: list[str] | None = None
     object_permission: LiteLLM_ObjectPermissionBase | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_unknown_fields(cls, values: object) -> object:
+        return reject_unknown_customer_fields(cls, values)
 
 
 class DeleteCustomerRequest(LiteLLMPydanticObjectBase):
@@ -2101,6 +2136,11 @@ class BlockModelRequest(LiteLLMPydanticObjectBase):
     model_id: str  # required
 
 
+CALLBACK_VAR_NAMES: Final = frozenset(
+    {*StandardCallbackDynamicParams.__annotations__, CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_VAR}
+)
+
+
 class AddTeamCallback(LiteLLMPydanticObjectBase):
     callback_name: str
     callback_type: Literal["success", "failure", "success_and_failure"] | None = "success_and_failure"
@@ -2110,14 +2150,9 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
     @classmethod
     def validate_callback_vars(cls, values):
         callback_vars: Final = values.get("callback_vars", {})
-        valid_keys: Final = {
-            *StandardCallbackDynamicParams.__annotations__,
-            CAPTURE_MESSAGE_CONTENT_VAR,
-            EXCLUDED_SERVICES_VAR,
-        }
         for key, value in callback_vars.items():
-            if key not in valid_keys:
-                raise ValueError(f"Invalid callback variable: {key}. Must be one of {valid_keys}")
+            if key not in CALLBACK_VAR_NAMES:
+                raise ValueError(f"Invalid callback variable: {key}. Must be one of {set(CALLBACK_VAR_NAMES)}")
             if key in (CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_VAR) and not isinstance(value, str):
                 raise ValueError(f"{key} must be a string, got {type(value).__name__}")
             callback_vars[key] = str(value)
@@ -5301,6 +5336,7 @@ class BaseDailySpendTransaction(TypedDict):
     # missing value to zero, so requiring it here would describe a shape the aggregation
     # is explicitly tested against.
     autorouter_savings_spend: NotRequired[float]
+    guardrail_spend: NotRequired[float]  # writable-ok: the rollup queue accumulates into this key in place
 
     # request level metrics
     spend: float

@@ -20,7 +20,7 @@ from litellm.llms.anthropic.count_tokens.transformation import (
 from litellm.llms.azure_ai.anthropic.count_tokens.handler import (
     AzureAIAnthropicCountTokensHandler,
 )
-from litellm.llms.base_llm.base_utils import BaseTokenCounter
+from litellm.llms.base_llm.base_utils import BaseTokenCounter, deployment_timeout
 from litellm.types.utils import CountContextManagement, LlmProviders, TokenCountMessagesFormat, TokenCountResponse
 
 # Global handler instance - reuse across all token counting requests
@@ -137,6 +137,7 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
                 system=system,
                 optional_params=count_options,
                 context_management=None if context_management is None else context_management.spec,
+                timeout=deployment_timeout(litellm_params),
             )
 
             if result is not None:

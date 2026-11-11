@@ -26,6 +26,7 @@ from litellm.proxy._types import (
     OrganizationMemberUpdateRequest,
     RegenerateKeyRequest,
     ResetSpendRequest,
+    UpdateCustomerRequest,
     UpdateKeyRequest,
     UpdateMCPServerRequest,
     UpdateTeamRequest,
@@ -634,3 +635,52 @@ def test_batch_file_caps_accept_only_positive_limits(setting):
         with pytest.raises(ValidationError):
             ConfigGeneralSettings.model_validate({setting: invalid})
     assert getattr(ConfigGeneralSettings.model_validate({setting: 3}), setting) == 3
+
+
+@pytest.mark.parametrize(
+    ("request_type", "body", "message"),
+    [
+        pytest.param(
+            UpdateCustomerRequest,
+            {"user_id": "acme", "tpm_limit": 5, "quota": {"opus": 1}},
+            "Unknown fields: quota, tpm_limit. tpm_limit: these live on the customer's budget object, "
+            "update it with /budget/update.",
+            id="update_with_a_budget_field_and_a_made_up_one",
+        ),
+        pytest.param(
+            UpdateCustomerRequest,
+            {"user_id": "acme", "alias": "Acme", "quota": 1},
+            "Unknown fields: quota.",
+            id="update_with_a_made_up_field_has_no_budget_hint",
+        ),
+        pytest.param(
+            NewCustomerRequest,
+            {"user_id": "acme", "tpm_limti": 5},
+            "Unknown fields: tpm_limti.",
+            id="create_with_a_misspelled_budget_field",
+        ),
+    ],
+)
+def test_a_customer_request_with_unknown_fields_is_refused_naming_them(
+    request_type: type[BaseModel], body: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValidationError) as exc:
+        request_type.model_validate(body)
+    assert [error["msg"] for error in exc.value.errors()] == [f"Value error, {message}"]
+
+
+@pytest.mark.parametrize(
+    ("request_type", "body"),
+    [
+        pytest.param(UpdateCustomerRequest, {"user_id": "acme", "alias": "Acme", "blocked": True}, id="update"),
+        pytest.param(
+            NewCustomerRequest,
+            {"user_id": "acme", "tpm_limit": 5, "model_tpm_limit": {"opus": 60}},
+            id="create_with_inline_budget_fields",
+        ),
+    ],
+)
+def test_a_customer_request_with_only_known_fields_is_accepted(
+    request_type: type[BaseModel], body: dict[str, object]
+) -> None:
+    assert request_type.model_validate(body).model_dump(exclude_unset=True) == body

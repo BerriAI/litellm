@@ -46,6 +46,7 @@ from litellm.litellm_core_utils.model_response_utils import (
 )
 from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject, drop_token_ids
 from litellm.litellm_core_utils.thread_pool_executor import executor
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.ollama.common_utils import OllamaResponseIdNormalizer
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import GenericLiteLLMParams
@@ -82,6 +83,8 @@ FUNCTION_CALL_ATTRIBUTE: Final = "function_call"
 
 _SYNC_ITER_EXHAUSTED: Final = object()
 
+_STREAMING_CHOICE_KEYS: Final = frozenset({"finish_reason", "index", "delta", "logprobs", "message"})
+
 _GCHUNK_FIELDS: Final[frozenset] = frozenset(GChunk.__annotations__)
 _CompleteStreamingResponse = ModelResponse | TextCompletionResponse | ModelResponseStream | None
 _USAGE_COST_HEADER_PROVIDERS: Final[frozenset[str]] = frozenset(
@@ -112,7 +115,12 @@ def _stamp_usage_cost(
     usage: Final[object] = getattr(usage_chunk, "usage", None)
     if usage is None or isinstance(bill, bool) or not isinstance(bill, (int, float)):
         return
-    if bill <= 0 and not isinstance(getattr(usage, "cost", None), (int, float)):
+    complete_usage: Final = getattr(complete_response, "usage", None)
+    if (
+        bill <= 0
+        and not isinstance(getattr(usage, "cost", None), (int, float))
+        and not (bill == 0 and getattr(complete_usage, "cost", None) == 0)
+    ):
         return
     chunk_hidden: Final = get_hidden_params(usage_chunk)
     if chunk_hidden is not None and UPSTREAM_USAGE_COST in complete_hidden:
@@ -139,11 +147,18 @@ def _entry_len(entries: Mapping[str, object], key: str) -> int:
 
 
 def _prepend_upstream_choice_extras(
-    choice: StreamingChoices, upstream_choice: ChunkChoice, extra_keys: frozenset[str]
+    choice: StreamingChoices, upstream_choice: ChunkChoice | StreamingChoices, extra_keys: frozenset[str]
 ) -> None:
     if not extra_keys:
         return
-    upstream_extras: Final[Mapping[str, object]] = upstream_choice.model_dump(include=set(extra_keys))
+    stored_extras: Final = {
+        key: value for key, value in (upstream_choice.__pydantic_extra__ or {}).items() if key in extra_keys
+    }
+    upstream_extras: Final[Mapping[str, object]] = (
+        stored_extras
+        if _holds_only_scalars(stored_extras.items())
+        else upstream_choice.model_dump(include=set(extra_keys))
+    )
     choice.__pydantic_extra__ = {**upstream_extras, **(choice.__pydantic_extra__ or {})}  # rebind-ok: reuse choice
     choice.__pydantic_fields_set__.update(upstream_extras)
 
@@ -439,7 +454,7 @@ class CustomStreamWrapper:
         self.completion_stream = completion_stream
         self.sent_first_chunk = False
         self.sent_last_chunk = False
-        self._openai_handler_receives_chat_chunks = False
+        self._openai_handler_receives_chunk_objects = False
         self._failure_logging: asyncio.Task[None] | None = None
         self._closed = False
         self._stream_created_time: float = time.time()
@@ -1162,13 +1177,13 @@ class CustomStreamWrapper:
 
     def _prebuilt_plain_delta(self, chunk: object) -> Delta | None:
         if (
-            not self._openai_handler_receives_chat_chunks
-            or not isinstance(chunk, ChatCompletionChunk)
+            not self._openai_handler_receives_chunk_objects
+            or not isinstance(chunk, (ChatCompletionChunk, ModelResponseStream))
             or not chunk.choices
         ):
             return None
         upstream_delta: Final = cast(  # cast-ok: [LIT006] runtime delta may be absent
-            ChoiceDelta | None,
+            ChoiceDelta | Delta | None,
             chunk.choices[0].delta,
         )
         if (
@@ -1296,22 +1311,23 @@ class CustomStreamWrapper:
                         upstream_choice: Final = (
                             original_chunk_for_reuse.choices[0]
                             if plain_delta_created
-                            and isinstance(original_chunk_for_reuse, ChatCompletionChunk)
+                            and isinstance(original_chunk_for_reuse, (ChatCompletionChunk, ModelResponseStream))
                             and len(original_chunk_for_reuse.choices) == 1
                             else None
                         )
                         upstream_delta: Final = cast(  # cast-ok: [LIT006] runtime delta may be absent
-                            ChoiceDelta | None,
+                            ChoiceDelta | Delta | None,
                             getattr(upstream_choice, "delta", None),
                         )
                         upstream_choice_extra_keys: Final = frozenset(
                             (upstream_choice.__pydantic_extra__ or {}) if upstream_choice is not None else ()
                         )
+                        upstream_logprobs: Final[object] = getattr(upstream_choice, "logprobs", None)
                         can_reuse_choice: Final = (
                             upstream_choice is not None
                             and upstream_delta is not None
                             and "enhancements" not in upstream_choice_extra_keys
-                            and upstream_choice.logprobs is None
+                            and upstream_logprobs is None
                             and _holds_only_scalars(upstream_delta)
                         )
                         if can_reuse_choice and upstream_choice is not None:
@@ -1320,7 +1336,7 @@ class CustomStreamWrapper:
                             _prepend_upstream_choice_extras(
                                 model_response.choices[0],
                                 upstream_choice,
-                                upstream_choice_extra_keys - {"message"},
+                                upstream_choice_extra_keys - _STREAMING_CHOICE_KEYS,
                             )
                         else:
                             choices: Final = []
@@ -1737,14 +1753,16 @@ class CustomStreamWrapper:
                 self._record_finish_choice_fields(cached_chunk)
         else:  # openai / azure chat model
             self.uses_openai_chat_stream = True
-            if isinstance(chunk, ChatCompletionChunk):
-                self._openai_handler_receives_chat_chunks = True
-                if any(str(choice.finish_reason) == "abort" for choice in chunk.choices or ()):
-                    raise litellm.InternalServerError(
-                        message="Upstream generation aborted (finish_reason=abort)",
-                        model=chunk.model,
-                        llm_provider=self.custom_llm_provider,
-                    )
+            if isinstance(chunk, (ChatCompletionChunk, ModelResponseStream)):
+                self._openai_handler_receives_chunk_objects = True
+            if isinstance(chunk, ChatCompletionChunk) and any(
+                str(choice.finish_reason) == "abort" for choice in chunk.choices or ()
+            ):
+                raise litellm.InternalServerError(
+                    message="Upstream generation aborted (finish_reason=abort)",
+                    model=chunk.model,
+                    llm_provider=self.custom_llm_provider,
+                )
             if self.custom_llm_provider in [
                 LlmProviders.AZURE.value,
                 LlmProviders.AZURE_AI.value,
@@ -2517,7 +2535,10 @@ class CustomStreamWrapper:
     def fetch_sync_stream(self):
         if self.completion_stream is None and self.make_call is not None:
             # Call make_call to get the completion stream
-            self.completion_stream = self.make_call(client=litellm.module_level_client)
+            try:
+                self.completion_stream = self.make_call(client=litellm.module_level_client)
+            except (BaseLLMException, httpx.HTTPError) as e:
+                self._raise_open_error(e)
             self._stream_iter = self.completion_stream.__iter__()
 
         return self.completion_stream
@@ -2525,7 +2546,10 @@ class CustomStreamWrapper:
     async def fetch_stream(self):
         if self.completion_stream is None and self.make_call is not None:
             # Call make_call to get the completion stream
-            self.completion_stream = await self.make_call(client=litellm.module_level_aclient)
+            try:
+                self.completion_stream = await self.make_call(client=litellm.module_level_aclient)
+            except (BaseLLMException, httpx.HTTPError) as e:
+                self._raise_open_error(e)
             self._stream_iter = self.completion_stream.__aiter__()
 
         return self.completion_stream
@@ -2846,6 +2870,12 @@ class CustomStreamWrapper:
         self.response_uptil_now += content if isinstance(content, str) else ""
         if not self._emitted_disqualifying_content and self._delta_disqualifies_continuation(delta):
             self._emitted_disqualifying_content = True
+
+    def _raise_open_error(self, error: BaseLLMException | httpx.HTTPError) -> NoReturn:
+        try:
+            raise self._map_stream_exception(error)
+        except Exception as mapped:
+            raise mapped from error
 
     def _map_stream_exception(self, original_exception: Exception) -> Exception:
         return exception_type(
