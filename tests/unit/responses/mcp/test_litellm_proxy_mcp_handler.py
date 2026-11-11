@@ -1889,7 +1889,7 @@ async def _calls_the_entries_run(
     ("labeled_server_urls", "allowed_label", "runs"),
     [
         ({"team": "litellm_proxy/mcp/team-toolset", "docs": "litellm_proxy/mcp/docs"}, "team", ("calc-add",)),
-        ({"team": "litellm_proxy/mcp/team-toolset", "docs": "litellm_proxy/mcp/docs"}, "docs", ("docs-lookup",)),
+        ({"team": "litellm_proxy/mcp/team-toolset", "docs": "litellm_proxy/mcp/docs"}, "docs", ()),
         ({"team": "litellm_proxy/mcp/team-toolset", "other": "litellm_proxy/mcp/other-toolset"}, "other", ()),
     ],
     ids=["granted_toolset", "server_beside_a_toolset", "ungranted_toolset"],
@@ -2289,6 +2289,7 @@ async def test_apply_toolset_permissions_pins_the_auth_to_explicit_grants_only(m
 
     fake_manager = types.SimpleNamespace(
         resolve_toolset_tool_permissions=AsyncMock(return_value={"srv-1": ["add"]}),
+        get_allowed_mcp_servers=AsyncMock(return_value=[]),
     )
     monkeypatch.setattr(
         "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",

@@ -78,6 +78,23 @@ def test_aiand_completion_request(respx_mock: respx.MockRouter):
     assert request_body["messages"] == messages
 
 
+@pytest.mark.parametrize("model", ["aiand/openai/gpt-oss-120b", "streamlake/kat-coder", "zerogpu/llama-3.1-8b"])
+def test_json_provider_chat_uses_only_its_own_key(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, model: str
+):
+    for env_name in ("AIAND_API_KEY", "STREAMLAKE_API_KEY", "ZEROGPU_API_KEY"):
+        monkeypatch.delenv(env_name, raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-env-key")
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+    route: Final = respx_mock.route(method="POST").mock(return_value=httpx.Response(401, json={"error": "no key"}))
+
+    with pytest.raises(Exception):
+        litellm.completion(model=model, messages=[{"role": "user", "content": "Hello"}], num_retries=0)
+
+    assert all("sk-env-key" not in call.request.headers.get("Authorization", "") for call in route.calls)
+
+
 def test_aiand_responses_provider():
     config = ProviderConfigManager.get_provider_responses_api_config(
         provider="aiand",
