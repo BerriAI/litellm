@@ -137,10 +137,9 @@ class _GeminiBatchOutputUsage(LiteLLMBaseModel):
 
 
 def is_native_gemini_batch_output_row(row: Mapping[str, object]) -> bool:
-    """A native ``{key, response: {candidates, usageMetadata}}`` row, written when the input file held
-    native ``{key, request}`` rows instead of OpenAI-shaped ones."""
-    response: Final = row.get("response")
-    return isinstance(response, Mapping) and "usageMetadata" in response
+    """Native rows carry Gemini's ``key`` (and a ``response`` or an error ``status``) where OpenAI-shaped rows
+    carry ``custom_id``, so the shape is known even when the first row failed."""
+    return "key" in row and "custom_id" not in row
 
 
 def is_gemini_batch_usage_shape(usage_object: Mapping[str, object]) -> bool:
