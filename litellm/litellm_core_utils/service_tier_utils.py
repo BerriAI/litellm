@@ -6,9 +6,10 @@ from litellm.types.utils import ServiceTier, StandardLoggingPayload
 
 # Tiers a caller may name in a request, across the providers that accept the
 # parameter: OpenAI ("auto", "default", "flex", "priority", "scale"), Bedrock
-# (those plus "reserved"), Groq (a subset of those), Anthropic ("auto",
-# "standard_only") and Vertex, which maps "default" to "standard". Bounds the
-# caller-controlled requested tier wherever it is recorded. Derived from ``ServiceTier`` so a tier added there for
+# ("auto", "default", "flex", "priority", "reserved", "standard", "standard_only"),
+# Groq (a subset of OpenAI's), Anthropic ("auto", "standard_only") and Vertex,
+# which maps "default" to "standard". Bounds the caller-controlled requested tier
+# wherever it is recorded. Derived from ``ServiceTier`` so a tier added there for
 # cost calculation cannot go missing here.
 KNOWN_REQUEST_SERVICE_TIERS: Final = frozenset(
     tuple(tier.value for tier in ServiceTier) + ("batch", "default", "reserved", "scale", "standard", "standard_only")
@@ -38,13 +39,14 @@ def get_requested_service_tier(standard_logging_payload: StandardLoggingPayload)
     The tier the caller asked for, as sent to the provider.
 
     The value is caller-controlled and survives param mapping even where the
-    provider then ignores it (Groq accepts the request and drops an unrecognized
-    tier), so it is only reported when it names a known tier.
+    provider then drops it (Groq for an unrecognized tier, Bedrock for one it
+    cannot serve under ``drop_params``), so it is only reported when it names a
+    known tier, in lowercase since Bedrock takes any case.
     """
     model_parameters: Final = standard_logging_payload.get("model_parameters")
     requested_tier: Final = model_parameters.get("service_tier") if isinstance(model_parameters, dict) else None
-    if isinstance(requested_tier, str) and requested_tier in KNOWN_REQUEST_SERVICE_TIERS:
-        return requested_tier
+    if isinstance(requested_tier, str) and requested_tier.lower() in KNOWN_REQUEST_SERVICE_TIERS:
+        return requested_tier.lower()
     return None
 
 

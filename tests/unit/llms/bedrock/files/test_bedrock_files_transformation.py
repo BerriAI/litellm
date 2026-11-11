@@ -215,6 +215,62 @@ class TestBedrockFilesTransformation:
         assert "service_tier" not in json.dumps(model_input)
         assert "serviceTier" not in model_input
 
+    @pytest.mark.parametrize("tier", [None, "auto", "AUTO"])
+    def test_claude_row_with_null_or_auto_service_tier_sends_no_tier(self, tier: str | None):
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [
+                self._nova_row(
+                    model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                    body_params={"service_tier": tier, "max_tokens": 10},
+                )
+            ]
+        )
+
+        assert result[0]["modelInput"]["messages"]
+        assert "service_tier" not in json.dumps(result[0]["modelInput"])
+
+    @pytest.mark.parametrize(
+        "model", ["us.anthropic.claude-haiku-4-5-20251001-v1:0", "openai.gpt-oss-120b-1:0", "us.amazon.nova-pro-v1:0"]
+    )
+    def test_row_level_drop_params_drops_a_tier_bedrock_rejects_for_every_row_format(self, model: str):
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [
+                self._nova_row(
+                    model=model, body_params={"service_tier": "ultrafast", "drop_params": True, "max_tokens": 10}
+                )
+            ]
+        )
+
+        assert result[0]["modelInput"]["messages"]
+        assert "ultrafast" not in json.dumps(result[0]["modelInput"])
+
+    @pytest.mark.parametrize(
+        "tier, bedrock_tier", [("priority", "priority"), ("Flex", "flex"), ("standard", "default"), ("default", "default")]
+    )
+    @pytest.mark.parametrize("url", ["/v1/chat/completions", "/v1/responses"])
+    def test_openai_format_row_forwards_a_tier_its_invoke_body_takes(self, url: str, tier: str, bedrock_tier: str):
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [self._nova_row(url, model="openai.gpt-oss-120b-1:0", body_params={"service_tier": tier})]
+        )
+
+        assert result[0]["modelInput"]["service_tier"] == bedrock_tier
+
+    @pytest.mark.parametrize("tier", [None, "auto", "AUTO"])
+    def test_openai_format_row_with_null_or_auto_service_tier_sends_no_tier(self, tier: str | None):
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [self._nova_row(model="openai.gpt-oss-120b-1:0", body_params={"service_tier": tier})]
+        )
+
+        assert "service_tier" not in result[0]["modelInput"]
+
+    @pytest.mark.parametrize("tier", ["ultrafast", "reserved", "scale"])
+    @pytest.mark.parametrize("url", ["/v1/chat/completions", "/v1/responses"])
+    def test_openai_format_row_with_a_tier_bedrock_rejects_fails_without_drop_params(self, url: str, tier: str):
+        with pytest.raises(litellm.UnsupportedParamsError, match=f"service_tier='{tier}'"):
+            BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+                [self._nova_row(url, model="openai.gpt-oss-120b-1:0", body_params={"service_tier": tier})]
+            )
+
     @pytest.mark.parametrize("url", ["/v1/chat/completions", "/v1/responses"])
     def test_passthrough_row_keeps_row_level_drop_params_out_of_the_model_input(self, url: str):
         result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(

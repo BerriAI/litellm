@@ -207,6 +207,11 @@ _BEDROCK_SERVICE_TIER_ALIASES: Final = types.MappingProxyType({"standard": "defa
 _DEEPSEEK_R1_EFFORT_REASON: Final = "DeepSeek R1 on Bedrock always reasons and rejects reasoning_effort."
 
 
+def bedrock_service_tier_name(requested_tier: str) -> str:
+    tier: Final = requested_tier.lower()
+    return _BEDROCK_SERVICE_TIER_ALIASES.get(tier, tier)
+
+
 def _has_native_text_format(output_config: object) -> bool:
     if not isinstance(output_config, Mapping):
         return False
@@ -1316,12 +1321,11 @@ class AmazonConverseConfig(BaseConfig):
             optional_params["context_management"] = mapped
 
     def _map_service_tier_param(self, value: object, optional_params: dict, model: str, drop_params: bool) -> None:
-        tier: Final = value.lower() if isinstance(value, str) else None
+        tier: Final = bedrock_service_tier_name(value) if isinstance(value, str) else None
         if value is None or tier == "auto":
             return
-        bedrock_tier: Final = None if tier is None else _BEDROCK_SERVICE_TIER_ALIASES.get(tier, tier)
-        if bedrock_tier in BEDROCK_SERVICE_TIERS:
-            optional_params["serviceTier"] = {"type": bedrock_tier}
+        if tier in BEDROCK_SERVICE_TIERS:
+            optional_params["serviceTier"] = {"type": tier}
             return
         if not (litellm.drop_params or drop_params):
             raise litellm.utils.UnsupportedParamsError(
