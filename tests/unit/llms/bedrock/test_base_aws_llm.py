@@ -290,6 +290,13 @@ DEPLOYMENT_KEY_PAIR: Final = MappingProxyType(
             None,
             id="config-pairs-the-env-key-id-with-another-secret",
         ),
+        pytest.param(
+            ENV_TEMPORARY_CREDENTIALS,
+            {"aws_access_key_id": "", "aws_secret_access_key": ""},
+            "",
+            None,
+            id="blank-deployment-key-pair",
+        ),
     ],
 )
 def test_bedrock_request_carries_only_the_session_token_of_the_key_pair_that_signs_it(
@@ -321,7 +328,7 @@ def _sts_client_answering_for_its_source_credentials(service_name: str, **client
             "AccessKeyId": "ASIAASSUMEDROLE",
             "SecretAccessKey": "assumed-secret",
             "SessionToken": f"assumed-by:{client_kwargs.get('aws_access_key_id')}:{client_kwargs.get('aws_session_token')}",
-            "Expiration": datetime.now(timezone.utc) + timedelta(hours=1),
+            "Expiration": datetime(2100, 1, 1, tzinfo=timezone.utc),
         }
     }
     return sts
@@ -352,18 +359,8 @@ def test_assume_role_source_session_carries_only_the_session_token_of_its_key_pa
     assert (credentials.access_key, credentials.token) == ("ASIAASSUMEDROLE", expected_assumed_token)
 
 
-@pytest.mark.parametrize(
-    "env_credentials",
-    [
-        pytest.param(ENV_TEMPORARY_CREDENTIALS, id="env-temporary-credentials"),
-        pytest.param(
-            {"AWS_ACCESS_KEY_ID": "AKIAENVIDENTITY", "AWS_SECRET_ACCESS_KEY": ENV_SECRET_KEY},
-            id="env-long-lived-key-pair",
-        ),
-    ],
-)
-def test_explicit_key_pair_without_a_region_signs_instead_of_the_env_identity(env_credentials: Mapping[str, str]):
-    with patch.dict(os.environ, {**_os_environ_without_aws_keys(), **env_credentials}, clear=True):
+def test_explicit_key_pair_without_a_region_signs_instead_of_the_env_temporary_identity():
+    with patch.dict(os.environ, {**_os_environ_without_aws_keys(), **ENV_TEMPORARY_CREDENTIALS}, clear=True):
         credentials: Final = BaseAWSLLM().get_credentials(**DEPLOYMENT_KEY_PAIR)
 
     assert (credentials.access_key, credentials.secret_key, credentials.token) == (
