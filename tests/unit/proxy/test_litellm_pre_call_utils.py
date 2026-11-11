@@ -25,7 +25,9 @@ from litellm.constants import (
     SERVER_STREAMING_CLASSIFICATION_MARKER,
     SESSION_ID_GENERATED_METADATA_KEY,
     SESSION_ID_OMITTED_METADATA_KEY,
+    USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY,
 )
+from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
@@ -59,6 +61,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     get_dynamic_logging_metadata,
     get_metadata_variable_name,
     move_guardrails_to_metadata,
+    resolve_tenant_otel_destinations,
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES
@@ -929,6 +932,38 @@ async def test_add_litellm_data_to_request_body_snapshot_excludes_secret_fields(
         "secret_fields must be excluded from proxy_server_request['body'] "
         "to prevent Authorization tokens from leaking into spend logs"
     )
+
+
+@pytest.mark.asyncio
+async def test_chat_completions_body_field_named_request_headers_stays_in_the_logged_body():
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    client_field: Final = {"x-client-trace": "client-supplied"}
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/chat/completions",
+            "scheme": "http",
+            "server": ("localhost", 4000),
+            "query_string": b"",
+            "headers": [(b"authorization", b"Bearer sk-litellm-key")],
+        }
+    )
+
+    enriched: Final = await add_litellm_data_to_request(
+        data={
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hello"}],
+            "request_headers": client_field,
+        },
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=ProxyConfig(),
+        general_settings={},
+    )
+
+    assert enriched["proxy_server_request"]["body"]["request_headers"] == client_field
 
 
 @pytest.mark.asyncio
@@ -2779,7 +2814,7 @@ def test_key_dynamic_logging_settings():
         team_metadata={},
     )
     result = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(key_with_arize)
-    assert result == [{"callback_name": "arize", "callback_type": "success"}]
+    assert result == ({"callback_name": "arize", "callback_type": "success"},)
 
     # Test with langfuse logging
     key_with_langfuse = UserAPIKeyAuth(
@@ -2788,7 +2823,7 @@ def test_key_dynamic_logging_settings():
         team_metadata={},
     )
     result = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(key_with_langfuse)
-    assert result == [{"callback_name": "langfuse", "callback_type": "success"}]
+    assert result == ({"callback_name": "langfuse", "callback_type": "success"},)
 
     # Test with no logging metadata
     key_without_logging = UserAPIKeyAuth(api_key="test-key", metadata={}, team_metadata={})
@@ -2910,6 +2945,22 @@ def test_get_dynamic_logging_metadata_with_arize_team_logging():
     assert result.callback_vars is not None
     assert result.callback_vars["arize_api_key"] == "test_arize_api_key"
     assert result.callback_vars["arize_space_id"] == "test_arize_space_id"
+
+
+@pytest.mark.parametrize(
+    "logging_value",
+    [
+        pytest.param({"callback_name": "langsmith"}, id="object"),
+        pytest.param("langsmith", id="string"),
+        pytest.param(["langsmith"], id="list-with-string"),
+        pytest.param([None], id="list-with-null"),
+    ],
+)
+def test_non_object_team_logging_metadata_fails_as_a_server_error_not_a_bad_request(logging_value: object) -> None:
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key="test-key", metadata={}, team_metadata={"logging": logging_value})
+
+    with pytest.raises(TypeError):
+        get_dynamic_logging_metadata(user_api_key_dict=user_api_key_dict, proxy_config=MagicMock())
 
 
 def test_add_team_callback_rejects_env_reference():
@@ -3893,6 +3944,41 @@ async def test_non_child_requests_cannot_forge_a_child_tier_identity(surface: st
         assert COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY not in metadata
         assert COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY not in metadata.get("requester_metadata", {})
     assert updated[get_metadata_variable_name(request)]["session_id"] == "child-01"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "agent_id,session_id,child_id",
+    [
+        (
+            "a7256c04dfd99c9b9",
+            "11111111-2222-3333-4444-555555555555",
+            "11111111-2222-3333-4444-555555555555:a7256c04dfd99c9b9",
+        ),
+        (None, "11111111-2222-3333-4444-555555555555", None),
+        ("short", "11111111-2222-3333-4444-555555555555", None),
+        ("agent id with spaces", "11111111-2222-3333-4444-555555555555", None),
+        ("a7256c04dfd99c9b9", "bad", None),
+    ],
+)
+async def test_claude_code_subagents_get_their_own_tier_identity_under_the_parent_session(
+    agent_id: str | None, session_id: str, child_id: str | None
+) -> None:
+    headers: Final = {
+        "x-claude-code-session-id": session_id,
+        **({"x-claude-code-agent-id": agent_id} if agent_id is not None else {}),
+    }
+    request: Final = _make_request_mock("/v1/messages", headers)
+    updated: Final = await add_litellm_data_to_request(
+        data={"model": "test-router", "messages": []},
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+    )
+    metadata: Final = updated[get_metadata_variable_name(request)]
+    assert metadata.get(COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY) == child_id
+    assert COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY not in metadata.get("requester_metadata", {})
 
 
 def test_add_litellm_metadata_from_request_headers_x_litellm_session_id_sets_chain_id():
@@ -8083,6 +8169,7 @@ async def test_add_litellm_data_to_request_refuses_a_model_config_credential_hol
         ("API-Key", True),
         ("Cookie", True),
         ("Proxy-Authorization", True),
+        ("X-Amz-Security-Token", True),
         ("anthropic-version", False),
         ("user-agent", False),
     ],
@@ -9131,6 +9218,7 @@ _PLANTED_STAMPS = {
     "previous_models": [{"exception_type": "Timeout", "deployment_id": "spoofed", "attempted_retries": 101}],
     "_client_output_ceiling": {"api_base": "https://attacker.example"},
     ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY: 10**9,
+    USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY: 10**9,
     "client_key": "client_value",
 }
 
@@ -9165,6 +9253,7 @@ async def test_add_litellm_data_to_request_strips_router_reserved_stamps_from_bo
     assert "request_retry_count" not in updated["metadata"]
     assert "previous_models" not in updated["metadata"]
     assert ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY not in updated["metadata"]
+    assert USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY not in updated["metadata"]
     assert updated["metadata"]["client_key"] == "client_value"
 
 
@@ -10227,6 +10316,48 @@ def test_arize_otlp_protocol_on_a_key_logging_entry_reaches_the_destination(monk
 
         assert [d.protocol for d in destinations] == ["otlp_http"]
         assert destinations[0].endpoint == "https://arize.internal.example/v1/traces"
+    finally:
+        is_otel_v2_enabled.cache_clear()
+
+
+def test_a_key_referencing_a_credential_routes_to_that_credential_with_its_own_excluded_services(monkeypatch):
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    monkeypatch.setenv("ARIZE_HTTP_ENDPOINT", "https://arize.internal.example/v1/traces")
+    monkeypatch.delenv("ARIZE_API_KEY", raising=False)
+    monkeypatch.delenv("ARIZE_SPACE_ID", raising=False)
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="space-a",
+                credential_values={"arize_api_key": "k", "arize_space_id": "s"},
+                credential_info={},
+            )
+        ],
+    )
+    is_otel_v2_enabled.cache_clear()
+    try:
+        auth = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={
+                "logging": [
+                    {
+                        "callback_name": "arize",
+                        "callback_type": "success",
+                        "litellm_credential_name": "space-a",
+                        "callback_vars": {"excluded_services": "redis,postgres"},
+                    }
+                ]
+            },
+            team_metadata={},
+        )
+
+        destinations = resolve_tenant_otel_destinations(auth)
+
+        assert [(d.headers, d.excluded_db_systems) for d in destinations] == [
+            ({"arize-space-id": "s", "api_key": "k"}, frozenset({"redis", "postgresql"}))
+        ]
     finally:
         is_otel_v2_enabled.cache_clear()
 

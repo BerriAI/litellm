@@ -37,7 +37,7 @@ from litellm.constants import (
     MAX_STRING_LENGTH_PROMPT_IN_DB as DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB,
 )
 from litellm.integrations.otel.model.metadata import caller_session_id
-from litellm.integrations.otel.model.trace_controls import TraceControls
+from litellm.integrations.otel.model.trace_controls import TraceControls, caller_trace_controls
 from litellm.litellm_core_utils.batch_utils import (
     BATCH_COST_REQUEST_ID_SUFFIX,
     charged_poll_cost,
@@ -1050,12 +1050,31 @@ def _get_batch_trace_session_id(call_type: str | None, request_id: str | None) -
     return request_id.removesuffix(BATCH_COST_REQUEST_ID_SUFFIX)
 
 
-def _caller_session_for_spend_log(kwargs: Mapping[str, object], metadata: Mapping[str, object] | None) -> str | None:
+def caller_session_for_accounting(kwargs: Mapping[str, object]) -> str | None:
+    params: Final = as_str_mapping(kwargs.get("litellm_params")) or MappingProxyType({})
+    preserved: Final = next(
+        (
+            session
+            for key in ("litellm_metadata", "metadata")
+            if isinstance(session := (as_str_mapping(params.get(key)) or {}).get(CALLER_SESSION_ID_METADATA_KEY), str)
+        ),
+        None,
+    )
+    return _caller_session_for_spend_log(
+        kwargs,
+        MappingProxyType({CALLER_SESSION_ID_METADATA_KEY: preserved}) if preserved else None,
+        trace=caller_trace_controls(kwargs),
+    )
+
+
+def _caller_session_for_spend_log(
+    kwargs: Mapping[str, object], metadata: Mapping[str, object] | None, trace: TraceControls | None = None
+) -> str | None:
     beside_trace_header: Final = metadata.get(CALLER_SESSION_ID_METADATA_KEY) if metadata else None
     caller_session: Final = (
         beside_trace_header
         if isinstance(beside_trace_header, str) and beside_trace_header
-        else caller_session_id(kwargs, TraceControls())
+        else caller_session_id(kwargs, trace or TraceControls())
     )
     return caller_session if caller_session and "\x00" not in caller_session else None
 
