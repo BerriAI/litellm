@@ -15776,8 +15776,8 @@
         "cache_creation_input_token_cost": 4.5e-06,
         "cache_creation_input_token_cost_above_1hr": 7.2e-06,
         "cache_read_input_token_cost": 3.6e-07,
-        "deprecation_date": "2027-04-08",
-        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4-5.md",
+        "deprecation_date": "2027-04-27",
+        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
         "successor_model": "bedrock/us-gov-east-1/anthropic.claude-sonnet-5-5",
         "input_cost_per_token": 3.6e-06,
         "litellm_provider": "bedrock",
@@ -15808,8 +15808,8 @@
         "cache_creation_input_token_cost": 4.5e-06,
         "cache_creation_input_token_cost_above_1hr": 7.2e-06,
         "cache_read_input_token_cost": 3.6e-07,
-        "deprecation_date": "2027-04-08",
-        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4-5.md",
+        "deprecation_date": "2027-04-27",
+        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
         "input_cost_per_token": 3.6e-06,
         "litellm_provider": "bedrock",
         "supports_tool_search": true,
@@ -15969,8 +15969,8 @@
         "cache_creation_input_token_cost": 4.5e-06,
         "cache_creation_input_token_cost_above_1hr": 7.2e-06,
         "cache_read_input_token_cost": 3.6e-07,
-        "deprecation_date": "2027-04-08",
-        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4-5.md",
+        "deprecation_date": "2027-04-27",
+        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
         "successor_model": "bedrock/us-gov-west-1/anthropic.claude-sonnet-5-5",
         "input_cost_per_token": 3.6e-06,
         "litellm_provider": "bedrock",
@@ -16001,8 +16001,8 @@
         "cache_creation_input_token_cost": 4.5e-06,
         "cache_creation_input_token_cost_above_1hr": 7.2e-06,
         "cache_read_input_token_cost": 3.6e-07,
-        "deprecation_date": "2027-04-08",
-        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4-5.md",
+        "deprecation_date": "2027-04-27",
+        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
         "input_cost_per_token": 3.6e-06,
         "litellm_provider": "bedrock",
         "supports_tool_search": true,
@@ -16026,8 +16026,8 @@
         "token_count_model": {"model":"anthropic.claude-sonnet-4-5-20250929-v1:0","litellm_provider":"bedrock"}
     },
     "bedrock/us-gov-west-1/meta.llama3-70b-instruct-v1:0": {
-        "deprecation_date": "2027-03-30",
-        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-70b-instruct.md",
+        "deprecation_date": "2027-05-09",
+        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
         "input_cost_per_token": 2.65e-06,
         "litellm_provider": "bedrock",
         "max_input_tokens": 8000,
@@ -16038,8 +16038,8 @@
         "supports_pdf_input": true
     },
     "bedrock/us-gov-west-1/meta.llama3-8b-instruct-v1:0": {
-        "deprecation_date": "2027-03-30",
-        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-8b-instruct.md",
+        "deprecation_date": "2027-05-09",
+        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
         "input_cost_per_token": 3e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 8000,
@@ -50861,8 +50861,8 @@
         "cache_creation_input_token_cost_above_200k_tokens": 9e-06,
         "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.44e-05,
         "cache_read_input_token_cost_above_200k_tokens": 7.2e-07,
-        "deprecation_date": "2027-04-08",
-        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4-5.md",
+        "deprecation_date": "2027-04-27",
+        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
         "successor_model": "us-gov.anthropic.claude-sonnet-5-5",
         "litellm_provider": "bedrock_converse",
         "supports_tool_search": true,
@@ -61526,7 +61526,7 @@
         "output_cost_per_token": 2.2e-05,
         "output_cost_per_token_above_272k_tokens": 3.3e-05,
         "litellm_provider": "bedrock_mantle",
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "responses",
         "search_context_cost_per_query": {"search_context_size_high":0.012,"search_context_size_low":0.012,"search_context_size_medium":0.012},
@@ -100105,5 +100105,38 @@
         "supported_output_modalities": [
             "video"
         ]
+    },
+    "bedrock_mantle/us-gov-east-1/openai.gpt-5.6-cyber": {
+        "cache_creation_input_token_cost": 2.109375e-05,
+        "cache_read_input_token_cost": 1.6875e-06,
+        "input_cost_per_token": 1.6875e-05,
+        "litellm_provider": "bedrock_mantle",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "mode": "responses",
+        "output_cost_per_token": 0.00010125,
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-cyber.html",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_prompt_cache_breakpoint": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": false,
+        "supports_xhigh_reasoning_effort": true,
+        "use_openai_responses_path": true
     }
 }
