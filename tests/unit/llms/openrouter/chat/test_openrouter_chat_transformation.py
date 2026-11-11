@@ -1156,6 +1156,49 @@ async def test_openrouter_non_streaming_failure_raises(
     assert payload["response_cost"] == pytest.approx(reported_cost)
 
 
+@pytest.mark.asyncio
+async def test_openrouter_documented_failure_body_without_usage_raises() -> None:
+    documented_body: Final = {
+        "id": "gen-error",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "openai/gpt-4o",
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "error",
+                "message": {"role": "assistant", "content": "partial output..."},
+                "error": {
+                    "code": 502,
+                    "message": "Provider disconnected mid-stream",
+                    "metadata": {"error_type": "provider_unavailable"},
+                },
+            }
+        ],
+    }
+    recorder: Final = _FailureUsageRecorder()
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=documented_body)))
+    try:
+        with pytest.raises(litellm.APIError) as exc_info:
+            await litellm.acompletion(
+                model="openrouter/openai/gpt-4o",
+                messages=[{"role": "user", "content": "hi"}],
+                api_key="sk-test",
+                client=client,
+                num_retries=0,
+                callbacks=[recorder],
+            )
+    finally:
+        await client.close()
+
+    assert exc_info.value.status_code == 502
+    assert "provider disconnected mid-stream" in str(exc_info.value).lower()
+    payload: Final = await asyncio.wrap_future(recorder.payload)
+    assert payload["status"] == "failure"
+    assert payload["total_tokens"] == 0
+    assert payload["response_cost"] == 0
+
+
 class _SuccessUsageRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
@@ -1229,7 +1272,7 @@ async def test_openrouter_recovered_failure_bills_the_failed_attempt(
         messages=messages,
         stream=False,
         call_type="acompletion",
-        start_time=datetime.now(),
+        start_time=datetime(2026, 1, 1),
         litellm_call_id="recovered-openrouter-failure",
         function_id="recovered-openrouter-failure",
         dynamic_async_success_callbacks=[recorder],
