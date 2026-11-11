@@ -1,2 +1,5 @@
 *.ipynb linguist-vendored
 ui/litellm-dashboard/src/lib/http/schema.d.ts linguist-generated
+# Tokenizer rank files are hashed by tiktoken: a checkout or build that converts
+# their line endings makes the hash check fail and the file be downloaded again (#50748)
+litellm/litellm_core_utils/tokenizers/* -text
