@@ -1,10 +1,10 @@
 import json
 from collections.abc import Mapping, Sequence
 from itertools import chain
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Literal
 
 from fastapi import HTTPException
-from pydantic import TypeAdapter, ValidationError
+from pydantic import StrictBool, TypeAdapter, ValidationError
 
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 _GUARDRAIL_ENTRIES: Final = TypeAdapter(list[str | dict[str, object]])
+_MODIFY_GUARDRAILS_PERMISSION: Final = TypeAdapter(dict[Literal["modify_guardrails"], StrictBool])
 
 
 def _guardrail_entry_names(entries: object) -> frozenset[str] | None:
@@ -23,6 +24,14 @@ def _guardrail_entry_names(entries: object) -> frozenset[str] | None:
     except ValidationError:
         return None
     return frozenset(chain.from_iterable((entry,) if isinstance(entry, str) else entry.keys() for entry in parsed))
+
+
+def _is_modify_guardrails_permission(entries: object) -> bool:
+    # a team's documented {"modify_guardrails": false}, read by auth checks, is the one stored dict that has an effect
+    try:
+        return len(_MODIFY_GUARDRAILS_PERMISSION.validate_python(entries, strict=True)) == 1
+    except ValidationError:
+        return False
 
 
 def _malformed_guardrails_message(entries: object) -> str:
@@ -60,8 +69,7 @@ async def validate_guardrail_names(
     requested_entries: Final = (
         guardrails if guardrails is not None else (metadata.get("guardrails") if metadata is not None else None)
     )
-    # a dict is the legacy {name: bool} toggle map or a team's {"modify_guardrails": false}, both read at request time
-    if requested_entries is None or isinstance(requested_entries, Mapping):
+    if requested_entries is None or _is_modify_guardrails_permission(requested_entries):
         return
     requested: Final = _guardrail_entry_names(requested_entries)
     if requested is None:

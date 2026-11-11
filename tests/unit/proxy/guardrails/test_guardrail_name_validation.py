@@ -203,15 +203,26 @@ async def test_license_first_puts_the_license_error_ahead_of_an_unknown_name(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "entries",
-    ({"modify_guardrails": False}, {"prompt_injection": True, "typo": False}),
-    ids=("team_modify_guardrails_permission", "v1_toggle_map"),
-)
-async def test_legacy_dict_forms_read_at_request_time_are_left_alone(entries: dict[str, bool]) -> None:
+@pytest.mark.parametrize("allowed", (False, True))
+async def test_the_team_modify_guardrails_permission_is_left_alone(allowed: bool) -> None:
     client: Final = _prisma()
+    permission: Final = {"modify_guardrails": allowed}
 
-    await _validate(None, {"guardrails": entries}, client, {"guardrails": entries})
-    await _validate(None, {"guardrails": entries}, client)
+    await _validate(None, {"guardrails": permission}, client, {"guardrails": permission})
+    await _validate(None, {"guardrails": permission}, client)
 
     assert _looked_up(client) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "entries",
+    ({"valid": True}, {"modify_guardrails": False, "valid": True}, {"modify_guardrails": "no"}),
+    ids=("toggle_map", "permission_plus_attachment", "non_bool_permission"),
+)
+async def test_other_stored_dicts_fail_loudly_since_they_never_run(entries: dict[str, object]) -> None:
+    with pytest.raises(HTTPException) as exc:
+        await _validate(None, {"guardrails": entries}, _prisma())
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail["error"].startswith("Invalid guardrail detected - {")
