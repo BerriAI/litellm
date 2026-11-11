@@ -5,7 +5,7 @@ use litellm_host::{
     interceptors::{RequestContext, WireRequest},
     lifecycle::Timing,
 };
-use litellm_host_python::{HookStep, PythonOwned, PythonRuntime, to_py};
+use litellm_host_python::{HookStep, PythonOwned, PythonRuntime, json_to_py, to_py};
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
     prelude::*,
@@ -123,7 +123,7 @@ impl CallHooks<PythonRuntime> for AgenticLoop {
                 body: to_py(py, &wire.body)?,
                 model: context.model.clone(),
                 provider: context.custom_llm_provider.clone(),
-                requested: to_py(py, &context.optional_params)?,
+                requested: json_to_py(py, &context.optional_params)?.unbind(),
             });
         }
         Ok(HookStep::Ready(wire))

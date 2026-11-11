@@ -7,6 +7,7 @@ from typing import Final
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
@@ -1567,3 +1568,81 @@ def test_sync_answer_serves_the_gateway_after_a_mock(monkeypatch: pytest.MonkeyP
     assert served is not None and served.value is sentinel
     assert mocked is not None and isinstance(mocked.value, dict)
     assert messages_host.sync_answer({**_CALL, "model": "anthropic/claude-sonnet-4-5"}) is None
+
+
+@pytest.mark.parametrize(
+    ("extra", "raised", "text"),
+    [
+        pytest.param({"messages": None}, TypeError, "'NoneType' object is not iterable", id="messages-none"),
+        pytest.param({"messages": 5}, TypeError, "'int' object is not iterable", id="messages-int"),
+        pytest.param({"tools": {"name": "t"}}, AttributeError, "'str' object has no attribute 'get'", id="tools-map"),
+        pytest.param({"model_info": "not-a-mapping"}, ValidationError, "model_info", id="model-info-str"),
+        pytest.param({"custom_llm_provider": 5}, ValidationError, "custom_llm_provider", id="provider-int"),
+    ],
+)
+def test_settings_raise_what_the_python_handler_raises_for_arguments_of_the_wrong_type(
+    extra: dict[str, object], raised: type[Exception], text: str
+) -> None:
+    with pytest.raises(raised, match=text):
+        messages_host.settings({}, {**_CALL, "model": "anthropic/claude-sonnet-4-5", **extra})
+
+
+def test_settings_leave_well_typed_tools_to_the_interceptors_after_the_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    asked: Final[list[object]] = []
+
+    def can_handle(tools: object, custom_llm_provider: object) -> bool:
+        asked.append(tools)
+        return False
+
+    advisor: Final = interceptors.get_messages_interceptors()[0]
+    monkeypatch.setattr(advisor, "can_handle", can_handle)
+
+    messages_host.settings({}, {**_CALL, "model": "anthropic/claude-sonnet-4-5", "tools": [{"name": "t"}]})
+
+    assert asked == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("hook_params", "raised", "text"),
+    [
+        pytest.param("not-a-mapping", AttributeError, "'str' object has no attribute 'get'", id="params-str"),
+        pytest.param({"custom_llm_provider": 5}, ValidationError, "custom_llm_provider", id="provider-int"),
+    ],
+)
+async def test_pre_request_hooks_raise_what_the_python_handler_raises_for_the_hooks_params(
+    monkeypatch: pytest.MonkeyPatch, hook_params: object, raised: type[Exception], text: str
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_hook({"litellm_params": hook_params})])
+
+    with pytest.raises(raised, match=text):
+        await messages_host.pre_request_hooks(_hook_request(model="claude-sonnet-4-5"))
+
+
+def test_a_provider_config_rejection_maps_as_the_python_http_handler_maps_it() -> None:
+    logger: Final = Logging(
+        model="anthropic/claude-sonnet-4-5",
+        messages=[],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="rejected",
+        function_id="rejected",
+    )
+    rejected: Final = ValueError("missing required field: max_tokens")
+    rejected.messages_request_error = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
+    rejected.messages_provider_rejection = "max_tokens is required for Anthropic /v1/messages API"  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
+
+    mapped: Final = messages_host.map_failure(
+        rejected,
+        {"model": "anthropic/claude-sonnet-4-5", "messages": [], "litellm_logging_obj": logger},
+        "anthropic",
+    )
+
+    assert isinstance(mapped, litellm.BadRequestError)
+    assert str(mapped) == (
+        "litellm.BadRequestError: AnthropicException - max_tokens is required for Anthropic /v1/messages API"
+    )
+    assert mapped.model == "anthropic/claude-sonnet-4-5"  # pyright: ignore[reportUnknownMemberType]  # the public error leaves model untyped
+    assert mapped.llm_provider == "anthropic"  # pyright: ignore[reportUnknownMemberType]  # the public error leaves llm_provider untyped
+    assert logger.model_call_details["custom_llm_provider"] == "anthropic"

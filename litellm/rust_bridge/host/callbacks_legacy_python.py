@@ -557,6 +557,9 @@ def stamp_stream_head(
     end_time: datetime.datetime,
     cache_hit: bool,
 ) -> None:
+    if kwargs.get("stream") is True:
+        logger.stream = True
+        logger.model_call_details["stream"] = True
     carrier: Final = _HiddenParamsCarrier(head)
     finalize(carrier, logger, kwargs, start_time, end_time, cache_hit)
     stamped: Final = carrier._hidden_params  # pyright: ignore[reportPrivateUsage]  # the carrier's own field
@@ -564,9 +567,11 @@ def stamp_stream_head(
         head.update(cast("dict[str, object]", stamped))  # cast-ok: update_response_metadata writes a str-keyed dict
 
 
-def stream_opened(logger: Logging, head: Mapping[str, object]) -> None:
-    logger.stream = True
-    logger.model_call_details["stream"] = True
+def stream_opened(logger: Logging, head: Mapping[str, object], keeps_requested: bool = False) -> None:
+    requested: Final = logger.model_call_details.get("stream")
+    streamed: Final = requested if keeps_requested and requested else True
+    logger.stream = cast(bool, streamed)  # cast-ok: Python's Messages handler logs the stream flag it sent
+    logger.model_call_details["stream"] = streamed
     if "httpx_response" in logger.model_call_details:
         return
     logger.model_call_details["response_headers"] = _STREAM_HEADERS.validate_python(

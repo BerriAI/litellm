@@ -295,22 +295,23 @@ async fn what_before_send_returns_is_what_the_provider_receives(call: MessagesCa
 }
 
 #[rstest]
-#[case::enable(false, json!(true), Some(true))]
-#[case::disable(true, json!(false), Some(false))]
-#[case::null(true, Value::Null, Some(false))]
-#[case::invalid(false, json!("true"), None)]
+#[case::enable(false, json!(true), true)]
+#[case::disable(true, json!(false), false)]
+#[case::null(true, Value::Null, false)]
+#[case::truthy_string(false, json!("false"), true)]
+#[case::falsy_integer(true, json!(0), false)]
 #[tokio::test]
 async fn response_mode_follows_the_intercepted_request(
     call: MessagesCall,
     traces: TraceCapture,
     #[case] original_stream: bool,
     #[case] rewritten_stream: Value,
-    #[case] expected_stream: Option<bool>,
+    #[case] expected_stream: bool,
 ) {
     use futures_util::TryStreamExt;
 
     let sse = "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
-    let response = if expected_stream == Some(true) {
+    let response = if expected_stream {
         ResponseTemplate::new(200).set_body_raw(sse, "text/event-stream")
     } else {
         message_response()
@@ -336,14 +337,14 @@ async fn response_mode_follows_the_intercepted_request(
                 .await?;
             match output {
                 MessagesCallResponse::Stream { chunks, .. } => {
-                    assert_eq!(expected_stream, Some(true));
+                    assert!(expected_stream);
                     assert_eq!(
                         chunks.try_collect::<Vec<_>>().await?.concat(),
                         sse.as_bytes()
                     );
                 }
                 MessagesCallResponse::Complete(message) => {
-                    assert_eq!(expected_stream, Some(false));
+                    assert!(!expected_stream);
                     assert_eq!(
                         message,
                         MessagesBody::Message(serde_json::from_value(message_body()).unwrap())
@@ -356,12 +357,6 @@ async fn response_mode_follows_the_intercepted_request(
 
     let summaries = traces.summaries("litellm.route");
     assert_eq!(summaries.len(), 1);
-    let Some(expected_stream) = expected_stream else {
-        assert!(result.unwrap_err().is_request());
-        assert!(received(&upstream).await.is_empty());
-        assert_eq!(summaries[0]["outcome"], "failure");
-        return;
-    };
     result.unwrap();
     assert_eq!(
         only_request(&upstream).await.json()["stream"],
@@ -479,6 +474,38 @@ async fn the_request_context_carries_the_shaped_params_without_model_or_messages
     let [optional_params] = <[Value; 1]>::try_from(host.optional_params.into_inner().unwrap())
         .unwrap_or_else(|seen| panic!("before_provider_request runs once, saw {}", seen.len()));
     assert_eq!(optional_params, json!({"max_tokens": 16}));
+}
+
+#[rstest]
+#[tokio::test]
+async fn the_request_context_keeps_the_nested_fields_additional_drop_params_strip(
+    call: MessagesCall,
+) {
+    let upstream = upstream([message_response()]).await;
+    let tool = json!({"name": "lookup", "input_schema": {"type": "object"}, "input_examples": [{"q": "x"}]});
+    let host = RecordingHost::passthrough(authenticated(
+        MessagesCall {
+            shaping: MessagesShaping {
+                settings: MessagesSettings {
+                    additional_drop_params: vec!["tools[*].input_examples".into()],
+                    ..MessagesSettings::default()
+                },
+                ..MessagesShaping::default()
+            },
+            ..with_fields(call, json!({"tools": [tool.clone()]}))
+        },
+        upstream.uri(),
+    ));
+
+    run_through(&host).await.expect("messages call succeeds");
+
+    let [optional_params] = <[Value; 1]>::try_from(host.optional_params.into_inner().unwrap())
+        .unwrap_or_else(|seen| panic!("before_provider_request runs once, saw {}", seen.len()));
+    assert_eq!(optional_params["tools"], json!([tool]));
+    assert_eq!(
+        only_request(&upstream).await.json()["tools"][0].get("input_examples"),
+        None
+    );
 }
 
 #[rstest]

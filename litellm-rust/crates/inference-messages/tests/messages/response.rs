@@ -154,6 +154,37 @@ async fn the_message_passes_through_losslessly(call: MessagesCall) {
 }
 
 #[rstest]
+#[case::without_stop_reason(json!({"stop_sequence": null}))]
+#[case::without_stop_fields(json!({}))]
+#[tokio::test]
+async fn a_message_without_stop_reason_keeps_it_absent(call: MessagesCall, #[case] stop: Value) {
+    let mut upstream_body = json!({
+        "id": "msg_3", "type": "message", "role": "assistant", "model": MODEL,
+        "content": [{"type": "text", "text": "hi"}],
+        "usage": {"input_tokens": 1, "output_tokens": 1}
+    });
+    upstream_body
+        .as_object_mut()
+        .unwrap()
+        .extend(stop.as_object().unwrap().clone());
+    let upstream = upstream([json_response(upstream_body.clone())]).await;
+
+    let output = run(MessagesCall {
+        api_key: Some("sk".into()),
+        api_base: Some(upstream.uri()),
+        ..call
+    })
+    .await
+    .expect("messages call succeeds");
+
+    let MessagesOutput::Complete(MessagesBody::Unchecked(body)) = output else {
+        panic!("a message without stop_reason is returned as sent");
+    };
+    upstream_body["stop_sequence"] = Value::Null;
+    assert_eq!(Value::Object(body), upstream_body);
+}
+
+#[rstest]
 #[tokio::test]
 async fn a_json_error_envelope_is_kept_verbatim(call: MessagesCall) {
     let envelope =

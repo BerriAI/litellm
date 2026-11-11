@@ -130,7 +130,8 @@
   ],
   "stream_opened": [
     "logger",
-    "head"
+    "head",
+    "keeps_requested"
   ],
   "stamp_stream_head": [
     "head",

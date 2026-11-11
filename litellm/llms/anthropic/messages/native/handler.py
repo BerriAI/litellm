@@ -472,13 +472,12 @@ def provider_after_pre_request_hooks(
 ) -> str | None:
     if custom_llm_provider:
         return custom_llm_provider
-    hook_params: Final = request_kwargs.get("litellm_params")
-    hooked: Final = (
-        cast(Mapping[str, object], hook_params).get("custom_llm_provider")  # cast-ok: the hooks' own params dict
-        if isinstance(hook_params, Mapping)
-        else None
+    hook_params: Final = cast(  # cast-ok: read as the hooks left it, so a non-mapping raises as Python's handler raises
+        Mapping[str, object], request_kwargs.get("litellm_params", {})
     )
-    derived: Final = hooked if isinstance(hooked, str) else None
+    derived: Final = cast(  # cast-ok: handed on unchecked, as Python's handler does
+        str | None, hook_params.get("custom_llm_provider")
+    )
     if derived:
         return derived
     try:

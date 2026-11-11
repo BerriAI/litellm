@@ -128,7 +128,7 @@ impl MessagesRoute {
         model = %call.body.model,
         provider,
         resolved_model,
-        stream = call.body.params.stream == Some(true),
+        stream = call.body.params.streams(),
         outcome
     ))]
     async fn run(
@@ -137,7 +137,7 @@ impl MessagesRoute {
         context: CallContext<'_, impl Interceptors<Error>>,
     ) -> Result<MessagesCallResponse, Error> {
         litellm_inference::diagnostic::call(async {
-            let requested_stream = call.body.params.stream == Some(true);
+            let requested_stream = call.body.params.streams();
             let call = match &self.pre_request_hooks {
                 None => call,
                 Some(hooks) => {
@@ -174,7 +174,7 @@ impl MessagesRoute {
                 .as_deref()
                 .filter(|_| call.shaping.settings.mcp_gateway)
             {
-                let stream = call.body.params.stream == Some(true);
+                let stream = call.body.params.streams();
                 return handler::answered(self, host_answer, config, model, stream, &context).await;
             }
             let secrets = self.secrets.resolve(config.config().secret_names()).await?;

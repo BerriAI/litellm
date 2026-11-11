@@ -1,5 +1,5 @@
 import inspect
-from collections.abc import AsyncIterator, Awaitable, Callable, Collection, Coroutine, Iterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping
 from types import MappingProxyType
 from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding selects a sync result or an async awaitable
 
@@ -66,7 +66,7 @@ def _native_kwargs(fields: Mapping[str, object], kwargs: Mapping[str, object]) -
             request_timeout=kwargs.get("request_timeout"),
             stream_timeout=kwargs.get("stream_timeout"),
         ),
-        stream=fields.get("stream") is True,
+        stream=bool(fields.get("stream")),
         custom_llm_provider=provider or "",
     )
     if timeout is None:
@@ -81,7 +81,7 @@ def _public_request(
     if fields is None:
         return None
     model: Final = fields.get("model")
-    if not isinstance(model, str) or not isinstance(fields.get("messages"), Collection):
+    if not isinstance(model, str):
         return None
     return native_call(legacy, args, _native_kwargs(fields, kwargs))
 

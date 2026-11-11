@@ -525,3 +525,22 @@ async def test_a_proxy_stream_abandoned_mid_cancel_bills_after_the_disconnect_cl
     await asyncio.sleep(0)
 
     assert events == ["disconnect recorded", "billed"]
+
+
+@pytest.mark.parametrize(
+    ("requested", "keeps_requested", "expected"),
+    [
+        pytest.param("false", True, "false", id="messages-keeps-a-truthy-string"),
+        pytest.param(1, True, 1, id="messages-keeps-a-truthy-int"),
+        pytest.param(False, True, True, id="messages-hook-streamed"),
+        pytest.param("false", False, True, id="other-routes-stream-true"),
+    ],
+)
+def test_a_stream_logs_the_flag_python_logs(requested: object, keeps_requested: bool, expected: object) -> None:
+    logger: Final = _supplied_logger()
+    logger.model_call_details["stream"] = requested
+
+    legacy.stream_opened(logger, {}, keeps_requested)
+
+    assert logger.model_call_details["stream"] == expected
+    assert logger.stream == expected
