@@ -32,7 +32,9 @@ use super::{
     Delivered, Error, HostAnswer, MessagesBody, MessagesCall, MessagesCallResponse, MessagesRoute,
     Transport, TransportBody, TransportRequest, TransportResponse, WorkloadIdentity,
     common_utils::{MessagesProvider, merge_messages_header_sources, string_headers},
-    constants::{MESSAGES_HTTP_ERROR_ATTEMPTS, MESSAGES_TIMEOUT_SECS},
+    constants::{
+        MESSAGES_HTTP_ERROR_ATTEMPTS, MESSAGES_STREAM_ERROR_BODY_READ_SECS, MESSAGES_TIMEOUT_SECS,
+    },
     route::Messages,
     types::invalid_request,
 };
@@ -490,7 +492,7 @@ async fn call_provider(
         });
     }
     let status = head.status;
-    let text = response.text().await.map_err(litellm_http::Error::from)?;
+    let text = read_body(response, timeout).await?;
     log_response_body(&text);
     context
         .raw_response_received(RawResponse::new(text.clone()).with_head(head))
@@ -615,15 +617,7 @@ async fn send_recovering(
         };
         let response = match transport {
             None => Upstream::Native(
-                send(
-                    http,
-                    authenticated,
-                    &request.wire.url,
-                    &body,
-                    timeout,
-                    request.stream,
-                )
-                .await?,
+                send(http, authenticated, &request.wire.url, &body, timeout).await?,
             ),
             Some(transport) => Upstream::Hosted(
                 transport
@@ -640,7 +634,9 @@ async fn send_recovering(
             Upstream::Native(response) if response.status().is_success() => {
                 return Ok(Upstream::Native(response));
             }
-            Upstream::Native(response) => provider_failure(response, timeout).await?,
+            Upstream::Native(response) => {
+                provider_failure(response, timeout, request.stream).await?
+            }
             Upstream::Hosted(TransportResponse {
                 status,
                 headers,
@@ -685,25 +681,35 @@ fn serialize_failure(err: serde_json::Error) -> Error {
     ))
 }
 
-/// Python's httpx timeout bounds each phase and each read, never the whole exchange. A complete
-/// response keeps the client's overall deadline; a stream is bounded until its head arrives and
-/// then per read (see [`timed_chunks`]), so a long stream that keeps sending is not cut off.
 async fn send(
     http: &litellm_http::Client,
     authenticated: Authenticated,
     url: &str,
     body: &Value,
     timeout: Duration,
-    stream: bool,
 ) -> Result<reqwest::Response, Error> {
-    let request = outbound_request(authenticated, url, body, (!stream).then_some(timeout))?;
-    if !stream {
-        return Ok(litellm_inference::outbound::send(request, http).await?);
-    }
+    let request = outbound_request(authenticated, url, body, None)?;
     tokio::time::timeout(timeout, litellm_inference::outbound::send(request, http))
         .await
         .map_err(litellm_http::Error::read_timeout)?
+        .map(super::encoding::decoded)
         .map_err(Error::from)
+}
+
+async fn read_body(
+    mut response: reqwest::Response,
+    timeout: Duration,
+) -> Result<String, litellm_http::Error> {
+    let expected = response.content_length();
+    let mut body = Vec::new();
+    while let Some(chunk) = tokio::time::timeout(timeout, response.chunk())
+        .await
+        .map_err(litellm_http::Error::read_timeout)?
+        .map_err(|error| litellm_http::Error::body_read(error, body.len() as u64, expected))?
+    {
+        body.extend_from_slice(&chunk);
+    }
+    Ok(String::from_utf8_lossy(&body).into_owned())
 }
 
 /// The stream's body, each read bounded by `timeout` as httpx bounds each read.
@@ -748,27 +754,32 @@ impl From<ProviderFailure> for Error {
     }
 }
 
-/// The provider's error, its body read under `timeout`: a stream has no overall deadline once
-/// its head arrives, so an error body that stalls would otherwise hold the call forever.
 async fn provider_failure(
     response: reqwest::Response,
     timeout: Duration,
+    stream: bool,
 ) -> Result<ProviderFailure, Error> {
     let status = response.status().as_u16();
     let headers = litellm_http::request::header_pairs(response.headers());
-    match tokio::time::timeout(timeout, response.text()).await {
-        Ok(Ok(text)) => {
-            log_error_body(status, &text);
-            Ok(ProviderFailure {
-                status,
-                text,
-                headers,
-                raised: None,
-            })
-        }
-        Ok(Err(error)) => Err(litellm_http::Error::from(error).into()),
-        Err(elapsed) => Err(litellm_http::Error::read_timeout(elapsed).into()),
-    }
+    let text = if stream {
+        tokio::time::timeout(
+            Duration::from_secs(MESSAGES_STREAM_ERROR_BODY_READ_SECS),
+            read_body(response, timeout),
+        )
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or_default()
+    } else {
+        read_body(response, timeout).await?
+    };
+    log_error_body(status, &text);
+    Ok(ProviderFailure {
+        status,
+        text,
+        headers,
+        raised: None,
+    })
 }
 
 fn decode_response(

@@ -4,3 +4,4 @@
 pub(crate) const MESSAGES_TIMEOUT_SECS: u64 = 600;
 
 pub(crate) const MESSAGES_HTTP_ERROR_ATTEMPTS: usize = 2;
+pub(crate) const MESSAGES_STREAM_ERROR_BODY_READ_SECS: u64 = 5;
