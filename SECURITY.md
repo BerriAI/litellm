@@ -12,7 +12,7 @@ To subscribe, visit [https://security.litellm.ai/mailinglist/](https://security.
 We value the security community's role in protecting our systems and users.
 To report a security vulnerability, please submit a report through our vulnerability disclosure form:
 
-[Report a vulnerability](https://github.com/BerriAI/litellm/security/advisories/new)
+[LiteLLM VDP](https://security.litellm.ai/vdp/)
 
 These reports are submitted to HackerOne and are triaged there, though no account is needed.
 
