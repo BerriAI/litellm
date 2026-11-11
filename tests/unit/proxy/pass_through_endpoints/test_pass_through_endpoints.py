@@ -10328,3 +10328,86 @@ def test_init_kwargs_no_authenticated_identity_field_is_client_settable(mock_req
     metadata: Final = result["litellm_params"]["metadata"]
     survived: Final = {key: metadata.get(key) for key in expected if metadata.get(key) != expected[key]}
     assert survived == {}, f"client-supplied values survived for: {sorted(survived)}"
+
+
+def _stub_adapter_proxy(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    proxy_logging: Final = MagicMock()
+    proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
+    proxy_logging.post_call_failure_hook = AsyncMock()
+
+    async def fake_add_litellm_data_to_request(**kwargs: object) -> object:
+        return kwargs["data"]
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging)
+    monkeypatch.setattr("litellm.proxy.proxy_server.add_litellm_data_to_request", fake_add_litellm_data_to_request)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    return proxy_logging
+
+def _request_with_body(content_type: str, body: bytes) -> Request:
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/pass-through",
+            "query_string": b"",
+            "headers": [(b"content-type", content_type.encode())],
+        },
+        receive,
+    )
+
+_ADAPTER_BODY_WITH_S3_IMAGE: Final = json.dumps(
+    {
+        "model": "unknown-model",
+        "messages": [
+            {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "s3://private-bucket/cat.png"}}]}
+        ],
+    }
+).encode()
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_pass_through_endpoint_refuses_an_s3_image_in_an_unlisted_bucket(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    proxy_logging: Final = _stub_adapter_proxy(monkeypatch)
+    request: Final = MagicMock(spec=Request)
+    request.body = AsyncMock(return_value=_ADAPTER_BODY_WITH_S3_IMAGE)
+
+    with pytest.raises(ProxyException) as raised:
+        await chat_completion_pass_through_endpoint(
+            fastapi_response=Response(),
+            request=request,
+            adapter_id="anthropic",
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    assert raised.value.code == "403"
+    proxy_logging.pre_call_hook.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_pass_through_endpoint_forwards_an_s3_image_in_a_listed_bucket(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    proxy_logging: Final = _stub_adapter_proxy(monkeypatch)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings", {"allowed_client_side_s3_buckets": ["private-bucket"]}
+    )
+    request: Final = MagicMock(spec=Request)
+    request.body = AsyncMock(return_value=_ADAPTER_BODY_WITH_S3_IMAGE)
+
+    with pytest.raises(ProxyException) as raised:
+        await chat_completion_pass_through_endpoint(
+            fastapi_response=Response(),
+            request=request,
+            adapter_id="anthropic",
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    assert raised.value.code != "403"
+    proxy_logging.pre_call_hook.assert_awaited_once()
