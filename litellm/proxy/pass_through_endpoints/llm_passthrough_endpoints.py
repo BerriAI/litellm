@@ -639,7 +639,6 @@ async def tripo_proxy_route(
         user_api_key_dict=user_api_key_dict,
         custom_llm_provider="tripo",
         stream=False,
-        tripo_billing_model=credentials.model_id or credentials.model_name,
         upstream_headers_filter=lambda headers: {
             **{key: value for key, value in headers.items() if key.lower() != "authorization"},
             "Authorization": authorization,

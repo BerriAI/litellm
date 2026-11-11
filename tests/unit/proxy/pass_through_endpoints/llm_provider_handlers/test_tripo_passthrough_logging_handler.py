@@ -19,18 +19,15 @@ def test_tripo_model_info_uses_3d_generation_mode() -> None:
 
 
 def test_tripo_region_and_cost_are_derived_from_upstream_data(monkeypatch: pytest.MonkeyPatch) -> None:
-    price: Final = 0.05
+    price: Final = 0.025
     monkeypatch.setitem(litellm.model_cost, "tripo/task", {
-        **litellm.model_cost["tripo/task"], "cost_per_credit": price,
-    })
-    monkeypatch.setitem(litellm.model_cost, "tripo/deployment-price", {
         **litellm.model_cost["tripo/task"], "cost_per_credit": price,
     })
     assert tripo_region_from_url("https://openapi.tripo3d.ai/v3") == "global"
     assert tripo_region_from_url("https://openapi.tripo3d.com/v3") == "cn"
     assert tripo_cost_per_credit("tripo/task") == price
     assert tripo_cost_per_credit("tripo/unlisted-test-model") == price
-    assert tripo_task_cost(TripoTaskData(task_id="task-1", credits_consumed=Decimal("100")), price) == 5.0
+    assert tripo_task_cost(TripoTaskData(task_id="task-1", credits_consumed=Decimal("100")), price) == 2.5
 
 
 def test_submitted_tripo_task_requires_a_task_id() -> None:
@@ -92,11 +89,8 @@ async def test_completed_task_credit_cost_reaches_success_callbacks(monkeypatch:
     from litellm.proxy.pass_through_endpoints.success_handler import PassThroughEndpointLogging
     from litellm.types.utils import StandardLoggingPayload
 
-    price: Final = 0.05
+    price: Final = 0.025
     monkeypatch.setitem(litellm.model_cost, "tripo/task", {
-        **litellm.model_cost["tripo/task"], "cost_per_credit": price,
-    })
-    monkeypatch.setitem(litellm.model_cost, "tripo/deployment-price", {
         **litellm.model_cost["tripo/task"], "cost_per_credit": price,
     })
     observed: Final[asyncio.Future[StandardLoggingPayload]] = asyncio.get_running_loop().create_future()
@@ -133,14 +127,13 @@ async def test_completed_task_credit_cost_reaches_success_callbacks(monkeypatch:
     assert handler.schedule(
         submission, {"code": 0, "data": {"task_id": "completed-task"}}, logging, start,
         {"model": "tripo/unlisted-test-model"}, PassThroughEndpointLogging().handle_logging, {},
-        billing_model="tripo/deployment-price",
     )
     await asyncio.gather(*tuple(handler.pending))
     assert observed.done()
     payload: Final = observed.result()
-    assert payload["response_cost"] == 1.0
+    assert payload["response_cost"] == 0.5
     assert payload["custom_llm_provider"] == "tripo"
-    assert logging.model_call_details["response_cost"] == 1.0
+    assert logging.model_call_details["response_cost"] == 0.5
     status_response: Final = httpx.Response(200, request=httpx.Request(
         "GET", "https://openapi.tripo3d.com/v3/tasks/completed-task",
     ))

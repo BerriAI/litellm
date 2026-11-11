@@ -33,7 +33,6 @@ class _PassThroughCredentials:
     api_key: str
     api_base: str | None
     model_name: str | None = None
-    model_id: str | None = None
 
 
 def _get_proxy_llm_router() -> "Router | None":
@@ -188,11 +187,7 @@ class PassthroughEndpointRouter:
         deployments: Final = llm_router.registry().deployments() or ()
         return next(
             (
-                replace(
-                    credentials,
-                    model_name=deployment["model_name"],
-                    model_id=_get_str_value(deployment.get("model_info"), "id"),
-                )
+                replace(credentials, model_name=deployment["model_name"])
                 for deployment in deployments
                 if (include_team_deployments or not _is_team_deployment(deployment))
                 and (

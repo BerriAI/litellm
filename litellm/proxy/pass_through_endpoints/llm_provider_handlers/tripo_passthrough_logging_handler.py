@@ -121,7 +121,6 @@ class TripoPassthroughLoggingHandler:
         request_body: Mapping[str, object],
         dispatch: PassThroughLogDispatch,
         kwargs: Mapping[str, object],
-        billing_model: str | None = None,
     ) -> bool:
         if not tripo_task_creation(response):
             return False
@@ -134,7 +133,7 @@ class TripoPassthroughLoggingHandler:
                 response.request.url,
                 response.request.headers.get('authorization', ''),
                 task.task_id,
-                billing_model or (model if isinstance(model, str) else 'tripo/task'),
+                model if isinstance(model, str) else 'tripo/task',
                 logging_obj,
                 start_time,
                 dispatch,
