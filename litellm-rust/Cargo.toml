@@ -161,3 +161,9 @@ panic = "unwind"
 debug = false
 incremental = false
 strip = "symbols"
+
+[profile.ci]
+inherits = "release"
+opt-level = 0
+lto = false
+codegen-units = 256
