@@ -151,7 +151,7 @@ USER root
 RUN echo "https://packages.wolfi.dev/os" >> /etc/apk/repositories
 
 RUN for i in 1 2 3; do \
-      apk add --no-cache bash openssl libssl3 tzdata nodejs python-3.13 libsndfile libatomic libevent nginx && break; \
+      apk add --no-cache bash openssl libssl3 tzdata nodejs python-3.13 libsndfile libatomic libevent libpq nginx && break; \
       [ "$i" = 3 ] && { echo "apk add failed after 3 retries" >&2; exit 1; }; \
       sleep 5; \
     done
