@@ -3,12 +3,12 @@ import contextlib
 import json
 import logging
 import math
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache, partial
 from http import HTTPStatus
-from itertools import chain, compress
+from itertools import chain
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -64,6 +64,7 @@ from litellm.litellm_core_utils.bug_report import (
     strip_bug_report_notice,
 )
 from litellm.litellm_core_utils.cloud_storage_security import (
+    file_id_embeds_s3_uri_matching,
     is_managed_s3_uri,
     media_file_ids,
     names_an_unlisted_s3_bucket,
@@ -115,7 +116,7 @@ from litellm.proxy.auth.auth_checks import (
     request_skips_budget_checks,
     tag_max_budget_check_for_tags,
 )
-from litellm.proxy.auth.auth_utils import ClientSideStorageAllowlist, check_response_size_is_safe, get_request_route
+from litellm.proxy.auth.auth_utils import check_response_size_is_safe, client_side_s3_bucket_check, get_request_route
 from litellm.proxy.bug_report_config import build_proxy_bug_report
 from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
@@ -1058,16 +1059,41 @@ async def _key_may_read_unified_file_id(
         return False
 
 
+async def _leading_readable_file_ids(
+    managed_files: ManagedResourceAccessChecker, user_api_key_dict: UserAPIKeyAuth, unified_file_ids: Iterable[str]
+) -> AsyncIterator[str]:
+    for file_id in unified_file_ids:
+        if not await _key_may_read_unified_file_id(managed_files, user_api_key_dict, file_id):
+            return
+        yield file_id
+
+
 async def _unified_file_ids_the_key_may_read(
-    data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth, managed_files: object
+    data: Mapping[str, object],
+    user_api_key_dict: UserAPIKeyAuth,
+    managed_files: object,
+    is_refused: Callable[[str], bool],
 ) -> frozenset[str]:
     if not isinstance(managed_files, ManagedResourceAccessChecker):
         return frozenset()
-    unified_file_ids: Final = tuple(filter(is_base64_encoded_unified_file_id, media_file_ids(data)))
-    readable: Final = await asyncio.gather(
-        *(_key_may_read_unified_file_id(managed_files, user_api_key_dict, file_id) for file_id in unified_file_ids)
+    file_ids_hiding_a_refused_uri: Final = filter(
+        partial(file_id_embeds_s3_uri_matching, matches=is_refused),
+        filter(is_base64_encoded_unified_file_id, media_file_ids(data)),
     )
-    return frozenset(compress(unified_file_ids, readable))
+    return frozenset(
+        [
+            file_id
+            async for file_id in _leading_readable_file_ids(
+                managed_files, user_api_key_dict, file_ids_hiding_a_refused_uri
+            )
+        ]
+    )
+
+
+def _unlisted_s3_uri_check(general_settings: Mapping[str, object]) -> Callable[[str], bool]:
+    if general_settings.get("allow_client_side_credentials") is True:
+        return lambda _: False
+    return partial(names_an_unlisted_s3_bucket, is_listed=client_side_s3_bucket_check(general_settings))
 
 
 async def refuse_s3_media_the_key_may_not_read(
@@ -1080,7 +1106,10 @@ async def refuse_s3_media_the_key_may_not_read(
         return
     if not s3_media_uris(data):
         return
-    readable_file_ids: Final = await _unified_file_ids_the_key_may_read(data, user_api_key_dict, managed_files)
+    is_unlisted: Final = _unlisted_s3_uri_check(general_settings)
+    readable_file_ids: Final = await _unified_file_ids_the_key_may_read(
+        data, user_api_key_dict, managed_files, lambda uri: is_managed_s3_uri(uri) or is_unlisted(uri)
+    )
     s3_uris: Final = s3_media_uris(data, readable_file_ids)
     managed_uris: Final = tuple(filter(is_managed_s3_uri, s3_uris))
     if managed_uris:
@@ -1089,12 +1118,7 @@ async def refuse_s3_media_the_key_may_not_read(
             detail=f"Raw s3:// URIs under LiteLLM-managed storage can only be sent by a proxy admin key "
             f"({', '.join(managed_uris)}). Use a LiteLLM managed file id that this key's user or team created.",
         )
-    if general_settings.get("allow_client_side_credentials") is True:
-        return
-    is_listed: Final = partial(
-        ClientSideStorageAllowlist.model_validate(general_settings).admits, "allowed_client_side_s3_buckets"
-    )
-    unlisted_uris: Final = tuple(uri for uri in s3_uris if names_an_unlisted_s3_bucket(uri, is_listed))
+    unlisted_uris: Final = tuple(filter(is_unlisted, s3_uris))
     if unlisted_uris:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

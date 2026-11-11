@@ -2,8 +2,8 @@ import importlib.util
 import os
 import re
 import sys
-from collections.abc import Collection, Iterator, Mapping
-from functools import lru_cache
+from collections.abc import Callable, Collection, Iterator, Mapping
+from functools import lru_cache, partial
 from itertools import accumulate, chain, repeat
 from logging import Logger
 from types import MappingProxyType
@@ -495,7 +495,7 @@ _PROXY_ALLOWLIST_SETTING_BY_PARAM: Final[Mapping[str, _ClientSideAllowlistSettin
 )
 
 
-class ClientSideStorageAllowlist(BaseModel):
+class _ClientSideStorageAllowlist(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     allowed_client_side_s3_buckets: tuple[str, ...] | None = None
@@ -507,6 +507,12 @@ class ClientSideStorageAllowlist(BaseModel):
                 return value in (self.allowed_client_side_s3_buckets or ())
             case "allowed_client_side_s3_endpoint_urls":
                 return value in (self.allowed_client_side_s3_endpoint_urls or ())
+
+
+def client_side_s3_bucket_check(general_settings: Mapping[str, object]) -> Callable[[str], bool]:
+    return partial(
+        _ClientSideStorageAllowlist.model_validate(general_settings).admits, "allowed_client_side_s3_buckets"
+    )
 
 
 def _banned_param_error(param: str) -> ValueError:
@@ -555,7 +561,7 @@ def _check_banned_params(
             return
         if (
             setting := _PROXY_ALLOWLIST_SETTING_BY_PARAM.get(param)
-        ) is not None and ClientSideStorageAllowlist.model_validate(general_settings).admits(setting, body[param]):
+        ) is not None and _ClientSideStorageAllowlist.model_validate(general_settings).admits(setting, body[param]):
             continue
         if (
             _allow_model_level_clientside_configurable_parameters(

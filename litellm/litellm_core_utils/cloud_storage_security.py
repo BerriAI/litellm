@@ -184,6 +184,10 @@ def media_file_ids(request_body: Mapping[str, object]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(filter(None, map(_media_file_id, _body_nodes(request_body)))))
 
 
+def file_id_embeds_s3_uri_matching(file_id: str, matches: Callable[[str], bool]) -> bool:
+    return any(map(matches, _s3_uris_embedded_in_file_id(file_id)))
+
+
 def s3_media_uris(
     request_body: Mapping[str, object], trusted_file_ids: frozenset[str] = frozenset()
 ) -> tuple[str, ...]:

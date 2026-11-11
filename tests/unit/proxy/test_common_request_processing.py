@@ -303,6 +303,30 @@ class _ManagedFilesCreatedBy(CustomLogger):
         return False
 
 
+class _ManagedFilesCountingLookups(_ManagedFilesCreatedBy):
+    def __init__(self, creators: Mapping[str, str]) -> None:
+        super().__init__(creators)
+        self.looked_up: Final[list[str]] = []  # mutable-ok: the fake records the lookups the gate makes
+
+    async def can_user_call_unified_file_id(
+        self, unified_file_id: str, user_api_key_dict: ProxyUserAPIKeyAuth
+    ) -> bool:
+        self.looked_up.append(unified_file_id)
+        return await super().can_user_call_unified_file_id(unified_file_id, user_api_key_dict)
+
+
+def _unified_file_id_for(s3_uri: str) -> str:
+    managed_id: Final = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
+        "application/pdf", "u1", "nova", s3_uri, "deployment-1"
+    )
+    return urlsafe_b64encode(managed_id.encode()).decode().rstrip("=")
+
+
+def _chat_files(file_ids: Sequence[str]) -> dict[str, object]:
+    parts: Final = [{"type": "file", "file": {"file_id": file_id}} for file_id in file_ids]
+    return {"messages": [{"role": "user", "content": parts}]}
+
+
 _S3_OBJECT: Final = "s3://media-bucket/dir/cat.png"
 _HELLO: Final = {"role": "user", "content": "hello"}
 _S3_VALUES_OUTSIDE_MEDIA_PARTS: Final = (
@@ -946,6 +970,76 @@ class TestProxyBaseLLMRequestProcessing:
         assert refused.value.status_code == status.HTTP_403_FORBIDDEN, refused.value.detail
         assert _UPLOADED_OBJECT in refused.value.detail
         assert "LiteLLM-managed storage" in refused.value.detail
+
+    @pytest.mark.asyncio
+    async def test_non_admin_forged_managed_file_ids_stop_at_the_first_failed_lookup(self) -> None:
+        forged_ids: Final = tuple(
+            _unified_file_id_for(f"s3://media-bucket/litellm-bedrock-files/forged-{index}.pdf") for index in range(2000)
+        )
+        managed_files: Final = _ManagedFilesCountingLookups({})
+
+        with pytest.raises(HTTPException) as refused:
+            await _send_s3_media(
+                "acompletion",
+                "/v1/chat/completions",
+                _chat_files(forged_ids),
+                LitellmUserRoles.INTERNAL_USER,
+                {},
+                managed_files,
+            )
+
+        assert refused.value.status_code == status.HTTP_403_FORBIDDEN, refused.value.detail
+        assert managed_files.looked_up == [forged_ids[0]]
+
+    @pytest.mark.asyncio
+    async def test_non_admin_file_ids_that_cannot_change_the_outcome_cost_no_lookup(self) -> None:
+        listed_object_id: Final = _unified_file_id_for("s3://media-bucket/dir/report.pdf")
+        id_without_s3_uri: Final = _unified_file_id_for("gs://other/report.pdf")
+        managed_files: Final = _ManagedFilesCountingLookups({_UPLOADED_FILE_ID: "user-a"})
+
+        response: Final = await _send_s3_media(
+            "acompletion",
+            "/v1/chat/completions",
+            _chat_files((listed_object_id, id_without_s3_uri, _UPLOADED_FILE_ID)),
+            LitellmUserRoles.INTERNAL_USER,
+            {"allowed_client_side_s3_buckets": ["media-bucket"]},
+            managed_files,
+        )
+
+        assert "a cat" in str(response)
+        assert managed_files.looked_up == [_UPLOADED_FILE_ID]
+
+    @pytest.mark.asyncio
+    async def test_non_admin_managed_file_id_its_user_created_passes_from_an_unlisted_bucket(self) -> None:
+        owned_id: Final = _unified_file_id_for("s3://other-bucket/report.pdf")
+
+        response: Final = await _send_s3_media(
+            "acompletion",
+            "/v1/chat/completions",
+            _chat_files((owned_id,)),
+            LitellmUserRoles.INTERNAL_USER,
+            {},
+            _ManagedFilesCreatedBy({owned_id: "user-a"}),
+        )
+
+        assert "a cat" in str(response)
+
+    @pytest.mark.asyncio
+    async def test_non_admin_unlisted_file_id_costs_no_lookup_when_client_side_credentials_are_allowed(self) -> None:
+        unlisted_object_id: Final = _unified_file_id_for("s3://other-bucket/report.pdf")
+        managed_files: Final = _ManagedFilesCountingLookups({})
+
+        response: Final = await _send_s3_media(
+            "acompletion",
+            "/v1/chat/completions",
+            _chat_files((unlisted_object_id,)),
+            LitellmUserRoles.INTERNAL_USER,
+            {"allow_client_side_credentials": True},
+            managed_files,
+        )
+
+        assert "a cat" in str(response)
+        assert managed_files.looked_up == []
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
