@@ -555,8 +555,8 @@ def test_mcp_metadata_accepts_a_boolean_skip_tool_output_validation(
 
 
 @pytest.mark.parametrize("request_model", (NewMCPServerRequest, UpdateMCPServerRequest))
-@pytest.mark.parametrize("value", [-1, 1.5, "60", True, None])
-def test_mcp_metadata_rejects_a_tools_list_cache_ttl_that_is_not_a_whole_number_of_seconds(
+@pytest.mark.parametrize("value", [-1, 1.5, "60", True, None, 31536001, 10**400])
+def test_mcp_metadata_rejects_a_tools_list_cache_ttl_that_is_not_whole_seconds_within_a_year(
     request_model: type[NewMCPServerRequest] | type[UpdateMCPServerRequest], value: object
 ) -> None:
     payload: Final = {
@@ -571,7 +571,7 @@ def test_mcp_metadata_rejects_a_tools_list_cache_ttl_that_is_not_a_whole_number_
 
 
 @pytest.mark.parametrize("request_model", (NewMCPServerRequest, UpdateMCPServerRequest))
-@pytest.mark.parametrize("value", [0, 60])
+@pytest.mark.parametrize("value", [0, 60, 31536000])
 def test_mcp_metadata_accepts_a_tools_list_cache_ttl_in_whole_seconds(
     request_model: type[NewMCPServerRequest] | type[UpdateMCPServerRequest], value: int
 ) -> None:

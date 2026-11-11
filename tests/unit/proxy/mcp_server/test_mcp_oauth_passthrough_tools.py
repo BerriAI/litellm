@@ -214,11 +214,11 @@ async def test_fetch_tools_from_passthrough_returns_tools_on_success():
         oauth_passthrough=True,
     )
 
-    tool = MCPTool(name="list_documents", inputSchema={"type": "object"})
+    tool: Final = MCPTool(name="list_documents", inputSchema={"type": "object"})
     mock_client = MagicMock()
     mock_client.list_tools_result = AsyncMock(return_value=ListToolsResult(tools=[tool]))
 
-    listing = await manager._fetch_tools_with_timeout(mock_client, passthrough_server.name)
+    listing: Final = await manager._fetch_tools_with_timeout(mock_client, passthrough_server.name)
     assert listing.tools == [tool]
 
 

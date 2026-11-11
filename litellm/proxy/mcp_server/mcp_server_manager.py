@@ -235,6 +235,7 @@ from litellm.types.mcp import (
     without_header,
 )
 from litellm.types.mcp_server.mcp_server_manager import (
+    MAX_TOOLS_LIST_CACHE_TTL_SECONDS,
     MCPInfo,
     MCPOAuthMetadata,
     MCPServer,
@@ -1911,7 +1912,7 @@ def _mcp_tools_list_cache_ttl() -> float | None:
     except ValueError:
         verbose_logger.warning("Invalid LITELLM_MCP_TOOLS_LIST_CACHE_TTL; ignoring it")
         return None
-    if not math.isfinite(ttl) or ttl < 0:
+    if not 0 <= ttl <= MAX_TOOLS_LIST_CACHE_TTL_SECONDS:
         verbose_logger.warning("Invalid LITELLM_MCP_TOOLS_LIST_CACHE_TTL; ignoring it")
         return None
     return ttl
@@ -4617,20 +4618,23 @@ class MCPServerManager:
                     tools=[t.model_copy(update={"name": registered_names[t.name]}) for t in guarded_openapi]
                 )
             else:
-                key: Final = self._discovery_key(
-                    server,
-                    user_api_key_auth,
-                    mcp_auth_header,
-                    extra_headers,
-                    stdio_env,
-                    subject_token,
-                    await client.discovery_auth_fingerprint(),
-                    raw_headers=raw_headers,
-                    page_cursor=None if params is None else (params.cursor,),
-                )
+
+                async def cache_key() -> _DiscoveryKey:
+                    return self._discovery_key(
+                        server,
+                        user_api_key_auth,
+                        mcp_auth_header,
+                        extra_headers,
+                        stdio_env,
+                        subject_token,
+                        await client.discovery_auth_fingerprint(),
+                        raw_headers=raw_headers,
+                        page_cursor=None if params is None else (params.cursor,),
+                    )
+
                 page: Final = await self._list_upstream_tools(
                     server,
-                    key,
+                    cache_key,
                     partial(self._fetch_tools_with_timeout, client, server.name)
                     if params is None
                     else partial(
@@ -4706,16 +4710,34 @@ class MCPServerManager:
         return self._tools_list_cache_ttl if per_server is None else float(per_server)
 
     async def _list_upstream_tools(
-        self, server: MCPServer, key: _DiscoveryKey, fetch: Callable[[], Awaitable[ListToolsResult]]
+        self,
+        server: MCPServer,
+        cache_key: Callable[[], Awaitable[_DiscoveryKey]],
+        fetch: Callable[[], Awaitable[ListToolsResult]],
     ) -> ListToolsResult:
         admin_ttl: Final = self._admin_tools_list_ttl(server)
         if admin_ttl is None:
-            return await self._tool_discovery_cache.get(key, fetch)
+            return await self._list_tools_for_upstream_ttl(server, cache_key, fetch)
 
         async def fetch_with_admin_ttl() -> ListToolsResult:
             return (await fetch()).model_copy(update={"ttl_ms": int(admin_ttl * 1000)})
 
-        return await self._tool_discovery_cache.get(key, fetch_with_admin_ttl, capped=False)
+        if admin_ttl <= 0:
+            return await fetch_with_admin_ttl()
+        return await self._tool_discovery_cache.get(await cache_key(), fetch_with_admin_ttl, capped=False)
+
+    async def _list_tools_for_upstream_ttl(
+        self,
+        server: MCPServer,
+        cache_key: Callable[[], Awaitable[_DiscoveryKey]],
+        fetch: Callable[[], Awaitable[ListToolsResult]],
+    ) -> ListToolsResult:
+        if self._tool_discovery_cache.holds(server.server_id):
+            return await self._tool_discovery_cache.get(await cache_key(), fetch)
+        page: Final = await fetch()
+        if self._list_caching_enabled and page.ttl_ms > 0:
+            self._tool_discovery_cache.keep(await cache_key(), page)
+        return page
 
     def clear_initialize_instructions(self) -> None:
         self._upstream_initialize_instructions_by_server_id.clear()

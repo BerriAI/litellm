@@ -208,10 +208,10 @@ async def test_cancelled_fetch_propagates_instead_of_masquerading_as_a_healthy_e
     client = MagicMock()
     started = asyncio.Event()
 
-    async def list_tools_result(raise_on_error: bool = False) -> list[object]:
+    async def list_tools_result(raise_on_error: bool = False) -> tuple[object, ...]:
         started.set()
         await asyncio.Event().wait()
-        return []
+        return ()
 
     client.list_tools_result = list_tools_result
     listing = asyncio.create_task(manager._fetch_tools_with_timeout(client, "cancelled_srv"))

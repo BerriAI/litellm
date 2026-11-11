@@ -3,6 +3,7 @@ import json
 import logging
 from datetime import datetime
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -216,7 +217,7 @@ async def test_proxy_schema_and_call_resolve_tool_id_without_waiting_on_unrelate
             except asyncio.CancelledError:
                 await slow_teardown.wait()
                 raise
-        echo = MCPTool(name="echo", description="Echo text back", inputSchema={"type": "object"})
+        echo: Final = MCPTool(name="echo", description="Echo text back", inputSchema={"type": "object"})
         return ListToolsResult(tools=[echo])
 
     async def call_regular_mcp_tool(*, tasks: list[asyncio.Task[object]], **_: object) -> CallToolResult:

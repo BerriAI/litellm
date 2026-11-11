@@ -95,7 +95,7 @@ def cleanup_mcp_global_state():
 
 
 def _listing_client() -> AsyncMock:
-    client = AsyncMock()
+    client: Final = AsyncMock()
     client.discovery_auth_fingerprint = AsyncMock(return_value="test-credential-hash")
     return client
 
@@ -8838,7 +8838,7 @@ async def test_execute_mcp_tool_implicit_listing_before_the_first_call_hands_hoo
     server = _never_listed_passthrough_server()
     manager.registry[server.server_id] = server
     manager._listed_tools_by_server_id.pop(server.server_id, None)
-    upstream = _listing_client()
+    upstream: Final = _listing_client()
     upstream.call_tool.return_value = CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
     proxy_logging = _mock_mcp_proxy_logging()
     proxy_logging.has_pre_call_guardrails.return_value = False

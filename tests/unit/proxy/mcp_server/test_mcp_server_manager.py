@@ -9,7 +9,7 @@ import logging
 import os
 import sys
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from datetime import datetime
 from pathlib import Path
 from types import EllipsisType, SimpleNamespace
@@ -8246,7 +8246,7 @@ class TestMCPServerManager:
         )
         manager.registry = {"byok-catalog": server}
         user = UserAPIKeyAuth(api_key="sk-litellm", user_id="byok-user")
-        mock_client = _listing_client()
+        mock_client: Final = _listing_client()
         mock_client.call_tool.return_value = MagicMock(spec=CallToolResult, content=[], isError=False)
         manager.create_mcp_client = AsyncMock(return_value=mock_client)
         manager._fetch_tools_with_timeout = AsyncMock(
@@ -8570,7 +8570,7 @@ class TestMCPServerManager:
                 )
             ],
         }
-        mock_client = _listing_client()
+        mock_client: Final = _listing_client()
         mock_client.call_tool.return_value = MagicMock(spec=CallToolResult, content=[], isError=False)
         manager.create_mcp_client = AsyncMock(return_value=mock_client)
         manager._fetch_tools_with_timeout = AsyncMock(side_effect=lambda client, name: ListToolsResult(tools=catalogs[client.workspace]))
@@ -16524,7 +16524,7 @@ async def test_health_check_logs_upstream_exchange_only_for_http_failures(
 class _DiscoveryUpstream:
     def __init__(self) -> None:
         self.requests: tuple[tuple[str, str], ...] = ()
-        self.tools: tuple[dict[str, object], ...] = (
+        self.tools: tuple[Mapping[str, object], ...] = (
             {"name": "example", "description": "original", "inputSchema": {"type": "object"}},
         )
         self.outcome = "supported"
@@ -16715,16 +16715,20 @@ async def test_discovery_cache_reuses_raw_results_and_expires(kind: str) -> None
         assert upstream.initializes == 2
 
 
-def _list_discovery_tools(
+async def _list_discovery_tools(
     manager: MCPServerManager,
     cursor: str | None | EllipsisType = ...,
     server: MCPServer | None = None,
-    **kwargs,
-):
+    *,
+    add_prefix: bool = True,
+    extra_headers: dict[str, str] | None = None,
+) -> ListToolsResult:
     from mcp.types import PaginatedRequestParams
 
     params: Final = None if cursor is ... else PaginatedRequestParams(cursor=cursor)
-    return manager.get_tools_page(server or _discovery_server(), params=params, **kwargs)
+    return await manager.get_tools_page(
+        server or _discovery_server(), params=params, add_prefix=add_prefix, extra_headers=extra_headers
+    )
 
 
 def _server_with_tools_list_ttl(seconds: int) -> MCPServer:
@@ -16896,7 +16900,17 @@ async def test_tools_list_global_ttl_applies_unless_the_server_sets_its_own(
 
 @pytest.mark.parametrize(
     ("value", "expected"),
-    ((None, None), ("invalid", None), ("nan", None), ("inf", None), ("-1", None), ("0", 0.0), ("12.5", 12.5)),
+    (
+        (None, None),
+        ("invalid", None),
+        ("nan", None),
+        ("inf", None),
+        ("-1", None),
+        ("31536001", None),
+        ("0", 0.0),
+        ("12.5", 12.5),
+        ("31536000", 31536000.0),
+    ),
 )
 def test_tools_list_cache_ttl_env_validation(
     value: str | None, expected: float | None, monkeypatch: pytest.MonkeyPatch
@@ -16943,6 +16957,29 @@ async def test_tools_list_failures_are_not_cached_under_a_server_ttl(
         for _ in range(2):
             assert len((await _list_discovery_tools(manager, server=server)).tools) == tool_count
         assert upstream.initializes == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("server_seconds", "upstream_fetches"),
+    ((None, 3), (0, 3), (300, 1)),
+    ids=("nothing_configured", "server_ttl_zero", "server_ttl_set"),
+)
+async def test_tools_list_requests_in_flight_share_an_upstream_fetch_only_under_a_server_ttl(
+    server_seconds: int | None, upstream_fetches: int
+) -> None:
+    manager: Final = MCPServerManager(discovery_clock=_DiscoveryClock())
+    upstream: Final = _DiscoveryUpstream()
+    upstream.ttl_ms = 0
+    upstream.release.clear()
+    server: Final = _discovery_server() if server_seconds is None else _server_with_tools_list_ttl(server_seconds)
+    with _mcp_upstream(upstream.respond):
+        listings: Final = tuple(asyncio.create_task(_list_discovery_tools(manager, server=server)) for _ in range(3))
+        await upstream.entered.wait()
+        await asyncio.sleep(0.2)
+        upstream.release.set()
+        assert [len(listing.tools) for listing in await asyncio.gather(*listings)] == [1, 1, 1]
+    assert sum(method == "tools/list" for method, _auth in upstream.requests) == upstream_fetches
 
 
 @pytest.mark.asyncio
@@ -21370,7 +21407,7 @@ async def test_paginated_listing_keeps_earlier_tool_metadata_and_caller_isolatio
     server = MCPServer(server_id="pages", name="pages", transport=MCPTransport.http)
     manager = MCPServerManager()
     manager.registry = {server.server_id: server}
-    client = _listing_client()
+    client: Final = _listing_client()
     client._last_initialize_instructions = None
     client.list_tools_page.side_effect = [
         ListToolsResult(tools=[first], next_cursor="next"),
@@ -21528,7 +21565,7 @@ async def test_failed_aggregate_continuation_preserves_only_delivered_tool_metad
     servers = [MCPServer(server_id=name, name=name, transport=MCPTransport.http) for name in ("alpha", "beta")]
     manager = MCPServerManager()
     manager.registry = {server.server_id: server for server in servers}
-    clients = {server.server_id: _listing_client() for server in servers}
+    clients: Final = {server.server_id: _listing_client() for server in servers}
     for client in clients.values():
         client._last_initialize_instructions = None
         client.list_tools_page.side_effect = [
@@ -21572,7 +21609,7 @@ async def test_aggregate_publishes_complete_bare_routes_only_after_delivering_a_
     servers = [MCPServer(server_id=name, name=name, transport=MCPTransport.http) for name in ("alpha", "beta")]
     manager = MCPServerManager()
     manager.registry = {server.server_id: server for server in servers}
-    clients = {server.server_id: _listing_client() for server in servers}
+    clients: Final = {server.server_id: _listing_client() for server in servers}
     for name, client in clients.items():
         client._last_initialize_instructions = None
         client.list_tools_page.return_value = ListToolsResult(

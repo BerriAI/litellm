@@ -1,4 +1,5 @@
 import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -172,12 +173,14 @@ async def test_pagination_walk_stops_on_repeated_cursor(mock_session):
 
 @pytest.mark.asyncio()
 @pytest.mark.parametrize("last_cursor", [None, "page-1"])
-async def test_pagination_walk_keeps_the_shortest_ttl_only_for_a_complete_walk(mock_session, last_cursor):
+async def test_pagination_walk_keeps_the_shortest_ttl_only_for_a_complete_walk(
+    mock_session: MagicMock, last_cursor: str | None
+) -> None:
     mock_session.list_tools.side_effect = [
         ListToolsResult(tools=[MCPTool(name="tool_0", inputSchema={})], nextCursor="page-1", ttl_ms=30000),
         ListToolsResult(tools=[MCPTool(name="tool_1", inputSchema={})], nextCursor=last_cursor, ttl_ms=20000),
     ]
-    result = await list_tools_result_with_pagination(mock_session)
+    result: Final = await list_tools_result_with_pagination(mock_session)
 
     assert [tool.name for tool in result.tools] == ["tool_0", "tool_1"]
     if last_cursor is None:

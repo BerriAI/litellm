@@ -18,8 +18,10 @@ from litellm.types.mcp import (
     validate_mcp_protocol_transport,
 )
 
-
-_TOOLS_LIST_CACHE_TTL_SECONDS: Final = TypeAdapter[int](Annotated[int, Field(ge=0)])
+MAX_TOOLS_LIST_CACHE_TTL_SECONDS: Final = 365 * 24 * 60 * 60
+_TOOLS_LIST_CACHE_TTL_SECONDS: Final = TypeAdapter[int](
+    Annotated[int, Field(ge=0, le=MAX_TOOLS_LIST_CACHE_TTL_SECONDS)]
+)
 
 
 # MCPInfo now allows arbitrary additional fields for custom metadata

@@ -1361,15 +1361,20 @@ class _DiscoveryCache(Generic[_DiscoveryPage]):
         self._waiters: dict[asyncio.Task[_DiscoveryPage], int] = {}  # mutable-ok: constant-time waiter accounting
         self._oversized_server_ids: set[str] = set()  # mutable-ok: one warning per server
 
-    def invalidate(self, server_id: str) -> None:
-        self._oversized_server_ids.discard(server_id)
+    def _entry_keys(self, server_id: str) -> tuple[str, ...]:
         prefix: Final = f"[{json.dumps(server_id)},"
         keys: Final = cast(  # cast-ok: private cache contains only JSON string keys
             "tuple[str, ...]", tuple(self._entries.cache_dict)
         )
-        for entry_key in keys:
-            if entry_key.startswith(prefix):
-                self._entries.delete_cache(entry_key)
+        return tuple(entry_key for entry_key in keys if entry_key.startswith(prefix))
+
+    def holds(self, server_id: str) -> bool:
+        return bool(self._entry_keys(server_id))
+
+    def invalidate(self, server_id: str) -> None:
+        self._oversized_server_ids.discard(server_id)
+        for entry_key in self._entry_keys(server_id):
+            self._entries.delete_cache(entry_key)
         for key in tuple(self._pending):
             if key[0] == server_id:
                 self._pending.pop(key)
@@ -1421,16 +1426,19 @@ class _DiscoveryCache(Generic[_DiscoveryPage]):
     ) -> _DiscoveryPage:
         try:
             items: Final = await fetch()
-            declared: Final = items.ttl_ms / 1000
-            ttl: Final = min(self._ttl, declared) if capped else declared
-            if ttl > 0 and self._pending.get(key) is asyncio.current_task():
-                self._store(key, _DISCOVERY_ENTRY.dump_json((self._clock() + ttl, self._adapter.dump_json(items))), ttl)
+            if self._pending.get(key) is asyncio.current_task():
+                self.keep(key, items, capped=capped)
             return items
         finally:
             if self._pending.get(key) is asyncio.current_task():
                 self._pending.pop(key)
 
-    def _store(self, key: _DiscoveryKey, entry: bytes, ttl: float) -> None:
+    def keep(self, key: _DiscoveryKey, items: _DiscoveryPage, *, capped: bool = True) -> None:
+        declared: Final = items.ttl_ms / 1000
+        ttl: Final = min(self._ttl, declared) if capped else declared
+        if ttl <= 0:
+            return
+        entry: Final = _DISCOVERY_ENTRY.dump_json((self._clock() + ttl, self._adapter.dump_json(items)))
         if self._entries.check_value_size(entry):
             self._entries.set_cache(json.dumps(key), entry, ttl=ttl)
             return
