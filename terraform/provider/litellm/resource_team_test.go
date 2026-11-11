@@ -707,3 +707,177 @@ func TestTeamReadWithoutMemberBudgetTableLeavesFieldEmpty(t *testing.T) {
 		t.Errorf("team_member_model_max_budget = %q, want empty", got)
 	}
 }
+
+func TestTeamReadMapsMemberBudgetFieldsFromBudgetTable(t *testing.T) {
+	var captured map[string]interface{}
+	srv := newTeamTestServer(t, &captured, `{
+		"team_id": "team-1",
+		"team_info": {
+			"team_id": "team-1",
+			"team_alias": "eng",
+			"metadata": {"team_member_budget_id": "budget-1"},
+			"team_member_budget_table": {
+				"max_budget": 250.0,
+				"budget_duration": "30d",
+				"rpm_limit": 60,
+				"tpm_limit": 100000
+			}
+		}
+	}`)
+	defer srv.Close()
+
+	d := newTeamResourceData(t, map[string]interface{}{"team_alias": "eng"})
+	d.SetId("team-1")
+	if err := resourceLiteLLMTeamRead(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("read returned error: %v", err)
+	}
+	if got := d.Get("team_member_budget").(float64); got != 250.0 {
+		t.Errorf("team_member_budget = %v, want 250", got)
+	}
+	if got := d.Get("team_member_budget_duration").(string); got != "30d" {
+		t.Errorf("team_member_budget_duration = %q, want 30d", got)
+	}
+	if got := d.Get("team_member_rpm_limit").(int); got != 60 {
+		t.Errorf("team_member_rpm_limit = %v, want 60", got)
+	}
+	if got := d.Get("team_member_tpm_limit").(int); got != 100000 {
+		t.Errorf("team_member_tpm_limit = %v, want 100000", got)
+	}
+}
+
+func TestTeamReadClearsMemberBudgetFieldsWhenBudgetTableNull(t *testing.T) {
+	var captured map[string]interface{}
+	srv := newTeamTestServer(t, &captured, `{"team_id":"team-1","team_info":{"team_id":"team-1","team_alias":"eng","team_member_budget_table":{"max_budget":null,"rpm_limit":null,"tpm_limit":null}}}`)
+	defer srv.Close()
+
+	d := newTeamResourceData(t, map[string]interface{}{
+		"team_alias":            "eng",
+		"team_member_budget":    250.0,
+		"team_member_rpm_limit": 60,
+		"team_member_tpm_limit": 100000,
+	})
+	d.SetId("team-1")
+	if err := resourceLiteLLMTeamRead(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("read returned error: %v", err)
+	}
+	for _, key := range []string{"team_member_budget", "team_member_rpm_limit", "team_member_tpm_limit"} {
+		if _, ok := d.GetOk(key); ok {
+			t.Errorf("%s = %v, want unset so drift shows up", key, d.Get(key))
+		}
+	}
+}
+
+func TestTeamMemberBudgetDurationInheritedByProxyIsNotDrift(t *testing.T) {
+	res := ResourceLiteLLMTeam()
+	priorData := schema.TestResourceDataRaw(t, res.Schema, map[string]interface{}{
+		"team_alias":                  "eng",
+		"budget_duration":             "7d",
+		"team_member_budget":          250.0,
+		"team_member_budget_duration": "7d",
+	})
+	priorData.SetId("team-1")
+	config := terraform.NewResourceConfigRaw(map[string]interface{}{
+		"team_alias":         "eng",
+		"budget_duration":    "7d",
+		"team_member_budget": 250.0,
+	})
+	diff, err := res.Diff(context.Background(), priorData.State(), config, nil)
+	if err != nil {
+		t.Fatalf("diff failed: %v", err)
+	}
+	if diff != nil && len(diff.Attributes) > 0 {
+		t.Fatalf("a member budget duration copied from the team's budget_duration must not plan a change, diff = %+v", diff.Attributes)
+	}
+}
+
+func TestTeamReadMapsAllowedPassthroughRoutesFromMetadata(t *testing.T) {
+	var captured map[string]interface{}
+	srv := newTeamTestServer(t, &captured, `{
+		"team_id": "team-1",
+		"team_info": {
+			"team_id": "team-1",
+			"team_alias": "eng",
+			"metadata": {"department": "eng", "allowed_passthrough_routes": ["/vertex_ai/*"]}
+		}
+	}`)
+	defer srv.Close()
+
+	d := newTeamResourceData(t, map[string]interface{}{"team_alias": "eng"})
+	d.SetId("team-1")
+	if err := resourceLiteLLMTeamRead(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("read returned error: %v", err)
+	}
+	if got := d.Get("allowed_passthrough_routes").([]interface{}); !reflect.DeepEqual(got, []interface{}{"/vertex_ai/*"}) {
+		t.Errorf("allowed_passthrough_routes = %v, want [/vertex_ai/*]", got)
+	}
+	if got := d.Get("metadata").(map[string]interface{}); !reflect.DeepEqual(got, map[string]interface{}{"department": "eng"}) {
+		t.Errorf("metadata = %v, want department only", got)
+	}
+}
+
+func TestTeamUpdateClearsRemovedMemberBudgetFieldsAndPassthroughRoutes(t *testing.T) {
+	var captured map[string]interface{}
+	srv := newTeamTestServer(t, &captured, `{"team_id":"team-1","team_info":{"team_id":"team-1","team_alias":"eng"}}`)
+	defer srv.Close()
+
+	res := ResourceLiteLLMTeam()
+	priorData := schema.TestResourceDataRaw(t, res.Schema, map[string]interface{}{
+		"team_alias":                 "eng",
+		"team_member_budget":         250.0,
+		"team_member_rpm_limit":      60,
+		"team_member_tpm_limit":      100000,
+		"allowed_passthrough_routes": []interface{}{"/vertex_ai/*"},
+	})
+	priorData.SetId("team-1")
+	prior := priorData.State()
+	config := terraform.NewResourceConfigRaw(map[string]interface{}{"team_alias": "eng"})
+	diff, err := res.Diff(context.Background(), prior, config, nil)
+	if err != nil {
+		t.Fatalf("diff failed: %v", err)
+	}
+	d, err := schema.InternalMap(res.Schema).Data(prior, diff)
+	if err != nil {
+		t.Fatalf("data failed: %v", err)
+	}
+
+	if err := resourceLiteLLMTeamUpdate(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+	for _, key := range []string{"team_member_budget", "team_member_rpm_limit", "team_member_tpm_limit"} {
+		if got, ok := captured[key]; !ok || got != nil {
+			t.Errorf("payload %s = %v (present=%v), want explicit null", key, got, ok)
+		}
+	}
+	if got := captured["allowed_passthrough_routes"]; !reflect.DeepEqual(got, []interface{}{}) {
+		t.Errorf("payload allowed_passthrough_routes = %v, want []", got)
+	}
+}
+
+func TestTeamUpdateOmitsUnchangedUnsetMemberBudgetFields(t *testing.T) {
+	var captured map[string]interface{}
+	srv := newTeamTestServer(t, &captured, `{"team_id":"team-1","team_info":{"team_id":"team-1","team_alias":"eng"}}`)
+	defer srv.Close()
+
+	res := ResourceLiteLLMTeam()
+	priorData := schema.TestResourceDataRaw(t, res.Schema, map[string]interface{}{"team_alias": "eng"})
+	priorData.SetId("team-1")
+	prior := priorData.State()
+	config := terraform.NewResourceConfigRaw(map[string]interface{}{"team_alias": "eng-renamed"})
+	diff, err := res.Diff(context.Background(), prior, config, nil)
+	if err != nil {
+		t.Fatalf("diff failed: %v", err)
+	}
+	d, err := schema.InternalMap(res.Schema).Data(prior, diff)
+	if err != nil {
+		t.Fatalf("data failed: %v", err)
+	}
+
+	if err := resourceLiteLLMTeamUpdate(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+	for _, key := range []string{"team_member_budget", "team_member_rpm_limit", "team_member_tpm_limit", "allowed_passthrough_routes"} {
+		if _, ok := captured[key]; ok {
+			t.Errorf("payload has %s = %v, want it omitted when never set", key, captured[key])
+		}
+	}
+}
