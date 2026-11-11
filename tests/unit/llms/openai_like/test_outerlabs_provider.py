@@ -128,7 +128,6 @@ _NO_FORCED_TOOL_CHOICE: Final = frozenset(
         "outerlabs/claude-fable-5-1",
         "outerlabs/claude-opus-5-5",
         "outerlabs/claude-sonnet-5-5",
-        "outerlabs/gpt-6-luna",
     }
 )
 
