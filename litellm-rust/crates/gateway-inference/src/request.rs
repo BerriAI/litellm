@@ -218,10 +218,14 @@ pub(crate) fn hold(routed: Routed<Response>) -> Response {
         return value;
     }
     value.map(|body| {
-        Body::from_stream(body.into_data_stream().map(move |chunk| {
+        let held = body.into_data_stream().map(move |chunk| {
             let _held = &in_flight;
             chunk
-        }))
+        });
+        match crate::coalesce::window() {
+            Some(window) => Body::from_stream(crate::coalesce::coalesce(held, window)),
+            None => Body::from_stream(held),
+        }
     })
 }
 

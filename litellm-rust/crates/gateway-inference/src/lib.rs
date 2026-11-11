@@ -7,6 +7,7 @@ mod cache_control_injection;
 mod caching;
 mod chat_completions;
 mod client_side;
+mod coalesce;
 mod deployment_params;
 mod error;
 mod hooks;
