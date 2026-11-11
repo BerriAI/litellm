@@ -104,6 +104,7 @@ impl litellm_host::protocol::Protocol for MessagesHosted {
 
 pub(super) enum MessagesHostCall {
     Answer { stream: bool, reply: Reply<()> },
+    Intercept { stream: bool, reply: Reply<bool> },
     Cache(CacheCall),
     PreRequest(Reply<Result<MessagesCall, Error>>),
     Safeguards(SafeguardsCall),
@@ -153,6 +154,7 @@ pub(super) struct MessagesPythonHost {
     requested_stream: bool,
     interceptor: Option<Py<PyAny>>,
     pending_answer: Option<Reply<()>>,
+    pending_intercept: Option<Reply<bool>>,
     answer: Option<Py<PyAny>>,
     answered: Option<Answered>,
 }
@@ -179,6 +181,7 @@ impl MessagesPythonHost {
             requested_stream: false,
             interceptor: None,
             pending_answer: None,
+            pending_intercept: None,
             answer: None,
             answered: None,
         }
@@ -195,12 +198,44 @@ impl MessagesPythonHost {
         Ok((!interceptor.is_none()).then(|| interceptor.unbind()))
     }
 
+    fn may_intercept(&self, py: Python<'_>) -> PyResult<bool> {
+        if !self.asynchronous {
+            return Ok(false);
+        }
+        py.import(ROUTE_HOST_MODULE)?
+            .getattr("has_interceptors")?
+            .call0()?
+            .extract()
+    }
+
+    fn begin_intercept(
+        &mut self,
+        py: Python<'_>,
+        stream: bool,
+        reply: Reply<bool>,
+    ) -> PyResult<Option<Py<PyAny>>> {
+        self.interceptor = self.interceptor(py)?;
+        if self.interceptor.is_none() {
+            reply.send(false);
+            return Ok(None);
+        }
+        let pending = self.start_answer(py, stream)?;
+        self.pending_intercept = Some(reply);
+        Ok(Some(pending))
+    }
+
     fn begin_answer(
         &mut self,
         py: Python<'_>,
         stream: bool,
         reply: Reply<()>,
     ) -> PyResult<Option<Py<PyAny>>> {
+        let pending = self.start_answer(py, stream)?;
+        self.pending_answer = Some(reply);
+        Ok(Some(pending))
+    }
+
+    fn start_answer(&mut self, py: Python<'_>, stream: bool) -> PyResult<Py<PyAny>> {
         let module = py.import(ROUTE_HOST_MODULE)?;
         let request = self.view.request(py)?;
         let pending = match &self.interceptor {
@@ -216,13 +251,12 @@ impl MessagesPythonHost {
         if pending.is_none() {
             return Err(litellm_host_python::Error::MissingState.into());
         }
-        self.pending_answer = Some(reply);
         self.answered = Some(match (stream, &self.interceptor) {
             (true, _) => Answered::Stream,
             (false, Some(_)) => Answered::Whole { verbatim: false },
             (false, None) => Answered::Whole { verbatim: true },
         });
-        Ok(Some(pending.unbind()))
+        Ok(pending.unbind())
     }
 
     fn host_settings(
@@ -297,7 +331,7 @@ impl MessagesPythonHost {
             settings: MessagesSettings {
                 whole_sse_frames: settings.stream_cost_model.is_some(),
                 presanitized,
-                intercepted: self.interceptor.is_some(),
+                intercepted: self.may_intercept(py)?,
                 ..settings.settings
             },
         };
@@ -464,7 +498,6 @@ impl MessagesPythonHost {
             .hooked_request
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(arguments.clone().unbind());
-        self.interceptor = self.interceptor(py).map_err(InvokeError::Python)?;
         match self.decode_call(py, arguments) {
             Ok(call) => reply.send(Ok(call)),
             Err(InvokeError::Native(error)) => reply.send(Err(error)),
@@ -486,7 +519,6 @@ impl PythonBinding for MessagesPythonHost {
         self.view
             .resolve(py, arguments)
             .map_err(InvokeError::Python)?;
-        self.interceptor = self.interceptor(py).map_err(InvokeError::Python)?;
         let function = py
             .import(ROUTE_HOST_MODULE)
             .and_then(|module| module.call_method0("cached_function"))
@@ -603,6 +635,9 @@ impl PythonHostCalls<MessagesHosted> for MessagesPythonHost {
             MessagesHostCall::PreRequest(reply) => self.begin_pre_request(py, reply).map(Some),
             MessagesHostCall::Safeguards(op) => self.safeguards.begin(py, op).map(Some),
             MessagesHostCall::Answer { stream, reply } => self.begin_answer(py, stream, reply),
+            MessagesHostCall::Intercept { stream, reply } => {
+                self.begin_intercept(py, stream, reply)
+            }
         }
         .map_err(InvokeError::Python)
     }
@@ -618,6 +653,11 @@ impl PythonHostCalls<MessagesHosted> for MessagesPythonHost {
         if let Some(reply) = self.pending_answer.take() {
             self.answer = Some(result?);
             reply.send(());
+            return Ok(None);
+        }
+        if let Some(reply) = self.pending_intercept.take() {
+            self.answer = Some(result?);
+            reply.send(true);
             return Ok(None);
         }
         if std::mem::take(&mut self.awaiting_safeguards) {
@@ -646,6 +686,7 @@ impl PythonOwned for MessagesPythonHost {
         self.safeguards.close();
         self.interceptor = None;
         self.pending_answer = None;
+        self.pending_intercept = None;
         self.answer = None;
         self.answered = None;
     }

@@ -20,6 +20,7 @@ R request, S response, C callbacks, F covered by a fallback detector today)
 """
 
 import asyncio
+import contextlib
 import copy
 import datetime
 import json
@@ -323,6 +324,14 @@ def _stream(events: tuple[tuple[str, object], ...], chunk_delay: float = 0) -> R
     return ResponseSpec(body={}, events=events, chunk_delay=chunk_delay)
 
 
+def _raw_stream(*frames: str) -> ResponseSpec:
+    return ResponseSpec(body="".join(f"{frame}\n\n" for frame in frames).encode())
+
+
+def _framed(events: tuple[tuple[str, object], ...], event_line: str = "event: ") -> tuple[str, ...]:
+    return tuple(f"{event_line}{event}\ndata: {json.dumps(data)}" for event, data in events)
+
+
 def _failure(status: int, kind: str, message: str, **headers: str) -> ResponseSpec:
     return ResponseSpec(body=dict(_upstream_error(kind, message)), status=status, headers=dict(headers))
 
@@ -388,7 +397,6 @@ def _kw(**kwargs: object) -> Mapping[str, object]:
 
 
 A10_NO_MAX_TOKENS: Final = "A10: native admission hands a call without an int max_tokens to Python, whose signature raises the TypeError; only dispatch differs"
-S6_PRIVATE_KEYS: Final = "S6: native writes _hidden_params into the response dict"
 S15_COMPLETE_DEADLINE: Final = (
     "S15: by design, native bounds a complete response by one overall deadline where Python bounds each read, "
     "so a body trickling in slower than the timeout succeeds in Python and times out natively"
@@ -401,7 +409,6 @@ C_UNSENT_CALL_FLAG: Final = (
 
 KNOWN_GAPS: Final[Mapping[str, Mapping[str, str | None]]] = MappingProxyType(
     {
-        "response_private_keys": _gaps(outcome=S6_PRIVATE_KEYS),
         "missing_max_tokens": _gaps(dispatch=A10_NO_MAX_TOKENS),
         **{
             name: _gaps(logged_call=C_UNSENT_CALL_FLAG)
@@ -1145,6 +1152,27 @@ CACHE_CASES: Final = (
     Case("cache_unsupported_call_type", upstream=(_ok(), _ok()), cache=_completion_only_cache),
     Case("cache_hit_with_metadata", _kw(metadata={"user_id": "user-123"}), upstream=(_ok(), _ok()), cache=Cache),
     Case("cache_sync", sync=True, upstream=(_ok(), _ok()), cache=Cache),
+    *(
+        Case(name, _kw(stream=True), upstream=(_raw_stream(*frames), _raw_stream(*frames)), cache=Cache)
+        for name, frames in (
+            ("cache_stream_data_only_frames", tuple(f"data: {json.dumps(data)}" for _, data in TEXT_STREAM)),
+            ("cache_stream_event_without_space", _framed(TEXT_STREAM, "event:")),
+            ("cache_stream_done_sentinel", (*_framed(TEXT_STREAM), "data: [DONE]")),
+            (
+                "cache_stream_without_output",
+                _framed(
+                    _events(_message_start("msg_01ParityEmpty"), *_text_block(0, ""), *_message_end("end_turn", 1))
+                ),
+            ),
+            (
+                "cache_stream_error_after_stop",
+                (
+                    *_framed(TEXT_STREAM),
+                    *_framed((("error", dict(_upstream_error("overloaded_error", "Overloaded"))),)),
+                ),
+            ),
+        )
+    ),
 )
 
 STRICT_REJECTION: Final = "Too many strict tools (21). The maximum number of strict tools is 20."
@@ -2128,6 +2156,25 @@ class _UninterceptedToolHook(CustomLogger):
         return {**kwargs, "tools": [dict(WEATHER_TOOL)]}
 
 
+class _DeploymentHookRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()  # pyright: ignore[reportUnknownMemberType]  # CustomLogger takes untyped kwargs
+        self.seen: list[Mapping[str, object]] = []
+
+    async def async_pre_call_deployment_hook(self, kwargs: dict[str, object], call_type: object) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]  # test double narrows the hook's types
+        self.seen.append({"logging_obj": type(kwargs.get("litellm_logging_obj")).__name__, "call_type": str(call_type)})
+
+
+DEPLOYMENT_HOOK_CASES: Final = (
+    Case("deployment_hook_sees_the_logging_object", loggers=_loggers(_DeploymentHookRecorder)),
+    Case(
+        "deployment_hook_sees_the_logging_object_stream",
+        _kw(stream=True),
+        upstream=(_stream(TEXT_STREAM),),
+        loggers=_loggers(_DeploymentHookRecorder),
+    ),
+)
+
 INTERCEPTOR_CASES: Final = (
     Case("interceptor_answers", _intercepted(), upstream=(), interceptor=_Answering),
     Case(
@@ -2407,6 +2454,7 @@ CASES: Final = (
     *SAFEGUARDS_CASES,
     *INTERCEPTOR_CASES,
     *MCP_CASES,
+    *DEPLOYMENT_HOOK_CASES,
 )
 
 
@@ -3104,3 +3152,182 @@ async def test_both_lanes_hand_the_web_search_pre_hook_kwargs_to_the_agentic_loo
     }
     assert [tool.get("name") for tool in cast(list[Mapping[str, object]], first["tools"])] == ["litellm_web_search"]
     assert first["stream"] is False
+
+
+class _CountingAnswering(_Answering):
+    def __init__(self) -> None:
+        self.asked = 0
+
+    def can_handle(self, tools: Sequence[Mapping[str, object]] | None, custom_llm_provider: str | None) -> bool:
+        self.asked += 1
+        return super().can_handle(tools, custom_llm_provider)
+
+
+async def _interceptor_asks(server: RecordingServer, hooked: bool, native: bool) -> tuple[int, tuple[object, ...]]:
+    counting: Final = _CountingAnswering()
+    acall: Final = _PUBLIC_AMESSAGES if native else _PYTHON_AMESSAGES
+    kwargs: Final[dict[str, object]] = {
+        "model": SONNET,
+        "max_tokens": 64,
+        "messages": [dict(USER)],
+        "api_key": API_KEY,
+        "api_base": server.base_url,
+        "tools": [dict(WEATHER_TOOL)] if hooked else [dict(INTERCEPTED_TOOL), dict(WEATHER_TOOL)],
+    }
+    answers: Final[list[object]] = []
+    with (
+        isolated_callback_registries(),
+        _environment({}),
+        _cache(Cache),
+        _interceptor(lambda: counting),
+    ):
+        if hooked:
+            litellm.callbacks.append(_InterceptedToolHook())
+        for _ in range(2):
+            answers.append(_response(await acall(**copy.deepcopy(kwargs)), private_keys=False))
+            await drain_logging()
+            await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
+    return counting.asked, tuple(answers)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hooked", (False, True), ids=("plain", "pre_request_hooked"))
+async def test_both_lanes_ask_the_interceptor_only_on_a_cache_miss(
+    hooked: bool, parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    python: Final = await _interceptor_asks(parity_server, hooked, native=False)
+    native: Final = await _interceptor_asks(parity_server, hooked, native=True)
+
+    assert native_messages.calls == 0
+    assert not parity_server.requests
+    assert native == python
+    assert python[0] == 1
+
+
+class _ServiceRecorder:
+    def __init__(self) -> None:
+        self.events: list[Mapping[str, object]] = []  # mutable-ok: appended per service hook
+
+    async def async_service_success_hook(self, **kwargs: object) -> None:  # kwargs-ok: the service hook's keyword call
+        self.events.append(
+            {
+                "service": kwargs.get("service"),
+                "call_type": kwargs.get("call_type"),
+                "timed": isinstance(kwargs.get("duration"), float),
+                "parent_otel_span": kwargs.get("parent_otel_span"),
+            }
+        )
+
+
+async def _llm_api_timings(server: RecordingServer, stream: bool, native: bool) -> tuple[Mapping[str, object], ...]:
+    recorder: Final = _ServiceRecorder()
+    server.enqueue(_stream(TEXT_STREAM) if stream else _ok())
+    acall: Final = _PUBLIC_AMESSAGES if native else _PYTHON_AMESSAGES
+    with isolated_callback_registries(), _environment({}), rebound(logging_utils, "_service_logger", recorder):
+        result: Final = await acall(
+            model=SONNET,
+            max_tokens=64,
+            messages=[dict(USER)],
+            api_key=API_KEY,
+            api_base=server.base_url,
+            stream=stream,
+        )
+        if not isinstance(result, dict):
+            await _consume_async(cast(AsyncIterator[object], result))
+        await drain_logging()
+        await asyncio.sleep(0)
+    server.responses.clear()
+    return tuple(recorder.events)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", (False, True), ids=("json", "streamed"))
+async def test_both_lanes_time_the_provider_exchange_as_one_llm_service_event(
+    stream: bool, parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    python: Final = await _llm_api_timings(parity_server, stream, native=False)
+    native: Final = await _llm_api_timings(parity_server, stream, native=True)
+
+    assert native_messages.calls == 0
+    assert native == python
+    assert [event["call_type"] for event in python] == ["post <- track_llm_api_timing"]
+
+
+class _AttemptRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()  # pyright: ignore[reportUnknownMemberType]  # CustomLogger takes untyped kwargs
+        self.seen: list[Mapping[str, object]] = []
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]  # test double narrows the hook's types
+        logged: Final = _LOGGED.validate_python(kwargs.get("standard_logging_object") or {})
+        self.seen.append(
+            {
+                "event": "success",
+                "model_id": logged.get("model_id"),
+                "completion_tokens": logged.get("completion_tokens"),
+            }
+        )
+
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]  # test double narrows the hook's types
+        logged: Final = _LOGGED.validate_python(kwargs.get("standard_logging_object") or {})
+        self.seen.append(
+            {
+                "event": "failure",
+                "model_id": logged.get("model_id"),
+                "exception": type(kwargs.get("exception")).__name__,
+            }
+        )
+
+
+async def _stream_fallback_attempts(
+    server: RecordingServer, native: bool
+) -> tuple[tuple[Mapping[str, object], ...], str]:
+    overloaded: Final = _events(
+        _message_start("msg_01ParityOverloaded"), ("error", dict(_upstream_error("overloaded_error", "Overloaded")))
+    )
+    server.enqueue(_stream(overloaded))
+    server.enqueue(_stream(TEXT_STREAM))
+    recorder: Final = _AttemptRecorder()
+    deployment: Final[Mapping[str, object]] = {"model": SONNET, "api_base": server.base_url, "api_key": API_KEY}
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(isolated_callback_registries())
+        stack.enter_context(_environment({}))
+        if not native:
+            stack.enter_context(rebound(litellm, "anthropic_messages", _PYTHON_AMESSAGES))
+        litellm.callbacks.append(recorder)
+        router: Final = litellm.Router(
+            model_list=[
+                {"model_name": "primary", "litellm_params": dict(deployment), "model_info": {"id": "dep-primary"}},
+                {"model_name": "fallback", "litellm_params": dict(deployment), "model_info": {"id": "dep-fallback"}},
+            ],
+            fallbacks=[{"primary": ["fallback"]}],
+            num_retries=0,
+        )
+        result: Final = await router.aanthropic_messages(
+            model="primary", max_tokens=64, messages=[dict(USER)], stream=True
+        )
+        chunks, failure = await _consume_async(cast(AsyncIterator[object], result))
+        assert failure is None
+        for _ in range(100):
+            await drain_logging()
+            if len(recorder.seen) >= 2:
+                break
+            await asyncio.sleep(0.05)
+    server.responses.clear()
+    return tuple(recorder.seen), _stream_text(chunks)
+
+
+@pytest.mark.asyncio
+async def test_both_lanes_log_a_stream_superseded_by_a_router_fallback_as_its_frame_s_failure(
+    parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    python: Final = await _stream_fallback_attempts(parity_server, native=False)
+    native: Final = await _stream_fallback_attempts(parity_server, native=True)
+
+    assert native_messages.calls == 0
+    assert native == python
+    assert sorted(str(event["event"]) for event in python[0]) == ["failure", "success"]

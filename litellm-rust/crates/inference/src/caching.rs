@@ -61,6 +61,10 @@ pub trait StreamCachable: Cachable {
 
     fn replay(data: Bytes) -> Option<OutputOf<Self>>;
     fn bytes(chunk: &Self::Chunk) -> &[u8];
+
+    fn storable_stream(text: &str) -> bool {
+        successful_stream(text, Self::TERMINAL_EVENT)
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -329,7 +333,7 @@ fn capture_stream<P: StreamCachable>(
                 None => {
                     if let Some(data) = captured
                         && let Ok(text) = String::from_utf8(data)
-                        && successful_stream(&text, P::TERMINAL_EVENT)
+                        && P::storable_stream(&text)
                         && let Ok(entry) = serde_json::to_value(ResponseEnvelope::new(
                             P::SURFACE,
                             CachedOutput::<Value>::Stream(text),

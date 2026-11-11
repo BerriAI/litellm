@@ -158,16 +158,10 @@ impl MessagesRoute {
                 .host_answer
                 .as_deref()
                 .filter(|_| call.shaping.settings.intercepted)
+                && host_answer.intercept(requested_stream).await?
             {
-                return handler::answered(
-                    self,
-                    host_answer,
-                    config,
-                    model,
-                    requested_stream,
-                    &context,
-                )
-                .await;
+                return handler::deliver_answer(self, config, model, requested_stream, &context)
+                    .await;
             }
             if let Some(mock) = call.shaping.settings.mock_response {
                 return Ok(
