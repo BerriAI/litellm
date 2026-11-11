@@ -14,7 +14,7 @@ from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from datetime import datetime as datetime_standard_logging, datetime as datetime_unit_test, datetime as dt_object
 from importlib.machinery import ModuleSpec
 from types import MappingProxyType, ModuleType
-from typing import Final, Literal
+from typing import Final, Literal, TypeAlias
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -61,6 +61,7 @@ from litellm.proxy.hooks.max_iterations_limiter import PROXY_MaxIterationsHandle
 from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
 from litellm.proxy.utils import InternalUsageCache
 from litellm.types.llms.openai import AllMessageValues, ResponseAPIUsage, ResponseCompletedEvent, ResponsesAPIResponse
+from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
     CallTypes,
@@ -68,6 +69,7 @@ from litellm.types.utils import (
     ImageResponse,
     LiteLLMRealtimeStreamLoggingObject,
     ModelResponse,
+    StandardCallbackDynamicParams,
     StandardLoggingHiddenParams,
     StandardLoggingMetadata,
     StandardLoggingModelInformation,
@@ -14823,6 +14825,7 @@ async def test_a_response_discarded_after_its_success_log_was_parked_is_billed_o
 
 
 _HOOKED_RESULT: Final = ModelResponse(id="hooked")
+_PromptResult: TypeAlias = tuple[str, list[AllMessageValues], dict[str, object]]
 
 
 class _PlaneRecorder(CustomLogger):
@@ -14836,28 +14839,36 @@ class _PlaneRecorder(CustomLogger):
     def log_post_api_call(self, kwargs: object, response_obj: object, start_time: object, end_time: object) -> None:
         self.seen.append(("post", kwargs))
 
-    def logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict, object]:
+    def logging_hook(
+        self, kwargs: dict[str, object], result: object, call_type: str
+    ) -> tuple[dict[str, object], object]:
         self.seen.append(("hook", result))
         return {**kwargs, "hooked": True}, _HOOKED_RESULT
 
-    async def async_logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict, object]:
+    async def async_logging_hook(
+        self, kwargs: dict[str, object], result: object, call_type: str
+    ) -> tuple[dict[str, object], object]:
         return self.logging_hook(kwargs, result, call_type)
 
-    def log_success_event(self, kwargs: dict, response_obj: object, start_time: object, end_time: object) -> None:
-        self.seen.append(("success", (kwargs.get("hooked"), response_obj)))
+    def log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.seen.append(("success", (kwargs.get("hooked"), response_obj is _HOOKED_RESULT)))
 
     async def async_log_success_event(
-        self, kwargs: dict, response_obj: object, start_time: object, end_time: object
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
-        self.seen.append(("success", (kwargs.get("hooked"), response_obj)))
+        self.log_success_event(kwargs, response_obj, start_time, end_time)
 
-    def log_failure_event(self, kwargs: dict, response_obj: object, start_time: object, end_time: object) -> None:
+    def log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
         self.seen.append(("failure", kwargs))
 
     async def async_log_failure_event(
-        self, kwargs: dict, response_obj: object, start_time: object, end_time: object
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
-        self.seen.append(("failure", kwargs))
+        self.log_failure_event(kwargs, response_obj, start_time, end_time)
 
 
 def _observing_native(hook: Hook, seen: list[tuple[str, object]], done: threading.Event) -> CustomLoggerV2:
@@ -14935,8 +14946,7 @@ def test_sync_success_delivers_what_the_logging_hook_returned(
     if native is not None:
         assert done.wait(timeout=30)
     assert [label for label, _ in seen] == ["hook", "success", *(["native"] if native else [])]
-    assert seen[1][1] == (True, _HOOKED_RESULT)
-    assert seen[1][1][1] is _HOOKED_RESULT
+    assert seen[1] == ("success", (True, True))
 
 
 @pytest.mark.parametrize("native", [None, Hook.log_prepare, Hook.attempt_ended])
@@ -14955,7 +14965,7 @@ async def test_async_success_delivers_what_the_logging_hook_returned(
     if native is not None:
         assert await asyncio.to_thread(done.wait, 30)
     assert [label for label, _ in seen] == ["hook", "success", *(["native"] if native else [])]
-    assert seen[1][1][1] is _HOOKED_RESULT
+    assert seen[1] == ("success", (True, True))
 
 
 @pytest.mark.parametrize("use_async", [False, True])
@@ -14997,7 +15007,11 @@ async def test_a_blocking_mcp_tool_result_native_runs_before_the_legacy_callback
 
     class Legacy(CustomLogger):
         async def async_post_mcp_tool_call_hook(
-            self, kwargs: dict, response_obj: MCPPostCallResponseObject, start_time: object, end_time: object
+            self,
+            kwargs: dict[str, object],
+            response_obj: MCPPostCallResponseObject,
+            start_time: datetime.datetime,
+            end_time: datetime.datetime,
         ) -> None:
             seen.append("legacy")
 
@@ -15013,34 +15027,72 @@ async def test_a_blocking_mcp_tool_result_native_runs_before_the_legacy_callback
 
 
 class _PromptManager(CustomLogger):
-    def __init__(self, resolved: tuple[str, list[AllMessageValues], dict], error: Exception | None = None) -> None:
+    def __init__(self, resolved: _PromptResult, error: Exception | None = None) -> None:
         super().__init__()
         self.resolved = resolved
         self.error = error
-        self.calls: list[str] = []
+        self.prompt_ids: list[str | None] = []
 
-    def get_chat_completion_prompt(self, **kwargs: object) -> tuple[str, list[AllMessageValues], dict]:
-        self.calls.append(str(kwargs["prompt_id"]))
+    def get_chat_completion_prompt(
+        self,
+        model: str,
+        messages: list[AllMessageValues],
+        non_default_params: dict[str, object],
+        prompt_id: str | None,
+        prompt_variables: dict[str, object] | None,
+        dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_spec: PromptSpec | None = None,
+        prompt_label: str | None = None,
+        prompt_version: int | None = None,
+        ignore_prompt_manager_model: bool | None = False,
+        ignore_prompt_manager_optional_params: bool | None = False,
+    ) -> _PromptResult:
+        self.prompt_ids.append(prompt_id)
         if self.error is not None:
             raise self.error
         return self.resolved
 
-    async def async_get_chat_completion_prompt(self, **kwargs: object) -> tuple[str, list[AllMessageValues], dict]:
-        return self.get_chat_completion_prompt(**kwargs)
+    async def async_get_chat_completion_prompt(
+        self,
+        model: str,
+        messages: list[AllMessageValues],
+        non_default_params: dict[str, object],
+        prompt_id: str | None,
+        prompt_variables: dict[str, object] | None,
+        dynamic_callback_params: StandardCallbackDynamicParams,
+        litellm_logging_obj: LitellmLogging,
+        prompt_spec: PromptSpec | None = None,
+        tools: list[dict[str, object]] | None = None,
+        prompt_label: str | None = None,
+        prompt_version: int | None = None,
+        ignore_prompt_manager_model: bool | None = False,
+        ignore_prompt_manager_optional_params: bool | None = False,
+    ) -> _PromptResult:
+        return self.get_chat_completion_prompt(
+            model, messages, non_default_params, prompt_id, prompt_variables, dynamic_callback_params
+        )
 
 
-async def _resolve_prompt(logging_obj: LitellmLogging, manager: CustomLogger, use_async: bool) -> tuple[object, ...]:
-    common: Final = {
-        "model": "gpt-4o",
-        "messages": [{"role": "user", "content": "raw"}],
-        "non_default_params": {},
-        "prompt_variables": None,
-        "prompt_id": "greeting",
-        "prompt_management_logger": manager,
-    }
+async def _resolve_prompt(logging_obj: LitellmLogging, manager: CustomLogger, use_async: bool) -> _PromptResult:
+    messages: Final[list[AllMessageValues]] = [{"role": "user", "content": "raw"}]
     if use_async:
-        return await logging_obj.async_get_chat_completion_prompt(**common)
-    return await asyncio.to_thread(lambda: logging_obj.get_chat_completion_prompt(**common))
+        return await logging_obj.async_get_chat_completion_prompt(
+            model="requested-model",
+            messages=messages,
+            non_default_params={},
+            prompt_variables=None,
+            prompt_id="greeting",
+            prompt_management_logger=manager,
+        )
+    return await asyncio.to_thread(
+        logging_obj.get_chat_completion_prompt,
+        model="requested-model",
+        messages=messages,
+        non_default_params={},
+        prompt_variables=None,
+        prompt_id="greeting",
+        prompt_management_logger=manager,
+    )
 
 
 @pytest.mark.parametrize("use_async", [False, True])
@@ -15050,11 +15102,7 @@ async def test_prompt_resolve_returns_the_managers_prompt_unchanged(
 ) -> None:
     seen: Final[list[tuple[str, object]]] = []
     done: Final = _register(Hook.prompt_resolve if native else None, seen)
-    resolved: Final[tuple[str, list[AllMessageValues], dict]] = (
-        "claude-opus-4-5",
-        [{"role": "system", "content": "rendered"}],
-        {"temperature": 0.1},
-    )
+    resolved: Final[_PromptResult] = ("rendered-model", [{"role": "system", "content": "rendered"}], {"seed": 1})
     manager: Final = _PromptManager(resolved)
 
     model, messages, params = await _resolve_prompt(logging_obj, manager, use_async)
@@ -15065,7 +15113,7 @@ async def test_prompt_resolve_returns_the_managers_prompt_unchanged(
     assert messages is resolved[1]
     assert params is resolved[2]
     assert logging_obj.messages is resolved[1]
-    assert manager.calls == ["greeting"]
+    assert manager.prompt_ids == ["greeting"]
     assert seen == ([("native", Hook.prompt_resolve)] if native else [])
 
 
