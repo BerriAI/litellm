@@ -17,7 +17,6 @@ pub struct GcsUri {
     pub object: String,
 }
 
-/// Splits like `S3Uri`, so the object name stays the opaque string Cloud Storage stores
 impl TryFrom<&str> for GcsUri {
     type Error = Error;
 

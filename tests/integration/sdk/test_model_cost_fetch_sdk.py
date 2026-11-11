@@ -576,6 +576,19 @@ def test_every_load_reads_a_gs_url_with_the_application_default_token(
     assert "lit-gcs-model" in rows
 
 
+@pytest.mark.usefixtures("remote_source", "own_model_cost")
+def test_a_gs_load_reaches_an_emulator_host_given_without_a_scheme(
+    gcs: Callable[[_Reply], AbstractContextManager[_Server]], monkeypatch: pytest.MonkeyPatch
+):
+    with gcs(_Reply()) as server:
+        emulator: Final = os.environ["STORAGE_EMULATOR_HOST"]
+        monkeypatch.setenv("STORAGE_EMULATOR_HOST", emulator.removeprefix("http://"))
+        litellm.get_model_cost_map(url=server.url, max_attempts=1)
+
+    assert server.targets == [_GCS_OBJECT_TARGET]
+    assert get_model_cost_map_source_info()["source"] == "remote"
+
+
 @pytest.mark.usefixtures("remote_source")
 def test_a_gs_boot_load_records_the_remote_source(gcs: Callable[[_Reply], AbstractContextManager[_Server]]):
     with gcs(_Reply()) as server:

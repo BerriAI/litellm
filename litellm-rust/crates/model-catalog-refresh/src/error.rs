@@ -29,6 +29,8 @@ enum Repr {
     GcsUri,
     #[error("Google access token unavailable")]
     GcsToken(#[source] litellm_auth_types::Error),
+    #[error("Google access token timed out")]
+    GcsTokenTimeout(#[source] Elapsed),
     #[error("response body is over the {limit} byte limit")]
     BodyTooLarge { limit: u64 },
 }
@@ -44,6 +46,10 @@ impl Error {
 
     pub(crate) fn gcs_token(cause: litellm_auth_types::Error) -> Self {
         Self(Box::new(Repr::GcsToken(cause)))
+    }
+
+    pub(crate) fn gcs_token_timeout(cause: Elapsed) -> Self {
+        Self(Box::new(Repr::GcsTokenTimeout(cause)))
     }
 
     pub(crate) fn body_too_large(limit: u64) -> Self {

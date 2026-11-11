@@ -346,7 +346,6 @@ async fn a_failure_reason_drops_url_credentials() {
 #[case::unsupported_scheme("ftp://example.com/cost.json")]
 #[case::not_a_url("not a url")]
 #[case::s3_without_a_key("s3://prices")]
-#[case::gs_without_an_object("gs://prices")]
 #[tokio::test]
 async fn an_unfetchable_url_fails_without_a_request(#[case] url: &str) {
     let failed = fetched(url, POLICY, Start::Fresh).await.unwrap_err();
@@ -533,7 +532,23 @@ impl GcpTokenSource for Token {
     }
 }
 
-async fn fetched_from_gcs(url: &str, upstream: &Upstream, token: Token) -> Result<Fetched, Failed> {
+struct StalledToken;
+
+impl GcpTokenSource for StalledToken {
+    fn project_id(&self) -> GcpAuthFuture<'_, String> {
+        Box::pin(std::future::pending())
+    }
+
+    fn token(&self) -> GcpAuthFuture<'_, SecretValue> {
+        Box::pin(std::future::pending())
+    }
+}
+
+async fn fetched_from_gcs(
+    url: &str,
+    upstream: &Upstream,
+    token: impl GcpTokenSource + 'static,
+) -> Result<Fetched, Failed> {
     fetch(
         &Client::for_test(),
         &S3Access::Environment { region: None },
@@ -628,6 +643,29 @@ async fn a_gcs_fetch_without_a_token_fails_without_a_request() {
     assert!(
         failed.reason.starts_with(&format!(
             "error fetching {url}: Google access token unavailable"
+        )),
+        "{}",
+        failed.reason
+    );
+    assert!(!failed.retryable);
+    assert!(upstream.heads().is_empty());
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_gcs_token_that_never_arrives_fails_within_the_attempt_timeout() {
+    let upstream = Upstream::serve(vec![Answer::Raw(OK)]);
+    let url = "gs://prices/cost.json";
+    let failed = tokio::time::timeout(
+        POLICY.timeout * 2,
+        fetched_from_gcs(url, &upstream, StalledToken),
+    )
+    .await
+    .expect("the token wait outlived the attempt timeout")
+    .unwrap_err();
+    assert!(
+        failed.reason.starts_with(&format!(
+            "error fetching {url}: Google access token timed out"
         )),
         "{}",
         failed.reason

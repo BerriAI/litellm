@@ -150,7 +150,6 @@ pub(crate) async fn s3(
     fetched.await.map_err(Rejected::fatal)
 }
 
-/// A token that cannot be acquired is final. Storage statuses retry like any HTTP status
 pub(crate) async fn gcs(
     client: &Client,
     gcs: &GcsAccess,
@@ -159,19 +158,26 @@ pub(crate) async fn gcs(
 ) -> Result<Fetched, Rejected> {
     let (endpoint, token) = match gcs {
         GcsAccess::Environment => (
-            std::env::var("STORAGE_EMULATOR_HOST").unwrap_or_else(|_| GCS_ENDPOINT.to_owned()),
-            GcpAuth::default()
-                .access_token(CredentialSource::application_default(&|name| {
+            emulator_endpoint(std::env::var("STORAGE_EMULATOR_HOST").ok()),
+            tokio::time::timeout(
+                timeout,
+                GcpAuth::default().access_token(CredentialSource::application_default(&|name| {
                     std::env::var(name).ok()
-                }))
-                .await,
+                })),
+            )
+            .await,
         ),
         GcsAccess::Config {
             endpoint,
             token_source,
-        } => (endpoint.clone(), token_source.token().await),
+        } => (
+            endpoint.clone(),
+            tokio::time::timeout(timeout, token_source.token()).await,
+        ),
     };
-    let token = token.map_err(|error| Rejected::fatal(Error::gcs_token(error)))?;
+    let token = token
+        .map_err(|elapsed| Rejected::fatal(Error::gcs_token_timeout(elapsed)))?
+        .map_err(|error| Rejected::fatal(Error::gcs_token(error)))?;
     let url = Url::parse(&format!(
         "{}/storage/v1/b/{}/o/{}?alt=media",
         endpoint.trim_end_matches('/'),
@@ -180,6 +186,14 @@ pub(crate) async fn gcs(
     ))
     .map_err(|error| Rejected::fatal(Error::from(error)))?;
     http(client, url, Some(token.expose()), timeout).await
+}
+
+fn emulator_endpoint(host: Option<String>) -> String {
+    match host {
+        Some(host) if host.contains("://") => host,
+        Some(host) if !host.is_empty() => format!("http://{host}"),
+        _ => GCS_ENDPOINT.to_owned(),
+    }
 }
 
 fn append(body: &mut Vec<u8>, chunk: &Bytes) -> Result<(), Error> {
