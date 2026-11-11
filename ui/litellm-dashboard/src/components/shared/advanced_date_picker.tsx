@@ -205,18 +205,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
 
   const handleApply = () => {
     if (tempValue.from && tempValue.to && validation.isValid) {
-      // First call with immediate value for UI responsiveness
-      onValueChange(tempValue, pickedPreset);
-
-      // Then do the same background adjustment logic as the original component
-      requestIdleCallback(
-        () => {
-          const adjustedValue = adjustDateRange(tempValue);
-          onValueChange(adjustedValue, pickedPreset);
-        },
-        { timeout: 100 },
-      );
-
+      onValueChange(adjustDateRange(tempValue), pickedPreset);
       setIsOpen(false);
     }
   };
