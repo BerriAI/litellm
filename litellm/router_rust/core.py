@@ -330,6 +330,7 @@ _SERVED_ARGUMENTS: Final = frozenset(
         "default_litellm_params",
         "fallback_access_check",
         "fallback_budget_check",
+        "fallback_rate_limit_check",
         "enable_mid_stream_fallback_continuation",
         "redis_url",
         "redis_host",
@@ -418,6 +419,7 @@ _DYNAMIC_SETTINGS: Final = frozenset(
         "default_litellm_params",
         "fallback_access_check",
         "fallback_budget_check",
+        "fallback_rate_limit_check",
         "routing_strategy_args",
         "enable_tag_filtering",
         "tag_filtering_match_any",
@@ -664,6 +666,7 @@ class Resolved:
     default_litellm_params: Mapping[str, object]
     fallback_access_check: object
     fallback_budget_check: object
+    fallback_rate_limit_check: object
     enable_mid_stream_fallback_continuation: bool = False
     routing_groups: "tuple[RoutingGroup, ...]" = ()
     enable_tag_filtering: bool = False
@@ -779,6 +782,7 @@ class Resolved:
             default_litellm_params=MappingProxyType(dict(as_str_mapping(get("default_litellm_params")) or {})),
             fallback_access_check=get("fallback_access_check"),
             fallback_budget_check=get("fallback_budget_check"),
+            fallback_rate_limit_check=get("fallback_rate_limit_check"),
             enable_mid_stream_fallback_continuation=continuation_flag(get("enable_mid_stream_fallback_continuation")),
             enable_tag_filtering=bool(get("enable_tag_filtering")),
             tag_filtering_match_any=_true_unless_given(get("tag_filtering_match_any")),
@@ -1911,6 +1915,7 @@ class RustCore(
             tag_routing_prefix=r.read("tag_routing_prefix"),  # pyright: ignore[reportArgumentType]  # the value as given, as the Python core stores it
             fallback_access_check=r.fallback_access_check,  # pyright: ignore[reportArgumentType]  # the check as passed
             fallback_budget_check=r.fallback_budget_check,  # pyright: ignore[reportArgumentType]  # the check as passed
+            fallback_rate_limit_check=r.fallback_rate_limit_check,  # pyright: ignore[reportArgumentType]  # the check as passed
             cache_responses=self._endpoints.cache_responses,
             search_tools=self._endpoints.search_tools,  # pyright: ignore[reportArgumentType]  # the configured entries, as passed
             guardrail_list=self._endpoints.guardrail_list,  # pyright: ignore[reportArgumentType]  # same
@@ -5413,6 +5418,11 @@ class _Driver:
                 return False
             if not await ctx.fallback_budget_allowed(model=target, request_kwargs=request):
                 self._walk.targets().record_skip(target, FallbackSkipReason.OVER_BUDGET)
+                return False
+            if target not in self._walk.targets() and not await ctx.fallback_rate_limit_allowed(
+                model=target, request_kwargs=request
+            ):
+                self._walk.targets().record_skip(target, FallbackSkipReason.RATE_LIMITED)
                 return False
         except Exception as error:  # noqa: BLE001  # handed to the Rust call loop, which ends the chain
             self._level_errors[self._level + 1] = error
