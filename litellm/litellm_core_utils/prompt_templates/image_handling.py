@@ -409,6 +409,11 @@ def _parse_remote_file(fields: Mapping[str, object]) -> _RemoteFile | None:
     return _RemoteFile(fields, file, url) if file is not None and url is not None else None
 
 
+def remote_pdf_file_link(part: Mapping[str, object]) -> str | None:
+    remote: Final = _parse_remote_file(part)
+    return remote.url if remote is not None and inline_remote_pdf_files(_remote_media(remote)) else None
+
+
 def _parse_remote_source(fields: Mapping[str, object]) -> _RemoteSource | None:
     source: Final = _as_mapping(fields.get("source")) if fields.get("type") in _ANTHROPIC_MEDIA_BLOCK_TYPES else None
     url: Final = _remote_url(source.get("url")) if source is not None and source.get("type") == "url" else None

@@ -16,7 +16,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_azure_openai_messages,
 )
-from litellm.litellm_core_utils.prompt_templates.image_handling import inline_remote_files, inline_remote_media
+from litellm.litellm_core_utils.prompt_templates.image_handling import inline_remote_media, inline_remote_pdf_files
 from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
     flatten_combinators_and_drop_non_python_regex_patterns,
     tool_with_sanitized_parameters,
@@ -304,7 +304,7 @@ class AzureOpenAIConfig(BaseConfig):
             else ordered_messages
         )
         stripped_messages: Final = drop_tool_reference_parts_from_tool_messages(wire_messages)
-        inlined_messages: Final = inline_remote_media(stripped_messages, should_inline=inline_remote_files)
+        inlined_messages: Final = inline_remote_media(stripped_messages, should_inline=inline_remote_pdf_files)
         azure_messages: Final = convert_to_azure_openai_messages(hoist_images_from_tool_messages(inlined_messages))
         request_params: Final = MappingProxyType(
             {

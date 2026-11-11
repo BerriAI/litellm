@@ -579,6 +579,24 @@ def test_transform_request_inlines_a_remote_pdf_file_part(respx_mock: MockRouter
     }
 
 
+@pytest.mark.parametrize("file_id", ["https://docs.example/notes.txt", "http://127.0.0.1:8080/photo.png"])
+def test_transform_request_leaves_a_remote_file_part_that_is_not_a_pdf_unfetched(
+    respx_mock: MockRouter, file_id: str
+) -> None:
+    file_part: Final = {"type": "file", "file": {"file_id": file_id}}
+
+    request: Final = AzureOpenAIConfig().transform_request(
+        model="gpt-5.4",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Summarize"}, file_part]}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert not respx_mock.calls
+    assert request["messages"][0]["content"][1] == file_part
+
+
 @pytest.fixture()
 def _vcr_outcome_gate(request, vcr):
     install_live_call_probe(request, vcr)

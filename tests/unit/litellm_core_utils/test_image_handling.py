@@ -388,8 +388,8 @@ async def test_async_inline_remote_media_inlines_every_remote_part_shape(async_o
 
     data_url = async_only_image_fetch.data_url
     base64_png = async_only_image_fetch.base64_png
-    pdf_name = pdf_url.rsplit("/", 1)[1]
-    image_name = image_url.rsplit("/", 1)[1]
+    pdf_name: Final = pdf_url.rsplit("/", 1)[1]
+    image_name: Final = image_url.rsplit("/", 1)[1]
     assert inlined[0] == {"role": "system", "content": "be terse"}
     assert inlined[1]["content"] == [
         {"type": "text", "text": "what is this?"},
@@ -465,11 +465,11 @@ def test_inline_remote_media_inlines_every_remote_part_shape(monkeypatch):
 )
 def test_inline_remote_media_names_an_inlined_file_so_openai_shaped_apis_accept_it(monkeypatch, file, filename):
     monkeypatch.setattr(image_handling, "convert_url_to_base64", lambda url: "data:application/pdf;base64,JVBERi0=")
-    messages = [{"role": "user", "content": [{"type": "file", "file": file}]}]
+    messages: Final = [{"role": "user", "content": [{"type": "file", "file": file}]}]
 
-    inlined = inline_remote_media(messages, should_inline=image_handling.inline_remote_files)
+    inlined: Final = inline_remote_media(messages, should_inline=image_handling.inline_remote_files)
 
-    inlined_file = inlined[0]["content"][0]["file"]
+    inlined_file: Final = inlined[0]["content"][0]["file"]
     assert "file_id" not in inlined_file
     assert inlined_file["file_data"] == "data:application/pdf;base64,JVBERi0="
     assert inlined_file["filename"] == filename
