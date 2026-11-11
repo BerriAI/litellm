@@ -10,7 +10,8 @@ import re
 import threading
 import weakref
 from collections import OrderedDict
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from concurrent.futures import Future
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 from urllib.parse import urlparse
@@ -129,8 +130,7 @@ class VertexBase:
         self._async_refresh_lock_refcounts: dict[_VertexCredentialCacheKey, int] = {}
         # Tracks in-flight background refresh tasks to avoid duplicate refreshes.
         self._background_refresh_tasks: dict[_VertexCredentialCacheKey, asyncio.Task] = {}
-        # RLocks, since the reauthentication retry re-enters get_access_token while holding its key's lock
-        self._sync_credential_locks: weakref.WeakValueDictionary[_VertexCredentialCacheKey, threading.RLock] = (
+        self._sync_token_flights: weakref.WeakValueDictionary[_VertexCredentialCacheKey, Future[tuple[str, str]]] = (
             weakref.WeakValueDictionary()
         )
         self._credential_refresh_locks: weakref.WeakKeyDictionary[_VertexCredentialsObject, threading.RLock] = (
@@ -415,9 +415,31 @@ class VertexBase:
         with self._credentials_cache_lock:
             return self._credential_refresh_locks.setdefault(credentials, threading.RLock())
 
-    def _sync_credential_lock(self, credential_cache_key: _VertexCredentialCacheKey) -> threading.RLock:
+    def _refresh_if_still_needed(
+        self,
+        credentials: _VertexCredentialsObject,
+        needs_refresh: Callable[[_VertexCredentialsObject], object],
+    ) -> None:
+        with self._credential_refresh_lock(credentials):
+            if needs_refresh(credentials):
+                verbose_logger.debug("Credentials expired, refreshing")
+                self.refresh_auth(credentials)
+
+    def _needs_blocking_refresh(self, credentials: _VertexCredentialsObject) -> bool:
+        from google.auth.credentials import TokenState
+
+        return not isinstance(credentials.token, str) or self._get_token_state(credentials) == TokenState.INVALID
+
+    def _join_sync_token_flight(
+        self, credential_cache_key: _VertexCredentialCacheKey
+    ) -> tuple[Future[tuple[str, str]], bool]:
         with self._credentials_cache_lock:
-            return self._sync_credential_locks.setdefault(credential_cache_key, threading.RLock())
+            in_flight: Final = self._sync_token_flights.get(credential_cache_key)
+            if in_flight is not None:
+                return in_flight, False
+            flight: Final[Future[tuple[str, str]]] = Future()
+            self._sync_token_flights[credential_cache_key] = flight
+            return flight, True
 
     @staticmethod
     def _refresh_rejected(error: Exception) -> bool:
@@ -913,6 +935,7 @@ class VertexBase:
 
         with self._credentials_cache_lock:
             self._credentials_project_mapping.pop(credential_cache_key, None)
+            self._credentials_project_mapping.pop((credential_cache_key[0], project_id), None)
 
         try:
             (
@@ -978,74 +1001,95 @@ class VertexBase:
         cache_credentials: Final = json.dumps(credentials) if isinstance(credentials, dict) else credentials
         credential_cache_key: Final = (cache_credentials, project_id)
         verbose_logger.debug("Checking cached credentials for project_id: %s", project_id)
-        with self._sync_credential_lock(credential_cache_key):
-            _credentials, credential_project_id = self._unpack_cached_credentials(credential_cache_key)
-            if _credentials is not None:
-                verbose_logger.debug("Cached credentials found for project_id: %s.", project_id)
-                verbose_logger.debug(
-                    "Using cached credentials for project_id: %s",
-                    credential_project_id,
+        if _retry_reauth:
+            return self._resolve_access_token(credentials, project_id, credential_cache_key, _retry_reauth=True)
+        flight, leads = self._join_sync_token_flight(credential_cache_key)
+        if not leads:
+            return flight.result()
+        try:
+            flight.set_result(self._resolve_access_token(credentials, project_id, credential_cache_key))
+        except BaseException as e:
+            flight.set_exception(e)
+            raise
+        finally:
+            with self._credentials_cache_lock:
+                self._sync_token_flights.pop(credential_cache_key, None)
+        return flight.result()
+
+    def _resolve_access_token(
+        self,
+        credentials: VERTEX_CREDENTIALS_TYPES | None,
+        project_id: str | None,
+        credential_cache_key: _VertexCredentialCacheKey,
+        _retry_reauth: bool = False,
+    ) -> tuple[str, str]:
+        cache_credentials: Final = credential_cache_key[0]
+        _credentials, credential_project_id = self._unpack_cached_credentials(credential_cache_key)
+        if _credentials is not None:
+            verbose_logger.debug("Cached credentials found for project_id: %s.", project_id)
+            verbose_logger.debug(
+                "Using cached credentials for project_id: %s",
+                credential_project_id,
+            )
+
+        else:
+            verbose_logger.debug(
+                "Credential cache key not found for project_id: %s, loading new credentials", project_id
+            )
+
+            try:
+                _credentials, credential_project_id = self.load_auth(credentials=credentials, project_id=project_id)
+            except Exception as e:
+                verbose_logger.exception(
+                    "Failed to load vertex credentials. Check to see if credentials containing partial/invalid information. Error: %s",
+                    e,
                 )
+                raise e
 
-            else:
-                verbose_logger.debug(
-                    "Credential cache key not found for project_id: %s, loading new credentials", project_id
-                )
-
-                try:
-                    _credentials, credential_project_id = self.load_auth(credentials=credentials, project_id=project_id)
-                except Exception as e:
-                    verbose_logger.exception(
-                        "Failed to load vertex credentials. Check to see if credentials containing partial/invalid information. Error: %s",
-                        e,
-                    )
-                    raise e
-
-                if _credentials is None:
-                    raise ValueError(
-                        f"Could not resolve credentials - either dynamically or from environment, for project_id: {project_id}"
-                    )
-                # Cache the project_id and credentials from load_auth result (resolved project_id)
-                self._cache_credentials(credential_cache_key, _credentials, credential_project_id)
-
-            ## VALIDATE CREDENTIALS
-            verbose_logger.debug("Validating credentials")
-            if project_id is None and credential_project_id is not None and isinstance(credential_project_id, str):
-                project_id = credential_project_id
-                # Update cache with resolved project_id for future lookups
-                resolved_cache_key: Final = (cache_credentials, project_id)
-                self._cache_credentials(resolved_cache_key, _credentials, credential_project_id, replace=False)
-
-            # Check if credentials are None before accessing attributes
             if _credentials is None:
-                raise ValueError("Credentials are None after loading")
-
-            if _credentials.expired:
-                try:
-                    verbose_logger.debug("Credentials expired, refreshing")
-                    self.refresh_auth(_credentials)
-                except Exception as e:
-                    # if refresh fails, it's possible the user has re-authenticated via `gcloud auth application-default login`
-                    # or rotated the key file, so we should try to reload the credentials by clearing the cache and retrying
-                    if self._refresh_rejected(e) and not _retry_reauth:
-                        return self._handle_reauthentication(
-                            credentials=credentials,
-                            project_id=project_id,
-                            credential_cache_key=credential_cache_key,
-                            error=e,
-                        )
-                    raise e
-
-            ## VALIDATION STEP
-            if _credentials.token is None or not isinstance(_credentials.token, str):
                 raise ValueError(
-                    f"Could not resolve credentials token. Got None or non-string token (type={type(_credentials.token).__name__})"
+                    f"Could not resolve credentials - either dynamically or from environment, for project_id: {project_id}"
                 )
+            # Cache the project_id and credentials from load_auth result (resolved project_id)
+            self._cache_credentials(credential_cache_key, _credentials, credential_project_id)
 
-            if project_id is None:
-                raise ValueError("Could not resolve project_id")
+        ## VALIDATE CREDENTIALS
+        verbose_logger.debug("Validating credentials")
+        if project_id is None and credential_project_id is not None and isinstance(credential_project_id, str):
+            project_id = credential_project_id
+            # Update cache with resolved project_id for future lookups
+            resolved_cache_key: Final = (cache_credentials, project_id)
+            self._cache_credentials(resolved_cache_key, _credentials, credential_project_id, replace=False)
 
-            return _credentials.token, project_id
+        # Check if credentials are None before accessing attributes
+        if _credentials is None:
+            raise ValueError("Credentials are None after loading")
+
+        if _credentials.expired:
+            try:
+                self._refresh_if_still_needed(_credentials, lambda loaded: loaded.expired)
+            except Exception as e:
+                # if refresh fails, it's possible the user has re-authenticated via `gcloud auth application-default login`
+                # or rotated the key file, so we should try to reload the credentials by clearing the cache and retrying
+                if self._refresh_rejected(e) and not _retry_reauth:
+                    return self._handle_reauthentication(
+                        credentials=credentials,
+                        project_id=project_id,
+                        credential_cache_key=credential_cache_key,
+                        error=e,
+                    )
+                raise e
+
+        ## VALIDATION STEP
+        if _credentials.token is None or not isinstance(_credentials.token, str):
+            raise ValueError(
+                f"Could not resolve credentials token. Got None or non-string token (type={type(_credentials.token).__name__})"
+            )
+
+        if project_id is None:
+            raise ValueError("Could not resolve project_id")
+
+        return _credentials.token, project_id
 
     async def get_access_token_async(
         self,
@@ -1141,9 +1185,9 @@ class VertexBase:
                     # Token is expired or missing — must block until refresh completes.
                     try:
                         verbose_logger.debug("Credentials expired, refreshing")
-                        await asyncify(self.refresh_auth)(_credentials)
+                        await asyncify(self._refresh_if_still_needed)(_credentials, self._needs_blocking_refresh)
                     except Exception as e:
-                        if "Reauthentication is needed" in str(e):
+                        if self._refresh_rejected(e):
                             verbose_logger.debug("Reauthentication needed, clearing cache and retrying")
                             return await self._handle_reauthentication_async(
                                 credentials=credentials,

@@ -5,8 +5,11 @@ import logging
 import os
 import pathlib
 import re
+import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
+from functools import partial
 from threading import Event
 from typing import Final, Literal
 from unittest.mock import MagicMock, call, patch
@@ -2593,6 +2596,50 @@ def test_get_access_token_reraises_malformed_service_account_credentials_without
     assert [record.getMessage().split(". Error: ")[0] for record in caplog.records] == [
         "Failed to load vertex credentials. Check to see if credentials containing partial/invalid information"
     ]
+
+
+def test_expired_credentials_shared_by_an_inferred_and_an_explicit_project_refresh_once() -> None:
+    vertex: Final = VertexBase()
+    now: Final = datetime(2025, 1, 1)
+    credentials: Final = _authorized_user_cache_credentials("shared")
+    with patch("google.auth._helpers.utcnow", return_value=now) as clock, responses.RequestsMock() as oauth:
+        def token_response(request: requests.PreparedRequest) -> tuple[int, dict[str, str], str]:
+            if len(oauth.calls) == 1:
+                time.sleep(0.3)
+            return 200, {}, json.dumps({"access_token": f"token-{len(oauth.calls) + 1}", "expires_in": 3600})
+
+        oauth.add_callback(responses.POST, "https://oauth2.googleapis.com/token", callback=token_response)
+        assert vertex.get_access_token(credentials, None) == ("token-1", "shared")
+        clock.return_value = now + timedelta(seconds=7200)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            tokens: Final = tuple(pool.map(partial(vertex.get_access_token, credentials), (None, "shared")))
+
+        assert tokens == (("token-2", "shared"), ("token-2", "shared"))
+        assert len(oauth.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_async_callers_reload_a_rotated_key_file_when_google_rejects_the_old_key(tmp_path: pathlib.Path) -> None:
+    vertex: Final = VertexBase()
+    now: Final = datetime(2025, 1, 1)
+    key_file: Final = tmp_path / "vertex-key.json"
+    key_file.write_text(_authorized_user_cache_credentials("old-key"))
+    old_key_revoked: Final = Event()
+
+    def token_response(request: requests.PreparedRequest) -> tuple[int, dict[str, str], str]:
+        form: Final = request.body.decode() if isinstance(request.body, bytes) else str(request.body)
+        is_old_key: Final = "old-key" in form
+        if is_old_key and old_key_revoked.is_set():
+            return 400, {}, json.dumps({"error": "invalid_grant", "error_description": "Token has been expired or revoked."})
+        return 200, {}, json.dumps({"access_token": "old-token" if is_old_key else "new-token", "expires_in": 3600})
+
+    with patch("google.auth._helpers.utcnow", return_value=now) as clock, responses.RequestsMock() as oauth:
+        oauth.add_callback(responses.POST, "https://oauth2.googleapis.com/token", callback=token_response)
+        assert await vertex.get_access_token_async(str(key_file), "unit-project") == ("old-token", "unit-project")
+        key_file.write_text(_authorized_user_cache_credentials("new-key"))
+        old_key_revoked.set()
+        clock.return_value = now + timedelta(seconds=7200)
+        assert await vertex.get_access_token_async(str(key_file), "unit-project") == ("new-token", "unit-project")
 
 
 def _authorized_user_cache_credentials(identity: str) -> str:
