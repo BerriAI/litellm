@@ -38,9 +38,10 @@ from litellm.litellm_core_utils.streaming_handler import (
     _ProviderChunkParsed,
 )
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator as AnthropicModelResponseIterator
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.custom_httpx.http_handler import HTTPHandler, MaskedHTTPStatusError
 from litellm.llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
 from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
+from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     ModelResponseIterator as GeminiModelResponseIterator,
 )
@@ -1433,6 +1434,102 @@ def test_sync_streaming_bad_request_not_midstream(logging_obj: Logging):
     assert "invalid maxOutputTokens" in str(excinfo.value)
 
 
+def _gemini_stream_error(status_code: int, sync_mode: bool) -> Exception:
+    if not sync_mode:
+        return VertexAIError(status_code=status_code, message="upstream said no", headers=None)
+    request: Final = httpx.Request("POST", "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash")
+    body: Final = b'{"error": {"message": "upstream said no"}}'
+    response: Final = httpx.Response(status_code, request=request, content=body)
+    return MaskedHTTPStatusError(
+        httpx.HTTPStatusError("upstream said no", request=request, response=response),
+        message=body,  # pyright: ignore[reportArgumentType]  # the sync stream handler passes the raw body bytes
+        text=body,  # pyright: ignore[reportArgumentType]  # the sync stream handler passes the raw body bytes
+    )
+
+
+def _gemini_stream_opened_by(error: BaseException, sync_mode: bool, logging_obj: Logging) -> CustomStreamWrapper:
+    def make_sync_call(client: object) -> NoReturn:
+        raise error
+
+    async def make_call(client: object) -> NoReturn:
+        raise error
+
+    return CustomStreamWrapper(
+        completion_stream=None,
+        model="gemini-2.5-flash",
+        logging_obj=logging_obj,
+        custom_llm_provider="gemini",
+        make_call=make_sync_call if sync_mode else make_call,
+    )
+
+
+async def _fetch(stream: CustomStreamWrapper, sync_mode: bool) -> object:
+    return stream.fetch_sync_stream() if sync_mode else await stream.fetch_stream()
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    ("status_code", "expected_error"),
+    [
+        (400, litellm.BadRequestError),
+        (429, litellm.RateLimitError),
+        (503, litellm.ServiceUnavailableError),
+    ],
+)
+async def test_a_gemini_stream_that_fails_to_open_raises_the_mapped_error_from_fetch(
+    logging_obj: Logging,
+    sync_mode: bool,
+    status_code: int,
+    expected_error: type[litellm.BadRequestError | litellm.RateLimitError | litellm.ServiceUnavailableError],
+) -> None:
+    provider_error: Final = _gemini_stream_error(status_code, sync_mode)
+    stream: Final = _gemini_stream_opened_by(provider_error, sync_mode, logging_obj)
+    with pytest.raises(expected_error, match="upstream said no") as excinfo:
+        await _fetch(stream, sync_mode)
+    assert (excinfo.value.status_code, excinfo.value.llm_provider) == (status_code, "gemini")
+    assert excinfo.value.__cause__ is provider_error
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_a_stream_open_error_that_is_already_mapped_is_raised_as_is(
+    logging_obj: Logging, sync_mode: bool
+) -> None:
+    already_mapped: Final = litellm.BadRequestError(
+        message="already mapped", model="gemini-2.5-flash", llm_provider="gemini"
+    )
+    stream: Final = _gemini_stream_opened_by(already_mapped, sync_mode, logging_obj)
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        await _fetch(stream, sync_mode)
+    assert excinfo.value is already_mapped
+    assert excinfo.value.__cause__ is None
+
+
+async def test_a_cancelled_stream_open_stays_cancelled(logging_obj: Logging) -> None:
+    stream: Final = _gemini_stream_opened_by(asyncio.CancelledError(), False, logging_obj)
+    with pytest.raises(asyncio.CancelledError):
+        await stream.fetch_stream()
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_a_stream_that_opens_is_opened_once(logging_obj: Logging, sync_mode: bool) -> None:
+    def make_sync_call(client: object) -> ModelResponseListIterator:
+        return ModelResponseListIterator(model_responses=[])
+
+    async def make_call(client: object) -> ModelResponseListIterator:
+        return ModelResponseListIterator(model_responses=[])
+
+    stream: Final = CustomStreamWrapper(
+        completion_stream=None,
+        model="gemini-2.5-flash",
+        logging_obj=logging_obj,
+        custom_llm_provider="gemini",
+        make_call=make_sync_call if sync_mode else make_call,
+    )
+    opened: Final = await _fetch(stream, sync_mode)
+    assert isinstance(opened, ModelResponseListIterator)
+    assert await _fetch(stream, sync_mode) is opened
+
+
 def _bedrock_error_event(exception_type: str):
     """A mocked botocore event-stream error event: status_code is botocore's
     hard-coded 400, with the real type in the :exception-type header."""
@@ -2113,37 +2210,32 @@ async def test_in_body_stream_error_500_wraps_for_midstream_fallback(
     assert "internal engine crash" in str(excinfo.value)
 
 
-@pytest.mark.asyncio
-async def test_async_streaming_read_timeout_triggers_midstream_fallback(
-    logging_obj: Logging,
-):
-    """A mid-stream httpx.ReadTimeout must wrap into MidStreamFallbackError so
-    the Router's FallbackStreamWrapper can switch to a fallback model.
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_a_read_timeout_while_opening_the_stream_triggers_midstream_fallback(
+    logging_obj: Logging, sync_mode: bool
+) -> None:
+    read_timeout: Final = httpx.ReadTimeout("Timeout on reading data from socket")
 
-    Previously __anext__ caught httpx.TimeoutException and re-raised it raw,
-    which bypassed _handle_stream_fallback_error and prevented stream_timeout
-    from triggering fallbacks the way connection-phase timeout does.
-    """
-    import httpx
+    def make_sync_call(client: object) -> NoReturn:
+        raise read_timeout
 
-    from litellm.exceptions import MidStreamFallbackError
+    async def make_call(client: object) -> NoReturn:
+        raise read_timeout
 
-    async def _raise_read_timeout(**kwargs):
-        raise httpx.ReadTimeout("Timeout on reading data from socket")
-
-    response = CustomStreamWrapper(
+    response: Final = CustomStreamWrapper(
         completion_stream=None,
         model="gpt-4",
         logging_obj=logging_obj,
         custom_llm_provider="openai",
-        make_call=_raise_read_timeout,
+        make_call=make_sync_call if sync_mode else make_call,
     )
 
     with pytest.raises(MidStreamFallbackError) as excinfo:
-        await response.__anext__()
+        next(response) if sync_mode else await response.__anext__()
 
     assert excinfo.value.is_pre_first_chunk is True
     assert isinstance(excinfo.value.original_exception, litellm.Timeout)
+    assert excinfo.value.original_exception.__cause__ is read_timeout
 
 
 def _raw_read_timeout() -> NoReturn:
