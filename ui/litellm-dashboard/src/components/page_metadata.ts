@@ -34,7 +34,6 @@ export const pageDescriptions: Record<string, ParseKeys> = {
   projects: "shell.pageDescriptions.projects",
   "access-groups": "shell.pageDescriptions.accessGroups",
   budgets: "shell.pageDescriptions.budgets",
-  api_ref: "shell.pageDescriptions.apiRef",
   "model-hub-table": "shell.pageDescriptions.modelHubTable",
   caching: "shell.pageDescriptions.caching",
   "transform-request": "shell.pageDescriptions.transformRequest",
