@@ -304,7 +304,10 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
     def _row_declared_reasoning_efforts(cls, model: str) -> tuple[str, ...] | None:
         from litellm.litellm_core_utils.reasoning_effort_capability import declared_reasoning_efforts_for_map_key
 
-        return declared_reasoning_efforts_for_map_key(cls._model_map_lookup_name(model))
+        own_levels: Final = declared_reasoning_efforts_for_map_key(cls._model_map_lookup_name(model))
+        if own_levels is None and is_chat_latest_name(model):
+            return declared_reasoning_efforts_for_map_key(OPENAI_CHAT_LATEST_ALIAS)
+        return own_levels
 
     @classmethod
     def refuses_reasoning_effort_level(cls, model: str, level: str) -> bool:
@@ -312,7 +315,8 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
 
         A row that lists its levels in reasoning_effort_levels answers whole, max included, since
         that list is how the map describes a model whose set the per-level flags cannot express
-        (chat-latest takes medium alone, and no flag can turn high off).
+        (chat-latest takes medium alone, and no flag can turn high off). A chat-latest deployment name
+        with no row of its own reads the chat-latest row, since its name is what put it in this family.
 
         Otherwise an opt-in level (xhigh here; Azure adds none) is refused unless the row says true,
         since the providers rejected it on most of the family when it arrived. Every other level is
@@ -369,7 +373,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         base_gpt_series_params: Final = super().get_supported_openai_params(model=model)
         gpt_5_only_params: Final = ["reasoning_effort", "verbosity"]
         base_gpt_series_params.extend(gpt_5_only_params)
-        if not is_chat_latest_name(model) and not supports_tool_choice(model=self._model_map_lookup_name(model)):
+        if not is_chat_latest_name(model) and not supports_tool_choice(model=model):
             base_gpt_series_params.remove("tool_choice")
 
         non_supported_params: Final = [

@@ -132,6 +132,9 @@ def test_chat_latest_aliases_take_the_gpt5_request_shape(custom_llm_provider: st
         ("openai", "chat-latest", "chat-latest"),
         ("azure", "gpt-chat-latest", "azure/gpt-chat-latest"),
         ("azure_ai", "gpt-chat-latest", "azure_ai/gpt-chat-latest"),
+        ("azure", "gpt-chat-latest-eastus", "chat-latest"),
+        ("azure_ai", "gpt-chat-latest-2", "chat-latest"),
+        ("openai", "gpt-chat-latest", "chat-latest"),
     ],
 )
 @pytest.mark.parametrize("level", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
