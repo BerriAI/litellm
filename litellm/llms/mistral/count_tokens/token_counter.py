@@ -19,7 +19,7 @@ from litellm.llms.anthropic.messages.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
-from litellm.llms.mistral.common_utils import MistralError
+from litellm.llms.mistral.common_utils import MistralError, get_mistral_chat_credentials
 from litellm.llms.mistral.count_tokens.handler import (
     MistralCountTokensHandler,
 )
@@ -40,40 +40,31 @@ class _MistralCountCredential:
     api_base: str | None
 
 
-def _is_azure_endpoint(api_base: str | None) -> bool:
-    if not api_base:
-        return False
-    hostname: Final = urlparse(api_base).hostname or ""
-    return hostname.endswith((".azure.com", ".azure.cn")) or "azure" in hostname.lower()
+def _is_azure_endpoint(api_base: str) -> bool:
+    return "azure" in (urlparse(api_base).hostname or "").lower()
 
 
 def _count_credential(
     deployment: Mapping[str, object] | None, model_label: str
 ) -> _MistralCountCredential | MistralError | None:
     litellm_params: Final = as_str_mapping(None if deployment is None else deployment.get("litellm_params")) or {}
-    custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
-    if custom_llm_provider in ("azure", "azure_ai"):
+    if litellm_params.get("custom_llm_provider") in ("azure", "azure_ai"):
         return None
     raw_api_base: Final = litellm_params.get("api_base")
     raw_api_key: Final = litellm_params.get("api_key")
-
-    from litellm.llms.mistral.chat.transformation import MistralConfig
-
-    resolved_base, resolved_key = MistralConfig().get_openai_compatible_provider_info(
-        api_base=raw_api_base if isinstance(raw_api_base, str) else None,
-        api_key=raw_api_key if isinstance(raw_api_key, str) else None,
+    deployment_key: Final = raw_api_key if isinstance(raw_api_key, str) and raw_api_key else None
+    api_base, api_key = get_mistral_chat_credentials(
+        api_base=raw_api_base if isinstance(raw_api_base, str) else None, api_key=deployment_key
     )
-
-    if _is_azure_endpoint(resolved_base) or (
-        bool(get_secret_str("MISTRAL_AZURE_API_KEY")) and not raw_api_key and not get_secret_str("MISTRAL_API_KEY")
-    ):
+    if _is_azure_endpoint(api_base) or (deployment_key is None and get_secret_str("MISTRAL_AZURE_API_KEY")):
         verbose_logger.debug(
             "Mistral native count tokens skipped for Azure deployment/credential, falling back to local: base=%s",
-            resolved_base,
+            api_base,
         )
         return None
 
-    if not isinstance(resolved_key, str) or not resolved_key:
+    resolved_key: Final = api_key or litellm.api_key
+    if not resolved_key:
         return MistralError(
             status_code=401,
             message=(
@@ -82,7 +73,7 @@ def _count_credential(
             ),
             headers=httpx.Headers(),
         )
-    return _MistralCountCredential(api_key=resolved_key, api_base=resolved_base)
+    return _MistralCountCredential(api_key=resolved_key, api_base=api_base)
 
 
 def _count_error(model_to_use: str, request_model: str, message: str, status_code: int) -> TokenCountResponse:
@@ -128,7 +119,7 @@ class MistralTokenCounter(BaseTokenCounter):
         self,
         custom_llm_provider: str | None = None,
     ) -> bool:
-        return custom_llm_provider in (LlmProviders.MISTRAL.value, "mistral")
+        return custom_llm_provider == LlmProviders.MISTRAL.value
 
     @staticmethod
     def _system_instructions(system: object) -> str | None:

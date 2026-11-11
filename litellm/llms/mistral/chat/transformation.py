@@ -32,12 +32,11 @@ from litellm.litellm_core_utils.reasoning_effort_capability import (
     nearest_declared_reasoning_effort,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE, warn_dropped_reasoning
-from litellm.litellm_core_utils.url_utils import ensure_api_route
+from litellm.llms.mistral.common_utils import get_mistral_chat_credentials
 from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
 )
-from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.mistral import (
     MistralCacheKeyParams,
     MistralFilePart,
@@ -389,26 +388,12 @@ class MistralConfig(OpenAIGPTConfig):
         )
 
     @staticmethod
-    def get_api_key(api_key: str | None = None, api_base: str | None = None) -> str | None:
-        resolved_base: Final = (
-            api_base or get_secret_str("MISTRAL_API_BASE") or get_secret_str("MISTRAL_AZURE_API_BASE")
-        )
-        is_azure: Final = bool(resolved_base and "azure" in resolved_base.lower())
-        return (
-            api_key
-            or (get_secret_str("MISTRAL_AZURE_API_KEY") if is_azure else get_secret_str("MISTRAL_API_KEY"))
-            or (get_secret_str("MISTRAL_API_KEY") if is_azure else get_secret_str("MISTRAL_AZURE_API_KEY"))
-            or litellm.api_key
-        )
+    def get_api_key(api_key: str | None = None) -> str | None:
+        return get_mistral_chat_credentials(api_base=None, api_key=api_key)[1]
 
     @staticmethod
     def get_api_base(api_base: str | None = None) -> str | None:
-        return (
-            api_base
-            or get_secret_str("MISTRAL_API_BASE")
-            or get_secret_str("MISTRAL_AZURE_API_BASE")
-            or "https://api.mistral.ai/v1"
-        )
+        return get_mistral_chat_credentials(api_base=api_base, api_key=None)[0]
 
     def get_models(
         self, api_key: str | None = None, api_base: str | None = None
@@ -425,23 +410,7 @@ class MistralConfig(OpenAIGPTConfig):
         )
 
     def _get_openai_compatible_provider_info(self, api_base: str | None, api_key: str | None) -> tuple[str, str | None]:
-        # mistral is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.mistral.ai
-        resolved_base: Final = (
-            api_base
-            or get_secret_str("MISTRAL_API_BASE")
-            or get_secret_str("MISTRAL_AZURE_API_BASE")  # for Azure AI Mistral
-            or "https://api.mistral.ai/v1"
-        )
-
-        resolved_base_with_v1: Final = ensure_api_route(resolved_base, "v1")
-        is_azure: Final = "azure" in resolved_base_with_v1.lower()
-        dynamic_api_key: Final = (
-            api_key
-            or (get_secret_str("MISTRAL_AZURE_API_KEY") if is_azure else get_secret_str("MISTRAL_API_KEY"))
-            or (get_secret_str("MISTRAL_API_KEY") if is_azure else get_secret_str("MISTRAL_AZURE_API_KEY"))
-            or litellm.api_key
-        )
-        return resolved_base_with_v1, dynamic_api_key
+        return get_mistral_chat_credentials(api_base, api_key)
 
     # fmt: off
 

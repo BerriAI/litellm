@@ -391,20 +391,32 @@ async def test_count_tokens_azure_endpoint_falls_back_to_none():
     assert result is None
 
 
+@pytest.mark.parametrize("mistral_api_key", [None, "env-mistral-key"])
 @pytest.mark.asyncio
-async def test_count_tokens_azure_only_credentials_falls_back_to_none(monkeypatch: pytest.MonkeyPatch):
+async def test_count_tokens_never_sends_the_azure_env_key_to_mistral(
+    monkeypatch: pytest.MonkeyPatch, mistral_api_key: str | None
+):
     monkeypatch.setenv("MISTRAL_AZURE_API_KEY", "azure-test-key")
-    monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
+    if mistral_api_key is None:
+        monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
+    else:
+        monkeypatch.setenv("MISTRAL_API_KEY", mistral_api_key)
+    monkeypatch.delenv("MISTRAL_AZURE_API_BASE", raising=False)
     monkeypatch.setattr(litellm, "api_key", None)
-    counter: Final = MistralTokenCounter()
-    result: Final = await counter.count_tokens(
-        model_to_use="mistral-large-4",
-        messages=[{"role": "user", "content": "Hello"}],
-        contents=None,
-        deployment={"litellm_params": {}},
-        request_model="mistral/mistral-large-4",
-    )
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock(assert_all_called=False) as router:
+        route: Final = router.post(COUNT_URL).mock(
+            return_value=httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 9})
+        )
+        result: Final = await MistralTokenCounter().count_tokens(
+            model_to_use="mistral-large-4",
+            messages=[{"role": "user", "content": "Hello"}],
+            contents=None,
+            deployment={"litellm_params": {}},
+            request_model="mistral/mistral-large-4",
+        )
     assert result is None
+    assert not route.called
 
 
 @pytest.mark.asyncio
@@ -413,6 +425,7 @@ async def test_count_tokens_mistral_env_key_takes_precedence_over_generic_litell
 ):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setenv("MISTRAL_API_KEY", "real-mistral-key")
+    monkeypatch.delenv("MISTRAL_AZURE_API_KEY", raising=False)
     monkeypatch.setattr(litellm, "api_key", "generic-openai-key")
     counter: Final = MistralTokenCounter()
     with respx.mock:
@@ -431,44 +444,74 @@ async def test_count_tokens_mistral_env_key_takes_precedence_over_generic_litell
     assert route.calls.last.request.headers["authorization"] == "Bearer real-mistral-key"
 
 
-def test_mistral_config_get_api_key_and_base(monkeypatch: pytest.MonkeyPatch):
-    import litellm
+_MISTRAL_ENV_VARS: Final = ("MISTRAL_API_KEY", "MISTRAL_API_BASE", "MISTRAL_AZURE_API_KEY", "MISTRAL_AZURE_API_BASE")
+
+
+def _set_mistral_env(monkeypatch: pytest.MonkeyPatch, env: dict[str, str]) -> None:
+    for name in _MISTRAL_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+
+
+@pytest.mark.parametrize(
+    ("env", "litellm_params"),
+    [
+        ({"MISTRAL_API_KEY": "env-mistral-key"}, {}),
+        ({"MISTRAL_API_KEY": "env-mistral-key", "MISTRAL_API_BASE": "https://egress.example.com"}, {}),
+        ({"MISTRAL_API_KEY": "env-mistral-key"}, {"api_key": "deployment-key"}),
+        ({}, {"api_key": "deployment-key", "api_base": "https://mistral-gateway.example.com"}),
+        ({}, {"api_key": "deployment-key", "api_base": "https://mistral-gateway.example.com/v1"}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_count_tokens_sends_the_key_and_base_chat_resolves(
+    monkeypatch: pytest.MonkeyPatch, env: dict[str, str], litellm_params: dict[str, str]
+):
+    _set_mistral_env(monkeypatch, env)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    _, _, chat_key, chat_base = litellm.get_llm_provider(
+        model="mistral/mistral-large-4",
+        api_base=litellm_params.get("api_base"),
+        api_key=litellm_params.get("api_key"),
+    )
+    with respx.mock:
+        route: Final = respx.post(f"{chat_base}/responses/input_tokens").mock(
+            return_value=httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 7})
+        )
+        result: Final = await MistralTokenCounter().count_tokens(
+            model_to_use="mistral-large-4",
+            messages=[{"role": "user", "content": "Hello"}],
+            contents=None,
+            deployment={"litellm_params": litellm_params},
+            request_model="mistral/mistral-large-4",
+        )
+    assert result is not None
+    assert result.total_tokens == 7
+    assert route.calls.last.request.headers["authorization"] == f"Bearer {chat_key}"
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {"MISTRAL_API_KEY": "mistral-key", "MISTRAL_API_BASE": "https://egress.example.com"},
+        {
+            "MISTRAL_API_KEY": "mistral-key",
+            "MISTRAL_AZURE_API_KEY": "azure-key",
+            "MISTRAL_AZURE_API_BASE": "https://mistral-resource.services.ai.azure.com/models",
+        },
+    ],
+)
+def test_mistral_model_info_key_and_base_match_chat(monkeypatch: pytest.MonkeyPatch, env: dict[str, str]):
     from litellm.llms.mistral.chat.transformation import MistralConfig
+    from litellm.types.utils import LlmProviders
+    from litellm.utils import ProviderConfigManager
 
-    monkeypatch.setattr(litellm, "api_base", "http://localhost:8000")
-    monkeypatch.setenv("MISTRAL_API_KEY", "env-mistral-key")
-    monkeypatch.setenv("MISTRAL_API_BASE", "https://custom.mistral.ai")
-    assert MistralConfig.get_api_key() == "env-mistral-key"
-    assert MistralConfig.get_api_base() == "https://custom.mistral.ai"
-
-
-def test_mistral_azure_key_priority(monkeypatch: pytest.MonkeyPatch):
-    from litellm.llms.mistral.chat.transformation import MistralConfig
-
-    monkeypatch.setenv("MISTRAL_API_KEY", "mistral-public-key")
-    monkeypatch.setenv("MISTRAL_AZURE_API_KEY", "azure-mistral-key")
-
-    config: Final = MistralConfig()
-    # When targeting an Azure base, Azure key takes precedence
-    base, key = config.get_openai_compatible_provider_info(
-        api_base="https://mistral-resource.services.ai.azure.com/models",
-        api_key=None,
-    )
-    assert "azure" in base.lower()
-    assert key == "azure-mistral-key"
-    assert (
-        MistralConfig.get_api_key(api_base="https://mistral-resource.services.ai.azure.com/models")
-        == "azure-mistral-key"
-    )
-
-    # When targeting standard Mistral, Mistral key takes precedence
-    base_std, key_std = config.get_openai_compatible_provider_info(
-        api_base="https://api.mistral.ai/v1",
-        api_key=None,
-    )
-    assert base_std == "https://api.mistral.ai/v1"
-    assert key_std == "mistral-public-key"
-    assert MistralConfig.get_api_key(api_base="https://api.mistral.ai/v1") == "mistral-public-key"
+    _set_mistral_env(monkeypatch, env)
+    _, _, chat_key, chat_base = litellm.get_llm_provider(model="mistral/mistral-large-4")
+    model_info: Final = ProviderConfigManager.get_provider_model_info(model=None, provider=LlmProviders.MISTRAL)
+    assert isinstance(model_info, MistralConfig)
+    assert (model_info.get_api_base(), model_info.get_api_key()) == (chat_base, chat_key)
 
 
 def test_mistral_config_get_models_calls_mistral_endpoint():

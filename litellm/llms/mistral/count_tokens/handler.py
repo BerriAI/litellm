@@ -1,4 +1,3 @@
-import json
 from collections.abc import Mapping, Sequence
 from typing import Final
 
@@ -91,7 +90,7 @@ class MistralCountTokensHandler(MistralCountTokensConfig):
                 message=e.response.text,
                 headers=e.response.headers,
             ) from e
-        except (httpx.RequestError, json.JSONDecodeError, ValueError) as e:
+        except ValueError as e:
             verbose_logger.error("Error in Mistral CountTokens handler: %s", e)
             raise MistralError(
                 status_code=500,
