@@ -272,7 +272,7 @@ async fn a_retry_leaves_a_pinned_deployment_that_failed_the_request(
 
 #[rstest]
 #[tokio::test]
-async fn a_bad_request_falls_back_without_retrying(config: RouterConfig) {
+async fn a_bad_request_is_retried_on_the_groups_other_deployment(config: RouterConfig) {
     let host = Arc::new(ScriptedHost::failing(
         "primary",
         vec![AttemptError::new(FailureKind::BadRequest, Some(400))],
@@ -286,18 +286,79 @@ async fn a_bad_request_falls_back_without_retrying(config: RouterConfig) {
         .call(Op::from("acompletion"), request())
         .await
         .unwrap();
-    let retried = host
-        .events
-        .lock()
-        .iter()
-        .any(|event| matches!(event, RouterEvent::Retry { .. }));
+    let mut selected = host.selected();
+    selected.sort();
+    assert_eq!(
+        (
+            response.model_group.as_str(),
+            response.attempted_fallbacks,
+            selected
+        ),
+        ("primary", 0, vec!["a1".to_owned(), "a2".to_owned()])
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_bad_request_from_every_deployment_falls_back(config: RouterConfig) {
+    let bad_request = AttemptError::new(FailureKind::BadRequest, Some(400));
+    let host = Arc::new(ScriptedHost::failing(
+        "primary",
+        vec![bad_request.clone(), bad_request],
+    ));
+    let router = router(
+        config,
+        json!({"num_retries": 3, "fallbacks": [{"primary": ["backup"]}]}),
+        host.clone(),
+    );
+    let response = router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap();
+    let mut primary_selected: Vec<String> = host
+        .selected()
+        .into_iter()
+        .filter(|id| id.starts_with('a'))
+        .collect();
+    primary_selected.sort();
     assert_eq!(
         (
             response.deployment_id.as_str(),
             response.attempted_fallbacks,
-            retried
+            primary_selected
         ),
-        ("b1", 1, false)
+        ("b1", 1, vec!["a1".to_owned(), "a2".to_owned()])
+    );
+}
+
+#[tokio::test]
+async fn a_guardrail_rejection_on_a_retry_is_not_failed_over_to_a_sibling() {
+    let config = serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "primary", "litellm_params": {"model": "openai/a"}, "model_info": {"id": "a1"}},
+            {"model_name": "primary", "litellm_params": {"model": "openai/b"}, "model_info": {"id": "a2"}},
+            {"model_name": "primary", "litellm_params": {"model": "openai/c"}, "model_info": {"id": "a3"}},
+        ]
+    }))
+    .unwrap();
+    let host = Arc::new(ScriptedHost::failing(
+        "primary",
+        vec![
+            AttemptError::new(FailureKind::NotFound, Some(404)),
+            AttemptError::new(FailureKind::GuardrailIntervention, Some(400)),
+        ],
+    ));
+    let router = router(config, json!({"num_retries": 2}), host.clone());
+    let error = router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (
+            error.attempt().map(|failure| failure.kind),
+            host.selected().len()
+        ),
+        (Some(FailureKind::GuardrailIntervention), 2)
     );
 }
 

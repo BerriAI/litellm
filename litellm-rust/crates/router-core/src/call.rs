@@ -1013,7 +1013,31 @@ impl Core {
             let Some(failure) = retried_failure(&failed.error) else {
                 return Err(failed);
             };
-            if !policy_applies && !self.should_retry(snapshot, request, &failure, healthy, all) {
+            let named = failure.failed_deployment_id.as_ref();
+            let failed_on = named.or(failed.deployment_id.as_ref());
+            if let Some(id) = failed_on
+                && !inputs.failed_ids.contains(id)
+            {
+                inputs.failed_ids.push(id.clone());
+            }
+            if let (Some(status), Some(id)) = (failure.status, failed_on)
+                && !should_retry_status(status)
+                && !inputs.skipped_ids.contains(id)
+            {
+                inputs.skipped_ids.push(id.clone());
+            }
+            let has_untried_deployment = healthy_ids
+                .iter()
+                .any(|id| !inputs.skipped_ids.contains(id));
+            if !policy_applies
+                && !self.should_retry(
+                    snapshot,
+                    request,
+                    &failure,
+                    (healthy, all),
+                    has_untried_deployment,
+                )
+            {
                 return Err(failed);
             }
             let uncounted = request.uncounted_retries.filter(|_| !policy_applies);
@@ -1041,19 +1065,6 @@ impl Core {
             }
             if retry == 0 {
                 self.log_retry(target, at, 0, &failed.error);
-            }
-            let named = failure.failed_deployment_id.as_ref();
-            let failed_on = named.or(failed.deployment_id.as_ref());
-            if let Some(id) = failed_on
-                && !inputs.failed_ids.contains(id)
-            {
-                inputs.failed_ids.push(id.clone());
-            }
-            if let (Some(status), Some(id)) = (failure.status, failed_on)
-                && !should_retry_status(status)
-                && !inputs.skipped_ids.contains(id)
-            {
-                inputs.skipped_ids.push(id.clone());
             }
             // An endpoint a deployment does not serve is retried on the others, until every
             // one refused (`_every_deployment_refused`).
@@ -1102,7 +1113,11 @@ impl Core {
                     response.max_retries = Some(num_retries);
                     return Ok(response);
                 }
-                Err(next) if next.error.attempt().is_some_and(|f| f.agentic_followup) => {
+                Err(next)
+                    if next.error.attempt().is_some_and(|f| {
+                        f.agentic_followup || f.kind == FailureKind::GuardrailIntervention
+                    }) =>
+                {
                     return Err(next);
                 }
                 Err(next) => {
@@ -1176,8 +1191,8 @@ impl Core {
         snapshot: &RouterStateSnapshot,
         request: &RouterRequest,
         failure: &AttemptError,
-        healthy: usize,
-        all: usize,
+        (healthy, all): (usize, usize),
+        has_untried_deployment: bool,
     ) -> bool {
         let lists = Lists::of(snapshot, request);
         should_retry(
@@ -1188,6 +1203,7 @@ impl Core {
                 has_context_window_fallbacks: lists.context_window.is_some(),
                 has_content_policy_fallbacks: lists.content_policy.is_some(),
                 has_regular_fallbacks: lists.has_regular(),
+                has_untried_deployment,
             },
         )
     }
