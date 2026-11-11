@@ -14,7 +14,7 @@ from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH, request_timeout
 
 # Import the adapter for fallback to completion format
 from litellm.google_genai.adapters.handler import CUSTOM_PRICING_PARAMS, GenerateContentToCompletionHandler
-from litellm.google_genai.adapters.transformation import ADAPTER_GENERATION_CONFIG_KEYS
+from litellm.google_genai.adapters.transformation import adapter_honors_generation_config
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.litellm_core_utils.per_call_pricing import per_call_model_info
@@ -23,7 +23,7 @@ from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.llms.custom_llm import CustomLLM, CustomLLMError
+from litellm.llms.custom_llm import CustomLLM
 from litellm.llms.vertex_ai.gemini.transformation import snake_to_camel
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -293,9 +293,10 @@ def _require_custom_stream_hook(setup_result: GenerateContentSetupResult, is_asy
         return
     hook_name: Final = "astreaming" if is_async else "streaming"
     if getattr(type(custom_handler), hook_name) is getattr(CustomLLM, hook_name):
-        raise CustomLLMError(
-            status_code=500,
+        raise litellm.APIConnectionError(
             message=f"{setup_result.custom_llm_provider} does not implement {hook_name}, so it cannot stream generateContent",
+            llm_provider=setup_result.custom_llm_provider,
+            model=setup_result.model,
         )
 
 
@@ -304,7 +305,11 @@ def _require_adapter_generation_config(setup_result: GenerateContentSetupResult)
         return
     if setup_result.litellm_params.drop_params or litellm.drop_params:
         return
-    untranslated: Final = sorted(setup_result.generate_content_config_dict.keys() - ADAPTER_GENERATION_CONFIG_KEYS)
+    untranslated: Final = sorted(
+        key
+        for key, value in setup_result.generate_content_config_dict.items()
+        if not adapter_honors_generation_config(key, value)
+    )
     if untranslated:
         raise litellm.UnsupportedParamsError(
             message=(

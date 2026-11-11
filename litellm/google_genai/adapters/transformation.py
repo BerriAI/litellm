@@ -119,6 +119,9 @@ ADAPTER_GENERATION_CONFIG_KEYS: Final = frozenset(
     {"temperature", "maxOutputTokens", "topP", "stopSequences", *_RESPONSE_MIME_TYPE_KEYS, *_RESPONSE_SCHEMA_KEYS}
 )
 _GEMINI_ONLY_SCHEMA_KEYS: Final = frozenset({"propertyOrdering", "property_ordering"})
+_ADAPTER_DEFAULT_GENERATION_CONFIG: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"responseModalities": ["TEXT"], "candidateCount": 1}
+)
 _CONFIG_FIELDS: Final = TypeAdapter(Mapping[str, object])
 _JSON_OBJECT_SCHEMA: Final = TypeAdapter(dict[str, JsonValue])
 _Validated: Final = TypeVar("_Validated")
@@ -128,6 +131,12 @@ _GENAI_FILE_DATA: Final = TypeAdapter(_GenAIFileData)
 _GENAI_FUNCTION_RESPONSE: Final = TypeAdapter(_GenAIFunctionResponse)
 _GENAI_FUNCTION_CALL: Final = TypeAdapter(_GenAIRequestFunctionCall)
 _GenAIMessagePart: TypeAlias = ChatCompletionTextObject | ChatCompletionImageObject | ChatCompletionFileObject
+
+
+def adapter_honors_generation_config(key: str, value: object) -> bool:
+    return key in ADAPTER_GENERATION_CONFIG_KEYS or (
+        key in _ADAPTER_DEFAULT_GENERATION_CONFIG and _ADAPTER_DEFAULT_GENERATION_CONFIG[key] == value
+    )
 
 
 def _first_present(config: Mapping[str, object], keys: Sequence[str]) -> object | None:
