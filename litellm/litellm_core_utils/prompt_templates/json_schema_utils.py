@@ -106,10 +106,17 @@ def ref_points_into_defs(ref: str, defs: Mapping[str, object]) -> bool:
     return names is not None and any(name in defs for name in names)
 
 
+def _def_names_a_ref_may_reach(ref: object) -> frozenset[str] | None:
+    names: Final = _referenced_def_names(ref)
+    if names is None or not isinstance(ref, str):
+        return names
+    return names | {ref.split("/")[-1]}
+
+
 def _node_ref_def_names(node: Mapping[str, object]) -> tuple[frozenset[str] | None, ...]:
     if any(keyword in node for keyword in _DYNAMIC_REF_KEYWORDS):
         return (None,)
-    return (_referenced_def_names(node["$ref"]),) if "$ref" in node else ()
+    return (_def_names_a_ref_may_reach(node["$ref"]),) if "$ref" in node else ()
 
 
 def _json_object(value: object) -> Mapping[str, object] | None:

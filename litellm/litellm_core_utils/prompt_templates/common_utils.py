@@ -950,7 +950,13 @@ def _resolve_in_scope(scope: _DefsScope, name: str) -> object:
     return next((defs[name] for defs in scope if name in defs), None)
 
 
-def _keeps_no_ref(_ref: str) -> bool:
+def _definition_schema(definition: object) -> Mapping[str, object] | None:
+    if isinstance(definition, bool):
+        return {} if definition else {"not": {}}
+    return definition if isinstance(definition, dict) else None
+
+
+def _keeps_no_ref(_ref: str, _scope: _DefsScope) -> bool:
     return False
 
 
@@ -959,7 +965,7 @@ def unpack_defs(
     defs: dict,
     max_inlined_bytes: int | None = None,
     *,
-    keeps_ref: Callable[[str], bool] = _keeps_no_ref,
+    keeps_ref: Callable[[str, _DefsScope], bool] = _keeps_no_ref,
 ) -> int:
     """Expand *all* ``$ref`` entries pointing into ``$defs`` / ``definitions``.
 
@@ -981,8 +987,8 @@ def unpack_defs(
     Defaults to ``None`` (unbounded) so existing callers are unaffected;
     raises ``ValueError`` on overflow.
 
-    ``keeps_ref`` names the refs to leave as they are, for a provider that
-    resolves those itself.
+    ``keeps_ref`` names the refs to leave as they are, given the definition
+    layers in scope, nearest first, for a provider that resolves those itself.
     """
 
     import copy
@@ -1007,7 +1013,7 @@ def unpack_defs(
         if isinstance(node, dict):
             # --- Case 1: this node *is* a reference ---
             ref = node.get("$ref")
-            if isinstance(ref, str) and not keeps_ref(ref):
+            if isinstance(ref, str) and not keeps_ref(ref, active_defs):
                 ref_name = ref.split("/")[-1]
 
                 # Check for circular reference in the resolution chain
@@ -1015,9 +1021,9 @@ def unpack_defs(
                     # Circular reference detected - leave as-is to prevent infinite recursion
                     continue
 
-                target_schema = _resolve_in_scope(active_defs, ref_name)
+                target_schema = _definition_schema(_resolve_in_scope(active_defs, ref_name))
                 # Unknown reference – leave untouched
-                if not isinstance(target_schema, dict):
+                if target_schema is None:
                     continue
 
                 if max_inlined_bytes is not None:
@@ -1086,6 +1092,15 @@ def _legacy_defs(schema: object) -> Mapping[str, object] | None:
     return {**_mapping_or_empty(components.get("schemas")), **_mapping_or_empty(node.get("definitions"))}
 
 
+def _legacy_blocks_are_well_formed(schema: Mapping[str, object]) -> bool:
+    components: Final = schema.get("components", {})
+    return (
+        isinstance(schema.get("definitions") or {}, dict)
+        and isinstance(components, dict)
+        and isinstance(_mapping_or_empty(components).get("schemas") or {}, dict)
+    )
+
+
 # Schema-bomb budget for ``$ref`` inlining: cap the cumulative JSON-byte
 # size of every inlined target. A byte cap is the universal measure of
 # expansion -- it simultaneously bounds ref-count fan-out, node-count
@@ -1116,7 +1131,7 @@ def unpack_legacy_defs(
     schemas cannot expand into a schema-bomb before reaching the upstream
     provider -- raises ``ValueError`` on overflow.
     """
-    if _legacy_defs(schema) is None:
+    if _legacy_defs(schema) is None or not _legacy_blocks_are_well_formed(schema):
         return schema
     if copy:
         import copy as _copy
@@ -1139,7 +1154,9 @@ def inline_refs_outside_root_defs(
         document,
         {**root_defs, **(_legacy_defs(schema) or {})},
         max_inlined_bytes=max_inlined_bytes,
-        keeps_ref=lambda ref: ref_points_into_defs(ref, root_defs),
+        keeps_ref=lambda ref, scope: (
+            ref_points_into_defs(ref, root_defs) and not any(ref_points_into_defs(ref, layer) for layer in scope[:-1])
+        ),
     )
     inlined: Final = document["body"]
     return ({**inlined, "$defs": root_defs} if root_defs else inlined), inlined_bytes

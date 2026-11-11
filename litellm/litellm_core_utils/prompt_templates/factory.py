@@ -5953,7 +5953,7 @@ def _bedrock_tools_pt(
         try:
             if resolves_schema_defs:
                 inlined, tool_inlined_bytes = inline_refs_outside_root_defs(
-                    schema_with_root_ref_resolved(parameters), remaining_inline_bytes
+                    schema_without_unreferenced_defs(schema_with_root_ref_resolved(parameters)), remaining_inline_bytes
                 )
                 parameters = dict(schema_without_unreferenced_defs(inlined))
             else:

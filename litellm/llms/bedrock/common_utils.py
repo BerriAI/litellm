@@ -1609,7 +1609,7 @@ def _is_claude(model: str) -> bool:
 
 
 def bedrock_converse_resolves_tool_schema_defs(model: str | None) -> bool:
-    return model is not None and _is_claude(model)
+    return model is not None and _is_claude_behind_any_region_prefix(model)
 
 
 def _is_claude_behind_any_region_prefix(model: str) -> bool:

@@ -342,6 +342,41 @@ class TestUnpackLegacyDefs:
 
         assert out["properties"]["home"] == address
 
+    def test_a_boolean_definition_is_inlined_as_the_schema_it_means(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_legacy_defs,
+        )
+
+        schema: Final = {
+            "type": "object",
+            "properties": {"anything": {"$ref": "#/definitions/Anything"}, "nothing": {"$ref": "#/definitions/Nothing"}},
+            "definitions": {"Anything": True, "Nothing": False},
+        }
+
+        out: Final = unpack_legacy_defs(schema)
+
+        assert out == {"type": "object", "properties": {"anything": {}, "nothing": {"not": {}}}}
+
+    @pytest.mark.parametrize(
+        "legacy_blocks",
+        [
+            {"definitions": 5},
+            {"definitions": {"A": {"type": "string"}}, "components": {"schemas": ["not", "a", "map"]}},
+            {"definitions": {"A": {"type": "string"}}, "components": 5},
+        ],
+        ids=["definitions_is_a_number", "components_schemas_is_a_list", "components_is_a_number"],
+    )
+    def test_a_malformed_legacy_block_is_left_for_the_provider_to_judge(self, legacy_blocks):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_legacy_defs,
+        )
+
+        schema: Final = {"type": "object", "properties": {"a": {"$ref": "#/definitions/A"}}, **legacy_blocks}
+
+        out: Final = unpack_legacy_defs(copy.deepcopy(schema))
+
+        assert out == schema
+
     def test_memory_stays_linear_in_schema_size_with_many_definitions(self):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             unpack_legacy_defs,
