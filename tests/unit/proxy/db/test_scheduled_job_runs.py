@@ -174,7 +174,7 @@ def test_an_invalid_schedule_replans_nothing_but_still_runs_what_the_last_valid_
     assert plan == TickPlan(cancel=(), insert=None, claim="a")
 
 
-@pytest.mark.parametrize("value", ["not a cron", "0 0 * * * *", 5, None])
+@pytest.mark.parametrize("value", ["not a cron", "0 0 * * * *", "0 0 31 2 *", "0 0 30 2 *", 5, None])
 def test_cron_schedule_rejects_what_is_not_a_crontab(value: object) -> None:
     assert isinstance(cron_schedule("maximum_spend_logs_cleanup_cron", value), InvalidSchedule)
 

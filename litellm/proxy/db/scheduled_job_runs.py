@@ -104,6 +104,8 @@ def cron_schedule(setting_name: str, value: object) -> Schedule | InvalidSchedul
         trigger: Final = _cron_trigger(value)
     except (ValueError, TypeError):
         return InvalidSchedule(f"{setting_name} is not a valid crontab expression: {value!r}")
+    if trigger.get_next_fire_time(None, datetime.now(timezone.utc)) is None:
+        return InvalidSchedule(f"{setting_name} never fires: {value!r}")
     return CronSchedule(expression=value, trigger=trigger)
 
 
