@@ -65,7 +65,7 @@ from litellm.types.llms.vertex_ai import PartType as VertexPartType
 from litellm.types.utils import GenericImageParsingChunk
 
 from .common_utils import (
-    BEDROCK_TOOLS_MAX_INLINED_BYTES,
+    DEFS_MAX_INLINED_BYTES,
     as_openai_image_part,
     converse_redacted_content,
     convert_content_list_to_str,
@@ -81,7 +81,7 @@ from .common_utils import (
     unpack_defs,
 )
 from .image_handling import convert_url_to_base64, is_pdf_media_type
-from .json_schema_utils import schema_with_root_ref_resolved
+from .json_schema_utils import schema_with_root_ref_resolved, schema_without_unreferenced_defs
 
 
 def default_pt(messages):
@@ -5949,11 +5949,11 @@ def _bedrock_tools_pt(
         else:
             description = name
 
-        remaining_inline_bytes = BEDROCK_TOOLS_MAX_INLINED_BYTES - inlined_bytes
+        remaining_inline_bytes = DEFS_MAX_INLINED_BYTES - inlined_bytes
         try:
             if resolves_schema_defs:
                 tool_inlined_bytes = inline_legacy_defs(parameters, remaining_inline_bytes)
-                parameters = dict(schema_with_root_ref_resolved(parameters))
+                parameters = dict(schema_without_unreferenced_defs(schema_with_root_ref_resolved(parameters)))
             else:
                 defs = parameters.pop("$defs", {})
                 defs_copy = defs if isinstance(defs, dict) else {}
@@ -5965,8 +5965,9 @@ def _bedrock_tools_pt(
         except ValueError as e:
             raise BedrockError(
                 status_code=400,
-                message=f"Inlining the $ref definitions of tool '{raw_name}' pushes the request's tool schemas past "
-                f"{BEDROCK_TOOLS_MAX_INLINED_BYTES:,} bytes. Reference shared $defs less often or flatten the schema.",
+                message=f"Inlining the $ref definitions of tool '{raw_name}' copies more than "
+                f"{DEFS_MAX_INLINED_BYTES:,} bytes of definitions across the request's tools. "
+                "Reference shared $defs less often or flatten the schema.",
             ) from e
         inlined_bytes += tool_inlined_bytes
         normalize_json_schema_custom_types_to_object(parameters)

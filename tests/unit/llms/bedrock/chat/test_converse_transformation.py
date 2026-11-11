@@ -27,7 +27,7 @@ from litellm.llms.anthropic.chat.transformation import (
     NATIVE_OUTPUT_MAX_OPTIONAL_PARAMETERS,
     NATIVE_OUTPUT_MAX_UNION_PARAMETERS,
 )
-from litellm.litellm_core_utils.prompt_templates.common_utils import BEDROCK_TOOLS_MAX_INLINED_BYTES
+from litellm.litellm_core_utils.prompt_templates.common_utils import DEFS_MAX_INLINED_BYTES
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 from litellm.llms.bedrock.common_utils import BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES
@@ -5787,8 +5787,21 @@ def test_tool_defs_that_double_at_every_level_fail_fast_with_a_400_naming_the_to
     mock_post.assert_not_called()
 
 
+def test_tool_defs_that_inline_to_megabytes_still_reach_models_that_need_inlining():
+    description: Final = "k" * 3_000_000
+    parameters: Final = {
+        "type": "object",
+        "properties": {"key": {"$ref": "#/$defs/Key"}},
+        "$defs": {"Key": {"type": "string", "description": description}},
+    }
+
+    sent: Final = _bedrock_tools_pt([_tool("lookup", parameters)], model="us.amazon.nova-2-lite-v1:0")
+
+    assert sent[0]["toolSpec"]["inputSchema"]["json"]["properties"]["key"]["description"] == description
+
+
 def test_tool_defs_inlining_budget_covers_every_tool_in_the_request():
-    description_bytes: Final = BEDROCK_TOOLS_MAX_INLINED_BYTES * 2 // 5
+    description_bytes: Final = DEFS_MAX_INLINED_BYTES * 2 // 5
     tools: Final = [
         _tool(
             f"lookup_{index}",

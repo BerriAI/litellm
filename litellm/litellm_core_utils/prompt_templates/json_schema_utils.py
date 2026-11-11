@@ -5,6 +5,7 @@ from graphlib import CycleError, TopologicalSorter
 from itertools import chain, islice
 from types import MappingProxyType
 from typing import Final
+from urllib.parse import unquote
 
 from pydantic import TypeAdapter
 
@@ -13,6 +14,8 @@ _OPENAI_REJECTED_TOP_LEVEL_SCHEMA_KEYS: Final = ("enum", "const", "not")
 _LOCAL_SCHEMA_REF_PREFIXES: Final = (("#/$defs/", "$defs"), ("#/definitions/", "definitions"))
 _MAX_SCHEMA_FLATTEN_DEPTH: Final = 32
 _EMPTY_SCHEMA: Final[Mapping[str, object]] = MappingProxyType({})
+_ROOT_DEFS_POINTER: Final = "#/$defs/"
+_DYNAMIC_REF_KEYWORDS: Final = ("$dynamicRef", "$recursiveRef")
 
 
 def _schema_properties(schema: Mapping[str, object]) -> Mapping[str, object]:
@@ -56,16 +59,74 @@ def _resolve_local_schema_ref(root: Mapping[str, object], ref: str) -> Mapping[s
     return target if isinstance(target, dict) else None
 
 
+def _required_names_in_order(schema: Mapping[str, object]) -> tuple[str, ...]:
+    return tuple(name for name in _list_at(schema, "required") if isinstance(name, str))
+
+
 def _with_root_ref_inlined(schema: Mapping[str, object]) -> Mapping[str, object]:
     ref: Final = schema.get("$ref")
     target: Final = _resolve_local_schema_ref(schema, ref) if isinstance(ref, str) else None
     if target is None:
         return schema
-    return {**target, **{key: value for key, value in schema.items() if key != "$ref"}}
+    siblings: Final = {key: value for key, value in schema.items() if key != "$ref"}
+    required: Final = dict.fromkeys((*_required_names_in_order(target), *_required_names_in_order(schema)))
+    return {
+        **target,
+        **siblings,
+        "properties": {**_schema_properties(target), **_schema_properties(schema)},
+        "required": list(required),
+    }
 
 
 def schema_with_root_ref_resolved(schema: Mapping[str, object]) -> Mapping[str, object]:
     return reduce(lambda resolved, _hop: _with_root_ref_inlined(resolved), range(_MAX_SCHEMA_FLATTEN_DEPTH), schema)
+
+
+def _referenced_def_names(ref: object) -> frozenset[str] | None:
+    if not isinstance(ref, str):
+        return frozenset()
+    pointer: Final = schema_fragment_ref(ref)
+    if pointer == "#" or (pointer.startswith("#/") and not pointer.startswith("#/$defs")):
+        return frozenset()
+    if not pointer.startswith(_ROOT_DEFS_POINTER):
+        return None
+    name: Final = pointer[len(_ROOT_DEFS_POINTER) :].split("/")[0]
+    return frozenset((name, unquote(name).replace("~1", "/").replace("~0", "~")))
+
+
+def _node_ref_def_names(node: Mapping[str, object]) -> tuple[frozenset[str] | None, ...]:
+    if any(keyword in node for keyword in _DYNAMIC_REF_KEYWORDS):
+        return (None,)
+    return (_referenced_def_names(node["$ref"]),) if "$ref" in node else ()
+
+
+def _schema_ref_def_names(schema: Mapping[str, object]) -> Iterator[frozenset[str] | None]:
+    return chain.from_iterable(_node_ref_def_names(node) for node in _schema_nodes(schema))
+
+
+def _reached_def_names(body: Mapping[str, object], defs: Mapping[str, object]) -> frozenset[str] | None:
+    reached: frozenset[str] = frozenset()  # rebind-ok: grows by the definitions the last round's refs name
+    frontier: tuple[Mapping[str, object], ...] = (body,)  # rebind-ok: the schemas the last round reached
+    while frontier:
+        found = tuple(chain.from_iterable(_schema_ref_def_names(node) for node in frontier))
+        if None in found:
+            return None
+        new_names = frozenset(chain.from_iterable(names for names in found if names is not None)) - reached
+        reached = reached | new_names
+        frontier = tuple(definition for name in new_names if (definition := _schema_at(defs, name)) is not None)
+    return reached
+
+
+def schema_without_unreferenced_defs(schema: Mapping[str, object]) -> Mapping[str, object]:
+    defs: Final = _schema_at(schema, "$defs")
+    if defs is None:
+        return schema
+    body: Final = {key: value for key, value in schema.items() if key != "$defs"}
+    reached: Final = _reached_def_names(body, defs)
+    if reached is None:
+        return schema
+    kept: Final = {name: definition for name, definition in defs.items() if name in reached}
+    return {**body, "$defs": kept} if kept else body
 
 
 def _mergeable_branch(

@@ -1092,7 +1092,6 @@ def _legacy_defs(schema: object) -> Mapping[str, object] | None:
 # below memory-pressure territory, and rejects request-supplied bombs before
 # the proxy materialises them.
 DEFS_MAX_INLINED_BYTES: Final = 10_000_000
-BEDROCK_TOOLS_MAX_INLINED_BYTES: Final = 1_000_000
 
 
 def unpack_legacy_defs(

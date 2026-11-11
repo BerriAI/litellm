@@ -2838,7 +2838,98 @@ def test_bedrock_tools_pt_follows_a_chain_of_root_refs_for_claude() -> None:
 
     sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
 
-    assert sent == {**_ADDRESS_SCHEMA, "$defs": defs}
+    assert sent == _ADDRESS_SCHEMA
+
+
+_ORDER_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"street": {"type": "string"}, "city": {"type": "string"}},
+    "required": ["street", "city"],
+}
+
+
+@pytest.mark.parametrize(
+    ("siblings", "expected"),
+    [
+        (
+            {"type": "object", "properties": {}, "additionalProperties": False},
+            {**_ORDER_SCHEMA, "additionalProperties": False},
+        ),
+        (
+            {
+                "properties": {"city": {"type": "string", "enum": ["Paris"]}, "note": {"type": "string"}},
+                "required": ["note"],
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "street": {"type": "string"},
+                    "city": {"type": "string", "enum": ["Paris"]},
+                    "note": {"type": "string"},
+                },
+                "required": ["street", "city", "note"],
+            },
+        ),
+    ],
+    ids=["mcp_normalized_empty_properties", "root_properties_win"],
+)
+def test_bedrock_tools_pt_merges_root_ref_siblings_into_its_target_for_claude(
+    siblings: dict[str, object], expected: dict[str, object]
+) -> None:
+    parameters: Final = {"$ref": "#/$defs/Order", "$defs": {"Order": _ORDER_SCHEMA}, **siblings}
+    tools: Final = [{"type": "function", "function": {"name": "ship_order", "strict": True, "parameters": parameters}}]
+
+    tool_spec: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-haiku-4-5-20251001-v1:0")[0]["toolSpec"]
+
+    assert tool_spec["inputSchema"]["json"] == expected
+
+
+def test_bedrock_tools_pt_sends_claude_only_the_defs_its_refs_reach() -> None:
+    defs: Final = {
+        "Home": {"type": "object", "properties": {"address": {"$ref": "#/$defs/Address"}}},
+        "Address": _ADDRESS_SCHEMA,
+        "Place": _ORDER_SCHEMA,
+        "Unused": {"type": "string"},
+    }
+    properties: Final = {
+        "home": {"$ref": "#/$defs/Home"},
+        "city": {"$ref": "#/$defs/Place/properties/city"},
+        "same_home": {"$ref": "#/properties/home"},
+        "parent": {"$ref": "#"},
+    }
+    parameters: Final = {"type": "object", "properties": properties, "$defs": defs}
+    tools: Final = [{"type": "function", "function": {"name": "save_home", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent["$defs"] == {"Home": defs["Home"], "Address": _ADDRESS_SCHEMA, "Place": _ORDER_SCHEMA}
+
+
+def test_bedrock_tools_pt_keeps_a_claude_def_whose_name_its_ref_escapes() -> None:
+    defs: Final = {"a/b c~1": _ADDRESS_SCHEMA, "Unused": {"type": "string"}}
+    parameters: Final = {"type": "object", "properties": {"home": {"$ref": "#/$defs/a~1b%20c~01"}}, "$defs": defs}
+    tools: Final = [{"type": "function", "function": {"name": "save_home", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent["$defs"] == {"a/b c~1": _ADDRESS_SCHEMA}
+
+
+@pytest.mark.parametrize(
+    "home",
+    [{"$ref": "#home"}, {"$dynamicRef": "#home"}, {"$ref": "#/$defs"}],
+    ids=["anchor_ref", "dynamic_ref", "whole_defs_ref"],
+)
+def test_bedrock_tools_pt_keeps_every_claude_def_when_a_ref_may_reach_one_by_other_means(
+    home: dict[str, object],
+) -> None:
+    defs: Final = {"Home": {"$anchor": "home", **_ADDRESS_SCHEMA}, "Spare": {"type": "string"}}
+    parameters: Final = {"type": "object", "properties": {"home": home}, "$defs": defs}
+    tools: Final = [{"type": "function", "function": {"name": "save_home", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent["$defs"] == defs
 
 
 def test_bedrock_tools_pt_inlines_legacy_refs_under_a_root_defs_ref_for_claude() -> None:
@@ -2850,8 +2941,7 @@ def test_bedrock_tools_pt_inlines_legacy_refs_under_a_root_defs_ref_for_claude()
 
     sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
 
-    home: Final = {"type": "object", "properties": {"address": _ADDRESS_SCHEMA}, "required": ["address"]}
-    assert sent == {**home, "$defs": {"Home": home}}
+    assert sent == {"type": "object", "properties": {"address": _ADDRESS_SCHEMA}, "required": ["address"]}
 
 
 def test_bedrock_tools_pt_inlines_only_legacy_refs_for_claude() -> None:
