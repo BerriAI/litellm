@@ -647,10 +647,11 @@ _ANSWER_ITEM: Final = {"role": "assistant", "content": "Paris."}
             },
             [_REASONING_ITEM, _ANSWER_ITEM],
         ),
-        ("magistral-medium-latest", {**_REASONED_TURN, "content": None}, [{"role": "assistant", "content": ""}]),
+        ("magistral-medium-latest", {**_REASONED_TURN, "content": None}, []),
+        ("magistral-medium-latest", {"role": "assistant", "content": ""}, []),
         ("mistral-no-reasoning-test-model", _REASONED_TURN, [_ANSWER_ITEM]),
     ],
-    ids=["reasoning_content", "thinking_blocks", "no_turn_output", "model_without_reasoning"],
+    ids=["reasoning_content", "thinking_blocks", "no_turn_output", "empty_text", "model_without_reasoning"],
 )
 @pytest.mark.asyncio
 async def test_count_tokens_counts_reasoning_only_where_mistral_chat_replays_it(

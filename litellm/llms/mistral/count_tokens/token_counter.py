@@ -105,6 +105,14 @@ def _file_id_parts(message: Mapping[str, object]) -> tuple[Mapping[str, object],
     return tuple({"type": "input_file", "file_id": file_id} for file_id in file_ids)
 
 
+def _chat_drops_turn(message: Mapping[str, object]) -> bool:
+    return (
+        message.get("role") == "assistant"
+        and message.get("content") in (None, "")
+        and message.get("tool_calls") is None
+    )
+
+
 def _replayed_reasoning_items(message: Mapping[str, object], keeps_reasoning: bool) -> tuple[Mapping[str, object], ...]:
     if not keeps_reasoning or message.get("role") != "assistant":
         return ()
@@ -192,7 +200,11 @@ class MistralTokenCounter(BaseTokenCounter):
                 )
             case "openai":
                 keeps_reasoning: Final = _MISTRAL_CHAT_CONFIG.accepts_reasoning(model_to_use)
-                converted: Final = tuple(_chat_message_items(message, keeps_reasoning) for message in messages)
+                converted: Final = tuple(
+                    _chat_message_items(message, keeps_reasoning)
+                    for message in messages
+                    if not _chat_drops_turn(message)
+                )
                 instruction_parts: Final = tuple(
                     instructions for _, instructions in converted if instructions is not None
                 )
