@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
+import litellm
 from litellm.llms.gigachat.chat.transformation import (
     GigaChatConfig,
     GigaChatError,
@@ -521,11 +522,6 @@ class TestTransformMessages:
                 "data:application/pdf;base64,JVBERi0xLjQK",
                 id="data_url",
             ),
-            pytest.param(
-                {"filename": "report.pdf", "file_id": "https://example.com/report.pdf", "format": "application/pdf"},
-                "https://example.com/report.pdf",
-                id="remote_url",
-            ),
         ],
     )
     def test_list_content_with_pdf_file_part_uploads_it_as_an_attachment(
@@ -542,6 +538,36 @@ class TestTransformMessages:
         upload.assert_called_once_with(upload_source)
         assert result[0]["content"] == "summarize"
         assert result[0]["attachments"] == ["file-789"]
+
+    def test_remote_pdf_file_part_uploads_the_fetched_document(self) -> None:
+        fetched: Final = "data:application/pdf;base64,JVBERi0xLjQK"
+        content: Final = [
+            {"type": "text", "text": "summarize"},
+            {
+                "type": "file",
+                "file": {"filename": "report.pdf", "file_id": "https://example.com/report.pdf", "format": "application/pdf"},
+            },
+        ]
+        with (
+            patch(f"{TRANSFORM_MODULE}.convert_url_to_base64", return_value=fetched) as fetch,
+            patch.object(self.config, "_upload_image", return_value="file-789") as upload,
+        ):
+            result: Final = self.config._transform_messages([{"role": "user", "content": content}])
+        fetch.assert_called_once_with("https://example.com/report.pdf")
+        upload.assert_called_once_with(fetched)
+        assert result[0]["attachments"] == ["file-789"]
+
+    @pytest.mark.parametrize(
+        "url",
+        ["http://169.254.169.254/latest/meta-data/report.pdf", "http://127.0.0.1:8080/report.pdf"],
+        ids=["cloud_metadata", "loopback"],
+    )
+    def test_remote_pdf_file_part_on_a_private_address_is_refused_before_any_upload(self, url: str) -> None:
+        content: Final = [{"type": "file", "file": {"file_id": url, "format": "application/pdf"}}]
+        with patch.object(self.config, "_upload_image", return_value="file-789") as upload:
+            with pytest.raises(litellm.ImageFetchError):
+                self.config._transform_messages([{"role": "user", "content": content}])
+        upload.assert_not_called()
 
 
 class TestTransformRequest:
