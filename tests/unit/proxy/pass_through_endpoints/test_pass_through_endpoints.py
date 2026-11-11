@@ -12277,9 +12277,11 @@ async def test_pass_through_request_strips_caller_identity_before_guardrail_hook
     cache_dict[cache_key] = SimpleNamespace(client=httpx.AsyncClient(transport=httpx.MockTransport(transport_handler)))
 
     hook_data = []
+    logged_prompts = []
 
     def record_hook_data(user_api_key_dict, data, call_type, endpoint_type=None):
         hook_data.append({key: value for key, value in data.items() if key != "litellm_logging_obj"})
+        logged_prompts.append(json.loads(data["litellm_logging_obj"].messages[0]["content"]))
         return data
 
     mock_proxy_logging = MagicMock()
@@ -12353,6 +12355,9 @@ async def test_pass_through_request_strips_caller_identity_before_guardrail_hook
     ]
     vendor_headers = _extract_inbound_headers(request_data=hook_data[0], logging_obj=None, extra_allowlist={"x-tenant"})
     assert vendor_headers is not None and vendor_headers["x-tenant"] == "tenant-real"
+    assert logged_prompts == [
+        {"prompt": "hello", "metadata": {"trace_label": "nightly"}, "litellm_metadata": {"trace_label": "nightly"}}
+    ]
     assert upstream_bodies == [{"prompt": "hello"}]
 
 

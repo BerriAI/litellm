@@ -1229,7 +1229,7 @@ from litellm.passthrough.timeout_utils import (
 )
 
 
-def _replace_caller_identity(body: object, user_api_key_dict: UserAPIKeyAuth, headers: Headers) -> None:
+def _replace_caller_identity(body: object, user_api_key_dict: UserAPIKeyAuth) -> None:
     if not is_str_keyed_dict(body):
         return
     strip_untrusted_caller_metadata(
@@ -1241,6 +1241,12 @@ def _replace_caller_identity(body: object, user_api_key_dict: UserAPIKeyAuth, he
     for caller_bucket in (body.get("metadata"), body.get("litellm_metadata")):
         if is_str_keyed_dict(caller_bucket):
             caller_bucket.pop("headers", None)
+
+
+def _attach_guardrail_context(body: object, logging_obj: LiteLLMLoggingObj, headers: Headers) -> None:
+    if not is_str_keyed_dict(body):
+        return
+    body["litellm_logging_obj"] = logging_obj
     body["proxy_server_request"] = {"headers": _guardrail_request_headers(headers)}
 
 
@@ -1431,7 +1437,7 @@ async def pass_through_request(
         )
 
         client_body: Final = TypeAdapter(dict[str, object]).validate_python(_parsed_body)
-        _replace_caller_identity(client_body, user_api_key_dict, request.headers)
+        _replace_caller_identity(client_body, user_api_key_dict)
         strip_client_guardrail_information(client_body)
         if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
             _strip_client_pricing_overrides(client_body)
@@ -1494,7 +1500,7 @@ async def pass_through_request(
         # Store logging_obj in data so guardrails can access it
         if _parsed_body is None:
             _parsed_body = {}
-        _parsed_body["litellm_logging_obj"] = logging_obj
+        _attach_guardrail_context(_parsed_body, logging_obj, request.headers)
         is_streaming_pass_through: Final = bool(
             HttpPassThroughEndpointHelpers._update_stream_param_based_on_request_body(
                 parsed_body=_parsed_body,
@@ -2008,7 +2014,10 @@ async def pass_through_request(
             # `metadata` by both pre_call_hook and _init_kwargs_for_pass_through_endpoint,
             # so we re-attach the configured guardrails here so should_run_guardrail
             # sees them.
-            hook_data: Final = dict(_parsed_body or {})
+            hook_data: Final = {
+                **(_parsed_body or {}),
+                "proxy_server_request": {"headers": _guardrail_request_headers(request.headers)},
+            }
             existing_metadata = hook_data.get("metadata")
             if not isinstance(existing_metadata, dict):
                 existing_metadata = {}
@@ -2016,7 +2025,6 @@ async def pass_through_request(
                 **existing_metadata,
                 "guardrails": guardrails_to_run,
             }
-            hook_data["proxy_server_request"] = {"headers": _guardrail_request_headers(request.headers)}
             post_call_guardrail_data = hook_data
             response_body = await proxy_logging_obj.post_call_success_hook(
                 data=hook_data,

@@ -98,6 +98,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
 )
 from litellm.proxy.spend_tracking.carried_budget_state import carried_budget_metadata
 from litellm.types.integrations.anthropic_cache_control_hook import GATEWAY_INJECTED_CACHE_METADATA_KEY
+from litellm.types.proxy.auth.user_api_key_auth import hash_token
 
 # Cache special headers as a frozenset for O(1) lookup performance
 _SPECIAL_HEADERS_CACHE: Final = frozenset(str(v.value).lower() for v in SpecialHeaders)
@@ -732,6 +733,9 @@ def _strip_untrusted_request_header_controls(
             if allow_client_message_redaction_opt_out:
                 continue
             headers.pop(header_name, None)
+
+
+_HASHED_KEY: Final = re.compile(r"[0-9a-f]{64}|hashed-jwt-.+")
 
 
 def is_untrusted_caller_metadata_key(key: str) -> bool:
@@ -2160,10 +2164,19 @@ class LiteLLMProxyRequestSetup:
         }
 
     @staticmethod
+    def get_vendor_safe_api_key(user_api_key_dict: UserAPIKeyAuth) -> str | None:
+        logged: Final = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)
+        if logged is None or not user_api_key_dict.authenticated_by_custom_auth or _HASHED_KEY.fullmatch(logged):
+            return logged
+        return hash_token(logged)
+
+    @staticmethod
     def get_authenticated_identity_metadata(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, object]:
+        vendor_safe_api_key: Final = LiteLLMProxyRequestSetup.get_vendor_safe_api_key(user_api_key_dict)
         return {
             **LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict),
-            "user_api_key": LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict),
+            "user_api_key_hash": vendor_safe_api_key,
+            "user_api_key": vendor_safe_api_key,
             **LiteLLMProxyRequestSetup.get_key_scoped_metadata(user_api_key_dict),
         }
 
