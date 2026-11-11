@@ -1,10 +1,11 @@
 import asyncio
 import contextlib
+import itertools
 import json
 import logging
 import math
 import time
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -2944,7 +2945,7 @@ class ProxyBaseLLMRequestProcessing:
                 if isinstance(raw_router_settings, Mapping)
                 else None
             )
-            attempted_fallback_models: Final[list[str]] = []
+            attempt_numbers: Final[Iterator[int]] = itertools.count(1)
             try:
                 for fallback_model in fallback_models:
                     if fallback_model == original_model:
@@ -2967,7 +2968,7 @@ class ProxyBaseLLMRequestProcessing:
                             user_api_key_dict.team_id,
                         ):
                             continue
-                        attempted_fallback_models.append(fallback_model)
+                        attempt = next(attempt_numbers)
                         admitted: tuple[
                             Mapping[str, object], LiteLLMLoggingObj
                         ] = await self.common_processing_pre_call_logic(
@@ -2993,20 +2994,19 @@ class ProxyBaseLLMRequestProcessing:
                         continue
                     else:
                         admitted_data, admitted_logging_obj = admitted
-                        return (
-                            dict(
-                                with_rate_limit_fallback(
-                                    admitted_data,
-                                    get_metadata_variable_name(request, admitted_data),
-                                    RateLimitFallback(
-                                        original_model_group=original_model,
-                                        descriptor_key=original_exc.descriptor_key or "unknown",
-                                        attempts=len(attempted_fallback_models),
-                                    ),
-                                )
-                            ),
-                            admitted_logging_obj,
+                        stamped: dict = dict(  # mutable-ok: caller-defined request-payload shape
+                            with_rate_limit_fallback(
+                                admitted_data,
+                                get_metadata_variable_name(request, admitted_data),
+                                RateLimitFallback(
+                                    original_model_group=original_model,
+                                    descriptor_key=original_exc.descriptor_key or "unknown",
+                                    attempts=attempt,
+                                ),
+                            )
                         )
+                        self.data = stamped
+                        return stamped, admitted_logging_obj
             except BaseException:
                 self.data = rate_limited_data
                 raise
