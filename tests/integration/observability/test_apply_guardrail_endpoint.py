@@ -116,7 +116,10 @@ def _assert_guardrail_request(request: Request, text: str, response: httpx.Respo
         "tool_calls": None,
         "model": None,
     }, response.text
-    assert payload["request_data"] == {}, response.text
+    assert payload["request_data"] == {
+        "user_api_key_hash": "litellm_proxy_master_key",
+        "user_api_key_user_id": "default_user_id",
+    }, response.text
     request_headers: Final = payload["request_headers"]
     assert request_headers is None or isinstance(request_headers, dict), response.text
     if isinstance(request_headers, dict):
@@ -149,7 +152,11 @@ def test_apply_guardrail_returns_a_block_error_for_generic_guardrails(gateway: G
         response: Final = gateway.request(
             "POST",
             "/guardrails/apply_guardrail",
-            {"guardrail_name": name, "text": _BLOCKED_TEXT},
+            {
+                "guardrail_name": name,
+                "text": _BLOCKED_TEXT,
+                "metadata": {"user_api_key_hash": "forged-hash", "user_api_key_user_id": "forged-user"},
+            },
         )
         assert response.status_code == 400, response.text
         error: Final = _ApplyError.model_validate_json(response.content)
@@ -281,7 +288,7 @@ async def apply_guardrail(inputs, request_data, input_type):
                     {
                         "guardrail_name": name,
                         "text": _METADATA_TEXT,
-                        "metadata": {"forbidden_topics": ["tax"]},
+                        "metadata": {"forbidden_topics": ["tax"], "user_api_key_alias": "batch-worker"},
                     },
                 )
                 assert with_metadata.status_code == 200, with_metadata.text
@@ -303,11 +310,29 @@ async def apply_guardrail(inputs, request_data, input_type):
             ("POST", "/metadata"),
             ("POST", "/metadata"),
         ]
-        assert tuple(_JSON_OBJECT.validate_json(request.body) for request in requests) == (
+        received: Final = tuple(_JSON_OBJECT.validate_json(request.body) for request in requests)
+        assert tuple(
+            {key: value for key, value in body.items() if key != "metadata"} for body in received
+        ) == ({"texts": [_METADATA_TEXT], "input_type": "request"},) * 2
+        metadata: Final = tuple(_JSON_OBJECT.validate_python(body["metadata"]) for body in received)
+        assert tuple(
             {
-                "texts": [_METADATA_TEXT],
-                "metadata": {"forbidden_topics": ["tax"]},
-                "input_type": "request",
+                key: entry.get(key)
+                for key in ("forbidden_topics", "user_api_key_alias", "user_api_key_hash", "user_api_key")
+            }
+            for entry in metadata
+        ) == (
+            {
+                "forbidden_topics": ["tax"],
+                "user_api_key_alias": None,
+                "user_api_key_hash": "litellm_proxy_master_key",
+                "user_api_key": "litellm_proxy_master_key",
             },
-            {"texts": [_METADATA_TEXT], "metadata": {}, "input_type": "request"},
+            {
+                "forbidden_topics": None,
+                "user_api_key_alias": None,
+                "user_api_key_hash": "litellm_proxy_master_key",
+                "user_api_key": "litellm_proxy_master_key",
+            },
         )
+        assert all("authorization" not in _JSON_OBJECT.validate_python(entry["headers"]) for entry in metadata)

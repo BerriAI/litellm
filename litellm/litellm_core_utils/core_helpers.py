@@ -105,6 +105,10 @@ def as_str_mapping(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, Mapping) else None
 
 
+def is_str_keyed_dict(value: object) -> TypeIs[dict[str, object]]:  # guard-ok: JSON object keys are str
+    return isinstance(value, dict)
+
+
 def as_object_list(value: object) -> Sequence[object] | None:
     return value if isinstance(value, list) else None
 

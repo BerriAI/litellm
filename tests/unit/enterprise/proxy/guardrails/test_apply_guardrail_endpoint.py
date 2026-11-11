@@ -11,7 +11,15 @@ from fastapi import HTTPException
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.types.guardrails import ApplyGuardrailRequest, ApplyGuardrailResponse
+
+
+def _identity_with_hash(caller: UserAPIKeyAuth) -> dict[str, object]:
+    return {
+        **LiteLLMProxyRequestSetup.get_authenticated_identity_metadata(caller),
+        "user_api_key_hash": caller.api_key,
+    }
 
 
 @pytest.mark.asyncio
@@ -63,7 +71,7 @@ async def test_apply_guardrail_endpoint_returns_correct_response(
         # Verify the guardrail was called with correct parameters
         mock_guardrail.apply_guardrail.assert_called_once_with(
             inputs={"texts": ["Test text with PII"]},
-            request_data={},
+            request_data={"metadata": _identity_with_hash(user_api_key_dict)},
             input_type="request",
         )
 
@@ -198,5 +206,7 @@ async def test_apply_guardrail_endpoint_without_optional_params(mock_proxy_loggi
 
         # Verify the guardrail was called with correct parameters
         mock_guardrail.apply_guardrail.assert_called_once_with(
-            inputs={"texts": ["Test text"]}, request_data={}, input_type="request"
+            inputs={"texts": ["Test text"]},
+            request_data={"metadata": _identity_with_hash(user_api_key_dict)},
+            input_type="request",
         )

@@ -40,7 +40,7 @@ from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP
 from litellm.litellm_core_utils.redact_messages import _get_turn_off_message_logging_from_dynamic_params
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
-from litellm.proxy._types import AddTeamCallback, ProxyException, TeamCallbackMetadata, UserAPIKeyAuth
+from litellm.proxy._types import AddTeamCallback, ProxyException, TeamCallbackMetadata, UserAPIKeyAuth, hash_token
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.litellm_pre_call_utils import (
     KeyAndTeamLoggingSettings,
@@ -56,6 +56,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     add_guardrails_from_policy_engine,
     add_litellm_data_to_request,
     add_provider_specific_headers_to_request,
+    caller_metadata_with_authenticated_identity,
     check_if_token_is_service_account,
     clean_headers,
     forwarded_anthropic_oauth_token,
@@ -11820,3 +11821,32 @@ def test_stale_team_alias_bypass_flag_is_read_once_per_process(monkeypatch: pyte
     monkeypatch.setenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", "false")
 
     assert (first, pre_call_utils._stale_team_alias_bypass_enabled()) == (True, True)
+
+
+def _custom_auth_key(api_key: str) -> UserAPIKeyAuth:
+    key = UserAPIKeyAuth(api_key=api_key, key_alias="custom-auth-app")
+    key.authenticated_by_custom_auth = True
+    return key
+
+
+@pytest.mark.parametrize(
+    ("key", "expected_hash"),
+    [
+        pytest.param(
+            _custom_auth_key("my-custom-auth-credential-abc123"),
+            hash_token("my-custom-auth-credential-abc123"),
+            id="opaque-custom-auth-credential-is-hashed",
+        ),
+        pytest.param(
+            _custom_auth_key(hash_token("sk-db-key")), hash_token("sk-db-key"), id="custom-auth-db-hash-kept"
+        ),
+        pytest.param(
+            UserAPIKeyAuth(api_key="sk-virtual-key", key_alias="vk"), hash_token("sk-virtual-key"), id="virtual-key"
+        ),
+    ],
+)
+def test_guardrail_identity_never_carries_a_raw_custom_auth_credential(key: UserAPIKeyAuth, expected_hash: str):
+    metadata = caller_metadata_with_authenticated_identity(None, key)
+
+    assert (metadata["user_api_key_hash"], metadata["user_api_key"]) == (expected_hash, expected_hash)
+    assert "my-custom-auth-credential-abc123" not in json.dumps(metadata, default=str)

@@ -238,6 +238,22 @@ def _in_role_scope(guardrail: "CustomGuardrail", role: str) -> bool:
     )
 
 
+def _litellm_metadata_with_identity(
+    request_data: Mapping[str, object], user_api_key_dict: object | None
+) -> Mapping[str, object]:
+    from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+
+    existing: Final = _json_object(request_data.get("litellm_metadata"))
+    identity: Final = BaseTranslation.transform_user_api_key_dict_to_metadata(user_api_key_dict)
+    if not isinstance(user_api_key_dict, UserAPIKeyAuth):
+        return {**(existing or {}), **identity}
+    # Lazy: needs the proxy extras, which an auth key implies
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    return {**(existing or {}), **identity, **LiteLLMProxyRequestSetup.get_vendor_key_fields(user_api_key_dict)}
+
+
 def realtime_runner_guardrail(
     callback: object,
     check_data: Mapping[str, object],
@@ -281,6 +297,7 @@ async def realtime_guardrail_verdict(
     guardrail_request_data: Final = {
         **{key: _turn_copy(value) for key, value in request_data.items()},
         "user_api_key_dict": user_api_key_dict,
+        "litellm_metadata": _litellm_metadata_with_identity(request_data, user_api_key_dict),
     }
     joined: Final = _joins(texts)
     screened: Final = await _screen_each(in_scope, joined, guardrail_request_data)
