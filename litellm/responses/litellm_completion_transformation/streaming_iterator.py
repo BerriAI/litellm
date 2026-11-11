@@ -22,7 +22,10 @@ from litellm.responses.litellm_completion_transformation.custom_tools import (
     is_custom_tool_call,
     serialize_tool_call_arguments,
 )
-from litellm.responses.litellm_completion_transformation.reasoning_items import mint_reasoning_item_id
+from litellm.responses.litellm_completion_transformation.reasoning_items import (
+    encode_thinking_blocks,
+    mint_reasoning_item_id,
+)
 from litellm.responses.litellm_completion_transformation.tool_search import (
     ToolSearchExecution,
     build_tool_search_call,
@@ -75,13 +78,14 @@ from litellm.types.llms.openai import (
     WebSearchCallSearchingEvent,
 )
 from litellm.types.responses.main import GenericResponseOutputItemContentAnnotation
-from litellm.types.utils import Delta as ChatCompletionDelta
 from litellm.types.utils import (
+    Choices,
     ModelResponse,
     ModelResponseStream,
     StreamingChoices,
     TextCompletionResponse,
 )
+from litellm.types.utils import Delta as ChatCompletionDelta
 
 _REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object])
 
@@ -229,6 +233,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._final_tool_events_queued: bool = False
         self._sequence_number: int = 0
         self._cached_reasoning_item_id: str | None = None
+        self._cached_encrypted_reasoning_content: str | None = None
         self._sent_reasoning_summary_text_done_event: bool = False
         self._sent_reasoning_summary_part_done_event: bool = False
         self._reasoning_summary_text: str = ""
@@ -1119,6 +1124,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self,
         reasoning_item_id: str,
         reasoning_content: str,
+        encrypted_content: str | None = None,
     ) -> OutputItemDoneEvent:
         """
         Create response.output_item.done event for reasoning items.
@@ -1130,30 +1136,34 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             "item": {
                 "id": "rs_0c5dae30e53172980069708ba2f59c8197b71ca9820edad07c",
                 "type": "reasoning",
+                "status": "completed",
                 "summary": [
                     {
                         "type": "summary_text",
                         "text": "**Clarifying the first humans**..."
                     }
-                ]
+                ],
+                "encrypted_content": "..."
             }
         }
         """
+        item_kwargs: Final[dict[str, object]] = {
+            "id": reasoning_item_id,
+            "type": "reasoning",
+            "status": "completed",
+            "summary": [
+                {
+                    "type": "summary_text",
+                    "text": reasoning_content,
+                }
+            ],
+        }
+        if encrypted_content:
+            item_kwargs["encrypted_content"] = encrypted_content
         return OutputItemDoneEvent(
             type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
             output_index=self._reasoning_index(),
-            item=BaseLiteLLMOpenAIResponseObject(
-                **{
-                    "id": reasoning_item_id,
-                    "type": "reasoning",
-                    "summary": [
-                        {
-                            "type": "summary_text",
-                            "text": reasoning_content,
-                        }
-                    ],
-                }
-            ),
+            item=BaseLiteLLMOpenAIResponseObject(**item_kwargs),
         )
 
     def return_default_done_events(
@@ -1211,6 +1221,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         return False
 
     def common_done_event_logic(self, sync_mode: bool = True) -> BaseLiteLLMOpenAIResponseObject:
+        self._queue_reasoning_done_events()
+        if self._pending_response_events:
+            return self._pending_response_events.pop(0)
+
         if not self.litellm_model_response or isinstance(self.litellm_model_response, TextCompletionResponse):
             self.litellm_model_response = self.create_litellm_model_response()
         if self.litellm_model_response:
@@ -1303,6 +1317,27 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if self._is_reasoning_end(chunk):
             self._queue_reasoning_done_events()
 
+    def _extract_streamed_thinking_blocks_encrypted(self) -> str | None:
+        if self._cached_encrypted_reasoning_content is not None:
+            return self._cached_encrypted_reasoning_content
+        chunks: Final = [
+            c if c.get("model") else {**c, "model": self.model or "unknown"}
+            for c in self.collected_chat_completion_chunks
+            if c.get("choices")
+        ]
+        if not chunks:
+            return None
+        try:
+            built: Final = stream_chunk_builder(chunks=chunks)
+            if built and built.choices and isinstance(built.choices[0], Choices):
+                thinking_blocks: Final[Sequence[Mapping[str, object]]] = (
+                    getattr(built.choices[0].message, "thinking_blocks", None) or ()
+                )
+                self._cached_encrypted_reasoning_content = encode_thinking_blocks(thinking_blocks)
+        except (KeyError, ValueError, TypeError, AttributeError, IndexError):
+            pass
+        return self._cached_encrypted_reasoning_content
+
     def _queue_reasoning_done_events(self) -> None:
         if not self._reasoning_active or self._reasoning_done_emitted:
             return
@@ -1320,9 +1355,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             reasoning_item_id=reasoning_item_id,
             reasoning_content=reasoning_content,
         )
+        encrypted_content: Final = self._extract_streamed_thinking_blocks_encrypted()
         reasoning_output_item_done_event: Final = self.create_reasoning_output_item_done_event(
             reasoning_item_id=reasoning_item_id,
             reasoning_content=reasoning_content,
+            encrypted_content=encrypted_content,
         )
         self._pending_response_events.extend([text_done_event, part_done_event, reasoning_output_item_done_event])
         self._reasoning_done_emitted = True
