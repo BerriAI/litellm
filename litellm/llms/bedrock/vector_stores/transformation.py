@@ -4,9 +4,11 @@ from typing import TYPE_CHECKING, Any, Final, Protocol, cast, runtime_checkable
 from urllib.parse import urlparse
 
 import httpx
+from pydantic import TypeAdapter
+from typing_extensions import TypedDict
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, keyword_arguments
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
@@ -59,6 +61,13 @@ def _item_assignment_target(value: object) -> _SupportsSetItem:
 
 def _vector_search_configuration(retrieval_config: object) -> Mapping[str, object]:
     return decoded_json_object(decoded_json_object(retrieval_config).get("vectorSearchConfiguration", {}))
+
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _KBResponseFields(TypedDict, total=False, extra_items=object):
+    pass
 
 
 class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
@@ -361,7 +370,11 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         self, response: httpx.Response, litellm_logging_obj: LiteLLMLoggingObj
     ) -> VectorStoreSearchResponse:
         try:
-            response_data: Final = BedrockKBResponse(**response.json())
+            response_data: Final = BedrockKBResponse(
+                **_KBResponseFields(
+                    **keyword_arguments(_DECODED_JSON.validate_python(response.json()), BedrockKBResponse)
+                )
+            )
             results: Final[list[VectorStoreSearchResult]] = []
             for item in response_data.get("retrievalResults", []) or []:
                 content: BedrockKBContent | None = item.get("content")
