@@ -136,11 +136,13 @@ def _children(argv: tuple[str, ...]) -> MappingProxyType[Child, ChildSpec]:
 @dataclass
 class _ChildThatExitsOnceStopped:
     stopped: anyio.Event
+    waiting: anyio.Event
     pid: int = 424242
     stdin: None = None
     returncode: int | None = None
 
     async def wait(self) -> int:
+        self.waiting.set()
         await self.stopped.wait()
         self.returncode = 0
         return 0
@@ -149,7 +151,7 @@ class _ChildThatExitsOnceStopped:
 @POSIX_ONLY
 @pytest.mark.timeout(60)
 async def test_a_cancelled_supervisor_still_waits_for_the_child_it_stops(monkeypatch: pytest.MonkeyPatch) -> None:
-    child: Final = _ChildThatExitsOnceStopped(anyio.Event())
+    child: Final = _ChildThatExitsOnceStopped(anyio.Event(), anyio.Event())
 
     async def create_subprocess_exec(
         *argv: str,
@@ -170,6 +172,7 @@ async def test_a_cancelled_supervisor_still_waits_for_the_child_it_stops(monkeyp
     with anyio.CancelScope() as scope:
         async with open_children(current_platform(), _children(("held-child",)), 1) as children:
             assert await children.spawn(Child.RUST) is None
+            await child.waiting.wait()
             scope.cancel()
             await anyio.lowlevel.checkpoint()
     assert child.returncode == 0
