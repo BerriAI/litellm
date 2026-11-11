@@ -62,10 +62,6 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
 
   const handleNext = () => {
     if (currentStep === 0) {
-      if (selectedModels.size === 0) {
-        toast.fromError(t("aiHub.makeModelPublic.selectAtLeastOne"));
-        return;
-      }
       setCurrentStep(1);
     }
   };
@@ -115,11 +111,6 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
   }, [visible, modelHubData]);
 
   const handleSubmit = async () => {
-    if (selectedModels.size === 0) {
-      toast.fromError(t("aiHub.makeModelPublic.selectAtLeastOne"));
-      return;
-    }
-
     setLoading(true);
     try {
       const modelGroupsToMakePublic = Array.from(selectedModels);
@@ -233,6 +224,11 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
           <p className="font-medium">{t("aiHub.makeModelPublic.toBeMadePublic")}</p>
           <div className="max-h-48 overflow-y-auto border rounded-lg p-3">
             <div className="space-y-2">
+              {selectedModels.size === 0 && (
+                <p className="text-sm text-muted-foreground p-2">
+                  {t("aiHub.makeModelPublic.noSelectedModels", "No models selected. Submitting will make all models private.")}
+                </p>
+              )}
               {Array.from(selectedModels).map((modelGroup) => {
                 const model = modelHubData.find((m) => m.model_group === modelGroup);
                 return (
@@ -289,7 +285,7 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
 
         <div className="flex space-x-2">
           {currentStep === 0 && (
-            <Button onClick={handleNext} disabled={selectedModels.size === 0}>
+            <Button onClick={handleNext} disabled={filteredData.length === 0}>
               {t("aiHub.makeModelPublic.next")}
             </Button>
           )}
