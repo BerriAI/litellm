@@ -435,10 +435,45 @@ def test_a_stream_body_cut_reaches_the_caller_as_the_transport_raised_it(
     native: Final = RuntimeError("upstream network error")
     native.messages_body_cut = cut  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
 
-    mapped: Final = messages_host.map_failure(native, {"model": _ADAPTIVE_OPUS}, "anthropic")
+    mapped: Final = messages_host.map_failure(native, {"model": _ADAPTIVE_OPUS, "stream": True}, "anthropic")
 
     assert type(mapped) is getattr(httpx, error_class)
     assert str(mapped) == text
+
+
+@pytest.mark.parametrize(
+    ("aiohttp", "cut", "text"),
+    (
+        (
+            True,
+            (19, 100, False),
+            "Response payload is not completed: <ContentLengthError: 400, "
+            "message='Not enough data to satisfy content length header (received 19 of 100 bytes).'>",
+        ),
+        (
+            False,
+            (19, 100, False),
+            "peer closed connection without sending complete message body (received 19 bytes, expected 100)",
+        ),
+    ),
+)
+def test_a_complete_body_cut_is_a_synthesized_server_error(
+    monkeypatch: pytest.MonkeyPatch,
+    aiohttp: bool,
+    cut: tuple[int, int | None, bool],
+    text: str,
+) -> None:
+    from litellm.rust_bridge.host import http_transport
+
+    monkeypatch.setattr(http_transport, "uses_aiohttp_transport", lambda: aiohttp)
+    native: Final = RuntimeError("upstream network error")
+    native.messages_body_cut = cut  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
+
+    mapped: Final = messages_host.map_failure(native, {"model": _ADAPTIVE_OPUS}, "anthropic")
+
+    assert type(mapped) is litellm.InternalServerError
+    assert mapped.status_code == 500
+    assert text in str(mapped)
 
 
 _TRANSPORT: Final = "error sending request: client error"

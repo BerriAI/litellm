@@ -16,6 +16,7 @@ use crate::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ClientVariant {
     Provider,
+    Undecoded,
     NoRedirect,
     Media,
     UnpinnedMedia,
@@ -103,6 +104,7 @@ impl HttpClientPool {
     ) -> reqwest::ClientBuilder {
         match variant {
             ClientVariant::Provider => builder,
+            ClientVariant::Undecoded => builder.no_gzip().no_deflate().no_brotli().no_zstd(),
             ClientVariant::NoRedirect | ClientVariant::UnpinnedMedia | ClientVariant::WebSocket => {
                 builder.redirect(reqwest::redirect::Policy::none())
             }
@@ -132,7 +134,9 @@ fn effective(config: &HttpClientConfig, variant: ClientVariant) -> HttpClientCon
             },
             ..config.clone()
         },
-        ClientVariant::Provider | ClientVariant::NoRedirect => config.clone(),
+        ClientVariant::Provider | ClientVariant::Undecoded | ClientVariant::NoRedirect => {
+            config.clone()
+        }
     }
 }
 

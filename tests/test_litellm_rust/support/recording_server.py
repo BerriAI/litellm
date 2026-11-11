@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import gzip
 import json
 import threading
 import time
@@ -29,13 +30,17 @@ class ResponseSpec:
     events: tuple[tuple[str, object], ...] = ()
     # Splits a non-stream body into this many writes, `chunk_delay` apart, so it trickles in.
     body_chunks: int = 1
+    cut_after: int | None = None
+    gzip: bool = False
 
     def payloads(self) -> tuple[bytes, ...]:
         if not self.events:
-            body: Final = self.body if isinstance(self.body, bytes) else json.dumps(self.body).encode()
+            raw: Final = self.body if isinstance(self.body, bytes) else json.dumps(self.body).encode()
+            body: Final = gzip.compress(raw, mtime=0) if self.gzip else raw
             size: Final = max(-(-len(body) // max(self.body_chunks, 1)), 1)
             return tuple(body[start : start + size] for start in range(0, len(body), size)) or (body,)
-        return tuple(f"event: {event}\ndata: {json.dumps(data)}\n\n".encode() for event, data in self.events)
+        frames: Final = tuple(f"event: {event}\ndata: {json.dumps(data)}\n\n".encode() for event, data in self.events)
+        return (gzip.compress(b"".join(frames), mtime=0),) if self.gzip else frames
 
 
 @dataclass
@@ -88,11 +93,16 @@ def recording_service() -> Iterator[RecordingServer]:
             self.send_response(response.status)
             self.send_header("Content-Type", "text/event-stream" if response.events else "application/json")
             self.send_header("Content-Length", str(sum(len(payload) for payload in payloads)))
+            if response.gzip:
+                self.send_header("Content-Encoding", "gzip")
             for name, value in response.headers.items():
                 self.send_header(name, value)
             self.end_headers()
             try:
                 for index, payload in enumerate(payloads):
+                    if index == response.cut_after:
+                        self.close_connection = True
+                        break
                     if index and response.chunk_delay:
                         time.sleep(response.chunk_delay)
                     self.wfile.write(payload)

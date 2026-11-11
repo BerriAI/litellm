@@ -576,6 +576,9 @@ def _aiohttp_connect_failure(url: httpx.URL, port: int, request: Mapping[str, ob
 
 def _transport_failure(error: Exception, request: Mapping[str, object], request_provider: str) -> str | None:
     """The text Python's HTTP client raises for a call that failed before any response arrived."""
+    body_cut: Final = getattr(error, "messages_body_cut", None)
+    if body_cut is not None:
+        return str(_body_cut(*_BODY_CUT.validate_python(body_cut)))
     native: Final = str(error)
     if native.startswith(_SEND_FAILED):
         reset: Final = native.endswith(f"Connection reset by peer (os error {errno.ECONNRESET})")
@@ -669,7 +672,7 @@ def map_failure(error: Exception, request: Mapping[str, object], request_provide
         # own timeout reaches the caller unmapped.
         return httpx.ReadTimeout(_BODY_READ_TIMEOUT)
     body_cut: Final = getattr(error, "messages_body_cut", None)
-    if body_cut is not None:
+    if body_cut is not None and request.get("stream") is True:
         # Python reads a stream's body outside its HTTP client's error mapping, so a body the
         # connection cut short reaches the caller as its transport raised it.
         return _body_cut(*_BODY_CUT.validate_python(body_cut))

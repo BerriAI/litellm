@@ -315,10 +315,11 @@ def record_response(
     request: Final = None if sent is None else _sent_request(sent)
     streamed: Final = sent is not None and sent[2].get("stream") is True
     response: Final = (
-        httpx.Response(status_code=status, headers=list(headers), stream=_UnreadBody(), request=request)
+        httpx.Response(status_code=status, stream=_UnreadBody(), request=request)
         if streamed
-        else httpx.Response(status_code=status, headers=list(headers), content=body.encode(), request=request)
+        else httpx.Response(status_code=status, content=body.encode(), request=request)
     )
+    response.headers = httpx.Headers(list(headers))
     details: Final = logger.model_call_details  # the call's own logger: recording on it is the point
     details["httpx_response"] = response
     details["response_headers"] = dict(response.headers)

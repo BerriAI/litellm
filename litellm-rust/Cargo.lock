@@ -4156,7 +4156,9 @@ name = "litellm-inference-messages"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "flate2",
  "futures-util",
+ "http 1.4.2",
  "litellm-auth",
  "litellm-auth-aws",
  "litellm-cache",

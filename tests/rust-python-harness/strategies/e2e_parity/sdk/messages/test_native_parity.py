@@ -390,11 +390,6 @@ def _kw(**kwargs: object) -> Mapping[str, object]:
 
 A10_NO_MAX_TOKENS: Final = "A10: native admission hands a call without an int max_tokens to Python, whose signature raises the TypeError; only dispatch differs"
 S6_PRIVATE_KEYS: Final = "S6: native writes _hidden_params into the response dict"
-S15_COMPLETE_DEADLINE: Final = (
-    "S15: by design, native bounds a complete response by one overall deadline where Python bounds each read, "
-    "so a body trickling in slower than the timeout succeeds in Python and times out natively"
-)
-
 C_UNSENT_CALL_FLAG: Final = (
     "C: a call that fails natively before its provider request logs no aanthropic_messages flag, "
     "which Python's handler sets before it shapes the request"
@@ -748,16 +743,21 @@ FAILURE_CASES: Final = (
         "response_trickles_slower_than_timeout",
         _kw(timeout=1),
         upstream=(ResponseSpec(body=dict(TEXT_RESPONSE), chunk_delay=0.5, body_chunks=4),),
-        gaps=_gaps(
-            logged_request=S15_COMPLETE_DEADLINE,
-            outcome=S15_COMPLETE_DEADLINE,
-            hidden_params=S15_COMPLETE_DEADLINE,
-            logged=S15_COMPLETE_DEADLINE,
-            logged_metadata=S15_COMPLETE_DEADLINE,
-            logged_response_headers=S15_COMPLETE_DEADLINE,
-            logged_sent_request=S15_COMPLETE_DEADLINE,
+    ),
+    Case(
+        "response_body_stalls_past_timeout",
+        _kw(timeout=0.5),
+        upstream=(ResponseSpec(body=dict(TEXT_RESPONSE), chunk_delay=1.0, body_chunks=2),),
+    ),
+    Case(
+        "upstream_500_body_cut",
+        upstream=(
+            ResponseSpec(body=dict(_upstream_error("api_error", "cut")), status=500, body_chunks=2, cut_after=1),
         ),
     ),
+    Case("response_body_cut", upstream=(ResponseSpec(body=dict(TEXT_RESPONSE), body_chunks=2, cut_after=1),)),
+    Case("gzip_response", upstream=(ResponseSpec(body=dict(TEXT_RESPONSE), gzip=True),)),
+    Case("upstream_500_gzip", upstream=(replace(_failure(500, "api_error", "internal"), gzip=True),)),
     Case("missing_max_tokens", _kw(max_tokens=None), upstream=()),
     Case("missing_api_key", _kw(api_key=None), upstream=()),
 )
@@ -787,6 +787,30 @@ STREAM_CASES: Final = (
         upstream=(_failure(429, "rate_limit_error", "slow down", **{"retry-after": "3"}),),
     ),
     Case("stream_false_explicit", _kw(stream=False)),
+    Case(
+        "stream_upstream_500_body_cut",
+        _kw(stream=True),
+        upstream=(
+            ResponseSpec(body=dict(_upstream_error("api_error", "cut")), status=500, body_chunks=2, cut_after=1),
+        ),
+    ),
+    Case(
+        "stream_upstream_500_body_stalls",
+        _kw(stream=True, timeout=8),
+        upstream=(
+            ResponseSpec(body=dict(_upstream_error("api_error", "stalled")), status=500, chunk_delay=6, body_chunks=2),
+        ),
+    ),
+    Case(
+        "stream_upstream_429_body_stalls_past_timeout",
+        _kw(stream=True, timeout=1),
+        upstream=(
+            ResponseSpec(
+                body=dict(_upstream_error("rate_limit_error", "stalled")), status=429, chunk_delay=2, body_chunks=2
+            ),
+        ),
+    ),
+    Case("stream_gzip_response", _kw(stream=True), upstream=(replace(_stream(TEXT_STREAM), gzip=True),)),
 )
 
 SYNC_CASES: Final = (
@@ -1458,6 +1482,7 @@ TRANSPORT_CASES: Final = (
     Case("tls_security_level", settings=_TLS_LEVEL),
     Case("tls_security_level_stream", _kw(stream=True), upstream=(_stream(TEXT_STREAM),), settings=_TLS_LEVEL),
     Case("tls_ecdh_curve", settings=_TLS_CURVE),
+    Case("tls_ecdh_curve_x448", settings=_tls(ssl_ecdh_curve="X448")),
     Case("tls_ecdh_curve_upstream_500", upstream=(_failure(500, "api_error", "internal"),), settings=_TLS_CURVE),
     Case(
         "tls_security_level_from_environment",
@@ -2306,7 +2331,14 @@ _SHARED_LOGGER: Final = (
     "the gateway's follow-up call rewrites the shared Logging object while the first call's async success callback "
     "is still queued, on Python and Rust alike, so the callback logs whichever call it saw"
 )
-SHARED_LOGGER_RACE: Final = MappingProxyType({"logged_request": _SHARED_LOGGER, "logged_metadata": _SHARED_LOGGER})
+SHARED_LOGGER_RACE: Final = MappingProxyType(
+    {
+        "logged_request": _SHARED_LOGGER,
+        "logged_metadata": _SHARED_LOGGER,
+        "logged_response_headers": _SHARED_LOGGER,
+        "logged_sent_request": _SHARED_LOGGER,
+    }
+)
 
 
 MCP_CASES: Final = (
@@ -2753,7 +2785,15 @@ def _logged(
     callback_kwargs: Final[Mapping[str, object]] = {
         "logged_metadata": sorted(metadata_keys) if isinstance(metadata, dict) else metadata,
         "logged_model_info": litellm_params.get("model_info"),
-        "logged_response_headers": bool(details.get("response_headers")),
+        "logged_response_headers": (
+            bool(details.get("response_headers"))
+            if details.get("stream") is True
+            else {
+                name: value
+                for name, value in _mapping(details.get("response_headers")).items()
+                if name.lower() != "date"
+            }
+        ),
         "logged_api_key": details.get("api_key"),
         "logged_call": {
             "custom_llm_provider": details.get("custom_llm_provider"),

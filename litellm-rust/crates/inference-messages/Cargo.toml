@@ -8,7 +8,9 @@ repository.workspace = true
 [dependencies]
 litellm-secret-value.workspace = true
 bytes.workspace = true
+flate2.workspace = true
 futures-util.workspace = true
+http.workspace = true
 litellm-auth = { workspace = true, features = ["aws", "azure", "gcp"] }
 litellm-auth-aws.workspace = true
 litellm-cache-response.workspace = true
