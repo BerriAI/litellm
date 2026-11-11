@@ -520,7 +520,11 @@ def _effective_key_for_generate(data: GenerateKeyRequest, now: datetime) -> Lite
         else {**preset_columns, "allowed_routes": list(default_allowed_routes)}
     )
     expires: Final = (
-        now + timedelta(seconds=duration_in_seconds(duration=data.duration)) if data.duration is not None else None
+        data.expires
+        if data.expires is not None
+        else now + timedelta(seconds=duration_in_seconds(duration=data.duration))
+        if data.duration is not None
+        else None
     )
     budget_reset_at: Final = (
         get_budget_reset_time(budget_duration=data.budget_duration) if data.budget_duration is not None else None
@@ -1440,6 +1444,21 @@ def _enforce_upperbound_key_params(
                         )
 
 
+def _reject_conflicting_expires_and_duration(data: GenerateKeyRequest | UpdateKeyRequest) -> None:
+    """`expires` is an absolute timestamp, `duration` is relative -- they are two
+    ways of saying when a key stops working. If a caller supplies both, honoring
+    either one would silently discard the other (GH#45236), so reject the request.
+    """
+    if "expires" in data.model_fields_set and data.expires is not None and "duration" in data.model_fields_set:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": (
+                    "`expires` and `duration` cannot be set together. "
+                    "Use `expires` for an absolute timestamp or `duration` for a relative lifetime, not both."
+                )
+            },
+        )
 def _team_admin_requests_member_key(
     data: GenerateKeyRequest,
     team_table: LiteLLM_TeamTableCachedObj | None,
@@ -1512,6 +1531,7 @@ async def _common_key_generation_helper(
     )
 
     validate_budget_duration(data.budget_duration)
+    _reject_conflicting_expires_and_duration(data)
     raise_on_invalid_key_logging_config(data.metadata)
     raise_on_logging_credential_change(data.metadata, None, user_api_key_dict)
 
@@ -2404,6 +2424,7 @@ async def generate_key_fn(
 
     Parameters:
     - duration: Optional[str] - Specify the length of time the token is valid for. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
+    - expires: Optional[datetime] - Absolute expiry timestamp for the key (ISO 8601). Use this or `duration`, not both.
     - key_alias: Optional[str] - User defined key alias
     - key: Optional[str] - User defined key value. Must start with 'sk-' and be at least 16 characters long. If not set, a 16-digit unique sk-key is created for you.
     - team_id: Optional[str] - The team id of the key
@@ -3054,6 +3075,7 @@ async def prepare_key_update_data(
     prisma_client: PrismaClient | None = None,
     llm_router: Router | None = None,
 ):
+    _reject_conflicting_expires_and_duration(data)
     if data.router_settings is not None or (
         "router_settings" not in data.model_fields_set
         and "team_id" in data.model_fields_set
@@ -4123,6 +4145,7 @@ async def update_key_fn(
     - rpm_limit_type: Optional[str] - RPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
     - allowed_cache_controls: Optional[list] - List of allowed cache control values
     - duration: Optional[str] - Key validity duration ("30d", "1h", etc.), null to never expire, or "-1" to never expire (deprecated, use null)
+    - expires: Optional[datetime] - Absolute expiry timestamp for the key (ISO 8601). Use this or `duration`, not both.
     - permissions: Optional[dict] - Key-specific permissions
     - send_invite_email: Optional[bool] - Send invite email to user_id
     - guardrails: Optional[List[str]] - List of active guardrails for the key
@@ -5303,6 +5326,9 @@ def metadata_json_with_limits(
 async def generate_key_helper_fn(
     request_type: Literal["user", "key"],  # identifies if this request is from /user/new or /key/generate
     duration: str | None = None,
+    # Typed as `object` because this helper is called with `**data_json` spreads whose
+    # value type is `object`; the caller-supplied absolute expiry (a `datetime`).
+    expires: object = None,
     models: list = [],
     aliases: dict = {},
     config: dict = {},
@@ -5380,12 +5406,17 @@ async def generate_key_helper_fn(
         else:
             token = f"sk-{secrets.token_urlsafe(LENGTH_OF_LITELLM_GENERATED_KEY)}"
 
-    if duration is None:  # allow tokens that never expire
-        expires = None
-    else:
+    if expires is not None and not isinstance(expires, datetime):
+        raise ValueError(f"`expires` must be a datetime, got {type(expires).__name__}")
+
+    key_expires: Final = (
+        expires
+        if expires is not None
         # Add duration to current time for exact expiration (not standardized reset time)
-        duration_seconds: Final = duration_in_seconds(duration)
-        expires = datetime.now(timezone.utc) + timedelta(seconds=duration_seconds)
+        else datetime.now(timezone.utc) + timedelta(seconds=duration_in_seconds(duration))
+        if duration is not None
+        else None  # allow tokens that never expire
+    )
 
     if key_budget_duration is None:  # one-time budget
         key_reset_at = None
@@ -5462,7 +5493,7 @@ async def generate_key_helper_fn(
         key_data: Final = {
             "token": token,
             "key_alias": key_alias,
-            "expires": expires,
+            "expires": key_expires,
             "models": models,
             "aliases": aliases_json,
             "config": config_json,
