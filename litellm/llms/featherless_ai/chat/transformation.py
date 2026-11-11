@@ -2,7 +2,6 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
-import litellm
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.secret_managers.main import get_secret_str
 
@@ -67,6 +66,8 @@ class FeatherlessAIConfig(OpenAIGPTConfig):
             "stop",
             "temperature",
             "top_p",
+            "tools",
+            "tool_choice",
         ]
 
     def map_openai_params(
@@ -78,21 +79,7 @@ class FeatherlessAIConfig(OpenAIGPTConfig):
     ) -> dict:
         supported_openai_params: Final = self.get_supported_openai_params(model=model)
         for param, value in non_default_params.items():
-            if param == "tool_choice" or param == "tools":
-                if param == "tool_choice" and (value == "auto" or value == "none"):
-                    # These values are supported, so add them to optional_params
-                    optional_params[param] = value
-                else:  # https://featherless.ai/docs/completions
-                    ## UNSUPPORTED TOOL CHOICE VALUE
-                    if litellm.drop_params is True or drop_params is True:
-                        value = None
-                    else:
-                        error_message = f"Featherless AI doesn't support {param}={value}. To drop unsupported openai params from the call, set `litellm.drop_params = True`"
-                        raise litellm.utils.UnsupportedParamsError(
-                            message=error_message,
-                            status_code=400,
-                        )
-            elif param == "max_completion_tokens":
+            if param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
             elif param in supported_openai_params:
                 if value is not None:
