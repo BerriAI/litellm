@@ -210,6 +210,7 @@ fn output_unit(unit: &str) -> Option<OutputUnit> {
         "pixel" => Some(OutputUnit::Pixel),
         "second" => Some(OutputUnit::Second(None)),
         "video_per_second" => Some(OutputUnit::VideoSecond),
+        "video" => Some(OutputUnit::Video),
         _ => None,
     }
 }
@@ -309,6 +310,7 @@ mod tests {
             Some(TierSuffix::Batches)
         )
     )]
+    #[case::video("output_cost_per_video", key(Meter::Output(OutputUnit::Video), Band::Base, None))]
     #[case::wall_clock("cost_per_second", key(Meter::WallClockSecond, Band::Base, None))]
     #[case::browser_open(
         "browser_open_cost_per_request",

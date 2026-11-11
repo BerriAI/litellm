@@ -95050,6 +95050,438 @@
             "video"
         ]
     },
+    "fal_ai/fal-ai/auto-caption": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.1,
+        "source": "https://fal.ai/models/fal-ai/auto-caption",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/hunyuan-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.4,
+        "source": "https://fal.ai/models/fal-ai/hunyuan-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/hunyuan-video-image-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.4,
+        "source": "https://fal.ai/models/fal-ai/hunyuan-video-image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/infinity-star/text-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.07,
+        "source": "https://fal.ai/models/fal-ai/infinity-star/text-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/ltx-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.02,
+        "source": "https://fal.ai/models/fal-ai/ltx-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/ltx-video-13b-distilled": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.04,
+        "source": "https://fal.ai/models/fal-ai/ltx-video-13b-distilled",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/ltx-video-13b-distilled/extend": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.04,
+        "source": "https://fal.ai/models/fal-ai/ltx-video-13b-distilled/extend",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/ltx-video-13b-distilled/multiconditioning": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.04,
+        "source": "https://fal.ai/models/fal-ai/ltx-video-13b-distilled/multiconditioning",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/ltx-video/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.02,
+        "source": "https://fal.ai/models/fal-ai/ltx-video/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/minimax/hailuo-2.3-fast/pro/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.33,
+        "source": "https://fal.ai/models/fal-ai/minimax/hailuo-2.3-fast/pro/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/minimax/video-01": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.5,
+        "source": "https://fal.ai/models/fal-ai/minimax/video-01",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/minimax/video-01-director": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.5,
+        "source": "https://fal.ai/models/fal-ai/minimax/video-01-director",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/minimax/video-01-director/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.5,
+        "source": "https://fal.ai/models/fal-ai/minimax/video-01-director/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/minimax/video-01-live": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.5,
+        "source": "https://fal.ai/models/fal-ai/minimax/video-01-live",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/minimax/video-01-live/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.5,
+        "source": "https://fal.ai/models/fal-ai/minimax/video-01-live/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/minimax/video-01-subject-reference": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.5,
+        "source": "https://fal.ai/models/fal-ai/minimax/video-01-subject-reference",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/minimax/video-01/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.5,
+        "source": "https://fal.ai/models/fal-ai/minimax/video-01/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/ovi": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.2,
+        "source": "https://fal.ai/models/fal-ai/ovi",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/ovi/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.2,
+        "source": "https://fal.ai/models/fal-ai/ovi/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/wan-i2v-lora": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.75,
+        "source": "https://fal.ai/models/fal-ai/wan-i2v-lora",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/wan-pro/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.8,
+        "source": "https://fal.ai/models/fal-ai/wan-pro/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/wan-t2v-lora": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.75,
+        "source": "https://fal.ai/models/fal-ai/wan-t2v-lora",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/wan/v2.2-5b/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.15,
+        "source": "https://fal.ai/models/fal-ai/wan/v2.2-5b/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/wan/v2.2-5b/text-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.15,
+        "source": "https://fal.ai/models/fal-ai/wan/v2.2-5b/text-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/moonvalley/marey/motion-transfer": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video": 2,
+        "source": "https://fal.ai/models/moonvalley/marey/motion-transfer",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/moonvalley/marey/pose-transfer": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video": 2,
+        "source": "https://fal.ai/models/moonvalley/marey/pose-transfer",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/mureka/api/generate/lyrics-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video": 0.1,
+        "source": "https://fal.ai/models/mureka/api/generate/lyrics-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
     "fal_ai/fal-ai/wan-22-vace-fun-a14b/inpainting": {
         "litellm_provider": "fal_ai",
         "metadata": {"comment":"per second of generated video by resolution; the page's resolution default is auto or unstated, so output_cost_per_second is the highest tier (720p); tiers without a catalog field: 580p $0.075"},
