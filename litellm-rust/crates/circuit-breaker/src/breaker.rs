@@ -1,5 +1,5 @@
 use std::{
-    sync::Arc,
+    sync::{Arc, Weak},
     time::{Duration, Instant},
 };
 
@@ -128,6 +128,9 @@ impl Machine for Config {
 #[derive(Clone)]
 pub struct Breaker(Arc<Shared<Config>>);
 
+#[derive(Clone)]
+pub struct WeakBreaker(Weak<Shared<Config>>);
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct Rejected;
 
@@ -164,6 +167,16 @@ impl Breaker {
 
     pub fn state(&self) -> State {
         self.0.state()
+    }
+
+    pub fn downgrade(&self) -> WeakBreaker {
+        WeakBreaker(Arc::downgrade(&self.0))
+    }
+}
+
+impl WeakBreaker {
+    pub fn upgrade(&self) -> Option<Breaker> {
+        self.0.upgrade().map(Breaker)
     }
 }
 

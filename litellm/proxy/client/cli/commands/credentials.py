@@ -1,5 +1,8 @@
 import json
-from collections.abc import Sequence
+import time
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final, Literal
 
 import click
@@ -8,8 +11,29 @@ import rich
 from rich.table import Table
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
+from litellm.models.credentials import UserConnectionPollResponse, UserConnectionPollStatus
+
 from ...credentials import CredentialsManagementClient
+from ...exceptions import UnauthorizedError
 from ._cli_context import cli_context_values
+
+_SLOW_DOWN_STEP_SECONDS: Final = 5
+_CONNECT_FAILURES: Final[MappingProxyType[UserConnectionPollStatus, str]] = MappingProxyType(
+    {
+        "expired": "The code expired before it was approved. Run the command again for a new code",
+        "denied": "The GitHub login was denied",
+        "no_copilot_seat": "That GitHub account has no GitHub Copilot seat",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class PollClock:
+    now: Callable[[], float]
+    sleep: Callable[[float], None]
+
+
+SYSTEM_CLOCK: Final = PollClock(now=time.monotonic, sleep=time.sleep)
 
 
 class _CredentialInfo(TypedDict):
@@ -179,3 +203,80 @@ def get(ctx: click.Context, credential_name: str):
     client: Final = CredentialsManagementClient(context["base_url"], context["api_key"])
     response: Final = client.get(credential_name)
     _print_json(response)
+
+
+def _next_poll_interval(poll: UserConnectionPollResponse, current: int) -> int:
+    if poll.interval is not None:
+        return poll.interval
+    return current + _SLOW_DOWN_STEP_SECONDS if poll.status == "slow_down" else current
+
+
+def _poll_until_settled(
+    client: CredentialsManagementClient,
+    credential_name: str,
+    flow_handle: str,
+    first_interval: int,
+    expires_at: float,
+    clock: PollClock,
+) -> UserConnectionPollResponse:
+    interval = first_interval  # rebind-ok: GitHub can ask for a longer wait on any poll
+    while clock.now() + interval < expires_at:
+        clock.sleep(interval)
+        if (poll := client.poll_user_connection(credential_name, flow_handle)).status not in ("pending", "slow_down"):
+            return poll
+        interval = _next_poll_interval(poll, interval)
+    return UserConnectionPollResponse(status="expired")
+
+
+def connect_user_credential(
+    client: CredentialsManagementClient,
+    credential_name: str,
+    clock: PollClock,
+) -> UserConnectionPollResponse:
+    """Run the GitHub device login for the calling key's user and return the final poll result.
+
+    Polling stops once the next poll would land after the code expires, since the proxy rejects polls on an expired
+    code. The countdown starts before the code is requested, so it never runs past the proxy's own."""
+    requested_at: Final = clock.now()
+    started: Final = client.start_user_connection(credential_name)
+    click.echo(f"Go to {started.verification_uri} and enter code {started.user_code}")
+    click.echo("Waiting for approval...")
+    expires_at: Final = requested_at + started.expires_in
+    return _poll_until_settled(client, credential_name, started.flow_handle, started.interval, expires_at, clock)
+
+
+def _report_http_error(response: requests.Response) -> None:
+    click.echo(f"Error: HTTP {response.status_code}", err=True)
+    try:
+        error_body: Final[_JsonBodyView] = {"body": response.json()}
+        _print_json(error_body["body"])
+    except json.JSONDecodeError:
+        click.echo(response.text, err=True)
+
+
+@credentials.command()
+@click.argument("credential_name")
+@click.pass_context
+def connect(ctx: click.Context, credential_name: str) -> None:
+    """Connect your own GitHub Copilot account to a per-user credential, without the UI"""
+    context: Final = cli_context_values(ctx)
+    client: Final = CredentialsManagementClient(context["base_url"], context["api_key"])
+    try:
+        result: Final = connect_user_credential(client, credential_name, SYSTEM_CLOCK)
+    except UnauthorizedError as e:
+        if isinstance(e.orig_exception, requests.exceptions.HTTPError) and e.orig_exception.response is not None:
+            _report_http_error(e.orig_exception.response)
+        raise click.Abort()
+    except requests.exceptions.HTTPError as e:
+        _report_http_error(e.response)
+        raise click.Abort()
+    except requests.exceptions.RequestException as e:
+        click.echo(
+            f"Error: could not reach the proxy at {context['base_url']} ({type(e).__name__}). Run the command again",
+            err=True,
+        )
+        raise click.Abort()
+    if result.status != "connected":
+        click.echo(f"Error: {_CONNECT_FAILURES.get(result.status, result.status)}", err=True)
+        raise click.exceptions.Exit(1)
+    click.echo(f"Connected as {result.github_login} for credential '{credential_name}'")

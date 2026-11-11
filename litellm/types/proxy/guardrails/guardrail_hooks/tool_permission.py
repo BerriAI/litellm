@@ -16,7 +16,7 @@ class ToolPermissionRule(LiteLLMBaseModel):
     id: str = Field(description="Unique identifier for the rule")
     tool_name: str | None = Field(
         default=None,
-        description="Regex pattern applied to the tool's function name",
+        description="Regex pattern applied to the tool's name, or to its type when the tool has no name",
     )
     tool_type: str | None = Field(
         default=None,

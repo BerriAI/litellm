@@ -73,6 +73,7 @@ _PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES: Final = frozenset(
 _PROXY_ADMIN_VIEW_ONLY_BLOCKED_KEY_SUFFIXES: Final = ("/regenerate", "/reset_spend")
 
 _LLM_API_ROUTE_GROUPS: Final = frozenset(("llm_api_routes", "llm_api_routes_without_mcp"))
+_EU_JEV_DECISION_ROUTE: Final = "/eu_jev/v1/systemone"
 _AUTH_ENFORCED_PASS_THROUGH_ROUTE_GROUPS: Final = frozenset(("openai_routes", *_LLM_API_ROUTE_GROUPS))
 
 # Writes that only touch the caller's own credential row (BYOK connections and
@@ -110,14 +111,7 @@ _TOKEN_COUNTING_ACTION: Final = "countTokens"
 
 class RouteChecks:
     @staticmethod
-    def should_call_route(
-        route: str,
-        valid_token: UserAPIKeyAuth,
-        request: Request | None = None,
-    ):
-        """
-        Check if management route is disabled and raise exception
-        """
+    def check_route_enabled(route: str) -> None:
         try:
             from litellm_enterprise.proxy.auth.route_checks import EnterpriseRouteChecks
 
@@ -127,6 +121,16 @@ class RouteChecks:
         except Exception:
             pass
 
+    @staticmethod
+    def should_call_route(
+        route: str,
+        valid_token: UserAPIKeyAuth,
+        request: Request | None = None,
+    ):
+        """
+        Check if management route is disabled and raise exception
+        """
+        RouteChecks.check_route_enabled(route)
         # Check if Virtual Key is allowed to call the route - Applies to all Roles
         RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=valid_token, request=request)
         return True
@@ -301,7 +305,7 @@ class RouteChecks:
                 f"keys/users/teams. Route={route}. Your role={user_role}. Your user_id={masked_user_id}"
             ),
             type=ProxyErrorTypes.auth_error,
-            param="None",
+            param=None,
             code=status.HTTP_401_UNAUTHORIZED,
         )
 
@@ -436,6 +440,19 @@ class RouteChecks:
                 )
 
     @staticmethod
+    def is_allowed_on_proxy(route: str) -> bool:
+        from litellm.proxy.proxy_server import general_settings, premium_user
+
+        if "allowed_routes" not in general_settings:
+            return True
+        if premium_user is not True:
+            verbose_proxy_logger.error(
+                "Trying to set allowed_routes. This is an Enterprise feature. %s",
+                CommonProxyErrors.not_premium_user.value,
+            )
+        return route in general_settings["allowed_routes"]
+
+    @staticmethod
     def is_unbilled_route(route: str) -> bool:
         resource, _, action = route.rsplit("/", 1)[-1].partition(":")
         return route in _UNBILLED_ROUTES or resource in _TOKEN_COUNTING_SEGMENTS or action == _TOKEN_COUNTING_ACTION
@@ -503,7 +520,19 @@ class RouteChecks:
         for _llm_passthrough_route in LiteLLMRoutes.mapped_pass_through_routes.value:
             if route == _llm_passthrough_route or route.startswith(_llm_passthrough_route + "/"):
                 return True
-        return False
+        return RouteChecks.is_builtin_eu_jev_decision_route(route=route)
+
+    @staticmethod
+    def is_builtin_eu_jev_decision_route(route: str) -> bool:
+        if route.rstrip("/") != _EU_JEV_DECISION_ROUTE:
+            return False
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (  # noqa: PLC0415  # pass_through_endpoints imports the auth stack
+            InitPassThroughEndpointHelpers,
+        )
+
+        return not InitPassThroughEndpointHelpers.has_configured_route_ignoring_trailing_slash(
+            route=_EU_JEV_DECISION_ROUTE
+        )
 
     @staticmethod
     def _is_get_mcp_server_discovery_route(route: str, request: Request | None) -> bool:

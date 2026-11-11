@@ -11,7 +11,7 @@ import math
 import uuid as uuid_lib
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import Final
 
 import httpx
 from pydantic import ConfigDict, JsonValue, TypeAdapter
@@ -19,7 +19,7 @@ from pydantic import ConfigDict, JsonValue, TypeAdapter
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
+from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeSessionUpdateRejection
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.realtime.trigger_audio import ready_trigger_pcm
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -194,13 +194,6 @@ def _malformed_settings(session_config: Mapping[str, JsonValue]) -> tuple[tuple[
         ),
     )
     return tuple((name, expected) for name, expected, is_malformed in malformed if is_malformed)
-
-
-@dataclasses.dataclass(frozen=True, slots=True)
-class BedrockSessionUpdateRejection:
-    code: Literal["invalid_type", "invalid_value", "session_update_not_applied"]
-    message: str
-    param: str
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -533,7 +526,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             max_tokens=max_tokens,
         )
 
-    def session_update_rejection(self, json_message: Mapping[str, JsonValue]) -> BedrockSessionUpdateRejection | None:
+    def session_update_rejection(self, json_message: Mapping[str, JsonValue]) -> RealtimeSessionUpdateRejection | None:
         """The error for a session.update this session cannot apply, or None when it applies."""
         session_config: Final = json_message.get("session")
         if not isinstance(session_config, Mapping):
@@ -541,7 +534,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         malformed: Final = () if self.drop_params else _malformed_settings(session_config)
         if malformed:
             name, expected = malformed[0]
-            return BedrockSessionUpdateRejection(
+            return RealtimeSessionUpdateRejection(
                 code="invalid_type",
                 message=(
                     f"Invalid type for 'session.{name}': Bedrock Nova Sonic needs {expected} there. "
@@ -551,7 +544,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             )
         unplayable_voice: Final = None if self.drop_params else _unplayable_voice(session_config)
         if unplayable_voice is not None:
-            return BedrockSessionUpdateRejection(
+            return RealtimeSessionUpdateRejection(
                 code="invalid_value",
                 message=(
                     f"Invalid value for 'session.voice': '{unplayable_voice}' is not a Bedrock Nova Sonic voice. "
@@ -562,7 +555,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         if not self.prompt_started:
             return None
         if self._apply_locked_settings(session_config, self._started_settings) != self._started_settings:
-            return BedrockSessionUpdateRejection(
+            return RealtimeSessionUpdateRejection(
                 code="session_update_not_applied",
                 message="Bedrock Nova Sonic cannot change tools, instructions, voice, output audio format, temperature or max output tokens after the session has started, so this session.update was not applied",
                 param="session",

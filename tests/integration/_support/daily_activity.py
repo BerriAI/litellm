@@ -272,16 +272,32 @@ def assert_key_reported(
     date: str,
     metadata: Mapping[str, JsonValue],
     metrics: Mapping[str, float],
+    *,
+    entity_rows: Mapping[str, int] | None = None,
 ) -> None:
     assert response.status_code == 200, response.text
     body: Final = object_value(response.json())
     records: Final = tuple(object_value(record) for record in records_of_key(body, api_key))
     assert records, response.text
     assert all(record["metadata"] == metadata for record in records), response.text
-    assert all(counted(record["metrics"]) == pytest.approx(metrics) for record in records), response.text
     days: Final = body["results"]
     assert isinstance(days, list) and len(days) == 1, response.text
     day: Final = object_value(days[0])
+    breakdown: Final = object_value(day["breakdown"])
+    if entity_rows is None:
+        assert all(counted(record["metrics"]) == pytest.approx(metrics) for record in records), response.text
+    else:
+        totals: Final = records_of_key({name: value for name, value in breakdown.items() if name != "entities"}, api_key)
+        assert totals, response.text
+        assert all(counted(object_value(record)["metrics"]) == pytest.approx(metrics) for record in totals), response.text
+        entities: Final = object_value(breakdown["entities"])
+        assert set(entities) == set(entity_rows), response.text
+        for entity, rows in entity_rows.items():
+            bucket: Final = object_value(entities[entity])
+            assert counted(bucket["metrics"]) == pytest.approx(seeded_metrics(rows)), response.text
+            keys: Final = object_value(bucket["api_key_breakdown"])
+            assert set(keys) == {api_key}, response.text
+            assert counted(object_value(keys[api_key])["metrics"]) == pytest.approx(seeded_metrics(rows)), response.text
     assert day["date"] == date, response.text
     assert counted(day["metrics"]) == pytest.approx(metrics), response.text
     assert object_value(body["metadata"])["total_spend"] == pytest.approx(metrics["spend"]), response.text

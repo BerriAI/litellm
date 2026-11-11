@@ -25,11 +25,13 @@ from litellm.types.utils import (
     HiddenParams,
     ImageObject,
     ImageResponse,
+    LiteLLMBatch,
     ModelResponse,
     ModelResponseStream,
     TextCompletionResponse,
     all_litellm_params,
     is_decisions_model_mode,
+    Usage,
     text_tokens_without_nested_reasoning,
 )
 
@@ -1007,3 +1009,214 @@ def test_text_tokens_without_nested_reasoning_clamps(
         )
         == expected_text_tokens
     )
+
+
+_BATCH_FIELDS: Final = {
+    "id": "batch_abc",
+    "object": "batch",
+    "endpoint": "/v1/responses",
+    "input_file_id": "file-abc",
+    "completion_window": "24h",
+    "status": "completed",
+    "created_at": 1,
+}
+_PROVIDER_BATCH_USAGE: Final = {
+    "input_tokens": 21,
+    "input_tokens_details": {"cached_tokens": 5},
+    "output_tokens": 543,
+    "output_tokens_details": {"reasoning_tokens": 448},
+    "total_tokens": 564,
+}
+
+
+def _batch_token_counts(batch: LiteLLMBatch) -> tuple[int, int, int, int | None, int | None]:
+    assert batch.usage is not None
+    assert batch.usage.prompt_tokens_details is not None
+    assert batch.usage.completion_tokens_details is not None
+    return (
+        batch.usage.prompt_tokens,
+        batch.usage.completion_tokens,
+        batch.usage.total_tokens,
+        batch.usage.prompt_tokens_details.cached_tokens,
+        batch.usage.completion_tokens_details.reasoning_tokens,
+    )
+
+
+@pytest.mark.parametrize(
+    "usage",
+    (
+        pytest.param(_PROVIDER_BATCH_USAGE, id="provider_batch_usage"),
+        pytest.param(
+            {"prompt_tokens": 0, "completion_tokens": 0, **_PROVIDER_BATCH_USAGE},
+            id="stored_row_with_zeroed_chat_fields",
+        ),
+    ),
+)
+def test_batch_usage_reads_token_counts_from_the_provider_batch_usage(usage: dict[str, object]) -> None:
+    batch: Final = LiteLLMBatch.model_validate({**_BATCH_FIELDS, "usage": usage})
+
+    assert _batch_token_counts(batch) == (21, 543, 564, 5, 448)
+    assert batch.usage is not None
+    assert (batch.usage.input_tokens, batch.usage.output_tokens) == (21, 543)
+
+
+def test_batch_usage_keeps_chat_shaped_usage_as_is() -> None:
+    batch: Final = LiteLLMBatch.model_validate(
+        {**_BATCH_FIELDS, "usage": {"prompt_tokens": 28, "completion_tokens": 8, "total_tokens": 36}}
+    )
+
+    assert batch.usage is not None
+    assert (batch.usage.prompt_tokens, batch.usage.completion_tokens, batch.usage.total_tokens) == (28, 8, 36)
+
+
+@pytest.mark.parametrize(
+    "usage",
+    (
+        pytest.param({"input_tokens": 10, "output_tokens": 5}, id="no_details_or_total"),
+        pytest.param(
+            {"input_tokens": 10, "input_tokens_details": None, "output_tokens": 5, "output_tokens_details": None},
+            id="null_details",
+        ),
+        pytest.param(
+            {
+                "input_tokens": 10,
+                "input_tokens_details": {"cached_tokens": None},
+                "output_tokens": 5,
+                "output_tokens_details": {"reasoning_tokens": None},
+                "total_tokens": 15,
+            },
+            id="null_detail_counts",
+        ),
+    ),
+)
+def test_batch_usage_reads_token_counts_from_partial_provider_batch_usage(usage: dict[str, object]) -> None:
+    batch: Final = LiteLLMBatch.model_validate({**_BATCH_FIELDS, "usage": usage})
+    dumped_usage: Final = json.loads(batch.model_dump_json())["usage"]
+
+    assert batch.usage is not None
+    assert (batch.usage.prompt_tokens, batch.usage.completion_tokens, batch.usage.total_tokens) == (10, 5, 15)
+    assert (dumped_usage["input_tokens"], dumped_usage["output_tokens"], dumped_usage["total_tokens"]) == (10, 5, 15)
+
+
+@pytest.mark.parametrize(
+    "usage",
+    (
+        pytest.param(_PROVIDER_BATCH_USAGE, id="provider_batch_usage"),
+        pytest.param(
+            Usage(
+                prompt_tokens=21,
+                completion_tokens=543,
+                total_tokens=564,
+                prompt_tokens_details={"cached_tokens": 5},
+                completion_tokens_details={"reasoning_tokens": 448},
+            ),
+            id="billed_chat_usage",
+        ),
+    ),
+)
+def test_batch_dump_carries_the_chat_and_provider_batch_usage_fields(usage: dict[str, object] | Usage) -> None:
+    batch: Final = LiteLLMBatch.model_validate({**_BATCH_FIELDS, "usage": usage})
+    dumped: Final = batch.model_dump_json()
+    dumped_usage: Final = json.loads(dumped)["usage"]
+
+    assert {key: dumped_usage[key] for key in _PROVIDER_BATCH_USAGE} == _PROVIDER_BATCH_USAGE
+    assert (dumped_usage["prompt_tokens"], dumped_usage["completion_tokens"]) == (21, 543)
+    assert batch.model_dump()["usage"] == dumped_usage
+    assert _batch_token_counts(LiteLLMBatch.model_validate_json(dumped)) == (21, 543, 564, 5, 448)
+
+
+def test_batch_dump_keeps_cache_write_tokens_from_billed_usage() -> None:
+    batch: Final = LiteLLMBatch.model_validate(_BATCH_FIELDS).model_copy(
+        update={"usage": Usage(prompt_tokens=30, completion_tokens=4, total_tokens=34, cache_creation_input_tokens=7)}
+    )
+    dumped: Final = batch.model_dump_json()
+    dumped_usage: Final = json.loads(dumped)["usage"]
+
+    assert (dumped_usage["prompt_tokens"], dumped_usage["input_tokens"]) == (30, 30)
+    assert (dumped_usage["completion_tokens"], dumped_usage["output_tokens"]) == (4, 4)
+    assert dumped_usage["prompt_tokens_details"]["cache_write_tokens"] == 7
+    assert None not in batch.model_dump(exclude_none=True)["usage"]["prompt_tokens_details"].values()
+    assert json.loads(LiteLLMBatch.model_validate_json(dumped).model_dump_json())["usage"] == dumped_usage
+
+
+def test_batch_json_keeps_usage_that_skipped_validation() -> None:
+    batch: Final = LiteLLMBatch.model_validate(_BATCH_FIELDS).model_copy(update={"usage": {"prompt_tokens": 3}})
+
+    assert json.loads(batch.model_dump_json(warnings=False))["usage"] == {"prompt_tokens": 3}
+
+
+def test_batch_dump_applies_nested_include_and_exclude_to_both_usage_shapes() -> None:
+    batch: Final = LiteLLMBatch.model_validate({**_BATCH_FIELDS, "usage": _PROVIDER_BATCH_USAGE})
+
+    excluded: Final = batch.model_dump(exclude={"usage": {"prompt_tokens_details", "input_tokens_details"}})["usage"]
+    included: Final = batch.model_dump(include={"usage": {"prompt_tokens", "input_tokens"}})["usage"]
+
+    assert {"prompt_tokens_details", "input_tokens_details"}.isdisjoint(excluded)
+    assert (excluded["prompt_tokens"], excluded["input_tokens"]) == (21, 21)
+    assert included == {"prompt_tokens": 21, "input_tokens": 21}
+
+
+def test_batch_dump_applies_exclude_defaults_to_the_chat_usage_keys() -> None:
+    batch: Final = LiteLLMBatch.model_validate(
+        {**_BATCH_FIELDS, "usage": Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)}
+    )
+
+    python_usage: Final = batch.model_dump(exclude_defaults=True)["usage"]
+    json_usage: Final = json.loads(batch.model_dump_json(exclude_defaults=True, warnings=False))["usage"]
+
+    assert python_usage == json_usage
+    assert {"prompt_tokens_details", "completion_tokens_details"}.isdisjoint(python_usage)
+    assert (python_usage["prompt_tokens"], python_usage["input_tokens"]) == (10, 10)
+
+
+def test_batch_dump_forwards_every_provider_usage_detail_field() -> None:
+    batch: Final = LiteLLMBatch.model_validate(
+        {
+            **_BATCH_FIELDS,
+            "usage": {
+                **_PROVIDER_BATCH_USAGE,
+                "input_tokens_details": {"cached_tokens": 5, "audio_tokens": 3},
+                "output_tokens_details": {"reasoning_tokens": 448, "audio_tokens": 2},
+            },
+        }
+    )
+
+    python_usage: Final = batch.model_dump()["usage"]
+    json_usage: Final = json.loads(batch.model_dump_json(warnings=False))["usage"]
+
+    assert python_usage == json_usage
+    assert python_usage["input_tokens_details"] == {"cached_tokens": 5, "audio_tokens": 3}
+    assert python_usage["output_tokens_details"] == {"reasoning_tokens": 448, "audio_tokens": 2}
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        {"input_tokens": 29, "output_tokens": None, "total_tokens": 29},
+        {"input_tokens": 29, "input_tokens_details": {"cached_tokens": 8}, "total_tokens": 29},
+    ],
+)
+def test_batch_dump_serves_unparsed_provider_usage_unchanged(usage: dict[str, object]) -> None:
+    batch: Final = LiteLLMBatch.model_validate({**_BATCH_FIELDS, "usage": usage})
+
+    python_usage: Final = batch.model_dump()["usage"]
+    json_usage: Final = json.loads(batch.model_dump_json(warnings=False))["usage"]
+
+    assert python_usage == json_usage
+    assert {key: python_usage[key] for key in usage} == usage
+
+
+def test_batch_dump_applies_exclude_none_to_provider_usage_detail_fields() -> None:
+    batch: Final = LiteLLMBatch.model_validate(
+        {
+            **_BATCH_FIELDS,
+            "usage": {**_PROVIDER_BATCH_USAGE, "input_tokens_details": {"cached_tokens": 5, "audio_tokens": None}},
+        }
+    )
+
+    python_usage: Final = batch.model_dump(exclude_none=True)["usage"]
+    json_usage: Final = json.loads(batch.model_dump_json(exclude_none=True, warnings=False))["usage"]
+
+    assert python_usage == json_usage
+    assert python_usage["input_tokens_details"] == {"cached_tokens": 5}
+    assert (python_usage["prompt_tokens"], python_usage["input_tokens"]) == (21, 21)
