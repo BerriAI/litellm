@@ -268,17 +268,17 @@ async def test_a_schedule_change_replaces_the_pending_run_planned_from_the_old_s
 async def test_moving_a_cron_earlier_plans_the_earlier_occurrence_instead_of_skipping_a_day() -> None:
     async with _scratch() as database:
         now: Final = datetime.now(timezone.utc)
-        job: Final = _Job(schedule=f"0 {(now + timedelta(hours=2)).hour} * * *")
+        job: Final = _Job(schedule=f"0 {(now + timedelta(hours=3)).hour} * * *")
         runners: Final = _runners(job)
         await _tick_all(runners, database)
         (old,) = database.rows("\"status\" = 'PENDING'")
 
-        job.schedule_value = f"0 {(now + timedelta(hours=1)).hour} * * *"
+        job.schedule_value = f"0 {(now + timedelta(hours=2)).hour} * * *"
         await _tick_all(runners, database)
 
         (replacement,) = database.rows("\"status\" = 'PENDING'")
         assert replacement["scheduled_for"] < old["scheduled_for"]
-        assert replacement["scheduled_for"] - datetime.now(timezone.utc) < timedelta(hours=1)
+        assert replacement["scheduled_for"] - datetime.now(timezone.utc) < timedelta(hours=2)
 
 
 async def test_a_run_cancelled_by_shutdown_is_recorded_as_failed_instead_of_holding_its_lease() -> None:
