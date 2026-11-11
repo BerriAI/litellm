@@ -56,8 +56,8 @@ export default function PerformanceMonitoring({ scope, readOnly }: { scope: stri
       </p>
     );
   const data = query.data;
-  const exhausted = data.alert_limit !== null && data.alerts_used >= data.alert_limit;
-  const message = t(statusMessage(data), { used: data.alerts_used, limit: data.alert_limit });
+  const messageKey = statusMessage(data);
+  const message = t(messageKey, { used: data.alerts_used, limit: data.alert_limit });
   return (
     <div className="space-y-2">
       <div className="space-y-2 text-sm">
@@ -77,7 +77,7 @@ export default function PerformanceMonitoring({ scope, readOnly }: { scope: stri
         </div>
         <p id="performance-monitoring-status" className="text-muted-foreground" role="status">
           {message}
-          {exhausted && (
+          {messageKey === "alerts.monitoring.exhausted" && (
             <a
               className="ml-2 text-foreground underline underline-offset-4"
               href="https://www.litellm.ai/enterprise"

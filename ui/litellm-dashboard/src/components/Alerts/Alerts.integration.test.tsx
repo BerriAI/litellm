@@ -181,6 +181,7 @@ describe("Alerts", () => {
 
   it("explains exhaustion without blocking saved alerts or model deprecations", async () => {
     monitoring.alerts_used = 5;
+    const user = userEvent.setup();
     renderWithProviders(<Alerts />);
     expect(
       await screen.findByText("You’ve used all 5 free alerts. New performance alerts are paused."),
@@ -191,6 +192,9 @@ describe("Alerts", () => {
     );
     expect(screen.getByRole("button", { name: "Mark resolved" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Set up email reminders" })).toBeInTheDocument();
+    await user.click(screen.getByRole("switch", { name: "Performance monitoring" }));
+    expect(await screen.findByText("Off. Saved alerts remain available.")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Upgrade to Enterprise" })).not.toBeInTheDocument();
   });
 
   it("keeps the saved toggle value when an older refresh finishes later", async () => {
@@ -229,9 +233,11 @@ describe("Alerts", () => {
 
   it("respects config opt-out and view-only permissions", async () => {
     monitoring.disabled_by_config = true;
+    monitoring.alerts_used = 5;
     monitoring.enabled = false;
     renderWithProviders(<Alerts />);
     expect(await screen.findByText("Disabled in proxy settings.")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Upgrade to Enterprise" })).not.toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "Performance monitoring" })).toHaveAttribute("aria-disabled", "true");
   });
 
