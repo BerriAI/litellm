@@ -8035,9 +8035,7 @@
         "organizations": "Organizations",
         "accessGroups": "Access Groups",
         "budgets": "Budgets",
-        "apiReference": "API Reference",
         "aiHub": "AI Hub",
-        "learningResources": "Learning Resources",
         "responseCache": "Response Cache",
         "experimental": "Experimental",
         "prompts": "Prompts",
@@ -8083,9 +8081,7 @@
       "projects": "Manage projects within teams",
       "accessGroups": "Manage access groups for role-based permissions",
       "budgets": "Set and monitor spending budgets",
-      "apiRef": "Browse API documentation and endpoints",
       "modelHubTable": "Explore available AI models and providers",
-      "learningResources": "Access tutorials and documentation",
       "caching": "Configure response caching and coordination Redis settings",
       "transformRequest": "Set up request transformation rules",
       "costTracking": "Track and analyze API costs",
@@ -8554,20 +8550,6 @@
       "failed": "Failed to load posts",
       "retry": "Retry",
       "empty": "No posts yet"
-    }
-  },
-  "apiReference": {
-    "page": {
-      "featureName": "The API Reference tab"
-    },
-    "view": {
-      "title": "OpenAI Compatible Proxy: API Reference",
-      "description": "LiteLLM is OpenAI Compatible. This means your API Key works with the OpenAI SDK. Just replace the base_url to point to your litellm proxy. Example Below"
-    },
-    "docLink": {
-      "title": "Open documentation in a new tab",
-      "label": "API Reference Docs",
-      "newTab": "(opens in a new tab)"
     }
   },
   "uiTheme": {

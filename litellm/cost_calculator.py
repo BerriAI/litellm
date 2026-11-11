@@ -970,6 +970,19 @@ def _bedrock_registration_has_prices(entry: Mapping[str, object]) -> bool:
     )
 
 
+def _bedrock_cost_registration(model: str | None) -> tuple[str, Mapping[str, object]] | None:
+    if model is None:
+        return None
+    return next(
+        (
+            (key, entry)
+            for key, entry in runtime_model_cost_registrations(model, "bedrock")
+            if _bedrock_registration_has_prices(entry)
+        ),
+        None,
+    )
+
+
 def _bedrock_pricing_info(
     model: str | None,
     invoked_model_id: str | None,
@@ -978,14 +991,7 @@ def _bedrock_pricing_info(
 ) -> ModelInfo | None:
     if explicit_pricing or custom_llm_provider != "bedrock" or not model:
         return None
-    registration: Final = next(
-        (
-            (key, entry)
-            for key, entry in runtime_model_cost_registrations(model, "bedrock")
-            if _bedrock_registration_has_prices(entry)
-        ),
-        None,
-    )
+    registration: Final = _bedrock_cost_registration(model)
     profile: Final = _cost_map_model_info(invoked_model_id, "bedrock") if invoked_model_id else None
     if profile is None or not _declares_rates(profile):
         return _cost_map_model_info(registration[0], None) if registration is not None else None
@@ -2807,7 +2813,14 @@ def pricing_entry_for_cost_calc(
         custom_pricing is True or base_model is not None,
     )
     if bedrock_model_info is not None:
-        return bedrock_model_info["key"], bedrock_model_info
+        key: Final = bedrock_model_info["key"]
+        declared_pricing: Final = declared_cost_map_pricing(key, model or key, custom_llm_provider)
+        registration: Final = _bedrock_cost_registration(model)
+        declared_keys: Final = frozenset(declared_pricing) | (
+            frozenset(registration[1]) if registration is not None else frozenset[str]()
+        )
+        selected_entry: Final[Mapping[str, object]] = bedrock_model_info
+        return key, MappingProxyType({name: value for name, value in selected_entry.items() if name in declared_keys})
     candidates: Final = (selected_model, _get_response_model(completion_response), model)
     resolved: Final = next(
         (info for info in (_cost_map_model_info(name, custom_llm_provider) for name in candidates if name) if info),
@@ -2815,7 +2828,7 @@ def pricing_entry_for_cost_calc(
     )
     if resolved is None:
         return None
-    return resolved["key"], _raw_cost_map_entry(resolved["key"]) or resolved
+    return resolved["key"], declared_cost_map_pricing(resolved["key"], model or resolved["key"], custom_llm_provider)
 
 
 def ocr_cost(

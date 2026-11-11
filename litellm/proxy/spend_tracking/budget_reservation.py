@@ -263,12 +263,13 @@ async def reserve_budget_for_request(
     apply_user_budget_to_team_keys: bool = False,
     fail_closed_budget_enforcement: bool = False,
     raw_body: bytes | None = None,
+    path_params: Mapping[str, object] | None = None,
 ) -> dict | None:
     if valid_token is None or not RouteChecks.is_llm_api_route(route=route):
         return None
     if RouteChecks.is_unbilled_route(route):
         return None
-    if get_model_from_request(request_body, route, llm_router=llm_router) is None:
+    if get_model_from_request(request_body, route, llm_router=llm_router, path_params=path_params) is None:
         return None
 
     counters: Final = await _get_budget_counters(
@@ -292,6 +293,7 @@ async def reserve_budget_for_request(
         llm_router=llm_router,
         team_id=valid_token.team_id,
         raw_body=raw_body,
+        path_params=path_params,
     )
 
     reservation_cost = estimate_request_max_cost(
@@ -299,6 +301,7 @@ async def reserve_budget_for_request(
         route=route,
         llm_router=llm_router,
         input_token_counts=input_token_counts,
+        path_params=path_params,
     )
     # estimate_request_max_cost still returns None when the model is unknown
     # to the cost map (no token-priced cost fields, e.g. image/audio routes).
@@ -335,6 +338,7 @@ async def reserve_budget_for_request(
         route=route,
         llm_router=llm_router,
         input_token_counts=input_token_counts,
+        path_params=path_params,
     )
     budget_reservation: Final = {
         "reserved_cost": reservation_cost,
@@ -1320,6 +1324,7 @@ def estimate_request_max_cost(
     route: str,
     llm_router: Router | None,
     input_token_counts: Mapping[str, int] | None = None,
+    path_params: Mapping[str, object] | None = None,
 ) -> float | None:
     estimates = [
         _estimate_request_max_cost_for_model(
@@ -1329,7 +1334,9 @@ def estimate_request_max_cost(
             llm_router=llm_router,
             input_tokens=(input_token_counts or {}).get(model_name),
         )
-        for model_name in _get_request_models(request_body=request_body, route=route, llm_router=llm_router)
+        for model_name in _get_request_models(
+            request_body=request_body, route=route, llm_router=llm_router, path_params=path_params
+        )
     ]
     estimates = [estimate for estimate in estimates if estimate is not None]
     if not estimates:
@@ -1342,6 +1349,7 @@ def estimate_request_input_cost(
     route: str,
     llm_router: Router | None,
     input_token_counts: Mapping[str, int] | None = None,
+    path_params: Mapping[str, object] | None = None,
 ) -> float | None:
     """Cost of the request's input tokens alone.
 
@@ -1358,7 +1366,9 @@ def estimate_request_input_cost(
             llm_router=llm_router,
             input_tokens=(input_token_counts or {}).get(model_name),
         )
-        for model_name in _get_request_models(request_body=request_body, route=route, llm_router=llm_router)
+        for model_name in _get_request_models(
+            request_body=request_body, route=route, llm_router=llm_router, path_params=path_params
+        )
     ]
     estimates = [estimate for estimate in estimates if estimate is not None]
     if not estimates:
@@ -1623,8 +1633,9 @@ def _get_request_models(
     request_body: dict,
     route: str,
     llm_router: Router | None,
+    path_params: Mapping[str, object] | None = None,
 ) -> Sequence[str]:
-    model: Final = get_model_from_request(request_body, route, llm_router=llm_router)
+    model: Final = get_model_from_request(request_body, route, llm_router=llm_router, path_params=path_params)
     if model is None:
         return ()
     return (model,) if isinstance(model, str) else tuple(model)
@@ -1636,11 +1647,14 @@ async def count_request_input_tokens(
     llm_router: Router | None,
     team_id: str | None,
     raw_body: bytes | None = None,
+    path_params: Mapping[str, object] | None = None,
 ) -> Mapping[str, int]:
     """Input-token count per candidate model, counted once per request.
 
     The counts are reused by both the max-cost and the input-cost estimate."""
-    models: Final = _get_request_models(request_body=request_body, route=route, llm_router=llm_router)
+    models: Final = _get_request_models(
+        request_body=request_body, route=route, llm_router=llm_router, path_params=path_params
+    )
     if not models:
         return MappingProxyType({})
     counted_models: Final = MappingProxyType(

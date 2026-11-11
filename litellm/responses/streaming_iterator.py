@@ -47,7 +47,7 @@ from litellm.litellm_core_utils.core_helpers import (
     set_response_cost_in_hidden_params,
     stamp_litellm_bill_on_usage,
 )
-from litellm.litellm_core_utils.exception_mapping_utils import with_deployment_api_base
+from litellm.litellm_core_utils.exception_mapping_utils import mapped_stream_exception, with_deployment_debug_info
 from litellm.litellm_core_utils.internal_call_metadata import (
     is_background_response,
     requests_background,
@@ -344,27 +344,21 @@ def map_stream_error_to_exception(
     return _mapped_exception(provider_exception, model, custom_llm_provider, logging_obj)
 
 
+def _logged_litellm_params(logging_obj: LiteLLMLoggingObj | None) -> object:
+    return (
+        None
+        if logging_obj is None
+        else _typed_gets_litellm_params(logging_obj.model_call_details.get)("litellm_params", {})
+    )
+
+
 def _mapped_exception(
     original_exception: Exception,
     model: str,
     custom_llm_provider: str,
     logging_obj: LiteLLMLoggingObj | None,
 ) -> Exception:
-    litellm_params: Final = (
-        None
-        if logging_obj is None
-        else _typed_gets_litellm_params(logging_obj.model_call_details.get)("litellm_params", {})
-    )
-    try:
-        return litellm.exception_type(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            original_exception=original_exception,
-            completion_kwargs={},
-            extra_kwargs=with_deployment_api_base(litellm_params),
-        )
-    except Exception as mapped_exception:
-        return mapped_exception
+    return mapped_stream_exception(original_exception, model, custom_llm_provider, _logged_litellm_params(logging_obj))
 
 
 def _event_field(event: object, name: str) -> object:
@@ -1219,12 +1213,17 @@ class BaseResponsesAPIStreamingIterator:
             model=self.model or "",
         )
 
+    def _with_deployment_debug_info(self, error: Exception) -> Exception:
+        return with_deployment_debug_info(
+            error, self.model or "", self.custom_llm_provider or "", _logged_litellm_params(self.logging_obj)
+        )
+
     def _raise_if_ended_without_terminal_event(self) -> None:
         if self.completed_response is not None:
             return
         if self._replays_stored_stream and not self._yielded_first_chunk:
             return
-        error: Final = self._stream_ended_early_error()
+        error: Final = self._with_deployment_debug_info(self._stream_ended_early_error())
         self._handle_failure(error)
         if self._output_started:
             raise error
@@ -1236,10 +1235,11 @@ class BaseResponsesAPIStreamingIterator:
         raise _mapped_exception(error, self.model or "", self.custom_llm_provider or "", self.logging_obj) from error
 
     def _raise_for_transport_error(self, error: httpx.ReadError | httpx.RemoteProtocolError) -> NoReturn:
-        self._handle_failure(error)
+        described: Final = self._with_deployment_debug_info(error)
+        self._handle_failure(described)
         if self._output_started:
-            raise error
-        raise self._fallback_error(error) from error
+            raise described
+        raise self._fallback_error(described) from described
 
 
 async def call_post_streaming_hooks_for_testing(
@@ -1341,14 +1341,9 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                 self.finished = True
                 raise StopAsyncIteration from e
             self._raise_for_transport_timeout(e)
-        except httpx.HTTPError as e:
-            # Handle HTTP errors
-            self.finished = True
-            self._handle_failure(e)
-            raise e
         except Exception as e:
             self.finished = True
-            self._handle_failure(e)
+            self._handle_failure(self._with_deployment_debug_info(e))
             raise e
 
     def _handle_logging_completed_response(self):
@@ -1434,14 +1429,9 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                 self.finished = True
                 raise StopIteration from e
             self._raise_for_transport_timeout(e)
-        except httpx.HTTPError as e:
-            # Handle HTTP errors
-            self.finished = True
-            self._handle_failure(e)
-            raise e
         except Exception as e:
             self.finished = True
-            self._handle_failure(e)
+            self._handle_failure(self._with_deployment_debug_info(e))
             raise e
 
     def _handle_logging_completed_response(self):
@@ -1931,7 +1921,11 @@ def stamp_responses_usage_cost(
         return
     if isinstance(bill, bool) or not isinstance(bill, (int, float)):
         return
-    if bill > 0 or isinstance(usage_obj.cost, (int, float)):
+    if (
+        bill > 0
+        or isinstance(usage_obj.cost, (int, float))
+        or (bill == 0 and logging_obj.is_usage_explicitly_free(priced))
+    ):
         stamp_litellm_bill_on_usage(response_obj, usage_obj, float(bill))
 
 

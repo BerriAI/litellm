@@ -18283,6 +18283,7 @@ export interface paths {
          *           An explicit value overrides the global setting for this destination; omitted follows the proxy's own callback for that backend, else the global setting.
          *           "span_only" puts prompt and response content on the destination's spans, "no_content" leaves it out
          *         - excluded_services: For OTel v2 callbacks, a comma-separated list of datastore names such as "redis,postgres", or "none" to exclude nothing. An explicit value replaces the global exclusions; omitted follows them
+         *         - baggage_metadata_keys: For OTel v2 callbacks, a comma-separated list of request metadata keys such as "requester_metadata.correlation_id", exported as litellm.metadata.<key> on this destination's spans only, on top of the global LITELLM_OTEL_BAGGAGE_METADATA_KEYS. At most 20 keys; names of proxy identity fields (user_api_key_*, requester_ip_address) and request headers (requester_metadata.headers.*) are rejected
          *         - gcs_bucket_name: The name of the GCS bucket
          *         - gcs_path_service_account: The path to the GCS service account
          *         - langsmith_api_key: The API key for the Langsmith callback
@@ -19884,13 +19885,13 @@ export interface paths {
         put?: never;
         /**
          * Token Counter
-         * @description Args:
+         * @description Returns:
+         *         TokenCountResponse
+         *
+         *     Args:
          *         request: TokenCountRequest
          *         call_endpoint: bool - When set to "True" it will call the token counting endpoint - e.g Anthropic or Google AI Studio Token Counting APIs.
          *         litellm_call_id: the x-litellm-call-id header, logged with the count so it joins the inference call's logs
-         *
-         *     Returns:
-         *         TokenCountResponse
          */
         post: operations["token_counter_utils_token_counter_post"];
         delete?: never;
