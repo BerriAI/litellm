@@ -1004,9 +1004,14 @@ class BaseResponsesAPIStreamingIterator:
         usage since the provider never sent any. None when nothing was relayed yet
         or the stream already reached its terminal event and billed itself.
         """
+        if self.completed_response is not None:
+            return None
+        return self.relayed_partial_response()
+
+    def relayed_partial_response(self) -> ResponseIncompleteEvent | None:
         created: Final = self._created_response
         generated: Final = self._generated_content + self._generated_tool_arguments
-        if self.completed_response is not None or created is None or not generated:
+        if created is None or not generated:
             return None
         usage: Final = _estimate_usage_safely(
             self.model or "", self.request_data.get("input"), self.request_data, generated

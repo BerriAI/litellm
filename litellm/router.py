@@ -3483,6 +3483,52 @@ class Router:
         return None
 
     @staticmethod
+    def _relayed_responses_leg(cut_stream: "BaseResponsesAPIStreamingIterator") -> tuple[Usage | None, float | None]:
+        from litellm.responses.utils import ResponseAPILoggingUtils
+
+        relayed: Final = cut_stream.relayed_partial_response()
+        relayed_usage: Final = relayed.response.usage if relayed is not None else None
+        if relayed_usage is None:
+            return None, None
+        return ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(relayed_usage), relayed_usage.cost
+
+    @staticmethod
+    def _billed_responses_cut_partial(cut_stream: "BaseResponsesAPIStreamingIterator") -> tuple[Usage, float] | None:
+        from litellm.cost_calculator import BaseTokenUsageProcessor
+        from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+            LiteLLMCompletionStreamingIterator,
+        )
+
+        bridged: Final = isinstance(cut_stream, LiteLLMCompletionStreamingIterator)
+        cut_logging: Final = getattr(cut_stream, "litellm_logging_obj" if bridged else "logging_obj", None)
+        if not isinstance(cut_logging, LiteLLMLogging):
+            return None
+        details: Final = cut_logging.model_call_details
+        stashed_leg: Final = (details.get("combined_usage_object"), details.get("response_cost"))
+        candidate_legs: Final = (
+            stashed_leg if bridged or isinstance(stashed_leg[0], Usage) else Router._relayed_responses_leg(cut_stream),
+            (details.get("continued_partial_usage"), details.get("continued_partial_cost")),
+        )
+        billed_legs: Final = tuple(
+            (usage, float(cost) if isinstance(cost, (int, float)) else 0.0)
+            for usage, cost in candidate_legs
+            if isinstance(usage, Usage)
+        )
+        if not billed_legs:
+            return None
+        return (
+            BaseTokenUsageProcessor.combine_usage_objects(usage_objects=[usage for usage, _ in billed_legs]),
+            sum((cost for _, cost in billed_legs), 0.0),
+        )
+
+    @staticmethod
+    def _carry_partial_spend_to_fallback(fallback_response: object, cut_partial: tuple[Usage, float] | None) -> None:
+        fallback_logging: Final = getattr(fallback_response, "logging_obj", None)
+        if cut_partial is None or not isinstance(fallback_logging, LiteLLMLogging):
+            return
+        fallback_logging.record_continued_partial(usage=cut_partial[0], response_cost=cut_partial[1])
+
+    @staticmethod
     def _combine_responses_fallback_usage(
         fallback_item: "BaseLiteLLMOpenAIResponseObject",
         partial_usage: "ResponseAPIUsage",
@@ -3816,6 +3862,7 @@ class Router:
         from litellm.exceptions import MidStreamFallbackError
 
         partial_usage: Final = Router._extract_partial_responses_usage(source_iterator)
+        cut_partial: Final = Router._billed_responses_cut_partial(source_iterator)
         fallback_response = None  # rebind-ok: pre-init so finally can close it if a fallback was actually attempted
         fallback_yielded = False  # rebind-ok: flipped on the first fallback item so a fallback that dies before its first event still replays the primary's held announcement
         try:
@@ -3865,6 +3912,7 @@ class Router:
             )
             prepared_fallback_hidden_params: Final = adopt_headers(fallback_response)
             if hasattr(fallback_response, "__aiter__"):
+                Router._carry_partial_spend_to_fallback(fallback_response, cut_partial)
                 async for fallback_item in fallback_response:
                     Router._apply_fallback_hidden_params_to_item(fallback_item, prepared_fallback_hidden_params)
                     if partial_usage is not None:

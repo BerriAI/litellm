@@ -585,7 +585,7 @@ def get_logging_payload(
     # streaming handler may have recovered the usage from the chunks already
     # delivered. Honor that override so the partial usage lands in spend tracking.
     _combined_usage: Final = kwargs.get("combined_usage_object")
-    if not usage and isinstance(_combined_usage, litellm.Usage):
+    if (not usage or "continued_partial_billed" in kwargs) and isinstance(_combined_usage, litellm.Usage):
         usage = _combined_usage.model_dump()
 
     id = get_spend_logs_id(call_type or "acompletion", response_obj_dict, kwargs, metadata)

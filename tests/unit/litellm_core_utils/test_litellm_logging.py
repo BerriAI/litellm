@@ -12593,3 +12593,43 @@ def test_record_native_bedrock_guardrail_bills_each_call_its_own_trace_when_call
     (first_cost, second_cost) = costs
     assert second_cost == pytest.approx(2 * first_cost)
     assert shared_metadata == {"tag": "x"}
+
+
+@pytest.mark.asyncio
+async def test_an_unpriced_continuation_logs_the_cut_partials_tokens_without_a_cost():
+    recorder: Final = _SuccessCapturingLogger()
+    start: Final = dt_object(2026, 1, 1)
+    logging_obj: Final = Logging(
+        model="litellm-unpriced-continuation",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=start,
+        litellm_call_id="unpriced-continuation",
+        function_id="unpriced-continuation",
+        dynamic_async_success_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model="litellm-unpriced-continuation",
+        user=None,
+        optional_params={},
+        litellm_params={"litellm_call_id": "unpriced-continuation", "metadata": {}},
+        custom_llm_provider="openai",
+    )
+    cut_usage: Final = Usage(prompt_tokens=40, completion_tokens=7, total_tokens=47)
+    logging_obj.record_partial_usage_for_failure(cut_usage, 0.001)
+    logging_obj.record_continued_partial(usage=cut_usage, response_cost=0.001)
+
+    await logging_obj.async_success_handler(
+        result=ModelResponse(
+            model="litellm-unpriced-continuation",
+            choices=[{"index": 0, "message": {"role": "assistant", "content": "Hello"}, "finish_reason": "stop"}],
+            usage={"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
+        ),
+        start_time=start,
+        end_time=start,
+    )
+
+    assert recorder.success_payload is not None
+    assert (recorder.success_payload["prompt_tokens"], recorder.success_payload["completion_tokens"]) == (45, 9)
+    assert not recorder.success_payload["response_cost"]

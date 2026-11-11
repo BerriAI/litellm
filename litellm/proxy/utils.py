@@ -1135,6 +1135,8 @@ def _failure_usage_to_lift(
     deployment's ``model_info.base_model``) or the deployment model; any other post-dispatch
     failure stays at zero cost. Returns the
     (combined_usage_object, response_cost) pair to lift, or None."""
+    if model_call_details.get("continued_partial_billed"):
+        return Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0), 0.0
     recovered_usage: Final = model_call_details.get("combined_usage_object")
     if recovered_usage is not None:
         return recovered_usage, model_call_details.get("response_cost")
