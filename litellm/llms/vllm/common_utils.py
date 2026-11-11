@@ -114,6 +114,12 @@ class HostedVLLMModelInfo(VLLMModelInfo):
     def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
         return self._list_models(api_key=api_key, api_base=api_base, extra_headers={}, ssl_verify=None)
 
+    def lists_served_model_ids(self) -> bool:
+        return (
+            type(self).get_models is HostedVLLMModelInfo.get_models
+            and type(self).discover_models is HostedVLLMModelInfo.discover_models
+        )
+
     def discover_models(
         self, litellm_params: Mapping[str, object] | None = None
     ) -> list[str]:  # mutable-ok: matches get_models' list[str] contract shared by every provider override

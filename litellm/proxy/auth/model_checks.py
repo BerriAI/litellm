@@ -89,18 +89,18 @@ def get_provider_models(provider: str, litellm_params: LiteLLM_Params | None = N
     )
 
 
-def _prefixed_served_ids(
+def _routable_served_ids(
     provider: str, custom_llm_provider: str | None, provider_models: Sequence[str]
 ) -> Sequence[str]:
     model_info: Final = _provider_model_info(provider)
-    if (
-        not litellm.check_provider_endpoint
-        or custom_llm_provider not in (None, provider)
-        or model_info is None
-        or not model_info.lists_served_model_ids()
-    ):
+    if not litellm.check_provider_endpoint or model_info is None or not model_info.lists_served_model_ids():
         return provider_models
-    return tuple(f"{provider}/{served_model_id}" for served_model_id in provider_models)
+    provider_id_prefix: Final = f"{provider}/"
+    if custom_llm_provider not in (None, provider):
+        return tuple(
+            served_model_id for served_model_id in provider_models if served_model_id.startswith(provider_id_prefix)
+        )
+    return tuple(f"{provider_id_prefix}{served_model_id}" for served_model_id in provider_models)
 
 
 def _provider_model_info(provider: str) -> BaseLLMModelInfo | None:
@@ -581,7 +581,7 @@ def _known_models_from_wildcard(
 
     if provider_models is None:
         return ()
-    wildcard_models = _prefixed_served_ids(
+    wildcard_models = _routable_served_ids(
         provider, litellm_params.custom_llm_provider if litellm_params is not None else None, provider_models
     )
     if deployment_pattern_naming_listed_ids is not None:

@@ -505,7 +505,9 @@ def test_hosted_vllm_wildcard_sends_the_configured_api_key_as_a_bearer_token(mon
 
 
 @respx.mock
-def test_hosted_vllm_wildcard_without_api_base_lists_the_server_chat_would_call(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_hosted_vllm_wildcard_without_api_base_lists_the_server_chat_would_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import litellm
     from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
     from litellm.types.router import LiteLLM_Params
@@ -577,7 +579,6 @@ def test_hosted_vllm_wildcard_listing_sends_the_deployment_extra_headers(monkeyp
     assert listed == ["hosted_vllm/qwen2.5"]
 
 
-
 @respx.mock
 def test_vllm_wildcard_never_lists_the_ids_of_a_configured_vllm_server(monkeypatch: pytest.MonkeyPatch) -> None:
     import litellm
@@ -598,6 +599,7 @@ def test_vllm_wildcard_never_lists_the_ids_of_a_configured_vllm_server(monkeypat
 
     assert "vllm/model-only-a-server-serves" not in listed
     assert not server_route.called
+
 
 _SELF_SIGNED_CERT_NOT_VALID_BEFORE: Final = datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC)
 _SELF_SIGNED_CERT_NOT_VALID_AFTER: Final = datetime.datetime(9999, 12, 31, tzinfo=datetime.UTC)
@@ -1111,7 +1113,6 @@ def test_expand_wildcard_invalid_litellm_params_passthrough():
     assert result == [deployment]
 
 
-
 @pytest.mark.parametrize(
     ("allowed_model_names", "expected_names", "expected_listings"),
     [
@@ -1160,6 +1161,7 @@ def test_expand_wildcard_alias_over_one_model_is_kept_only_for_keys_with_a_name_
     rows: Final = expand_wildcard_deployments_for_model_info([deployment], allowed_model_names=allowed_model_names)
 
     assert rows == ([deployment] if keeps_the_alias else [])
+
 
 def test_get_complete_model_list_excludes_wildcard_routes_by_default():
     """Regression (LIT-4108): a wildcard with a matching router deployment leaked into /v1/models."""
@@ -2338,9 +2340,13 @@ def test_slashless_wildcard_over_a_bare_deployment_lists_its_custom_llm_provider
     model_info_rows: Final = expand_wildcard_deployments_for_model_info(
         [dict(deployment) for deployment in router.get_model_list() or []], router
     )
-    openai_ids: Final = frozenset(model.removeprefix("openai/") for model in get_valid_models(custom_llm_provider="openai"))
+    openai_ids: Final = frozenset(
+        model.removeprefix("openai/") for model in get_valid_models(custom_llm_provider="openai")
+    )
     routed_models: Final = {
-        listed_id: [deployment["litellm_params"]["model"] for deployment in router.wildcard_route_deployments(listed_id, None)]
+        listed_id: [
+            deployment["litellm_params"]["model"] for deployment in router.wildcard_route_deployments(listed_id, None)
+        ]
         for listed_id in v1_models
     }
 
@@ -2573,6 +2579,24 @@ def _model_the_server_received(router: "Router", server: respx.MockRouter, liste
             {"baseten/openai/gpt-oss-20b": _SERVED_ORG_ID, "baseten/Qwen/Qwen3-8B": _SERVED_HUB_ID},
             id="provider-whose-listing-adds-its-own-prefix",
         ),
+        pytest.param(
+            "hosted_vllm/*",
+            "hosted_vllm/*",
+            {"hosted_vllm/openai/gpt-oss-20b": _SERVED_ORG_ID, "hosted_vllm/Qwen/Qwen3-8B": _SERVED_HUB_ID},
+            id="hosted-vllm-wildcard",
+        ),
+        pytest.param(
+            "openai/*",
+            "hosted_vllm/*",
+            {"openai/openai/gpt-oss-20b": _SERVED_ORG_ID, "openai/Qwen/Qwen3-8B": _SERVED_HUB_ID},
+            id="alias-over-hosted-vllm-named-like-a-served-org",
+        ),
+        pytest.param(
+            "Qwen/*",
+            "hosted_vllm/*",
+            {"Qwen/openai/gpt-oss-20b": _SERVED_ORG_ID, "Qwen/Qwen/Qwen3-8B": _SERVED_HUB_ID},
+            id="alias-over-hosted-vllm-named-like-a-served-hub-org",
+        ),
     ],
 )
 def test_every_id_a_live_listing_lists_reaches_the_id_the_server_serves(
@@ -2601,21 +2625,19 @@ def test_every_id_a_live_listing_lists_reaches_the_id_the_server_serves(
     assert sorted(model_info_names) == sorted(v1_models)
 
 
-@pytest.mark.parametrize("model_name", ["vllm/*", "*"])
-def test_a_custom_llm_provider_that_keeps_the_deployment_prefix_lists_org_ids_that_reach_the_served_model(
-    openai_compatible_server: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, model_name: str
+@pytest.mark.parametrize(("model_name", "listed_org_id"), [("vllm/*", "vllm/gpt-oss-20b"), ("*", "gpt-oss-20b")])
+def test_a_custom_llm_provider_that_keeps_the_deployment_prefix_lists_only_ids_that_reach_a_served_model(
+    openai_compatible_server: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, model_name: str, listed_org_id: str
 ) -> None:
     import litellm
 
     monkeypatch.setattr(litellm, "check_provider_endpoint", True)
     router: Final = _wildcard_router(model_name, "openai/*", custom_llm_provider="hosted_vllm")
-    listed_org_ids: Final = [
-        listed_id for listed_id in _v1_models(router, model_name) if listed_id.endswith(_SERVED_ORG_ID.split("/")[1])
-    ]
 
-    assert [
-        _model_the_server_received(router, openai_compatible_server, listed_id) for listed_id in listed_org_ids
-    ] == [_SERVED_ORG_ID]
+    assert {
+        listed_id: _model_the_server_received(router, openai_compatible_server, listed_id)
+        for listed_id in _v1_models(router, model_name)
+    } == {listed_org_id: _SERVED_ORG_ID}
 
 
 def test_a_static_catalog_id_stored_with_the_provider_prefix_still_lists_and_reaches_its_model(
