@@ -10,7 +10,7 @@ Finance scripts and the admin UI read spend through these routes rather than SQL
     POST /global/spend/end_users     per-customer request count and spend
     GET  /global/spend/provider      spend per provider, needs both dates
     GET  /global/spend/teams         daily spend per team alias
-    GET  /global/spend/keys, /global/spend/models   top keys and models, scoped to the caller for internal users
+    GET  /global/spend/keys, /global/spend/models   top keys and models, proxy admins only
 
 Each test makes two chat calls of 0.02 with fresh ids (key, user, tag, customer), so the totals it expects are
 0.04 and 2 requests regardless of what else is in the shared database. Date filters are built from the UTC day of
@@ -57,6 +57,14 @@ def _two_calls(
     served(ask(gateway, model, caller, **body))
     served(ask(gateway, model, caller, **body))
     return caller, rows_of_key(gateway, caller, 2)
+
+
+def _refused_to_internal_user(response: httpx.Response, route: str) -> None:
+    assert response.status_code == 401, f"{response.status_code} {response.text}"
+    error: Final = object_value(JSON_OBJECT.validate_json(response.content)["error"])
+    message: Final = string_value(error["message"])
+    assert "Only proxy admin" in message and f"Route={route}" in message, response.text
+    assert "Your role=internal_user" in message, response.text
 
 
 def _internal_user_key(scenario: Scenario) -> tuple[str, str]:
@@ -126,7 +134,8 @@ def test_spend_logs_by_user_id_returns_only_that_users_rows(gateway: Gateway) ->
 def test_spend_logs_date_range_summary_groups_spend_by_day_key_user_and_model(gateway: Gateway) -> None:
     """With `start_date` and `end_date` (and the default `summarize=true`) the route returns one object per day
     instead of rows. For the key's day: `spend` 0.04, the hashed key as a field with 0.04, `users` mapping the
-    owner to 0.04 and `models` mapping `gpt-4o-mini` to 0.04. The following day is padded with a zero entry."""
+    owner to 0.04 and `models` mapping the deployment's model `openai/gpt-4o-mini` (as the row's `model` column
+    stores it) to 0.04. The following day is padded with a zero entry."""
     with scripted_upstream() as wire, gateway.scenario() as scenario:
         user: Final = scenario.user()
         key, rows = _two_calls(gateway, scenario, wire, scenario.key(user_id=user))
@@ -140,7 +149,7 @@ def test_spend_logs_date_range_summary_groups_spend_by_day_key_user_and_model(ga
         assert number(found[0]["spend"]) == pytest.approx(0.04), found
         assert number(found[0][hashed(key)]) == pytest.approx(0.04), found
         assert found[0]["users"] == {user: pytest.approx(0.04)}, found
-        assert found[0]["models"] == {"gpt-4o-mini": pytest.approx(0.04)}, found
+        assert found[0]["models"] == {"openai/gpt-4o-mini": pytest.approx(0.04)}, found
         assert found[1] == {"startTime": next_day, "spend": 0, "users": {}, "models": {}}, found
 
 
@@ -309,28 +318,33 @@ def test_global_spend_teams_reports_daily_spend_under_the_team_alias(gateway: Ga
         assert mine == [pytest.approx(0.04)], (mine, rows[0]["start_day"])
 
 
-def test_global_spend_models_for_an_internal_user_lists_only_their_models(gateway: Gateway) -> None:
-    """An internal user makes two calls. `GET /global/spend/models` with that user's key returns exactly
-    `[{"model": "gpt-4o-mini", "total_spend": 0.04, "total_tokens": 30}]`, built from the user's own rows."""
+def test_global_spend_models_refuses_an_internal_users_key(gateway: Gateway) -> None:
+    """An internal user makes two calls and then asks `GET /global/spend/models` with that user's key. The route is
+    refused with 401 "Only proxy admin" and no spend is returned.
+    Pinned current behaviour: the handler has a branch that scopes the answer to an internal user's own rows
+    (`litellm/proxy/spend_tracking/spend_management_endpoints.py:4256`), but route authorization never lets an
+    internal user reach it, because the global spend routes are deliberately kept off the non-admin allow-lists
+    (`litellm/proxy/_types.py:827`)."""
     with scripted_upstream() as wire, gateway.scenario() as scenario:
         _, key = _internal_user_key(scenario)
         _two_calls(gateway, scenario, wire, key)
-        found: Final = _listed(gateway.request("GET", "/global/spend/models", key=key))
-        assert found == [{"model": "gpt-4o-mini", "total_spend": pytest.approx(0.04), "total_tokens": 30}], found
+        _refused_to_internal_user(gateway.request("GET", "/global/spend/models", key=key), "/global/spend/models")
 
 
-def test_global_spend_keys_for_an_internal_user_lists_only_their_keys(gateway: Gateway) -> None:
-    """An internal user makes two calls with their key. `GET /global/spend/keys` with that key returns one entry:
-    `api_key` the hashed key, `total_spend` 0.04 and the key's alias. Keys of other users are not listed."""
+def test_global_spend_keys_refuses_an_internal_users_key(gateway: Gateway) -> None:
+    """An internal user makes two calls with their key, another key makes two more, and the internal user asks
+    `GET /global/spend/keys`. The route is refused with 401 "Only proxy admin" and lists no key, neither theirs
+    nor the other one.
+    Pinned current behaviour: the handler's internal user branch
+    (`litellm/proxy/spend_tracking/spend_management_endpoints.py:4005`) is unreachable, because the global spend
+    routes are deliberately kept off the non-admin allow-lists (`litellm/proxy/_types.py:827`)."""
     with scripted_upstream() as wire, gateway.scenario() as scenario:
         _, key = _internal_user_key(scenario)
         _two_calls(gateway, scenario, wire, key)
-        _two_calls(gateway, scenario, wire)
-        found: Final = _listed(gateway.request("GET", "/global/spend/keys", key=key))
-        assert [(entry["api_key"], number(entry["total_spend"])) for entry in found] == [
-            (hashed(key), pytest.approx(0.04))
-        ], found
-        assert string_value(found[0]["key_alias"]).startswith("dec1-read-"), found
+        other, _ = _two_calls(gateway, scenario, wire)
+        response: Final = gateway.request("GET", "/global/spend/keys", key=key)
+        _refused_to_internal_user(response, "/global/spend/keys")
+        assert hashed(key) not in response.text and hashed(other) not in response.text, response.text
 
 
 def test_global_spend_keys_rejects_a_limit_below_one(gateway: Gateway) -> None:

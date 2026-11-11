@@ -57,7 +57,9 @@ def redis_rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory
 
 def _unauthenticated(rig: CacheRig, method: str, path: str, authorization: str | None) -> httpx.Response:
     headers: Final = {} if authorization is None else {"Authorization": authorization}
-    return rig.gateway.client.request(method, path, headers=headers, json={"keys": ["a" * 64]} if method == "POST" else None)
+    return rig.gateway.client.request(
+        method, path, headers=headers, json={"keys": ["a" * 64]} if method == "POST" else None
+    )
 
 
 def test_cache_ping_reports_a_healthy_redis_backend(redis_rig: CacheRig) -> None:
@@ -74,12 +76,18 @@ def test_cache_ping_reports_a_healthy_redis_backend(redis_rig: CacheRig) -> None
 def test_cache_ping_reports_the_configured_host_and_port(redis_rig: CacheRig) -> None:
     """The ping body's ``health_check_cache_params`` must name the Redis ``host`` and ``port`` the proxy was
     configured with (the owned Redis), which is what the admin UI shows as the cache connection.
+    Pinned current behaviour: ``RedisCache`` keeps its connection settings only in ``redis_kwargs``
+    (``litellm/caching/redis_cache.py:595``), so the top level ``host`` and ``port`` of
+    ``HealthCheckCacheParams`` stay null and the owned Redis is named under ``redis_kwargs``, with the port as
+    the string the config resolved from ``os.environ/REDIS_PORT``.
     """
     assert redis_rig.redis is not None
     body: Final = JSON_OBJECT.validate_json(redis_rig.get("/cache/ping").content)
     params: Final = object_value(body["health_check_cache_params"])
-    assert params["host"] == redis_rig.redis.host, params
-    assert str(params["port"]) == str(redis_rig.redis.port), params
+    assert (params["host"], params["port"]) == (None, None), params
+    connection: Final = object_value(params["redis_kwargs"])
+    assert connection["host"] == redis_rig.redis.host, params
+    assert str(connection["port"]) == str(redis_rig.redis.port), params
 
 
 def test_cache_ping_returns_the_cache_settings_as_a_json_string(redis_rig: CacheRig) -> None:
@@ -182,17 +190,21 @@ def test_cache_delete_without_any_key_fails_with_500_and_deletes_nothing(
         assert store.exists(entry) == 1
 
 
-def test_cache_delete_with_a_body_that_is_not_json_fails_with_500(redis_rig: CacheRig) -> None:
-    """``POST /cache/delete`` with the raw body ``not json`` must answer 500 "Cache Delete Failed(...)" (the
-    route wraps every failure, including the JSON decode error), never an unhandled error page.
+def test_cache_delete_with_a_body_that_is_not_json_is_refused_with_400(redis_rig: CacheRig) -> None:
+    """``POST /cache/delete`` with the raw body ``not json`` must be refused as a bad request, never an
+    unhandled error page. Authentication parses the body before the route runs
+    (``litellm/proxy/common_utils/http_parsing_utils.py:345``), so the caller gets a 400
+    ``invalid_request_error`` "Invalid JSON payload" rather than the route's own 500.
     """
     response: Final = redis_rig.gateway.client.post(
         "/cache/delete",
         content=b"not json",
         headers={"Authorization": f"Bearer {redis_rig.gateway.key}", "Content-Type": "application/json"},
     )
-    assert response.status_code == 500, response.text
-    assert "Cache Delete Failed" in error_message(response), response.text
+    assert response.status_code == 400, response.text
+    assert "Invalid JSON payload" in error_message(response), response.text
+    error: Final = object_value(JSON_OBJECT.validate_json(response.content)["error"])
+    assert (error["type"], error["code"]) == ("invalid_request_error", "400"), response.text
 
 
 def test_cache_delete_makes_a_later_request_reach_the_upstream(redis_rig: CacheRig) -> None:

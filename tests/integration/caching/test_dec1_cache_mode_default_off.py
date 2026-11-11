@@ -14,7 +14,7 @@ from typing import Final
 import pytest
 from pydantic import JsonValue
 
-from tests.integration._support.client import JSON_OBJECT, Gateway, string_value
+from tests.integration._support.client import JSON_OBJECT, Gateway
 from tests.integration._support.redis_process import owned_redis
 from tests.integration.caching.dec1_cache_support import (
     CACHE_KEY_HEADER,
@@ -27,8 +27,9 @@ from tests.integration.caching.dec1_cache_support import (
     filled,
     probe,
     redis_params,
+    unique_embedding,
 )
-from tests.integration.caching.response_cache_case import CACHE_KEY, EMBEDDING, await_entry, json_response, prompt
+from tests.integration.caching.response_cache_case import CACHE_KEY, await_entry, entry_key, prompt
 
 pytestmark: Final = [pytest.mark.shares_worker_state, pytest.mark.timeout(300)]
 
@@ -134,15 +135,21 @@ def test_use_cache_with_no_store_reads_an_entry_but_writes_none(opt_in_rig: Cach
 def test_use_cache_opts_an_embedding_request_in(opt_in_rig: CacheRig) -> None:
     """On ``/v1/embeddings`` a plain request repeated twice reaches the upstream twice, while the same input
     with ``cache: {"use-cache": true}`` is filled once and then served without an upstream call.
+    The entry is found by the unique vector the provider returned, since the answer's ``model`` is the
+    public model name (``litellm/proxy/common_request_processing.py:3689``) and the entry keeps the
+    provider's model (``litellm/caching/caching.py:961``).
     """
     with opt_in_rig.gateway.scenario() as scenario:
-        target: Final = probe(scenario, json_response(EMBEDDING), model="openai/text-embedding-3-small")
+        answer, marker = unique_embedding()
+        target: Final = probe(scenario, answer, model="openai/text-embedding-3-small")
         body: Final[dict[str, JsonValue]] = {"model": target.model, "input": prompt()}
         assert target.send("/v1/embeddings", body).reached_upstream
         assert target.send("/v1/embeddings", body).reached_upstream
+        assert entry_key(opt_in_rig.store(), marker) is None
         opted: Final[dict[str, JsonValue]] = {**body, "cache": USE_CACHE}
         first: Final = target.send("/v1/embeddings", opted)
-        await_entry(opt_in_rig.store(), string_value(first.json()["model"]))
+        assert first.reached_upstream, first.response.text
+        await_entry(opt_in_rig.store(), marker)
         second: Final = target.send("/v1/embeddings", opted)
         assert not second.reached_upstream and second.json()["data"] == first.json()["data"]
 

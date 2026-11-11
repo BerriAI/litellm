@@ -21,7 +21,7 @@ from typing import Final
 import pytest
 from pydantic import JsonValue
 
-from tests.integration._support.client import Gateway, eventually, string_value
+from tests.integration._support.client import Gateway, eventually
 from tests.integration.caching.dec1_cache_support import (
     CACHE_KEY_HEADER,
     SETTLE_SECONDS,
@@ -31,11 +31,11 @@ from tests.integration.caching.dec1_cache_support import (
     filled,
     probe,
     sse_payloads,
+    unique_embedding,
 )
 from tests.integration.caching.response_cache_case import (
     CACHE_KEY,
     CHAT_STREAM,
-    EMBEDDING,
     MESSAGE,
     MESSAGES_MODEL,
     RERANK,
@@ -127,18 +127,26 @@ def test_no_cache_skips_the_lookup_on_every_cached_endpoint(
 
 
 def test_no_cache_on_embeddings_sends_every_input_upstream_again(gateway: Gateway) -> None:
-    """An embedding entry exists for an input. The same ``/v1/embeddings`` request with
-    ``cache: {"no-cache": true}`` must reach the upstream again and return the newly scripted model name.
+    """An embedding entry exists for an input, and a plain repeat is served from it. The same
+    ``/v1/embeddings`` request with ``cache: {"no-cache": true}`` must reach the upstream again, so the
+    provider has been called twice for three requests.
+    The entry is found by the unique vector the provider returned: the answer's ``model`` is restamped to the
+    public model name (``litellm/proxy/common_request_processing.py:3689``), so it cannot tell a fresh answer
+    from a stored one; the upstream call count does.
     """
     store: Final = redis_store()
     with gateway.scenario() as scenario:
-        target: Final = probe(scenario, json_response(EMBEDDING), model="openai/text-embedding-3-small")
+        answer, marker = unique_embedding()
+        target: Final = probe(scenario, answer, model="openai/text-embedding-3-small")
         body: Final[dict[str, JsonValue]] = {"model": target.model, "input": prompt()}
         first: Final = target.send("/v1/embeddings", body)
-        await_entry(store, string_value(first.json()["model"]))
+        assert first.reached_upstream, first.response.text
+        await_entry(store, marker)
+        assert not target.send("/v1/embeddings", body).reached_upstream
         fresh: Final = target.send("/v1/embeddings", {**body, "cache": NO_CACHE})
         assert fresh.reached_upstream, fresh.response.text
-        assert fresh.json()["model"] != first.json()["model"]
+        assert fresh.json()["data"] == first.json()["data"], fresh.response.text
+        assert target.calls() == 2
 
 
 def test_no_store_answers_normally_and_leaves_no_entry(gateway: Gateway) -> None:

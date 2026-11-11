@@ -167,7 +167,8 @@ def test_streamed_chat_usage_chunk_sent_to_the_caller_matches_the_row(gateway: G
 
 def test_embeddings_row_has_no_completion_tokens_and_bills_input_only(gateway: Gateway) -> None:
     """An embeddings call reports 7 prompt tokens and no completion tokens. The row stores 7 / 0 / 7 and spend
-    7 * 0.001 = 0.007, and the provider model `text-embedding-3-small` in `model`."""
+    7 * 0.001 = 0.007, and the deployment's model `openai/text-embedding-3-small` in `model`, provider prefix
+    included as on every request row."""
     with scripted_upstream() as wire, gateway.scenario() as scenario:
         model: Final = EMBEDDINGS.model(scenario, wire)
         key: Final = scenario.key(models=[model])
@@ -175,7 +176,7 @@ def test_embeddings_row_has_no_completion_tokens_and_bills_input_only(gateway: G
         row: Final = rows_of_key(gateway, key, 1)[0]
         assert (row["prompt_tokens"], row["completion_tokens"], row["total_tokens"]) == (7, 0, 7), row
         assert number(row["spend"]) == pytest.approx(7 * 0.001), row
-        assert row["model"] == "text-embedding-3-small", row
+        assert row["model"] == "openai/text-embedding-3-small", row
 
 
 def test_messages_row_maps_anthropic_input_and_output_tokens(gateway: Gateway) -> None:

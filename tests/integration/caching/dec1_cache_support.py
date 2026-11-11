@@ -41,6 +41,7 @@ from tests.integration._support.wire import Reply, Request
 from tests.integration.caching.response_cache_case import (
     CHAT,
     CHAT_MODEL,
+    EMBEDDING,
     PROVIDER_KEY,
     Upstream,
     await_entry,
@@ -59,7 +60,7 @@ SETTLE_SECONDS: Final = 15
 RIG_CONFIG: Final = Path(__file__).resolve().parents[1] / "proxy_config.yaml"
 REMOVE_FROM_ENVIRONMENT: Final = ("DATABASE_URL_READ_REPLICA",)
 SPEND_SQL: Final = (
-    'SELECT request_id, cache_hit, cache_key, spend, call_type, model, prompt_tokens, completion_tokens '
+    "SELECT request_id, cache_hit, cache_key, spend, call_type, model, prompt_tokens, completion_tokens "
     'FROM "LiteLLM_SpendLogs" WHERE api_key = %s ORDER BY "startTime", request_id'
 )
 EMBEDDING_TOKENS_PER_INPUT: Final = 3
@@ -246,6 +247,21 @@ def openai_embedding_peer(request: Request) -> Reply:
 
 def embedding_model(scenario: Scenario, wire_url: str) -> str:
     return scenario.model(model="openai/text-embedding-3-small", api_base=f"{wire_url}/v1")
+
+
+def unique_embedding() -> tuple[JsonResponse, str]:
+    """A scripted ``EMBEDDING`` answer whose vector carries a float no other answer has, and that float as text.
+
+    The proxy restamps the ``model`` of an embedding answer to the public model name the caller asked for,
+    while the stored entry keeps the provider's model, so the answer's ``model`` cannot find the entry. The
+    stored vector is written back with Python's shortest float repr, which is the marker text unchanged.
+    """
+    marker: Final = f"0.5{uuid.uuid4().int % 10**12:012d}7"
+    body: Final[dict[str, JsonValue]] = {
+        **EMBEDDING,
+        "data": [{"object": "embedding", "embedding": [0.1, float(marker)], "index": 0}],
+    }
+    return json_response(body), marker
 
 
 def vectors(answer: Mapping[str, JsonValue]) -> list[JsonValue]:

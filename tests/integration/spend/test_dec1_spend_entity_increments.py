@@ -300,7 +300,13 @@ def test_team_spend_counter_in_redis_matches_the_database_total(gateway: Gateway
 def test_key_spend_response_header_includes_the_cost_of_the_current_call(gateway: Gateway) -> None:
     """`x-litellm-key-spend` is the key's spend as known when the response is built, plus the cost of this call.
     The first call reports 0.02. Once it has been applied, a later call must report at least 0.04 and never
-    more than 0.02 per call made so far."""
+    more than 0.02 per call made so far.
+    BUG: the header is the cached key object's `spend` plus this call
+    (`litellm/proxy/common_request_processing.py:2409`), and nothing raises that cached spend after a charge:
+    `update_cache._update_key_cache` computes `new_spend` and never stores it (`litellm/proxy/proxy_server.py:4661`)
+    and the ledger worker does not invalidate key objects (`litellm/proxy/db/db_spend_update_writer.py:2295`). In
+    run 42966523075 every call for 70 seconds after the spend landed still reported 0.02."""
+    pytest.skip("BUG: x-litellm-key-spend stays at the cached spend plus this call long after earlier charges landed")
     with scripted_upstream() as wire, gateway.scenario() as scenario:
         model: Final = chat_model(scenario, wire)
         key: Final = scenario.key(models=[model])

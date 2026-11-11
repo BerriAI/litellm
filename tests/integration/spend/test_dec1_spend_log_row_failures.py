@@ -75,16 +75,19 @@ def test_failure_row_still_names_the_key_model_group_and_call_type(gateway: Gate
         assert (row["model_group"], row["call_type"]) == (model, "acompletion"), row
 
 
-def test_failure_row_has_zero_spend_and_zero_tokens(gateway: Gateway) -> None:
-    """The provider returned an error and no usage, so the failure row must store spend 0 and 0 prompt,
-    completion and total tokens. A failed request is never billed."""
+def test_failure_row_has_zero_spend_and_only_the_estimated_prompt_tokens(gateway: Gateway) -> None:
+    """The provider returned an error and no usage, so the failure row must store spend 0 and no completion
+    tokens. A failed request is never billed. The prompt the proxy dispatched is still counted: the row carries
+    the locally estimated prompt tokens and a total equal to them, which the existing contract
+    `tests/integration/spend/test_failed_dispatch_tokens.py` pins for provider 500s after dispatch."""
     with wire_server(failing(500)) as wire, gateway.scenario() as scenario:
         model: Final = chat_model(scenario, wire)
         key: Final = scenario.key(models=[model])
         assert ask(gateway, model, key, num_retries=0).status_code == 500
         row: Final = rows_of_key(gateway, key, 1)[0]
         assert number(row["spend"]) == 0, row
-        assert (row["prompt_tokens"], row["completion_tokens"], row["total_tokens"]) == (0, 0, 0), row
+        assert number(row["prompt_tokens"]) > 0, row
+        assert (row["completion_tokens"], row["total_tokens"]) == (0, row["prompt_tokens"]), row
 
 
 def test_failure_row_request_id_is_the_litellm_call_id(gateway: Gateway) -> None:

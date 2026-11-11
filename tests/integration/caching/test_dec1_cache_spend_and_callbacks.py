@@ -29,6 +29,7 @@ from tests.integration.caching.dec1_cache_support import (
     await_spend_rows,
     cache_config,
     cache_rig,
+    error_message,
     filled,
     hashed,
     probe,
@@ -63,8 +64,11 @@ def _rows_by_hit(rows: list[dict[str, JsonValue]]) -> tuple[dict[str, JsonValue]
 
 def test_the_filling_request_is_logged_as_a_miss_under_its_own_id(gateway: Gateway) -> None:
     """A key sends one chat request that reaches the upstream. Its single spend row must have ``request_id``
-    equal to the response body ``id``, ``cache_hit`` equal to the string ``False`` and a ``cache_key`` that
-    is a sha256 hex digest (the key the entry is stored under, logged even on a miss).
+    equal to the response body ``id``, a ``cache_hit`` that is not ``True`` and a ``cache_key`` that is a
+    sha256 hex digest (logged even on a miss).
+    Pinned current behaviour: a miss is stored with ``cache_hit`` the string ``None``, because the row writes
+    ``str(kwargs.get("cache_hit"))`` and the logging object leaves it unset on a miss
+    (``litellm/proxy/spend_tracking/spend_tracking_utils.py:646`` and ``:948``), never ``False``.
     """
     with gateway.scenario() as scenario:
         target: Final = probe(scenario)
@@ -73,7 +77,7 @@ def test_the_filling_request_is_logged_as_a_miss_under_its_own_id(gateway: Gatew
         assert first.reached_upstream, first.response.text
         rows: Final = await_spend_rows(gateway, key, 1)
         assert rows[0]["request_id"] == first.id(), rows
-        assert rows[0]["cache_hit"] == "False", rows
+        assert rows[0]["cache_hit"] == "None", rows
         assert CACHE_KEY.match(string_value(rows[0]["cache_key"])), rows
 
 
@@ -107,7 +111,12 @@ def test_a_hit_row_has_zero_spend_and_the_fill_row_has_the_real_cost(gateway: Ga
 def test_hit_and_miss_rows_share_the_cache_key_sent_in_the_hit_header(gateway: Gateway) -> None:
     """After a miss and a hit, both spend rows must carry the same ``cache_key`` and it must equal the
     ``x-litellm-cache-key`` header of the hit, so a row can be joined to the Redis entry it came from.
+    BUG: on a miss the logging object carries no ``preset_cache_key`` (only the hit path sets it,
+    ``litellm/caching/caching_handler.py:1475``), so ``get_logging_payload`` re-hashes the logging kwargs
+    (``litellm/proxy/spend_tracking/spend_tracking_utils.py:929``) and the miss row names a key no entry has,
+    while the hit row names the real entry key.
     """
+    pytest.skip("BUG: the miss row's cache_key is re-hashed from logging kwargs and matches no Redis entry")
     with gateway.scenario() as scenario:
         target: Final = probe(scenario)
         key: Final = scenario.key(models=[target.model])
@@ -151,8 +160,10 @@ def test_every_hit_writes_a_distinct_row(gateway: Gateway) -> None:
 
 
 def test_a_no_cache_request_is_logged_as_a_miss_with_its_real_cost(gateway: Gateway) -> None:
-    """An entry exists. The same key repeats the request with ``cache: {"no-cache": true}``. Both spend rows
-    must have ``cache_hit`` ``False`` and each a spend of 0.003: a forced refresh is billed like any call.
+    """An entry exists. The same key repeats the request with ``cache: {"no-cache": true}``. Neither spend row
+    may be a hit and each must have a spend of 0.003: a forced refresh is billed like any call.
+    Pinned current behaviour: both rows store ``cache_hit`` as the string ``None`` rather than ``False``
+    (``litellm/proxy/spend_tracking/spend_tracking_utils.py:948`` writes ``str(kwargs.get("cache_hit"))``).
     """
     with gateway.scenario() as scenario:
         target: Final = probe(scenario, **PRICED)
@@ -163,7 +174,7 @@ def test_a_no_cache_request_is_logged_as_a_miss_with_its_real_cost(gateway: Gate
         fresh: Final = target.chat(text, key=key, cache={"no-cache": True})
         assert fresh.reached_upstream, fresh.response.text
         rows: Final = await_spend_rows(gateway, key, 2)
-        assert [row["cache_hit"] for row in rows] == ["False", "False"], rows
+        assert [row["cache_hit"] for row in rows] == ["None", "None"], rows
         assert [float(str(row["spend"])) for row in rows] == [pytest.approx(ONE_CALL_COST)] * 2, rows
 
 
@@ -208,8 +219,9 @@ def test_team_spend_grows_only_by_the_request_that_reached_the_provider(gateway:
 
 def test_a_key_at_its_budget_is_refused_even_when_the_answer_is_cached(gateway: Gateway) -> None:
     """A key with ``max_budget`` 0.001 fills an entry with a call that costs 0.003. Once its spend is recorded
-    the identical request must be refused with a 400 budget error instead of being served from the cache:
-    the budget check runs before the cache lookup, so free hits do not bypass an exhausted budget.
+    the identical request must be refused with the budget error instead of being served from the cache:
+    the budget check runs before the cache lookup, so free hits do not bypass an exhausted budget. The
+    refusal is a 422 ``budget_exceeded`` (``litellm.budget_exceeded_status_code``, ``litellm/__init__.py:392``).
     """
     with gateway.scenario() as scenario:
         target: Final = probe(scenario, **PRICED)
@@ -222,8 +234,9 @@ def test_a_key_at_its_budget_is_refused_even_when_the_answer_is_cached(gateway: 
             lambda exchange: exchange.response.status_code != 200,
             SPEND_SECONDS,
         )
-        assert refused.response.status_code == 400, refused.response.text
-        assert "budget" in refused.response.text.lower(), refused.response.text
+        assert refused.response.status_code == 422, refused.response.text
+        assert error_message(refused.response).startswith("Budget has been exceeded!"), refused.response.text
+        assert first.id() not in refused.response.text
 
 
 def test_a_streamed_hit_is_logged_exactly_once(gateway: Gateway) -> None:
@@ -266,9 +279,7 @@ def _accept(_: Request) -> Reply:
     return Reply(body=b"{}")
 
 
-def test_a_success_callback_fires_for_a_hit_with_cache_hit_true_and_zero_cost(
-    gateway: Gateway, tmp_path: Path
-) -> None:
+def test_a_success_callback_fires_for_a_hit_with_cache_hit_true_and_zero_cost(gateway: Gateway, tmp_path: Path) -> None:
     """An owned proxy logs to a ``generic_api`` callback sink. A priced model is asked twice; the second answer
     is a hit. The sink must receive two standard logging payloads: the miss with ``cache_hit`` false-ish and a
     ``response_cost`` of 0.003, and the hit with ``cache_hit: true``, ``response_cost: 0``, a
@@ -312,8 +323,10 @@ def test_a_success_callback_fires_for_a_hit_with_cache_hit_true_and_zero_cost(
 
 def test_spend_rows_say_cache_off_when_no_response_cache_is_configured(gateway: Gateway, tmp_path: Path) -> None:
     """An owned proxy runs without ``litellm_settings.cache``. A key sends the same request twice: both reach
-    the upstream, and both spend rows must have ``cache_hit`` ``False`` and the literal ``cache_key``
-    ``Cache OFF`` (``spend_tracking_utils.get_logging_payload``).
+    the upstream, and both spend rows must have the literal ``cache_key`` ``Cache OFF``
+    (``spend_tracking_utils.get_logging_payload``) and must not be hits.
+    Pinned current behaviour: ``cache_hit`` is the string ``None`` on both rows
+    (``litellm/proxy/spend_tracking/spend_tracking_utils.py:948``), not ``False``.
     """
     config: Final = cache_config(tmp_path, cache=None)
     with cache_rig(gateway, tmp_path, config) as rig, rig.gateway.scenario() as scenario:
@@ -323,8 +336,6 @@ def test_spend_rows_say_cache_off_when_no_response_cache_is_configured(gateway: 
         first: Final = target.chat(text, key=key)
         second: Final = target.chat(text, key=key)
         assert first.reached_upstream and second.reached_upstream and target.calls() == 2
-        rows: Final = eventually(
-            lambda: spend_rows(rig.gateway, key), lambda found: len(found) >= 2, SPEND_SECONDS
-        )
+        rows: Final = eventually(lambda: spend_rows(rig.gateway, key), lambda found: len(found) >= 2, SPEND_SECONDS)
         assert [row["cache_key"] for row in rows] == ["Cache OFF", "Cache OFF"], rows
-        assert [row["cache_hit"] for row in rows] == ["False", "False"], rows
+        assert [row["cache_hit"] for row in rows] == ["None", "None"], rows

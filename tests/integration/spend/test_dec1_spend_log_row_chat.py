@@ -12,6 +12,7 @@ spend is 10 * 0.001 + 5 * 0.002 = 0.02.
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from typing import Final
 
@@ -81,14 +82,16 @@ def test_chat_row_api_key_is_the_sha256_hash_and_the_raw_key_is_stored_nowhere(g
 
 
 def test_chat_row_model_group_is_the_public_name_and_model_is_the_provider_model(gateway: Gateway) -> None:
-    """The deployment is published under a random public name and calls provider model `gpt-4o-mini`. The row
-    stores the public name in `model_group` and the provider model in `model`, never the other way round."""
+    """The deployment is published under a random public name and calls provider model `openai/gpt-4o-mini`. The
+    row stores the public name in `model_group` and the deployment's model in `model`, never the other way round.
+    `model` is the deployment's `litellm_params.model` with its provider prefix, as the daily tables and
+    `/spend/logs` summaries also report it."""
     with scripted_upstream() as wire, gateway.scenario() as scenario:
         model: Final = chat_model(scenario, wire)
         key: Final = scenario.key(models=[model])
         row: Final = row_by_id(gateway, served_id(ask(gateway, model, key)))
         assert row["model_group"] == model, row
-        assert row["model"] == "gpt-4o-mini", row
+        assert row["model"] == "openai/gpt-4o-mini", row
 
 
 def test_chat_row_model_id_matches_the_model_id_response_header(gateway: Gateway) -> None:
@@ -105,13 +108,14 @@ def test_chat_row_model_id_matches_the_model_id_response_header(gateway: Gateway
 
 def test_chat_row_records_provider_and_api_base_of_the_deployment(gateway: Gateway) -> None:
     """For an `openai/...` deployment pointed at the scripted provider, `custom_llm_provider` is `openai` and
-    `api_base` is the deployment's configured base url, with no credentials in it."""
+    `api_base` is the deployment's configured base url, with no credentials in it. The chat path logs the base
+    url of the OpenAI client, which carries a trailing slash, so the comparison ignores one."""
     with scripted_upstream() as wire, gateway.scenario() as scenario:
         model: Final = chat_model(scenario, wire)
         key: Final = scenario.key(models=[model])
         row: Final = row_by_id(gateway, served_id(ask(gateway, model, key)))
         assert row["custom_llm_provider"] == "openai", row
-        assert row["api_base"] == f"{wire.url}/v1", row
+        assert string_value(row["api_base"]).rstrip("/") == f"{wire.url}/v1", row
         assert "dec1-provider-key" not in json.dumps(row), "the provider api key leaked into the spend log row"
 
 
@@ -254,15 +258,19 @@ def test_chat_row_request_tags_include_the_caller_user_agent(gateway: Gateway) -
 
 
 def test_chat_row_metadata_names_the_key_alias_and_status(gateway: Gateway) -> None:
-    """The row's `metadata` JSON must contain the key alias, a `status` of `success`, and the bookkeeping keys
-    `usage_object`, `model_map_information`, `cost_breakdown` and `additional_usage_values`."""
+    """The row's `metadata` JSON must contain the key alias and the bookkeeping keys `usage_object`,
+    `model_map_information`, `cost_breakdown` and `additional_usage_values`, and the row's `status` column must be
+    `success`. The outcome lives in the `status` column (`litellm/proxy/spend_tracking/spend_tracking_utils.py:996`);
+    `metadata.status` only copies a `failure` marker from the request metadata and is null on success."""
     with scripted_upstream() as wire, gateway.scenario() as scenario:
         model: Final = chat_model(scenario, wire)
         alias: Final = f"dec1-alias-{uuid.uuid4().hex}"
         key: Final = scenario.key(models=[model], key_alias=alias)
-        metadata: Final = metadata_of(row_by_id(gateway, served_id(ask(gateway, model, key))))
+        row: Final = row_by_id(gateway, served_id(ask(gateway, model, key)))
+        metadata: Final = metadata_of(row)
         assert metadata["user_api_key_alias"] == alias, metadata
-        assert metadata["status"] == "success", metadata
+        assert row["status"] == "success", row
+        assert metadata["status"] != "failure", metadata
         assert {"usage_object", "model_map_information", "cost_breakdown", "additional_usage_values"} <= set(metadata)
 
 
@@ -305,9 +313,10 @@ def test_chat_row_spend_logs_metadata_of_the_key_is_merged_and_the_request_wins(
 
 
 def test_chat_row_cache_columns_mark_a_provider_served_call_as_not_a_hit(gateway: Gateway) -> None:
-    """A first, uncached call reaches the provider once. Its row must not say `cache_hit` `True`, and `cache_key`
-    equals the `x-litellm-cache-key` response header. UNVERIFIED: a miss is stored as the string `False` or
-    `None` depending on the cache layer, see `get_logging_payload` in spend_tracking_utils.py."""
+    """A first, uncached call reaches the provider once. Its row must not say `cache_hit` `True` and its
+    `cache_key` is a sha256 hex digest. The `x-litellm-cache-key` header is only sent on a cache hit, so a
+    provider-served answer carries none. A miss is stored as the string `None`
+    (`litellm/proxy/spend_tracking/spend_tracking_utils.py:948`)."""
     with scripted_upstream() as wire, gateway.scenario() as scenario:
         model: Final = chat_model(scenario, wire)
         key: Final = scenario.key(models=[model])
@@ -315,7 +324,8 @@ def test_chat_row_cache_columns_mark_a_provider_served_call_as_not_a_hit(gateway
         row: Final = row_by_id(gateway, served_id(response))
         assert len(provider_calls(wire)) == 1
         assert row["cache_hit"] in ("False", "None"), row
-        assert row["cache_key"] == response.headers["x-litellm-cache-key"], row
+        assert "x-litellm-cache-key" not in response.headers, dict(response.headers)
+        assert re.fullmatch(r"[0-9a-f]{64}", string_value(row["cache_key"])), row
 
 
 @pytest.mark.parametrize("carrier", ["metadata.session_id", "x-litellm-session-id", "litellm_session_id"])

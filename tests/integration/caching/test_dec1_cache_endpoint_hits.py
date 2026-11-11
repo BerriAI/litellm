@@ -27,11 +27,11 @@ from tests.integration.caching.dec1_cache_support import (
     filled,
     probe,
     stored_entry,
+    unique_embedding,
 )
 from tests.integration.caching.response_cache_case import (
     CACHE_KEY,
     CHAT,
-    EMBEDDING,
     MESSAGE,
     MESSAGES_MODEL,
     RERANK,
@@ -62,6 +62,15 @@ CHAT_WITH_DETAILS: Final[dict[str, JsonValue]] = {
 
 def _first_output_id(body: dict[str, JsonValue]) -> str:
     return string_value(object_value(list_value(body["output"])[0])["id"])
+
+
+def _without_nulls(value: JsonValue) -> JsonValue:
+    """``value`` with every object member whose value is null removed, at any depth."""
+    if isinstance(value, dict):
+        return {name: _without_nulls(item) for name, item in value.items() if item is not None}
+    if isinstance(value, list):
+        return [_without_nulls(item) for item in value]
+    return value
 
 
 def test_chat_hit_returns_the_stored_answer_without_an_upstream_call(gateway: Gateway) -> None:
@@ -169,6 +178,9 @@ def test_stored_entry_is_json_with_a_timestamp_and_the_response_under_a_bare_sha
     """After a chat miss the Redis entry must be a string key that is a bare sha256 hex digest (no namespace on
     the shared rig) holding JSON with a numeric ``timestamp`` and a ``response`` that decodes to the answer the
     caller got. Python and Rust proxies read each other's entries during the migration, so the shape is a contract.
+    The entry is the ``model_dump_json`` of the response (``litellm/caching/caching.py:776``), which keeps the
+    message's ``tool_calls`` and ``function_call`` as null while the HTTP answer leaves them out, so the choices
+    are compared with null members dropped.
     """
     store: Final = redis_store()
     with gateway.scenario() as scenario:
@@ -182,7 +194,7 @@ def test_stored_entry_is_json_with_a_timestamp_and_the_response_under_a_bare_sha
         response: Final = entry["response"]
         decoded: Final = object_value(json.loads(response) if isinstance(response, str) else response)
         assert decoded["id"] == first.id(), decoded
-        assert decoded["choices"] == first.json()["choices"], decoded
+        assert _without_nulls(decoded["choices"]) == _without_nulls(first.json()["choices"]), decoded
 
 
 def test_stored_entry_expires_after_the_default_sixty_seconds(gateway: Gateway) -> None:
@@ -254,14 +266,17 @@ def test_messages_hit_returns_the_stored_message(gateway: Gateway) -> None:
 def test_embedding_hit_returns_the_stored_vector_and_zero_cost(gateway: Gateway) -> None:
     """Two identical single-string ``/v1/embeddings`` requests: the second must return the same vector and
     model name as the first, must not reach the upstream and must report a zero ``x-litellm-response-cost``.
+    The entry is found by the unique vector the provider returned: the answer's ``model`` is restamped to the
+    public model name (``litellm/proxy/common_request_processing.py:3689``) while the entry keeps the provider's.
     """
     store: Final = redis_store()
     with gateway.scenario() as scenario:
-        target: Final = probe(scenario, json_response(EMBEDDING), model="openai/text-embedding-3-small")
+        answer, marker = unique_embedding()
+        target: Final = probe(scenario, answer, model="openai/text-embedding-3-small")
         body: Final[dict[str, JsonValue]] = {"model": target.model, "input": prompt()}
         first: Final = target.send("/v1/embeddings", body)
         assert first.reached_upstream, first.response.text
-        await_entry(store, string_value(first.json()["model"]))
+        await_entry(store, marker)
         second: Final = target.send("/v1/embeddings", body)
         assert not second.reached_upstream, second.response.text
         assert second.json()["data"] == first.json()["data"], second.response.text
@@ -276,10 +291,12 @@ def test_embedding_hit_reports_the_prompt_tokens_of_the_original(gateway: Gatewa
     """
     store: Final = redis_store()
     with gateway.scenario() as scenario:
-        target: Final = probe(scenario, json_response(EMBEDDING), model="openai/text-embedding-3-small")
+        answer, marker = unique_embedding()
+        target: Final = probe(scenario, answer, model="openai/text-embedding-3-small")
         body: Final[dict[str, JsonValue]] = {"model": target.model, "input": prompt()}
         first: Final = target.send("/v1/embeddings", body)
-        await_entry(store, string_value(first.json()["model"]))
+        assert first.reached_upstream, first.response.text
+        await_entry(store, marker)
         second: Final = target.send("/v1/embeddings", body)
         assert not second.reached_upstream, second.response.text
         usage: Final = object_value(second.json()["usage"])

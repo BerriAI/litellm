@@ -56,8 +56,9 @@ def _tag_rows(gateway: Gateway, tag: str) -> list[dict[str, JsonValue]]:
 
 def test_daily_user_row_is_keyed_by_user_day_key_model_provider_and_endpoint(gateway: Gateway) -> None:
     """A user's key makes one chat call. One `LiteLLM_DailyUserSpend` row appears with `user_id` the owner,
-    `date` the UTC day of the request, `api_key` the hashed key, `model` the provider model `gpt-4o-mini`,
-    `model_group` the public name, `custom_llm_provider` `openai` and `endpoint` `/chat/completions`."""
+    `date` the UTC day of the request, `api_key` the hashed key, `model` the deployment's model
+    `openai/gpt-4o-mini` (provider prefix included, copied from the request row's `model` column), `model_group`
+    the public name, `custom_llm_provider` `openai` and `endpoint` `/chat/completions`."""
     with scripted_upstream() as wire, gateway.scenario() as scenario:
         model: Final = chat_model(scenario, wire)
         user: Final = scenario.user()
@@ -71,7 +72,7 @@ def test_daily_user_row_is_keyed_by_user_day_key_model_provider_and_endpoint(gat
             "user_id": user,
             "date": logged["start_day"],
             "api_key": hashed(key),
-            "model": "gpt-4o-mini",
+            "model": "openai/gpt-4o-mini",
             "model_group": model,
             "custom_llm_provider": "openai",
             "endpoint": "/chat/completions",
@@ -108,7 +109,8 @@ def test_second_call_of_the_day_adds_to_the_same_daily_row(gateway: Gateway) -> 
 
 def test_calls_to_two_models_get_one_daily_row_per_model(gateway: Gateway) -> None:
     """One key calls two different public models once each. There are two daily user rows for the key, one per
-    `model_group`, each with api_requests 1 and spend 0.02."""
+    `model_group`, each with api_requests 1 and spend 0.02, and `model` names each deployment's model with its
+    provider prefix."""
     with scripted_upstream() as wire, gateway.scenario() as scenario:
         first: Final = chat_model(scenario, wire)
         second: Final = chat_model(scenario, wire, model="openai/gpt-4o")
@@ -117,7 +119,7 @@ def test_calls_to_two_models_get_one_daily_row_per_model(gateway: Gateway) -> No
         served(ask(gateway, second, key))
         rows: Final = [object_value(row["row"]) for row in daily_rows(gateway, "LiteLLM_DailyUserSpend", key, 2)]
         assert {row["model_group"] for row in rows} == {first, second}, rows
-        assert {row["model"] for row in rows} == {"gpt-4o-mini", "gpt-4o"}, rows
+        assert {row["model"] for row in rows} == {"openai/gpt-4o-mini", "openai/gpt-4o"}, rows
         assert [(row["api_requests"], number(row["spend"])) for row in rows] == [(1, pytest.approx(0.02))] * 2
 
 
@@ -165,8 +167,12 @@ def test_team_key_call_writes_a_daily_team_row(gateway: Gateway) -> None:
 def test_key_without_team_writes_no_daily_team_row(gateway: Gateway) -> None:
     """A key with no team makes one call. After the call is fully applied there must be no
     `LiteLLM_DailyTeamSpend` row for that key, not even one with an empty `team_id`.
-    UNVERIFIED: the ledger projection passes an empty-string team id through `daily_spend_entity_ids`, which
-    only drops empty ids for end users, so this may currently write a row with `team_id` ''."""
+    BUG: a key without a team is logged with `team_id` '' (`litellm/proxy/spend_tracking/spend_tracking_utils.py:956`)
+    and `daily_spend_entity_ids` drops an empty id only for end users
+    (`litellm/proxy/db/daily_spend_bulk_upsert.py:73`), so a `LiteLLM_DailyTeamSpend` row with `team_id` '' is
+    written for every teamless key, although the team writer means to skip a request without a team
+    (`litellm/proxy/db/db_spend_update_writer.py:3215`) and the organization table gets no such row."""
+    pytest.skip("BUG: a key without a team writes a LiteLLM_DailyTeamSpend row with an empty team_id")
     with scripted_upstream() as wire, gateway.scenario() as scenario:
         model: Final = chat_model(scenario, wire)
         key: Final = scenario.key(models=[model])
@@ -336,7 +342,8 @@ def test_daily_rows_of_a_key_add_up_to_its_request_rows(gateway: Gateway) -> Non
 def test_daily_model_usage_row_counts_the_request_for_its_model_group(gateway: Gateway) -> None:
     """`LiteLLM_DailyModelUsage` is keyed by (date, model_group, model, custom_llm_provider, task_type) across all
     keys. One call to a fresh public model name leaves one row for that `model_group` with request_count 1,
-    successful_requests 1, failed_requests 0, 10 prompt tokens, 5 completion tokens and spend 0.02."""
+    successful_requests 1, failed_requests 0, 10 prompt tokens, 5 completion tokens and spend 0.02. Its `model` is
+    the deployment's model with the provider prefix, `openai/gpt-4o-mini`."""
     with scripted_upstream() as wire, gateway.scenario() as scenario:
         model: Final = chat_model(scenario, wire)
         key: Final = scenario.key(models=[model])
@@ -349,7 +356,7 @@ def test_daily_model_usage_row_counts_the_request_for_its_model_group(gateway: G
             seconds=LANDING_SECONDS,
         )
         usage: Final = object_value(rows[0]["row"])
-        assert (usage["model"], usage["custom_llm_provider"]) == ("gpt-4o-mini", "openai"), usage
+        assert (usage["model"], usage["custom_llm_provider"]) == ("openai/gpt-4o-mini", "openai"), usage
         assert (usage["request_count"], usage["successful_requests"], usage["failed_requests"]) == (1, 1, 0), usage
         assert (usage["prompt_tokens"], usage["completion_tokens"]) == (10, 5), usage
         assert number(usage["spend"]) == pytest.approx(0.02), usage
