@@ -249,17 +249,21 @@ MALFORMED_FILTERS: Final = (
     {"filters": {"type": "eq", "key": "category"}},
     {"filters": {"type": "eq", "key": "category", "value": "hr", "case_sensitive": False}},
     {"filters": {"type": "and", "filters": [{"type": "eq", "key": "category", "value": "hr"}, {"type": "near"}]}},
-    {"filters": "category = hr"},
-    {"filters": []},
     {"filters": {"type": "gt", "key": "score", "value": float("nan")}},
     {"filters": {"type": "in", "key": "score", "value": [0.5, float("inf")]}},
 )
+NON_OBJECT_FILTERS: Final = ({"filters": "category = hr"}, {"filters": []}, {"filters": 5})
 
 
 @pytest.mark.parametrize(
     "overrides,message",
     [
         *((malformed, "filters must be an OpenAI vector store filter") for malformed in MALFORMED_FILTERS),
+        *((non_object, "Invalid vector store search parameters") for non_object in NON_OBJECT_FILTERS),
+        *(
+            ({**non_object, "drop_params": True}, "Invalid vector store search parameters")
+            for non_object in NON_OBJECT_FILTERS
+        ),
         ({"opensearch_hybrid_search": True}, "opensearch_hybrid_search needs opensearch_search_pipeline"),
         ({"opensearch_hybrid_search": "sometimes"}, "opensearch_hybrid_search must be a boolean"),
         ({"opensearch_search_pipeline": ["hybrid-norm"]}, "opensearch_search_pipeline"),
@@ -536,20 +540,37 @@ async def test_no_op_values_of_unsupported_params_are_accepted() -> None:
     assert response["data"] == EXPECTED_RESULTS
 
 
-HR_EXACT: Final = {
-    "bool": {
-        "should": [
-            {"term": {"category.keyword": "hr"}},
-            {
-                "bool": {
-                    "filter": [{"term": {"category": "hr"}}],
-                    "must_not": [{"exists": {"field": "category.keyword"}}],
-                }
-            },
-        ],
-        "minimum_should_match": 1,
+DYNAMIC_MAPPING: Final = {
+    "properties": {
+        "category": {"type": "text", "fields": {"keyword": {"type": "keyword", "ignore_above": 256}}},
+        "published": {"type": "boolean"},
+        "published_at": {"type": "date"},
+        "revision": {"type": "long"},
+        "score": {"type": "float"},
     }
 }
+HR_EXACT: Final = {"term": {"category.keyword": "hr"}}
+
+
+def _index_mappings(mappings: Mapping[str, Mapping[str, object]]) -> httpx.Response:
+    return httpx.Response(200, json={index: {"mappings": mapping} for index, mapping in mappings.items()})
+
+
+def _index(mapping: Mapping[str, object], *searches: httpx.Response) -> MagicMock:
+    answers: Final = iter(searches)
+    return MagicMock(
+        side_effect=lambda request: (
+            _index_mappings({"litellm-qa-docs": mapping}) if request.method == "GET" else next(answers)
+        )
+    )
+
+
+def _searches(respond: MagicMock) -> tuple[httpx.Request, ...]:
+    return tuple(request for request in _sent(respond) if request.method == "POST")
+
+
+def _mapping_reads(respond: MagicMock) -> tuple[httpx.Request, ...]:
+    return tuple(request for request in _sent(respond) if request.method == "GET")
 
 
 @pytest.mark.parametrize(
@@ -577,20 +598,7 @@ HR_EXACT: Final = {
         ),
         pytest.param(
             {"type": "in", "key": "category", "value": ["hr", "legal"]},
-            {
-                "bool": {
-                    "should": [
-                        {"terms": {"category.keyword": ["hr", "legal"]}},
-                        {
-                            "bool": {
-                                "filter": [{"terms": {"category": ["hr", "legal"]}}],
-                                "must_not": [{"exists": {"field": "category.keyword"}}],
-                            }
-                        },
-                    ],
-                    "minimum_should_match": 1,
-                }
-            },
+            {"terms": {"category.keyword": ["hr", "legal"]}},
             id="in",
         ),
         pytest.param({"type": "in", "key": "revision", "value": [6, 7]}, {"terms": {"revision": [6, 7]}}, id="in-int"),
@@ -634,18 +642,183 @@ HR_EXACT: Final = {
 async def test_filters_narrow_the_knn_query_with_the_matching_opensearch_filter(
     search_filter: Mapping[str, object], opensearch_filter: Mapping[str, object]
 ) -> None:
-    respond: Final = MagicMock(return_value=httpx.Response(200, json=_opensearch_hits("text", "embedding")))
+    respond: Final = _index(DYNAMIC_MAPPING, httpx.Response(200, json=_opensearch_hits("text", "embedding")))
 
     response: Final = await _search(
         True, respond, RecordingEmbeddingExecutor(), {"filters": search_filter, "max_num_results": 3}
     )
 
     assert response["data"] == EXPECTED_RESULTS
-    assert json.loads(_sent(respond)[0].content) == {
+    (search,) = _searches(respond)
+    assert json.loads(search.content) == {
         "size": 3,
         "query": {"knn": {"embedding": {"vector": QUERY_VECTOR, "k": 3, "filter": opensearch_filter}}},
         "_source": {"excludes": ["embedding"]},
     }
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize(
+    "mapping,search_filter,opensearch_filter",
+    [
+        pytest.param(
+            {"properties": {"tenant": {"type": "keyword"}}},
+            {"type": "eq", "key": "tenant", "value": "acme"},
+            {"term": {"tenant": "acme"}},
+            id="keyword-field",
+        ),
+        pytest.param(
+            {"properties": {"tenant": {"type": "text", "fields": {"raw": {"type": "keyword"}}}}},
+            {"type": "ne", "key": "tenant", "value": "acme"},
+            {"bool": {"must_not": [{"term": {"tenant.raw": "acme"}}]}},
+            id="text-with-a-keyword-subfield",
+        ),
+        pytest.param(
+            {"properties": {"tenant": {"type": "text", "fields": {"keyword": {"type": "keyword"}}}}},
+            {"type": "gte", "key": "tenant", "value": "b"},
+            {"range": {"tenant.keyword": {"gte": "b"}}},
+            id="string-range",
+        ),
+        pytest.param(
+            {"properties": {"owner": {"properties": {"team": {"type": "keyword"}}}}},
+            {"type": "in", "key": "owner.team", "value": ["people-ops"]},
+            {"terms": {"owner.team": ["people-ops"]}},
+            id="object-subfield",
+        ),
+        pytest.param(
+            {"properties": {"category": {"type": "keyword"}}},
+            {"type": "eq", "key": "tenant", "value": "acme"},
+            {"term": {"tenant": "acme"}},
+            id="unmapped",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_string_filters_compare_the_exact_keyword_field_the_index_maps(
+    asynchronous: bool,
+    mapping: Mapping[str, object],
+    search_filter: Mapping[str, object],
+    opensearch_filter: Mapping[str, object],
+) -> None:
+    respond: Final = _index(mapping, httpx.Response(200, json=_opensearch_hits("text", "embedding")))
+
+    await _search(asynchronous, respond, RecordingEmbeddingExecutor(), {"filters": search_filter, "max_num_results": 3})
+
+    (mapping_read,) = _mapping_reads(respond)
+    assert str(mapping_read.url) == f"{SERVERLESS}/litellm-qa-docs/_mapping"
+    assert _signature_scope(mapping_read) == ("aoss", "us-east-1")
+    (search,) = _searches(respond)
+    assert json.loads(search.content)["query"]["knn"]["embedding"]["filter"] == opensearch_filter
+
+
+@pytest.mark.asyncio
+async def test_a_filter_without_string_comparisons_reads_no_index_mapping() -> None:
+    respond: Final = MagicMock(return_value=httpx.Response(200, json=_opensearch_hits("text", "embedding")))
+    numeric: Final = {
+        "type": "and",
+        "filters": [{"type": "gte", "key": "revision", "value": 7}, {"type": "eq", "key": "published", "value": True}],
+    }
+
+    await _search(True, respond, RecordingEmbeddingExecutor(), {"filters": numeric})
+
+    assert not _mapping_reads(respond)
+    assert len(_searches(respond)) == 1
+
+
+TEXT_ONLY: Final = {"litellm-qa-docs": {"properties": {"tenant": {"type": "text"}}}}
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize(
+    "mappings,search_filter,reason",
+    [
+        pytest.param(
+            TEXT_ONLY,
+            {"type": "eq", "key": "tenant", "value": "team"},
+            "the index maps tenant as text with no keyword subfield",
+            id="text-only",
+        ),
+        pytest.param(
+            TEXT_ONLY,
+            {
+                "type": "or",
+                "filters": [
+                    {"type": "eq", "key": "revision", "value": 7},
+                    {"type": "nin", "key": "tenant", "value": ["team other"]},
+                ],
+            },
+            "the index maps tenant as text with no keyword subfield",
+            id="text-only-in-a-compound",
+        ),
+        pytest.param(
+            {
+                "litellm-qa-docs": {
+                    "properties": {
+                        "tenant": {"type": "text", "fields": {"keyword": {"type": "keyword", "ignore_above": 8}}}
+                    }
+                }
+            },
+            {"type": "eq", "key": "tenant", "value": "acme quarterly"},
+            "the index ignores tenant values longer than 8 characters",
+            id="longer-than-ignore-above",
+        ),
+        pytest.param(
+            {
+                "docs-2025": {"properties": {"tenant": {"type": "keyword"}}},
+                "docs-2026": {"properties": {"tenant": {"type": "text", "fields": {"keyword": {"type": "keyword"}}}}},
+            },
+            {"type": "eq", "key": "tenant", "value": "acme"},
+            "the indexes behind this store map tenant differently",
+            id="alias-indexes-disagree",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_string_filter_the_index_cannot_match_exactly_is_a_400_unless_drop_params_drops_the_filters(
+    asynchronous: bool, mappings: Mapping[str, Mapping[str, object]], search_filter: Mapping[str, object], reason: str
+) -> None:
+    rejected: Final = MagicMock(return_value=_index_mappings(mappings))
+    executor: Final = RecordingEmbeddingExecutor()
+
+    with pytest.raises(openai.BadRequestError) as error:
+        await _search(asynchronous, rejected, executor, {"filters": search_filter})
+
+    assert reason in str(error.value)
+    assert not _searches(rejected)
+    executor.call.assert_not_called()
+
+    dropped: Final = MagicMock(
+        side_effect=[_index_mappings(mappings), httpx.Response(200, json=_opensearch_hits("text", "embedding"))]
+    )
+    response: Final = await _search(
+        asynchronous, dropped, RecordingEmbeddingExecutor(), {"filters": search_filter, "drop_params": True}
+    )
+
+    assert response["data"] == EXPECTED_RESULTS
+    (search,) = _searches(dropped)
+    assert json.loads(search.content)["query"] == {"knn": {"embedding": {"vector": QUERY_VECTOR, "k": 10}}}
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("status", [403, 404])
+@pytest.mark.asyncio
+async def test_a_refused_index_mapping_read_keeps_its_status_and_sends_no_search(
+    asynchronous: bool, status: int
+) -> None:
+    respond: Final = MagicMock(
+        return_value=httpx.Response(
+            status, json={"status": status, "error": {"reason": "no mapping for you", "type": "x"}}
+        )
+    )
+    executor: Final = RecordingEmbeddingExecutor()
+
+    with pytest.raises(openai.APIStatusError) as error:
+        await _search(asynchronous, respond, executor, {"filters": {"type": "eq", "key": "tenant", "value": "acme"}})
+
+    assert error.value.status_code == status
+    assert "no mapping for you" in str(error.value)
+    assert not _searches(respond)
+    executor.call.assert_not_called()
 
 
 def _rejection(reason: str) -> httpx.Response:
@@ -659,38 +832,63 @@ def _rejection(reason: str) -> httpx.Response:
 
 
 ENGINE_REFUSES_FILTERS: Final = "failed to create query: Engine [NMSLIB] does not support filters"
+KNN_PARSER_REFUSES_FILTERS: Final = "[knn] unknown token [START_OBJECT] after [filter]"
 FILTERED_KNN: Final = {"knn": {"embedding": {"vector": QUERY_VECTOR, "k": 3, "filter": HR_EXACT}}}
 UNFILTERED_KNN: Final = {"knn": {"embedding": {"vector": QUERY_VECTOR, "k": 3}}}
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("refusal", [ENGINE_REFUSES_FILTERS, KNN_PARSER_REFUSES_FILTERS])
 @pytest.mark.asyncio
-async def test_a_filter_the_index_engine_refuses_is_dropped_under_drop_params(asynchronous: bool) -> None:
-    respond: Final = MagicMock(
-        side_effect=[
-            _rejection(ENGINE_REFUSES_FILTERS),
-            httpx.Response(200, json=_opensearch_hits("text", "embedding")),
-        ]
+async def test_a_filter_the_index_refuses_is_dropped_under_drop_params_without_embedding_again(
+    asynchronous: bool, refusal: str
+) -> None:
+    respond: Final = _index(
+        DYNAMIC_MAPPING, _rejection(refusal), httpx.Response(200, json=_opensearch_hits("text", "embedding"))
     )
+    executor: Final = RecordingEmbeddingExecutor()
 
     response: Final = await _search(
         asynchronous,
         respond,
-        RecordingEmbeddingExecutor(),
+        executor,
         {"filters": {"type": "eq", "key": "category", "value": "hr"}, "drop_params": True, "max_num_results": 3},
     )
 
     assert response["data"] == EXPECTED_RESULTS
-    sent: Final = _sent(respond)
+    sent: Final = _searches(respond)
     assert [json.loads(request.content)["query"] for request in sent] == [FILTERED_KNN, UNFILTERED_KNN]
     assert _signature_scope(sent[1]) == ("aoss", "us-east-1")
+    executor.call.assert_called_once_with("embedding-alias", QUERY, {})
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("refusal", [ENGINE_REFUSES_FILTERS, KNN_PARSER_REFUSES_FILTERS])
+@pytest.mark.asyncio
+async def test_a_filter_the_index_refuses_without_drop_params_is_a_400_that_hides_the_opensearch_error(
+    asynchronous: bool, refusal: str
+) -> None:
+    respond: Final = _index(DYNAMIC_MAPPING, _rejection(refusal))
+
+    with pytest.raises(openai.BadRequestError) as error:
+        await _search(
+            asynchronous,
+            respond,
+            RecordingEmbeddingExecutor(),
+            {"filters": {"type": "eq", "key": "category", "value": "hr"}, "max_num_results": 3},
+        )
+
+    assert "cannot apply filters inside a k-NN query" in str(error.value)
+    assert "set drop_params to drop them" in str(error.value)
+    assert refusal not in str(error.value)
+    assert "query_shard_exception" not in str(error.value)
+    assert len(_searches(respond)) == 1
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize(
     "drop_params,rejections,sent_queries,reason",
     [
-        pytest.param({}, [ENGINE_REFUSES_FILTERS], [FILTERED_KNN], "does not support filters", id="no-drop"),
         pytest.param(
             {"drop_params": True},
             ["failed to create query: unknown field [category]"],
@@ -715,7 +913,7 @@ async def test_a_rejected_filtered_search_is_a_400_unless_drop_params_can_drop_t
     sent_queries: list[Mapping[str, object]],
     reason: str,
 ) -> None:
-    respond: Final = MagicMock(side_effect=[_rejection(reason) for reason in rejections])
+    respond: Final = _index(DYNAMIC_MAPPING, *(_rejection(reason) for reason in rejections))
 
     with pytest.raises(openai.BadRequestError) as error:
         await _search(
@@ -726,7 +924,7 @@ async def test_a_rejected_filtered_search_is_a_400_unless_drop_params_can_drop_t
         )
 
     assert reason in str(error.value)
-    assert [json.loads(request.content)["query"] for request in _sent(respond)] == sent_queries
+    assert [json.loads(request.content)["query"] for request in _searches(respond)] == sent_queries
 
 
 HYBRID: Final = {
@@ -758,12 +956,12 @@ async def test_hybrid_search_sends_a_keyword_and_a_knn_query_through_the_signed_
     asynchronous: bool, filters: Mapping[str, object], queries: list[Mapping[str, object]]
 ) -> None:
     executor: Final = RecordingEmbeddingExecutor()
-    respond: Final = MagicMock(return_value=httpx.Response(200, json=_opensearch_hits("passage", "embedding")))
+    respond: Final = _index(DYNAMIC_MAPPING, httpx.Response(200, json=_opensearch_hits("passage", "embedding")))
 
     response: Final = await _search(asynchronous, respond, executor, {**HYBRID, **filters, "max_num_results": 3})
 
     assert response["data"] == EXPECTED_RESULTS
-    sent: Final = _sent(respond)
+    sent: Final = _searches(respond)
     assert len(sent) == 1
     assert str(sent[0].url) == f"{SERVERLESS}/litellm-qa-docs/_search?search_pipeline=hybrid%20norm"
     assert json.loads(sent[0].content) == {

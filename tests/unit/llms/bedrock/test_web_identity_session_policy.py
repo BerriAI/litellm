@@ -840,8 +840,8 @@ class TestEachCallerGetsItsOwnCeiling:
 
 _OPENSEARCH_ENDPOINT_ACTIONS: Final = MappingProxyType(
     {
-        "https://search-docs-abc123.us-east-1.es.amazonaws.com": "es:ESHttpPost",
-        "https://abc123.us-east-1.aoss.amazonaws.com": "aoss:APIAccessAll",
+        "https://search-docs-abc123.us-east-1.es.amazonaws.com": frozenset({"es:ESHttpGet", "es:ESHttpPost"}),
+        "https://abc123.us-east-1.aoss.amazonaws.com": frozenset({"aoss:APIAccessAll"}),
     }
 )
 
@@ -868,13 +868,15 @@ def _opensearch_policy(api_base: str) -> WebIdentitySessionPolicy:
 
 
 class TestOpenSearchSearchGetsItsOwnCeiling:
-    @pytest.mark.parametrize(("api_base", "action"), sorted(_OPENSEARCH_ENDPOINT_ACTIONS.items()))
-    def test_search_action_is_granted_by_the_opensearch_ceiling(self, api_base: str, action: str):
-        assert action in _granted_actions(_opensearch_policy(api_base))
+    @pytest.mark.parametrize(("api_base", "actions"), sorted(_OPENSEARCH_ENDPOINT_ACTIONS.items()))
+    def test_search_and_mapping_read_actions_are_granted_by_the_opensearch_ceiling(
+        self, api_base: str, actions: frozenset[str]
+    ):
+        assert actions <= _granted_actions(_opensearch_policy(api_base))
 
     @pytest.mark.parametrize("api_base", sorted(_OPENSEARCH_ENDPOINT_ACTIONS))
     def test_opensearch_ceiling_grants_only_opensearch_services(self, api_base: str):
-        allowed: Final = frozenset(_service(action) for action in _OPENSEARCH_ENDPOINT_ACTIONS.values())
+        allowed: Final = frozenset(map(_service, frozenset[str]().union(*_OPENSEARCH_ENDPOINT_ACTIONS.values())))
         extra: Final = sorted(a for a in _granted_actions(_opensearch_policy(api_base)) if _service(a) not in allowed)
         assert not extra, f"the OpenSearch session policy also grants {extra}"
 

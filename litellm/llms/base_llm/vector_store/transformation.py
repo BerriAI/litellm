@@ -23,6 +23,7 @@ from litellm.types.vector_stores import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
     from litellm.router import Router
 
     from ..chat.transformation import BaseLLMException as _BaseLLMException
@@ -60,6 +61,32 @@ class LiteLLMVectorStoreEmbeddingExecutor:
             input=[query],
             **dict(configuration),  # pyright: ignore[reportArgumentType]  # provider-specific embedding config is validated downstream
         )
+
+
+class EmbedOnceExecutor:
+    def __init__(self, executor: VectorStoreEmbeddingExecutor) -> None:
+        self._executor: Final = executor
+        self._embedded: tuple[str, str, EmbeddingResponse] | None = None
+
+    def _reused(self, model: str, query: str) -> EmbeddingResponse | None:
+        embedded: Final = self._embedded
+        return embedded[2] if embedded is not None and embedded[:2] == (model, query) else None
+
+    def embed(self, model: str, query: str, configuration: Mapping[str, object]) -> EmbeddingResponse:
+        reused: Final = self._reused(model, query)
+        if reused is not None:
+            return reused
+        response: Final = self._executor.embed(model, query, configuration)
+        self._embedded = (model, query, response)
+        return response
+
+    async def aembed(self, model: str, query: str, configuration: Mapping[str, object]) -> EmbeddingResponse:
+        reused: Final = self._reused(model, query)
+        if reused is not None:
+            return reused
+        response: Final = await self._executor.aembed(model, query, configuration)
+        self._embedded = (model, query, response)
+        return response
 
 
 _REQUEST_METADATA: Final = TypeAdapter(dict[str, object])
@@ -260,12 +287,32 @@ class BaseVectorStoreConfig:
         """
         return headers, None
 
-    def retry_params_for_rejected_search(
+    def resolve_search_params(
+        self,
+        vector_store_id: str,
+        vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
+        api_base: str,
+        litellm_params: Mapping[str, object],
+        client: HTTPHandler,
+    ) -> VectorStoreSearchOptionalRequestParams:
+        return vector_store_search_optional_params
+
+    async def aresolve_search_params(
+        self,
+        vector_store_id: str,
+        vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
+        api_base: str,
+        litellm_params: Mapping[str, object],
+        client: AsyncHTTPHandler,
+    ) -> VectorStoreSearchOptionalRequestParams:
+        return vector_store_search_optional_params
+
+    def recover_rejected_search(
         self,
         rejection: httpx.Response,
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         litellm_params: Mapping[str, object],
-    ) -> VectorStoreSearchOptionalRequestParams | None:
+    ) -> VectorStoreSearchOptionalRequestParams | BaseLLMException | None:
         return None
 
     def calculate_vector_store_cost(

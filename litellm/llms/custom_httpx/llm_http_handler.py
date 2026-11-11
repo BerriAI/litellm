@@ -122,6 +122,7 @@ from litellm.llms.base_llm.vector_store.transformation import (
     BaseDirectVectorStoreConfig,
     BaseQueryEmbeddingVectorStoreConfig,
     BaseVectorStoreConfig,
+    EmbedOnceExecutor,
     VectorStoreEmbeddingExecutor,
 )
 from litellm.llms.base_llm.vector_store_files.transformation import (
@@ -10681,7 +10682,18 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        async def send(search_params: VectorStoreSearchOptionalRequestParams) -> httpx.Response:
+        search_params: Final = await vector_store_provider_config.aresolve_search_params(
+            vector_store_id=vector_store_id,
+            vector_store_search_optional_params=vector_store_search_optional_params,
+            api_base=api_base,
+            litellm_params=MappingProxyType(dict(litellm_params, timeout=timeout)),
+            client=async_httpx_client,
+        )
+        search_embedding_executor: Final = EmbedOnceExecutor(
+            BaseQueryEmbeddingVectorStoreConfig.query_embedding_executor(embedding_executor, None)
+        )
+
+        async def send(params: VectorStoreSearchOptionalRequestParams) -> httpx.Response:
             if isinstance(vector_store_provider_config, BaseQueryEmbeddingVectorStoreConfig):
                 (
                     url,
@@ -10689,12 +10701,12 @@ class BaseLLMHTTPHandler:
                 ) = await vector_store_provider_config.atransform_search_vector_store_request(
                     vector_store_id=vector_store_id,
                     query=query,
-                    vector_store_search_optional_params=search_params,
+                    vector_store_search_optional_params=params,
                     api_base=api_base,
                     litellm_logging_obj=logging_obj,
                     litellm_params=MappingProxyType(dict(litellm_params, timeout=timeout)),
                     extra_body=extra_body,
-                    embedding_executor=embedding_executor,
+                    embedding_executor=search_embedding_executor,
                 )
             else:
                 (
@@ -10703,7 +10715,7 @@ class BaseLLMHTTPHandler:
                 ) = await vector_store_provider_config.atransform_search_vector_store_request(
                     vector_store_id=vector_store_id,
                     query=query,
-                    vector_store_search_optional_params=search_params,
+                    vector_store_search_optional_params=params,
                     api_base=api_base,
                     litellm_logging_obj=logging_obj,
                     litellm_params=dict(litellm_params),
@@ -10713,7 +10725,7 @@ class BaseLLMHTTPHandler:
                 vector_store_provider_config,
                 vector_store_provider_config.sign_request,
                 headers=headers,
-                optional_params={**dict(litellm_params), **(search_params or {})},
+                optional_params={**dict(litellm_params), **(params or {})},
                 request_data=request_body,
                 api_base=url,
             )
@@ -10748,10 +10760,10 @@ class BaseLLMHTTPHandler:
                 raise self._handle_error(e=e, provider_config=vector_store_provider_config)
 
         try:
-            response: Final = await send(vector_store_search_optional_params)
+            response: Final = await send(search_params)
         except httpx.HTTPStatusError as rejection:
             retry_params: Final = self._vector_store_search_retry_params(
-                rejection, vector_store_provider_config, vector_store_search_optional_params, litellm_params
+                rejection, vector_store_provider_config, search_params, litellm_params
             )
             try:
                 retry_response: Final = await send(retry_params)
@@ -10774,12 +10786,14 @@ class BaseLLMHTTPHandler:
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         litellm_params: GenericLiteLLMParams,
     ) -> VectorStoreSearchOptionalRequestParams:
-        retry_params: Final = vector_store_provider_config.retry_params_for_rejected_search(
+        recovery: Final = vector_store_provider_config.recover_rejected_search(
             rejection.response, vector_store_search_optional_params, MappingProxyType(dict(litellm_params))
         )
-        if retry_params is None:
+        if isinstance(recovery, BaseLLMException):
+            raise recovery from None
+        if recovery is None:
             raise self._handle_error(e=rejection, provider_config=vector_store_provider_config)
-        return retry_params
+        return recovery
 
     def vector_store_search_handler(
         self,
@@ -10847,7 +10861,18 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        def send(search_params: VectorStoreSearchOptionalRequestParams) -> httpx.Response:
+        search_params: Final = vector_store_provider_config.resolve_search_params(
+            vector_store_id=vector_store_id,
+            vector_store_search_optional_params=vector_store_search_optional_params,
+            api_base=api_base,
+            litellm_params=MappingProxyType(dict(litellm_params, timeout=timeout)),
+            client=sync_httpx_client,
+        )
+        search_embedding_executor: Final = EmbedOnceExecutor(
+            BaseQueryEmbeddingVectorStoreConfig.query_embedding_executor(embedding_executor, None)
+        )
+
+        def send(params: VectorStoreSearchOptionalRequestParams) -> httpx.Response:
             if isinstance(vector_store_provider_config, BaseQueryEmbeddingVectorStoreConfig):
                 (
                     url,
@@ -10855,12 +10880,12 @@ class BaseLLMHTTPHandler:
                 ) = vector_store_provider_config.transform_search_vector_store_request(
                     vector_store_id=vector_store_id,
                     query=query,
-                    vector_store_search_optional_params=search_params,
+                    vector_store_search_optional_params=params,
                     api_base=api_base,
                     litellm_logging_obj=logging_obj,
                     litellm_params=MappingProxyType(dict(litellm_params, timeout=timeout)),
                     extra_body=extra_body,
-                    embedding_executor=embedding_executor,
+                    embedding_executor=search_embedding_executor,
                 )
             else:
                 (
@@ -10869,7 +10894,7 @@ class BaseLLMHTTPHandler:
                 ) = vector_store_provider_config.transform_search_vector_store_request(
                     vector_store_id=vector_store_id,
                     query=query,
-                    vector_store_search_optional_params=search_params,
+                    vector_store_search_optional_params=params,
                     api_base=api_base,
                     litellm_logging_obj=logging_obj,
                     litellm_params=dict(litellm_params),
@@ -10878,7 +10903,7 @@ class BaseLLMHTTPHandler:
 
             signed_headers, signed_json_body = vector_store_provider_config.sign_request(
                 headers=headers,
-                optional_params={**dict(litellm_params), **(search_params or {})},
+                optional_params={**dict(litellm_params), **(params or {})},
                 request_data=request_body,
                 api_base=url,
             )
@@ -10911,10 +10936,10 @@ class BaseLLMHTTPHandler:
                 raise self._handle_error(e=e, provider_config=vector_store_provider_config)
 
         try:
-            response: Final = send(vector_store_search_optional_params)
+            response: Final = send(search_params)
         except httpx.HTTPStatusError as rejection:
             retry_params: Final = self._vector_store_search_retry_params(
-                rejection, vector_store_provider_config, vector_store_search_optional_params, litellm_params
+                rejection, vector_store_provider_config, search_params, litellm_params
             )
             try:
                 retry_response: Final = send(retry_params)
