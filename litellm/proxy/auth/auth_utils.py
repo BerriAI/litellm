@@ -2,8 +2,8 @@ import importlib.util
 import os
 import re
 import sys
-from collections.abc import Collection, Iterator, Mapping
-from functools import lru_cache
+from collections.abc import Callable, Collection, Iterator, Mapping
+from functools import lru_cache, partial
 from itertools import accumulate, chain, repeat
 from logging import Logger
 from types import MappingProxyType
@@ -532,13 +532,17 @@ _BANNED_METADATA_PARAMS: Final[tuple[str, ...]] = tuple(
 )
 
 
-class ClientSideStorageAllowlist(BaseModel):
+class _ClientSideStorageAllowlist(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     allowed_client_side_s3_buckets: tuple[str, ...] | None = None
 
     def admits_s3_bucket(self, bucket: str) -> bool:
         return bucket in (self.allowed_client_side_s3_buckets or ())
+
+
+def client_side_s3_bucket_check(general_settings: Mapping[str, object]) -> Callable[[str], bool]:
+    return _ClientSideStorageAllowlist.model_validate(general_settings).admits_s3_bucket
 
 
 def _check_banned_params(
