@@ -4980,16 +4980,15 @@ async def _run_post_custom_auth_checks(
     # spend some other model accrued. The JWT and virtual-key paths already skip
     # every budget check for these; this path did not, so the same request could
     # be refused under custom auth and served under the other two.
-    skip_budget_checks: Final = (
-        is_video_retrieval_request(route=route, http_method=RouteChecks.get_request_method(request))
-        or (
-            is_model_cost_zero(
-                model=await budget_served_model(current_model, request_data, request, llm_router, valid_token),
-                llm_router=llm_router,
-            )
-            if current_model is not None and llm_router is not None
-            else False
+    skip_budget_checks: Final = is_video_retrieval_request(
+        route=route, http_method=RouteChecks.get_request_method(request)
+    ) or (
+        is_model_cost_zero(
+            model=await budget_served_model(current_model, request_data, request, llm_router, valid_token),
+            llm_router=llm_router,
         )
+        if current_model is not None and llm_router is not None
+        else False
     )
 
     # 3. Check key-level model_max_budget
