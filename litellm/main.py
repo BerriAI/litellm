@@ -1091,6 +1091,7 @@ def mock_completion(
 from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
     _resolve_openai_api_base as _resolve_openai_api_base,  # pyright: ignore[reportPrivateUsage]  # noqa: PLC0414  # re-export of moved helper
 )
+from litellm.responses.bridge_check import bridge_reasoning_effort  # noqa: E402  # imported at the old definition site, same as its neighbours
 from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
     responses_api_bridge_check as responses_api_bridge_check,  # pyright: ignore[reportUnknownVariableType]  # noqa: PLC0414  # re-export of moved function
 )
@@ -5956,7 +5957,7 @@ def completion(
                 custom_llm_provider=custom_llm_provider,
                 web_search_options=web_search_options,
                 tools=tools,
-                reasoning_effort=reasoning_effort,
+                reasoning_effort=bridge_reasoning_effort(reasoning_effort, optional_params.get("extra_body")),
                 reasoning_summary=_reasoning_summary_for_bridge,
                 api_base=api_base,
             )
