@@ -197,6 +197,7 @@ from litellm.router_utils.clientside_credential_handler import (
     is_clientside_credential,
 )
 from litellm.router_utils.common_utils import (
+    as_retry_skipped_deployment_ids,
     filter_team_based_models,
     filter_web_search_deployments,
     format_fallback_outcome_message,
@@ -592,10 +593,6 @@ def _deployment_pick_attributes(model: str, request_kwargs: Mapping[str, object]
 
 def _configured_model_info(deployment: Mapping[str, object]) -> Mapping[str, object]:
     return _MODEL_INFO_ADAPTER.validate_python(deployment.get("model_info") or {})
-
-
-def _as_retry_skipped_deployment_ids(value: object) -> tuple[str, ...]:
-    return tuple(item for item in value if isinstance(item, str)) if isinstance(value, tuple) else ()
 
 
 def _silent_experiment_targets(silent_model: object) -> tuple[str, ...]:
@@ -8340,7 +8337,7 @@ class Router:
             return ()
         if litellm.should_retry(status_code):
             return ()
-        already_skipped_ids: Final = _as_retry_skipped_deployment_ids(already_skipped)
+        already_skipped_ids: Final = as_retry_skipped_deployment_ids(already_skipped)
         skipped: Final = tuple(sorted(frozenset((*already_skipped_ids, failed_deployment_id))))
         verbose_router_logger.debug(
             "Retry skips deployments that already answered %s to this request: %s", status_code, skipped
@@ -14196,7 +14193,7 @@ class Router:
         ## RETRY SKIP ## -> drop deployments that already refused this request with a
         ## non-retryable status, unless that leaves nothing, so the caller still gets
         ## the provider's own error instead of a no-deployments error.
-        _retry_skipped_deployment_ids: Final = _as_retry_skipped_deployment_ids(
+        _retry_skipped_deployment_ids: Final = as_retry_skipped_deployment_ids(
             request_kwargs.pop("_retry_skipped_deployment_ids", None) if request_kwargs else None
         )
         healthy_deployments = (
@@ -15381,7 +15378,7 @@ class Router:
         )
 
         ## RETRY SKIP ## -> see async counterpart in async_get_healthy_deployments.
-        _retry_skipped_deployment_ids: Final = _as_retry_skipped_deployment_ids(
+        _retry_skipped_deployment_ids: Final = as_retry_skipped_deployment_ids(
             request_kwargs.pop("_retry_skipped_deployment_ids", None) if request_kwargs else None
         )
         healthy_deployments = (

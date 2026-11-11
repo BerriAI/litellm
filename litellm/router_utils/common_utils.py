@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeVar
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 if TYPE_CHECKING:
     from litellm.types.llms.openai import OpenAIFileObject
@@ -29,10 +29,36 @@ _V = TypeVar("_V")
 
 ROUTER_ONLY_CALL_KWARGS: Final = frozenset({"silent_model", "include_fallback_errors"})
 _OBJECT_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
+_DEPLOYMENT_IDS_ADAPTER: Final = TypeAdapter(tuple[str, ...])
 
 
 def without_router_only_kwargs(kwargs: Mapping[str, _V]) -> dict[str, _V]:
     return {key: value for key, value in kwargs.items() if key not in ROUTER_ONLY_CALL_KWARGS}
+
+
+def as_retry_skipped_deployment_ids(value: object) -> tuple[str, ...]:
+    if not isinstance(value, tuple):
+        return ()
+    items: Final[tuple[object, ...]] = value
+    return tuple(item for item in items if isinstance(item, str))
+
+
+def as_excluded_deployment_ids(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    try:
+        return _DEPLOYMENT_IDS_ADAPTER.validate_python(value)
+    except ValidationError:
+        return ()
+
+
+def deployment_ids_failed_in_request(request_kwargs: Mapping[str, object]) -> frozenset[str]:
+    return frozenset(
+        (
+            *as_excluded_deployment_ids(request_kwargs.get("_excluded_deployment_ids")),
+            *as_retry_skipped_deployment_ids(request_kwargs.get("_retry_skipped_deployment_ids")),
+        )
+    )
 
 
 def request_user_api_key_auth(request_kwargs: Mapping[str, object]) -> object:
