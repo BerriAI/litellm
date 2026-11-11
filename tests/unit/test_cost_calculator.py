@@ -10268,3 +10268,12 @@ def test_bedrock_registered_cache_prices_preserve_dynamic_threshold_rates(
     assert entry is not None
     assert entry[1]["input_cost_per_token_above_300k_tokens"] == 0.03
     assert entry[1][tier_field] == (tier_override if tier_override is not None else 0.007)
+
+
+def test_cost_failure_for_an_unpriced_response_does_not_echo_the_response() -> None:
+    image_data: Final = "c2VjcmV0LWltYWdlLWJ5dGVz"
+
+    with pytest.raises(ValueError, match="Model is None") as exc_info:
+        completion_cost(completion_response={"data": [{"content": [{"source": {"data": image_data}}]}]})
+
+    assert image_data not in str(exc_info.value)

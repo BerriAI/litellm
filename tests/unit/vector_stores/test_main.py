@@ -179,7 +179,7 @@ def test_search_by_query_image_sends_a_bedrock_image_retrieval_query(query: str 
         ),
         (
             {"custom_llm_provider": "openai", "query": "", "query_image": QUERY_IMAGE, "drop_params": True},
-            "query or query_image is required.",
+            "drop_params dropped it",
         ),
     ],
 )
@@ -203,6 +203,28 @@ def test_search_rejects_an_invalid_query_image_without_echoing_its_data():
     assert exc_info.value.status_code == 400
     assert "query_image.media_type" in str(exc_info.value)
     assert image_data not in str(exc_info.value)
+
+
+def test_search_rejects_query_image_data_that_is_not_base64():
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        _search_with_recorded_post(
+            custom_llm_provider="bedrock",
+            query_image={"type": "base64", "media_type": "image/jpeg", "data": "not base64!"},
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "query_image.data: not valid base64" in str(exc_info.value)
+    assert "not base64!" not in str(exc_info.value)
+
+
+def test_search_by_a_query_image_sent_in_extra_body_sends_a_bedrock_image_retrieval_query():
+    client: Final = _search_with_recorded_post(custom_llm_provider="bedrock", extra_body={"query_image": QUERY_IMAGE})
+
+    posted: Final = json.loads(client.post.call_args.kwargs["data"])
+    assert posted["retrievalQuery"] == {
+        "type": "IMAGE",
+        "image": {"format": "jpeg", "inlineContent": "/9j/4AAQSkZJRg=="},
+    }
 
 
 @pytest.mark.parametrize("drop_params_source", ["request", "global"])

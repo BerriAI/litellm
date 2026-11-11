@@ -23,7 +23,7 @@ import pytest_asyncio
 from pydantic import JsonValue
 
 import litellm
-from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
+from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE, REDACTED_BY_LITELLM
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.redact_messages import (
@@ -1504,6 +1504,34 @@ async def test_redaction_responses_api():
         "logged standard logging payload for ResponsesAPIResponse",
         json.dumps(standard_logging_payload, indent=2),
     )
+
+
+def _vector_store_search_details(query_image: Mapping[str, str]) -> dict[str, object]:
+    return {
+        "query_image": query_image,
+        "optional_params": {"query_image": query_image},
+        "litellm_params": {"proxy_server_request": {"body": {"query_image": query_image}}},
+        "standard_logging_object": {"model_parameters": {"query_image": query_image}, "messages": [], "response": {}},
+    }
+
+
+def test_redaction_removes_a_vector_store_query_image_from_every_logged_copy() -> None:
+    details: Final = _vector_store_search_details({"type": "base64", "media_type": "image/jpeg", "data": SECRET})
+
+    perform_redaction(details, result=None)
+
+    assert details["query_image"] == REDACTED_BY_LITELLM
+    assert SECRET not in json.dumps(details, default=str)
+
+
+def test_a_callback_opting_out_gets_a_query_image_redacted_outside_the_spend_log_body() -> None:
+    details: Final = _vector_store_search_details({"type": "base64", "media_type": "image/jpeg", "data": SECRET})
+
+    perform_redaction(details, result=None, redact_streaming_responses=False)
+
+    logged: Final = {key: details[key] for key in ("query_image", "optional_params", "standard_logging_object")}
+    assert SECRET not in json.dumps(logged, default=str)
+    assert SECRET in json.dumps(details["litellm_params"], default=str)
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
