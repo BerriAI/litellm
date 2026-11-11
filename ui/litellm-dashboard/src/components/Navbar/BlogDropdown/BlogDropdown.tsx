@@ -28,7 +28,7 @@ export const BlogDropdown: React.FC = () => {
 
   const { data, isLoading, isError, refetch } = useBlogPosts();
 
-  if (disableBlogPosts) {
+  if (disableBlogPosts || data?.hide_updates) {
     return null;
   }
 

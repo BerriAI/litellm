@@ -10,6 +10,7 @@ export interface BlogPost {
 }
 
 export interface BlogPostsResponse {
+  hide_updates?: boolean;
   posts: BlogPost[];
 }
 

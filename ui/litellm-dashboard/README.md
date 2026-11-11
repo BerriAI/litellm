@@ -34,3 +34,15 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/deployment) for more details.
+
+## Hide update content
+
+Set `LITELLM_HIDE_UPDATES=true` in the proxy environment and restart the proxy to hide the home Updates feed,
+What's New cards and navbar Blog dropdown for every user, including administrators. Reload open dashboard tabs
+to refresh their cached blog response. The public `/public/litellm_blog_posts` endpoint returns no posts while this
+option is enabled, so neither remote RSS nor bundled fallback posts are loaded. Direct navigation to the home
+page still shows the rest of the dashboard. This is a display option, not an authorization rule.
+
+The default is false. Unset the variable or set it to `false` to preserve the existing behavior. The option takes
+precedence over `LITELLM_BLOG_POSTS_URL` and `LITELLM_LOCAL_BLOG_POSTS`. Operational notifications and other pages
+are unaffected. This option does not require an Admin UI build-time environment variable or a database setting.

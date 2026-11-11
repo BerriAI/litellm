@@ -37,7 +37,7 @@ export default function UpdatesFeed({ className }: { className?: string }) {
   const { t } = useTranslation();
   const disabled = useDisableBlogPosts();
   const { data, isLoading, isError, refetch } = useBlogPosts();
-  if (disabled) return null;
+  if (disabled || data?.hide_updates) return null;
 
   const posts = data?.posts.slice(0, MAX_ROWS) ?? [];
 
