@@ -17,22 +17,37 @@ from litellm.types.utils import (
 _ENV_REF_PREFIX: Final = "os.environ/"
 
 
+def _env_ref(value: object, key: str) -> str | None:
+    """The ``os.environ/<VAR>`` reference this loader would resolve, or ``None`` for anything else.
+
+    ``*_ref`` federation fields are pointers their identity source dereferences at use time, so they
+    stay as written.
+    """
+    if not isinstance(value, str) or not value.startswith(_ENV_REF_PREFIX) or holds_secret_pointer(key):
+        return None
+    return value
+
+
+def env_ref_fields(values: Mapping[str, object]) -> tuple[str, ...]:
+    """Field names in ``values`` holding an ``os.environ/<VAR>`` reference this loader would resolve."""
+    return tuple(key for key, value in values.items() if _env_ref(value, key) is not None)
+
+
 def _resolved_credential_value(credential_name: str, key: str, value: object) -> object:
     """The environment variable's value for an ``os.environ/<VAR>`` reference, or the value itself.
 
-    An unresolvable reference is kept and logged rather than dropped, so a provider with optional
-    params cannot silently fall back to another account's ambient credentials. ``*_ref`` federation
-    fields are pointers their identity source dereferences at use time, so they stay as written.
+    A reference that resolves to nothing is kept and logged rather than dropped: an unset variable
+    and a set-but-empty one both leave the field blank, which lets a provider fall back to its
+    ambient credentials for another account instead of failing this one.
     """
-    if not isinstance(value, str) or not value.startswith(_ENV_REF_PREFIX):
+    reference: Final = _env_ref(value, key)
+    if reference is None:
         return value
-    if holds_secret_pointer(key):
-        return value
-    resolved: Final = get_secret_str(value)
-    if resolved is not None:
+    resolved: Final = get_secret_str(reference)
+    if resolved:
         return resolved
     verbose_logger.warning(
-        "credential '%s' value '%s' references unset environment variable %s; keeping the reference",
+        "credential '%s' value '%s' references environment variable %s, which is unset or empty; keeping the reference",
         credential_name,
         key,
         value,
