@@ -27,6 +27,10 @@
     "api_key",
     "additional_args"
   ],
+  "messages_input": [
+    "body",
+    "kwargs"
+  ],
   "post_call": [
     "logger",
     "original_response",
@@ -47,9 +51,18 @@
   "defers_async_logging": [
     "logger"
   ],
+  "claim_async_success_log": [
+    "logger"
+  ],
+  "mark_async_success_enqueued": [
+    "logger"
+  ],
   "defer_success": [
     "logger",
-    "pending"
+    "pending",
+    "response",
+    "start",
+    "end"
   ],
   "sync_success_for_async_call": [
     "logger",
@@ -117,7 +130,8 @@
     "chunks",
     "start",
     "end",
-    "first_chunk"
+    "first_chunk",
+    "stream_teardown"
   ],
   "stream_failure": [
     "logger",

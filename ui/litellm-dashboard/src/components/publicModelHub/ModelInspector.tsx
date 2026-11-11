@@ -2,12 +2,15 @@
 
 import { ChevronDown } from "lucide-react";
 import * as React from "react";
+import { Trans, useTranslation } from "react-i18next";
 
+import { DeploymentPricingBreakdown } from "@/components/molecules/models/DeploymentPricingBreakdown";
 import type { ModelGroupInfo } from "@/components/PublicModelHubTableColumns";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import i18n from "@/i18n/i18n";
 
 import {
   formatPerMillion,
@@ -15,41 +18,55 @@ import {
   modeLabel,
   modelCapabilities,
   providerName,
+  SECTION_TITLE,
   wildcardExample,
 } from "./hubFormat";
 import { Badges, CodeBlock, type Fact, Facts, PaneSection, ProviderAvatar, ProviderName } from "./HubParts";
 import { curlSnippet, modelSnippet } from "./hubSnippets";
 import { HealthBadge } from "./HubStatus";
 import { InspectorHeader } from "./InspectorHeader";
+import { productNames } from "@/i18n/untranslated/productNames";
 
 const summary = (model: ModelGroupInfo): string | undefined => {
   if (model.description) return model.description;
   const providers = (model.providers ?? []).map(providerName).join(", ");
-  return model.mode && providers ? `${modeLabel(model.mode)} model from ${providers}` : undefined;
+  return model.mode && providers
+    ? i18n.t("publicModelHub.modelInspector.summary", { mode: modeLabel(model.mode), providers })
+    : undefined;
 };
 
-const tokens = (value: number | undefined) => (value ? `${formatTokens(value)} tokens` : null);
+const tokens = (value: number | undefined) =>
+  value ? i18n.t("publicModelHub.modelInspector.tokens", { tokens: formatTokens(value) }) : null;
 
 const modelFacts = (model: ModelGroupInfo): Fact[][] => {
   const providers = model.providers ?? [];
   const tags = model.custom_tags ?? [];
   return [
     [
-      { label: "Mode", value: model.mode ? modeLabel(model.mode) : null },
-      { label: "Context", value: tokens(model.max_input_tokens) },
-      { label: "Max output", value: tokens(model.max_output_tokens) },
-    ],
-    [
-      { label: "Input / 1M tokens", value: formatPerMillion(model.input_cost_per_token) },
-      { label: "Output / 1M tokens", value: formatPerMillion(model.output_cost_per_token) },
-    ],
-    [
-      { label: "Requests per minute", value: model.rpm },
-      { label: "Tokens per minute", value: model.tpm ? formatTokens(model.tpm) : null },
+      { label: i18n.t("publicModelHub.modelInspector.facts.mode"), value: model.mode ? modeLabel(model.mode) : null },
+      { label: i18n.t("publicModelHub.modelInspector.facts.context"), value: tokens(model.max_input_tokens) },
+      { label: i18n.t("publicModelHub.modelInspector.facts.maxOutput"), value: tokens(model.max_output_tokens) },
     ],
     [
       {
-        label: providers.length > 1 ? "Providers" : "Provider",
+        label: i18n.t("publicModelHub.modelInspector.facts.inputPrice"),
+        value: formatPerMillion(model.input_cost_per_token),
+      },
+      {
+        label: i18n.t("publicModelHub.modelInspector.facts.outputPrice"),
+        value: formatPerMillion(model.output_cost_per_token),
+      },
+    ],
+    [
+      { label: i18n.t("publicModelHub.modelInspector.facts.rpm"), value: model.rpm },
+      { label: i18n.t("publicModelHub.modelInspector.facts.tpm"), value: model.tpm ? formatTokens(model.tpm) : null },
+    ],
+    [
+      {
+        label:
+          providers.length > 1
+            ? i18n.t("publicModelHub.modelInspector.facts.providers")
+            : i18n.t("publicModelHub.modelInspector.facts.provider"),
         wide: true,
         value: providers.length > 0 && (
           <span className="flex flex-wrap gap-x-4 gap-y-1">
@@ -59,26 +76,31 @@ const modelFacts = (model: ModelGroupInfo): Fact[][] => {
           </span>
         ),
       },
-      { label: "Tags", wide: true, value: tags.length > 0 && <Badges items={tags} /> },
+      {
+        label: i18n.t("publicModelHub.modelInspector.facts.tags"),
+        wide: true,
+        value: tags.length > 0 && <Badges items={tags} />,
+      },
     ],
   ];
 };
 
 function CallThisModel({ model }: { model: ModelGroupInfo }) {
+  const { t } = useTranslation();
   const curl = curlSnippet(model);
   if (!curl) {
     return (
-      <PaneSection title="Call this model">
+      <PaneSection title={t("publicModelHub.modelInspector.callThisModel.title")}>
         <CodeBlock code={modelSnippet(model)} />
       </PaneSection>
     );
   }
   return (
-    <PaneSection title="Call this model">
+    <PaneSection title={t("publicModelHub.modelInspector.callThisModel.title")}>
       <Tabs defaultValue="python" className="gap-3">
         <TabsList>
-          <TabsTrigger value="python">Python</TabsTrigger>
-          <TabsTrigger value="curl">cURL</TabsTrigger>
+          <TabsTrigger value="python">{productNames.python}</TabsTrigger>
+          <TabsTrigger value="curl">{productNames.curl}</TabsTrigger>
         </TabsList>
         <TabsContent value="python">
           <CodeBlock code={modelSnippet(model)} />
@@ -92,10 +114,11 @@ function CallThisModel({ model }: { model: ModelGroupInfo }) {
 }
 
 function CustomMetadata({ model }: { model: ModelGroupInfo }) {
+  const { t } = useTranslation();
   const metadata = Object.entries(model.custom_metadata ?? {});
   if (metadata.length === 0) return null;
   return (
-    <PaneSection title="Custom metadata">
+    <PaneSection title={t("publicModelHub.modelInspector.customMetadata.title")}>
       <dl className="grid grid-cols-[160px_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm">
         {metadata.map(([key, value]) => (
           <React.Fragment key={key}>
@@ -109,14 +132,15 @@ function CustomMetadata({ model }: { model: ModelGroupInfo }) {
 }
 
 function SupportedParams({ params }: { params: string[] }) {
+  const { t } = useTranslation();
   if (params.length === 0) return null;
   return (
     <Collapsible>
       <PaneSection
-        title="Supported OpenAI parameters"
+        title={t("publicModelHub.modelInspector.supportedParams.title")}
         aside={
           <CollapsibleTrigger render={<Button variant="ghost" size="sm" />}>
-            Show {params.length}
+            {t("publicModelHub.modelInspector.supportedParams.show", { total: params.length })}
             <ChevronDown className="text-muted-foreground" />
           </CollapsibleTrigger>
         }
@@ -130,6 +154,7 @@ function SupportedParams({ params }: { params: string[] }) {
 }
 
 export function ModelInspector({ model }: { model: ModelGroupInfo }) {
+  const { t } = useTranslation();
   const providers = model.providers ?? [];
   const capabilities = modelCapabilities(model);
   return (
@@ -137,22 +162,28 @@ export function ModelInspector({ model }: { model: ModelGroupInfo }) {
       <InspectorHeader
         media={<ProviderAvatar provider={providers[0] ?? ""} className="size-6" />}
         title={model.model_group}
-        copyLabel="Copy model name"
+        copyLabel={t("publicModelHub.modelInspector.copyName")}
         status={<HealthBadge model={model} />}
         description={summary(model)}
       />
       {model.model_group.includes("*") && (
         <Alert>
-          <AlertTitle>Wildcard model</AlertTitle>
+          <AlertTitle>{t("publicModelHub.modelInspector.wildcard.title")}</AlertTitle>
           <AlertDescription>
-            Call it as <code className="font-mono">{wildcardExample(model.model_group)}</code>, with any model name this
-            provider offers
+            <Trans
+              i18nKey="publicModelHub.modelInspector.wildcard.description"
+              components={{ example: <code className="font-mono">{wildcardExample(model.model_group)}</code> }}
+            />
           </AlertDescription>
         </Alert>
       )}
       <Facts groups={modelFacts(model)} />
+      <DeploymentPricingBreakdown
+        deployments={model.deployment_pricing}
+        heading={<h3 className={SECTION_TITLE}>{t("publicModelHub.modelInspector.pricingByDeployment")}</h3>}
+      />
       {capabilities.length > 0 && (
-        <PaneSection title="Capabilities">
+        <PaneSection title={t("publicModelHub.modelInspector.capabilities")}>
           <Badges items={capabilities} />
         </PaneSection>
       )}

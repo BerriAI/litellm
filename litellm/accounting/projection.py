@@ -1,5 +1,5 @@
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from itertools import chain
 from types import MappingProxyType
@@ -24,8 +24,11 @@ from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
 
 _FIELDS: Final = TypeAdapter(dict[str, object])
 _STRINGS: Final = TypeAdapter(tuple[str, ...])
+_VALUES: Final = TypeAdapter(tuple[object, ...])
 _ROWS: Final = TypeAdapter(tuple[dict[str, object], ...])
 _TASK_TYPES: Final = frozenset(load_model_insight_tasks())
+_MAX_INDEXED_TEXT_BYTES: Final = 2000
+_MAX_COUNTER: Final = 2**40
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,7 +57,8 @@ def _tags(row: Mapping[str, object]) -> tuple[str, ...]:
     value: Final = row.get("request_tags")
     if value is None:
         return ()
-    return _STRINGS.validate_json(value) if isinstance(value, str) else _STRINGS.validate_python(value)
+    parsed: Final = _VALUES.validate_json(value) if isinstance(value, str) else _VALUES.validate_python(value)
+    return tuple(tag for tag in parsed if isinstance(tag, str))
 
 
 def _date(row: Mapping[str, object]) -> str | None:
@@ -129,6 +133,7 @@ def _daily_counters(row: Mapping[str, object], metadata: Mapping[str, object]) -
         ("prompt_caching_savings_spend", _number(savings.get("prompt_caching"))),
         ("gateway_injected_caching_savings_spend", _number(savings.get("gateway_injected_caching"))),
         ("autorouter_savings_spend", 0.0 if internal else _number(savings.get("autorouter"))),
+        ("guardrail_spend", _number(metadata.get("accounting_guardrail_spend"))),
         ("total_response_time_ms", _number(duration) if timed else 0),
         ("timed_requests", int(timed)),
     )
@@ -191,12 +196,30 @@ def _window_contributions(row: Mapping[str, object], metadata: Mapping[str, obje
 
 def project(row: Mapping[str, object]) -> tuple[Contribution, ...]:
     metadata: Final = _fields(row.get("metadata"))
-    return (
+    contributions: Final = (
         *_entity_contributions(row, metadata),
         *_daily_contributions(row, metadata),
         *_window_contributions(row, metadata),
         *_model_contributions(row, metadata),
         *_guardrail_contributions(row, metadata),
+    )
+    return tuple(_capped(contribution) for contribution in contributions if _indexable(contribution))
+
+
+def _indexable(contribution: Contribution) -> bool:
+    texts: Final = (value for _, value in (*contribution.key, *contribution.values) if value is not None)
+    return all(len(text.encode("utf-8", "surrogatepass")) <= _MAX_INDEXED_TEXT_BYTES for text in texts)
+
+
+def _capped(contribution: Contribution) -> Contribution:
+    """Counters are summed into bigint columns in the charge's transaction, so one capped far below that range
+    can never overflow a day's total."""
+    return replace(
+        contribution,
+        increments=tuple(
+            (name, max(-_MAX_COUNTER, min(_MAX_COUNTER, value)) if isinstance(value, int) else value)
+            for name, value in contribution.increments
+        ),
     )
 
 

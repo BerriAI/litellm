@@ -16,12 +16,13 @@ following the OpenAI Response API format.
 
 import asyncio
 import json
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any, Dict, Final, Optional
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
-from fastapi import Request
+from fastapi import HTTPException, Request
 from pydantic import ValidationError
 
 from litellm.proxy.response_polling.polling_handler import ResponsePollingHandler
@@ -1523,6 +1524,395 @@ class TestBackgroundStreamingTerminalEvents:
         final_call = handler.update_state.call_args_list[-1]
         assert final_call.kwargs["status"] == "failed"
         assert final_call.kwargs["error"] == error_payload
+
+    @pytest.mark.asyncio
+    async def test_a_late_failure_after_keepalive_pings_sets_failed_status_and_error(self):
+        from litellm.proxy.common_request_processing import RESPONSES_LATE_SSE_FRAMING
+        from litellm.proxy.response_polling.background_streaming import (
+            background_streaming_task,
+        )
+
+        late_frames: Final = RESPONSES_LATE_SSE_FRAMING.failure(HTTPException(status_code=429, detail="rate limited"))
+
+        async def _body_iterator():
+            yield b": ping\n\n"
+            for frame in late_frames:
+                yield frame.encode()
+
+        mock_response: Final = Mock()
+        mock_response.body_iterator = _body_iterator()
+        handler: Final = AsyncMock(spec=ResponsePollingHandler)
+        kwargs: Final = _make_background_streaming_kwargs("poll_late_failure", handler)
+
+        with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(
+                return_value=mock_response
+            )
+            await background_streaming_task(**kwargs)
+
+        final_call: Final = handler.update_state.call_args_list[-1]
+        assert final_call.kwargs["status"] == "failed"
+        assert final_call.kwargs["error"] == {"code": "rate_limit_exceeded", "message": "rate limited"}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("data_type", "nested_error", "expected_error"),
+        [
+            (
+                {"type": "error"},
+                {"type": "guardrail_error", "code": "400", "message": "output blocked by policy"},
+                {"code": "invalid_request_error", "message": "output blocked by policy"},
+            ),
+            ({"type": "error"}, "output blocked by policy", {"code": "server_error", "message": "output blocked by policy"}),
+            (
+                {},
+                {"code": "400", "message": "output blocked by policy"},
+                {"code": "invalid_request_error", "message": "output blocked by policy"},
+            ),
+            (
+                {"type": "response.output_text.delta"},
+                {"code": "400", "message": "output blocked by policy"},
+                {"code": "invalid_request_error", "message": "output blocked by policy"},
+            ),
+        ],
+        ids=["typed_object", "typed_string", "untyped_object", "delta_typed_object"],
+    )
+    async def test_a_nested_only_error_event_keeps_its_reason(
+        self,
+        data_type: Mapping[str, str],
+        nested_error: Mapping[str, str] | str,
+        expected_error: Mapping[str, str],
+    ):
+        from litellm.proxy.response_polling.background_streaming import (
+            background_streaming_task,
+        )
+
+        error_event: Final = {**data_type, "sequence_number": 9, "error": nested_error}
+
+        async def _body_iterator():
+            yield b'data: {"type": "response.in_progress"}\n\n'
+            yield f"event: error\ndata: {json.dumps(error_event)}\n\n".encode()
+
+        mock_response: Final = Mock()
+        mock_response.body_iterator = _body_iterator()
+        handler: Final = AsyncMock(spec=ResponsePollingHandler)
+        kwargs: Final = _make_background_streaming_kwargs("poll_nested_error", handler)
+
+        with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(
+                return_value=mock_response
+            )
+            await background_streaming_task(**kwargs)
+
+        final_call: Final = handler.update_state.call_args_list[-1]
+        assert final_call.kwargs["status"] == "failed"
+        assert final_call.kwargs["error"] == expected_error
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("chunks", "expected_status", "expected_error", "expected_usage"),
+        [
+            (
+                (
+                    'data: {"type": "response.output_text.delta", "delta": "hi"}\n\n'
+                    'event: error\ndata: {"error": {"code": "400", "message": "output blocked by policy"}}\n\n',
+                ),
+                "failed",
+                {"code": "invalid_request_error", "message": "output blocked by policy"},
+                None,
+            ),
+            (
+                (
+                    'event: error\ndata: {"error": {"code": "400", "message": "output blocked by policy"}}\n\n',
+                    'data: {"type": "response.completed", "response": {"status": "completed", "usage": {"input_tokens": 3}}}\n\n',
+                ),
+                "completed",
+                None,
+                {"input_tokens": 3},
+            ),
+            (
+                (
+                    'data:{"type": "response.output_text.delta", "delta": "hi"}\n\n'
+                    'data: {"type": "response.completed", "response": {"status": "completed", "usage": {"input_tokens": 3}}}\n\n',
+                ),
+                "completed",
+                None,
+                {"input_tokens": 3},
+            ),
+            (
+                (
+                    'event: error\ndata: {"error": {"code": "' + "9" * 4400 + '", "message": "huge code"}}\n\n',
+                    'data: {"type": "response.completed", "response": {"status": "completed", "usage": {"input_tokens": 3}}}\n\n',
+                ),
+                "completed",
+                None,
+                {"input_tokens": 3},
+            ),
+            (
+                (
+                    'data: {"type": "response.output_item.done", "output_index": 0, "item": "hook-text"}\n\n',
+                    'data: {"type": "response.completed", "response": {"status": "completed", "usage": {"input_tokens": 3}}}\n\n',
+                ),
+                "completed",
+                None,
+                {"input_tokens": 3},
+            ),
+            (
+                (
+                    'event: error\ndata: {"error": {"code": "400", "message": "output blocked by policy"}}\n\n'
+                    'event: response.completed\ndata: {"type": "response.completed", "response": {"status": "completed"}}\n\n',
+                ),
+                "completed",
+                None,
+                None,
+            ),
+            (
+                (
+                    'data: {"type": "response.output_text.delta", "delta": "hi"}\n\n',
+                    'data: [DONE]\n\nevent: error\ndata: {"error": {"code": "400", "message": "output blocked by policy"}}\n\n',
+                ),
+                "completed",
+                None,
+                None,
+            ),
+            (('data: {"type": "response.failed", "response": "hook-text"}\n\n',), "failed", None, None),
+            (('data: {"type": "response.failed", "response": null}\n\n',), "failed", None, None),
+            (
+                (
+                    'event: error\ndata: {"error": {"code": "400", "message": "output blocked by policy"}}\n\n'
+                    'event: response.incomplete\ndata: {"type": "response.incomplete", '
+                    '"response": {"status": "incomplete", "usage": {"input_tokens": 3}}}\n\n',
+                ),
+                "incomplete",
+                None,
+                {"input_tokens": 3},
+            ),
+            (
+                (
+                    'event: error\ndata: {"error": {"code": "400", "message": "output blocked by policy"}}\n\n',
+                    'data: {"type": "response.output_text.delta", "delta": "hi"}\n\n'
+                    'data: {"type": "response.completed", "response": {"status": "completed", "usage": {"input_tokens": 3}}}\n\n',
+                ),
+                "completed",
+                None,
+                {"input_tokens": 3},
+            ),
+            (
+                (
+                    'data: {"type": "response.output_text.delta", "delta": "hi"}\n\n'
+                    'data: {"type": "hook.huge", "n": ' + "9" * 4400 + "}\n\n",
+                    'data: {"type": "response.completed", "response": {"status": "completed", "usage": {"input_tokens": 3}}}\n\n',
+                ),
+                "completed",
+                None,
+                {"input_tokens": 3},
+            ),
+            (
+                (
+                    'data: {"type": "response.output_text.delta", "delta": "hi"}\n\ndata: [DONE]\n\n',
+                    'data: {"type": "response.completed", "response": {"status": "completed", "usage": {"input_tokens": 3}}}\n\n',
+                ),
+                "completed",
+                None,
+                {"input_tokens": 3},
+            ),
+            (
+                (
+                    'data: {"type": "response.completed", "response": {"status": "completed", "usage": {"input_tokens": 3}}}\n\n'
+                    'data: {"type": "response.failed", "response": {"status": "failed", '
+                    '"error": {"code": "server_error", "message": "late"}}}\n\n',
+                ),
+                "completed",
+                None,
+                {"input_tokens": 3},
+            ),
+            (
+                ('data: event: response.incomplete\ndata: {"type": "response.incomplete", "response": {"status": "incomplete"}}\n\n',),
+                "completed",
+                None,
+                None,
+            ),
+            (
+                (
+                    'data: {"type": "response.completed", "response": {"status": "completed", "usage": {"input_tokens": 3}}}\n\n',
+                    'data: {"type": "response.failed", "response": {"status": "failed", '
+                    '"error": {"code": "server_error", "message": "late"}}}\n\n',
+                ),
+                "completed",
+                None,
+                {"input_tokens": 3},
+            ),
+            (
+                (
+                    'data: {"type": "response.failed", "response": {"status": "failed", '
+                    '"error": {"code": "server_error", "message": "first"}, "usage": {"input_tokens": 3}}}\n\n',
+                    'data: {"type": "response.completed", "response": {"status": "completed", "usage": {"input_tokens": 9}}}\n\n',
+                ),
+                "failed",
+                {"code": "server_error", "message": "first"},
+                {"input_tokens": 3},
+            ),
+        ],
+        ids=[
+            "error_frame_after_a_delta",
+            "error_frame_then_completed",
+            "unspaced_delta_then_completed",
+            "error_code_past_the_int_digit_limit_then_completed",
+            "output_item_done_with_a_string_item_then_completed",
+            "error_frame_then_completed_in_one_chunk",
+            "error_frame_after_done_in_one_chunk",
+            "failed_event_whose_response_is_a_string",
+            "failed_event_whose_response_is_null",
+            "error_frame_and_incomplete_in_one_chunk",
+            "error_frame_then_completed_behind_a_delta_in_one_chunk",
+            "frame_past_the_int_digit_limit_behind_a_delta_then_completed",
+            "done_behind_a_delta_in_one_chunk_then_completed",
+            "completed_then_failed_in_one_chunk",
+            "event_line_sent_as_a_data_line_of_one_event",
+            "completed_then_failed_in_the_next_chunk",
+            "failed_then_completed_in_the_next_chunk",
+        ],
+    )
+    async def test_a_poll_stores_what_its_stream_ended_with(
+        self,
+        chunks: tuple[str, ...],
+        expected_status: str,
+        expected_error: Mapping[str, str] | None,
+        expected_usage: Mapping[str, int] | None,
+    ):
+        from litellm.proxy.response_polling.background_streaming import (
+            background_streaming_task,
+        )
+
+        async def _body_iterator():
+            yield b'data: {"type": "response.in_progress"}\n\n'
+            for chunk in chunks:
+                yield chunk.encode()
+
+        mock_response: Final = Mock()
+        mock_response.body_iterator = _body_iterator()
+        handler: Final = AsyncMock(spec=ResponsePollingHandler)
+        kwargs: Final = _make_background_streaming_kwargs("poll_stream_end", handler)
+
+        with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(
+                return_value=mock_response
+            )
+            await background_streaming_task(**kwargs)
+
+        final_call: Final = handler.update_state.call_args_list[-1]
+        assert final_call.kwargs["status"] == expected_status
+        assert final_call.kwargs["error"] == expected_error
+        assert final_call.kwargs["usage"] == expected_usage
+
+    @pytest.mark.asyncio
+    async def test_a_poll_stores_the_final_output_items_beside_one_that_is_not_an_object(self):
+        from litellm.proxy.response_polling.background_streaming import (
+            background_streaming_task,
+        )
+
+        final_item: Final = {"id": "msg_1", "content": [{"type": "output_text", "text": "final"}]}
+        draft_item: Final = {"id": "msg_1", "content": [{"type": "output_text", "text": ""}]}
+        completed: Final = {"type": "response.completed", "response": {"status": "completed", "output": ["hook-text", final_item]}}
+
+        async def _body_iterator():
+            yield f"data: {json.dumps({'type': 'response.output_item.added', 'item': draft_item})}\n\n".encode()
+            yield b'data: {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "draft"}\n\n'
+            yield f"data: {json.dumps(completed)}\n\n".encode()
+
+        mock_response: Final = Mock()
+        mock_response.body_iterator = _body_iterator()
+        handler: Final = AsyncMock(spec=ResponsePollingHandler)
+        kwargs: Final = _make_background_streaming_kwargs("poll_final_output", handler)
+
+        with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(
+                return_value=mock_response
+            )
+            await background_streaming_task(**kwargs)
+
+        stored_outputs: Final = [call.kwargs["output"] for call in handler.update_state.call_args_list if "output" in call.kwargs]
+        assert stored_outputs[-1] == [final_item]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("status_code", "body", "expected_error"),
+        [
+            (
+                404,
+                json.dumps(
+                    {"error": {"message": "model not found", "type": "invalid_request_error", "param": None, "code": "404"}}
+                ),
+                {"code": "not_found_error", "message": "model not found"},
+            ),
+            (429, "rate limited", {"code": "rate_limit_exceeded", "message": "Too Many Requests"}),
+            (
+                403,
+                json.dumps({"error": {"type": "guardrail_scan_error", "code": 403}}),
+                {"code": "permission_error", "message": "Forbidden"},
+            ),
+            (
+                404,
+                json.dumps({"error": {"message": "model not found", "type": "invalid_request_error", "param": None}}),
+                {"code": "not_found_error", "message": "model not found"},
+            ),
+        ],
+    )
+    async def test_a_first_chunk_error_polls_failed_like_a_late_one(
+        self, status_code: int, body: str, expected_error: Mapping[str, str]
+    ):
+        from fastapi import Response
+
+        from litellm.proxy.response_polling.background_streaming import (
+            background_streaming_task,
+        )
+
+        first_chunk_error: Final = Response(status_code=status_code, content=body)
+        handler: Final = AsyncMock(spec=ResponsePollingHandler)
+        kwargs: Final = _make_background_streaming_kwargs("poll_first_chunk_error", handler)
+
+        with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(
+                return_value=first_chunk_error
+            )
+            await background_streaming_task(**kwargs)
+
+        final_call: Final = handler.update_state.call_args_list[-1]
+        assert final_call.kwargs["status"] == "failed"
+        assert final_call.kwargs["error"] == expected_error
+
+    @pytest.mark.asyncio
+    async def test_a_non_streamed_success_response_still_polls_completed(self):
+        from fastapi.responses import JSONResponse
+
+        from litellm.proxy.response_polling.background_streaming import (
+            background_streaming_task,
+        )
+
+        handler: Final = AsyncMock(spec=ResponsePollingHandler)
+        kwargs: Final = _make_background_streaming_kwargs("poll_non_streamed_success", handler)
+
+        with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(
+                return_value=JSONResponse(status_code=200, content={"id": "resp_123", "status": "completed"})
+            )
+            await background_streaming_task(**kwargs)
+
+        final_call: Final = handler.update_state.call_args_list[-1]
+        assert final_call.kwargs["status"] == "completed"
+        assert final_call.kwargs["error"] is None
 
     @pytest.mark.asyncio
     async def test_response_incomplete_sets_incomplete_status_and_details(self):

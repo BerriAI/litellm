@@ -21,6 +21,7 @@ import { normalizeMoyaiUrl } from "./moyaiConnect";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import i18n from "@/i18n/i18n";
 import styles from "./MoyaiLanding.module.css";
+import { productNames } from "@/i18n/untranslated/productNames";
 
 export const MOYAI_GITHUB_URL = "https://github.com/BerriAI/moyai";
 export const MOYAI_WALKTHROUGH_URL = `${MOYAI_GITHUB_URL}#see-it-in-action`;
@@ -214,7 +215,7 @@ function DemoPreview() {
         <span className="size-2.5 rounded-full bg-[#ff5f57]" />
         <span className="size-2.5 rounded-full bg-[#febc2e]" />
         <span className="size-2.5 rounded-full bg-[#28c840]" />
-        <span className="ml-3 truncate text-xs text-[#a6a4c6]">github.com/BerriAI/moyai</span>
+        <span className="ml-3 truncate text-xs text-[#a6a4c6]">{productNames.moyaiRepository}</span>
       </div>
       {failed ? (
         <div className="flex aspect-[1196/720] flex-col items-center justify-center gap-3 text-[#c2c6d0]">
@@ -350,7 +351,7 @@ export default function MoyaiLanding({
             style={{ animationDelay: "0.08s" }}
           >
             <img src={moyaiHead.src} alt="" className={`${styles.mark} mb-[0.08em] h-[0.78em] w-auto`} />
-            <span>Moyai</span>
+            <span>{productNames.moyai}</span>
           </h1>
           <p
             className={`${styles.rise} mb-0 mt-3 text-[clamp(18px,1.8vw,26px)] tracking-[-0.01em] text-[rgba(226,234,255,0.86)]`}

@@ -42,6 +42,8 @@ pub(crate) enum Logging {
     Update,
     #[strum(serialize = "pre_call")]
     PreCall,
+    #[strum(serialize = "messages_input")]
+    MessagesInput,
     #[strum(serialize = "post_call")]
     PostCall,
     #[strum(serialize = "record_response")]
@@ -50,6 +52,8 @@ pub(crate) enum Logging {
     RecordApiWindow,
     #[strum(serialize = "defers_async_logging")]
     DefersAsync,
+    #[strum(serialize = "claim_async_success_log")]
+    ClaimAsyncSuccess,
     #[strum(serialize = "defer_success")]
     DeferSuccess,
     #[strum(serialize = "sync_success_for_async_call")]
@@ -58,6 +62,8 @@ pub(crate) enum Logging {
     SubmitSuccess,
     #[strum(serialize = "async_success_handler")]
     AsyncSuccessHandler,
+    #[strum(serialize = "mark_async_success_enqueued")]
+    MarkAsyncSuccessEnqueued,
     #[strum(serialize = "enqueue_logging")]
     Enqueue,
     #[strum(serialize = "failure_handler")]

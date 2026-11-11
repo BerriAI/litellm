@@ -8,7 +8,7 @@ import logging
 import os
 import threading
 import urllib.parse
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
@@ -557,15 +557,21 @@ _ALLOWED_TOOLS_TOOL_CHOICE: Final = {
     "type": "allowed_tools",
     "allowed_tools": {"mode": "required", "tools": [{"type": "function", "function": {"name": "get_time"}}]},
 }
+_RESPONSES_LAYOUT_ALLOWED_TOOLS_TOOL_CHOICE: Final = {
+    "type": "allowed_tools",
+    "mode": "required",
+    "tools": [{"type": "function", "name": "get_time"}],
+}
 _TWO_TOOLS: Final = [
     {"type": "function", "function": {"name": "get_time", "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}}},
 ]
 
 
+@pytest.mark.parametrize("tool_choice", [_ALLOWED_TOOLS_TOOL_CHOICE, _RESPONSES_LAYOUT_ALLOWED_TOOLS_TOOL_CHOICE])
 @pytest.mark.parametrize("model", ["openai/gpt-5.5", "azure/my-gpt-deployment"])
 def test_completion_forwards_allowed_tools_tool_choice_to_openai_compatible_chat(
-    respx_mock: respx.MockRouter, openai_api_response: dict[str, object], model: str
+    respx_mock: respx.MockRouter, openai_api_response: dict[str, object], model: str, tool_choice: dict[str, object]
 ):
     mock_route: Final = respx_mock.post(url__regex=r"http://localhost:12346/.*chat/completions.*").mock(
         return_value=httpx.Response(status_code=200, json=openai_api_response)
@@ -575,7 +581,7 @@ def test_completion_forwards_allowed_tools_tool_choice_to_openai_compatible_chat
         model=model,
         messages=[{"role": "user", "content": "What time is it?"}],
         tools=_TWO_TOOLS,
-        tool_choice=_ALLOWED_TOOLS_TOOL_CHOICE,
+        tool_choice=tool_choice,
         api_base="http://localhost:12346/v1",
         api_key="fake_api_key",
         api_version="2025-04-01-preview",
@@ -587,10 +593,10 @@ def test_completion_forwards_allowed_tools_tool_choice_to_openai_compatible_chat
     assert [tool["function"]["name"] for tool in sent["tools"]] == ["get_time", "get_weather"]
 
 
-@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize("tool_choice", [_ALLOWED_TOOLS_TOOL_CHOICE, _RESPONSES_LAYOUT_ALLOWED_TOOLS_TOOL_CHOICE])
 @pytest.mark.parametrize("model", ["anthropic/claude-sonnet-4-5", "gemini/gemini-2.5-flash", "bedrock/converse/x"])
 def test_completion_allowed_tools_tool_choice_is_a_400_where_the_provider_cannot_enforce_it(
-    respx_mock: respx.MockRouter, model: str, drop_params: bool
+    respx_mock: respx.MockRouter, model: str, tool_choice: dict[str, object]
 ):
     with pytest.raises(
         litellm.BadRequestError, match=r"allowed_tools.*only supported for azure, litellm_proxy, openai"
@@ -599,7 +605,127 @@ def test_completion_allowed_tools_tool_choice_is_a_400_where_the_provider_cannot
             model=model,
             messages=[{"role": "user", "content": "What time is it?"}],
             tools=_TWO_TOOLS,
-            tool_choice=_ALLOWED_TOOLS_TOOL_CHOICE,
+            tool_choice=tool_choice,
+            api_key="fake_api_key",
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+        )
+    assert exc.value.status_code == 400
+    assert not respx_mock.calls
+
+
+@pytest.mark.parametrize(
+    ("model", "tool_choice"),
+    [
+        ("hosted_vllm/my-model", _ALLOWED_TOOLS_TOOL_CHOICE),
+        ("hosted_vllm/my-model", _RESPONSES_LAYOUT_ALLOWED_TOOLS_TOOL_CHOICE),
+        ("openai/gpt-5.5", {"type": "allowed_tools", "mode": "required", "tools": []}),
+        ("openai/gpt-5.5", {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function"}]}),
+    ],
+)
+def test_completion_drop_params_drops_an_allowed_tools_tool_choice_it_cannot_send(
+    respx_mock: respx.MockRouter, openai_api_response: dict[str, object], model: str, tool_choice: dict[str, object]
+):
+    mock_route: Final = respx_mock.post(url__regex=r"http://localhost:12346/.*chat/completions.*").mock(
+        return_value=httpx.Response(status_code=200, json=openai_api_response)
+    )
+
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "What time is it?"}],
+        tools=_TWO_TOOLS,
+        tool_choice=tool_choice,
+        drop_params=True,
+        api_base="http://localhost:12346/v1",
+        api_key="fake_api_key",
+    )
+
+    assert mock_route.called
+    sent: Final = json.loads(respx_mock.calls[0].request.content)
+    assert "tool_choice" not in sent
+    assert [tool["function"]["name"] for tool in sent["tools"]] == ["get_time", "get_weather"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        {"type": "allowed_tools", "mode": "required", "tools": []},
+        {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "mcp", "name": ["get_time"]}]},
+        {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": [{"type": "mcp", "name": ["get_time"]}]}},
+    ],
+)
+async def test_a_malformed_allowed_tools_tool_choice_is_a_400_on_mcp_gateway_tools_without_drop_params(
+    tool_choice: dict[str, object], respx_mock: respx.MockRouter
+):
+    with pytest.raises(litellm.BadRequestError, match="Invalid tool choice") as exc:
+        await litellm.acompletion(
+            model="openai/gpt-5.5",
+            messages=[{"role": "user", "content": "What time is it?"}],
+            tools=[{"type": "mcp", "server_url": "litellm_proxy/mcp/demo", "require_approval": "never"}],
+            tool_choice=tool_choice,
+            api_base="http://localhost:12346/v1",
+            api_key="fake_api_key",
+        )
+
+    assert exc.value.status_code == 400
+    assert not respx_mock.calls
+
+
+_HOSTED_TOOL_CHOICE: Final = {"type": "web_search"}
+_HOSTED_TOOLS: Final[list[dict[str, object]]] = [*_TWO_TOOLS, {"type": "web_search"}]
+
+
+def test_completion_forwards_a_hosted_tool_choice_to_the_responses_api_unchanged(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post("https://api.openai.com/v1/responses").respond(
+        json={
+            "id": "resp_hosted",
+            "object": "response",
+            "created_at": 1,
+            "status": "completed",
+            "model": "gpt-5.6",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_hosted",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "18C and foggy", "annotations": []}],
+                }
+            ],
+            "usage": {"input_tokens": 40, "output_tokens": 5, "total_tokens": 45},
+        }
+    )
+
+    response: Final = litellm.completion(
+        model="openai/responses/gpt-5.6",
+        api_key="sk-test",
+        api_base="https://api.openai.com/v1",
+        messages=[{"role": "user", "content": "What is the weather in Paris right now?"}],
+        tools=_HOSTED_TOOLS,
+        tool_choice=_HOSTED_TOOL_CHOICE,
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert sent["tool_choice"] == _HOSTED_TOOL_CHOICE
+    assert {"type": "web_search"} in sent["tools"]
+    assert response.choices[0].message.content == "18C and foggy"
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize("model", ["anthropic/claude-sonnet-4-5", "gemini/gemini-2.5-flash", "bedrock/converse/x"])
+def test_completion_hosted_tool_choice_is_a_400_where_the_provider_cannot_run_it(
+    respx_mock: respx.MockRouter, model: str, drop_params: bool
+):
+    with pytest.raises(
+        litellm.BadRequestError, match=r"tool_choice type 'web_search'.*only supported for azure, litellm_proxy, openai"
+    ) as exc:
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "What is the weather in Paris right now?"}],
+            tools=_TWO_TOOLS,
+            tool_choice=_HOSTED_TOOL_CHOICE,
             drop_params=drop_params,
             api_key="fake_api_key",
             aws_access_key_id="fake",
@@ -608,6 +734,34 @@ def test_completion_allowed_tools_tool_choice_is_a_400_where_the_provider_cannot
         )
     assert exc.value.status_code == 400
     assert not respx_mock.calls
+
+
+def test_drop_params_drops_the_choice_beside_a_tool_the_provider_runs(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-4-5",
+                "content": [{"type": "text", "text": "done"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+    )
+
+    litellm.completion(
+        model="anthropic/claude-haiku-4-5",
+        messages=[{"role": "user", "content": "What time is it?"}],
+        tools=[{"type": "mcp", "server_label": "docs", "server_url": "https://mcp.example.com/sse"}],
+        tool_choice={"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "get_time"}]},
+        drop_params=True,
+        api_key="sk-ant-fake",
+    )
+
+    assert "tool_choice" not in json.loads(route.calls[0].request.content)
 
 
 _CLAUDE_TOOL_SEARCH_CALL: Final = {
@@ -1355,12 +1509,7 @@ def test_responses_api_bridge_check_azure_gpt_5_4_tools_plus_reasoning_routes_to
     assert model_info.get("mode") == "responses"
 
 
-def test_responses_api_bridge_check_azure_gpt_5_4_tools_with_default_reasoning_routes_to_responses():
-    """
-    Azure gpt-5.4 with tools and UNSET reasoning_effort must bridge: OpenAI enables
-    reasoning by default for gpt-5.4+, and Chat Completions rejects function tools
-    whenever reasoning is on.
-    """
+def test_responses_api_bridge_check_azure_gpt_5_4_tools_with_default_reasoning_stays_chat():
     from litellm.main import responses_api_bridge_check
 
     with patch("litellm.responses.bridge_check.get_model_info_helper") as mock_get_model_info:
@@ -1373,15 +1522,10 @@ def test_responses_api_bridge_check_azure_gpt_5_4_tools_with_default_reasoning_r
         )
 
     assert model == "gpt-5.4"
-    assert model_info.get("mode") == "responses"
+    assert model_info.get("mode") != "responses"
 
 
-def test_responses_api_bridge_check_gpt_5_4_tools_with_default_reasoning_routes_to_responses():
-    """
-    gpt-5.4 with tools and UNSET reasoning_effort must bridge: OpenAI enables reasoning
-    by default for gpt-5.4+, and Chat Completions rejects function tools whenever
-    reasoning is on ("use /v1/responses or set reasoning_effort to 'none'").
-    """
+def test_responses_api_bridge_check_gpt_5_4_tools_with_default_reasoning_stays_chat():
     from litellm.main import responses_api_bridge_check
 
     with patch("litellm.responses.bridge_check.get_model_info_helper") as mock_get_model_info:
@@ -1394,7 +1538,7 @@ def test_responses_api_bridge_check_gpt_5_4_tools_with_default_reasoning_routes_
         )
 
     assert model == "gpt-5.4"
-    assert model_info.get("mode") == "responses"
+    assert model_info.get("mode") != "responses"
 
 
 @pytest.mark.parametrize("region", ("us", "eu"))
@@ -1909,8 +2053,7 @@ def test_responses_api_bridge_check_custom_api_base_with_explicit_effort_still_r
     assert model_info.get("mode") == "responses"
 
 
-def test_responses_api_bridge_check_azure_with_api_base_and_unset_effort_routes():
-    """Azure OpenAI always sets api_base and does enforce the constraint; keep bridging."""
+def test_responses_api_bridge_check_azure_gpt_5_4_with_api_base_and_unset_effort_stays_chat():
     from litellm.main import responses_api_bridge_check
 
     with patch("litellm.responses.bridge_check.get_model_info_helper") as mock_get_model_info:
@@ -1924,7 +2067,7 @@ def test_responses_api_bridge_check_azure_with_api_base_and_unset_effort_routes(
         )
 
     assert model == "gpt-5.4"
-    assert model_info.get("mode") == "responses"
+    assert model_info.get("mode") != "responses"
 
 
 _FOUNDRY_API_BASE: Final = "https://myproject.services.ai.azure.com"
@@ -2533,9 +2676,7 @@ def non_openai_responses_bridge(
         json.dumps({"access_token": "token", "account_id": "acct", "expires_at": 4102444800})
     )
     monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
-    (tmp_path / "api-key.json").write_text(
-        json.dumps({"token": "token", "expires_at": 4102444800, "endpoints": {"api": "https://api.githubcopilot.com"}})
-    )
+    (tmp_path / "access-token").write_text("gho_test")
     litellm.register_model(
         {
             **{
@@ -2579,7 +2720,11 @@ def non_openai_responses_bridge(
             {"api_base": _FOUNDRY_API_BASE, "api_key": "fake-key"},
         ),
         "chatgpt": ("chatgpt/gpt-6.1-bridge-test", "https://chatgpt.com/backend-api/codex/responses", {}),
-        "github_copilot": ("github_copilot/gpt-6.1-bridge-test", "https://api.githubcopilot.com/responses", {}),
+        "github_copilot": (
+            "github_copilot/gpt-6.1-bridge-test",
+            "https://api.githubcopilot.com/responses",
+            {"api_base": "https://api.githubcopilot.com"},
+        ),
         "databricks": (
             "databricks/responses/databricks-gpt-bridge-test",
             "https://dbx.example/serving-endpoints/responses",
@@ -4216,6 +4361,41 @@ def test_anthropic_text_disable_url_suffix_env_var(
     assert str(disabled_route.calls.last.request.url) == "https://api.example.com/custom/complete"
 
 
+def test_huggingface_text_completion_sends_each_token_prompt_with_the_callers_params(
+    respx_mock: respx.MockRouter,
+) -> None:
+    from litellm.rust_bridge.tokenizer import get_encoding
+
+    encoding: Final = get_encoding("p50k_base")
+    respx_mock.get(url__startswith="https://huggingface.co/").respond(404)
+    endpoint: Final = respx_mock.post("https://hf.example.com/v1/chat/completions").respond(
+        json={
+            "id": "chatcmpl-hf",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "tgi",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}],
+        }
+    )
+
+    response: Final = litellm.text_completion(
+        model="huggingface/tgi",
+        prompt=[list(encoding.encode("Hello")), list(encoding.encode("world"))],
+        api_key="hf-test-key",
+        api_base="https://hf.example.com",
+        max_tokens=7,
+    )
+
+    assert [choice.text for choice in response.choices] == ["OK", "OK"]
+    sent: Final = sorted(
+        (json.loads(call.request.content) for call in endpoint.calls), key=lambda body: body["messages"][0]["content"]
+    )
+    assert [(body["messages"], body["max_tokens"]) for body in sent] == [
+        ([{"role": "user", "content": "Hello"}], 7),
+        ([{"role": "user", "content": "world"}], 7),
+    ]
+
+
 def test_image_edit_merges_headers_and_extra_headers():
     from litellm.images.main import base_llm_http_handler
 
@@ -5472,21 +5652,14 @@ def _priced_at(prompt_tokens, completion_tokens):
 @pytest.fixture
 def local_cost_map(monkeypatch):
     """The prices these tests assert are the checked-in ones. Setting the environment
-    variable alone does not reload the map, so pin the map itself.
-
-    Prices are read through two separate lru_caches, so pinning ``model_cost`` is not
-    enough on its own: an entry warmed against the network-fetched map keeps its old
-    prices and billing reads those while the assertions read the pinned map.
-    ``_invalidate_model_cost_lowercase_map`` clears both caches, where
-    ``get_model_info.cache_clear`` reaches only one. Invalidate on the way in and out
-    so entries never leak across tests in either direction."""
-    from litellm.utils import _invalidate_model_cost_lowercase_map
+    variable alone does not reload the map, so pin the map itself."""
+    from litellm.rust_bridge.host.model_cost import publish
 
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     yield
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 def test_a_streamed_response_bills_the_usage_the_provider_reported(local_cost_map):
@@ -6353,7 +6526,9 @@ def test_aiohttp_openai_warns_only_when_http2_enabled(
     assert warned is http2_on
 
 
-@pytest.mark.parametrize("tool_choice", [{"type": "bogus"}, {"name": "lookup_fruit"}, {"type": "file_search"}])
+@pytest.mark.parametrize(
+    "tool_choice", [{"type": "bogus"}, {"name": "lookup_fruit"}, {"type": "function", "name": "lookup_fruit"}]
+)
 def test_completion_rejects_untranslatable_tool_choice_with_a_400(tool_choice):
     with pytest.raises(litellm.BadRequestError) as exc_info:
         litellm.completion(
@@ -7703,6 +7878,7 @@ async def test_bedrock_converse_parses_scripted_response(
     assert json.loads(route.calls[0].request.content) == {
         "messages": [{"role": "user", "content": [{"text": "hello"}]}],
         "inferenceConfig": {},
+        "additionalModelResponseFieldPaths": ["/usage/output_tokens_details"],
     }
     assert response.choices[0].message.content == "Hello from Bedrock."
     assert response.usage.prompt_tokens == 8
@@ -9355,6 +9531,19 @@ async def test_responses_with_retries(sync_mode):
         mock_responses.assert_called_once()
         assert mock_responses.call_args.kwargs["num_retries"] == 0
         assert mock_responses.call_args.kwargs["max_retries"] == 0
+
+
+@pytest.mark.parametrize("retry_function", [acompletion_with_retries, aresponses_with_retries])
+@pytest.mark.asyncio
+async def test_async_retry_helpers_stop_when_the_call_is_cancelled(
+    retry_function: Callable[..., Awaitable[object]],
+) -> None:
+    upstream: Final = AsyncMock(side_effect=[asyncio.CancelledError(), MagicMock()])
+
+    with pytest.raises(asyncio.CancelledError):
+        await retry_function(model="gpt-4o", num_retries=3, original_function=upstream)
+
+    assert upstream.await_count == 1
 
 
 def test_azure_embedding_exceptions():

@@ -89,6 +89,32 @@ vi.mock("./common_components/OrganizationDropdown", () => ({
   ),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroups", () => ({
+  useAccessGroups: () => ({
+    data: [
+      { access_group_id: "ag-1", access_group_name: "Central Models" },
+      { access_group_id: "ag-2", access_group_name: "Research" },
+    ],
+    isLoading: false,
+    isError: false,
+  }),
+}));
+
+vi.mock("./common_components/AccessGroupSelector", () => ({
+  default: ({ value = [], onChange }: { value?: string[]; onChange?: (v: string[]) => void }) => (
+    <select
+      data-testid="access-group-selector"
+      multiple
+      value={value}
+      onChange={(e) => onChange?.(Array.from(e.target.selectedOptions, (option) => option.value))}
+      aria-label="Access Groups"
+    >
+      <option value="ag-1">Central Models</option>
+      <option value="ag-2">Research</option>
+    </select>
+  ),
+}));
+
 vi.mock("./ModelSelect/ModelSelect", () => {
   const ModelSelect = ({ value, onChange }: { value: string[]; onChange: (value: string[]) => void }) => (
     <select
@@ -134,6 +160,7 @@ describe("TeamSSOSettings", () => {
       rpm_limit: 100,
       models: ["gpt-4"],
       team_member_permissions: ["/key/generate", "/key/update"],
+      access_group_ids: ["ag-1"],
     },
   };
 
@@ -245,6 +272,47 @@ describe("TeamSSOSettings", () => {
     await waitFor(() => {
       expect(screen.getByText("gpt-4")).toBeInTheDocument();
     });
+  });
+
+  it("should display default access groups by name in view mode", async () => {
+    mockGetDefaultTeamSettings.mockResolvedValue({
+      values: { ...mockSettingsResponse.values, access_group_ids: ["ag-1", "ag-missing"] },
+    });
+
+    renderWithProviders(<TeamSSOSettings {...defaultProps} />);
+
+    expect(await screen.findByText("Central Models")).toBeInTheDocument();
+    expect(screen.getByText("ag-missing")).toBeInTheDocument();
+  });
+
+  it("should say the models default only applies to SSO auto-created teams", async () => {
+    mockGetDefaultTeamSettings.mockResolvedValue(mockSettingsResponse);
+
+    renderWithProviders(<TeamSSOSettings {...defaultProps} />);
+
+    expect(await screen.findByText(/auto-created from SSO groups/i)).toBeInTheDocument();
+  });
+
+  it("should send the newly selected access group alongside the existing one when saving", async () => {
+    mockGetDefaultTeamSettings.mockResolvedValue(mockSettingsResponse);
+    mockUpdateDefaultTeamSettings.mockResolvedValue({
+      settings: { ...mockSettingsResponse.values, access_group_ids: ["ag-1", "ag-2"] },
+    });
+
+    renderWithProviders(<TeamSSOSettings {...defaultProps} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /Edit Settings/i }));
+    await userEvent.selectOptions(screen.getByTestId("access-group-selector"), "ag-2");
+    await userEvent.click(screen.getByRole("button", { name: /Save Changes/i }));
+
+    await waitFor(() => {
+      expect(mockUpdateDefaultTeamSettings).toHaveBeenCalledWith(
+        "test-token",
+        expect.objectContaining({ access_group_ids: ["ag-1", "ag-2"] }),
+      );
+    });
+
+    expect(await screen.findByText("Research")).toBeInTheDocument();
   });
 
   it("should display permissions as tags in view mode", async () => {

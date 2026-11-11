@@ -721,3 +721,17 @@ def test_a_first_party_messages_request_never_fetches_the_remote_beta_headers_co
 
     assert request["messages"][1] == {"role": "system", "content": "be terse"}
     assert not remote_config.called
+
+
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        ("claude-sonnet-5", {"type": "disabled"}),
+        ("claude-haiku-4-5", None),
+        ("claude-sonnet-5-5", None),
+    ],
+)
+def test_none_disables_only_optional_default_thinking(model: str, expected: dict[str, str] | None) -> None:
+    params: Final[dict[str, object]] = {"reasoning_effort": "none", "output_config": {"effort": "high"}}
+    AnthropicMessagesConfig._translate_reasoning_effort_to_anthropic(model, params, 1024, "anthropic")
+    assert params == ({"thinking": expected} if expected is not None else {})

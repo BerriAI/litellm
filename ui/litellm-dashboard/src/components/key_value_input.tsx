@@ -1,5 +1,6 @@
 import React from "react";
 import { Minus, Plus } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,6 +13,7 @@ interface KeyValueInputProps {
 }
 
 const KeyValueInput: React.FC<KeyValueInputProps> = ({ value = [], onChange }) => {
+  const { t } = useTranslation();
   const handleAdd = () => onChange?.([...value, ["", ""]]);
 
   const handleRemove = (index: number) => onChange?.(value.filter((_, i) => i !== index));
@@ -23,14 +25,22 @@ const KeyValueInput: React.FC<KeyValueInputProps> = ({ value = [], onChange }) =
     <div className="space-y-2">
       {value.map(([key, val], index) => (
         <div key={index} className="flex items-center gap-2">
-          <Input placeholder="Header Name" value={key} onChange={(e) => handleChange(index, [e.target.value, val])} />
-          <Input placeholder="Header Value" value={val} onChange={(e) => handleChange(index, [key, e.target.value])} />
+          <Input
+            placeholder={t("keyValueInput.headerName")}
+            value={key}
+            onChange={(e) => handleChange(index, [e.target.value, val])}
+          />
+          <Input
+            placeholder={t("keyValueInput.headerValue")}
+            value={val}
+            onChange={(e) => handleChange(index, [key, e.target.value])}
+          />
           <Button
             type="button"
             variant="ghost"
             size="icon-sm"
             onClick={() => handleRemove(index)}
-            aria-label={`Remove header ${index + 1}`}
+            aria-label={t("keyValueInput.removeHeader", { position: index + 1 })}
           >
             <Minus />
           </Button>
@@ -38,7 +48,7 @@ const KeyValueInput: React.FC<KeyValueInputProps> = ({ value = [], onChange }) =
       ))}
       <Button type="button" variant="outline" onClick={handleAdd}>
         <Plus />
-        Add Header
+        {t("keyValueInput.addHeader")}
       </Button>
     </div>
   );

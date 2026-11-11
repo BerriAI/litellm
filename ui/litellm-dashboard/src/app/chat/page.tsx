@@ -503,7 +503,7 @@ export default function ChatConversationPage() {
       return t("chat.page.backgroundHint.cancelling");
     if (background.pending && storageUnavailable) return t("chat.page.backgroundHint.unsaved");
     if (background.pending) return t("chat.page.backgroundHint.running");
-    if (useBackground) return null;
+    if (useBackground || (!isStreaming && !isRequestInFlight)) return null;
     return t("chat.page.backgroundHint.unavailable");
   };
 
@@ -694,9 +694,6 @@ export default function ChatConversationPage() {
             {hint}
           </p>
         )}
-        <p className="moyai-chat-home-composer-hint">
-          {mode === "image" ? t("chat.page.composerHint.image") : t("chat.page.composerHint.chat")}
-        </p>
       </div>
     );
   };
@@ -724,19 +721,12 @@ export default function ChatConversationPage() {
             researchMode={research}
             draft={inputText}
             busy={isStreaming}
-            conversations={conversations}
-            onSelectConversation={(id) => {
-              void setConversationIdInUrl(id);
-            }}
             onPrompt={setInputText}
           >
             {inputBar(false)}
           </MoyaiChatHome>
         ) : (
           <div className="moyai-chat-conversation">
-            <header className="moyai-chat-conversation-header">
-              <h1>{activeConversation!.title}</h1>
-            </header>
             <div className="moyai-chat-transcript-layout">
               <div ref={messagesScrollRef} className="moyai-chat-transcript" style={{ overflowAnchor: "none" }}>
                 <ChatMessages

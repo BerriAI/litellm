@@ -35,6 +35,8 @@ from dataclasses import dataclass
 from typing import Any, Dict, Final
 from unittest.mock import MagicMock, patch
 
+from litellm.types.videos.main import VideoCreateOptionalRequestParams
+
 import pytest
 
 
@@ -439,18 +441,39 @@ def test_video_generation__custom_provider_map_base_video_config_is_dispatched(m
     from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 
     class QueueVideoConfig(OpenAIVideoConfig):
-        pass
+        def map_openai_params(
+            self, video_create_optional_params: VideoCreateOptionalRequestParams, model: str, drop_params: bool
+        ) -> dict[str, object]:
+            return dict(video_create_optional_params)
 
     video_config: Final = QueueVideoConfig()
     monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "queue-video", "custom_handler": video_config}])
     monkeypatch.setattr(litellm, "_custom_providers", ["queue-video"])
     handler: Final = MagicMock(spec=BaseLLMHTTPHandler)
     with patch.object(videos_main, "base_llm_http_handler", handler):
-        videos_main.video_generation(model="queue-video/seedance-1", prompt="a cat", api_base="http://backend.test")
+        videos_main.video_generation(
+            model="queue-video/seedance-1",
+            prompt="a cat",
+            api_base="http://backend.test",
+            duration=8,
+            aspect_ratio="16:9",
+            frame_images=[{"type": "image_url", "image_url": {"url": "https://example.com/first.png"}, "frame_type": "first_frame"}],
+            input_references=[{"type": "image_url", "image_url": {"url": "https://example.com/ref.png"}}],
+            generate_audio=False,
+            seed=0,
+        )
     kw: Final = handler.video_generation_handler.call_args.kwargs
     assert kw["video_generation_provider_config"] is video_config
     assert kw["custom_llm_provider"] == "queue-video"
     assert kw["model"] == "seedance-1"
+    assert kw["video_generation_optional_request_params"] == {
+        "duration": 8,
+        "aspect_ratio": "16:9",
+        "frame_images": [{"type": "image_url", "image_url": {"url": "https://example.com/first.png"}, "frame_type": "first_frame"}],
+        "input_references": [{"type": "image_url", "image_url": {"url": "https://example.com/ref.png"}}],
+        "generate_audio": False,
+        "seed": 0,
+    }
 
 
 def test_video_generation__custom_provider_without_a_video_config_is_a_400(monkeypatch: pytest.MonkeyPatch) -> None:

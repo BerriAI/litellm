@@ -1,565 +1,204 @@
-import React, { useState } from "react";
-import type { ParseKeys } from "i18next";
-import { CircleHelp } from "lucide-react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import i18n from "@/i18n/i18n";
 import { z } from "zod";
+import i18n from "@/i18n/i18n";
 import { toast } from "@/lib/toast";
-import { registerClaudeCodePlugin, uploadClaudeCodeSkill } from "@/components/networking";
-import { FieldGroup } from "@/components/ui/field";
+import { importSkillHubSkill, updateSkillHubSkill, uploadSkillHubSkill } from "@/components/networking";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
-import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
-import {
-  Combobox,
-  ComboboxContent,
-  ComboboxEmpty,
-  ComboboxInput,
-  ComboboxItem,
-  ComboboxList,
-} from "@/components/ui/combobox";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { FieldGroup } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useZodForm } from "@/lib/forms/useZodForm";
-import {
-  validatePluginName,
-  isValidSemanticVersion,
-  isValidEmail,
-  parseKeywords,
-  parseSkillSource,
-  isValidSubPath,
-  isValidSha256,
-  SkillSourcePreview,
-} from "@/components/claude_code_plugins/helpers";
-import { PluginAuthor, PluginSource, SkillRegisterRequest } from "@/components/claude_code_plugins/types";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { isValidSemanticVersion } from "@/components/claude_code_plugins/helpers";
+import { isPendingSkill, type SkillHubSkill, type SkillMutationResponse } from "@/components/claude_code_plugins/types";
+import { buildSkillImport, buildSkillMetadata, skillFormValues } from "@/components/claude_code_plugins/skillForm";
+
+const EDIT_SKILL_SOURCES = ["metadata", "upload"] as const;
+const NEW_SKILL_SOURCES = ["upload", "import"] as const;
 
 interface AddPluginFormProps {
   visible: boolean;
   onClose: () => void;
   accessToken: string | null;
-  onSuccess: () => void;
+  onSuccess: (response: SkillMutationResponse) => void;
+  skill?: SkillHubSkill;
+  requiresApproval?: boolean;
 }
 
-const MAX_SKILL_UPLOAD_BYTES = 10 * 1024 * 1024;
-
-const addPluginShape = {
-  sourceType: z.enum(["url", "upload"]),
+const skillShape = {
+  mode: z.enum(["upload", "import", "metadata"]),
   archiveFile: z
     .file()
     .refine((file) => file.name.toLowerCase().endsWith(".zip"), {
       error: () => i18n.t("skills.addForm.errors.zipRequired"),
     })
-    .max(MAX_SKILL_UPLOAD_BYTES, { error: () => i18n.t("skills.addForm.errors.zipTooLarge") })
+    .max(10 * 1024 * 1024, { error: () => i18n.t("skills.addForm.errors.zipTooLarge") })
     .nullable(),
-  skillUrl: z.string(),
-  subPath: z.string(),
-  sha256: z.string(),
-  name: z
-    .string()
-    .min(1, { error: () => i18n.t("skills.addForm.errors.nameRequired") })
-    .regex(/^[a-z0-9-]+$/, { error: () => i18n.t("skills.addForm.errors.nameInvalid") }),
+  url: z.string(),
+  skill: z.string(),
+  ref: z.string(),
+  path: z.string(),
   domain: z.string(),
   namespace: z.string(),
   description: z.string(),
-  category: z.string().nullable(),
   keywords: z.string(),
-  version: z.string(),
-  authorName: z.string(),
-  authorEmail: z.string().refine((value) => value === "" || z.email().safeParse(value).success, {
-    error: () => i18n.t("skills.addForm.errors.emailInvalid"),
+  version: z.string().refine((value) => !value.trim() || isValidSemanticVersion(value.trim()), {
+    error: () => i18n.t("skills.addForm.toasts.invalidVersion"),
   }),
 };
-
-const addPluginSchema = z.object(addPluginShape).superRefine((values, context) => {
-  if (values.sourceType === "upload") {
-    if (!values.archiveFile) {
-      context.addIssue({ code: "custom", path: ["archiveFile"], message: i18n.t("skills.addForm.errors.zipRequired") });
-    }
-    return;
+const skillSchema = z.object(skillShape).superRefine((values, context) => {
+  if (values.mode === "upload" && !values.archiveFile) {
+    context.addIssue({ code: "custom", path: ["archiveFile"], message: i18n.t("skills.addForm.errors.zipRequired") });
   }
-  if (!values.skillUrl) {
-    context.addIssue({ code: "custom", path: ["skillUrl"], message: i18n.t("skills.addForm.errors.urlRequired") });
+  if (values.mode === "import" && !values.url.trim()) {
+    context.addIssue({ code: "custom", path: ["url"], message: i18n.t("skills.addForm.errors.urlRequired") });
   }
-  if (values.subPath && !isValidSubPath(values.subPath)) {
-    context.addIssue({ code: "custom", path: ["subPath"], message: i18n.t("skills.addForm.errors.subPathInvalid") });
-  }
-  if (!isValidSha256(values.sha256)) {
-    context.addIssue({ code: "custom", path: ["sha256"], message: i18n.t("skills.addForm.errors.sha256Invalid") });
+  if (values.mode === "metadata" && values.description.length > 1024) {
+    context.addIssue({
+      code: "custom",
+      path: ["description"],
+      message: i18n.t("skills.addForm.errors.descriptionTooLong"),
+    });
   }
 });
 
-type AddPluginFormValues = z.infer<typeof addPluginSchema>;
-
-const EMPTY_VALUES: AddPluginFormValues = {
-  sourceType: "url",
-  archiveFile: null,
-  skillUrl: "",
-  subPath: "",
-  sha256: "",
-  name: "",
-  domain: "",
-  namespace: "",
-  description: "",
-  category: null,
-  keywords: "",
-  version: "",
-  authorName: "",
-  authorEmail: "",
-};
-
-const buildAuthor = (values: AddPluginFormValues): PluginAuthor | undefined => {
-  const name = values.authorName.trim();
-  const email = values.authorEmail.trim();
-  if (!name) {
-    return undefined;
-  }
-  return email ? { name, email } : { name };
-};
-
-const archiveUrlOf = (preview: SkillSourcePreview | null): string | undefined =>
-  preview?.parsed.source === "archive" ? preview.parsed.url : undefined;
-
-const withArchiveDigest = (source: PluginSource, sha256: string): PluginSource => {
-  const digest = sha256.trim();
-  return source.source === "archive" && digest ? { ...source, sha256: digest.toLowerCase() } : source;
-};
-
-const buildSkillMetadata = (values: AddPluginFormValues): Omit<SkillRegisterRequest, "source"> => {
-  const author = buildAuthor(values);
-  return {
-    name: values.name.trim(),
-    ...(values.version ? { version: values.version.trim() } : {}),
-    ...(values.description ? { description: values.description.trim() } : {}),
-    ...(author ? { author } : {}),
-    ...(values.category ? { category: values.category } : {}),
-    ...(values.keywords ? { keywords: parseKeywords(values.keywords) } : {}),
-    ...(values.domain ? { domain: values.domain.trim() } : {}),
-    ...(values.namespace ? { namespace: values.namespace.trim() } : {}),
-  };
-};
-
-const PREDEFINED_CATEGORIES = [
-  "Development",
-  "Productivity",
-  "Learning",
-  "Security",
-  "Data & Analytics",
-  "Integration",
-  "Testing",
-  "Documentation",
-];
-
-const SUB_PATH_LOCK_REASON_KEY = {
-  "git-subdir": "skills.addForm.subPathLock.gitSubdir",
-  archive: "skills.addForm.subPathLock.archive",
-} as const satisfies Record<string, ParseKeys>;
-
-type SubPathLock = keyof typeof SUB_PATH_LOCK_REASON_KEY;
-
-const subPathLockFor = (source: PluginSource["source"] | undefined): SubPathLock | null =>
-  source === "git-subdir" || source === "archive" ? source : null;
-
-const labelWithHint = (label: string, hint: string): React.ReactNode => (
-  <>
-    {label}
-    <Tooltip>
-      <TooltipTrigger render={<CircleHelp className="size-3.5 shrink-0 cursor-help text-muted-foreground" />} />
-      <TooltipContent>{hint}</TooltipContent>
-    </Tooltip>
-  </>
-);
-
-const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessToken, onSuccess }) => {
+export default function AddPluginForm({
+  visible,
+  onClose,
+  accessToken,
+  onSuccess,
+  skill,
+  requiresApproval = false,
+}: AddPluginFormProps) {
   const { t } = useTranslation();
-  const form = useZodForm(addPluginSchema, { defaultValues: EMPTY_VALUES });
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [urlPreview, setUrlPreview] = useState<SkillSourcePreview | null>(null);
-  const [subPathLock, setSubPathLock] = useState<SubPathLock | null>(null);
-  const [archiveInputKey, setArchiveInputKey] = useState(0);
-  const isUpload = form.watch("sourceType") === "upload";
-
-  const clearArchive = () => {
-    form.setValue("archiveFile", null);
-    form.clearErrors("archiveFile");
-    setArchiveInputKey((key) => key + 1);
-  };
-
-  const resetDraft = () => {
-    form.reset(EMPTY_VALUES);
-    setArchiveInputKey((key) => key + 1);
-    setUrlPreview(null);
-    setSubPathLock(null);
-  };
-
-  const handleSourceChange = (value: unknown) => {
-    if (value !== "url" && value !== "upload") return;
-    form.setValue("sourceType", value);
-    clearArchive();
-    form.clearErrors(["skillUrl", "subPath", "sha256"]);
-  };
-
-  const selectArchive = (file: File | undefined) => {
-    form.setValue("archiveFile", file ?? null, { shouldValidate: true });
-    if (!file || !addPluginShape.archiveFile.safeParse(file).success) return;
-    if (!form.getValues("name")) {
-      form.setValue(
-        "name",
-        file.name
-          .slice(0, -4)
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, "-")
-          .replace(/^-+|-+$/g, ""),
-      );
-    }
-  };
-
-  const recomputePreview = (skillUrl: string, subPath: string) => {
-    const lock = subPathLockFor(parseSkillSource(skillUrl)?.parsed.source);
-    setSubPathLock(lock);
-    if (lock && form.getValues("subPath")) {
-      form.setValue("subPath", "");
-    }
-    const preview = parseSkillSource(skillUrl, lock ? undefined : subPath);
-    if (archiveUrlOf(preview) !== archiveUrlOf(urlPreview) && form.getValues("sha256")) {
-      form.setValue("sha256", "");
-    }
-    setUrlPreview(preview);
-    if (preview && !form.getValues("name")) {
-      form.setValue("name", preview.suggestedName);
-    }
-  };
-
-  const handleSubmit = async (values: AddPluginFormValues) => {
-    if (!accessToken) {
-      toast.error(t("skills.addForm.toasts.noToken"));
-      return;
-    }
-
-    if (values.sourceType === "url" && !urlPreview) {
-      toast.error(t("skills.addForm.toasts.invalidUrl"));
-      return;
-    }
-
-    if (!validatePluginName(values.name)) {
-      toast.error(t("skills.addForm.toasts.invalidName"));
-      return;
-    }
-
-    if (values.version && !isValidSemanticVersion(values.version)) {
-      toast.error(t("skills.addForm.toasts.invalidVersion"));
-      return;
-    }
-
-    if (values.authorEmail && !isValidEmail(values.authorEmail)) {
-      toast.error(t("skills.addForm.toasts.invalidEmail"));
-      return;
-    }
-
-    setIsSubmitting(true);
+  const form = useZodForm(skillSchema, { defaultValues: skillFormValues(skill) });
+  const mode = form.watch("mode");
+  const [error, setError] = useState<string | null>(null);
+  const isSubmitting = form.formState.isSubmitting;
+  const submit = async (values: z.infer<typeof skillSchema>) => {
+    if (!accessToken) return;
+    setError(null);
     try {
-      const metadata = buildSkillMetadata(values);
-      if (values.sourceType === "upload") {
-        if (!values.archiveFile) return;
-        await uploadClaudeCodeSkill(accessToken, values.archiveFile, metadata);
-      } else if (urlPreview) {
-        await registerClaudeCodePlugin(accessToken, {
-          ...metadata,
-          source: withArchiveDigest(urlPreview.parsed, values.sha256),
-        });
-      }
-      toast.success(t("skills.addForm.toasts.registered"));
-      resetDraft();
-      onSuccess();
+      const write = () => {
+        if (values.mode === "upload" && values.archiveFile) {
+          return uploadSkillHubSkill(accessToken, values.archiveFile, values.version, skill);
+        }
+        if (skill) return updateSkillHubSkill(accessToken, skill.name, buildSkillMetadata(values, skill));
+        return importSkillHubSkill(accessToken, buildSkillImport(values));
+      };
+      const response = await write();
+      const publishedMessage = skill ? "skills.addForm.toasts.updated" : "skills.addForm.toasts.registered";
+      toast.success(t(isPendingSkill(response) ? "skills.addForm.toasts.submitted" : publishedMessage));
+      onSuccess(response);
       onClose();
-    } catch (error) {
-      console.error("Error registering skill:", error);
-      toast.error(error instanceof Error && error.message ? error.message : t("skills.addForm.toasts.registerFailed"));
-    } finally {
-      setIsSubmitting(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("skills.addForm.toasts.registerFailed"));
     }
   };
-
-  const handleCancel = () => {
-    if (isSubmitting) return;
-    resetDraft();
-    onClose();
+  const changeMode = (value: string) => {
+    if (value !== "upload" && value !== "import" && value !== "metadata") return;
+    form.setValue("mode", value);
+    form.setValue("archiveFile", null);
+    form.clearErrors();
+    setError(null);
   };
-
+  const directLabel = skill ? "skills.addForm.save" : "skills.addForm.submit";
+  const submitLabel = requiresApproval ? "skills.addForm.submitReview" : directLabel;
+  const fields =
+    mode === "import" ? (["url", "skill", "ref", "path"] as const) : (["domain", "namespace", "keywords"] as const);
   return (
-    <Dialog open={visible} onOpenChange={(open) => !open && handleCancel()}>
-      <DialogContent className="top-8 max-h-[calc(100dvh-4rem)] translate-y-0 overflow-y-auto sm:max-w-[700px]">
+    <Dialog open={visible} onOpenChange={(open) => !open && !isSubmitting && onClose()}>
+      <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle>{t("skills.addForm.title")}</DialogTitle>
+          <DialogTitle>{t(skill ? "skills.addForm.editTitle" : "skills.addForm.title")}</DialogTitle>
         </DialogHeader>
-        <TooltipProvider>
-          <form onSubmit={form.handleSubmit(handleSubmit)} noValidate className="mt-4">
+        {skill && <p className="text-sm font-medium">{skill.name}</p>}
+        {requiresApproval && <p className="text-sm text-muted-foreground">{t("skills.addForm.approvalNotice")}</p>}
+        <form onSubmit={form.handleSubmit(submit)} className="space-y-6">
+          <fieldset disabled={isSubmitting} className="space-y-6">
+            <FormField control={form.control} name="mode" label={t("skills.addForm.labels.source")}>
+              {({ value }) => (
+                <RadioGroup value={value} onValueChange={changeMode} className="flex gap-5">
+                  {(skill ? EDIT_SKILL_SOURCES : NEW_SKILL_SOURCES).map((option) => (
+                    <label key={option} className="flex items-center gap-2 text-sm">
+                      <RadioGroupItem value={option} />
+                      {t(`skills.addForm.modes.${option}`)}
+                    </label>
+                  ))}
+                </RadioGroup>
+              )}
+            </FormField>
             <FieldGroup>
-              <FormField control={form.control} name="sourceType" label={t("skills.addForm.labels.source")}>
-                {({ value }) => (
-                  <RadioGroup
-                    value={value}
-                    disabled={isSubmitting}
-                    onValueChange={handleSourceChange}
-                    aria-label={t("skills.addForm.labels.source")}
-                    className="flex gap-6"
-                  >
-                    <label className="flex items-center gap-2 text-sm">
-                      <RadioGroupItem value="url" />
-                      {t("skills.addForm.sourceOptions.url")}
-                    </label>
-                    <label className="flex items-center gap-2 text-sm">
-                      <RadioGroupItem value="upload" />
-                      {t("skills.addForm.sourceOptions.upload")}
-                    </label>
-                  </RadioGroup>
-                )}
-              </FormField>
-
-              {isUpload ? (
+              {mode === "upload" ? (
                 <FormField
                   control={form.control}
                   name="archiveFile"
                   label={t("skills.addForm.labels.archive")}
-                  description={t("skills.addForm.hints.archive")}
+                  description={t(skill ? "skills.addForm.replacementHint" : "skills.addForm.uploadHint")}
                 >
-                  {({ value, ...field }) => (
-                    <>
-                      <Input
-                        {...field}
-                        key={archiveInputKey}
-                        type="file"
-                        accept=".zip,application/zip"
-                        disabled={isSubmitting}
-                        onChange={(event) => selectArchive(event.target.files?.[0])}
-                      />
-                      {value && (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          className="self-start"
-                          onClick={clearArchive}
-                          disabled={isSubmitting}
-                        >
-                          {t("skills.addForm.removeFile")}
-                        </Button>
-                      )}
-                    </>
+                  {({ value, onChange, ...field }) => (
+                    <Input
+                      {...field}
+                      type="file"
+                      accept=".zip,application/zip"
+                      onChange={(event) => onChange(event.target.files?.[0] ?? null)}
+                    />
                   )}
                 </FormField>
               ) : (
                 <>
-                  <FormField
-                    control={form.control}
-                    name="skillUrl"
-                    label={labelWithHint(t("skills.addForm.labels.sourceUrl"), t("skills.addForm.hints.sourceUrl"))}
-                  >
-                    {({ ref, onChange, ...field }) => (
-                      <Input
-                        {...field}
-                        ref={ref}
-                        placeholder={t("skills.addForm.placeholders.sourceUrl")}
-                        className="rounded-lg"
-                        onChange={(event) => {
-                          onChange(event);
-                          recomputePreview(event.target.value, form.getValues("subPath"));
-                        }}
-                      />
-                    )}
-                  </FormField>
-
-                  <FormField
-                    control={form.control}
-                    name="subPath"
-                    label={labelWithHint(t("skills.addForm.labels.subPath"), t("skills.addForm.hints.subPath"))}
-                    description={subPathLock ? t(SUB_PATH_LOCK_REASON_KEY[subPathLock]) : undefined}
-                  >
-                    {({ ref, onChange, ...field }) => (
-                      <Input
-                        {...field}
-                        ref={ref}
-                        placeholder="plugins/my-skill"
-                        className="rounded-lg"
-                        onChange={(event) => {
-                          onChange(event);
-                          recomputePreview(form.getValues("skillUrl"), event.target.value);
-                        }}
-                        disabled={subPathLock !== null}
-                      />
-                    )}
-                  </FormField>
-
-                  {urlPreview?.parsed.source === "archive" && (
-                    <FormField
-                      control={form.control}
-                      name="sha256"
-                      label={labelWithHint(t("skills.addForm.labels.sha256"), t("skills.addForm.hints.sha256"))}
-                    >
-                      {({ ref, ...field }) => (
-                        <Input
-                          {...field}
-                          ref={ref}
-                          placeholder={t("skills.addForm.placeholders.sha256")}
-                          className="rounded-lg font-mono"
-                        />
-                      )}
+                  {mode === "metadata" && (
+                    <FormField control={form.control} name="description" label={t("skills.addForm.labels.description")}>
+                      {(field) => <Textarea {...field} maxLength={1024} />}
                     </FormField>
                   )}
-
-                  {urlPreview && (
-                    <div className="rounded-lg border border-info/20 bg-info/10 px-3 py-2 text-sm text-info">
-                      {t("skills.addForm.detected", { source: urlPreview.label })}
-                    </div>
+                  {fields.map((name) => (
+                    <FormField
+                      key={name}
+                      control={form.control}
+                      name={name}
+                      label={t(`skills.addForm.neutralLabels.${name}`)}
+                    >
+                      {(field) => <Input {...field} />}
+                    </FormField>
+                  ))}
+                  {mode === "import" && (
+                    <p className="text-sm text-muted-foreground">{t("skills.addForm.importHint")}</p>
                   )}
                 </>
               )}
-
-              <FormField
-                control={form.control}
-                name="name"
-                label={labelWithHint(t("skills.addForm.labels.name"), t("skills.addForm.hints.name"))}
-              >
-                {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="my-skill" className="rounded-lg" />}
-              </FormField>
-
-              <div className="flex gap-4">
-                <FormField
-                  control={form.control}
-                  name="domain"
-                  label={labelWithHint(t("skills.addForm.labels.domain"), t("skills.addForm.hints.domain"))}
-                  className="flex-1"
-                >
-                  {({ ref, ...field }) => (
-                    <Input
-                      {...field}
-                      ref={ref}
-                      placeholder={t("skills.addForm.placeholders.domain")}
-                      className="rounded-lg"
-                    />
-                  )}
-                </FormField>
-                <FormField
-                  control={form.control}
-                  name="namespace"
-                  label={labelWithHint(t("skills.addForm.labels.namespace"), t("skills.addForm.hints.namespace"))}
-                  className="flex-1"
-                >
-                  {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="workflows" className="rounded-lg" />}
-                </FormField>
-              </div>
-
-              <FormField
-                control={form.control}
-                name="description"
-                label={labelWithHint(t("skills.addForm.labels.description"), t("skills.addForm.hints.description"))}
-              >
-                {({ ref, ...field }) => (
-                  <Textarea
-                    {...field}
-                    ref={ref}
-                    rows={3}
-                    placeholder={t("skills.addForm.placeholders.description")}
-                    maxLength={500}
-                    className="rounded-lg"
-                  />
-                )}
-              </FormField>
-
-              <FormField
-                control={form.control}
-                name="category"
-                label={labelWithHint(t("skills.addForm.labels.category"), t("skills.addForm.hints.category"))}
-              >
-                {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
-                  <Combobox items={PREDEFINED_CATEGORIES} value={value} onValueChange={onChange}>
-                    <ComboboxInput
-                      id={id}
-                      aria-invalid={ariaInvalid}
-                      aria-describedby={ariaDescribedBy}
-                      placeholder={t("skills.addForm.placeholders.category")}
-                      className="w-full rounded-lg"
-                      showClear={value != null && value !== ""}
-                    />
-                    <ComboboxContent>
-                      <ComboboxEmpty>{t("skills.addForm.noCategories")}</ComboboxEmpty>
-                      <ComboboxList>
-                        {(category: string) => (
-                          <ComboboxItem key={category} value={category}>
-                            {category}
-                          </ComboboxItem>
-                        )}
-                      </ComboboxList>
-                    </ComboboxContent>
-                  </Combobox>
-                )}
-              </FormField>
-
-              <FormField
-                control={form.control}
-                name="keywords"
-                label={labelWithHint(t("skills.addForm.labels.keywords"), t("skills.addForm.hints.keywords"))}
-              >
-                {({ ref, ...field }) => (
-                  <Input
-                    {...field}
-                    ref={ref}
-                    placeholder={t("skills.addForm.placeholders.keywords")}
-                    className="rounded-lg"
-                  />
-                )}
-              </FormField>
-
               <FormField
                 control={form.control}
                 name="version"
-                label={labelWithHint(t("skills.addForm.labels.version"), t("skills.addForm.hints.version"))}
+                label={t(skill ? "skills.addForm.versionOverride" : "skills.addForm.labels.version")}
+                description={
+                  skill
+                    ? t("skills.addForm.versionContext", { version: skill.version ?? t("skills.submissions.notSet") })
+                    : undefined
+                }
               >
-                {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="1.0.0" className="rounded-lg" />}
-              </FormField>
-
-              <FormField
-                control={form.control}
-                name="authorName"
-                label={labelWithHint(t("skills.addForm.labels.authorName"), t("skills.addForm.hints.authorName"))}
-              >
-                {({ ref, ...field }) => (
-                  <Input
-                    {...field}
-                    ref={ref}
-                    placeholder={t("skills.addForm.placeholders.authorName")}
-                    className="rounded-lg"
-                  />
-                )}
-              </FormField>
-
-              <FormField
-                control={form.control}
-                name="authorEmail"
-                label={labelWithHint(t("skills.addForm.labels.authorEmail"), t("skills.addForm.hints.authorEmail"))}
-              >
-                {({ ref, ...field }) => (
-                  <Input {...field} ref={ref} type="email" placeholder="author@example.com" className="rounded-lg" />
-                )}
+                {(field) => <Input {...field} placeholder={skill ? t("skills.addForm.automaticVersion") : "1.0.0"} />}
               </FormField>
             </FieldGroup>
-
-            <div className="mt-6 flex justify-end gap-2">
-              <Button type="button" variant="outline" onClick={handleCancel} disabled={isSubmitting}>
-                {t("skills.addForm.cancel")}
-              </Button>
-              <Button type="submit" disabled={isSubmitting} aria-busy={isSubmitting}>
-                {isSubmitting && <UiLoadingSpinner className="size-4" />}
-                {isSubmitting ? t("skills.addForm.adding") : t("skills.addForm.submit")}
-              </Button>
-            </div>
-          </form>
-        </TooltipProvider>
+          </fieldset>
+          {error && (
+            <p role="alert" className="text-sm text-destructive">
+              {error}
+            </p>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" onClick={onClose} disabled={isSubmitting}>
+              {t("skills.addForm.cancel")}
+            </Button>
+            <Button type="submit" disabled={isSubmitting} aria-busy={isSubmitting}>
+              {t(isSubmitting ? "skills.addForm.saving" : submitLabel)}
+            </Button>
+          </div>
+        </form>
       </DialogContent>
     </Dialog>
   );
-};
-
-export default AddPluginForm;
+}

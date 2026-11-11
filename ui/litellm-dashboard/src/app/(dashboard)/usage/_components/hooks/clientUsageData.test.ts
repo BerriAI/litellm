@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import i18n from "@/i18n/i18n";
 import {
   clientUsageFromLogs,
   identifyUsageClient,
@@ -87,6 +88,26 @@ describe("client usage from request logs", () => {
     expect(day?.date).toBe(localDay);
   });
 
+  it("should report guardrail spend inside model spend, capped at what each request was charged", () => {
+    const guarded = (request_id: string, spend: number, guardrail_information: unknown) =>
+      log({ request_id, spend, metadata: { user_agent: desktopAgent, guardrail_information } });
+    const result = clientUsageFromLogs(
+      page([
+        guarded("billed", 0.0076916, [
+          { guardrail_cost: 0.00015 },
+          { guardrail_cost: 0.0004, guardrail_cost_in_spend: false },
+        ]),
+        guarded("capped", 0.0001, { guardrail_cost: 0.0003 }),
+        guarded("malformed", 0.002, [{ guardrail_cost: "free" }]),
+        log(),
+      ]),
+      scope,
+    );
+    expect(result.error).toBeNull();
+    const metrics = result.data.results?.[0]?.breakdown?.models?.["provider-model"].metrics;
+    expect(metrics?.guardrail_spend).toBeCloseTo(0.00025, 10);
+  });
+
   it("should deduplicate request ids without double counting bare and full user-agent tags", () => {
     const result = clientUsageFromLogs(page([log(), log({ spend: 0.02 })]), scope);
     expect(result.data.metadata?.total_api_requests).toBe(1);
@@ -115,7 +136,7 @@ describe("client usage from request logs", () => {
     "should refuse totals for a partial page %j",
     (overrides) => {
       const result = clientUsageFromLogs(page([log()], overrides), scope);
-      expect(result.error).toBe(INCOMPLETE_CLIENT_USAGE);
+      expect(result.error).toBe(i18n.t(INCOMPLETE_CLIENT_USAGE));
       expect(result.data.results).toEqual([]);
       expect(result.data.metadata?.total_spend).toBe(0);
     },

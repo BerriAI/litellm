@@ -350,7 +350,7 @@ function ResponseTurn({ response, index }: { response: RealtimeResponse; index: 
         }}
       >
         <Badge variant={response.status === "completed" ? "secondary" : "outline"} style={{ margin: 0 }}>
-          {response.status || "unknown"}
+          {response.status || t("logs.detail.realtime.unknownStatus")}
         </Badge>
         {usage && (
           <span className="text-muted-foreground" style={{ fontSize: 11 }}>
