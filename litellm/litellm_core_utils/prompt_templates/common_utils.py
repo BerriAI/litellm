@@ -929,6 +929,17 @@ def _estimate_json_bytes(obj: object) -> int:
 
 
 _DefsScope: TypeAlias = tuple[Mapping[str, object], ...]
+_DEFS_KEYS: Final = ("$defs", "definitions")
+_LEGACY_DEFS_KEYS: Final = ("definitions",)
+_LEGACY_REF_PREFIXES: Final = ("#/definitions/", "#/components/schemas/")
+
+
+def _defs_block(value: object) -> Mapping[str, object]:
+    return value if isinstance(value, dict) else {}
+
+
+def _local_defs(node: Mapping[str, object], defs_keys: tuple[str, ...]) -> Mapping[str, object]:
+    return dict(chain.from_iterable(_defs_block(node.get(key)).items() for key in defs_keys))
 
 
 def _scope_with_local_defs(scope: _DefsScope, local_defs: Mapping[str, object]) -> _DefsScope:
@@ -943,6 +954,8 @@ def unpack_defs(
     schema: dict,
     defs: dict,
     max_inlined_bytes: int | None = None,
+    *,
+    legacy_only: bool = False,
 ) -> int:
     """Expand *all* ``$ref`` entries pointing into ``$defs`` / ``definitions``.
 
@@ -963,6 +976,9 @@ def unpack_defs(
     (a target containing a large string, ``const``, or ``enum`` entry).
     Defaults to ``None`` (unbounded) so existing callers are unaffected;
     raises ``ValueError`` on overflow.
+
+    ``legacy_only`` resolves only ``definitions`` / ``components.schemas``
+    refs and leaves ``$defs`` refs for a provider that resolves them itself.
     """
 
     import copy
@@ -971,7 +987,8 @@ def unpack_defs(
     # Combine the defs handed down by the caller with defs/definitions found on
     # the current node.  Local keys shadow parent keys to match JSON-schema
     # scoping rules.
-    root_defs: Final[_DefsScope] = ({**defs, **schema.get("$defs", {}), **schema.get("definitions", {})},)
+    defs_keys: Final = _LEGACY_DEFS_KEYS if legacy_only else _DEFS_KEYS
+    root_defs: Final[_DefsScope] = ({**defs, **_local_defs(schema, defs_keys)},)
 
     # Use iterative approach with queue to avoid recursion
     # Each item in queue is (node, parent_container, key/index, active_defs, ref_chain)
@@ -987,7 +1004,10 @@ def unpack_defs(
         if isinstance(node, dict):
             # --- Case 1: this node *is* a reference ---
             if "$ref" in node:
-                ref_name: str = node["$ref"].split("/")[-1]
+                ref = node["$ref"]
+                if not isinstance(ref, str) or (legacy_only and not ref.startswith(_LEGACY_REF_PREFIXES)):
+                    continue
+                ref_name = ref.split("/")[-1]
 
                 # Check for circular reference in the resolution chain
                 if ref_name in ref_chain:
@@ -1010,11 +1030,7 @@ def unpack_defs(
                         )
 
                 # Merge defs from the target to capture nested definitions
-                target_local_defs: Mapping[str, object] = {
-                    **target_schema.get("$defs", {}),
-                    **target_schema.get("definitions", {}),
-                }
-                child_defs = _scope_with_local_defs(active_defs, target_local_defs)
+                child_defs = _scope_with_local_defs(active_defs, _local_defs(target_schema, defs_keys))
 
                 # Replace the reference with resolved copy
                 resolved = copy.deepcopy(target_schema)
@@ -1042,8 +1058,7 @@ def unpack_defs(
 
             # --- Case 2: regular dict – process its values ---
             # Update defs with any nested $defs/definitions present *here*.
-            local_defs: Mapping[str, object] = {**node.get("$defs", {}), **node.get("definitions", {})}
-            current_defs = _scope_with_local_defs(active_defs, local_defs)
+            current_defs = _scope_with_local_defs(active_defs, _local_defs(node, defs_keys))
 
             # Add all dict values to queue
             for k, v in node.items():
@@ -1115,7 +1130,7 @@ def inline_legacy_defs(schema: dict, max_inlined_bytes: int) -> int:
     # namespace.
     defs: Final = schema.pop("components", {}).get("schemas") or {}
     defs.update(schema.pop("definitions", None) or {})
-    return unpack_defs(schema, defs, max_inlined_bytes=max_inlined_bytes)
+    return unpack_defs(schema, defs, max_inlined_bytes=max_inlined_bytes, legacy_only=True)
 
 
 def sanitize_input_schema_for_anthropic(input_schema: dict) -> "AnthropicInputSchema":

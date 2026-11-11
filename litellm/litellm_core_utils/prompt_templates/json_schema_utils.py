@@ -1,5 +1,6 @@
 import re
 from collections.abc import Callable, Iterator, Mapping
+from functools import reduce
 from graphlib import CycleError, TopologicalSorter
 from itertools import chain, islice
 from types import MappingProxyType
@@ -55,12 +56,16 @@ def _resolve_local_schema_ref(root: Mapping[str, object], ref: str) -> Mapping[s
     return target if isinstance(target, dict) else None
 
 
-def schema_with_root_ref_resolved(schema: Mapping[str, object]) -> Mapping[str, object]:
+def _with_root_ref_inlined(schema: Mapping[str, object]) -> Mapping[str, object]:
     ref: Final = schema.get("$ref")
     target: Final = _resolve_local_schema_ref(schema, ref) if isinstance(ref, str) else None
     if target is None:
         return schema
     return {**target, **{key: value for key, value in schema.items() if key != "$ref"}}
+
+
+def schema_with_root_ref_resolved(schema: Mapping[str, object]) -> Mapping[str, object]:
+    return reduce(lambda resolved, _hop: _with_root_ref_inlined(resolved), range(_MAX_SCHEMA_FLATTEN_DEPTH), schema)
 
 
 def _mergeable_branch(

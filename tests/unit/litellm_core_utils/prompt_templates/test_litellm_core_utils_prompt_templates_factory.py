@@ -2816,6 +2816,53 @@ def test_bedrock_tools_pt_resolves_a_root_ref_for_claude_and_keeps_its_defs() ->
     assert sent == {**node, "$defs": {"Node": node}}
 
 
+def test_bedrock_tools_pt_follows_a_chain_of_root_refs_for_claude() -> None:
+    defs: Final = {"Alias": {"$ref": "#/$defs/Address"}, "Address": _ADDRESS_SCHEMA}
+    tools: Final = [
+        {"type": "function", "function": {"name": "save_address", "parameters": {"$ref": "#/$defs/Alias", "$defs": defs}}}
+    ]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {**_ADDRESS_SCHEMA, "$defs": defs}
+
+
+def test_bedrock_tools_pt_inlines_only_legacy_refs_for_claude() -> None:
+    parameters: Final = {
+        "type": "object",
+        "properties": {"home": {"$ref": "#/definitions/Address"}, "work": {"$ref": "#/$defs/Address"}},
+        "required": ["home", "work"],
+        "definitions": {"Address": _ADDRESS_SCHEMA},
+        "$defs": {"Address": {"type": "string"}},
+    }
+    tools: Final = [{"type": "function", "function": {"name": "save_addresses", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {
+        "type": "object",
+        "properties": {"home": _ADDRESS_SCHEMA, "work": {"$ref": "#/$defs/Address"}},
+        "required": ["home", "work"],
+        "$defs": {"Address": {"type": "string"}},
+    }
+
+
+def test_bedrock_tools_pt_keeps_claude_defs_refs_beside_an_empty_definitions_block() -> None:
+    depth: Final = 17
+    branches: Final = {
+        f"L{i}": {"type": "object", "properties": {"left": {"$ref": f"#/$defs/L{i + 1}"}, "right": {"$ref": f"#/$defs/L{i + 1}"}}}
+        for i in range(depth)
+    }
+    defs: Final = {**branches, f"L{depth}": {"type": "string"}}
+    parameters: Final = {"type": "object", "properties": {"root": {"$ref": "#/$defs/L0"}}, "$defs": defs, "definitions": {}}
+    tools: Final = [{"type": "function", "function": {"name": "tree", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent["properties"] == {"root": {"$ref": "#/$defs/L0"}}
+    assert sent["$defs"] == defs
+
+
 def test_bedrock_tools_pt_strict_parameter():
     """Regression for strict tools on the Bedrock Converse path.
 

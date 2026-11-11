@@ -372,6 +372,43 @@ class TestUnpackLegacyDefs:
         assert out["properties"]["outer"] == {"type": "string"}
         assert out["properties"]["inner"]["properties"]["value"] == {"type": "integer"}
 
+    def test_a_defs_block_that_is_not_a_map_is_ignored(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_defs,
+        )
+
+        schema: Final = {
+            "type": "object",
+            "properties": {
+                "item": {
+                    "type": "object",
+                    "properties": {"value": {"$ref": "#/definitions/T"}},
+                    "$defs": ["not", "a", "map"],
+                }
+            },
+        }
+
+        unpack_defs(schema, {"T": {"type": "string"}})
+
+        assert schema["properties"]["item"]["properties"]["value"] == {"type": "string"}
+
+    def test_a_ref_that_is_not_a_string_is_left_as_is(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_defs,
+        )
+
+        schema: Final = {
+            "type": "object",
+            "properties": {
+                "odd": {"$ref": 5},
+                "value": {"$ref": "#/definitions/T"},
+            },
+        }
+
+        unpack_defs(schema, {"T": {"type": "string"}})
+
+        assert schema["properties"] == {"odd": {"$ref": 5}, "value": {"type": "string"}}
+
 
 class TestTextCompletionPromptToMessages:
     """`/v1/completions` prompt wrapping, shared by the real-time and batch paths."""
