@@ -70,6 +70,10 @@ from litellm.constants import (
 )
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.allowed_tools_tool_choice import (
+    drops_unsupported_allowed_tools_tool_choice,
+    parse_allowed_tools_tool_choice,
+)
 from litellm.litellm_core_utils.asyncify import asyncify, run_async_function
 from litellm.litellm_core_utils.audio_utils.utils import (
     calculate_request_duration,
@@ -81,6 +85,7 @@ from litellm.litellm_core_utils.chat_completion_agentic_loop import (
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_litellm_params import (
+    AGENTIC_LOOP_TOOL_CHOICE_KEY,
     AWS_CREDENTIAL_KWARGS_KEYS,
     OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS,
     OPTIONAL_KWARGS_KEYS,
@@ -199,7 +204,7 @@ from litellm.utils import (
 
 from ._logging import verbose_logger
 from .caching.caching import disable_cache, enable_cache, update_cache
-from .litellm_core_utils.core_helpers import normalize_drop_params, safe_deep_copy
+from .litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params, safe_deep_copy
 from .litellm_core_utils.fallback_utils import (
     async_completion_with_fallbacks,
     completion_with_fallbacks,
@@ -5353,7 +5358,17 @@ def completion(
     messages = validate_and_fix_openai_messages(messages=messages)
     tools = validate_and_fix_openai_tools(tools=tools)
     # validate tool_choice
-    tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice, model=model)
+    requested_tool_choice: Final = cast(  # cast-ok: widening an untyped dict to object is always sound
+        object, tool_choice
+    )
+    drops_unsupported: Final = drops_unsupported_params(
+        cast("Mapping[str, object]", kwargs).get("drop_params")  # cast-ok: kwargs is the untyped request dict
+    )
+    tool_choice = validate_chat_completion_tool_choice(
+        tool_choice=tool_choice,
+        model=model,
+        drop_params=drops_unsupported,
+    )
     # validate optional params
     stop = validate_openai_optional_params(stop=stop)
     thinking = validate_and_fix_thinking_param(thinking=thinking)
@@ -5602,6 +5617,15 @@ def completion(
         if not _is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model):
             tools = _drop_anthropic_only_tool_keys(tools=tools)
 
+        drops_tool_choice: Final = drops_unsupported_allowed_tools_tool_choice(
+            tool_choice=cast(  # cast-ok: widening an untyped dict to object is always sound, the helper validates it with pydantic
+                object, tool_choice
+            ),
+            custom_llm_provider=custom_llm_provider,
+            model=model,
+            drop_params=drops_unsupported,
+        )
+
         if provider_specific_header is not None:
             headers.update(
                 ProviderSpecificHeaderUtils.get_provider_specific_headers(
@@ -5724,7 +5748,7 @@ def completion(
             "response_format": response_format,
             "seed": seed,
             "tools": tools,
-            "tool_choice": tool_choice,
+            "tool_choice": None if drops_tool_choice else tool_choice,
             "max_retries": max_retries,
             "logprobs": logprobs,
             "top_logprobs": top_logprobs,
@@ -5861,7 +5885,18 @@ def completion(
                 if key in kwargs
             },
         )
-        litellm_params: Final = with_control_options(requested_litellm_params, control_options)
+        litellm_params: Final = with_control_options(
+            {
+                **requested_litellm_params,
+                **(
+                    {AGENTIC_LOOP_TOOL_CHOICE_KEY: kwargs.get(AGENTIC_LOOP_TOOL_CHOICE_KEY, requested_tool_choice)}
+                    if AGENTIC_LOOP_TOOL_CHOICE_KEY in kwargs
+                    or parse_allowed_tools_tool_choice(requested_tool_choice) is not None
+                    else {}
+                ),
+            },
+            control_options,
+        )
         if litellm_params.get("provider_affinity_header") is not None:
             try:
                 headers = add_provider_affinity_header(

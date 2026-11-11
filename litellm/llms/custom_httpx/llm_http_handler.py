@@ -49,6 +49,12 @@ from litellm.litellm_core_utils.audio_utils.subtitle_utils import (
     SUBTITLE_RESPONSE_FORMATS,
     synthesize_subtitle_document,
 )
+from litellm.litellm_core_utils.chat_completion_agentic_loop import (
+    called_tool_names,
+    holds_a_call_the_choice_excludes,
+    refuse_a_call_the_choice_excludes,
+    with_caller_tool_choice,
+)
 from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
@@ -134,6 +140,7 @@ from litellm.types.integrations.custom_logger import (
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
     AgenticLoopSafetyError,
+    AgenticLoopToolChoiceError,
     converted_stream_requested,
     is_interception_internal_key,
 )
@@ -5631,6 +5638,12 @@ class BaseLLMHTTPHandler:
         return not stream and api_surface == "anthropic_messages"
 
     @staticmethod
+    def _unreplaceable_refusal(error: AgenticLoopSafetyError, stream: bool, model: str) -> Exception:
+        if stream or not isinstance(error, AgenticLoopToolChoiceError):
+            return error
+        return litellm.BadRequestError(message=str(error), model=model, llm_provider="")
+
+    @staticmethod
     def _finalize_refused_agentic_response(response: object, tool_calls: object) -> object:
         """
         Turn the response into a terminal turn after a safety rail refused the rerun.
@@ -5958,8 +5971,6 @@ class BaseLLMHTTPHandler:
             else False
         )
         if websearch_converted_stream and isinstance(response, dict):
-            from typing import cast
-
             from litellm._logging import verbose_logger
             from litellm.llms.anthropic.pass_through.messages.fake_stream_iterator import (
                 FakeAnthropicMessagesStreamIterator,
@@ -6002,7 +6013,13 @@ class BaseLLMHTTPHandler:
         tools: Final = anthropic_messages_optional_request_params.get("tools", [])
         depth, max_loops, fingerprints = self._get_agentic_loop_settings(kwargs=kwargs)
 
-        hook_kwargs: Final = {**kwargs, "_agentic_loop_api_surface": api_surface}
+        hook_kwargs: Final = {
+            **with_caller_tool_choice(
+                _OPTIONAL_PARAMS.validate_python(kwargs),
+                _OPTIONAL_PARAMS.validate_python(anthropic_messages_optional_request_params),
+            ),
+            "_agentic_loop_api_surface": api_surface,
+        }
 
         for callback in callbacks:
             if not isinstance(callback, CustomLogger):
@@ -6041,6 +6058,8 @@ class BaseLLMHTTPHandler:
             # Safety guards must run OUTSIDE the callback try/except — they are
             # bounded-loop / cycle-break rails, not callback bugs.
             try:
+                if holds_a_call_the_choice_excludes(called_tool_names(response), hook_kwargs, callbacks):
+                    raise AgenticLoopToolChoiceError(model)
                 fingerprint = self._check_agentic_loop_safety(
                     tool_calls=tool_calls,
                     fingerprints=fingerprints,
@@ -6050,7 +6069,7 @@ class BaseLLMHTTPHandler:
                 )
             except AgenticLoopSafetyError as e:
                 if not self._can_replace_turn_with_terminal_response(stream, api_surface):
-                    raise
+                    raise self._unreplaceable_refusal(e, stream, model)
                 verbose_logger.warning(
                     "LiteLLM.AgenticLoopRefused: ending turn [call_id=%s model=%s]: %s",
                     logging_obj.litellm_call_id,
@@ -6192,6 +6211,7 @@ class BaseLLMHTTPHandler:
         callbacks: Final = litellm.callbacks + (logging_obj.dynamic_success_callbacks or [])
         tools: Final = optional_params.get("tools", [])
         depth, max_loops, fingerprints = self._get_agentic_loop_settings(kwargs=kwargs)
+        request_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: kwargs is a str-keyed dict
 
         for callback in callbacks:
             if not isinstance(callback, CustomLogger):
@@ -6226,6 +6246,7 @@ class BaseLLMHTTPHandler:
 
             # Safety guards must run OUTSIDE the callback try/except — they are
             # bounded-loop / cycle-break rails that must propagate to the caller.
+            refuse_a_call_the_choice_excludes(response, request_kwargs, callbacks, model)
             fingerprint = self._check_agentic_loop_safety(
                 tool_calls=tool_calls,
                 fingerprints=fingerprints,
