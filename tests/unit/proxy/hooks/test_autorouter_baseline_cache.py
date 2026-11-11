@@ -1098,3 +1098,10 @@ async def test_tier_pins_never_enter_the_caller_snapshot_on_later_routing_passes
     assert context is not None and context.baseline_body is not None
     assert context.baseline_body.get("max_tokens") == 16
     assert "output_config" not in context.baseline_body and "thinking" not in context.baseline_body
+
+
+@pytest.fixture(autouse=True)
+def _python_messages(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.llms.anthropic.messages.native import handler as python_messages
+
+    monkeypatch.setattr(litellm, "anthropic_messages", python_messages.anthropic_messages)

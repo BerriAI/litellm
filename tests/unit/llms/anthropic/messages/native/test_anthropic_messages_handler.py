@@ -20,6 +20,7 @@ from pydantic import TypeAdapter, ValidationError
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
+from litellm.llms.anthropic.messages.native import handler as python_messages
 from litellm.anthropic_interface import messages
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -1470,7 +1471,7 @@ async def test_native_messages_strips_replayed_provider_specific_fields_from_wir
         patch.object(httpx.AsyncClient, "send", fake_send),
         pytest.raises(litellm.exceptions.InternalServerError),
     ):
-        await litellm.anthropic.messages.acreate(
+        await python_messages.anthropic_messages(
             max_tokens=100,
             messages=messages,
             model="anthropic/claude-haiku-4-5-20251001",
@@ -2451,7 +2452,7 @@ async def test_anthropic_messages_with_extra_headers():
     mock_client.post = AsyncMock(return_value=mock_response)
 
     # Call the handler with extra_headers and our mocked client
-    response = await litellm.anthropic.messages.acreate(
+    response = await python_messages.anthropic_messages(
         messages=messages,
         api_key=api_key,
         model="claude-haiku-4-5-20251001",
@@ -2515,7 +2516,7 @@ async def test_anthropic_messages_with_thinking():
     mock_client.post = AsyncMock(return_value=mock_response)
 
     # Call the handler with extra_headers and our mocked client
-    response = await litellm.anthropic.messages.acreate(
+    response = await python_messages.anthropic_messages(
         messages=messages,
         api_key=api_key,
         model="claude-haiku-4-5-20251001",
@@ -2785,7 +2786,7 @@ async def test_anthropic_messages_strict_tools_rejection_is_sent_again_without_s
     anthropic: Final = _RejectsStrictToolsOnce()
     tool: Final = {"name": "lookup_record", "input_schema": {"type": "object"}, "strict": True}
 
-    response: Final = await litellm.anthropic_messages(
+    response: Final = await python_messages.anthropic_messages(
         max_tokens=16,
         messages=[{"role": "user", "content": "Use lookup_record to find invoice 42"}],
         model="anthropic/claude-sonnet-4-6",

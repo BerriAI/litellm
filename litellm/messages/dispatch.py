@@ -3,12 +3,13 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Itera
 from types import MappingProxyType
 from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding selects a sync result or an async awaitable
 
-from litellm.exceptions import BadRequestError
+from litellm.exceptions import BadRequestError, UnsupportedParamsError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.anthropic.messages.native import handler as main
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.rust_bridge import detectors
+from litellm.rust_bridge import catalog, detectors
 from litellm.rust_bridge.catalog import Feature, Route, RouteContext, Target
+from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.dispatch import PublicDispatch
 from litellm.rust_bridge.messages import detectors as route_detectors
 from litellm.rust_bridge.messages.entrypoints import (
@@ -178,28 +179,83 @@ _ADISPATCH: Final = PublicDispatch(
 )
 
 
+def _unsupported_features(features: detectors.Detectors, request: NativeCall) -> tuple[str, ...]:
+    try:
+        return tuple(sorted(feature.value for feature in detectors.detected(features, request)))
+    except Exception:  # noqa: BLE001  # a failing detector names nothing, and the call is refused all the same
+        return ()
+
+
+def _checked_target(request: NativeCall, model: str, provider: str | None) -> Target | None:
+    try:
+        return _target(request, model, provider)
+    except Exception:  # noqa: BLE001  # the provider alone still decides whether the call has a Python path
+        return None
+
+
+def _rust_only_refusal(
+    legacy: inspect.Signature, features: detectors.Detectors, args: tuple[object, ...], kwargs: Mapping[str, object]
+) -> UnsupportedParamsError | None:
+    if bind(legacy, args, kwargs) is None:
+        return None
+    request: Final = native_call(legacy, args, kwargs)
+    requested_model: Final = request.resolved.get("model")
+    if not isinstance(requested_model, str):
+        return None
+    model, provider = _resolved(request)
+    context: Final = RouteContext(
+        Route.MESSAGES, provider=provider, model=requested_model, target=_checked_target(request, model, provider)
+    )
+    if catalog.rollout(context) is not Rollout.RUST_REQUIRED:
+        return None
+    unsupported: Final = _unsupported_features(features, request)
+    return UnsupportedParamsError(
+        message=(
+            f"provider {provider} on /v1/messages runs only on the Rust path, which does not support "
+            f"{', '.join(unsupported) if unsupported else 'this call'}"
+        ),
+        llm_provider=provider,
+        model=requested_model,
+    )
+
+
+def _python_messages_handler(
+    *args: object,
+    **kwargs: object,  # kwargs-ok: forwards the public call shape
+) -> MessagesResult | Coroutine[object, object, MessagesResult]:
+    refusal: Final = _rust_only_refusal(_MESSAGES, _FEATURES, args, kwargs)
+    if refusal is not None:
+        raise refusal
+    return _PYTHON_MESSAGES(*args, **kwargs)
+
+
+async def _python_anthropic_messages(*args: object, **kwargs: object) -> MessagesResult:  # kwargs-ok: public call shape
+    refusal: Final = _rust_only_refusal(_AMESSAGES, _ASYNC_FEATURES, args, kwargs)
+    if refusal is not None:
+        raise refusal
+    return await _PYTHON_AMESSAGES(*args, **kwargs)
+
+
 def anthropic_messages_handler(
     *args: object,
     **kwargs: object,  # kwargs-ok: preserve the public Anthropic Messages call shape
 ) -> MessagesResult | Coroutine[object, object, MessagesResult]:
-    python: Final = _PYTHON_MESSAGES
     if _FLAG.requested(kwargs):
         return anthropic_messages(**_FLAG.keywords(args, kwargs))
     return _DISPATCH.run(
         args,
         _FLAG.dropped(kwargs),
-        python=python,
+        python=_python_messages_handler,
         binding=NATIVE_MESSAGES,
         native=native_call_hook,
     )
 
 
 async def anthropic_messages(*args: object, **kwargs: object) -> MessagesResult:  # kwargs-ok: public call shape
-    python: Final = _PYTHON_AMESSAGES
     return await _ADISPATCH.arun(
         args,
         _FLAG.dropped(kwargs),
-        python=python,
+        python=_python_anthropic_messages,
         binding=NATIVE_AMESSAGES,
         native=native_acall_hook,
     )

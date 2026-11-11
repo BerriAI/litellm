@@ -6,7 +6,7 @@ import functools
 import os
 from collections.abc import Callable, Iterable, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, TypeAlias, cast  # noqa: TID251  # tool lists stay caller-owned
+from typing import Final, TypeAlias
 
 import httpx
 
@@ -16,9 +16,6 @@ from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.model_latest_aliases import is_model_latest_alias
 from litellm.rust_bridge.catalog import Feature
 from litellm.rust_bridge.public_call import NativeCall, optional_mapping, optional_sequence, optional_str
-
-if TYPE_CHECKING:
-    from litellm.responses.mcp.litellm_proxy_mcp_handler import ToolParam
 
 Detector: TypeAlias = Callable[[NativeCall], bool]
 Detectors: TypeAlias = Mapping[Feature, Detector]
@@ -70,12 +67,10 @@ def timeout_variants(request: NativeCall) -> bool:
 
 def proxy_mcp_tools(request: NativeCall) -> bool:
     """Python expands proxy MCP tools and may execute their tool calls."""
-    from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
+    from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
 
     tools: Final = optional_sequence(request.resolved.get("tools"))
-    return tools is not None and LiteLLM_Proxy_MCP_Handler.should_use_litellm_mcp_gateway(
-        cast("Iterable[ToolParam]", tools)  # cast-ok: the predicate skips entries that are not MCP tool dicts
-    )
+    return tools is not None and may_name_litellm_mcp_gateway(tools)
 
 
 def prompt_management(request: NativeCall) -> bool:

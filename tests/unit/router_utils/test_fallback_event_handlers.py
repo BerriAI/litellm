@@ -2501,3 +2501,19 @@ def test_is_bad_request_without_fallback_only_stops_on_a_real_400_when_the_flag_
 ) -> None:
     assert is_bad_request_without_fallback(exception, fallback_on_unsupported_params=False) is stops_fallbacks
     assert is_bad_request_without_fallback(exception, fallback_on_unsupported_params=True) is False
+
+
+@pytest.fixture(autouse=True)
+def _python_messages(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.rust_bridge import catalog
+    from litellm.rust_bridge.configuration import Rollout
+
+    monkeypatch.setattr(
+        catalog,
+        "RULES",
+        tuple(
+            rule
+            for rule in catalog.RULES
+            if not (rule.route is catalog.Route.MESSAGES and rule.rollout is Rollout.RUST_REQUIRED)
+        ),
+    )
