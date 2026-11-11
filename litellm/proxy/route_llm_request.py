@@ -1068,6 +1068,16 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
         ) or (data["model"] is not None and llm_router.registry().resolve(data["model"], kind="recognized")):
             return getattr(llm_router, f"{route_type}")(**data)
 
+        elif _is_a2a_agent_model(data.get("model", "")):
+            from litellm.proxy.agent_endpoints.a2a_routing import (
+                route_a2a_agent_request,
+            )
+
+            result: Final = await route_a2a_agent_request(data, route_type, user_api_key_dict=user_api_key_dict)
+            if result is not None:
+                return result
+            # Fall through to raise exception below if result is None
+
         elif data["model"] not in router_model_names:
             # Check wildcards before checking deployment_names
             # Priority: 1. Exact model_name match, 2. Wildcard match, 3. deployment_names match
@@ -1128,15 +1138,6 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
                 except Exception:
                     # If router fails (e.g., model not found in router), fall back to direct call
                     return getattr(litellm, f"{route_type}")(**direct_litellm_kwargs())
-            elif _is_a2a_agent_model(data.get("model", "")):
-                from litellm.proxy.agent_endpoints.a2a_routing import (
-                    route_a2a_agent_request,
-                )
-
-                result: Final = await route_a2a_agent_request(data, route_type, user_api_key_dict=user_api_key_dict)
-                if result is not None:
-                    return result
-                # Fall through to raise exception below if result is None
 
     elif user_model is not None or route_type == "allm_passthrough_route":
         return getattr(litellm, f"{route_type}")(**direct_litellm_kwargs())

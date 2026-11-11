@@ -667,3 +667,50 @@ async def test_route_a2a_bridge_agent_calls_without_client_extra_headers_it_drop
     assert app.calls.last.request.headers["Authorization"] == "Bearer p"
     assert "X-N" not in app.calls.last.request.headers
     assert response.choices[0].message.content == "pong"
+
+
+@pytest.mark.asyncio
+
+
+@pytest.mark.asyncio
+async def test_route_a2a_model_takes_precedence_over_wildcard_deployment():
+    """Regression test for @veria-ai[bot] review on PR #51174:
+    With a wildcard deployment (model_name: '*') configured in the router,
+    a verified A2A request (a2a/foo) must route directly to the A2A agent handler
+    and NOT fall through to the wildcard LLM deployment.
+    """
+    from litellm.proxy.route_llm_request import route_request
+    from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
+
+    data = {
+        "model": "a2a/registered-agent",
+        "messages": [{"role": "user", "content": "hello agent"}],
+    }
+
+    mock_router = route_entry_points_to_stubs(Mock())
+    mock_router.model_names = ["gpt-4o-mini"]
+    mock_router.deployment_names = []
+    mock_router.has_model_id = Mock(return_value=False)
+    mock_router.is_recognized_model = Mock(return_value=False)
+    mock_router.model_group_alias = None
+    mock_router.router_general_settings = Mock(pass_through_all_models=False)
+    # Wildcard deployment pattern present
+    pattern_mock = Mock()
+    mock_router.default_deployment = None
+    mock_router.pattern_router = Mock(patterns=[pattern_mock])
+    mock_router.map_team_model = Mock(return_value=None)
+    mock_router.acompletion = AsyncMock(return_value="wildcard_llm_called")
+
+    mock_a2a_result = Mock(choices=[Mock(message=Mock(content="agent_response"))])
+
+    with patch("litellm.proxy.agent_endpoints.a2a_routing.route_a2a_agent_request", AsyncMock(return_value=mock_a2a_result)) as mock_route_a2a:
+        res = await route_request(
+            data=data,
+            llm_router=mock_router,
+            user_model=None,
+            route_type="acompletion",
+            user_api_key_dict={},
+        )
+        assert res == mock_a2a_result
+        mock_route_a2a.assert_awaited_once()
+        mock_router.acompletion.assert_not_called()
