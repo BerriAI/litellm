@@ -53,17 +53,17 @@ jobs:
           python-version: "3.12"
 
       - name: Set up uv
-        uses: ./.github/actions/setup-uv-with-retries
+        uses: $/.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
 
       - name: Cache the Rust build
         if: matrix.checker == 'basedpyright'
-        uses: ./.github/actions/cache-cargo-build
+        uses: $/.github/actions/cache-cargo-build
 
       - name: Cache Prisma binaries
         if: matrix.checker == 'basedpyright' || matrix.checker == 'openapi-docs'
-        uses: ./.github/actions/cache-prisma-binaries
+        uses: $/.github/actions/cache-prisma-binaries
 
       # The source scanners only need the pinned dev tools (ruff and the
       # stdlib checkers), the same versions test-linting.yml's python job runs.

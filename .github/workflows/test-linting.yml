@@ -42,7 +42,7 @@ jobs:
 
       - name: Detect relevant changes
         id: changes
-        uses: ./.github/actions/detect-changes
+        uses: $/.github/actions/detect-changes
 
       - name: Fetch gate base (merge-base with target branch)
         if: steps.changes.outputs.decision != 'skip'
@@ -67,7 +67,7 @@ jobs:
 
       - name: Set up uv
         if: steps.changes.outputs.decision != 'skip'
-        uses: ./.github/actions/setup-uv-with-retries
+        uses: $/.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
 
@@ -95,7 +95,7 @@ jobs:
 
       - name: Cache the Rust build
         if: steps.changes.outputs.decision != 'skip'
-        uses: ./.github/actions/cache-cargo-build
+        uses: $/.github/actions/cache-cargo-build
 
       - name: Install dependencies
         if: steps.changes.outputs.decision != 'skip'
@@ -104,7 +104,7 @@ jobs:
 
       - name: Cache Prisma binaries
         if: steps.changes.outputs.decision != 'skip'
-        uses: ./.github/actions/cache-prisma-binaries
+        uses: $/.github/actions/cache-prisma-binaries
 
       - name: Generate Prisma client
         if: steps.changes.outputs.decision != 'skip'
@@ -243,7 +243,7 @@ jobs:
           python-version: "3.12"
 
       - name: Set up uv
-        uses: ./.github/actions/setup-uv-with-retries
+        uses: $/.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
 
@@ -390,7 +390,7 @@ jobs:
 
       - name: Set up uv
         if: steps.changes.outputs.relevant == 'true'
-        uses: ./.github/actions/setup-uv-with-retries
+        uses: $/.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
 
@@ -407,7 +407,7 @@ jobs:
 
       - name: Cache the Rust build
         if: steps.changes.outputs.relevant == 'true'
-        uses: ./.github/actions/cache-cargo-build
+        uses: $/.github/actions/cache-cargo-build
 
       - name: Install backend dependencies
         if: steps.changes.outputs.relevant == 'true'
@@ -415,7 +415,7 @@ jobs:
 
       - name: Cache Prisma binaries
         if: steps.changes.outputs.relevant == 'true'
-        uses: ./.github/actions/cache-prisma-binaries
+        uses: $/.github/actions/cache-prisma-binaries
 
       - name: Generate Prisma client
         if: steps.changes.outputs.relevant == 'true'
@@ -497,7 +497,7 @@ jobs:
           python-version: "3.12"
 
       - name: Set up uv
-        uses: ./.github/actions/setup-uv-with-retries
+        uses: $/.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
 
@@ -512,7 +512,7 @@ jobs:
             ${{ runner.os }}-uv-
 
       - name: Cache the Rust build
-        uses: ./.github/actions/cache-cargo-build
+        uses: $/.github/actions/cache-cargo-build
 
       - name: Install dependencies
         run: uv sync --frozen --all-groups --all-extras
@@ -698,7 +698,7 @@ jobs:
           python-version: "3.12"
 
       - name: Set up uv
-        uses: ./.github/actions/setup-uv-with-retries
+        uses: $/.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
 

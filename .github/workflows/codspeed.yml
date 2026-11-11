@@ -53,12 +53,12 @@ jobs:
           python-version: "3.12"
 
       - name: Set up uv
-        uses: ./.github/actions/setup-uv-with-retries
+        uses: $/.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
 
       - name: Cache the Rust build
-        uses: ./.github/actions/cache-cargo-build
+        uses: $/.github/actions/cache-cargo-build
         with:
           profile: release
 
