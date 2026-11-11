@@ -335,7 +335,8 @@ def _models_after_update(data: UpdateProjectRequest, existing_project: object) -
 
 
 def _models_an_update_can_leave_short(data: UpdateProjectRequest, existing_project: object) -> Sequence[str]:
-    if data.models is None and data.metadata is None:
+    keeps_team: Final = data.team_id is None or data.team_id == getattr(existing_project, "team_id", None)
+    if data.models is None and data.metadata is None and keeps_team:
         return ()
     return _models_after_update(data, existing_project)
 

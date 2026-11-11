@@ -2127,11 +2127,23 @@ async def _add_clip_studio_to_project(monkeypatch: pytest.MonkeyPatch) -> None:
     await _run_project_update(f"project-{uuid.uuid4()}", models=["clip-studio"])
 
 
+async def _move_clip_studio_project_to_another_team(monkeypatch: pytest.MonkeyPatch) -> None:
+    prisma: Final = _project_update_mocks(monkeypatch, {})
+    prisma.db.litellm_projecttable.find_unique.return_value.team_id = "team-a"
+    prisma.db.litellm_projecttable.find_unique.return_value.models = ["clip-studio"]
+    prisma.db.litellm_teamtable.find_unique = mock.AsyncMock(return_value=LiteLLM_TeamTable(team_id="test-team"))
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _clip_studio_router("runwayml/gen4_turbo"))
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "general_settings", {"enforce_project_model_quota": _CUSTOMER_QUOTA_POLICY}
+    )
+    await _run_project_update(f"project-{uuid.uuid4()}", team_id="test-team")
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "write_project",
-    [_create_clip_studio_project, _add_clip_studio_to_project],
-    ids=["create", "update"],
+    [_create_clip_studio_project, _add_clip_studio_to_project, _move_clip_studio_project_to_another_team],
+    ids=["create", "update", "team-move"],
 )
 async def test_project_quota_check_reads_the_route_another_worker_just_wrote(
     monkeypatch: pytest.MonkeyPatch, write_project: Callable[[pytest.MonkeyPatch], Awaitable[None]]
@@ -2155,8 +2167,8 @@ async def test_project_quota_check_reads_the_route_another_worker_just_wrote(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "write_project",
-    [_create_clip_studio_project, _add_clip_studio_to_project],
-    ids=["create", "update"],
+    [_create_clip_studio_project, _add_clip_studio_to_project, _move_clip_studio_project_to_another_team],
+    ids=["create", "update", "team-move"],
 )
 @pytest.mark.parametrize(
     "failed_reload",
