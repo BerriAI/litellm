@@ -15,11 +15,11 @@ from typing import Final
 import pytest
 
 from litellm.integrations.prometheus import PrometheusLogger
-from litellm.llms.bedrock.chat.converse_transformation import BEDROCK_SERVICE_TIERS
 from litellm.litellm_core_utils.service_tier_utils import (
     KNOWN_REQUEST_SERVICE_TIERS,
     get_service_tier_from_standard_logging_payload,
 )
+from litellm.llms.bedrock.chat.converse_transformation import BEDROCK_SERVICE_TIERS
 from litellm.types.integrations.prometheus import (
     PrometheusMetricLabels,
     UserAPIKeyLabelNames,
