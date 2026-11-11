@@ -7,7 +7,6 @@ This module handles the transformation of requests to Anthropic's CountTokens AP
 import copy
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from functools import reduce
 from itertools import chain
 from types import MappingProxyType
 from typing import (
@@ -23,7 +22,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION, DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
+from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_values
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     anthropic_system_blocks,
     split_leading_system_run,
@@ -364,7 +363,7 @@ def _max_output_tokens(model: str, custom_llm_provider: str | None) -> int:
 
 def without_dropped_paths(options: Mapping[str, JsonValue], additional_drop_params: object) -> Mapping[str, JsonValue]:
     return _COUNT_REQUEST.validate_python(
-        reduce(delete_nested_value, _DROPPED_PATHS.validate_python(additional_drop_params or ()), {**options})
+        delete_nested_values(options, _DROPPED_PATHS.validate_python(additional_drop_params or ()))
     )
 
 

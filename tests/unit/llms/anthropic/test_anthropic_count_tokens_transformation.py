@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from copy import deepcopy
 from queue import SimpleQueue
 from threading import get_ident
+from time import perf_counter
 from types import MappingProxyType
 from typing import Final
 
@@ -20,6 +21,7 @@ from litellm.exceptions import BadRequestError
 from litellm.llms.anthropic.count_tokens.transformation import (
     COUNT_TOKEN_OPTION_NAMES,
     AnthropicCountTokensConfig,
+    without_dropped_paths,
 )
 from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
 from litellm.llms.azure_ai.anthropic.count_tokens.handler import (
@@ -1146,3 +1148,18 @@ async def test_counter_leaves_out_context_management_without_edits(context_manag
         ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value,
         ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value,
     }
+
+
+def test_many_client_drop_paths_over_a_large_schema_finish_well_inside_one_request():
+    properties: Final = {f"field_{index}": {"type": "string", "description": "d" * 8} for index in range(3000)}
+    options: Final = {
+        "output_config": {"format": {"type": "json_schema", "schema": {"type": "object", "properties": properties}}},
+        "thinking": {"type": "enabled", "budget_tokens": 2048},
+    }
+    paths: Final = [*(f"output_config.missing_{index}" for index in range(1000)), "thinking"]
+    started: Final = perf_counter()
+    result: Final = without_dropped_paths(options, paths)
+    elapsed: Final = perf_counter() - started
+    assert result == {"output_config": options["output_config"]}
+    assert "thinking" in options
+    assert elapsed < 1.0
