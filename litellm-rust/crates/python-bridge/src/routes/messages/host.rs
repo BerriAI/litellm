@@ -12,18 +12,19 @@ use litellm_host_python::{
     InvokeError, PythonBinding, effective_py_args, from_py, json_from_py, to_py,
 };
 use litellm_inference_messages::{
-    Error, MessagesCall, MessagesSettings, MessagesShaping, litellm_params, messages_body,
+    Error, MessagesCall, MessagesSettings, MessagesShaping, UnencodableHeader, litellm_params,
+    messages_body,
     route::{Messages, MessagesStreamHead},
 };
 use litellm_llms::base_llm::messages::context::MessagesModelCapabilities;
 use litellm_llms_types::headers::ProviderSpecificHeaders;
 use litellm_router_types::LitellmParams;
 use pyo3::{
-    exceptions::PyException,
+    exceptions::{PyException, PyUnicodeEncodeError},
     gc::{PyTraverseError, PyVisit},
     prelude::*,
     sync::PyOnceLock,
-    types::{PyBytes, PyDict, PyList, PyMapping, PyTuple},
+    types::{PyBytes, PyDict, PyList, PyMapping, PyString, PyTuple},
 };
 use serde_json::{Map, Value};
 
@@ -39,6 +40,35 @@ use crate::{
     python_settings::PythonSettings,
     routes::RequestView,
 };
+
+type MergedHeaders = (Option<Map<String, Value>>, Option<Vec<u8>>);
+
+fn ascii_headers<'py>(
+    headers: &Bound<'py, PyAny>,
+    unencodable: &mut Option<Vec<u8>>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let Ok(headers) = headers.cast::<PyDict>() else {
+        return Ok(headers.clone());
+    };
+    let py = headers.py();
+    let kept = PyDict::new(py);
+    for (name, value) in headers.iter() {
+        if value.is_instance_of::<PyString>()
+            && let Err(error) = value.call_method1("encode", ("ascii",))
+        {
+            if !error.is_instance_of::<PyUnicodeEncodeError>(py) {
+                return Err(error);
+            }
+            if unencodable.is_none() {
+                let sent = value.call_method1("encode", ("utf-8", "surrogatepass"))?;
+                *unencodable = Some(sent.cast::<PyBytes>()?.as_bytes().to_vec());
+            }
+            continue;
+        }
+        kept.set_item(name, value)?;
+    }
+    Ok(kept.into_any())
+}
 
 fn json_messages(messages: &Bound<'_, PyAny>) -> PyResult<Value> {
     if messages.is_instance_of::<PyList>() || messages.is_instance_of::<PyTuple>() {
@@ -348,18 +378,19 @@ impl MessagesPythonHost {
                 .call1((&model, api_base.as_deref()))?
                 .extract()?,
         };
+        let (extra_headers, unencodable_request_header) = match settings.extra_headers {
+            Some(headers) => (Some(headers), None),
+            None => self.merged_headers(py, arguments)?,
+        };
         let shaping = MessagesShaping {
             capabilities: self.capabilities(py, &model, custom_llm_provider.as_deref())?,
             settings: MessagesSettings {
                 whole_sse_frames: settings.stream_cost_model.is_some(),
                 presanitized,
                 intercepted: self.may_intercept(py)?,
+                unencodable_request_header,
                 ..settings.settings
             },
-        };
-        let extra_headers = match settings.extra_headers {
-            Some(headers) => Some(headers),
-            None => self.merged_headers(py, arguments)?,
         };
         let provider_specific_header = self.provider_specific_header(py, arguments)?;
         let federation_fields: &[String] = match custom_llm_provider.as_deref() {
@@ -390,17 +421,17 @@ impl MessagesPythonHost {
         &self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
-    ) -> PyResult<Option<Map<String, Value>>> {
-        let mapping = |name: &str| -> PyResult<Option<Map<String, Value>>> {
+    ) -> PyResult<MergedHeaders> {
+        let mut unencodable = None;
+        let mut mapping = |name: &str| -> PyResult<Option<Map<String, Value>>> {
             self.view
                 .argument(py, arguments, name)?
-                .map(|value| from_py(&value))
+                .map(|value| from_py(&ascii_headers(&value, &mut unencodable)?))
                 .transpose()
         };
-        Ok(merge_headers(
-            mapping("headers")?,
-            mapping("extra_headers")?,
-        ))
+        let headers = mapping("headers")?;
+        let extra_headers = mapping("extra_headers")?;
+        Ok((merge_headers(headers, extra_headers), unencodable))
     }
 
     fn provider_specific_header(
@@ -622,6 +653,17 @@ impl PythonBinding for MessagesPythonHost {
             } else {
                 self.map_transport_failure(py, raised)
             };
+        }
+        if let Some(unencodable) = litellm_error::find::<UnencodableHeader>(&error) {
+            let (value, received) = match unencodable {
+                UnencodableHeader::Sent(value) => (value, false),
+                UnencodableHeader::Received(value) => (value, true),
+            };
+            let raised = py
+                .import(ROUTE_HOST_MODULE)?
+                .getattr("unencodable_header")?
+                .call1((PyBytes::new(py, value), received))?;
+            return self.map_transport_failure(py, PyErr::from_value(raised));
         }
         route_failure(py, error, RequestMarker::Messages, |native| {
             Ok(self.map_failure(py, native))

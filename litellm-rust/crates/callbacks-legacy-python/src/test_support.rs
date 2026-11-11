@@ -76,7 +76,7 @@ FAKES = {
     'record_api_window': lambda logger, start, end: logger.model_call_details.update(
         llm_api_duration_ms=(end - start) * 1000
     ),
-    'times_provider_exchange': lambda client: client is None,
+    'times_provider_exchange': lambda client, timeout: client is None,
     'defers_async_logging': lambda logger: bool(getattr(logger, '_defer_async_logging', False)),
     'claim_async_success_log': lambda logger: logger.claim_async_success_log(),
     'defer_success': lambda logger, pending, response, start, end: (

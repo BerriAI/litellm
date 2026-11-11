@@ -45,6 +45,24 @@ impl Decoder {
     }
 }
 
+pub(crate) fn header_pairs(headers: &HeaderMap) -> Vec<(String, String)> {
+    let utf8 = headers
+        .values()
+        .all(|value| std::str::from_utf8(value.as_bytes()).is_ok());
+    headers
+        .iter()
+        .map(|(name, value)| {
+            let bytes = value.as_bytes();
+            let text = if utf8 {
+                String::from_utf8_lossy(bytes).into_owned()
+            } else {
+                bytes.iter().copied().map(char::from).collect()
+            };
+            (name.to_string(), text)
+        })
+        .collect()
+}
+
 pub(crate) fn decoded(response: reqwest::Response) -> reqwest::Response {
     let Some(decoder) = Decoder::detect(response.headers()) else {
         return response;
@@ -90,7 +108,9 @@ mod tests {
     use flate2::{Compression, write::GzEncoder, write::ZlibEncoder};
     use rstest::rstest;
 
-    use super::decoded;
+    use reqwest::header::{HeaderMap, HeaderValue};
+
+    use super::{decoded, header_pairs};
 
     fn encoded(encoding: &str, body: &[u8]) -> Vec<u8> {
         match encoding {
@@ -139,5 +159,32 @@ mod tests {
             response.bytes().await.unwrap().as_ref(),
             expected.as_slice()
         );
+    }
+
+    #[rstest]
+    #[case::ascii(&[b"plain".as_slice()], &["plain"])]
+    #[case::utf_8(&[b"plain".as_slice(), b"caf\xc3\xa9"], &["plain", "caf\u{e9}"])]
+    #[case::latin_1_once_any_value_is_not_utf_8(
+        &[b"caf\xc3\xa9".as_slice(), b"caf\xe9"],
+        &["caf\u{c3}\u{a9}", "caf\u{e9}"]
+    )]
+    fn header_values_decode_as_httpx_decodes_them(
+        #[case] values: &[&[u8]],
+        #[case] expected: &[&str],
+    ) {
+        let mut headers = HeaderMap::new();
+        for (index, value) in values.iter().enumerate() {
+            headers.insert(
+                format!("x-fz-{index}")
+                    .parse::<reqwest::header::HeaderName>()
+                    .unwrap(),
+                HeaderValue::from_bytes(value).unwrap(),
+            );
+        }
+        let decoded: Vec<String> = header_pairs(&headers)
+            .into_iter()
+            .map(|(_, value)| value)
+            .collect();
+        assert_eq!(decoded, expected);
     }
 }

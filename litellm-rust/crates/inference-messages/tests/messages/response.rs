@@ -2,7 +2,9 @@ use litellm_host::{
     interceptors::{ExecutionFacts, ResultSource},
     lifecycle::ExecutionEvent,
 };
-use litellm_inference_messages::{MessagesBody, MessagesCallResponse, messages_body};
+use litellm_inference_messages::{
+    MessagesBody, MessagesCallResponse, UnencodableHeader, messages_body,
+};
 use litellm_inference_testing::{
     RecordingSecrets, http_config, no_secrets, provider_http, resources,
 };
@@ -308,6 +310,88 @@ async fn a_provider_slower_than_the_timeout_fails_the_call(call: MessagesCall) {
     assert!(error.dispatched(), "{error:?}");
     assert!(!error.is_request(), "{error:?}");
     assert_eq!(error.upstream_response(), None);
+}
+
+fn with_settings(call: MessagesCall, settings: MessagesSettings) -> MessagesCall {
+    MessagesCall {
+        shaping: MessagesShaping {
+            settings,
+            ..call.shaping
+        },
+        ..call
+    }
+}
+
+#[rstest]
+#[case::unary(false)]
+#[case::stream(true)]
+#[tokio::test]
+async fn a_non_ascii_response_header_fails_the_call_when_python_reads_heads_as_ascii(
+    call: MessagesCall,
+    #[case] stream: bool,
+) {
+    let upstream = upstream([message_response().insert_header("x-fz-unicode", "café")]).await;
+    let call = with_fields(
+        MessagesCall {
+            api_key: Some("sk".into()),
+            api_base: Some(upstream.uri()),
+            ..call
+        },
+        json!({"stream": stream}),
+    );
+    let settings = MessagesSettings {
+        ascii_response_headers: true,
+        ..MessagesSettings::default()
+    };
+
+    let error = run(with_settings(call, settings))
+        .await
+        .expect_err("the head cannot be encoded");
+
+    assert_eq!(
+        litellm_error::find::<UnencodableHeader>(&error),
+        Some(&UnencodableHeader::Received("café".as_bytes().to_vec()))
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_non_ascii_response_header_is_served_when_python_keeps_raw_heads(call: MessagesCall) {
+    let upstream = upstream([message_response().insert_header("x-fz-unicode", "café")]).await;
+
+    let message = run_message(MessagesCall {
+        api_key: Some("sk".into()),
+        api_base: Some(upstream.uri()),
+        ..call
+    })
+    .await;
+
+    assert_eq!(message.id, "msg_1");
+}
+
+#[rstest]
+#[tokio::test]
+async fn an_unencodable_request_header_fails_before_anything_is_sent(call: MessagesCall) {
+    let upstream = upstream([message_response()]).await;
+    let call = MessagesCall {
+        api_key: Some("sk".into()),
+        api_base: Some(upstream.uri()),
+        ..call
+    };
+    let settings = MessagesSettings {
+        unencodable_request_header: Some(b"h\xed\xa0\x80".to_vec()),
+        ..MessagesSettings::default()
+    };
+
+    let error = run(with_settings(call, settings))
+        .await
+        .expect_err("the header cannot be encoded");
+
+    assert_eq!(
+        litellm_error::find::<UnencodableHeader>(&error),
+        Some(&UnencodableHeader::Sent(b"h\xed\xa0\x80".to_vec()))
+    );
+    assert!(received(&upstream).await.is_empty());
 }
 
 #[rstest]

@@ -479,7 +479,12 @@ def test_tls_policy_reads_the_security_level_environment_then_the_setting(
     ("environment", "setting", "expected"),
     (
         (None, "X25519", False),
-        (None, " P-256 ", False),
+        (None, "prime256v1", False),
+        (None, "secp384r1", False),
+        (None, " P-256 ", True),
+        (None, "P-384", True),
+        (None, "secp256r1", True),
+        (None, "x25519", True),
         ("secp521r1", None, True),
         (None, "secp521r1", True),
         ("", "secp521r1", False),

@@ -397,10 +397,19 @@ def _kw(**kwargs: object) -> Mapping[str, object]:
     return MappingProxyType(kwargs)
 
 
+def _tls(**settings: object) -> Mapping[str, object]:
+    return MappingProxyType({**settings, "in_memory_llm_clients_cache": LLMClientCache()})
+
+
 A10_NO_MAX_TOKENS: Final = "A10: native admission hands a call without an int max_tokens to Python, whose signature raises the TypeError; only dispatch differs"
 C_UNSENT_CALL_FLAG: Final = (
     "C: a call that fails natively before its provider request logs no aanthropic_messages flag, "
     "which Python's handler sets before it shapes the request"
+)
+
+REDIRECTED_SENT_REQUEST: Final = (
+    "a followed provider redirect: Python logs the redirected request (its URL, its body already streamed) on the "
+    "logged response, the native call logs the request it sent"
 )
 
 KNOWN_GAPS: Final[Mapping[str, Mapping[str, str | None]]] = MappingProxyType(
@@ -767,6 +776,29 @@ FAILURE_CASES: Final = (
     Case("upstream_500_gzip", upstream=(replace(_failure(500, "api_error", "internal"), gzip=True),)),
     Case("missing_max_tokens", _kw(max_tokens=None), upstream=()),
     Case("missing_api_key", _kw(api_key=None), upstream=()),
+    Case(
+        "auth_token_padded_with_whitespace",
+        _kw(api_key=None),
+        env=MappingProxyType({"ANTHROPIC_AUTH_TOKEN": "  fz-env-auth-token  "}),
+    ),
+    Case(
+        "provider_redirect_is_followed",
+        gaps=_gaps(logged_sent_request=REDIRECTED_SENT_REQUEST),
+        upstream=(
+            ResponseSpec(body=b"moved", status=307, headers={"location": "/redirected/v1/messages"}),
+            ResponseSpec(body=dict(TEXT_RESPONSE)),
+        ),
+    ),
+    Case("extra_header_lone_surrogate", _kw(extra_headers={"x-fz-surrogate": "h\ud800"}), upstream=()),
+    Case("extra_header_non_ascii", _kw(extra_headers={"x-fz-unicode": "caf\u00e9"}), upstream=()),
+    Case("response_header_latin_1", upstream=(_ok(**{"x-fz-unicode": "caf\u00e9"}),)),
+    Case("response_header_utf_8", upstream=(_ok(**{"x-fz-unicode": "caf\u00c3\u00a9"}),)),
+    Case(
+        "response_header_utf_8_httpx_transport",
+        upstream=(_ok(**{"x-fz-unicode": "caf\u00c3\u00a9"}),),
+        env=MappingProxyType({"DISABLE_AIOHTTP_TRANSPORT": "true"}),
+        settings=_tls(),
+    ),
 )
 
 STREAM_CASES: Final = (
@@ -818,6 +850,25 @@ STREAM_CASES: Final = (
         ),
     ),
     Case("stream_gzip_response", _kw(stream=True), upstream=(replace(_stream(TEXT_STREAM), gzip=True),)),
+    Case(
+        "stream_read_stalls_past_timeout_httpx_transport",
+        _kw(stream=True, timeout=0.5),
+        upstream=(_stream(SLOW_STREAM, chunk_delay=1.0),),
+        env=MappingProxyType({"DISABLE_AIOHTTP_TRANSPORT": "true"}),
+        settings=_tls(),
+    ),
+    Case(
+        "stream_response_header_utf_8",
+        _kw(stream=True),
+        upstream=(replace(_stream(TEXT_STREAM), headers={"x-fz-unicode": "caf\u00c3\u00a9"}),),
+    ),
+    Case(
+        "stream_response_header_utf_8_httpx_transport",
+        _kw(stream=True),
+        upstream=(replace(_stream(TEXT_STREAM), headers={"x-fz-unicode": "caf\u00c3\u00a9"}),),
+        env=MappingProxyType({"DISABLE_AIOHTTP_TRANSPORT": "true"}),
+        settings=_tls(),
+    ),
 )
 
 SYNC_CASES: Final = (
@@ -1458,10 +1509,6 @@ def _caller(**kwargs: object) -> Mapping[str, object]:
     return _kw(client=_CallerHandler(), **kwargs)
 
 
-def _tls(**settings: object) -> Mapping[str, object]:
-    return MappingProxyType({**settings, "in_memory_llm_clients_cache": LLMClientCache()})
-
-
 _TLS_LEVEL: Final = _tls(ssl_security_level="DEFAULT@SECLEVEL=1")
 _TLS_CURVE: Final = _tls(ssl_ecdh_curve="secp521r1")
 
@@ -1518,6 +1565,26 @@ TRANSPORT_CASES: Final = (
         settings=_tls(),
     ),
     Case("tls_security_level_python_cannot_apply", upstream=(), settings=_tls(ssl_security_level="NOT-A-CIPHER")),
+    Case("tls_ecdh_curve_nist_name", settings=_tls(ssl_ecdh_curve="P-256")),
+    Case("tls_ecdh_curve_padded_lowercase", settings=_tls(ssl_ecdh_curve=" x25519 ")),
+    Case("negative_timeout", _kw(timeout=-1), upstream=(ResponseSpec(body=dict(TEXT_RESPONSE), delay=0.3),)),
+    Case(
+        "negative_timeout_stream",
+        _kw(stream=True, timeout=-0.5),
+        upstream=(replace(_stream(TEXT_STREAM), delay=0.3),),
+    ),
+    Case(
+        "zero_timeout_httpx_transport",
+        _kw(timeout=0),
+        env=MappingProxyType({"DISABLE_AIOHTTP_TRANSPORT": "true"}),
+        settings=_tls(),
+    ),
+    Case(
+        "negative_timeout_httpx_transport",
+        _kw(timeout=-1),
+        env=MappingProxyType({"DISABLE_AIOHTTP_TRANSPORT": "true"}),
+        settings=_tls(),
+    ),
 )
 
 
@@ -2704,9 +2771,16 @@ def _sent_request(response: object) -> Mapping[str, object] | None:
             "method": sent.method,
             "path": sent.url.path,
             "anthropic-beta": sent.headers.get("anthropic-beta"),
-            "body": json.loads(sent.content),
+            "body": _sent_body(sent),
         },
     }
+
+
+def _sent_body(sent: httpx.Request) -> object:
+    try:
+        return json.loads(sent.read())
+    except (httpx.RequestNotRead, httpx.StreamClosed):
+        return None
 
 
 def _stream_text(chunks: Iterable[object]) -> str:

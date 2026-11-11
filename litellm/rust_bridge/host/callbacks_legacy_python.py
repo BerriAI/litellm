@@ -299,6 +299,10 @@ class _UnreadBody(httpx.SyncByteStream, httpx.AsyncByteStream):
             yield chunk
 
 
+def wire_headers(headers: Sequence[tuple[str, str]]) -> httpx.Headers:
+    return httpx.Headers([(name.encode(), value.encode()) for name, value in headers])
+
+
 def _sent_request(sent: tuple[str, Mapping[str, str], Mapping[str, object]]) -> httpx.Request:
     url, headers, body = sent
     return httpx.Request("POST", url, headers=list(headers.items()), content=json.dumps(body, default=str).encode())
@@ -319,7 +323,7 @@ def record_response(
         if streamed
         else httpx.Response(status_code=status, content=body.encode(), request=request)
     )
-    response.headers = httpx.Headers(list(headers))
+    response.headers = wire_headers(headers)
     details: Final = logger.model_call_details  # the call's own logger: recording on it is the point
     details["httpx_response"] = response
     details["response_headers"] = dict(response.headers)
@@ -395,10 +399,10 @@ def _log_api_window(logger: Logging, start: float, end: float) -> None:
         verbose_logger.debug("Error in service logging: %s", e)
 
 
-def times_provider_exchange(client: object) -> bool:
+def times_provider_exchange(client: object, timeout: object) -> bool:
     from litellm.rust_bridge.host import http_transport
 
-    return not http_transport.sends_through_python(client)
+    return not http_transport.sends_through_python(client, timeout)
 
 
 def defers_async_logging(logger: LoggingSurface) -> bool:

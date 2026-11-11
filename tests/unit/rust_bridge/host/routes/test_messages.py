@@ -52,6 +52,8 @@ def test_settings_project_caller_configuration_without_resolving_a_model(monkeyp
     monkeypatch.setattr(litellm, "reasoning_auto_summary", True)
     monkeypatch.setattr(litellm, "request_timeout", 1800)
     monkeypatch.setattr(litellm, "request_timeout_explicitly_set", True)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", False)
+    monkeypatch.delenv("DISABLE_AIOHTTP_TRANSPORT", raising=False)
 
     projected: Final = messages_host.settings({"drop_params": "true", "additional_drop_params": ["metadata.user_id"]})
 
@@ -66,6 +68,7 @@ def test_settings_project_caller_configuration_without_resolving_a_model(monkeyp
         "stream_cost_model": None,
         "extra_headers": None,
         "mcp_gateway": False,
+        "ascii_response_headers": True,
     }
 
 
@@ -283,13 +286,40 @@ def _marked(phase: str | None = None, *args: object) -> ValueError:
     return error
 
 
-def test_a_stalled_stream_body_reaches_the_caller_as_the_transport_timeout() -> None:
+@pytest.mark.parametrize(
+    ("disabled", "text"), ((None, "Timeout on reading data from socket"), ("true", "")), ids=("aiohttp", "httpx")
+)
+def test_a_stalled_stream_body_reaches_the_caller_as_the_transport_timeout(
+    monkeypatch: pytest.MonkeyPatch, disabled: str | None, text: str
+) -> None:
     import httpx
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", False)
+    if disabled is None:
+        monkeypatch.delenv("DISABLE_AIOHTTP_TRANSPORT", raising=False)
+    else:
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", disabled)
 
     mapped: Final = messages_host.map_failure(_marked("Body"), {"model": _ADAPTIVE_OPUS}, "anthropic")
 
     assert isinstance(mapped, httpx.ReadTimeout)
-    assert str(mapped) == "Timeout on reading data from socket"
+    assert str(mapped) == text
+
+
+@pytest.mark.parametrize(
+    ("value", "received", "text"),
+    (
+        ("h\ud800".encode("utf-8", "surrogatepass"), False, "can't encode character '\\ud800' in position 1"),
+        ("caf\u00e9".encode(), True, "can't encode character '\\xe9' in position 3"),
+        (b"caf\xe9", True, "can't encode character '\\udce9' in position 3"),
+    ),
+    ids=("sent-surrogate", "received-utf-8", "received-latin-1"),
+)
+def test_an_unencodable_header_is_the_error_pythons_ascii_codec_raises(value: bytes, received: bool, text: str) -> None:
+    error: Final = messages_host.unencodable_header(value, received)
+
+    assert isinstance(error, UnicodeEncodeError)
+    assert text in str(error)
 
 
 def test_a_native_read_timeout_maps_to_the_public_timeout_with_python_text() -> None:
@@ -856,13 +886,37 @@ def test_tls_the_native_client_cannot_apply_posts_through_pythons_anthropic_hand
     handler: Final = messages_host.transport_handler({"client": object()})
 
     assert handler is get_async_httpx_client(llm_provider=litellm.LlmProviders.ANTHROPIC)
-    assert callbacks_legacy_python.times_provider_exchange(object()) is False
+    assert callbacks_legacy_python.times_provider_exchange(object(), None) is False
 
 
 @pytest.mark.usefixtures("no_tls_settings")
 def test_only_a_native_post_is_timed_by_the_native_call() -> None:
-    assert callbacks_legacy_python.times_provider_exchange(None) is True
-    assert callbacks_legacy_python.times_provider_exchange(AsyncHTTPHandler()) is False
+    assert callbacks_legacy_python.times_provider_exchange(None, None) is True
+    assert callbacks_legacy_python.times_provider_exchange(None, 30.0) is True
+    assert callbacks_legacy_python.times_provider_exchange(AsyncHTTPHandler(), None) is False
+
+
+@pytest.mark.usefixtures("no_tls_settings")
+@pytest.mark.parametrize(
+    "timeout",
+    (-1.0, 0, -0.5, httpx.Timeout(10.0, connect=0)),
+    ids=("negative", "zero", "fraction", "httpx-zero-connect"),
+)
+def test_a_non_positive_timeout_posts_through_pythons_anthropic_handler(
+    monkeypatch: pytest.MonkeyPatch, timeout: object
+) -> None:
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+
+    handler: Final = messages_host.transport_handler({"client": None, "timeout": timeout})
+
+    assert handler is get_async_httpx_client(llm_provider=litellm.LlmProviders.ANTHROPIC)
+    assert callbacks_legacy_python.times_provider_exchange(None, timeout) is False
+
+
+@pytest.mark.usefixtures("no_tls_settings")
+@pytest.mark.parametrize("timeout", (None, 0.5, httpx.Timeout(10.0)), ids=("unset", "positive", "httpx"))
+def test_a_positive_timeout_keeps_the_native_client(timeout: object) -> None:
+    assert messages_host.transport_handler({"client": None, "timeout": timeout}) is None
 
 
 @pytest.mark.asyncio

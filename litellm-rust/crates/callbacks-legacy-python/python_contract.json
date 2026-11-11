@@ -57,7 +57,8 @@
     "end"
   ],
   "times_provider_exchange": [
-    "client"
+    "client",
+    "timeout"
   ],
   "defers_async_logging": [
     "logger"

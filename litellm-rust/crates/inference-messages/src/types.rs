@@ -86,6 +86,10 @@ pub struct MessagesSettings {
     pub intercepted: bool,
     #[serde(default)]
     pub mcp_gateway: bool,
+    #[serde(default)]
+    pub ascii_response_headers: bool,
+    #[serde(default)]
+    pub unencodable_request_header: Option<Vec<u8>>,
 }
 
 impl MessagesSettings {
