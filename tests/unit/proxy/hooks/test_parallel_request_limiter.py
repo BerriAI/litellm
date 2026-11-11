@@ -707,3 +707,64 @@ async def test_unadmitted_request_failure_does_not_release_team_slot():
         key=key, local_only=False, litellm_parent_otel_span=None
     )
     assert val == 1, f"Expected gauge to remain 1, but got {val}"
+
+
+@pytest.mark.asyncio
+async def test_caller_supplied_team_slot_acquired_is_stripped_and_sanitized():
+    """Regression test for veria-ai review on f843efbc (caller metadata suppressing release).
+
+    If an external caller provides `_team_slot_acquired: false` in `data["metadata"]`
+    or `data["litellm_metadata"]` (e.g. on /v1/responses), it must be stripped on admission
+    and overwritten with True once the slot is acquired, so that the failure/success
+    callbacks will correctly release the acquired slot instead of leaking it.
+    """
+    cache = DualCache()
+    handler = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache), clock=_frozen_clock
+    )
+    team_id = "test-team-sanitize"
+    key = f"{team_id}::max_parallel_requests"
+
+    team_key = UserAPIKeyAuth(
+        api_key=hash_token("sk-test-sanitize"),
+        team_id=team_id,
+        team_max_parallel_requests=2,
+    )
+
+    # Malicious/crafted caller data attempting to forge _team_slot_acquired=False
+    data = {
+        "model": "gpt-4o-mini",
+        "metadata": {"_team_slot_acquired": False},
+        "litellm_metadata": {"_team_slot_acquired": False},
+    }
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=team_key,
+        cache=cache,
+        data=data,
+        call_type="completion",
+    )
+
+    # Both containers must have _team_slot_acquired=True after successful admission
+    assert data["metadata"]["_team_slot_acquired"] is True
+    assert data["litellm_metadata"]["_team_slot_acquired"] is True
+
+    # Now verify that when failure hook runs with this litellm_metadata, slot is released
+    now = datetime(2026, 1, 31, 23, 59, 30)
+    await handler.async_log_failure_event(
+        kwargs={
+            "litellm_params": {
+                "metadata": {"user_api_key": "sk-test", "user_api_key_team_id": team_id},
+                "litellm_metadata": data["litellm_metadata"],
+            },
+            "exception": Exception("Upstream 500 error"),
+        },
+        response_obj=None,
+        start_time=now,
+        end_time=now,
+    )
+
+    val = await handler.internal_usage_cache.async_get_cache(
+        key=key, local_only=False, litellm_parent_otel_span=None
+    )
+    assert val == 0, f"Expected gauge to be decremented to 0, but got {val}"

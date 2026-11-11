@@ -289,6 +289,12 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             max_parallel_requests = sys.maxsize
         if data is None:
             data = {}
+        # Sanitize client-supplied internal state flags from both metadata containers
+        # so external callers cannot forge slot-acquisition state (#49070).
+        if isinstance(data.get("metadata"), dict):
+            data["metadata"].pop("_team_slot_acquired", None)
+        if isinstance(data.get("litellm_metadata"), dict):
+            data["litellm_metadata"].pop("_team_slot_acquired", None)
         global_max_parallel_requests: Final = data.get("metadata", {}).get("global_max_parallel_requests", None)
         throttle_pct: Final = getattr(user_api_key_dict, "budget_throttle_pct", None)
         tpm_limit = throttled_limit(getattr(user_api_key_dict, "tpm_limit", sys.maxsize), throttle_pct)
@@ -524,6 +530,8 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 if "metadata" not in data or data["metadata"] is None:
                     data["metadata"] = {}
                 data["metadata"]["_team_slot_acquired"] = True
+                if isinstance(data.get("litellm_metadata"), dict):
+                    data["litellm_metadata"]["_team_slot_acquired"] = True
 
             request_count_api_key = f"{team_id}::{precise_minute}::request_count"
             # print(f"Checking if {request_count_api_key} is allowed to make request for minute {precise_minute}")
@@ -553,6 +561,8 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     )
                     if isinstance(data.get("metadata"), dict):
                         data["metadata"]["_team_slot_acquired"] = False
+                    if isinstance(data.get("litellm_metadata"), dict):
+                        data["litellm_metadata"]["_team_slot_acquired"] = False
                 raise
 
         # End-User Rate Limits
@@ -765,8 +775,14 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 # local_only=False: share gauge across workers via Redis when
                 # available, matching the increment in async_pre_call_hook.
                 # Only decrement if this request actually acquired a team slot.
-                _meta = kwargs.get("litellm_params", {}).get("metadata", {}) or {}
-                if released > 0 and _meta.get("_team_slot_acquired", True):
+                # Check both metadata and litellm_metadata containers.
+                _lp = kwargs.get("litellm_params", {}) or {}
+                _meta = _lp.get("metadata", {}) or {}
+                _lmeta = _lp.get("litellm_metadata", {}) or {}
+                _has_slot = _meta.get("_team_slot_acquired")
+                if _has_slot is None:
+                    _has_slot = _lmeta.get("_team_slot_acquired", True)
+                if released > 0 and _has_slot:
                     _team_parallel_key: Final = f"{user_api_key_team_id}::max_parallel_requests"
                     await self.internal_usage_cache.async_increment_cache(
                         key=_team_parallel_key,
@@ -775,6 +791,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                         litellm_parent_otel_span=litellm_parent_otel_span,
                     )
                     _meta["_team_slot_acquired"] = False
+                    _lmeta["_team_slot_acquired"] = False
 
             # ------------
             # Update usage - End User
@@ -881,8 +898,14 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 # local_only=False: share gauge across workers via Redis when
                 # available, matching the increment in async_pre_call_hook.
                 # Only decrement if this request actually acquired a team slot.
+                # Check both metadata and litellm_metadata containers.
                 _failure_team_id: Final = _metadata.get("user_api_key_team_id", None)
-                if released > 0 and _failure_team_id is not None and _metadata.get("_team_slot_acquired", True):
+                _lp_fail = kwargs.get("litellm_params", {}) or {}
+                _lmeta_fail = _lp_fail.get("litellm_metadata", {}) or {}
+                _has_slot_fail = _metadata.get("_team_slot_acquired")
+                if _has_slot_fail is None:
+                    _has_slot_fail = _lmeta_fail.get("_team_slot_acquired", True)
+                if released > 0 and _failure_team_id is not None and _has_slot_fail:
                     _team_parallel_key_f: Final = f"{_failure_team_id}::max_parallel_requests"
                     await self.internal_usage_cache.async_increment_cache(
                         key=_team_parallel_key_f,
@@ -891,6 +914,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                         litellm_parent_otel_span=litellm_parent_otel_span,
                     )
                     _metadata["_team_slot_acquired"] = False
+                    _lmeta_fail["_team_slot_acquired"] = False
         except Exception as e:
             verbose_proxy_logger.exception("Inside Parallel Request Limiter: An exception occurred - %s", e)
 
