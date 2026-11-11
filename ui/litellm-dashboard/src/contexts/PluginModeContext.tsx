@@ -4,7 +4,7 @@ import React, { createContext, useContext, useState, useEffect } from "react";
 import { createApiClient } from "@/lib/http/client";
 import { getProxyBaseUrl } from "@/components/networking";
 
-export type PluginMode = "ai-gateway" | "customer-portal" | string; // built-in modes or a registered plugin name
+export type PluginMode = "ai-gateway" | "customer-portal" | string;
 export const BUILT_IN_MODES: ReadonlySet<string> = new Set(["ai-gateway", "customer-portal"]);
 
 export interface PluginNavItem {
