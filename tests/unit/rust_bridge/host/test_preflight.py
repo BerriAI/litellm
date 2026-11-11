@@ -8,8 +8,8 @@ import pytest
 from pydantic import TypeAdapter
 
 import litellm
-from litellm.rust_bridge import preflight
-from litellm.rust_bridge.preflight import check_limits
+from litellm.rust_bridge.host import preflight
+from litellm.rust_bridge.host.preflight import check_limits
 
 
 @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
@@ -47,7 +47,7 @@ def test_check_limits_refuses_a_call_over_the_budget(monkeypatch: pytest.MonkeyP
         check_limits({"model": "mistral/mistral-ocr-latest"})
 
 
-CONTRACT_PATH: Final = Path(__file__).parents[3] / "litellm-rust/crates/python-bridge/preflight_contract.json"
+CONTRACT_PATH: Final = Path(__file__).parents[4] / "litellm-rust/crates/python-bridge/preflight_contract.json"
 _SHIMS: Final[MappingProxyType[str, Callable[..., object]]] = MappingProxyType(
     {
         "credential_list": preflight.credential_list,

@@ -101,7 +101,7 @@ from litellm.llms.base_llm.vector_store.transformation import (
     RouterVectorStoreEmbeddingExecutor,
 )
 from litellm.types.utils import CallTypes, CredentialItem, Usage
-from litellm.utils import _invalidate_model_cost_lowercase_map
+from litellm.litellm_core_utils.model_cost_table import publish
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 from tests.large_text import text
@@ -14262,7 +14262,7 @@ def isolate_litellm_state():
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 _SCALAR_DEFAULTS = {
@@ -20331,3 +20331,22 @@ def test_router_warns_when_a_deployment_enforces_endpoints_without_a_list(caplog
 
     assert "Deployment 'embed-from-config' sets enforce_supported_endpoints without" in caplog.text
     assert "Deployment 'embed-from-api' sets enforce_supported_endpoints without" in caplog.text
+
+
+def test_registry_finds_a_team_deployment_by_public_and_internal_name_for_its_team_only() -> None:
+    internal_name: Final = "model_name_team-a_row"
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": internal_name,
+                "litellm_params": {"model": "openai/gpt-5.5", "api_key": "x"},
+                "model_info": {"id": "team-row", "team_id": "team-a", "team_public_model_name": "public-chat"},
+            }
+        ]
+    )
+    registry: Final = router.registry()
+
+    assert [row["model_info"]["id"] for row in registry.deployments("public-chat", team_id="team-a")] == ["team-row"]
+    assert [row["model_info"]["id"] for row in registry.deployments(internal_name, team_id="team-a")] == ["team-row"]
+    assert list(registry.deployments("public-chat", team_id="team-b")) == []
+    assert list(registry.deployments("public-chat")) == []

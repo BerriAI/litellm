@@ -6,6 +6,7 @@ import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings"
 import { useApplyUserBudgetToTeamKeys } from "@/app/(dashboard)/hooks/uiSettings/useApplyUserBudgetToTeamKeys";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import { formatBudgetResetTime } from "@/utils/budgetUtils";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
 import { ArrowLeft, Info } from "lucide-react";
@@ -580,6 +581,7 @@ export default function KeyInfoView({
     return t("keyDetail.keyInfoView.budget.unlimited");
   })();
   const inheritedGates = hasOwnBudget ? [] : inheritedBudgetGates(parentTeam, parentOrg, ownerUser, memberGate);
+  const budgetResetTime = formatBudgetResetTime(currentKeyData.budget_reset_at);
 
   return (
     <div className="w-full h-full overflow-y-auto p-4">
@@ -786,10 +788,10 @@ export default function KeyInfoView({
                       : t("keyDetail.keyInfoView.overview.ofBudget", { budget: budgetDisplay })}
                     <InheritedBudgetHint gates={inheritedGates} />
                   </p>
-                  {currentKeyData.budget_reset_at && (
+                  {budgetResetTime && (
                     <p className="text-sm">
                       {t("keyDetail.keyInfoView.overview.resets")}
-                      {formatTimestamp(currentKeyData.budget_reset_at)}
+                      {budgetResetTime}
                     </p>
                   )}
                   <p className="text-sm mt-2" data-testid="key-lifetime-spend">
@@ -1119,8 +1121,8 @@ export default function KeyInfoView({
                   <div>
                     <p className="text-sm font-medium">{t("keyDetail.keyInfoView.settings.budgetReset")}</p>
                     <p data-testid="budget-reset-value" className="text-sm">
-                      {currentKeyData.budget_reset_at
-                        ? `${currentKeyData.budget_duration ? t("keyDetail.keyInfoView.settings.budgetResetEvery", { duration: currentKeyData.budget_duration }) : ""}${formatTimestamp(currentKeyData.budget_reset_at)}`
+                      {budgetResetTime
+                        ? `${currentKeyData.budget_duration ? t("keyDetail.keyInfoView.settings.budgetResetEvery", { duration: currentKeyData.budget_duration }) : ""}${budgetResetTime}`
                         : t("keyDetail.keyInfoView.settings.never")}
                     </p>
                   </div>

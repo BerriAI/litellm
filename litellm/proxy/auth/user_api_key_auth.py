@@ -14,6 +14,7 @@ import secrets
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from enum import Enum
+from functools import partial
 from types import MappingProxyType
 from typing import Final, NamedTuple, Protocol, Union, cast
 
@@ -44,6 +45,7 @@ from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_
 from litellm.models.end_user import LiteLLM_EndUserTable
 from litellm.proxy._types import *
 from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_from_headers
+from litellm.proxy.auth.access_group_rules import access_group_ids_for_identity
 from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
     ExperimentalUIJWTToken,
     TeamNotFoundError,
@@ -107,12 +109,14 @@ from litellm.proxy.auth.auth_object_prefetch import (
 )
 from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
+    checks_team_s3_buckets_in_handler,
     fallback_target_model_name,
     get_end_user_id_from_request_body,
     get_model_from_request,
     get_request_route,
     get_request_route_template,
     is_invalid_virtual_key_error,
+    is_request_body_safe,
     iter_request_fallback_targets,
     log_model_access_denial,
     normalize_request_route,
@@ -144,7 +148,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _safe_get_request_query_params,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _safe_set_request_parsed_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
-    is_opaque_audio_pass_through_request,
+    is_opaque_pass_through_request,
     populate_request_with_path_params,
     read_raw_json_body,
     read_request_body,
@@ -170,7 +174,15 @@ from litellm.proxy.db.db_lookup_gate import bounded_db_lookup
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
-from litellm.proxy.spend_tracking.carried_budget_state import carry_team_and_user_budget_state
+from litellm.proxy.spend_tracking.carried_budget_state import (
+    carry_committed_budget_spend,
+    carry_team_and_user_budget_state,
+)
+from litellm.proxy.spend_tracking.committed_spend import (
+    bind_committed_admission_counters,
+    committed_spend_tracked,
+    read_admission_committed_spend,
+)
 from litellm.proxy.spend_tracking.spend_counter_batch import (
     bind_admission_counter_keys,
     release_spend_counter_batch,
@@ -395,6 +407,17 @@ def _get_model_names_for_budget_checks(
     if isinstance(model, str):
         return [model]
     return model
+
+
+async def _normalize_model_for_auth(
+    request_data: dict[str, object],  # mutable-ok: normalization updates dispatch data
+    valid_token: UserAPIKeyAuth,
+    request: Request | None,
+    route: str,
+) -> None:
+    await _normalize_claude_model(request_data, valid_token, request, route)
+    await _resolve_router_settings_model_group_alias(request_data, valid_token, request, route)
+    _resolve_codex_native_chatgpt_model(request_data, valid_token, request, route)
 
 
 def _budget_fallback_target_model(target: object) -> str | None:
@@ -1292,6 +1315,12 @@ def _apply_budget_limits_to_end_user_params(
     if budget_info.model_max_budget is not None:
         end_user_params["end_user_model_max_budget"] = budget_info.model_max_budget
 
+    if budget_info.model_tpm_limit is not None:
+        end_user_params["end_user_model_tpm_limit"] = budget_info.model_tpm_limit  # rebind-ok: in-place like siblings
+
+    if budget_info.model_rpm_limit is not None:
+        end_user_params["end_user_model_rpm_limit"] = budget_info.model_rpm_limit  # rebind-ok: in-place like siblings
+
     verbose_proxy_logger.debug("Applied budget limits to end user %s", end_user_id)
 
 
@@ -1423,6 +1452,10 @@ def update_valid_token_with_end_user_params(valid_token: UserAPIKeyAuth, end_use
         valid_token.allowed_model_region = end_user_params["allowed_model_region"]
     if end_user_params.get("end_user_model_max_budget") is not None:
         valid_token.end_user_model_max_budget = end_user_params["end_user_model_max_budget"]
+    if "end_user_model_tpm_limit" in end_user_params:
+        valid_token.end_user_model_tpm_limit = end_user_params["end_user_model_tpm_limit"]  # rebind-ok: in-place
+    if "end_user_model_rpm_limit" in end_user_params:
+        valid_token.end_user_model_rpm_limit = end_user_params["end_user_model_rpm_limit"]  # rebind-ok: in-place
     return valid_token
 
 
@@ -2128,7 +2161,7 @@ async def _read_request_body_deferring_parse_failure(
     must run (resolving identity onto the request's trace) before the 400 goes
     out; the caller re-raises the returned exception once identity is seeded.
     """
-    if is_opaque_audio_pass_through_request(
+    if is_opaque_pass_through_request(
         route=get_request_route(request=request),
         content_type=safe_get_request_headers(request=request).get("content-type", ""),
     ):
@@ -2245,6 +2278,7 @@ async def user_api_key_auth_builder(
     azure_apim_header: str | None,
     request_data: dict[str, object],
     custom_litellm_key_header: str | None = None,
+    defer_team_checks: bool = False,
 ) -> UserAPIKeyAuth:
     from litellm.proxy.proxy_server import (
         general_settings,
@@ -2279,6 +2313,7 @@ async def user_api_key_auth_builder(
                 request_data=request_data,
                 request=request,
                 route=route,
+                defer_team_checks=defer_team_checks,
             )
         pass_through_endpoints: Final[list[dict] | None] = general_settings.get("pass_through_endpoints", None)
         ## CHECK IF X-LITELM-API-KEY IS PASSED IN - supercedes Authorization header
@@ -2964,6 +2999,10 @@ async def user_api_key_auth_builder(
             valid_token.end_user_tpm_limit = end_user_params.get("end_user_tpm_limit")
             valid_token.end_user_rpm_limit = end_user_params.get("end_user_rpm_limit")
             valid_token.end_user_tpd_limit = end_user_params.get("end_user_tpd_limit")
+            if "end_user_model_tpm_limit" in end_user_params:
+                valid_token.end_user_model_tpm_limit = end_user_params["end_user_model_tpm_limit"]
+            if "end_user_model_rpm_limit" in end_user_params:
+                valid_token.end_user_model_rpm_limit = end_user_params["end_user_model_rpm_limit"]
             valid_token.allowed_model_region = end_user_params.get("allowed_model_region")
 
         return await validate_resolved_virtual_key(
@@ -3044,14 +3083,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                 param=None,
                 code=status.HTTP_401_UNAUTHORIZED,
             )
-        await enforce_key_and_fallback_model_access(
-            valid_token=valid_token,
-            request_data=request_data,
-            route=route,
-            request=request,
-            llm_model_list=llm_model_list,
-            llm_router=llm_router,
-        )
+        await _normalize_model_for_auth(request_data, valid_token, request, route)
         await _prefetch_referenced_auth_objects(
             valid_token, end_user_id=end_user_id, user_api_key_cache=user_api_key_cache, prisma_client=prisma_client
         )
@@ -3405,6 +3437,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
             start_time=start_time,
         )
         virtual_key_auth_obj.via_virtual_key = True
+        request.state.requires_key_model_check = True  # rebind-ok: defer until central grants
         return virtual_key_auth_obj
 
 
@@ -3650,9 +3683,22 @@ async def run_centralized_common_checks(
         model_max_budget_limiter,
         prisma_client,
         proxy_logging_obj,
+        spend_counter_store,
         user_api_key_cache,
         user_custom_auth,
     )
+
+    if not sub_call and getattr(request.state, "deferred_model_body_check", False) is True:
+        body_model: Final = request_data.get("model")
+        is_request_body_safe(
+            request_body=request_data,
+            general_settings=_GENERAL_SETTINGS_ADAPTER.validate_python(general_settings),
+            llm_router=llm_router,
+            model=body_model if isinstance(body_model, str) else "",
+            route=route,
+            team_id=user_api_key_auth_obj.team_id,
+            defer_s3_buckets=checks_team_s3_buckets_in_handler(request),
+        )
 
     # Public routes (e.g. /health/liveness) are exempt from
     # auth in the builder — the wrapper must not retroactively apply
@@ -3960,6 +4006,7 @@ async def run_centralized_common_checks(
         )
 
     bind_admission_counter_keys(user_api_key_auth_obj, end_user_id=end_user_id)
+    bind_committed_admission_counters(user_api_key_auth_obj, end_user_id=end_user_id)
     try:
         _ = await common_checks(
             request=request,
@@ -4035,6 +4082,18 @@ async def run_centralized_common_checks(
                     user_obj=user_object,
                 )
 
+        if committed_spend_tracked():
+            await carry_committed_budget_spend(
+                valid_token=user_api_key_auth_obj,
+                team_object=typed_team_object,
+                user_object=user_object,
+                end_user_object=end_user_object,
+                read_committed=(
+                    None
+                    if route_skips_budget_checks(route=route)
+                    else partial(read_admission_committed_spend, spend_counter_store)
+                ),
+            )
         await _reserve_budget_after_common_checks(
             user_api_key_auth_obj=user_api_key_auth_obj,
             request=request,
@@ -4105,6 +4164,10 @@ async def _apply_key_end_user_default_budget_to_token(
         valid_token.end_user_tpd_limit = default_budget.tpd_limit
     if not keep_token_limits or valid_token.end_user_model_max_budget is None:
         valid_token.end_user_model_max_budget = default_budget.model_max_budget
+    if not keep_token_limits or valid_token.end_user_model_tpm_limit is None:
+        valid_token.end_user_model_tpm_limit = default_budget.model_tpm_limit  # rebind-ok: in-place like siblings
+    if not keep_token_limits or valid_token.end_user_model_rpm_limit is None:
+        valid_token.end_user_model_rpm_limit = default_budget.model_rpm_limit  # rebind-ok: in-place like siblings
 
 
 async def _reserve_budget_after_common_checks(
@@ -4228,7 +4291,33 @@ async def _authorize_authenticated_request(
             prepare_agent_invocation,
         )
         from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore
-        from litellm.proxy.proxy_server import general_settings, prisma_client, user_model
+        from litellm.proxy.proxy_server import (
+            general_settings,
+            llm_model_list,  # pyright: ignore[reportUnknownVariableType]  # proxy global has untyped deployment entries
+            llm_router,
+            prisma_client,
+            user_model,
+        )
+
+        grants: Final = await access_group_ids_for_identity(user_api_key_auth_obj)
+        user_api_key_auth_obj.apply_access_group_rule_grants(grants)
+        key_check_required: Final = (
+            getattr(request.state, "requires_key_model_check", False) or force_virtual_key_checks
+        )
+        if key_check_required or grants:
+            model_identity: Final = (
+                user_api_key_auth_obj
+                if key_check_required
+                else user_api_key_auth_obj.model_copy(update={"models": list(user_api_key_auth_obj.team_models or ())})
+            )
+            await enforce_key_and_fallback_model_access(
+                valid_token=model_identity,
+                request_data=request_data,
+                route=route,
+                request=request,
+                llm_model_list=llm_model_list,
+                llm_router=llm_router,
+            )
 
         store: Final = AgentIdentityStore.from_client(prisma_client) if prisma_client is not None else None
         if user_api_key_auth_obj.agent_id is not None:
@@ -4345,9 +4434,9 @@ async def _prefetch_referenced_auth_objects(
     user_api_key_cache: UserApiKeyCache,
     prisma_client: PrismaClient | None,
 ) -> None:
-    """Warm every object and spend counter the checks below will read, in one MGET each (one DB query when cold).
-    Runs after the key's model access check so a denied request costs no more than it did before."""
+    """Warm every object and spend counter the checks below will read, in one MGET each (one DB query when cold)."""
     bind_admission_counter_keys(valid_token, end_user_id=end_user_id or None)
+    bind_committed_admission_counters(valid_token, end_user_id=end_user_id or None)
     await prefetch_auth_objects(
         refs=AuthObjectRefs.from_token(valid_token),
         user_api_key_cache=user_api_key_cache,
@@ -4438,7 +4527,7 @@ async def user_api_key_auth(
         spend_counter_batch_scope(_spend_counter_store()),
     ):
         try:
-            user_api_key_auth_obj: Final = await user_api_key_auth_builder(
+            authenticated: Final = await user_api_key_auth_builder(
                 request=request,
                 api_key=api_key,
                 azure_api_key_header=azure_api_key_header,
@@ -4447,6 +4536,7 @@ async def user_api_key_auth(
                 azure_apim_header=azure_apim_header,
                 request_data=request_data,
                 custom_litellm_key_header=custom_litellm_key_header,
+                defer_team_checks=True,
             )
         except Exception:
             # The body was read first, so a caller who sent both a malformed body and
@@ -4455,6 +4545,14 @@ async def user_api_key_auth(
             if body_parse_exception is not None:
                 raise body_parse_exception
             raise
+        from litellm.proxy.proxy_server import (
+            general_settings,  # pyright: ignore[reportUnknownVariableType]  # proxy global is validated below
+        )
+
+        settings: Final = _GENERAL_SETTINGS_ADAPTER.validate_python(general_settings)
+        user_api_key_auth_obj: Final = (
+            authenticated.model_copy() if settings.get("access_group_rules") else authenticated
+        )
         user_api_key_auth_obj.budget_reservation = None
         user_api_key_auth_obj.agent_caller = agent_caller_from_headers(
             safe_get_request_headers(request), user_api_key_auth_obj
@@ -4793,14 +4891,8 @@ async def _run_post_custom_auth_checks(
             )
 
     if general_settings.get("custom_auth_run_common_checks", False):
-        await enforce_key_and_fallback_model_access(
-            valid_token=valid_token,
-            request_data=request_data,
-            route=route,
-            request=request,
-            llm_model_list=llm_model_list,
-            llm_router=llm_router,
-        )
+        await _normalize_model_for_auth(request_data, valid_token, request, route)
+        request.state.requires_key_model_check = True  # rebind-ok: defer until central grants
 
     current_model = _get_model_from_request_context(
         request_data=request_data,
@@ -4924,7 +5016,7 @@ async def authorize_internal_virtual_key(
         )
     )
     route: Final = get_request_route(request=request)
-    await pre_db_read_auth_checks(request_data=request_data, request=request, route=route)
+    await pre_db_read_auth_checks(request_data=request_data, request=request, route=route, defer_team_checks=True)
     auth: Final = await validate_resolved_virtual_key(
         request=request,
         request_data=request_data,
