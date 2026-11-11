@@ -39,6 +39,8 @@ from litellm.constants import (
 )
 from litellm.cost_calculator import ocr_batch_cost
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger_v2 import CallContext, CustomLoggerV2, Hook, build_manifest, on
+from litellm.integrations.custom_logger_v2.host import register_native, reset_host_for_tests
 from litellm.litellm_core_utils import litellm_logging
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.litellm_logging import (
@@ -58,7 +60,7 @@ from litellm.proxy.hooks.cache_control_check import PROXY_CacheControlCheck
 from litellm.proxy.hooks.max_iterations_limiter import PROXY_MaxIterationsHandler
 from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
 from litellm.proxy.utils import InternalUsageCache
-from litellm.types.llms.openai import ResponseAPIUsage, ResponseCompletedEvent, ResponsesAPIResponse
+from litellm.types.llms.openai import AllMessageValues, ResponseAPIUsage, ResponseCompletedEvent, ResponsesAPIResponse
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
     CallTypes,
@@ -1703,7 +1705,9 @@ class TestRetrieveBatchPricesOnlyFinalBatches:
         assert batch.usage.total_tokens == 35
 
     @pytest.mark.parametrize("batch_ignore_default_logging", [True, False])
-    def test_sync_logger_gets_a_free_event_for_the_cost_poller_retrieve(self, batch_ignore_default_logging: bool) -> None:
+    def test_sync_logger_gets_a_free_event_for_the_cost_poller_retrieve(
+        self, batch_ignore_default_logging: bool
+    ) -> None:
         sync_events: list[object] = []
 
         class SyncOnlyLogger(CustomLogger):
@@ -7197,7 +7201,12 @@ _WEB_SEARCH_REPLY: Final = (
         (
             [
                 {"type": "mcp_tool_use", "id": "mcptoolu_1", "name": "lookup", "server_name": "docs", "input": {}},
-                {"type": "mcp_tool_result", "tool_use_id": "mcptoolu_1", "is_error": False, "content": [{"type": "text", "text": "ok"}]},
+                {
+                    "type": "mcp_tool_result",
+                    "tool_use_id": "mcptoolu_1",
+                    "is_error": False,
+                    "content": [{"type": "text", "text": "ok"}],
+                },
                 {"type": "text", "text": "Found it."},
             ],
             "end_turn",
@@ -12731,7 +12740,12 @@ def test_get_model_cost_information_maps_requested_model_when_response_names_an_
     monkeypatch.setitem(
         litellm.model_cost,
         requested_model,
-        {"litellm_provider": "fireworks_ai", "mode": "chat", "input_cost_per_token": 3e-6, "output_cost_per_token": 7e-6},
+        {
+            "litellm_provider": "fireworks_ai",
+            "mode": "chat",
+            "input_cost_per_token": 3e-6,
+            "output_cost_per_token": 7e-6,
+        },
     )
     response: Final = ModelResponse(model="Sol Display Max", choices=[])
     response._hidden_params["provider_response_model"] = "Sol Display Max"
@@ -12743,15 +12757,27 @@ def test_get_model_cost_information_maps_requested_model_when_response_names_an_
 
     assert result["model_map_key"] == requested_model
     assert result["model_map_value"] is not None
-    assert result["model_map_value"]["input_cost_per_token"] == litellm.model_cost[requested_model]["input_cost_per_token"]
+    assert (
+        result["model_map_value"]["input_cost_per_token"] == litellm.model_cost[requested_model]["input_cost_per_token"]
+    )
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 def test_get_model_cost_information_keeps_a_priced_response_model_that_echoes_without_its_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    served_row: Final = {"litellm_provider": "mistral", "mode": "chat", "input_cost_per_token": 2e-6, "output_cost_per_token": 5e-6}
-    requested_row: Final = {"litellm_provider": "mistral", "mode": "chat", "input_cost_per_token": 9e-6, "output_cost_per_token": 9e-6}
+    served_row: Final = {
+        "litellm_provider": "mistral",
+        "mode": "chat",
+        "input_cost_per_token": 2e-6,
+        "output_cost_per_token": 5e-6,
+    }
+    requested_row: Final = {
+        "litellm_provider": "mistral",
+        "mode": "chat",
+        "input_cost_per_token": 9e-6,
+        "output_cost_per_token": 9e-6,
+    }
     monkeypatch.setitem(litellm.model_cost, "mistral/sol-snapshot-test", served_row)
     monkeypatch.setitem(litellm.model_cost, "mistral/sol-alias-test", requested_row)
     response: Final = ModelResponse(model="sol-snapshot-test", choices=[])
@@ -14639,7 +14665,9 @@ async def test_a_redacted_batch_retrieve_still_tells_the_spend_callbacks_whether
     ((kwargs, response_obj),) = recorder.events
     assert not isinstance(response_obj, LiteLLMBatch)
     assert defers_batch_cost(kwargs, response_obj) is deferred
-    assert (job_to_charge_once(kwargs, response_obj, 0.42) == ChargeOnceJob(kind="batch", job_id="batch_abc")) is charged
+    assert (
+        job_to_charge_once(kwargs, response_obj, 0.42) == ChargeOnceJob(kind="batch", job_id="batch_abc")
+    ) is charged
 
 
 _FAILED_ATTEMPT: Final = (Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500), 0.5)
@@ -14792,3 +14820,262 @@ async def test_a_response_discarded_after_its_success_log_was_parked_is_billed_o
     assert kwargs["response_cost"] == pytest.approx(both_attempts)
     assert prepared is not None
     assert prepared.amount == pytest.approx(both_attempts)
+
+
+_HOOKED_RESULT: Final = ModelResponse(id="hooked")
+
+
+class _PlaneRecorder(CustomLogger):
+    def __init__(self, seen: list[tuple[str, object]]) -> None:
+        super().__init__()
+        self.seen = seen
+
+    def log_pre_api_call(self, model: object, messages: object, kwargs: object) -> None:
+        self.seen.append(("pre", kwargs))
+
+    def log_post_api_call(self, kwargs: object, response_obj: object, start_time: object, end_time: object) -> None:
+        self.seen.append(("post", kwargs))
+
+    def logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict, object]:
+        self.seen.append(("hook", result))
+        return {**kwargs, "hooked": True}, _HOOKED_RESULT
+
+    async def async_logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict, object]:
+        return self.logging_hook(kwargs, result, call_type)
+
+    def log_success_event(self, kwargs: dict, response_obj: object, start_time: object, end_time: object) -> None:
+        self.seen.append(("success", (kwargs.get("hooked"), response_obj)))
+
+    async def async_log_success_event(
+        self, kwargs: dict, response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.seen.append(("success", (kwargs.get("hooked"), response_obj)))
+
+    def log_failure_event(self, kwargs: dict, response_obj: object, start_time: object, end_time: object) -> None:
+        self.seen.append(("failure", kwargs))
+
+    async def async_log_failure_event(
+        self, kwargs: dict, response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.seen.append(("failure", kwargs))
+
+
+def _observing_native(hook: Hook, seen: list[tuple[str, object]], done: threading.Event) -> CustomLoggerV2:
+    class Observer(CustomLoggerV2):
+        @on(hook)
+        def observe(self, view: object, ctx: CallContext[object]) -> None:
+            seen.append(("native", hook))
+            done.set()
+
+    return Observer()
+
+
+@pytest.fixture
+def v2_host() -> Iterator[None]:
+    reset_host_for_tests()
+    yield
+    reset_host_for_tests()
+
+
+def _register(hook: Hook | None, seen: list[tuple[str, object]]) -> threading.Event:
+    done: Final = threading.Event()
+    if hook is not None:
+        register_native(build_manifest(_observing_native(hook, seen, done)))
+    return done
+
+
+def _plane_callbacks(
+    monkeypatch: pytest.MonkeyPatch, sync: Sequence[CustomLogger], asyncs: Sequence[CustomLogger]
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "input_callback", list(sync))
+    monkeypatch.setattr(litellm, "success_callback", list(sync))
+    monkeypatch.setattr(litellm, "failure_callback", list(sync))
+    monkeypatch.setattr(litellm, "_async_success_callback", list(asyncs))
+    monkeypatch.setattr(litellm, "_async_failure_callback", list(asyncs))
+
+
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize(
+    ("hook", "label"), [(Hook.provider_request_sent, "pre"), (Hook.provider_response_received, "post")]
+)
+def test_provider_events_reach_input_callbacks_once_with_the_live_call_details(
+    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch, v2_host: None, hook: Hook, label: str, native: bool
+) -> None:
+    seen: Final[list[tuple[str, object]]] = []
+    _plane_callbacks(monkeypatch, [_PlaneRecorder(seen)], [])
+    done: Final = _register(hook if native else None, seen)
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={})
+
+    if hook is Hook.provider_request_sent:
+        logging_obj.pre_call(input="", api_key="")
+    else:
+        logging_obj.post_call(original_response="ok", input="", api_key="")
+
+    if native:
+        assert done.wait(timeout=30)
+    assert seen[0][0] == label
+    assert seen[0][1] is logging_obj.model_call_details
+    assert seen[1:] == ([("native", hook)] if native else [])
+
+
+@pytest.mark.parametrize("native", [None, Hook.log_prepare, Hook.attempt_ended])
+def test_sync_success_delivers_what_the_logging_hook_returned(
+    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch, v2_host: None, native: Hook | None
+) -> None:
+    seen: Final[list[tuple[str, object]]] = []
+    _plane_callbacks(monkeypatch, [_PlaneRecorder(seen)], [])
+    done: Final = _register(native, seen)
+    logging_obj.stream = False
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={})
+    now: Final = datetime.datetime.now()
+
+    logging_obj.success_handler(result=ModelResponse(id="served"), start_time=now, end_time=now)
+
+    if native is not None:
+        assert done.wait(timeout=30)
+    assert [label for label, _ in seen] == ["hook", "success", *(["native"] if native else [])]
+    assert seen[1][1] == (True, _HOOKED_RESULT)
+    assert seen[1][1][1] is _HOOKED_RESULT
+
+
+@pytest.mark.parametrize("native", [None, Hook.log_prepare, Hook.attempt_ended])
+async def test_async_success_delivers_what_the_logging_hook_returned(
+    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch, v2_host: None, native: Hook | None
+) -> None:
+    seen: Final[list[tuple[str, object]]] = []
+    _plane_callbacks(monkeypatch, [], [_PlaneRecorder(seen)])
+    done: Final = _register(native, seen)
+    logging_obj.stream = False
+    logging_obj.update_environment_variables(litellm_params={"acompletion": True}, optional_params={})
+    now: Final = datetime.datetime.now()
+
+    await logging_obj.async_success_handler(result=ModelResponse(id="served"), start_time=now, end_time=now)
+
+    if native is not None:
+        assert await asyncio.to_thread(done.wait, 30)
+    assert [label for label, _ in seen] == ["hook", "success", *(["native"] if native else [])]
+    assert seen[1][1][1] is _HOOKED_RESULT
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("native", [False, True])
+async def test_failure_handlers_deliver_once_with_the_live_call_details(
+    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch, v2_host: None, use_async: bool, native: bool
+) -> None:
+    seen: Final[list[tuple[str, object]]] = []
+    recorder: Final = _PlaneRecorder(seen)
+    _plane_callbacks(monkeypatch, [] if use_async else [recorder], [recorder] if use_async else [])
+    done: Final = _register(Hook.attempt_ended if native else None, seen)
+    logging_obj.stream = False
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={})
+    error: Final = ValueError("provider failed")
+
+    if use_async:
+        await logging_obj.async_failure_handler(error, "trace")
+    else:
+        await asyncio.to_thread(logging_obj.failure_handler, error, "trace")
+
+    if native:
+        assert await asyncio.to_thread(done.wait, 30)
+    assert seen[0] == ("failure", logging_obj.model_call_details)
+    assert seen[0][1] is logging_obj.model_call_details
+    assert seen[1:] == ([("native", Hook.attempt_ended)] if native else [])
+
+
+async def test_a_blocking_mcp_tool_result_native_runs_before_the_legacy_callbacks(
+    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch, v2_host: None
+) -> None:
+    from litellm.types.mcp import MCPPostCallResponseObject
+
+    seen: Final[list[str]] = []
+
+    class Gate(CustomLoggerV2):
+        @on(Hook.mcp_tool_result, may_abort=True)
+        async def gate(self, view: object, ctx: CallContext[object]) -> None:
+            seen.append("native")
+
+    class Legacy(CustomLogger):
+        async def async_post_mcp_tool_call_hook(
+            self, kwargs: dict, response_obj: MCPPostCallResponseObject, start_time: object, end_time: object
+        ) -> None:
+            seen.append("legacy")
+
+    register_native(build_manifest(Gate()))
+    monkeypatch.setattr(litellm, "success_callback", [Legacy()])
+    result: Final = CallToolResult(content=[TextContent(type="text", text="ok")])
+    now: Final = datetime.datetime.now()
+
+    returned: Final = await logging_obj.async_post_mcp_tool_call_hook({}, result, now, now)
+
+    assert returned is result
+    assert seen == ["native", "legacy"]
+
+
+class _PromptManager(CustomLogger):
+    def __init__(self, resolved: tuple[str, list[AllMessageValues], dict], error: Exception | None = None) -> None:
+        super().__init__()
+        self.resolved = resolved
+        self.error = error
+        self.calls: list[str] = []
+
+    def get_chat_completion_prompt(self, **kwargs: object) -> tuple[str, list[AllMessageValues], dict]:
+        self.calls.append(str(kwargs["prompt_id"]))
+        if self.error is not None:
+            raise self.error
+        return self.resolved
+
+    async def async_get_chat_completion_prompt(self, **kwargs: object) -> tuple[str, list[AllMessageValues], dict]:
+        return self.get_chat_completion_prompt(**kwargs)
+
+
+async def _resolve_prompt(logging_obj: LitellmLogging, manager: CustomLogger, use_async: bool) -> tuple[object, ...]:
+    common: Final = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "raw"}],
+        "non_default_params": {},
+        "prompt_variables": None,
+        "prompt_id": "greeting",
+        "prompt_management_logger": manager,
+    }
+    if use_async:
+        return await logging_obj.async_get_chat_completion_prompt(**common)
+    return await asyncio.to_thread(lambda: logging_obj.get_chat_completion_prompt(**common))
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("native", [False, True])
+async def test_prompt_resolve_returns_the_managers_prompt_unchanged(
+    logging_obj: LitellmLogging, v2_host: None, use_async: bool, native: bool
+) -> None:
+    seen: Final[list[tuple[str, object]]] = []
+    done: Final = _register(Hook.prompt_resolve if native else None, seen)
+    resolved: Final[tuple[str, list[AllMessageValues], dict]] = (
+        "claude-opus-4-5",
+        [{"role": "system", "content": "rendered"}],
+        {"temperature": 0.1},
+    )
+    manager: Final = _PromptManager(resolved)
+
+    model, messages, params = await _resolve_prompt(logging_obj, manager, use_async)
+
+    if native:
+        assert await asyncio.to_thread(done.wait, 30)
+    assert model == resolved[0]
+    assert messages is resolved[1]
+    assert params is resolved[2]
+    assert logging_obj.messages is resolved[1]
+    assert manager.calls == ["greeting"]
+    assert seen == ([("native", Hook.prompt_resolve)] if native else [])
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_prompt_resolve_propagates_the_managers_error(
+    logging_obj: LitellmLogging, v2_host: None, use_async: bool
+) -> None:
+    error: Final = LookupError("unknown prompt")
+
+    with pytest.raises(LookupError) as raised:
+        await _resolve_prompt(logging_obj, _PromptManager(("m", [], {}), error), use_async)
+
+    assert raised.value is error
