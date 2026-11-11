@@ -877,6 +877,29 @@ def strip_client_guardrail_information(data: dict[str, object]) -> None:  # muta
             )
 
 
+def strip_caller_supplied_identity(
+    metadata: dict[str, object],  # mutable-ok: strips in place on the metadata bucket it is handed
+    *,
+    allow_client_message_redaction_opt_out: bool = False,
+) -> None:
+    """Drop from a caller-supplied metadata bucket the fields pre-call processing owns.
+
+    The proxy fills a family of ``user_api_key_*`` fields into one of the two metadata dicts,
+    so a caller pre-populating any of them on the other dict would have its forged values
+    surface in guardrails, spend tracking, audit logs and identity resolution. Stripping by
+    prefix covers ``user_api_key_*`` fields added later without per-key maintenance.
+
+    Shared with ``/apply_guardrail``, which accepts caller metadata the same way and so has to
+    take identity from the authenticated key rather than from the body.
+    """
+    _strip_untrusted_request_header_controls(
+        metadata.get("headers"),
+        allow_client_message_redaction_opt_out=allow_client_message_redaction_opt_out,
+    )
+    for key in [k for k in metadata if k.startswith("user_api_key_") or k in _UNTRUSTED_METADATA_CONTROL_FIELDS]:
+        metadata.pop(key, None)
+
+
 def _strip_router_reserved_metadata(
     data: dict[str, object],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
 ) -> None:
@@ -2902,14 +2925,10 @@ async def add_litellm_data_to_request(
     for _meta_key in ("metadata", "litellm_metadata"):
         _user_meta = data.get(_meta_key)
         if isinstance(_user_meta, dict):
-            _strip_untrusted_request_header_controls(
-                _user_meta.get("headers"),
-                allow_client_message_redaction_opt_out=(_allow_client_message_redaction_opt_out),
+            strip_caller_supplied_identity(
+                _user_meta,
+                allow_client_message_redaction_opt_out=_allow_client_message_redaction_opt_out,
             )
-            for _k in [
-                k for k in _user_meta if k.startswith("user_api_key_") or k in _UNTRUSTED_METADATA_CONTROL_FIELDS
-            ]:
-                _user_meta.pop(_k, None)
 
     # Strip pricing overrides AFTER the litellm_metadata string-to-dict parse
     # above, for the same reason as the user_api_key_* strip — JSON-string

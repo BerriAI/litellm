@@ -4,7 +4,7 @@ from collections.abc import Callable
 from datetime import datetime
 from types import MappingProxyType
 from typing import Dict, Final, List, Literal, Optional
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
@@ -25,6 +25,7 @@ from litellm.proxy.guardrails.guardrail_endpoints import (
     TestCustomCodeGuardrailRequest,
     UpdateGuardrailRequest,
     _get_guardrails_list_response,
+    _guardrail_request_metadata,
     apply_guardrail,
     approve_guardrail_submission,
     create_guardrail,
@@ -2169,18 +2170,20 @@ async def test_apply_guardrail_invokes_logging_pipeline(mocker):
     }
 
 
-def _patch_apply_guardrail_env(mocker, guardrail_result):
-    mock_guardrail = mocker.Mock()
+def _patch_apply_guardrail_env(
+    mocker: MockerFixture, guardrail_result: object
+) -> Mock:
+    mock_guardrail: Final = mocker.Mock()
     mock_guardrail.apply_guardrail = AsyncMock(return_value=guardrail_result)
 
-    mock_registry = mocker.Mock()
+    mock_registry: Final = mocker.Mock()
     mock_registry.get_initialized_guardrail_callback.return_value = mock_guardrail
     mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_registry)
 
-    mock_logging_obj = mocker.Mock()
+    mock_logging_obj: Final = mocker.Mock()
     mock_logging_obj.async_success_handler = AsyncMock()
     mock_logging_obj.model_call_details = {}
-    mock_processor = mocker.Mock()
+    mock_processor: Final = mocker.Mock()
     mock_processor.common_processing_pre_call_logic = AsyncMock(
         return_value=({"guardrail_name": "test-guardrail"}, mock_logging_obj)
     )
@@ -2189,7 +2192,7 @@ def _patch_apply_guardrail_env(mocker, guardrail_result):
         return_value=mock_processor,
     )
 
-    mock_proxy_logging = mocker.Mock()
+    mock_proxy_logging: Final = mocker.Mock()
     mock_proxy_logging.post_call_success_hook = AsyncMock()
     mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging)
     mocker.patch("litellm.proxy.proxy_server.general_settings", {})
@@ -2483,23 +2486,257 @@ async def test_apply_guardrail_forwards_metadata_and_messages_together(mocker):
     )
 
 
+def test_the_authenticated_key_identity_replaces_the_caller_version() -> None:
+    metadata: Final = _guardrail_request_metadata(
+        {"forbidden_topics": ["tax"], "user_api_key_alias": "someone-else"},
+        {"user_api_key_alias": "billing-app", "user_api_key_user_id": "u-1"},
+    )
+    assert metadata == {
+        "forbidden_topics": ["tax"],
+        "user_api_key_alias": "billing-app",
+        "user_api_key_user_id": "u-1",
+    }
+
+
+def test_the_bare_key_hash_cannot_come_from_the_caller() -> None:
+    metadata: Final = _guardrail_request_metadata({"user_api_key": "spoof"}, {"user_api_key": "proxy-value"})
+    assert metadata == {}
+
+
+def test_the_end_user_comes_from_the_proxy_not_the_caller() -> None:
+    """LLM routes resolve the end user and drop whatever the body said, so this endpoint does too."""
+    metadata: Final = _guardrail_request_metadata(
+        {"user_api_key_end_user_id": "someone-elses-customer"},
+        {"user_api_key_end_user_id": "customer-42"},
+    )
+    assert metadata == {"user_api_key_end_user_id": "customer-42"}
+
+
+def test_an_end_user_the_proxy_did_not_resolve_is_dropped() -> None:
+    metadata: Final = _guardrail_request_metadata({"user_api_key_end_user_id": "someone-elses-customer"}, {})
+    assert metadata == {}
+
+
+def test_no_request_route_reaches_the_guardrail() -> None:
+    """A route makes the tool policy guardrail read the request instead of the replayed tools."""
+    metadata: Final = _guardrail_request_metadata(
+        {"user_api_key_request_route": "/v1/chat/completions", "topic": "tax"},
+        {"user_api_key_request_route": "/apply_guardrail"},
+    )
+    assert metadata == {"topic": "tax"}
+
+
+def test_an_unbound_agent_is_not_taken_from_the_request() -> None:
+    """Pre-call processing keeps the request's own agent_id when the key has none, so the proxy's
+    metadata already carries a caller-chosen value and reserving the field is not enough."""
+    metadata: Final = _guardrail_request_metadata(
+        {"agent_id": "someone-elses-agent"}, {"agent_id": "someone-elses-agent"}
+    )
+    assert metadata == {}
+
+
+def test_a_bound_agent_comes_from_the_authenticated_key() -> None:
+    metadata: Final = _guardrail_request_metadata(
+        {"agent_id": "someone-elses-agent"}, {"agent_id": "someone-elses-agent"}, agent_id="billing-agent"
+    )
+    assert metadata == {"agent_id": "billing-agent"}
+
+
+def test_identity_fields_outside_the_key_namespace_are_reserved_too() -> None:
+    """Pre-call processing fills every one of these from the key and the connection, so an LLM
+    route never carries a caller value for them and neither may this endpoint."""
+    metadata: Final = _guardrail_request_metadata(
+        {
+            "requester_ip_address": "203.0.113.9",
+            "user_agent": "forged/1.0",
+            "agent_id": "someone-elses-agent",
+            "actor_agent_id": "someone-elses-actor",
+            "target_agent_id": "someone-elses-target",
+            "billing_agent_id": "someone-elses-payer",
+            "agent_execution_mode": "forged",
+            "verified_human_user_id": "someone-else",
+            "topic": "tax",
+        },
+        {
+            "requester_ip_address": "198.51.100.4",
+            "user_agent": "litellm-cli/2.3",
+            "actor_agent_id": "support-agent",
+            "target_agent_id": "billing-agent",
+            "billing_agent_id": "support-agent",
+            "agent_execution_mode": "managed",
+            "verified_human_user_id": "user-7",
+        },
+        agent_id="billing-agent",
+    )
+    assert metadata == {
+        "topic": "tax",
+        "requester_ip_address": "198.51.100.4",
+        "user_agent": "litellm-cli/2.3",
+        "actor_agent_id": "support-agent",
+        "target_agent_id": "billing-agent",
+        "billing_agent_id": "support-agent",
+        "agent_execution_mode": "managed",
+        "verified_human_user_id": "user-7",
+        "agent_id": "billing-agent",
+    }
+
+
+def test_a_reserved_identity_field_the_proxy_left_empty_is_dropped() -> None:
+    """Reserving the names is what keeps a forged value out when the proxy resolved none."""
+    metadata: Final = _guardrail_request_metadata(
+        {
+            "actor_agent_id": "someone-elses-actor",
+            "target_agent_id": "someone-elses-target",
+            "billing_agent_id": "someone-elses-payer",
+            "agent_execution_mode": "forged",
+            "verified_human_user_id": "someone-else",
+            "topic": "tax",
+        },
+        {},
+    )
+    assert metadata == {"topic": "tax"}
+
+
+def test_the_end_user_budget_is_not_a_caller_field() -> None:
+    metadata: Final = _guardrail_request_metadata(
+        {"user_api_end_user_max_budget": 999.0, "topic": "tax"},
+        {"user_api_end_user_max_budget": 10.0},
+    )
+    assert metadata == {"topic": "tax", "user_api_end_user_max_budget": 10.0}
+
+
+def test_the_authenticated_key_object_is_left_behind() -> None:
+    """A guardrail vendor receives this encoded as JSON, which the auth object does not survive."""
+    metadata: Final = _guardrail_request_metadata(
+        {},
+        {
+            "user_api_key_auth": UserAPIKeyAuth(key_alias="billing-app"),
+            "user_api_key_metadata": {"tags": {"a", "b"}},
+            "user_api_key_alias": "billing-app",
+        },
+    )
+    assert metadata == {"user_api_key_alias": "billing-app"}
+
+
+def test_no_key_field_reaches_the_guardrail_at_all() -> None:
+    """Under custom_auth these hold the bearer token itself, and nothing on the auth object says
+    whether a value was hashed, so a direct evaluation sends neither rather than a value of its own."""
+    metadata: Final = _guardrail_request_metadata(
+        {}, {"user_api_key": "tok-not-an-sk-key", "user_api_key_hash": "a" * 64, "user_api_key_alias": "billing-app"}
+    )
+    assert metadata == {"user_api_key_alias": "billing-app"}
+
+
+def test_no_headers_reach_the_guardrail() -> None:
+    """The bucket carries provider credentials and SSO assertions that no denylist names reliably,
+    and before this endpoint resolved identity the headers it held were the caller's own."""
+    metadata: Final = _guardrail_request_metadata(
+        {"headers": {"x-caller": "forged"}, "topic": "tax"},
+        {
+            "headers": {
+                "anthropic-api-key": "sk-ant-secret",
+                "cf-access-jwt-assertion": "signed-assertion",
+                "user-agent": "curl/8.7",
+            }
+        },
+    )
+    assert metadata == {"topic": "tax"}
+
+
+def test_a_guardrail_can_annotate_what_it_is_handed() -> None:
+    """OpenAI moderation and Presidio write their detection details into this mapping."""
+    metadata: Final = _guardrail_request_metadata({}, {"user_api_key_alias": "billing-app"})
+    metadata["moderation_model"] = "omni-moderation-latest"
+    assert metadata == {"user_api_key_alias": "billing-app", "moderation_model": "omni-moderation-latest"}
+
+
+class _MetadataRecordingGuardrail(CustomGuardrail):
+    """A guardrail registered the way the proxy registers one, keeping what the endpoint hands it."""
+
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="identity-probe")
+        self.calls: Final[list[dict[str, object]]] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[object] = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.calls.append(dict(request_data))
+        return inputs
+
+
+async def _metadata_the_guardrail_was_handed(
+    caller_metadata: dict[str, object] | None, auth: UserAPIKeyAuth
+) -> dict[str, object]:
+    """Drive the real endpoint with a real registered guardrail and report what reached it.
+
+    A registered guardrail also runs as an ordinary callback on this request, so the endpoint's
+    own call is the first one it receives."""
+    import litellm
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.guardrails.guardrail_endpoints import router
+    from litellm.proxy.proxy_server import openai_exception_handler
+
+    guardrail: Final = _MetadataRecordingGuardrail()
+    litellm.logging_callback_manager.add_litellm_callback(guardrail)
+    body: Final[dict[str, object]] = {"guardrail_name": "identity-probe", "text": "hello"}
+    if caller_metadata is not None:
+        body["metadata"] = caller_metadata
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.add_exception_handler(ProxyException, openai_exception_handler)
+    app.dependency_overrides[user_api_key_auth] = lambda: auth
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://guardrails.test"
+        ) as client:
+            response: Final = await client.post("/guardrails/apply_guardrail", json=body)
+        assert response.status_code == 200, response.text
+    finally:
+        litellm.logging_callback_manager.remove_callback_from_all_lists(guardrail)
+    assert guardrail.calls, "the endpoint never reached the registered guardrail"
+    return dict(guardrail.calls[0].get("metadata") or {})
+
+
 @pytest.mark.asyncio
-async def test_apply_guardrail_omits_metadata_when_not_sent(mocker):
-    """Without metadata, request_data stays empty (backward-compatible)."""
-    mock_guardrail = _patch_apply_guardrail_env(mocker, {"texts": ["ok"]})
-
-    request = ApplyGuardrailRequest(guardrail_name="test-guardrail", text="hello")
-    await apply_guardrail(
-        fastapi_request=mocker.Mock(),
-        request=request,
-        user_api_key_dict=UserAPIKeyAuth(),
+async def test_apply_guardrail_replaces_caller_identity_with_the_authenticated_key() -> None:
+    """Identity fields come from the proxy's own metadata, never from the caller, so a request
+    cannot impersonate another key or probe its policy."""
+    forwarded: Final = await _metadata_the_guardrail_was_handed(
+        {
+            "forbidden_topics": ["tax"],
+            "user_api_key_alias": "someone-else",
+            "user_api_key_user_email": "victim@example.com",
+            "user_api_key": "hash-of-someone-else",
+        },
+        UserAPIKeyAuth(key_alias="billing-app", user_id="u-1"),
     )
+    json.dumps(forwarded)
+    assert forwarded["forbidden_topics"] == ["tax"]
+    assert forwarded.get("user_api_key_alias") == "billing-app"
+    assert "victim@example.com" not in forwarded.values()
+    assert forwarded.get("user_api_key") != "hash-of-someone-else"
 
-    mock_guardrail.apply_guardrail.assert_awaited_once_with(
-        inputs={"texts": ["hello"]},
-        request_data={},
-        input_type="request",
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_attaches_key_identity_when_caller_sends_no_metadata() -> None:
+    """A caller that sends no metadata still arrives with the key's identity attached, because
+    pre-call processing fills it in."""
+    forwarded: Final = await _metadata_the_guardrail_was_handed(None, UserAPIKeyAuth(key_alias="billing-app"))
+    assert forwarded.get("user_api_key_alias") == "billing-app"
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_prefers_the_agent_the_key_was_invoked_as() -> None:
+    """A key bound to an agent can be invoked as another, and the invoked one is who is acting."""
+    auth: Final = UserAPIKeyAuth(agent_id="support-agent").model_copy(
+        update={"invoked_agent_id": "billing-agent"}
     )
+    forwarded: Final = await _metadata_the_guardrail_was_handed(None, auth)
+    assert forwarded.get("agent_id") == "billing-agent"
 
 
 @pytest.mark.asyncio

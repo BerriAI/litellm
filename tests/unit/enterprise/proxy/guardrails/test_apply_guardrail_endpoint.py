@@ -63,7 +63,7 @@ async def test_apply_guardrail_endpoint_returns_correct_response(
         # Verify the guardrail was called with correct parameters
         mock_guardrail.apply_guardrail.assert_called_once_with(
             inputs={"texts": ["Test text with PII"]},
-            request_data={},
+            request_data={"metadata": {}},
             input_type="request",
         )
 
@@ -198,5 +198,5 @@ async def test_apply_guardrail_endpoint_without_optional_params(mock_proxy_loggi
 
         # Verify the guardrail was called with correct parameters
         mock_guardrail.apply_guardrail.assert_called_once_with(
-            inputs={"texts": ["Test text"]}, request_data={}, input_type="request"
+            inputs={"texts": ["Test text"]}, request_data={"metadata": {}}, input_type="request"
         )

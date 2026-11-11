@@ -12,6 +12,18 @@ from integration._support.wire import Reply, Request, wire_server
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+_GENERIC_API_IDENTITY_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "user_api_key_hash",
+        "user_api_key_alias",
+        "user_api_key_user_id",
+        "user_api_key_user_email",
+        "user_api_key_team_id",
+        "user_api_key_team_alias",
+        "user_api_key_end_user_id",
+        "user_api_key_org_id",
+    }
+)
 _BLOCK_REASON: Final = "synthetic blocked by apply endpoint"
 _BLOCKED_TEXT: Final = "forbidden integration prompt"
 _METADATA_TEXT: Final = "metadata forwarding prompt"
@@ -116,7 +128,10 @@ def _assert_guardrail_request(request: Request, text: str, response: httpx.Respo
         "tool_calls": None,
         "model": None,
     }, response.text
-    assert payload["request_data"] == {}, response.text
+    direct_request_data: Final = payload["request_data"]
+    assert isinstance(direct_request_data, dict), response.text
+    assert set(direct_request_data) <= _GENERIC_API_IDENTITY_FIELDS, response.text
+    assert "user_api_key_hash" not in direct_request_data, response.text
     request_headers: Final = payload["request_headers"]
     assert request_headers is None or isinstance(request_headers, dict), response.text
     if isinstance(request_headers, dict):
@@ -303,11 +318,12 @@ async def apply_guardrail(inputs, request_data, input_type):
             ("POST", "/metadata"),
             ("POST", "/metadata"),
         ]
-        assert tuple(_JSON_OBJECT.validate_json(request.body) for request in requests) == (
-            {
-                "texts": [_METADATA_TEXT],
-                "metadata": {"forbidden_topics": ["tax"]},
-                "input_type": "request",
-            },
-            {"texts": [_METADATA_TEXT], "metadata": {}, "input_type": "request"},
-        )
+        bodies: Final = tuple(_JSON_OBJECT.validate_json(request.body) for request in requests)
+        assert [body["texts"] for body in bodies] == [[_METADATA_TEXT], [_METADATA_TEXT]]
+        assert [body["input_type"] for body in bodies] == ["request", "request"]
+        sent, omitted = (_JSON_OBJECT.validate_python(body["metadata"]) for body in bodies)
+        assert sent["forbidden_topics"] == ["tax"], sent
+        assert "forbidden_topics" not in omitted, omitted
+        assert "user_api_key_hash" not in sent, sent
+        assert "user_api_key_auth" not in sent, sent
+        assert sent["user_api_key_alias"] == omitted["user_api_key_alias"], (sent, omitted)

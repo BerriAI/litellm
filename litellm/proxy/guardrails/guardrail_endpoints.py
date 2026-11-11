@@ -2337,6 +2337,95 @@ async def test_custom_code_guardrail(
         )
 
 
+_GUARDRAIL_METADATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+def _metadata_fields(value: object) -> Mapping[str, object]:
+    try:
+        return _GUARDRAIL_METADATA_ADAPTER.validate_python(value)
+    except ValidationError:
+        return {}
+
+
+_WITHHELD_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "user_api_key_request_route",
+        "agent_id",
+        "user_api_key_auth",
+        "user_api_key",
+        "user_api_key_hash",
+        "headers",
+    }
+)
+
+_PROXY_RESOLVED_IDENTITY_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "requester_ip_address",
+        "user_agent",
+        "headers",
+        "agent_id",
+        "actor_agent_id",
+        "target_agent_id",
+        "billing_agent_id",
+        "agent_execution_mode",
+        "verified_human_user_id",
+        "user_api_end_user_max_budget",
+    }
+)
+
+def _is_json_safe(value: object) -> bool:
+    try:
+        json.dumps(value)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def _is_proxy_identity_field(key: str) -> bool:
+    """Whether a metadata field attributes the authenticated caller rather than the request.
+
+    Pre-call processing owns the whole ``user_api_key_`` namespace, the end user included, and
+    fills the agent, connection and header fields from the key and the connection right after,
+    so a caller value never reaches an LLM route. The same fields are reserved here.
+    """
+    return key in _PROXY_RESOLVED_IDENTITY_FIELDS or key == "user_api_key" or key.startswith("user_api_key_")
+
+
+def _guardrail_request_metadata(
+    caller: object, proxy: object, agent_id: str | None = None
+) -> dict[str, object]:  # mutable-ok: guardrails annotate the metadata they are handed
+    """Caller metadata with the identity fields taken from the authenticated key.
+
+    The result is handed to the guardrail as ``request_data["metadata"]``, which providers
+    write their own detection details into, so it cannot be a read-only mapping.
+
+    The caller's bucket goes through the sanitizer the LLM routes use, so this endpoint drops
+    the same fields they do, and what that leaves is then overlaid with the identity the proxy
+    resolved.
+
+    The request route is withheld from both sides. The tool policy guardrail reads the request
+    itself when a route is present, instead of the tools replayed to it, so a route here turns
+    its checks off: the caller must not be able to set one, and this endpoint's own route
+    describes the evaluation rather than the call being evaluated.
+
+    The agent is taken from ``agent_id``, the one the key authenticated with, and omitted when the
+    key is bound to none. Pre-call processing keeps the request's own agent when the key has none,
+    so the processed metadata is not a trustworthy source for it either.
+    """
+    from litellm.proxy.litellm_pre_call_utils import strip_caller_supplied_identity
+
+    sanitized: Final = dict(_metadata_fields(caller))
+    strip_caller_supplied_identity(sanitized)
+    caller_fields: Final = tuple((key, value) for key, value in sanitized.items() if not _is_proxy_identity_field(key))
+    key_identity: Final = tuple(
+        (key, value)
+        for key, value in _metadata_fields(proxy).items()
+        if _is_proxy_identity_field(key) and key not in _WITHHELD_FIELDS and _is_json_safe(value)
+    )
+    bound_agent: Final = (("agent_id", agent_id),) if agent_id is not None else ()
+    return dict((*caller_fields, *key_identity, *bound_agent))
+
+
 def _execution_timeout_response(timeout: float) -> TestCustomCodeGuardrailResponse:
     return TestCustomCodeGuardrailResponse(
         success=False,
@@ -2503,6 +2592,13 @@ async def apply_guardrail(
 
         response_handler: Final = GUARDRAIL_RESPONSE_HANDLERS[request.response_format]
         request_data: Final = dict(response_handler.prepare_request_data(request))
+        caller_metadata: Final = request_data.get("metadata")
+        metadata: Final = _guardrail_request_metadata(
+            caller_metadata,
+            _GUARDRAIL_METADATA_ADAPTER.validate_python(data).get("metadata"),
+            agent_id=user_api_key_dict.invoked_agent_id or user_api_key_dict.agent_id,
+        )
+        request_data["metadata"] = metadata
         input_type: Final = response_handler.resolve_input_type(request, active_guardrail)
         guardrailed_inputs: Final = await active_guardrail.apply_guardrail(
             inputs={"texts": [request.text]},
