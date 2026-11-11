@@ -327,18 +327,11 @@ async def _router_for_quota_check(
 ) -> "Router | None":
     if not judged_models or not exempts_any_route(policy):
         return llm_router
-    return await model_router_reconciled_with_db()
+    return await model_router_reconciled_with_db(judged_models)
 
 
 def _models_after_update(data: UpdateProjectRequest, existing_project: object) -> list[str]:
     return data.models if data.models is not None else (getattr(existing_project, "models", None) or [])
-
-
-def _models_an_update_can_leave_short(data: UpdateProjectRequest, existing_project: object) -> Sequence[str]:
-    keeps_team: Final = data.team_id is None or data.team_id == getattr(existing_project, "team_id", None)
-    if data.models is None and data.metadata is None and keeps_team:
-        return ()
-    return _models_after_update(data, existing_project)
 
 
 def _project_model_quota_policy(general_settings: Mapping[str, object]) -> ModelQuotaPolicy | None:
@@ -868,7 +861,7 @@ async def update_project(
         quota_policy: Final = _project_model_quota_policy(general_settings_view())
         if quota_policy is not None:
             quota_router: Final = await _router_for_quota_check(
-                quota_policy, llm_router, _models_an_update_can_leave_short(data, existing_project)
+                quota_policy, llm_router, _models_after_update(data, existing_project)
             )
             _raise_on_missing_project_model_quota_on_update(
                 data,

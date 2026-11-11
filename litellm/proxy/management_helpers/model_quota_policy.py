@@ -236,6 +236,21 @@ def _routable_name(llm_router: "Router | None", model: str) -> str:
     return model if llm_router is None else llm_router.registry().resolve(model)
 
 
+def _names_behind(llm_router: "Router | None", model: str) -> frozenset[str]:
+    target: Final = _routable_name(llm_router, model)
+    group: Final = None if llm_router is None else llm_router.registry().routing_group(target)
+    return frozenset((model, target, *(() if group is None else group.models)))
+
+
+def _name_serves(name: str, served: frozenset[str]) -> bool:
+    return name in served or ("*" in name and any(_wildcard_matches(name, model) for model in served))
+
+
+def model_routes_through(llm_router: "Router | None", model: str, names: frozenset[str]) -> bool:
+    served: Final = _names_behind(llm_router, model)
+    return any(_name_serves(name, served) for name in names)
+
+
 def _patterns_tried_before(patterns: Sequence[str], regex: str) -> Sequence[str]:
     if regex in patterns:
         return patterns[: patterns.index(regex)]

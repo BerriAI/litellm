@@ -162,14 +162,19 @@ class ReconcileOutcome(NamedTuple):
     live_after: frozenset[str] | None
 
 
-class RouterUpdateOutcome(NamedTuple):
-    still_desired: frozenset[str] | None
+class UnloadedDbModel(NamedTuple):
+    model_id: str
+    names: frozenset[str]
+
+
+class ModelRoutesReload(NamedTuple):
     routes_current: bool
+    unloaded: frozenset[UnloadedDbModel] = frozenset()
 
 
 class DbModelsReload(NamedTuple):
     started_at: float
-    outcome: RouterUpdateOutcome
+    outcome: ModelRoutesReload
 
 
 class SupportedDBObjectType(str, enum.Enum):

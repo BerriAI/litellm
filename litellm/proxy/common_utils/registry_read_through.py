@@ -16,8 +16,9 @@ here with its old route, and answers 503 when that reload fails rather than judg
 """
 
 import asyncio
+import itertools
 import time
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
@@ -27,8 +28,9 @@ from pydantic import TypeAdapter, ValidationError
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
-from litellm.proxy._types import ProxyErrorTypes, ProxyException
+from litellm.proxy._types import ModelRoutesReload, ProxyException
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+from litellm.proxy.management_helpers.model_quota_policy import model_routes_through
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -308,10 +310,18 @@ async def _resync_agents(agent_id_or_name: str) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class ModelRoutesUnconfirmed:
-    pass
+    models: tuple[str, ...] = ()
 
 
-async def _reconcile_model_router_with_db() -> "Router | None | ModelRoutesUnconfirmed":
+def _unloaded_names(outcome: ModelRoutesReload, written_model_id: str | None) -> frozenset[str]:
+    return frozenset(
+        itertools.chain.from_iterable(model.names for model in outcome.unloaded if model.model_id != written_model_id)
+    )
+
+
+async def _reconcile_model_router_with_db(
+    judged_models: Collection[str], written_model_id: str | None, requested_at: float
+) -> "Router | None | ModelRoutesUnconfirmed":
     from litellm.proxy import proxy_server
 
     prisma_client: Final = proxy_server.prisma_client
@@ -319,19 +329,37 @@ async def _reconcile_model_router_with_db() -> "Router | None | ModelRoutesUncon
         return proxy_server.llm_router
     router_before: Final = proxy_server.llm_router
     outcome: Final = await proxy_server.proxy_config.reconcile_db_models(
-        prisma_client=prisma_client, proxy_logging_obj=proxy_server.proxy_logging_obj
+        prisma_client=prisma_client, proxy_logging_obj=proxy_server.proxy_logging_obj, requested_at=requested_at
     )
     if router_before is not None and not outcome.routes_current:
         return ModelRoutesUnconfirmed()
-    return proxy_server.llm_router
+    router: Final = proxy_server.llm_router
+    if router is not None:
+        proxy_server.llm_model_list = router.registry().deployments()
+    unloaded: Final = _unloaded_names(outcome, written_model_id)
+    stale: Final = tuple(sorted(model for model in judged_models if model_routes_through(router, model, unloaded)))
+    return ModelRoutesUnconfirmed(models=stale) if stale else router
 
 
-async def model_router_reconciled_with_db() -> "Router | None":
-    match await _reconcile_model_router_with_db():
-        case ModelRoutesUnconfirmed():
+def _routes_unconfirmed_message(models: tuple[str, ...]) -> str:
+    if not models:
+        return "Could not reload the model routes from the database to check project model quotas. Retry."
+    return (
+        f"Could not load every model behind {', '.join(repr(model) for model in models)} from the database "
+        "to check project model quotas. The proxy log names the model that failed to load. Fix it, then retry."
+    )
+
+
+async def model_router_reconciled_with_db(
+    judged_models: Collection[str], written_model_id: str | None = None, requested_at: float | None = None
+) -> "Router | None":
+    match await _reconcile_model_router_with_db(
+        judged_models, written_model_id, time.monotonic() if requested_at is None else requested_at
+    ):
+        case ModelRoutesUnconfirmed(models=models):
             raise ProxyException(
-                message="Could not reload the model routes from the database to check project model quotas. Retry.",
-                type=ProxyErrorTypes.internal_server_error.value,
+                message=_routes_unconfirmed_message(models),
+                type="service_unavailable_error",
                 param=None,
                 code=status.HTTP_503_SERVICE_UNAVAILABLE,
             )

@@ -123,6 +123,7 @@ from litellm.litellm_core_utils.token_counter import (
     offload_token_count,
     sends_function_tools,
 )
+from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.llms.bedrock.count_tokens.kimi_k3 import (
     HUGGING_FACE_SOURCE,
     KimiK3Encodings,
@@ -159,17 +160,18 @@ from litellm.proxy._types import (
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
     LitellmUserRoles,
+    ModelRoutesReload,
     PassThroughGenericEndpoint,
     ProxyErrorTypes,
     ProxyException,
     ProxyLifespanState,
-    RouterUpdateOutcome,
     SpecialModelNames,
     SSOUserDefinedValues,
     SupportedDBObjectType,
     TeamDefaultSettings,
     TokenCountRequest,
     TransformRequestBody,
+    UnloadedDbModel,
     UserAPIKeyAuth,
 )
 from litellm.proxy.common_utils.callback_utils import (
@@ -2537,6 +2539,15 @@ class _InvitationAcceptTxManager(Protocol):
 _ProxyModelRow: TypeAlias = "prisma_models.LiteLLM_ProxyModelTable"
 
 
+def _db_model_names(row: _ProxyModelRow) -> frozenset[str]:
+    public_name: Final = row.model_info.get("team_public_model_name") if is_str_keyed_mapping(row.model_info) else None
+    return frozenset((row.model_name, public_name)) if isinstance(public_name, str) else frozenset((row.model_name,))
+
+
+def _is_db_deployment(deployment: Deployment | None) -> bool:
+    return deployment is not None and deployment.model_info.db_model
+
+
 def _config_param_table(client: PrismaClient | None, *, use_writer: bool = False) -> TableActions[_ConfigParamRow]:
     return cast(  # cast-ok: this is prisma's LiteLLM_Config actions object, which parses its Json column to a mapping
         "TableActions[_ConfigParamRow]", ConfigRepository(client, use_writer=use_writer).table
@@ -4771,7 +4782,7 @@ def _get_process_rss_mb() -> float | None:
         if sys.platform == "darwin":
             return float(ru_maxrss) / (1024 * 1024)
         return float(ru_maxrss) / 1024
-    except Exception:
+    except (ImportError, OSError, ValueError):
         return None
 
 
@@ -8112,10 +8123,10 @@ class ProxyConfig:
         self,
         new_models: Sequence[_ProxyModelRow] | None,
         proxy_logging_obj: ProxyLogging,
-    ) -> RouterUpdateOutcome:
+    ) -> frozenset[str] | None:
         global llm_router, llm_model_list, master_key, general_settings
 
-        router_update: RouterUpdateOutcome = RouterUpdateOutcome(still_desired=None, routes_current=False)
+        still_desired_ids: frozenset[str] | None = None
 
         # Load config separately so a timeout here doesn't block model loading
         config_data: dict | None = None
@@ -8138,7 +8149,7 @@ class ProxyConfig:
                     "_update_llm_router: DB model fetch returned None (transient failure). "
                     "Skipping router update to preserve existing deployments."
                 )
-                return router_update
+                return
 
             models_list: Final[list] = new_models if isinstance(new_models, list) else []
             if llm_router is None and master_key is not None:
@@ -8172,12 +8183,11 @@ class ProxyConfig:
                 verbose_proxy_logger.debug("len new_models: %s", len(models_list))
                 if search_tools is not None and llm_router is not None:
                     llm_router.apply(ChangeSet(assign={"search_tools": search_tools}))
-                still_desired_ids: Final = await self._delete_deployment(db_models=models_list)
-                router_update = RouterUpdateOutcome(still_desired=still_desired_ids, routes_current=False)
+                ## DELETE MODEL LOGIC
+                still_desired_ids = await self._delete_deployment(db_models=models_list)
+
+                ## ADD MODEL LOGIC
                 self._add_deployment(db_models=models_list)
-                router_update = RouterUpdateOutcome(
-                    still_desired=still_desired_ids, routes_current=still_desired_ids is not None
-                )
 
         except Exception as e:
             verbose_proxy_logger.exception("Error adding/deleting model to llm_router: %s", e)
@@ -8191,7 +8201,7 @@ class ProxyConfig:
         # router settings
         await self._add_router_settings_from_db_config(llm_router=llm_router, prisma_client=prisma_client)
 
-        return router_update
+        return still_desired_ids
 
     def _add_callback_from_db_to_in_memory_litellm_callbacks(
         self,
@@ -9019,7 +9029,7 @@ class ProxyConfig:
         and would deadlock on a re-acquire."""
         global llm_router, llm_model_list, master_key, general_settings
 
-        router_update: RouterUpdateOutcome = RouterUpdateOutcome(still_desired=None, routes_current=False)
+        still_desired_ids: frozenset[str] | None = None
 
         try:
             # warm the config cache so the per-param reads below all hit
@@ -9038,7 +9048,7 @@ class ProxyConfig:
             new_models: Final = await self.get_models_from_db(prisma_client=prisma_client) if load_models else None
             await self.get_credentials(prisma_client=prisma_client)
             if load_models:
-                router_update = await self._update_llm_router(
+                still_desired_ids = await self._update_llm_router(
                     new_models=new_models, proxy_logging_obj=proxy_logging_obj
                 )
 
@@ -9064,26 +9074,56 @@ class ProxyConfig:
         # Read while the lock is still held: once it is released the next reconcile can
         # begin, and clear_cache's leading wipe would make this look like a mass drop.
         return ReconcileOutcome(
-            still_desired=router_update.still_desired,
-            live_after=None if router_update.still_desired is None else live_model_ids_snapshot(),
+            still_desired=still_desired_ids,
+            live_after=None if still_desired_ids is None else live_model_ids_snapshot(),
         )
 
     _add_deployment_locked = add_deployment_locked
 
     async def reconcile_db_models(
-        self, prisma_client: PrismaClient, proxy_logging_obj: ProxyLogging
-    ) -> RouterUpdateOutcome:
-        requested_at: Final = time.monotonic()
+        self, prisma_client: PrismaClient, proxy_logging_obj: ProxyLogging, requested_at: float
+    ) -> ModelRoutesReload:
         async with DB_RECONCILE_LOCK:
             last_reload: Final = self._last_db_models_reload
             if last_reload is not None and last_reload.started_at >= requested_at:
                 return last_reload.outcome
             started_at: Final = time.monotonic()
-            new_models: Final = await self.get_models_from_db(prisma_client=prisma_client)
-            await self.get_credentials(prisma_client=prisma_client)
-            outcome: Final = await self._update_llm_router(new_models=new_models, proxy_logging_obj=proxy_logging_obj)
+            outcome: Final = await self._reload_db_model_routes(prisma_client, proxy_logging_obj)
             self._last_db_models_reload = DbModelsReload(started_at=started_at, outcome=outcome)
             return outcome
+
+    async def _reload_db_model_routes(
+        self, prisma_client: PrismaClient, proxy_logging_obj: ProxyLogging
+    ) -> ModelRoutesReload:
+        rows: Final = await self.get_models_from_db(prisma_client=prisma_client)
+        if rows is None:
+            return ModelRoutesReload(routes_current=False)
+        await self.get_credentials(prisma_client=prisma_client)
+        router: Final = llm_router
+        if router is None:
+            await self._update_llm_router(new_models=rows, proxy_logging_obj=proxy_logging_obj)
+            return ModelRoutesReload(routes_current=llm_router is not None)
+        self._evict_db_models_missing_from(router, frozenset(row.model_id for row in rows))
+        unloaded: Final = frozenset(failure for row in rows if (failure := self._load_db_model(row)) is not None)
+        return ModelRoutesReload(routes_current=True, unloaded=unloaded)
+
+    def _evict_db_models_missing_from(self, router: Router, db_model_ids: frozenset[str]) -> None:
+        registry: Final = router.registry()
+        missing: Final = tuple(
+            model_id
+            for model_id in registry.names(kind="ids")
+            if model_id not in db_model_ids and _is_db_deployment(registry.deployment(model_id))
+        )
+        if missing:
+            router.apply(ChangeSet(delete=missing))
+
+    def _load_db_model(self, row: _ProxyModelRow) -> UnloadedDbModel | None:
+        try:
+            self._add_deployment(db_models=[row])
+        except Exception as e:
+            verbose_proxy_logger.exception("Could not load model %s from the database: %s", row.model_name, e)
+            return UnloadedDbModel(model_id=row.model_id, names=_db_model_names(row))
+        return None
 
     def start_config_sync_subscriber(
         self,

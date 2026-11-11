@@ -35,7 +35,7 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 import litellm
 from litellm._logging import turn_on_json
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
-from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings, RouterUpdateOutcome
+from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.config_resolvers.settings_store import SettingsStore
 from litellm.router_api import ApplyResult, RouterSettings
@@ -4544,9 +4544,8 @@ async def test_ProxyConfig_add_deployment_loads_db_credentials_before_reconcilin
         ]
         return [MagicMock()]
 
-    async def install_models(new_models: object, proxy_logging_obj: object) -> RouterUpdateOutcome:
+    async def install_models(new_models: object, proxy_logging_obj: object) -> None:
         installed(credential=CredentialAccessor.get_credential_values("openai-cred"))
-        return RouterUpdateOutcome(still_desired=frozenset(), routes_current=True)
 
     monkeypatch.setattr(pc, "get_models_from_db", read_models_while_a_credential_lands)
     monkeypatch.setattr(pc, "_update_llm_router", install_models)

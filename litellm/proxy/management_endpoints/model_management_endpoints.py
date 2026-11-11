@@ -14,6 +14,7 @@ import asyncio
 import datetime
 import itertools
 import json
+import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
@@ -961,6 +962,7 @@ async def _raise_if_team_write_leaves_projects_short(
     public_name: str,
     replaced_id: str | None,
     written_params: Mapping[str, object] | None,
+    requested_at: float | None = None,
 ) -> None:
     if team_id is None:
         return
@@ -971,7 +973,7 @@ async def _raise_if_team_write_leaves_projects_short(
     listed: Final = frozenset(itertools.chain.from_iterable(project.models for project in projects))
     if not listed:
         return
-    llm_router: Final = await model_router_reconciled_with_db()
+    llm_router: Final = await model_router_reconciled_with_db(listed, replaced_id, requested_at)
     served: Final = sorted(model for model in listed if team_write_serves(llm_router, team_id, public_name, model))
     shortfall: Final = next(
         (
@@ -1015,6 +1017,7 @@ async def _raise_if_team_update_leaves_projects_short(
     if written_team_id is None and existing.model_info.team_id is None:
         return
     stored_name: Final = existing.model_info.team_public_model_name or existing.model_name
+    requested_at: Final = time.monotonic()
     await _raise_if_team_write_leaves_projects_short(
         prisma_client=prisma_client,
         general_settings=general_settings,
@@ -1022,6 +1025,7 @@ async def _raise_if_team_update_leaves_projects_short(
         public_name=written_name,
         replaced_id=existing.model_info.id,
         written_params=_written_routing_params(incoming_params, remaining_params),
+        requested_at=requested_at,
     )
     if (written_team_id, written_name) == (existing.model_info.team_id, stored_name):
         return
@@ -1032,6 +1036,7 @@ async def _raise_if_team_update_leaves_projects_short(
         public_name=stored_name,
         replaced_id=existing.model_info.id,
         written_params=None,
+        requested_at=requested_at,
     )
 
 

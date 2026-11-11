@@ -27,8 +27,9 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     Member,
     ProxyException,
+    ModelRoutesReload,
     ReconcileOutcome,
-    RouterUpdateOutcome,
+    UnloadedDbModel,
     UserAPIKeyAuth,
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
@@ -50,12 +51,14 @@ from litellm.router import Router
 from litellm.router_api import ApplyResult, ChangeSet
 from litellm.types.router import (
     Deployment,
+    GenericLiteLLMParams,
     LiteLLM_Params,
     ModelAccessWindow,
     ModelInfo,
     updateDeployment,
     updateLiteLLMParams,
 )
+from tests._master_key import MASTER_KEY
 
 
 async def _passthrough_row(update_data):
@@ -8304,8 +8307,10 @@ def _use_quota_proxy(monkeypatch: pytest.MonkeyPatch, prisma: MagicMock, router:
 def _use_db_backed_quota_proxy(monkeypatch: pytest.MonkeyPatch, prisma: MagicMock, router: Router) -> None:
     from litellm.proxy import proxy_server
 
-    async def reload_finds_the_router_current(prisma_client: object, proxy_logging_obj: object) -> RouterUpdateOutcome:
-        return RouterUpdateOutcome(still_desired=frozenset(router.registry().names(kind="ids")), routes_current=True)
+    async def reload_finds_the_router_current(
+        prisma_client: object, proxy_logging_obj: object, requested_at: float
+    ) -> ModelRoutesReload:
+        return ModelRoutesReload(routes_current=True)
 
     _use_quota_proxy(monkeypatch, prisma, router)
     monkeypatch.setattr(proxy_server, "store_model_in_db", True)
@@ -8539,25 +8544,47 @@ async def test_team_model_patch_rejects_a_removal_that_moves_its_route_where_its
     assert error.value.message.startswith("projects video-gen list 'jev-latest' without a positive rpm and tpm quota")
 
 
-def _use_quota_proxy_whose_model_reload_fails(monkeypatch: pytest.MonkeyPatch, prisma: MagicMock) -> None:
+def _use_quota_proxy_whose_model_reload_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    prisma: MagicMock,
+    failed_reload: ModelRoutesReload = ModelRoutesReload(routes_current=False),
+) -> None:
     from litellm.proxy import proxy_server
 
-    _use_quota_proxy(monkeypatch, prisma, _quota_router("jev-latest", {"model": "openai/jev-latest"}, _TEAM_RUNWAY))
+    _use_quota_proxy(
+        monkeypatch, prisma, _quota_router("jev-latest", {"model": "openai/jev-latest"}, _TEAM_RUNWAY_BY_PREFIX)
+    )
     monkeypatch.setattr(proxy_server, "store_model_in_db", True)
-    monkeypatch.setattr(
-        proxy_server.proxy_config,
-        "reconcile_db_models",
-        AsyncMock(return_value=RouterUpdateOutcome(still_desired=None, routes_current=False)),
+    monkeypatch.setattr(proxy_server.proxy_config, "reconcile_db_models", AsyncMock(return_value=failed_reload))
+
+
+_TEAM_RUNWAY_BY_PREFIX: Final = {"model": "runwayml/gen4_turbo"}
+
+
+def _not_loaded(model_id: str, name: str) -> ModelRoutesReload:
+    return ModelRoutesReload(
+        routes_current=True, unloaded=frozenset({UnloadedDbModel(model_id=model_id, names=frozenset({name}))})
     )
 
 
 @pytest.mark.asyncio
-async def test_team_model_patch_answers_503_when_the_model_reload_fails_and_a_team_project_lists_a_model(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("failed_reload", "expected_code"),
+    [
+        (ModelRoutesReload(routes_current=False), "503"),
+        (_not_loaded("other-row", "jev-latest"), "503"),
+        (_not_loaded("team-row", "jev-latest"), "400"),
+    ],
+    ids=["models-not-read", "another-model-behind-the-name-not-loaded", "patched-model-itself-not-loaded"],
+)
+async def test_team_model_patch_is_judged_only_once_every_other_model_behind_its_projects_loaded(
+    monkeypatch: pytest.MonkeyPatch, failed_reload: ModelRoutesReload, expected_code: str
 ) -> None:
     prisma: Final = _media_team_db("jev-latest", {})
-    prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=_team_model_row("jev-latest", _TEAM_RUNWAY))
-    _use_quota_proxy_whose_model_reload_fails(monkeypatch, prisma)
+    prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
+        return_value=_team_model_row("jev-latest", _TEAM_RUNWAY_BY_PREFIX)
+    )
+    _use_quota_proxy_whose_model_reload_fails(monkeypatch, prisma, failed_reload)
 
     with pytest.raises(ProxyException) as error:
         await patch_model(
@@ -8566,8 +8593,46 @@ async def test_team_model_patch_answers_503_when_the_model_reload_fails_and_a_te
             user_api_key_dict=_ADMIN,
         )
 
-    assert error.value.code == "503"
+    assert error.value.code == expected_code
     prisma.db.litellm_proxymodeltable.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_team_model_rename_reads_the_models_from_the_db_once_for_both_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_endpoints.model_management_endpoints import (
+        _raise_if_team_update_leaves_projects_short,
+    )
+
+    prisma: Final = _media_team_db("jev-latest", {})
+    router: Final = _quota_router("jev-latest", {"model": "openai/jev-latest"}, _TEAM_RUNWAY)
+    _use_quota_proxy(monkeypatch, prisma, router)
+    read_models: Final = AsyncMock(return_value=[_team_model_row("jev-latest", _TEAM_RUNWAY)])
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "DB_RECONCILE_LOCK", asyncio.Lock())
+    monkeypatch.setattr(proxy_server, "llm_model_list", [])
+    monkeypatch.setattr(proxy_server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(proxy_server.proxy_config, "_last_db_models_reload", None)
+    monkeypatch.setattr(proxy_server.proxy_config, "get_models_from_db", read_models)
+    monkeypatch.setattr(proxy_server.proxy_config, "get_credentials", AsyncMock())
+    existing: Final = router.registry().deployment("team-row")
+    assert existing is not None
+
+    assert (
+        await _raise_if_team_update_leaves_projects_short(
+            prisma_client=prisma,
+            general_settings=_PROJECT_QUOTA_SETTINGS,
+            existing=existing,
+            written_team_id="media-team",
+            written_name="jev-renamed",
+            incoming_params=None,
+            remaining_params=GenericLiteLLMParams(**_TEAM_RUNWAY),
+        )
+        is None
+    )
+    assert read_models.await_count == 1
 
 
 @pytest.mark.asyncio

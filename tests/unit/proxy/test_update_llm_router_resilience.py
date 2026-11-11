@@ -9,6 +9,7 @@ catch-all handler in _update_llm_router.
 """
 
 import asyncio
+import time
 from collections.abc import Sequence
 from typing import Final
 
@@ -17,7 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
 from litellm.models.model import LiteLLM_ProxyModelTable
-from litellm.proxy._types import RouterUpdateOutcome
+from litellm.proxy._types import ModelRoutesReload, UnloadedDbModel
 from litellm.proxy.proxy_server import ProxyConfig
 from tests._master_key import MASTER_KEY
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
@@ -133,55 +134,68 @@ def _db_row(model_id: str, route: str, api_key: str | None = None) -> LiteLLM_Pr
     )
 
 
-class TestUpdateLlmRouterReportsWhetherRoutesAreCurrent:
-    async def _reload_moved_model(
-        self, monkeypatch: pytest.MonkeyPatch, db_models: Sequence[LiteLLM_ProxyModelTable]
-    ) -> tuple[RouterUpdateOutcome, str]:
+def _router_with(*deployments: tuple[str, str, bool]) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": model_id,
+                "litellm_params": {"model": route},
+                "model_info": {"id": model_id, "db_model": db_model},
+            }
+            for model_id, route, db_model in deployments
+        ]
+    )
+
+
+class TestModelRoutesReloadForQuotaChecks:
+    async def _reload(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        router: litellm.Router,
+        db_models: Sequence[LiteLLM_ProxyModelTable],
+    ) -> ModelRoutesReload:
         monkeypatch.delenv("QA_UNSET_OIDC_TOKEN", raising=False)
-        router: Final = litellm.Router(
-            model_list=[
-                {
-                    "model_name": "clip-moved",
-                    "litellm_params": {"model": _OLD_ROUTE},
-                    "model_info": {"id": "clip-moved", "db_model": True},
-                }
-            ]
-        )
         proxy_config: Final = ProxyConfig()
+        monkeypatch.setattr("litellm.proxy.proxy_server.DB_RECONCILE_LOCK", asyncio.Lock())
+        monkeypatch.setattr(proxy_config, "get_models_from_db", AsyncMock(return_value=list(db_models)))
+        monkeypatch.setattr(proxy_config, "get_credentials", AsyncMock())
         with (
-            patch.object(proxy_config, "get_config", new_callable=AsyncMock, return_value={"model_list": []}),
-            patch("litellm.proxy.proxy_server.proxy_config", proxy_config),
             patch("litellm.proxy.proxy_server.llm_router", router),
             patch("litellm.proxy.proxy_server.master_key", MASTER_KEY),
             patch("litellm.proxy.proxy_server.llm_model_list", []),
             patch("litellm.proxy.proxy_server.general_settings", {}),
         ):
-            outcome: Final = await proxy_config._update_llm_router(
-                new_models=list(db_models), proxy_logging_obj=MagicMock()
-            )
-        moved: Final = router.registry().deployment("clip-moved")
-        assert moved is not None
-        return outcome, moved.litellm_params.model
+            return await _reconcile(proxy_config)
 
     @pytest.mark.asyncio
-    async def test_routes_are_not_current_when_a_secret_lookup_fails_before_a_moved_model_re_adds(
+    async def test_a_model_whose_secret_cannot_load_is_reported_while_the_other_models_reload(
         self, monkeypatch: pytest.MonkeyPatch
     ):
+        router: Final = _router_with(("clip-token", _OLD_ROUTE, True), ("clip-moved", _OLD_ROUTE, True))
         broken: Final = _db_row("clip-token", _OLD_ROUTE, api_key="os.environ/oidc/env/QA_UNSET_OIDC_TOKEN")
 
-        outcome, served_route = await self._reload_moved_model(monkeypatch, [broken, _db_row("clip-moved", _NEW_ROUTE)])
+        outcome: Final = await self._reload(monkeypatch, router, [broken, _db_row("clip-moved", _NEW_ROUTE)])
 
-        assert outcome == RouterUpdateOutcome(
-            still_desired=frozenset({"clip-token", "clip-moved"}), routes_current=False
+        assert outcome == ModelRoutesReload(
+            routes_current=True,
+            unloaded=frozenset({UnloadedDbModel(model_id="clip-token", names=frozenset({"clip-token"}))}),
         )
-        assert served_route == _OLD_ROUTE
+        moved: Final = router.registry().deployment("clip-moved")
+        assert moved is not None
+        assert moved.litellm_params.model == _NEW_ROUTE
 
     @pytest.mark.asyncio
-    async def test_routes_are_current_when_every_model_re_adds(self, monkeypatch: pytest.MonkeyPatch):
-        outcome, served_route = await self._reload_moved_model(monkeypatch, [_db_row("clip-moved", _NEW_ROUTE)])
+    async def test_reload_drops_models_deleted_from_the_db_and_keeps_config_models(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        router: Final = _router_with(
+            ("config-model", _OLD_ROUTE, False), ("db-deleted", _OLD_ROUTE, True), ("db-kept", _OLD_ROUTE, True)
+        )
 
-        assert outcome == RouterUpdateOutcome(still_desired=frozenset({"clip-moved"}), routes_current=True)
-        assert served_route == _NEW_ROUTE
+        outcome: Final = await self._reload(monkeypatch, router, [_db_row("db-kept", _NEW_ROUTE)])
+
+        assert outcome == ModelRoutesReload(routes_current=True)
+        assert sorted(router.registry().names(kind="ids")) == ["config-model", "db-kept"]
 
 
 class TestDeleteDeploymentResilience:
@@ -500,16 +514,15 @@ def _count_model_reads(
     monkeypatch.setattr("litellm.proxy.proxy_server.DB_RECONCILE_LOCK", asyncio.Lock())
     monkeypatch.setattr(proxy_config, "get_models_from_db", read_models_mock)
     monkeypatch.setattr(proxy_config, "get_credentials", AsyncMock())
-    monkeypatch.setattr(
-        proxy_config,
-        "_update_llm_router",
-        AsyncMock(return_value=RouterUpdateOutcome(still_desired=frozenset(), routes_current=True)),
-    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", litellm.Router(model_list=[]))
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_model_list", [])
     return read_models_mock
 
 
-async def _reconcile(proxy_config: ProxyConfig) -> RouterUpdateOutcome:
-    return await proxy_config.reconcile_db_models(prisma_client=MagicMock(), proxy_logging_obj=MagicMock())
+async def _reconcile(proxy_config: ProxyConfig) -> ModelRoutesReload:
+    return await proxy_config.reconcile_db_models(
+        prisma_client=MagicMock(), proxy_logging_obj=MagicMock(), requested_at=time.monotonic()
+    )
 
 
 @pytest.mark.asyncio

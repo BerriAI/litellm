@@ -51,8 +51,9 @@ from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     Member,
+    ModelRoutesReload,
     ProxyException,
-    RouterUpdateOutcome,
+    UnloadedDbModel,
 )
 from litellm.proxy.management.teams.authz import TeamAccess
 from litellm.proxy.management.users.service import PrismaOrgRoles
@@ -2139,23 +2140,44 @@ async def _move_clip_studio_project_to_another_team(monkeypatch: pytest.MonkeyPa
     await _run_project_update(f"project-{uuid.uuid4()}", team_id="test-team")
 
 
+def _model_reload_returns(
+    monkeypatch: pytest.MonkeyPatch, outcome: ModelRoutesReload, router_in_db: "litellm.Router | None" = None
+) -> None:
+    async def reload_models(prisma_client: object, proxy_logging_obj: object, requested_at: float) -> ModelRoutesReload:
+        if router_in_db is not None:
+            monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router_in_db)
+        return outcome
+
+    monkeypatch.setattr(litellm.proxy.proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(litellm.proxy.proxy_server.proxy_config, "reconcile_db_models", reload_models)
+
+
+_MODELS_NOT_READ: Final = ModelRoutesReload(routes_current=False)
+
+
+def _not_loaded(model_id: str, *names: str) -> ModelRoutesReload:
+    return ModelRoutesReload(
+        routes_current=True, unloaded=frozenset({UnloadedDbModel(model_id=model_id, names=frozenset(names))})
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "write_project",
     [_create_clip_studio_project, _add_clip_studio_to_project, _move_clip_studio_project_to_another_team],
     ids=["create", "update", "team-move"],
 )
+@pytest.mark.parametrize(
+    "reload_outcome",
+    [ModelRoutesReload(routes_current=True), _not_loaded("unrelated-id", "unrelated-model")],
+    ids=["every-model-loaded", "unrelated-model-not-loaded"],
+)
 async def test_project_quota_check_reads_the_route_another_worker_just_wrote(
-    monkeypatch: pytest.MonkeyPatch, write_project: Callable[[pytest.MonkeyPatch], Awaitable[None]]
+    monkeypatch: pytest.MonkeyPatch,
+    write_project: Callable[[pytest.MonkeyPatch], Awaitable[None]],
+    reload_outcome: ModelRoutesReload,
 ) -> None:
-    route_in_db: Final = _clip_studio_router("vertex_ai/gemini-3.8-flash")
-
-    async def load_models_from_db(prisma_client: object, proxy_logging_obj: object) -> RouterUpdateOutcome:
-        monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", route_in_db)
-        return RouterUpdateOutcome(still_desired=frozenset(), routes_current=True)
-
-    monkeypatch.setattr(litellm.proxy.proxy_server, "store_model_in_db", True)
-    monkeypatch.setattr(litellm.proxy.proxy_server.proxy_config, "reconcile_db_models", load_models_from_db)
+    _model_reload_returns(monkeypatch, reload_outcome, _clip_studio_router("vertex_ai/gemini-3.8-flash"))
 
     with pytest.raises(ProxyException) as exc_info:
         await write_project(monkeypatch)
@@ -2171,32 +2193,27 @@ async def test_project_quota_check_reads_the_route_another_worker_just_wrote(
     ids=["create", "update", "team-move"],
 )
 @pytest.mark.parametrize(
-    "failed_reload",
+    ("failed_reload", "expected_message"),
     [
-        RouterUpdateOutcome(still_desired=None, routes_current=False),
-        RouterUpdateOutcome(still_desired=frozenset({"clip-studio"}), routes_current=False),
+        (_MODELS_NOT_READ, "Could not reload the model routes from the database"),
+        (_not_loaded("clip-studio-id", "clip-studio"), "Could not load every model behind 'clip-studio'"),
+        (_not_loaded("clip-wildcard-id", "clip-*"), "Could not load every model behind 'clip-studio'"),
     ],
-    ids=["models-not-read", "re-add-failed-partway"],
+    ids=["models-not-read", "judged-model-not-loaded", "wildcard-serving-judged-model-not-loaded"],
 )
 async def test_project_quota_check_refuses_stale_routes_when_the_model_reload_fails(
     monkeypatch: pytest.MonkeyPatch,
     write_project: Callable[[pytest.MonkeyPatch], Awaitable[None]],
-    failed_reload: RouterUpdateOutcome,
+    failed_reload: ModelRoutesReload,
+    expected_message: str,
 ) -> None:
-    _fail_every_model_reload(monkeypatch, failed_reload)
+    _model_reload_returns(monkeypatch, failed_reload)
 
     with pytest.raises(ProxyException) as exc_info:
         await write_project(monkeypatch)
 
-    assert exc_info.value.code == "503"
-
-
-def _fail_every_model_reload(monkeypatch: pytest.MonkeyPatch, failed_reload: RouterUpdateOutcome) -> None:
-    async def fail_to_read_models(prisma_client: object, proxy_logging_obj: object) -> RouterUpdateOutcome:
-        return failed_reload
-
-    monkeypatch.setattr(litellm.proxy.proxy_server, "store_model_in_db", True)
-    monkeypatch.setattr(litellm.proxy.proxy_server.proxy_config, "reconcile_db_models", fail_to_read_models)
+    assert (exc_info.value.code, exc_info.value.type) == ("503", "service_unavailable_error")
+    assert expected_message in str(exc_info.value.message)
 
 
 async def _create_project_listing_no_models(monkeypatch: pytest.MonkeyPatch) -> str:
@@ -2212,17 +2229,6 @@ async def _create_project_listing_no_models(monkeypatch: pytest.MonkeyPatch) -> 
     with pytest.raises(ProxyException) as exc_info:
         await _run_new_project(NewProjectRequest(team_id="test-team", project_id="taken-id", models=[]))
     return exc_info.value.message
-
-
-async def _rename_project_listing_clip_studio(monkeypatch: pytest.MonkeyPatch) -> str:
-    prisma: Final = _project_update_mocks(monkeypatch, {})
-    prisma.db.litellm_projecttable.find_unique.return_value.models = ["clip-studio"]
-    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _clip_studio_router("runwayml/gen4_turbo"))
-    monkeypatch.setattr(
-        litellm.proxy.proxy_server, "general_settings", {"enforce_project_model_quota": _CUSTOMER_QUOTA_POLICY}
-    )
-    await _run_project_update(f"project-{uuid.uuid4()}", description="renamed only")
-    return _written_project_data(prisma)["description"]
 
 
 async def _create_project_under_a_policy_that_exempts_nothing(monkeypatch: pytest.MonkeyPatch) -> str:
@@ -2242,32 +2248,45 @@ async def _create_project_under_a_policy_that_exempts_nothing(monkeypatch: pytes
     ("write_project", "expected_outcome"),
     [
         (_create_project_listing_no_models, "already exists"),
-        (_rename_project_listing_clip_studio, "renamed only"),
         (_create_project_under_a_policy_that_exempts_nothing, "clip-studio (model_rpm_limit and model_tpm_limit)"),
     ],
-    ids=["create-without-models", "description-only-update", "policy-exempts-nothing"],
+    ids=["create-without-models", "policy-exempts-nothing"],
 )
 async def test_project_write_with_no_route_to_judge_succeeds_while_the_model_reload_fails(
     monkeypatch: pytest.MonkeyPatch,
     write_project: Callable[[pytest.MonkeyPatch], Awaitable[str]],
     expected_outcome: str,
 ) -> None:
-    _fail_every_model_reload(monkeypatch, RouterUpdateOutcome(still_desired=None, routes_current=False))
+    _model_reload_returns(monkeypatch, _MODELS_NOT_READ)
 
     assert expected_outcome in await write_project(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_project_quota_check_reads_the_first_router_built_from_the_db(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def build_first_router(prisma_client: object, proxy_logging_obj: object) -> RouterUpdateOutcome:
-        monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _clip_studio_router("vertex_ai/gemini-3.8-flash"))
-        return RouterUpdateOutcome(still_desired=None, routes_current=False)
+async def test_project_update_that_keeps_its_models_reads_the_route_another_worker_just_wrote(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prisma: Final = _project_update_mocks(monkeypatch, {})
+    prisma.db.litellm_projecttable.find_unique.return_value.models = ["clip-studio"]
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _clip_studio_router("vertex_ai/gemini-3.8-flash"))
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "general_settings", {"enforce_project_model_quota": _CUSTOMER_QUOTA_POLICY}
+    )
+    _model_reload_returns(
+        monkeypatch, ModelRoutesReload(routes_current=True), _clip_studio_router("runwayml/gen4_turbo")
+    )
 
+    await _run_project_update(f"project-{uuid.uuid4()}", description="renamed only")
+
+    assert _written_project_data(prisma)["description"] == "renamed only"
+
+
+@pytest.mark.asyncio
+async def test_project_quota_check_reads_the_first_router_built_from_the_db(monkeypatch: pytest.MonkeyPatch) -> None:
     _enforced_new_project_mocks(
         monkeypatch, team_models=["clip-studio"], llm_router=None, quota_setting=_CUSTOMER_QUOTA_POLICY
     )
-    monkeypatch.setattr(litellm.proxy.proxy_server, "store_model_in_db", True)
-    monkeypatch.setattr(litellm.proxy.proxy_server.proxy_config, "reconcile_db_models", build_first_router)
+    _model_reload_returns(monkeypatch, _MODELS_NOT_READ, _clip_studio_router("vertex_ai/gemini-3.8-flash"))
 
     with pytest.raises(ProxyException) as exc_info:
         await _run_new_project(NewProjectRequest(team_id="test-team", models=["clip-studio"]))
