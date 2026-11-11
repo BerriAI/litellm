@@ -46,6 +46,7 @@ from litellm.litellm_core_utils.model_response_utils import (
 )
 from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject, drop_token_ids
 from litellm.litellm_core_utils.thread_pool_executor import executor
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.ollama.common_utils import OllamaResponseIdNormalizer
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import GenericLiteLLMParams
@@ -2531,7 +2532,7 @@ class CustomStreamWrapper:
             # Call make_call to get the completion stream
             try:
                 self.completion_stream = self.make_call(client=litellm.module_level_client)
-            except Exception as e:
+            except (BaseLLMException, httpx.HTTPError) as e:
                 self._raise_open_error(e)
             self._stream_iter = self.completion_stream.__iter__()
 
@@ -2542,7 +2543,7 @@ class CustomStreamWrapper:
             # Call make_call to get the completion stream
             try:
                 self.completion_stream = await self.make_call(client=litellm.module_level_aclient)
-            except Exception as e:
+            except (BaseLLMException, httpx.HTTPError) as e:
                 self._raise_open_error(e)
             self._stream_iter = self.completion_stream.__aiter__()
 
@@ -2865,12 +2866,11 @@ class CustomStreamWrapper:
         if not self._emitted_disqualifying_content and self._delta_disqualifies_continuation(delta):
             self._emitted_disqualifying_content = True
 
-    def _raise_open_error(self, error: Exception) -> NoReturn:
+    def _raise_open_error(self, error: BaseLLMException | httpx.HTTPError) -> NoReturn:
         try:
-            already_mapped: Final = self._map_stream_exception(error)
+            raise self._map_stream_exception(error)
         except Exception as mapped:
             raise mapped from error
-        raise already_mapped
 
     def _map_stream_exception(self, original_exception: Exception) -> Exception:
         return exception_type(
