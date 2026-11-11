@@ -85,6 +85,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     is_model_cost_zero,
     is_user_proxy_admin,
     is_valid_fallback_model,
+    is_video_retrieval_request,
     jwt_key_mapping_cache_key,
     key_access_group_grants_model,
     key_model_aliases_for_auth_check,
@@ -4980,12 +4981,15 @@ async def _run_post_custom_auth_checks(
     # every budget check for these; this path did not, so the same request could
     # be refused under custom auth and served under the other two.
     skip_budget_checks: Final = (
-        is_model_cost_zero(
-            model=await budget_served_model(current_model, request_data, request, llm_router, valid_token),
-            llm_router=llm_router,
+        is_video_retrieval_request(route=route, http_method=RouteChecks.get_request_method(request))
+        or (
+            is_model_cost_zero(
+                model=await budget_served_model(current_model, request_data, request, llm_router, valid_token),
+                llm_router=llm_router,
+            )
+            if current_model is not None and llm_router is not None
+            else False
         )
-        if current_model is not None and llm_router is not None
-        else False
     )
 
     # 3. Check key-level model_max_budget
