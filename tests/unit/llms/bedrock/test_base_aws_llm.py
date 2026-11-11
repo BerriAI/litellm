@@ -14,8 +14,9 @@ from fastapi.testclient import TestClient
 
 
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import Any, Dict, Final, Optional
 from unittest.mock import MagicMock, Mock, patch
 
@@ -227,16 +228,30 @@ ENV_SECRET_KEY: Final = "env-identity-secret"
 ENV_SESSION_TOKEN: Final = "env-identity-session-token"
 
 
+ENV_TEMPORARY_CREDENTIALS: Final = MappingProxyType(
+    {
+        "AWS_ACCESS_KEY_ID": ENV_ACCESS_KEY,
+        "AWS_SECRET_ACCESS_KEY": ENV_SECRET_KEY,
+        "AWS_SESSION_TOKEN": ENV_SESSION_TOKEN,
+    }
+)
+DEPLOYMENT_KEY_PAIR: Final = MappingProxyType(
+    {"aws_access_key_id": "AKIADEPLOYMENT", "aws_secret_access_key": "deployment-secret"}
+)
+
+
 @pytest.mark.parametrize(
-    "credential_params,expected_access_key,expected_session_token",
+    "env_credentials,credential_params,expected_access_key,expected_session_token",
     [
         pytest.param(
-            {"aws_access_key_id": "AKIADEPLOYMENT", "aws_secret_access_key": "deployment-secret"},
+            ENV_TEMPORARY_CREDENTIALS,
+            DEPLOYMENT_KEY_PAIR,
             "AKIADEPLOYMENT",
             None,
             id="deployment-key-pair-without-token",
         ),
         pytest.param(
+            ENV_TEMPORARY_CREDENTIALS,
             {
                 "aws_access_key_id": "ASIADEPLOYMENT",
                 "aws_secret_access_key": "deployment-secret",
@@ -247,25 +262,29 @@ ENV_SESSION_TOKEN: Final = "env-identity-session-token"
             id="deployment-key-pair-with-its-own-token",
         ),
         pytest.param(
+            ENV_TEMPORARY_CREDENTIALS,
             {"aws_access_key_id": ENV_ACCESS_KEY, "aws_secret_access_key": ENV_SECRET_KEY},
             ENV_ACCESS_KEY,
             ENV_SESSION_TOKEN,
             id="config-references-the-env-key-pair",
         ),
-        pytest.param({}, ENV_ACCESS_KEY, ENV_SESSION_TOKEN, id="ambient-env-key-pair"),
+        pytest.param(ENV_TEMPORARY_CREDENTIALS, {}, ENV_ACCESS_KEY, ENV_SESSION_TOKEN, id="ambient-env-key-pair"),
+        pytest.param(
+            {"AWS_SESSION_TOKEN": ENV_SESSION_TOKEN},
+            {"aws_access_key_id": "ASIADEPLOYMENT", "aws_secret_access_key": "deployment-secret"},
+            "ASIADEPLOYMENT",
+            ENV_SESSION_TOKEN,
+            id="env-holds-only-the-token-of-the-deployment-key-pair",
+        ),
     ],
 )
 def test_bedrock_request_carries_only_the_session_token_of_the_key_pair_that_signs_it(
-    credential_params: Dict[str, str],
+    env_credentials: Mapping[str, str],
+    credential_params: Mapping[str, str],
     expected_access_key: str,
     expected_session_token: Optional[str],
 ):
-    env = {
-        **_os_environ_without_aws_keys(),
-        "AWS_ACCESS_KEY_ID": ENV_ACCESS_KEY,
-        "AWS_SECRET_ACCESS_KEY": ENV_SECRET_KEY,
-        "AWS_SESSION_TOKEN": ENV_SESSION_TOKEN,
-    }
+    env: Final = {**_os_environ_without_aws_keys(), **env_credentials}
     with patch.dict(os.environ, env, clear=True):
         headers, _ = BaseAWSLLM()._sign_request(
             service_name="bedrock",
@@ -278,6 +297,45 @@ def test_bedrock_request_carries_only_the_session_token_of_the_key_pair_that_sig
     lowered: Final = {name.lower(): value for name, value in headers.items()}
     assert lowered["authorization"].startswith(f"AWS4-HMAC-SHA256 Credential={expected_access_key}/")
     assert lowered.get("x-amz-security-token") == expected_session_token
+
+
+def _sts_client_answering_for_its_source_credentials(service_name: str, **client_kwargs: object) -> MagicMock:
+    sts: Final = MagicMock()
+    sts.get_caller_identity.return_value = {"Arn": "arn:aws:sts::111111111111:assumed-role/SomeOtherRole/probe"}
+    sts.assume_role.return_value = {
+        "Credentials": {
+            "AccessKeyId": "ASIAASSUMEDROLE",
+            "SecretAccessKey": "assumed-secret",
+            "SessionToken": f"assumed-by:{client_kwargs.get('aws_access_key_id')}:{client_kwargs.get('aws_session_token')}",
+            "Expiration": datetime.now(timezone.utc) + timedelta(hours=1),
+        }
+    }
+    return sts
+
+
+@pytest.mark.parametrize(
+    "credential_params,expected_assumed_token",
+    [
+        pytest.param({}, f"assumed-by:{ENV_ACCESS_KEY}:{ENV_SESSION_TOKEN}", id="env-key-pair"),
+        pytest.param(DEPLOYMENT_KEY_PAIR, "assumed-by:AKIADEPLOYMENT:None", id="deployment-key-pair-without-token"),
+    ],
+)
+def test_assume_role_source_session_carries_only_the_session_token_of_its_key_pair(
+    credential_params: Mapping[str, str],
+    expected_assumed_token: str,
+):
+    with (
+        patch.dict(os.environ, {**_os_environ_without_aws_keys(), **ENV_TEMPORARY_CREDENTIALS}, clear=True),
+        patch("boto3.client", side_effect=_sts_client_answering_for_its_source_credentials),
+    ):
+        credentials: Final = BaseAWSLLM().get_credentials(
+            aws_role_name="arn:aws:iam::222222222222:role/LitellmTargetRole",
+            aws_session_name="source-session",
+            aws_region_name="us-east-1",
+            **credential_params,
+        )
+
+    assert (credentials.access_key, credentials.token) == ("ASIAASSUMEDROLE", expected_assumed_token)
 
 
 def test_get_credentials_ambient_fallback_resolves_aws_external_id():

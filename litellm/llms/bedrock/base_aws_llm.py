@@ -370,8 +370,11 @@ class BaseAWSLLM(SignsRequestsWithAWS):
 
     @staticmethod
     def _env_session_token_for_key_pair(aws_access_key_id: str | None, aws_secret_access_key: str | None) -> str | None:
-        env_key_pair: Final = (os.getenv("AWS_ACCESS_KEY_ID"), os.getenv("AWS_SECRET_ACCESS_KEY"))
-        if (aws_access_key_id, aws_secret_access_key) != env_key_pair:
+        env_access_key_id: Final = os.getenv("AWS_ACCESS_KEY_ID")
+        if env_access_key_id is not None and (aws_access_key_id, aws_secret_access_key) != (
+            env_access_key_id,
+            os.getenv("AWS_SECRET_ACCESS_KEY"),
+        ):
             return None
         return os.getenv("AWS_SESSION_TOKEN")
 
@@ -399,7 +402,8 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         # so any reference still present at this point is caller-supplied input and is
         # left as-is rather than expanded into a process environment variable. Each
         # unset param falls back to its matching fixed AWS_* ambient env var, except the
-        # session token, which belongs to the env key pair and is only used beside it.
+        # session token, which belongs to the env key pair when one is set and is then
+        # only used beside it.
         (
             aws_access_key_id,
             aws_secret_access_key,
