@@ -393,4 +393,10 @@ export const GUARDRAIL_PRESETS: Record<string, GuardrailPreset> = {
     mode: ["pre_call", "post_call"],
     defaultOn: false,
   },
+  reco: {
+    provider: "Reco",
+    guardrailNameSuggestion: "Reco Guardrail",
+    mode: "pre_call",
+    defaultOn: false,
+  },
 };
