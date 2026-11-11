@@ -7951,14 +7951,14 @@ async def test_key_level_callback_vars_survive_the_strip():
         pytest.param(
             {"no-cache": True},
             {"use-cache": True, "ttl": 60},
-            {"ttl": 60, "no-cache": True},
+            {"no-cache": True},
             False,
             id="key-no-cache-keeps-the-key-out-of-opt-in-caching",
         ),
         pytest.param(
             {"use-cache": False},
             {"use-cache": True, "ttl": 60},
-            {"ttl": 60},
+            {},
             False,
             id="key-use-cache-false-keeps-the-key-out-of-opt-in-caching",
         ),
@@ -7968,6 +7968,48 @@ async def test_key_level_callback_vars_survive_the_strip():
             {"use-cache": True},
             True,
             id="key-use-cache-true-leaves-the-request-opt-in",
+        ),
+        pytest.param(
+            {"no-cache": "true"},
+            {"use-cache": True},
+            {"no-cache": "true"},
+            False,
+            id="key-non-boolean-no-cache-keeps-the-key-out-of-opt-in-caching",
+        ),
+        pytest.param(
+            {"no-cache": False},
+            {"use-cache": True},
+            {"use-cache": True, "no-cache": False},
+            True,
+            id="key-no-cache-false-leaves-the-request-opt-in",
+        ),
+        pytest.param(
+            {"ttl": 600},
+            {"no-cache": True, "namespace": "team-a"},
+            {"ttl": 600},
+            False,
+            id="request-without-opt-in-is-still-replaced",
+        ),
+        pytest.param(
+            {"ttl": 600},
+            {"use-cache": "true", "no-store": True},
+            {"ttl": 600},
+            False,
+            id="request-non-boolean-use-cache-is-still-replaced",
+        ),
+        pytest.param(
+            {"s-maxage": 1},
+            {"use-cache": True, "s-max-age": 100000},
+            {"use-cache": True, "s-maxage": 1},
+            True,
+            id="key-s-maxage-overrides-the-request-s-max-age-alias",
+        ),
+        pytest.param(
+            {"ttl": 600},
+            {"use-cache": True, "s-max-age": 5},
+            {"use-cache": True, "s-max-age": 5, "ttl": 600},
+            True,
+            id="request-s-max-age-kept-when-the-key-has-no-s-maxage",
         ),
     ],
 )
@@ -7996,6 +8038,41 @@ async def test_key_cache_controls_merge_into_request_cache_controls(
     assert updated["cache"] == expected_cache
     opt_in_cache: Final = Cache(type=LiteLLMCacheType.LOCAL, mode=CacheMode.default_off)
     assert opt_in_cache.should_use_cache(**updated) is uses_cache_when_default_off
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "allowed_cache_controls, request_cache, expected_cache",
+    [
+        pytest.param(["no-store"], {"use-cache": True}, {"ttl": 600}, id="opt-in-not-allowed-is-replaced"),
+        pytest.param(
+            ["use-cache"], {"use-cache": True, "no-store": True}, {"ttl": 600}, id="any-disallowed-control-is-replaced"
+        ),
+        pytest.param(["use-cache"], {"use-cache": True}, {"use-cache": True, "ttl": 600}, id="allowed-opt-in-is-kept"),
+        pytest.param([], {"use-cache": True}, {"use-cache": True, "ttl": 600}, id="empty-list-allows-the-opt-in"),
+    ],
+)
+async def test_key_cache_metadata_only_keeps_request_controls_the_key_allows(
+    allowed_cache_controls: list[str],
+    request_cache: dict[str, object],
+    expected_cache: dict[str, object],
+):
+    key: Final = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={"cache": {"ttl": 600}},
+        allowed_cache_controls=allowed_cache_controls,
+    )
+
+    updated: Final = await add_litellm_data_to_request(
+        data={"model": "gpt-4.1-mini", "messages": [{"role": "user", "content": "hello"}], "cache": request_cache},
+        request=_callback_credential_request_mock(),
+        user_api_key_dict=key,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated["cache"] == expected_cache
 
 
 class TestPromotedTraceControlFields:

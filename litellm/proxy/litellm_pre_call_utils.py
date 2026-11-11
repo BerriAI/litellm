@@ -2122,7 +2122,28 @@ class LiteLLMProxyRequestSetup:
         return data
 
     @staticmethod
-    def add_key_level_controls(key_metadata: dict | None, data: dict, _metadata_variable_name: str):
+    def _request_cache_kept_for_key(
+        request_cache: Mapping[str, object],
+        key_cache: Mapping[str, object],
+        allowed_cache_controls: Sequence[object] | None,
+    ) -> Mapping[str, object]:
+        key_opts_out: Final = (
+            key_cache.get("no-cache", False) is not False or key_cache.get("use-cache", True) is not True
+        )
+        request_is_allowed: Final = not allowed_cache_controls or all(
+            control in allowed_cache_controls for control in request_cache
+        )
+        if key_opts_out or request_cache.get("use-cache") is not True or not request_is_allowed:
+            return MappingProxyType({})
+        return {k: v for k, v in request_cache.items() if not (k == "s-max-age" and "s-maxage" in key_cache)}
+
+    @staticmethod
+    def add_key_level_controls(
+        key_metadata: dict | None,
+        data: dict,
+        _metadata_variable_name: str,
+        allowed_cache_controls: Sequence[object] | None = None,
+    ):
         if key_metadata is None:
             return data
         if "cache" in key_metadata and not isinstance(key_metadata["cache"], dict):
@@ -2130,11 +2151,11 @@ class LiteLLMProxyRequestSetup:
         elif "cache" in key_metadata:
             request_cache: Final = _DECODED_JSON.validate_python(data["cache"]) if "cache" in data else None
             key_cache: Final = _request_fields(_DECODED_JSON.validate_python(key_metadata["cache"]))
-            key_cache_controls: Final = {k: v for k, v in key_cache.items() if k in SupportedCacheControls}
-            key_opts_out: Final = key_cache.get("no-cache") is True or key_cache.get("use-cache", True) is not True
             data["cache"] = {  # rebind-ok: data is an out-param
-                **{k: v for k, v in _request_fields(request_cache).items() if not (key_opts_out and k == "use-cache")},
-                **key_cache_controls,
+                **LiteLLMProxyRequestSetup._request_cache_kept_for_key(
+                    _request_fields(request_cache), key_cache, allowed_cache_controls
+                ),
+                **{k: v for k, v in key_cache.items() if k in SupportedCacheControls},
             }
 
         ## KEY-LEVEL SPEND LOGS / TAGS
@@ -2845,6 +2866,7 @@ async def add_litellm_data_to_request(
         key_metadata=key_metadata,
         data=data,
         _metadata_variable_name=_metadata_variable_name,
+        allowed_cache_controls=user_api_key_dict.allowed_cache_controls,
     )
     data[_metadata_variable_name] = LiteLLMProxyRequestSetup.add_team_and_project_level_controls(
         user_api_key_dict=user_api_key_dict,
