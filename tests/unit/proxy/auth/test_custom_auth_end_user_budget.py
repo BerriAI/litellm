@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from starlette.requests import Request
+from starlette.routing import Route
 
 import litellm
 from litellm.proxy._types import (
@@ -463,30 +464,12 @@ def test_apply_budget_limits_copies_per_model_limits_onto_end_user_params():
     ],
 )
 async def test_custom_auth_judges_the_zero_cost_waiver_by_the_key_alias_target(
-    requested_model: str, key_aliases: dict[str, str], run_common_checks: bool, expect_enforced: bool
+    requested_model: str,
+    key_aliases: dict[str, str],
+    run_common_checks: bool,
+    expect_enforced: bool,
+    free_and_paid_router: litellm.Router,
 ) -> None:
-    router: Final = litellm.Router(
-        model_list=[
-            {
-                "model_name": "free-model",
-                "litellm_params": {
-                    "model": "openai/free-backend",
-                    "api_key": "sk-fixture",
-                    "input_cost_per_token": 0.0,
-                    "output_cost_per_token": 0.0,
-                },
-            },
-            {
-                "model_name": "paid-model",
-                "litellm_params": {
-                    "model": "openai/paid-backend",
-                    "api_key": "sk-fixture",
-                    "input_cost_per_token": 1e-6,
-                    "output_cost_per_token": 2e-6,
-                },
-            },
-        ]
-    )
     valid_token: Final = UserAPIKeyAuth(
         token="test_token",
         aliases=key_aliases,
@@ -497,7 +480,16 @@ async def test_custom_auth_judges_the_zero_cost_waiver_by_the_key_alias_target(
     limiter.is_end_user_within_model_budget = AsyncMock(
         side_effect=litellm.BudgetExceededError(current_cost=5.0, max_budget=1.0)
     )
-    http_request: Final = Request({"type": "http", "method": "POST", "path": "/v1/chat/completions"})
+    http_request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "headers": [],
+            "query_string": b"",
+            "route": Route("/v1/chat/completions", endpoint=lambda request: None),
+        }
+    )
 
     async def run() -> UserAPIKeyAuth:
         return await _run_post_custom_auth_checks(
@@ -509,7 +501,7 @@ async def test_custom_auth_judges_the_zero_cost_waiver_by_the_key_alias_target(
         )
 
     with (
-        patch("litellm.proxy.proxy_server.llm_router", router),
+        patch("litellm.proxy.proxy_server.llm_router", free_and_paid_router),
         patch("litellm.proxy.proxy_server.model_max_budget_limiter", limiter),
         patch("litellm.proxy.proxy_server.general_settings", {"custom_auth_run_common_checks": run_common_checks}),
     ):

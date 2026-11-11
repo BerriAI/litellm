@@ -11654,3 +11654,14 @@ def test_request_served_model_ignores_a_malformed_alias_like_request_preparation
     _update_model_if_key_alias_exists(data=prepared, user_api_key_dict=valid_token)
 
     assert request_served_model("requested", valid_token, None, None) == prepared["model"] == expected
+
+
+def test_stale_team_alias_bypass_flag_is_read_once_per_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
+
+    monkeypatch.setattr(pre_call_utils, "_ENABLE_TEAM_STALE_ALIAS_BYPASS", None)
+    monkeypatch.setenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", "true")
+    first: Final = pre_call_utils._stale_team_alias_bypass_enabled()
+    monkeypatch.setenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", "false")
+
+    assert (first, pre_call_utils._stale_team_alias_bypass_enabled()) == (True, True)

@@ -364,27 +364,22 @@ def _inference_model_overridden() -> bool:
 async def budget_served_model(
     model: str | Sequence[str] | None,
     request_data: Mapping[str, object],
-    route: str,
     request: Request | None,
     llm_router: litellm.Router | None,
     valid_token: UserAPIKeyAuth,
 ) -> str | Sequence[str] | None:
-    """The model the zero-cost budget waiver judges. For a string body `model` on a chat, completions, responses
-    or messages route, that is the model request preparation serves it with, through the caller's team, key,
-    global and router aliases. Anywhere request preparation could pick the model otherwise (a path or query
-    `model`, a configured `completion_model` or CLI `--model`, or before auth has applied the router aliases to
-    the body), it stays the requested model."""
-    if request is None or llm_router is None or route not in _SERVED_MODEL_BUDGET_WAIVER_ROUTES:
+    """The model the zero-cost budget waiver judges. For a client's own HTTP request to a chat, completions,
+    responses or messages route that names a string body `model`, it is the model request preparation serves it
+    with through the caller's team, key, global and router aliases. Everywhere else it stays the requested model:
+    requests built inside the proxy, a path or query `model`, a configured `completion_model` or CLI `--model`,
+    and requests whose body auth has not yet passed through the router aliases."""
+    if request is None or llm_router is None or not isinstance(model, str):
         return model
-    if request.scope.get(MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY) is not True:
+    if get_request_route_template(request) not in _SERVED_MODEL_BUDGET_WAIVER_ROUTES:
         return model
-    if not isinstance(model, str) or request_data.get("model") != model:
+    if request.scope.get(MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY) is not True or request_data.get("model") != model:
         return model
-    if (
-        "model" in request.path_params
-        or "model" in safe_get_request_query_params(request=request)
-        or _inference_model_overridden()
-    ):
+    if "model" in safe_get_request_query_params(request=request) or _inference_model_overridden():
         return model
     if not (
         key_model_aliases_for_auth_check(valid_token)
@@ -3199,7 +3194,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
         )
         skip_budget_checks: Final = request_skips_budget_checks(
             route=route,
-            model=await budget_served_model(model, request_data, route, request, llm_router, valid_token),
+            model=await budget_served_model(model, request_data, request, llm_router, valid_token),
             llm_router=llm_router,
             request_body=request_data,
         )
@@ -4298,11 +4293,7 @@ async def _should_skip_budget_checks(
     )
     return request_skips_budget_checks(
         route=route,
-        model=(
-            model
-            if sub_call
-            else await budget_served_model(model, request_data, route, request, llm_router, valid_token)
-        ),
+        model=(model if sub_call else await budget_served_model(model, request_data, request, llm_router, valid_token)),
         llm_router=llm_router,
         request_body=request_data,
     )
@@ -4984,7 +4975,7 @@ async def _run_post_custom_auth_checks(
     # be refused under custom auth and served under the other two.
     skip_budget_checks: Final = (
         is_model_cost_zero(
-            model=await budget_served_model(current_model, request_data, route, request, llm_router, valid_token),
+            model=await budget_served_model(current_model, request_data, request, llm_router, valid_token),
             llm_router=llm_router,
         )
         if current_model is not None and llm_router is not None
