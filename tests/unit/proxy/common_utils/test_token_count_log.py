@@ -5,7 +5,6 @@ from typing import Final
 import pytest
 from fastapi import HTTPException, Response
 
-from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.openai_error_payload import LITELLM_CALL_ID_HEADER
 from litellm.proxy.common_utils.token_count_log import answered_with_litellm_call_id, logged_token_count
 from litellm.types.utils import TokenCountResponse
@@ -61,16 +60,6 @@ async def test_an_http_error_answers_its_status_and_detail_with_the_call_id_besi
         {"error": "slow down"},
         {"retry-after": "3", LITELLM_CALL_ID_HEADER: "count-echo-http"},
     )
-
-
-@pytest.mark.asyncio
-async def test_an_unhandled_error_answers_a_500_with_the_call_id() -> None:
-    with pytest.raises(ProxyException) as answered:
-        await answered_with_litellm_call_id(
-            _count_ending_in(RuntimeError("tokenizer crashed")), "count-echo-crash", Response()
-        )
-
-    assert (answered.value.code, answered.value.headers) == ("500", {LITELLM_CALL_ID_HEADER: "count-echo-crash"})
 
 
 @pytest.mark.asyncio

@@ -584,6 +584,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 )
 from litellm.proxy.common_utils.openai_error_payload import (
     LITELLM_CALL_ID_HEADER,
+    UnhandledErrorWithCallId,
     attribute_of,
     error_status_code,
     headers_with_litellm_call_id,
@@ -2589,8 +2590,12 @@ async def otel_request_validation_exception_handler(request: Request, exc: Reque
 async def otel_unhandled_exception_handler(request: Request, exc: Exception):
     if isinstance(exc, (ProxyException, HTTPException, RequestValidationError)):
         raise exc
-    response: Final = await _unhandled_exception_response(request, exc)
+    response: Final = await _unhandled_exception_response(
+        request, exc.error if isinstance(exc, UnhandledErrorWithCallId) else exc
+    )
     response.headers.update(trace_response_headers(getattr(request.state, "parent_otel_span", None)))
+    if isinstance(exc, UnhandledErrorWithCallId):
+        response.headers.setdefault(LITELLM_CALL_ID_HEADER, exc.litellm_call_id)
     return response
 
 

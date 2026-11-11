@@ -5530,7 +5530,9 @@ def _utils_token_counter(
         ),
     )
     monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-test"))
-    return TestClient(app).post("/utils/token_counter", json=dict(body), headers=dict(headers))
+    return TestClient(app, raise_server_exceptions=False).post(
+        "/utils/token_counter", json=dict(body), headers=dict(headers)
+    )
 
 
 def test_utils_token_counter_logs_one_line_with_the_callers_call_id_model_and_count(
@@ -5619,8 +5621,13 @@ def test_utils_token_counter_failed_count_logs_its_status_in_place_of_a_count(
         (_COUNTED_HELLO, {"x-litellm-call-id": "count-echo-utils"}, 200),
         ({"model": "count-log-gpt"}, {}, 400),
         ({**_COUNTED_HELLO, "prompt": "and a prompt"}, {"x-litellm-call-id": "count-echo-utils"}, 400),
+        (
+            {"model": "count-log-gpt", "messages": [{"role": "user", "content": "hi", "tool_calls": "x"}]},
+            {"x-litellm-call-id": "count-echo-utils"},
+            500,
+        ),
     ],
-    ids=["counted", "counted-with-client-id", "no-messages", "failed-count-with-client-id"],
+    ids=["counted", "counted-with-client-id", "no-messages", "failed-count-with-client-id", "crash-with-client-id"],
 )
 def test_utils_token_counter_answers_the_call_id_its_count_line_names(
     monkeypatch: pytest.MonkeyPatch,

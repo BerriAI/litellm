@@ -10,9 +10,9 @@ from fastapi import HTTPException, Response, status
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ProxyException
-from litellm.proxy.common_request_processing import log_llm_api_exception, proxy_exception_from_route_error
 from litellm.proxy.common_utils.openai_error_payload import (
     LITELLM_CALL_ID_HEADER,
+    UnhandledErrorWithCallId,
     error_status_code,
     headers_with_litellm_call_id,
     with_litellm_call_id,
@@ -155,8 +155,7 @@ async def answered_with_litellm_call_id(
             headers=headers_with_litellm_call_id(e.headers, litellm_call_id),
         ) from e
     except Exception as e:
-        log_llm_api_exception(e, litellm_call_id)
-        raise with_litellm_call_id(proxy_exception_from_route_error(e), litellm_call_id) from e
+        raise UnhandledErrorWithCallId(e, litellm_call_id) from e
     if isinstance(answered, Response):
         answered.headers.setdefault(LITELLM_CALL_ID_HEADER, litellm_call_id)
         return answered
