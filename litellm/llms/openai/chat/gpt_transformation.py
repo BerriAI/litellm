@@ -958,7 +958,10 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         )
 
     def lists_served_model_ids(self) -> bool:
-        return type(self).get_models is OpenAIGPTConfig.get_models
+        return (
+            type(self).get_models is OpenAIGPTConfig.get_models
+            and type(self).discover_models is OpenAIGPTConfig.discover_models
+        )
 
     def discover_models(
         self, litellm_params: Mapping[str, object] | None = None

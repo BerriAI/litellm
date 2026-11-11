@@ -2519,17 +2519,13 @@ def openai_compatible_server() -> Generator[respx.MockRouter, None, None]:
     _model_cache.flush_cache()
 
 
-def _wildcard_router(model_name: str, deployment_model: str) -> "Router":
+def _wildcard_router(model_name: str, deployment_model: str, custom_llm_provider: str | None = None) -> "Router":
     from litellm import Router
 
-    return Router(
-        model_list=[
-            {
-                "model_name": model_name,
-                "litellm_params": {"model": deployment_model, "api_base": _SERVER_API_BASE, "api_key": "sk-listing"},
-            }
-        ]
+    litellm_params: Final = {"model": deployment_model, "api_base": _SERVER_API_BASE, "api_key": "sk-listing"} | (
+        {} if custom_llm_provider is None else {"custom_llm_provider": custom_llm_provider}
     )
+    return Router(model_list=[{"model_name": model_name, "litellm_params": litellm_params}])
 
 
 def _v1_models(router: "Router", model_name: str) -> list[str]:
@@ -2603,6 +2599,23 @@ def test_every_id_a_live_listing_lists_reaches_the_id_the_server_serves(
         listed_id: _model_the_server_received(router, openai_compatible_server, listed_id) for listed_id in v1_models
     } == served_id_by_listed_id
     assert sorted(model_info_names) == sorted(v1_models)
+
+
+@pytest.mark.parametrize("model_name", ["vllm/*", "*"])
+def test_a_custom_llm_provider_that_keeps_the_deployment_prefix_lists_org_ids_that_reach_the_served_model(
+    openai_compatible_server: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, model_name: str
+) -> None:
+    import litellm
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    router: Final = _wildcard_router(model_name, "openai/*", custom_llm_provider="hosted_vllm")
+    listed_org_ids: Final = [
+        listed_id for listed_id in _v1_models(router, model_name) if listed_id.endswith(_SERVED_ORG_ID.split("/")[1])
+    ]
+
+    assert [
+        _model_the_server_received(router, openai_compatible_server, listed_id) for listed_id in listed_org_ids
+    ] == [_SERVED_ORG_ID]
 
 
 def test_a_static_catalog_id_stored_with_the_provider_prefix_still_lists_and_reaches_its_model(
