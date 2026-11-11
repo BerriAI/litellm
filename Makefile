@@ -10,7 +10,7 @@
 	lint-ruff-strict lint-gate lint-test-quality lint-openapi-docs \
 	install-dev install-proxy-dev install-test-deps install-hooks \
 	install-helm-unittest check-circular-imports check-import-safety check check-inner pre-commit \
-	lint-install lint-fetch-base bootstrap
+	lint-install lint-fetch-base bootstrap bootstrap-deps bootstrap-env
 
 # Default target
 help:
@@ -88,17 +88,21 @@ install-dev:
 
 # Deliberately unqueued: provisioning is I/O bound, so it doesn't need one of the
 # machine-wide slots the CPU-bound gates below share.
-bootstrap:
+bootstrap: bootstrap-deps bootstrap-env
+	@echo "bootstrap: done"
+
+bootstrap-deps:
 	$(UV) sync --inexact --frozen --extra proxy --group proxy-dev --group e2e-dev
 	$(UV_RUN) python scripts/prisma_generate_if_needed.py
 	cd ui/litellm-dashboard && ../../scripts/with_dashboard_node.sh npm install --no-audit --no-fund
+
+bootstrap-env:
 	@main_root=$$(git worktree list --porcelain | head -1 | sed 's/^worktree //'); \
 	if [ "$$main_root" != "$$(git rev-parse --show-toplevel)" ] && [ -f "$$main_root/.env" ] && [ ! -f .env ]; then \
 		cp "$$main_root/.env" .env && echo "bootstrap: copied .env from $$main_root"; \
 	else \
 		echo "bootstrap: .env left untouched"; \
 	fi
-	@echo "bootstrap: done"
 
 install-proxy-dev:
 	$(UV) sync --frozen --group proxy-dev --extra proxy
@@ -271,7 +275,7 @@ lint-dev: lint-format-changed check-circular-imports check-import-safety
 check:
 	@$(GATE_SLOT_LOCK) $(MAKE) check-inner
 
-check-inner: bootstrap
+check-inner: bootstrap-deps
 	./scripts/pre_commit_lint.sh
 
 pre-commit:
