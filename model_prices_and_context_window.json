@@ -21878,7 +21878,7 @@
         "thinking_always_on": true
     },
     "databricks/claude-fable-latest": {
-        "alias_of": "databricks/databricks-claude-fable-5-1"
+        "alias_of": "databricks/databricks-claude-fable-5-2"
     },
     "databricks/databricks-claude-haiku-4-5": {
         "cache_creation_input_token_cost": 1.24999e-06,
@@ -22804,7 +22804,10 @@
         "input_cost_per_token_priority": 2.45e-06,
         "output_cost_per_token_priority": 7.7e-06,
         "cache_read_input_token_cost_priority": 4.55e-07,
-        "cache_creation_input_token_cost_priority": 2.45e-06
+        "cache_creation_input_token_cost_priority": 2.45e-06,
+        "deprecation_date": "2027-02-04",
+        "deprecation_source": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models",
+        "successor_model": "databricks/databricks-glm-5-3"
     },
     "databricks/databricks-glm-5-3": {
         "cache_creation_input_token_cost": 1.4e-06,
@@ -23471,7 +23474,7 @@
         "input_cost_per_token": 1.5001e-07,
         "input_dbu_cost_per_token": 2.1429999999999996e-06,
         "litellm_provider": "databricks",
-        "max_input_tokens": 200000,
+        "max_input_tokens": 128000,
         "max_output_tokens": 128000,
         "metadata": {
             "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
@@ -48622,6 +48625,7 @@
         "max_output_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 5e-07,
+        "source": "https://replicate.com/meta/llama-2-13b",
         "supports_tool_choice": true
     },
     "replicate/meta/llama-2-13b-chat": {
@@ -48631,6 +48635,8 @@
         "max_output_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 5e-07,
+        "source": "https://replicate.com/meta/llama-2-13b-chat",
+        "supports_system_messages": true,
         "supports_tool_choice": true
     },
     "replicate/meta/llama-2-70b": {
@@ -48640,6 +48646,7 @@
         "max_output_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 2.75e-06,
+        "source": "https://replicate.com/meta/llama-2-70b",
         "supports_tool_choice": true
     },
     "replicate/meta/llama-2-70b-chat": {
@@ -48649,6 +48656,8 @@
         "max_output_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 2.75e-06,
+        "source": "https://replicate.com/meta/llama-2-70b-chat",
+        "supports_system_messages": true,
         "supports_tool_choice": true
     },
     "replicate/meta/llama-2-7b": {
@@ -48658,6 +48667,7 @@
         "max_output_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/meta/llama-2-7b",
         "supports_tool_choice": true
     },
     "replicate/meta/llama-2-7b-chat": {
@@ -48667,6 +48677,8 @@
         "max_output_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/meta/llama-2-7b-chat",
+        "supports_system_messages": true,
         "supports_tool_choice": true
     },
     "replicate/meta/llama-3-70b": {
@@ -48721,6 +48733,7 @@
         "max_output_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/mistralai/mistral-7b-v0.1",
         "supports_tool_choice": true
     },
     "replicate/mistralai/mixtral-8x7b-instruct-v0.1": {
@@ -48737,8 +48750,10 @@
         "output_cost_per_token": 1e-05,
         "litellm_provider": "replicate",
         "mode": "chat",
+        "source": "https://replicate.com/openai/gpt-5",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
         "supports_vision": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -48749,6 +48764,7 @@
         "output_cost_per_token": 3.6e-07,
         "litellm_provider": "replicate",
         "mode": "chat",
+        "source": "https://replicate.com/openai/gpt-oss-20b",
         "supports_function_calling": true,
         "supports_system_messages": true
     },
@@ -48764,13 +48780,15 @@
         "supports_tool_choice": true,
         "supports_response_schema": true,
         "supports_prompt_caching": true,
-        "prompt_cache_min_tokens": 4096
+        "prompt_cache_min_tokens": 4096,
+        "source": "https://replicate.com/anthropic/claude-4.5-haiku"
     },
     "replicate/ibm-granite/granite-3.3-8b-instruct": {
         "input_cost_per_token": 3e-08,
         "output_cost_per_token": 2.5e-07,
         "litellm_provider": "replicate",
         "mode": "chat",
+        "source": "https://replicate.com/ibm-granite/granite-3.3-8b-instruct",
         "supports_function_calling": true,
         "supports_system_messages": true
     },
@@ -48779,6 +48797,7 @@
         "output_cost_per_token": 1e-05,
         "litellm_provider": "replicate",
         "mode": "chat",
+        "source": "https://replicate.com/openai/gpt-4o",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_vision": true,
@@ -48820,6 +48839,7 @@
         "output_cost_per_token": 6e-07,
         "litellm_provider": "replicate",
         "mode": "chat",
+        "source": "https://replicate.com/openai/gpt-4o-mini",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_vision": true,
@@ -48832,6 +48852,7 @@
         "output_cost_per_token": 1.06e-06,
         "litellm_provider": "replicate",
         "mode": "chat",
+        "source": "https://replicate.com/qwen/qwen3-235b-a22b-instruct-2507",
         "supports_function_calling": true,
         "supports_system_messages": true
     },
@@ -48856,6 +48877,7 @@
         "mode": "chat",
         "max_input_tokens": 65536,
         "max_output_tokens": 8192,
+        "source": "https://replicate.com/deepseek-ai/deepseek-v3",
         "supports_function_calling": true,
         "supports_system_messages": true
     },
@@ -48911,7 +48933,9 @@
         "supports_response_schema": false,
         "input_cost_per_token_above_200k_tokens": 4e-06,
         "output_cost_per_token_above_200k_tokens": 1.8e-05,
+        "source": "https://replicate.com/google/gemini-3-pro",
         "supports_audio_input": true,
+        "supports_reasoning": true,
         "supports_video_input": true
     },
     "replicate/anthropic/claude-4.5-sonnet": {
@@ -48926,13 +48950,15 @@
         "supports_tool_choice": true,
         "supports_response_schema": true,
         "supports_prompt_caching": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "source": "https://replicate.com/anthropic/claude-4.5-sonnet"
     },
     "replicate/openai/gpt-4.1": {
         "input_cost_per_token": 2e-06,
         "output_cost_per_token": 8e-06,
         "litellm_provider": "replicate",
         "mode": "chat",
+        "source": "https://replicate.com/openai/gpt-4.1",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_vision": true,
@@ -48953,6 +48979,7 @@
         "output_cost_per_token": 1.6e-06,
         "litellm_provider": "replicate",
         "mode": "chat",
+        "source": "https://replicate.com/openai/gpt-4.1-mini",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_vision": true,
@@ -48965,16 +48992,21 @@
         "output_cost_per_token": 4e-07,
         "litellm_provider": "replicate",
         "mode": "chat",
+        "source": "https://replicate.com/openai/gpt-5-nano",
         "supports_function_calling": true,
-        "supports_system_messages": true
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_vision": true
     },
     "replicate/openai/gpt-5-mini": {
         "input_cost_per_token": 2.5e-07,
         "output_cost_per_token": 2e-06,
         "litellm_provider": "replicate",
         "mode": "chat",
+        "source": "https://replicate.com/openai/gpt-5-mini",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
         "supports_vision": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -48985,6 +49017,7 @@
         "output_cost_per_token": 2.5e-06,
         "litellm_provider": "replicate",
         "mode": "chat",
+        "source": "https://replicate.com/google/gemini-2.5-flash",
         "supports_function_calling": false,
         "supports_parallel_function_calling": false,
         "supports_vision": true,
@@ -49000,6 +49033,7 @@
         "output_cost_per_token": 7.2e-07,
         "litellm_provider": "replicate",
         "mode": "chat",
+        "source": "https://replicate.com/openai/gpt-oss-120b",
         "supports_function_calling": true,
         "supports_system_messages": true
     },
@@ -49010,6 +49044,7 @@
         "mode": "chat",
         "max_input_tokens": 163840,
         "max_output_tokens": 163840,
+        "source": "https://replicate.com/deepseek-ai/deepseek-v3.1",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_system_messages": true
@@ -49030,6 +49065,7 @@
         "mode": "chat",
         "max_input_tokens": 65536,
         "max_output_tokens": 8192,
+        "source": "https://replicate.com/deepseek-ai/deepseek-r1",
         "supports_reasoning": true,
         "supports_system_messages": true
     },
@@ -97061,5 +97097,2938 @@
         "supported_output_modalities": [
             "video"
         ]
+    },
+    "replicate/alibaba/happyhorse-1.0": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.28,
+        "output_cost_per_second_1080p": 0.28,
+        "output_cost_per_second_720p": 0.14,
+        "source": "https://replicate.com/alibaba/happyhorse-1.0"
+    },
+    "replicate/alibaba/happyhorse-1.1": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.18,
+        "output_cost_per_second_1080p": 0.18,
+        "output_cost_per_second_720p": 0.14,
+        "source": "https://replicate.com/alibaba/happyhorse-1.1"
+    },
+    "replicate/alibaba/qwen-image-3": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/alibaba/qwen-image-3"
+    },
+    "replicate/alibaba/qwen-image-3-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/alibaba/qwen-image-3-pro"
+    },
+    "replicate/alibaba/wan-3": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.14,
+        "output_cost_per_second_1080p": 0.14,
+        "output_cost_per_second_480p": 0.035,
+        "output_cost_per_second_720p": 0.07,
+        "source": "https://replicate.com/alibaba/wan-3"
+    },
+    "replicate/alibaba/wan-3-prime": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.28,
+        "output_cost_per_second_1080p": 0.28,
+        "output_cost_per_second_480p": 0.068,
+        "output_cost_per_second_720p": 0.14,
+        "source": "https://replicate.com/alibaba/wan-3-prime"
+    },
+    "replicate/anthropic/claude-fable-5": {
+        "input_cost_per_token": 1e-05,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 5e-05,
+        "source": "https://replicate.com/anthropic/claude-fable-5",
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/anthropic/claude-fable-5.2": {
+        "input_cost_per_token": 8e-06,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 4e-05,
+        "source": "https://replicate.com/anthropic/claude-fable-5.2",
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/anthropic/claude-opus-4.6": {
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-05,
+        "source": "https://replicate.com/anthropic/claude-opus-4.6",
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/anthropic/claude-opus-4.7": {
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-05,
+        "source": "https://replicate.com/anthropic/claude-opus-4.7",
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/anthropic/claude-opus-5.5": {
+        "input_cost_per_token": 4e-06,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2e-05,
+        "source": "https://replicate.com/anthropic/claude-opus-5.5",
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/anthropic/claude-sonnet-4.6": {
+        "input_cost_per_token": 3e-06,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-05,
+        "source": "https://replicate.com/anthropic/claude-sonnet-4.6",
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/anthropic/claude-sonnet-5": {
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "source": "https://replicate.com/anthropic/claude-sonnet-5",
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/black-forest-labs/flux-1.1-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/black-forest-labs/flux-1.1-pro"
+    },
+    "replicate/black-forest-labs/flux-1.1-pro-ultra": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.06,
+        "source": "https://replicate.com/black-forest-labs/flux-1.1-pro-ultra"
+    },
+    "replicate/black-forest-labs/flux-1.1-pro-ultra-finetuned": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.07,
+        "source": "https://replicate.com/black-forest-labs/flux-1.1-pro-ultra-finetuned"
+    },
+    "replicate/black-forest-labs/flux-2-flex": {
+        "input_cost_per_pixel": 6e-08,
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_pixel": 6e-08,
+        "source": "https://replicate.com/black-forest-labs/flux-2-flex"
+    },
+    "replicate/black-forest-labs/flux-2-klein-4b": {
+        "input_cost_per_pixel": 1e-09,
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_pixel": 1e-09,
+        "source": "https://replicate.com/black-forest-labs/flux-2-klein-4b"
+    },
+    "replicate/black-forest-labs/flux-2-klein-4b-base": {
+        "input_cost_per_pixel": 9e-09,
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_pixel": 9e-09,
+        "source": "https://replicate.com/black-forest-labs/flux-2-klein-4b-base"
+    },
+    "replicate/black-forest-labs/flux-2-klein-4b-base-lora": {
+        "input_cost_per_pixel": 9e-09,
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_pixel": 1.9e-08,
+        "source": "https://replicate.com/black-forest-labs/flux-2-klein-4b-base-lora"
+    },
+    "replicate/black-forest-labs/flux-2-klein-9b": {
+        "input_cost_per_pixel": 2e-09,
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_pixel": 1.5e-08,
+        "source": "https://replicate.com/black-forest-labs/flux-2-klein-9b"
+    },
+    "replicate/black-forest-labs/flux-2-klein-9b-base": {
+        "input_cost_per_pixel": 1.1e-08,
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_pixel": 1.1e-08,
+        "source": "https://replicate.com/black-forest-labs/flux-2-klein-9b-base"
+    },
+    "replicate/black-forest-labs/flux-2-klein-9b-base-lora": {
+        "input_cost_per_pixel": 1.1e-08,
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_pixel": 2.1e-08,
+        "source": "https://replicate.com/black-forest-labs/flux-2-klein-9b-base-lora"
+    },
+    "replicate/black-forest-labs/flux-canny-dev": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "source": "https://replicate.com/black-forest-labs/flux-canny-dev"
+    },
+    "replicate/black-forest-labs/flux-canny-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05,
+        "source": "https://replicate.com/black-forest-labs/flux-canny-pro"
+    },
+    "replicate/black-forest-labs/flux-depth-dev": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "source": "https://replicate.com/black-forest-labs/flux-depth-dev"
+    },
+    "replicate/black-forest-labs/flux-depth-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05,
+        "source": "https://replicate.com/black-forest-labs/flux-depth-pro"
+    },
+    "replicate/black-forest-labs/flux-dev": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "source": "https://replicate.com/black-forest-labs/flux-dev"
+    },
+    "replicate/black-forest-labs/flux-dev-lora": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.032,
+        "source": "https://replicate.com/black-forest-labs/flux-dev-lora"
+    },
+    "replicate/black-forest-labs/flux-fill-dev": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/black-forest-labs/flux-fill-dev"
+    },
+    "replicate/black-forest-labs/flux-fill-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05,
+        "source": "https://replicate.com/black-forest-labs/flux-fill-pro"
+    },
+    "replicate/black-forest-labs/flux-kontext-dev": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "source": "https://replicate.com/black-forest-labs/flux-kontext-dev"
+    },
+    "replicate/black-forest-labs/flux-kontext-dev-lora": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.032,
+        "source": "https://replicate.com/black-forest-labs/flux-kontext-dev-lora"
+    },
+    "replicate/black-forest-labs/flux-kontext-max": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.08,
+        "source": "https://replicate.com/black-forest-labs/flux-kontext-max"
+    },
+    "replicate/black-forest-labs/flux-kontext-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/black-forest-labs/flux-kontext-pro"
+    },
+    "replicate/black-forest-labs/flux-krea-dev": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "source": "https://replicate.com/black-forest-labs/flux-krea-dev"
+    },
+    "replicate/black-forest-labs/flux-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.055,
+        "source": "https://replicate.com/black-forest-labs/flux-pro"
+    },
+    "replicate/black-forest-labs/flux-pro-finetuned": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.06,
+        "source": "https://replicate.com/black-forest-labs/flux-pro-finetuned"
+    },
+    "replicate/black-forest-labs/flux-redux-dev": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "source": "https://replicate.com/black-forest-labs/flux-redux-dev"
+    },
+    "replicate/black-forest-labs/flux-redux-schnell": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.003,
+        "source": "https://replicate.com/black-forest-labs/flux-redux-schnell"
+    },
+    "replicate/black-forest-labs/flux-schnell": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.003,
+        "source": "https://replicate.com/black-forest-labs/flux-schnell"
+    },
+    "replicate/black-forest-labs/flux-schnell-lora": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.02,
+        "source": "https://replicate.com/black-forest-labs/flux-schnell-lora"
+    },
+    "replicate/bria/eraser": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/bria/eraser"
+    },
+    "replicate/bria/expand-image": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/bria/expand-image"
+    },
+    "replicate/bria/fibo": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/bria/fibo"
+    },
+    "replicate/bria/fibo-edit": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/bria/fibo-edit"
+    },
+    "replicate/bria/generate-background": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/bria/generate-background"
+    },
+    "replicate/bria/genfill": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/bria/genfill"
+    },
+    "replicate/bria/image-3.2": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/bria/image-3.2"
+    },
+    "replicate/bria/increase-resolution": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/bria/increase-resolution"
+    },
+    "replicate/bria/product-cutout": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/bria/product-cutout"
+    },
+    "replicate/bria/product-packshot": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/bria/product-packshot"
+    },
+    "replicate/bria/product-shadow": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/bria/product-shadow"
+    },
+    "replicate/bria/remove-background": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.018,
+        "source": "https://replicate.com/bria/remove-background"
+    },
+    "replicate/bria/video-erase-object": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "source": "https://replicate.com/bria/video-erase-object"
+    },
+    "replicate/bria/video-increase-resolution": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "source": "https://replicate.com/bria/video-increase-resolution"
+    },
+    "replicate/bria/video-remove-background": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "source": "https://replicate.com/bria/video-remove-background"
+    },
+    "replicate/bytedance/dreamactor-m2.0": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "source": "https://replicate.com/bytedance/dreamactor-m2.0"
+    },
+    "replicate/bytedance/dreamina-3.1": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/bytedance/dreamina-3.1"
+    },
+    "replicate/bytedance/omni-human": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.14,
+        "source": "https://replicate.com/bytedance/omni-human"
+    },
+    "replicate/bytedance/omni-human-1.5": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.16,
+        "source": "https://replicate.com/bytedance/omni-human-1.5"
+    },
+    "replicate/bytedance/seedance-1-lite": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.036,
+        "output_cost_per_second_1080p": 0.072,
+        "output_cost_per_second_480p": 0.018,
+        "output_cost_per_second_720p": 0.036,
+        "source": "https://replicate.com/bytedance/seedance-1-lite"
+    },
+    "replicate/bytedance/seedance-1-pro": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.15,
+        "output_cost_per_second_1080p": 0.15,
+        "output_cost_per_second_480p": 0.03,
+        "output_cost_per_second_720p": 0.06,
+        "source": "https://replicate.com/bytedance/seedance-1-pro"
+    },
+    "replicate/bytedance/seedance-1-pro-fast": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.06,
+        "output_cost_per_second_1080p": 0.06,
+        "output_cost_per_second_480p": 0.015,
+        "output_cost_per_second_720p": 0.025,
+        "source": "https://replicate.com/bytedance/seedance-1-pro-fast"
+    },
+    "replicate/bytedance/seedream-3": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/bytedance/seedream-3"
+    },
+    "replicate/bytedance/seedream-4": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/bytedance/seedream-4"
+    },
+    "replicate/bytedance/seedream-4.5": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/bytedance/seedream-4.5"
+    },
+    "replicate/bytedance/seedream-5-lite": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.035,
+        "source": "https://replicate.com/bytedance/seedream-5-lite"
+    },
+    "replicate/datalab-to/ocr": {
+        "litellm_provider": "replicate",
+        "mode": "ocr",
+        "ocr_cost_per_page": 0.002,
+        "source": "https://replicate.com/datalab-to/ocr"
+    },
+    "replicate/decart/lucy-edit-2": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.04,
+        "source": "https://replicate.com/decart/lucy-edit-2"
+    },
+    "replicate/easel/ai-avatars": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05,
+        "source": "https://replicate.com/easel/ai-avatars"
+    },
+    "replicate/elevenlabs/dubbing": {
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "output_cost_per_second": 0.0366667,
+        "source": "https://replicate.com/elevenlabs/dubbing"
+    },
+    "replicate/elevenlabs/flash-v2.5": {
+        "input_cost_per_character": 5e-05,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/elevenlabs/flash-v2.5"
+    },
+    "replicate/elevenlabs/turbo-v2.5": {
+        "input_cost_per_character": 5e-05,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/elevenlabs/turbo-v2.5"
+    },
+    "replicate/elevenlabs/v2-multilingual": {
+        "input_cost_per_character": 0.0001,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/elevenlabs/v2-multilingual"
+    },
+    "replicate/elevenlabs/v3": {
+        "input_cost_per_character": 0.0001,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/elevenlabs/v3"
+    },
+    "replicate/flux-kontext-apps/cartoonify": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/cartoonify"
+    },
+    "replicate/flux-kontext-apps/change-haircut": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/change-haircut"
+    },
+    "replicate/flux-kontext-apps/depth-of-field": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/depth-of-field"
+    },
+    "replicate/flux-kontext-apps/face-to-many-kontext": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/face-to-many-kontext"
+    },
+    "replicate/flux-kontext-apps/filters": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/filters"
+    },
+    "replicate/flux-kontext-apps/iconic-locations": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/iconic-locations"
+    },
+    "replicate/flux-kontext-apps/impossible-scenarios": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/impossible-scenarios"
+    },
+    "replicate/flux-kontext-apps/multi-image-kontext-max": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.08,
+        "source": "https://replicate.com/flux-kontext-apps/multi-image-kontext-max"
+    },
+    "replicate/flux-kontext-apps/multi-image-kontext-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/multi-image-kontext-pro"
+    },
+    "replicate/flux-kontext-apps/multi-image-list": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.08,
+        "source": "https://replicate.com/flux-kontext-apps/multi-image-list"
+    },
+    "replicate/flux-kontext-apps/portrait-series": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/portrait-series"
+    },
+    "replicate/flux-kontext-apps/professional-headshot": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/professional-headshot"
+    },
+    "replicate/flux-kontext-apps/restore-image": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/restore-image"
+    },
+    "replicate/flux-kontext-apps/restyle-video-frame": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/restyle-video-frame"
+    },
+    "replicate/flux-kontext-apps/text-removal": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/text-removal"
+    },
+    "replicate/google/gemini-2.5-flash-image": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.039,
+        "source": "https://replicate.com/google/gemini-2.5-flash-image"
+    },
+    "replicate/google/gemini-3-flash": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 3e-06,
+        "source": "https://replicate.com/google/gemini-3-flash",
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/google/gemini-3.1-flash-tts": {
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "output_cost_per_token": 4e-05,
+        "source": "https://replicate.com/google/gemini-3.1-flash-tts"
+    },
+    "replicate/google/gemini-3.1-pro": {
+        "input_cost_per_token": 2e-06,
+        "input_cost_per_token_above_200k_tokens": 4e-06,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-05,
+        "output_cost_per_token_above_200k_tokens": 1.8e-05,
+        "source": "https://replicate.com/google/gemini-3.1-pro",
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/google/gemini-3.5-flash": {
+        "input_cost_per_token": 1.5e-06,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 9e-06,
+        "source": "https://replicate.com/google/gemini-3.5-flash",
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/google/gemini-3.8-flash-lite-tts": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "output_cost_per_token": 6e-06,
+        "source": "https://replicate.com/google/gemini-3.8-flash-lite-tts"
+    },
+    "replicate/google/gemini-3.8-flash-tts": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "output_cost_per_token": 9e-06,
+        "source": "https://replicate.com/google/gemini-3.8-flash-tts"
+    },
+    "replicate/google/nano-banana": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.039,
+        "source": "https://replicate.com/google/nano-banana"
+    },
+    "replicate/google/nano-banana-2": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.067,
+        "output_cost_per_image_1K": 0.067,
+        "output_cost_per_image_2K": 0.101,
+        "output_cost_per_image_4K": 0.151,
+        "source": "https://replicate.com/google/nano-banana-2"
+    },
+    "replicate/google/nano-banana-2-lite": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.034,
+        "source": "https://replicate.com/google/nano-banana-2-lite"
+    },
+    "replicate/google/nano-banana-2.1": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.0336,
+        "output_cost_per_image_1K": 0.0336,
+        "output_cost_per_image_2K": 0.0504,
+        "output_cost_per_image_4K": 0.1134,
+        "source": "https://replicate.com/google/nano-banana-2.1"
+    },
+    "replicate/heygen/avatar-iv": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.075,
+        "source": "https://replicate.com/heygen/avatar-iv"
+    },
+    "replicate/heygen/avatar-v": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.075,
+        "source": "https://replicate.com/heygen/avatar-v"
+    },
+    "replicate/heygen/lipsync-precision": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.0667,
+        "source": "https://replicate.com/heygen/lipsync-precision"
+    },
+    "replicate/heygen/lipsync-speed": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.0333,
+        "source": "https://replicate.com/heygen/lipsync-speed"
+    },
+    "replicate/heygen/video-agent": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.0333,
+        "source": "https://replicate.com/heygen/video-agent"
+    },
+    "replicate/ibm-granite/granite-20b-code-instruct-8k": {
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-20b-code-instruct-8k",
+        "supports_system_messages": true
+    },
+    "replicate/ibm-granite/granite-3.0-2b-instruct": {
+        "input_cost_per_token": 3e-08,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-3.0-2b-instruct",
+        "supports_system_messages": true
+    },
+    "replicate/ibm-granite/granite-3.0-8b-instruct": {
+        "input_cost_per_token": 5e-08,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-3.0-8b-instruct",
+        "supports_system_messages": true
+    },
+    "replicate/ibm-granite/granite-3.1-2b-instruct": {
+        "input_cost_per_token": 3e-08,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-3.1-2b-instruct",
+        "supports_system_messages": true
+    },
+    "replicate/ibm-granite/granite-3.1-8b-instruct": {
+        "input_cost_per_token": 3e-08,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-3.1-8b-instruct",
+        "supports_system_messages": true
+    },
+    "replicate/ibm-granite/granite-3.2-8b-instruct": {
+        "input_cost_per_token": 3e-08,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-3.2-8b-instruct",
+        "supports_system_messages": true
+    },
+    "replicate/ibm-granite/granite-4.0-h-small": {
+        "input_cost_per_token": 6e-08,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-4.0-h-small",
+        "supports_function_calling": true,
+        "supports_system_messages": true
+    },
+    "replicate/ibm-granite/granite-4.1-8b": {
+        "input_cost_per_token": 6e-08,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-4.1-8b",
+        "supports_function_calling": true,
+        "supports_system_messages": true
+    },
+    "replicate/ibm-granite/granite-4.2-8b": {
+        "input_cost_per_token": 6e-08,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-4.2-8b",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true
+    },
+    "replicate/ibm-granite/granite-8b-code-instruct-128k": {
+        "input_cost_per_token": 5e-08,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-8b-code-instruct-128k",
+        "supports_system_messages": true
+    },
+    "replicate/ibm-granite/granite-speech-3.3-8b": {
+        "litellm_provider": "replicate",
+        "mode": "audio_transcription",
+        "output_cost_per_token": 4.9e-06,
+        "source": "https://replicate.com/ibm-granite/granite-speech-3.3-8b"
+    },
+    "replicate/ibm-granite/granite-speech-4.1-2b": {
+        "input_cost_per_token": 3e-08,
+        "litellm_provider": "replicate",
+        "mode": "audio_transcription",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-speech-4.1-2b"
+    },
+    "replicate/ibm-granite/granite-vision-3.3-2b": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-vision-3.3-2b",
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/ibm-granite/granite-vision-4.1-4b": {
+        "input_cost_per_token": 6e-08,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-vision-4.1-4b",
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/ideogram-ai/ideogram-v2": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.08,
+        "source": "https://replicate.com/ideogram-ai/ideogram-v2"
+    },
+    "replicate/ideogram-ai/ideogram-v2-turbo": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05,
+        "source": "https://replicate.com/ideogram-ai/ideogram-v2-turbo"
+    },
+    "replicate/ideogram-ai/ideogram-v2a": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/ideogram-ai/ideogram-v2a"
+    },
+    "replicate/ideogram-ai/ideogram-v2a-turbo": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "source": "https://replicate.com/ideogram-ai/ideogram-v2a-turbo"
+    },
+    "replicate/ideogram-ai/ideogram-v3-balanced": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.06,
+        "source": "https://replicate.com/ideogram-ai/ideogram-v3-balanced"
+    },
+    "replicate/ideogram-ai/ideogram-v3-quality": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.09,
+        "source": "https://replicate.com/ideogram-ai/ideogram-v3-quality"
+    },
+    "replicate/ideogram-ai/ideogram-v3-turbo": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/ideogram-ai/ideogram-v3-turbo"
+    },
+    "replicate/ideogram-ai/ideogram-v4-balanced": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.06,
+        "source": "https://replicate.com/ideogram-ai/ideogram-v4-balanced"
+    },
+    "replicate/ideogram-ai/ideogram-v4-quality": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.1,
+        "source": "https://replicate.com/ideogram-ai/ideogram-v4-quality"
+    },
+    "replicate/ideogram-ai/layerize": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.09,
+        "source": "https://replicate.com/ideogram-ai/layerize"
+    },
+    "replicate/intelligent-utilities/html-to-image": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.001,
+        "source": "https://replicate.com/intelligent-utilities/html-to-image"
+    },
+    "replicate/inworld/realtime-tts-1.5-max": {
+        "input_cost_per_character": 3.5e-05,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/inworld/realtime-tts-1.5-max"
+    },
+    "replicate/inworld/realtime-tts-1.5-mini": {
+        "input_cost_per_character": 1.5e-05,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/inworld/realtime-tts-1.5-mini"
+    },
+    "replicate/inworld/realtime-tts-2": {
+        "input_cost_per_character": 2.5e-05,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/inworld/realtime-tts-2"
+    },
+    "replicate/kwaivgi/kling-lip-sync": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.014,
+        "source": "https://replicate.com/kwaivgi/kling-lip-sync"
+    },
+    "replicate/kwaivgi/kling-v2.1-master": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.28,
+        "source": "https://replicate.com/kwaivgi/kling-v2.1-master"
+    },
+    "replicate/kwaivgi/kling-v2.5-turbo-pro": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.07,
+        "source": "https://replicate.com/kwaivgi/kling-v2.5-turbo-pro"
+    },
+    "replicate/lightricks/audio-to-video": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "source": "https://replicate.com/lightricks/audio-to-video"
+    },
+    "replicate/lightricks/ltx-2-distilled": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.02,
+        "source": "https://replicate.com/lightricks/ltx-2-distilled"
+    },
+    "replicate/lightricks/ltx-2-fast": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.04,
+        "output_cost_per_second_1080p": 0.04,
+        "output_cost_per_second_2k": 0.08,
+        "output_cost_per_second_4k": 0.16,
+        "source": "https://replicate.com/lightricks/ltx-2-fast"
+    },
+    "replicate/lightricks/ltx-2-pro": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.06,
+        "output_cost_per_second_1080p": 0.06,
+        "output_cost_per_second_2k": 0.12,
+        "output_cost_per_second_4k": 0.24,
+        "source": "https://replicate.com/lightricks/ltx-2-pro"
+    },
+    "replicate/lightricks/ltx-2-retake": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "source": "https://replicate.com/lightricks/ltx-2-retake"
+    },
+    "replicate/lightricks/ltx-2.3-fast": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.06,
+        "output_cost_per_second_1080p": 0.06,
+        "output_cost_per_second_2k": 0.12,
+        "output_cost_per_second_4k": 0.24,
+        "source": "https://replicate.com/lightricks/ltx-2.3-fast"
+    },
+    "replicate/lightricks/ltx-2.3-pro": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.08,
+        "output_cost_per_second_1080p": 0.08,
+        "output_cost_per_second_2k": 0.16,
+        "output_cost_per_second_4k": 0.32,
+        "source": "https://replicate.com/lightricks/ltx-2.3-pro"
+    },
+    "replicate/lightricks/ltx-2.5-fast": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.06,
+        "output_cost_per_second_1080p": 0.06,
+        "output_cost_per_second_2k": 0.12,
+        "output_cost_per_second_4k": 0.24,
+        "output_cost_per_second_720p": 0.03,
+        "source": "https://replicate.com/lightricks/ltx-2.5-fast"
+    },
+    "replicate/luma/photon": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/luma/photon"
+    },
+    "replicate/luma/photon-flash": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01,
+        "source": "https://replicate.com/luma/photon-flash"
+    },
+    "replicate/luma/reframe-video": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.06,
+        "source": "https://replicate.com/luma/reframe-video"
+    },
+    "replicate/meta/llama-4-maverick-instruct": {
+        "input_cost_per_token": 2.5e-07,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 9.5e-07,
+        "source": "https://replicate.com/meta/llama-4-maverick-instruct",
+        "supports_system_messages": true
+    },
+    "replicate/meta/llama-4-scout-instruct": {
+        "input_cost_per_token": 1.7e-07,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 6.5e-07,
+        "source": "https://replicate.com/meta/llama-4-scout-instruct",
+        "supports_system_messages": true
+    },
+    "replicate/meta/llama-guard-4-12b": {
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2e-07,
+        "source": "https://replicate.com/meta/llama-guard-4-12b",
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/meta/meta-llama-3-70b": {
+        "input_cost_per_token": 6.5e-07,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.75e-06,
+        "source": "https://replicate.com/meta/meta-llama-3-70b"
+    },
+    "replicate/meta/meta-llama-3-70b-instruct": {
+        "input_cost_per_token": 6.5e-07,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.75e-06,
+        "source": "https://replicate.com/meta/meta-llama-3-70b-instruct",
+        "supports_system_messages": true
+    },
+    "replicate/meta/meta-llama-3-8b": {
+        "input_cost_per_token": 5e-08,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/meta/meta-llama-3-8b"
+    },
+    "replicate/meta/meta-llama-3-8b-instruct": {
+        "input_cost_per_token": 5e-08,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/meta/meta-llama-3-8b-instruct",
+        "supports_system_messages": true
+    },
+    "replicate/minimax/h3": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.13,
+        "output_cost_per_second_2k": 0.13,
+        "output_cost_per_second_768p": 0.08,
+        "source": "https://replicate.com/minimax/h3"
+    },
+    "replicate/minimax/h3-highspeed": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.03,
+        "source": "https://replicate.com/minimax/h3-highspeed"
+    },
+    "replicate/minimax/h3-lite": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.02,
+        "output_cost_per_second_480p": 0.0125,
+        "output_cost_per_second_768p": 0.02,
+        "source": "https://replicate.com/minimax/h3-lite"
+    },
+    "replicate/minimax/image-01": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01,
+        "source": "https://replicate.com/minimax/image-01"
+    },
+    "replicate/minimax/speech-02-hd": {
+        "input_cost_per_token": 0.0001,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/minimax/speech-02-hd"
+    },
+    "replicate/minimax/speech-02-turbo": {
+        "input_cost_per_token": 6e-05,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/minimax/speech-02-turbo"
+    },
+    "replicate/minimax/speech-2.6-hd": {
+        "input_cost_per_token": 0.0001,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/minimax/speech-2.6-hd"
+    },
+    "replicate/minimax/speech-2.6-turbo": {
+        "input_cost_per_token": 6e-05,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/minimax/speech-2.6-turbo"
+    },
+    "replicate/minimax/speech-2.8-hd": {
+        "input_cost_per_token": 0.0001,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/minimax/speech-2.8-hd"
+    },
+    "replicate/minimax/speech-2.8-turbo": {
+        "input_cost_per_token": 6e-05,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/minimax/speech-2.8-turbo"
+    },
+    "replicate/moonshotai/kimi-k2-thinking": {
+        "input_cost_per_token": 6.6e-07,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.7e-06,
+        "source": "https://replicate.com/moonshotai/kimi-k2-thinking"
+    },
+    "replicate/moonshotai/kimi-k2.5": {
+        "input_cost_per_token": 7.2e-07,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 3.6e-06,
+        "source": "https://replicate.com/moonshotai/kimi-k2.5",
+        "supports_vision": true
+    },
+    "replicate/moonshotai/kimi-k2.6": {
+        "input_cost_per_token": 9.5e-07,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 4e-06,
+        "source": "https://replicate.com/moonshotai/kimi-k2.6",
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/nightmareai/real-esrgan": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.002,
+        "source": "https://replicate.com/nightmareai/real-esrgan"
+    },
+    "replicate/openai/gpt-4o-mini-transcribe": {
+        "input_cost_per_token": 3e-06,
+        "litellm_provider": "replicate",
+        "mode": "audio_transcription",
+        "output_cost_per_token": 5e-06,
+        "source": "https://replicate.com/openai/gpt-4o-mini-transcribe"
+    },
+    "replicate/openai/gpt-4o-transcribe": {
+        "input_cost_per_token": 6e-06,
+        "litellm_provider": "replicate",
+        "mode": "audio_transcription",
+        "output_cost_per_token": 1e-05,
+        "source": "https://replicate.com/openai/gpt-4o-transcribe"
+    },
+    "replicate/openai/gpt-5-pro": {
+        "input_cost_per_token": 1.5e-05,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 0.00012,
+        "source": "https://replicate.com/openai/gpt-5-pro",
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/openai/gpt-5.1": {
+        "input_cost_per_token": 1.25e-06,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "source": "https://replicate.com/openai/gpt-5.1",
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/openai/gpt-5.2": {
+        "input_cost_per_token": 1.75e-06,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 1.4e-05,
+        "source": "https://replicate.com/openai/gpt-5.2",
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/openai/gpt-5.4": {
+        "input_cost_per_token": 2.5e-06,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-05,
+        "source": "https://replicate.com/openai/gpt-5.4",
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/openai/gpt-5.6-luna": {
+        "input_cost_per_token": 1e-06,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 6e-06,
+        "source": "https://replicate.com/openai/gpt-5.6-luna",
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/openai/gpt-5.6-sol": {
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "source": "https://replicate.com/openai/gpt-5.6-sol",
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/openai/gpt-5.6-terra": {
+        "input_cost_per_token": 2.5e-06,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-05,
+        "source": "https://replicate.com/openai/gpt-5.6-terra",
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/perceptron-ai-inc/isaac-0.1": {
+        "input_cost_per_token": 2.6e-07,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.17e-06,
+        "source": "https://replicate.com/perceptron-ai-inc/isaac-0.1",
+        "supports_vision": true
+    },
+    "replicate/philz1337x/clarity-pro-upscaler": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_pixel": 3e-08,
+        "source": "https://replicate.com/philz1337x/clarity-pro-upscaler"
+    },
+    "replicate/pixverse/lipsync": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.04,
+        "source": "https://replicate.com/pixverse/lipsync"
+    },
+    "replicate/playht/play-dialog": {
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "output_cost_per_second": 0.001,
+        "source": "https://replicate.com/playht/play-dialog"
+    },
+    "replicate/prunaai/flux-fast": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.005,
+        "source": "https://replicate.com/prunaai/flux-fast"
+    },
+    "replicate/prunaai/flux-kontext-fast": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01,
+        "source": "https://replicate.com/prunaai/flux-kontext-fast"
+    },
+    "replicate/prunaai/hidream-l1-fast": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.005,
+        "source": "https://replicate.com/prunaai/hidream-l1-fast"
+    },
+    "replicate/prunaai/p-image": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.005,
+        "source": "https://replicate.com/prunaai/p-image"
+    },
+    "replicate/prunaai/p-image-edit": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01,
+        "source": "https://replicate.com/prunaai/p-image-edit"
+    },
+    "replicate/prunaai/p-image-edit-lora": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01,
+        "source": "https://replicate.com/prunaai/p-image-edit-lora"
+    },
+    "replicate/prunaai/p-image-lora": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.005,
+        "source": "https://replicate.com/prunaai/p-image-lora"
+    },
+    "replicate/prunaai/p-video-2-pro-avatar": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.04,
+        "output_cost_per_second_1080p": 0.06,
+        "output_cost_per_second_2k": 0.08,
+        "output_cost_per_second_480p": 0.02,
+        "output_cost_per_second_4k": 0.12,
+        "output_cost_per_second_768p": 0.04,
+        "source": "https://replicate.com/prunaai/p-video-2-pro-avatar"
+    },
+    "replicate/prunaai/p-video-2-pro-replace": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "output_cost_per_second_1080p": 0.06,
+        "output_cost_per_second_2k": 0.07,
+        "output_cost_per_second_480p": 0.025,
+        "output_cost_per_second_4k": 0.09,
+        "output_cost_per_second_768p": 0.05,
+        "source": "https://replicate.com/prunaai/p-video-2-pro-replace"
+    },
+    "replicate/prunaai/p-video-animate": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.03,
+        "output_cost_per_second_1080p": 0.06,
+        "output_cost_per_second_720p": 0.03,
+        "source": "https://replicate.com/prunaai/p-video-animate"
+    },
+    "replicate/prunaai/p-video-avatar": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.025,
+        "output_cost_per_second_1080p": 0.045,
+        "output_cost_per_second_720p": 0.025,
+        "source": "https://replicate.com/prunaai/p-video-avatar"
+    },
+    "replicate/prunaai/p-video-replace": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.03,
+        "output_cost_per_second_1080p": 0.06,
+        "output_cost_per_second_720p": 0.03,
+        "source": "https://replicate.com/prunaai/p-video-replace"
+    },
+    "replicate/prunaai/wan-2.2-image": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.02,
+        "source": "https://replicate.com/prunaai/wan-2.2-image"
+    },
+    "replicate/quiverai/arrow-1.1": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.2,
+        "source": "https://replicate.com/quiverai/arrow-1.1"
+    },
+    "replicate/quiverai/arrow-1.1-max": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.25,
+        "source": "https://replicate.com/quiverai/arrow-1.1-max"
+    },
+    "replicate/quiverai/arrow-1.1-max-vectorize": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.2,
+        "source": "https://replicate.com/quiverai/arrow-1.1-max-vectorize"
+    },
+    "replicate/quiverai/arrow-1.1-vectorize": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.15,
+        "source": "https://replicate.com/quiverai/arrow-1.1-vectorize"
+    },
+    "replicate/qwen-edit-apps/qwen-image-edit-plus-lora-fusion": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/qwen-edit-apps/qwen-image-edit-plus-lora-fusion"
+    },
+    "replicate/qwen-edit-apps/qwen-image-edit-plus-lora-next-scene": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/qwen-edit-apps/qwen-image-edit-plus-lora-next-scene"
+    },
+    "replicate/qwen-edit-apps/qwen-image-edit-plus-lora-photo-to-anime": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/qwen-edit-apps/qwen-image-edit-plus-lora-photo-to-anime"
+    },
+    "replicate/qwen-edit-apps/qwen-image-edit-plus-lora-relight": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/qwen-edit-apps/qwen-image-edit-plus-lora-relight"
+    },
+    "replicate/qwen-edit-apps/qwen-image-edit-plus-lora-skin": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/qwen-edit-apps/qwen-image-edit-plus-lora-skin"
+    },
+    "replicate/qwen-edit-apps/qwen-image-edit-plus-lora-upscale": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/qwen-edit-apps/qwen-image-edit-plus-lora-upscale"
+    },
+    "replicate/qwen/qwen-edit-multiangle": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/qwen/qwen-edit-multiangle"
+    },
+    "replicate/qwen/qwen-image": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "source": "https://replicate.com/qwen/qwen-image"
+    },
+    "replicate/qwen/qwen-image-2": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.035,
+        "source": "https://replicate.com/qwen/qwen-image-2"
+    },
+    "replicate/qwen/qwen-image-2-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.075,
+        "source": "https://replicate.com/qwen/qwen-image-2-pro"
+    },
+    "replicate/qwen/qwen-image-2512": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.02,
+        "source": "https://replicate.com/qwen/qwen-image-2512"
+    },
+    "replicate/qwen/qwen-image-edit": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/qwen/qwen-image-edit"
+    },
+    "replicate/qwen/qwen-image-edit-2511": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/qwen/qwen-image-edit-2511"
+    },
+    "replicate/qwen/qwen-image-edit-plus": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/qwen/qwen-image-edit-plus"
+    },
+    "replicate/qwen/qwen-image-edit-plus-lora": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/qwen/qwen-image-edit-plus-lora"
+    },
+    "replicate/qwen/qwen3-7-plus": {
+        "input_cost_per_token": 2.76e-07,
+        "input_cost_per_token_above_256k_tokens": 8.26e-07,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 1.101e-06,
+        "output_cost_per_token_above_256k_tokens": 3.301e-06,
+        "source": "https://replicate.com/qwen/qwen3-7-plus",
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/qwen/qwen3-tts": {
+        "input_cost_per_character": 2e-05,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/qwen/qwen3-tts"
+    },
+    "replicate/recraft-ai/recraft-20b": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.022,
+        "source": "https://replicate.com/recraft-ai/recraft-20b"
+    },
+    "replicate/recraft-ai/recraft-20b-svg": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.044,
+        "source": "https://replicate.com/recraft-ai/recraft-20b-svg"
+    },
+    "replicate/recraft-ai/recraft-creative-upscale": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.3,
+        "source": "https://replicate.com/recraft-ai/recraft-creative-upscale"
+    },
+    "replicate/recraft-ai/recraft-crisp-upscale": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.006,
+        "source": "https://replicate.com/recraft-ai/recraft-crisp-upscale"
+    },
+    "replicate/recraft-ai/recraft-remove-background": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01,
+        "source": "https://replicate.com/recraft-ai/recraft-remove-background"
+    },
+    "replicate/recraft-ai/recraft-v3": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/recraft-ai/recraft-v3"
+    },
+    "replicate/recraft-ai/recraft-v3-svg": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.08,
+        "source": "https://replicate.com/recraft-ai/recraft-v3-svg"
+    },
+    "replicate/recraft-ai/recraft-v4": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/recraft-ai/recraft-v4"
+    },
+    "replicate/recraft-ai/recraft-v4-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.25,
+        "source": "https://replicate.com/recraft-ai/recraft-v4-pro"
+    },
+    "replicate/recraft-ai/recraft-v4-pro-svg": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.3,
+        "source": "https://replicate.com/recraft-ai/recraft-v4-pro-svg"
+    },
+    "replicate/recraft-ai/recraft-v4-styles-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.1,
+        "source": "https://replicate.com/recraft-ai/recraft-v4-styles-pro"
+    },
+    "replicate/recraft-ai/recraft-v4-styles-pro-svg": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.12,
+        "source": "https://replicate.com/recraft-ai/recraft-v4-styles-pro-svg"
+    },
+    "replicate/recraft-ai/recraft-v4-svg": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.08,
+        "source": "https://replicate.com/recraft-ai/recraft-v4-svg"
+    },
+    "replicate/recraft-ai/recraft-v4.1": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/recraft-ai/recraft-v4.1"
+    },
+    "replicate/recraft-ai/recraft-v4.1-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.25,
+        "source": "https://replicate.com/recraft-ai/recraft-v4.1-pro"
+    },
+    "replicate/recraft-ai/recraft-v4.1-pro-svg": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.25,
+        "source": "https://replicate.com/recraft-ai/recraft-v4.1-pro-svg"
+    },
+    "replicate/recraft-ai/recraft-v4.1-svg": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/recraft-ai/recraft-v4.1-svg"
+    },
+    "replicate/recraft-ai/recraft-v4.1-utility": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/recraft-ai/recraft-v4.1-utility"
+    },
+    "replicate/recraft-ai/recraft-v4.1-utility-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.25,
+        "source": "https://replicate.com/recraft-ai/recraft-v4.1-utility-pro"
+    },
+    "replicate/recraft-ai/recraft-vectorize": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01,
+        "source": "https://replicate.com/recraft-ai/recraft-vectorize"
+    },
+    "replicate/resemble-ai/chatterbox": {
+        "input_cost_per_character": 2.5e-05,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/resemble-ai/chatterbox"
+    },
+    "replicate/resemble-ai/chatterbox-pro": {
+        "input_cost_per_character": 4e-05,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/resemble-ai/chatterbox-pro"
+    },
+    "replicate/resemble-ai/chatterbox-turbo": {
+        "input_cost_per_character": 2.5e-05,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/resemble-ai/chatterbox-turbo"
+    },
+    "replicate/retro-diffusion/rd-animation": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.07,
+        "source": "https://replicate.com/retro-diffusion/rd-animation"
+    },
+    "replicate/runwayml/aleph-2": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.336,
+        "source": "https://replicate.com/runwayml/aleph-2"
+    },
+    "replicate/runwayml/gen-4.5": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.12,
+        "source": "https://replicate.com/runwayml/gen-4.5"
+    },
+    "replicate/runwayml/gen4-image-turbo": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/runwayml/gen4-image-turbo"
+    },
+    "replicate/runwayml/gen4-turbo": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "source": "https://replicate.com/runwayml/gen4-turbo"
+    },
+    "replicate/snowflake/snowflake-arctic-instruct": {
+        "input_cost_per_token": 2e-05,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2e-05,
+        "source": "https://replicate.com/snowflake/snowflake-arctic-instruct",
+        "supports_system_messages": true
+    },
+    "replicate/stability-ai/stable-diffusion-3": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.035,
+        "source": "https://replicate.com/stability-ai/stable-diffusion-3"
+    },
+    "replicate/stability-ai/stable-diffusion-3.5-large": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.065,
+        "source": "https://replicate.com/stability-ai/stable-diffusion-3.5-large"
+    },
+    "replicate/stability-ai/stable-diffusion-3.5-large-turbo": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/stability-ai/stable-diffusion-3.5-large-turbo"
+    },
+    "replicate/stability-ai/stable-diffusion-3.5-medium": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.035,
+        "source": "https://replicate.com/stability-ai/stable-diffusion-3.5-medium"
+    },
+    "replicate/sync/lipsync-2": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "source": "https://replicate.com/sync/lipsync-2"
+    },
+    "replicate/sync/lipsync-2-pro": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.08325,
+        "source": "https://replicate.com/sync/lipsync-2-pro"
+    },
+    "replicate/sync/react-1": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.167,
+        "source": "https://replicate.com/sync/react-1"
+    },
+    "replicate/tencent/hunyuan-image-2.1": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.02,
+        "source": "https://replicate.com/tencent/hunyuan-image-2.1"
+    },
+    "replicate/tencent/hunyuan-image-3": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.08,
+        "source": "https://replicate.com/tencent/hunyuan-image-3"
+    },
+    "replicate/veed/fabric-1.0": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.15,
+        "output_cost_per_second_480p": 0.08,
+        "output_cost_per_second_720p": 0.15,
+        "source": "https://replicate.com/veed/fabric-1.0"
+    },
+    "replicate/wan-video/wan-2.2-s2v": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.02,
+        "source": "https://replicate.com/wan-video/wan-2.2-s2v"
+    },
+    "replicate/wan-video/wan-2.5-i2v": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "output_cost_per_second_1080p": 0.15,
+        "output_cost_per_second_480p": 0.05,
+        "output_cost_per_second_720p": 0.1,
+        "source": "https://replicate.com/wan-video/wan-2.5-i2v"
+    },
+    "replicate/wan-video/wan-2.5-i2v-fast": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.068,
+        "output_cost_per_second_1080p": 0.102,
+        "output_cost_per_second_720p": 0.068,
+        "source": "https://replicate.com/wan-video/wan-2.5-i2v-fast"
+    },
+    "replicate/wan-video/wan-2.5-t2v": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "output_cost_per_second_1080p": 0.15,
+        "output_cost_per_second_480p": 0.05,
+        "output_cost_per_second_720p": 0.1,
+        "source": "https://replicate.com/wan-video/wan-2.5-t2v"
+    },
+    "replicate/wan-video/wan-2.5-t2v-fast": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.068,
+        "output_cost_per_second_1080p": 0.102,
+        "output_cost_per_second_720p": 0.068,
+        "source": "https://replicate.com/wan-video/wan-2.5-t2v-fast"
+    },
+    "replicate/wan-video/wan-2.6-i2v": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "output_cost_per_second_1080p": 0.15,
+        "output_cost_per_second_720p": 0.1,
+        "source": "https://replicate.com/wan-video/wan-2.6-i2v"
+    },
+    "replicate/wan-video/wan-2.6-t2v": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "output_cost_per_second_1080p": 0.15,
+        "output_cost_per_second_720p": 0.1,
+        "source": "https://replicate.com/wan-video/wan-2.6-t2v"
+    },
+    "replicate/wan-video/wan-2.7-i2v": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.15,
+        "output_cost_per_second_1080p": 0.15,
+        "output_cost_per_second_720p": 0.1,
+        "source": "https://replicate.com/wan-video/wan-2.7-i2v"
+    },
+    "replicate/wan-video/wan-2.7-image": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/wan-video/wan-2.7-image"
+    },
+    "replicate/wan-video/wan-2.7-image-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/wan-video/wan-2.7-image-pro"
+    },
+    "replicate/wan-video/wan-2.7-r2v": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "source": "https://replicate.com/wan-video/wan-2.7-r2v"
+    },
+    "replicate/wan-video/wan-2.7-t2v": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "source": "https://replicate.com/wan-video/wan-2.7-t2v"
+    },
+    "replicate/wan-video/wan-2.7-videoedit": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "source": "https://replicate.com/wan-video/wan-2.7-videoedit"
+    },
+    "replicate/wan-video/wan2.6-i2v-flash": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "output_cost_per_second_1080p": 0.075,
+        "output_cost_per_second_720p": 0.05,
+        "source": "https://replicate.com/wan-video/wan2.6-i2v-flash"
+    },
+    "replicate/wavespeedai/qwen-image": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "source": "https://replicate.com/wavespeedai/qwen-image"
+    },
+    "replicate/wavespeedai/wan-2.1-i2v-480p": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.09,
+        "source": "https://replicate.com/wavespeedai/wan-2.1-i2v-480p"
+    },
+    "replicate/wavespeedai/wan-2.1-i2v-720p": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.25,
+        "source": "https://replicate.com/wavespeedai/wan-2.1-i2v-720p"
+    },
+    "replicate/wavespeedai/wan-2.1-t2v-480p": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.07,
+        "source": "https://replicate.com/wavespeedai/wan-2.1-t2v-480p"
+    },
+    "replicate/wavespeedai/wan-2.1-t2v-720p": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.24,
+        "source": "https://replicate.com/wavespeedai/wan-2.1-t2v-720p"
+    },
+    "replicate/xai/grok-imagine-image": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.02,
+        "source": "https://replicate.com/xai/grok-imagine-image"
+    },
+    "replicate/xai/grok-imagine-image-quality": {
+        "input_cost_per_pixel": 1e-08,
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.06,
+        "output_cost_per_image_1K": 0.04,
+        "output_cost_per_image_2K": 0.06,
+        "source": "https://replicate.com/xai/grok-imagine-image-quality"
+    },
+    "replicate/xai/grok-imagine-r2v": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "source": "https://replicate.com/xai/grok-imagine-r2v"
+    },
+    "replicate/xai/grok-imagine-video": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.07,
+        "output_cost_per_second_480p": 0.05,
+        "output_cost_per_second_720p": 0.07,
+        "source": "https://replicate.com/xai/grok-imagine-video"
+    },
+    "replicate/xai/grok-imagine-video-1.5": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.08,
+        "source": "https://replicate.com/xai/grok-imagine-video-1.5"
+    },
+    "replicate/xai/grok-imagine-video-extension": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "source": "https://replicate.com/xai/grok-imagine-video-extension"
+    },
+    "replicate/xai/grok-text-to-speech": {
+        "input_cost_per_character": 1.5e-05,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/xai/grok-text-to-speech"
+    },
+    "fal_ai/blackforestlabs/flux-3/edit-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"the page states only the 1K (1 MP) price of $0.048 and the pricing API bills in megapixels at $0.048, so the per-pixel rate is $0.048 per megapixel and the per-image price is the default 1k output; 768sq, 1.5k, 2k and 4k outputs are priced by the per-pixel rate"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.048,
+        "output_cost_per_pixel": 4.57763671875e-08,
+        "source": "https://fal.ai/models/blackforestlabs/flux-3/edit-image",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/blackforestlabs/flux-3/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate; the pricing API reports a $0.085 per second base price that the page does not state"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.17,
+        "output_cost_per_second_1080p": 0.29,
+        "output_cost_per_second_2k": 0.32,
+        "output_cost_per_second_4k": 0.47,
+        "output_cost_per_second_720p": 0.17,
+        "source": "https://fal.ai/models/blackforestlabs/flux-3/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/blackforestlabs/flux-3/klein/edit-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per output image by resolution; output_cost_per_image is the 1K rate (image_size defaults to the input size, 1K is the page example); 768 x 768 is $0.008 and 1.5K is $0.011 per image, no catalog field"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.009,
+        "output_cost_per_image_1K": 0.009,
+        "output_cost_per_image_2K": 0.014,
+        "output_cost_per_image_4K": 0.036,
+        "source": "https://fal.ai/models/blackforestlabs/flux-3/klein/edit-image",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/blackforestlabs/flux-3/klein/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per output image by resolution; output_cost_per_image is the 1K rate (default image_size square_hd); 768 x 768 is $0.008 and 1.5K is $0.011 per image, no catalog field"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.009,
+        "output_cost_per_image_1K": 0.009,
+        "output_cost_per_image_2K": 0.014,
+        "output_cost_per_image_4K": 0.036,
+        "source": "https://fal.ai/models/blackforestlabs/flux-3/klein/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/blackforestlabs/flux-3/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"the page states only the 1K (1 MP) price of $0.048 and the pricing API bills in megapixels at $0.048, so the per-pixel rate is $0.048 per megapixel and the per-image price is the default 1k output; 768sq, 1.5k, 2k and 4k outputs are priced by the per-pixel rate"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.048,
+        "output_cost_per_pixel": 4.57763671875e-08,
+        "source": "https://fal.ai/models/blackforestlabs/flux-3/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/blackforestlabs/flux-3/text-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate; the pricing API reports a $0.085 per second base price that the page does not state"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.17,
+        "output_cost_per_second_1080p": 0.29,
+        "output_cost_per_second_2k": 0.32,
+        "output_cost_per_second_4k": 0.47,
+        "output_cost_per_second_720p": 0.17,
+        "source": "https://fal.ai/models/blackforestlabs/flux-3/text-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/blackforestlabs/flux-video-upscale": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of output video by resolution in the default creative mode (creativity=1); output_cost_per_second is the highest tier (4K) because the output resolution depends on the source and upscale_factor; precise mode (creativity=0) is $0.084 (1080p), $0.15 (2K) and $0.33 (4K) per second and has no catalog field"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.474,
+        "output_cost_per_second_1080p": 0.12,
+        "output_cost_per_second_2k": 0.21,
+        "output_cost_per_second_4k": 0.474,
+        "source": "https://fal.ai/models/blackforestlabs/flux-video-upscale",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/bria/fibo-2/generate": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per generated image at the default 1MP output; the 4MP output is $0.06 per image and has no catalog field"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://fal.ai/models/bria/fibo-2/generate",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/bytedance/seedance-2.0/fast/reference-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video at the default resolution 720p, the only per-second rate the page states; fal bills tokens at $0.0112 per 1000 tokens, counts input video duration, and multiplies by 0.6 with video inputs"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.2419,
+        "output_cost_per_second_720p": 0.2419,
+        "source": "https://fal.ai/models/bytedance/seedance-2.0/fast/reference-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/bytedance/seedance-2.0/us/reference-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate; 1080p and 4k are not priced on the page; fal bills tokens at $0.0168 per 1000 tokens, counts input video duration, and multiplies by 0.6 with video inputs"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.37,
+        "output_cost_per_second_480p": 0.1731,
+        "output_cost_per_second_720p": 0.37,
+        "source": "https://fal.ai/models/bytedance/seedance-2.0/us/reference-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/bytedance/seedance-2.5/us/reference-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate; with video references fal bills input and output duration and multiplies by 0.6"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.473,
+        "output_cost_per_second_1080p": 1.164,
+        "output_cost_per_second_480p": 0.2205,
+        "output_cost_per_second_720p": 0.473,
+        "source": "https://fal.ai/models/bytedance/seedance-2.5/us/reference-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/bria/background/remove": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per image without a prompt (prompt is optional); $0.03 per image when a prompt is given has no catalog field"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.018,
+        "source": "https://fal.ai/models/fal-ai/bria/background/remove",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/fal-ai/bytedance-upscaler/upscale/video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of output video by target_resolution at 30fps in normal mode; output_cost_per_second is the default target_resolution 1080p rate; 6k $0.0574 and 8k $0.1148 per second have no catalog field; 30-60fps doubles, over 60fps quadruples and pro mode multiplies by 10, none of which is modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.0072,
+        "output_cost_per_second_1080p": 0.0072,
+        "output_cost_per_second_2k": 0.0144,
+        "output_cost_per_second_4k": 0.0288,
+        "source": "https://fal.ai/models/fal-ai/bytedance-upscaler/upscale/video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/emu-3.5-image/edit-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per image at the default 720p resolution; 480p is $0.15 per image and has no catalog field"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.3,
+        "source": "https://fal.ai/models/fal-ai/emu-3.5-image/edit-image",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/fal-ai/emu-3.5-image/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per image at the default 720p resolution; 480p is $0.15 per image and has no catalog field"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.3,
+        "source": "https://fal.ai/models/fal-ai/emu-3.5-image/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/fal-ai/kling-video/v2.5-turbo/pro/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.07,
+        "source": "https://fal.ai/models/fal-ai/kling-video/v2.5-turbo/pro/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/kling-video/v2.5-turbo/pro/text-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.07,
+        "source": "https://fal.ai/models/fal-ai/kling-video/v2.5-turbo/pro/text-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/kling-video/v2.5-turbo/standard/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.042,
+        "source": "https://fal.ai/models/fal-ai/kling-video/v2.5-turbo/standard/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/minimax/hailuo-02/standard/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 768P rate; 512P is roughly $0.017 per second and has no catalog field"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.045,
+        "output_cost_per_second_768p": 0.045,
+        "source": "https://fal.ai/models/fal-ai/minimax/hailuo-02/standard/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/minimax/image-01": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01,
+        "source": "https://fal.ai/models/fal-ai/minimax/image-01",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/fal-ai/object-removal": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per image at the default model best_quality; low_quality $0.006, medium_quality $0.012 and high_quality $0.018 per image have no catalog field"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.024,
+        "source": "https://fal.ai/models/fal-ai/object-removal",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/fal-ai/object-removal/bbox": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per image at the default model best_quality; low_quality $0.006, medium_quality $0.012 and high_quality $0.018 per image have no catalog field"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.024,
+        "source": "https://fal.ai/models/fal-ai/object-removal/bbox",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/fal-ai/object-removal/mask": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per image at the default model best_quality; low_quality $0.006, medium_quality $0.012 and high_quality $0.018 per image have no catalog field"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.024,
+        "source": "https://fal.ai/models/fal-ai/object-removal/mask",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/fal-ai/recraft/v3/image-to-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per image at the default realistic_image style; vector styles are $0.08 per image and have no catalog field"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://fal.ai/models/fal-ai/recraft/v3/image-to-image",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/fal-ai/scail-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.2,
+        "source": "https://fal.ai/models/fal-ai/scail-2",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/wan-vace-apps/long-reframe": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of output video by resolution, converted from the page rate per 2 seconds ($0.08 per 2s at 720p, $0.04 per 2s at 480p); output_cost_per_second is the 720p rate because the default resolution is auto; 580p ($0.06 per 2s) has no catalog field, 240p and 360p are not priced on the page; seconds are rounded up to a multiple of 2"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.04,
+        "output_cost_per_second_480p": 0.02,
+        "output_cost_per_second_720p": 0.04,
+        "source": "https://fal.ai/models/fal-ai/wan-vace-apps/long-reframe",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/wan/v2.2-14b/animate/move": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per video second of output by resolution, where a video second is 16 frames; output_cost_per_second is the default resolution 480p rate; 580p is $0.06 per video second and has no catalog field"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.04,
+        "output_cost_per_second_480p": 0.04,
+        "output_cost_per_second_720p": 0.08,
+        "source": "https://fal.ai/models/fal-ai/wan/v2.2-14b/animate/move",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/wan/v2.2-14b/animate/replace": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per video second of output by resolution, where a video second is 16 frames; output_cost_per_second is the default resolution 480p rate; 580p is $0.06 per video second and has no catalog field"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.04,
+        "output_cost_per_second_480p": 0.04,
+        "output_cost_per_second_720p": 0.08,
+        "source": "https://fal.ai/models/fal-ai/wan/v2.2-14b/animate/replace",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/google/gemini-omni-flash/v1.2/edit": {
+        "input_cost_per_token": 1.5e-06,
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of output video by resolution; output_cost_per_second is the default resolution 720p rate; 360p is $0.0273 per second and has no catalog field; input tokens (text, image, video) are billed at $1.50 per million"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.0819,
+        "output_cost_per_second_1080p": 0.1229,
+        "output_cost_per_second_4k": 0.2457,
+        "output_cost_per_second_720p": 0.0819,
+        "source": "https://fal.ai/models/google/gemini-omni-flash/v1.2/edit",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/google/gemini-omni-flash/v1.2/extend": {
+        "input_cost_per_token": 1.5e-06,
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of output video by resolution; output_cost_per_second is the default resolution 720p rate; 360p is $0.0273 per second and has no catalog field; input tokens (text, image, video) are billed at $1.50 per million"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.0819,
+        "output_cost_per_second_1080p": 0.1229,
+        "output_cost_per_second_4k": 0.2457,
+        "output_cost_per_second_720p": 0.0819,
+        "source": "https://fal.ai/models/google/gemini-omni-flash/v1.2/extend",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/google/gemini-omni-flash/v1.2/image-to-video": {
+        "input_cost_per_token": 1.5e-06,
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of output video by resolution; output_cost_per_second is the default resolution 720p rate; 360p is $0.0273 per second and has no catalog field; input tokens (text, image, video) are billed at $1.50 per million"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.0819,
+        "output_cost_per_second_1080p": 0.1229,
+        "output_cost_per_second_4k": 0.2457,
+        "output_cost_per_second_720p": 0.0819,
+        "source": "https://fal.ai/models/google/gemini-omni-flash/v1.2/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/google/gemini-omni-flash/v1.2/reference-to-video": {
+        "input_cost_per_token": 1.5e-06,
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of output video by resolution; output_cost_per_second is the default resolution 720p rate; 360p is $0.0273 per second and has no catalog field; input tokens (text, image, video) are billed at $1.50 per million"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.0819,
+        "output_cost_per_second_1080p": 0.1229,
+        "output_cost_per_second_4k": 0.2457,
+        "output_cost_per_second_720p": 0.0819,
+        "source": "https://fal.ai/models/google/gemini-omni-flash/v1.2/reference-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/google/gemini-omni-flash/v1.2/text-to-video": {
+        "input_cost_per_token": 1.5e-06,
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of output video by resolution; output_cost_per_second is the default resolution 720p rate; 360p is $0.0273 per second and has no catalog field; input tokens (text, image, video) are billed at $1.50 per million"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.0819,
+        "output_cost_per_second_1080p": 0.1229,
+        "output_cost_per_second_4k": 0.2457,
+        "output_cost_per_second_720p": 0.0819,
+        "source": "https://fal.ai/models/google/gemini-omni-flash/v1.2/text-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/google/virtual-try-on": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.075,
+        "source": "https://fal.ai/models/google/virtual-try-on",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/ideogram/v4/tiling": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per megapixel at the default rendering_speed BALANCED; TURBO is $0.03 and QUALITY is $0.10 per megapixel, no catalog field"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.06,
+        "output_cost_per_pixel": 5.7220458984375e-08,
+        "source": "https://fal.ai/models/ideogram/v4/tiling",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/ideogram/v4/tiling/lora": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per megapixel at the default rendering_speed BALANCED; TURBO is $0.03375 and QUALITY is $0.1125 per megapixel, no catalog field"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.0675,
+        "output_cost_per_pixel": 6.437301635742188e-08,
+        "source": "https://fal.ai/models/ideogram/v4/tiling/lora",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/kling/v4/flash/reference-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of output video at 720p (the only resolution) with image references; with video references fal bills $0.063 per second on the output duration plus the greater of the input and output durations, which has no catalog field"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.094,
+        "output_cost_per_second_720p": 0.094,
+        "source": "https://fal.ai/models/kling/v4/flash/reference-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/kling/v4/reference-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of output video by resolution with image references; output_cost_per_second is the default resolution 1080p rate; with video references or video elements fal bills $0.094 (720p) or $0.141 (1080p) per second on the input plus output length, which has no catalog field"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.235,
+        "output_cost_per_second_1080p": 0.235,
+        "output_cost_per_second_720p": 0.157,
+        "source": "https://fal.ai/models/kling/v4/reference-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/luma/agent/ray/v3.2/reframe": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per started source second by resolution; output_cost_per_second is the default resolution 540p rate ($0.06), which has no tier field"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.06,
+        "output_cost_per_second_1080p": 0.36,
+        "output_cost_per_second_720p": 0.12,
+        "source": "https://fal.ai/models/luma/agent/ray/v3.2/reframe",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/minimax/h3-max/reference-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of requested output duration by resolution; output_cost_per_second is the default resolution 768P rate; the page states no promotion for this endpoint; reference tokens above the 4,096 included per request are $0.02 per 1,000 tokens and are not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.08,
+        "output_cost_per_second_1080p": 0.16,
+        "output_cost_per_second_480p": 0.05,
+        "output_cost_per_second_768p": 0.08,
+        "source": "https://fal.ai/models/minimax/h3-max/reference-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/minimax/h3-max/styles/16bit-pixel": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.08,
+        "output_cost_per_second_768p": 0.08,
+        "source": "https://fal.ai/models/minimax/h3-max/styles/16bit-pixel",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/minimax/h3-max/styles/hand-drawn": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.08,
+        "output_cost_per_second_768p": 0.08,
+        "source": "https://fal.ai/models/minimax/h3-max/styles/hand-drawn",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/minimax/h3-max/styles/low-poly": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.08,
+        "output_cost_per_second_768p": 0.08,
+        "source": "https://fal.ai/models/minimax/h3-max/styles/low-poly",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/minimax/h3-max/styles/retro-toon-70s": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.08,
+        "output_cost_per_second_768p": 0.08,
+        "source": "https://fal.ai/models/minimax/h3-max/styles/retro-toon-70s",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/minimax/h3-max/styles/vhs": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.08,
+        "output_cost_per_second_768p": 0.08,
+        "source": "https://fal.ai/models/minimax/h3-max/styles/vhs",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/mirelo-ai/sfx2.0/video-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated audio per sample; promotional 33% off rate through 2026-12-13 per the page; the standard rate of $0.015 per second applies from 2026-12-14 (ruling fal-ai-promotional-rates-apply-until-promotion-ends, 2026-11-10); mode and endpoint follow fal_ai/sonilo/v1.1/video-to-video-sound-effects"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.01,
+        "source": "https://fal.ai/models/mirelo-ai/sfx2.0/video-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/nvidia/cosmos-3-super/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per generated image; the optional $0.02 per request prompt expansion surcharge is not modeled, and agentic generation bills every candidate image"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://fal.ai/models/nvidia/cosmos-3-super/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/recraft/v4/style/pro/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per generated image when a style_id is provided; the one-time $0.005 style creation surcharge when no style_id is given is not modeled"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.1,
+        "source": "https://fal.ai/models/recraft/v4/style/pro/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/recraft/v4/style/pro/text-to-vector": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per generated image when a style_id is provided; the one-time $0.005 style creation surcharge when no style_id is given is not modeled"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.12,
+        "source": "https://fal.ai/models/recraft/v4/style/pro/text-to-vector",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/recraft/v4/style/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per generated image when a style_id is provided; the one-time $0.005 style creation surcharge when no style_id is given is not modeled"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.035,
+        "source": "https://fal.ai/models/recraft/v4/style/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/recraft/v4/style/text-to-vector": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per generated image when a style_id is provided; the one-time $0.005 style creation surcharge when no style_id is given is not modeled"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05,
+        "source": "https://fal.ai/models/recraft/v4/style/text-to-vector",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/vast/eden-live-14b-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of video generated in a live session; the 10 billable second ($0.10) minimum per session is not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.01,
+        "source": "https://fal.ai/models/vast/eden-live-14b-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/vast/eden-live-5b-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of video generated in a live session; the 10 billable second ($0.035) minimum per session is not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.0035,
+        "source": "https://fal.ai/models/vast/eden-live-5b-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/xai/grok-imagine-image/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.022,
+        "source": "https://fal.ai/models/xai/grok-imagine-image/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/xai/grok-imagine-video/edit-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of output video by resolution; output_cost_per_second is the 720p rate because the default resolution is auto; the $0.01 per second of input video charge is not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.07,
+        "output_cost_per_second_480p": 0.05,
+        "output_cost_per_second_720p": 0.07,
+        "source": "https://fal.ai/models/xai/grok-imagine-video/edit-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/xai/grok-imagine-video/extend-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of output video by resolution; output_cost_per_second is the 720p rate because the endpoint has no resolution field; the $0.01 per second of input video charge is not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.07,
+        "output_cost_per_second_480p": 0.05,
+        "output_cost_per_second_720p": 0.07,
+        "source": "https://fal.ai/models/xai/grok-imagine-video/extend-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/xai/grok-imagine-video/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of output video by resolution; output_cost_per_second is the default resolution 720p rate; the $0.002 per request image input charge is not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.07,
+        "output_cost_per_second_480p": 0.05,
+        "output_cost_per_second_720p": 0.07,
+        "source": "https://fal.ai/models/xai/grok-imagine-video/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/xai/grok-imagine-video/reference-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of output video by resolution; output_cost_per_second is the default resolution 480p rate; the $0.002 per request image input charge is not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "output_cost_per_second_480p": 0.05,
+        "output_cost_per_second_720p": 0.07,
+        "source": "https://fal.ai/models/xai/grok-imagine-video/reference-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/xai/grok-imagine-video/text-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of output video by resolution; output_cost_per_second is the default resolution 720p rate"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.07,
+        "output_cost_per_second_480p": 0.05,
+        "output_cost_per_second_720p": 0.07,
+        "source": "https://fal.ai/models/xai/grok-imagine-video/text-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/xai/grok-imagine-video/v1.5/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of output video by resolution; output_cost_per_second is the default resolution 720p rate; the $0.01 per reference image charge is not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.14,
+        "output_cost_per_second_1080p": 0.25,
+        "output_cost_per_second_480p": 0.08,
+        "output_cost_per_second_720p": 0.14,
+        "source": "https://fal.ai/models/xai/grok-imagine-video/v1.5/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/xai/grok-imagine-video/v1.5/reference-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of output video by resolution; output_cost_per_second is the default resolution 480p rate; the $0.01 per reference image charge is not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.08,
+        "output_cost_per_second_480p": 0.08,
+        "output_cost_per_second_720p": 0.14,
+        "source": "https://fal.ai/models/xai/grok-imagine-video/v1.5/reference-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "databricks/databricks-claude-fable-5-2": {
+        "cache_creation_input_token_cost": 8e-06,
+        "cache_read_input_token_cost": 8e-06,
+        "input_cost_per_token": 8e-06,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "metadata": {"notes":"Claude Fable 5.2 on Databricks is available only through Unity Gateway with the model service name system.ai.claude-fable-5-2, and Databricks hosts it through Amazon Bedrock. The Databricks pricing page lists no row for it yet, so input and output are inherited from the catalog Bedrock row anthropic.claude-fable-5-2, no '*_dbu_cost_per_token' fields are published, and cache tokens bill at the input rate until Databricks publishes cache DBU rates."},
+        "mode": "chat",
+        "output_cost_per_token": 4e-05,
+        "prompt_cache_min_tokens": 512.0,
+        "source": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models",
+        "supports_adaptive_thinking": true,
+        "supports_anthropic_thinking_payload": true,
+        "supports_assistant_prefill": false,
+        "supports_forced_tool_use": false,
+        "supports_function_calling": true,
+        "supports_mid_conversation_system": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_sampling_params": false,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "thinking_always_on": true
+    },
+    "databricks/system.ai.claude-fable-5-2": {
+        "cache_creation_input_token_cost": 8e-06,
+        "cache_read_input_token_cost": 8e-06,
+        "input_cost_per_token": 8e-06,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "metadata": {"notes":"Claude Fable 5.2 on Databricks is available only through Unity Gateway with the model service name system.ai.claude-fable-5-2, and Databricks hosts it through Amazon Bedrock. The Databricks pricing page lists no row for it yet, so input and output are inherited from the catalog Bedrock row anthropic.claude-fable-5-2, no '*_dbu_cost_per_token' fields are published, and cache tokens bill at the input rate until Databricks publishes cache DBU rates."},
+        "mode": "chat",
+        "output_cost_per_token": 4e-05,
+        "prompt_cache_min_tokens": 512.0,
+        "source": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models",
+        "supports_adaptive_thinking": true,
+        "supports_anthropic_thinking_payload": true,
+        "supports_assistant_prefill": false,
+        "supports_forced_tool_use": false,
+        "supports_function_calling": true,
+        "supports_mid_conversation_system": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_sampling_params": false,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "thinking_always_on": true
     }
 }

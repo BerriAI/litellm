@@ -285,6 +285,7 @@ from litellm.proxy.policy_engine.pipeline_executor import (
 )
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
+from litellm.proxy.spend_tracking.session_spend_total import SessionSpendTotals
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.spend_log_insert import RejectedSpendLogRow
@@ -1983,7 +1984,8 @@ class ProxyLogging:
                 )
         self.premium_user = premium_user
         self.service_logging_obj = ServiceLogging()
-        self.db_spend_update_writer = DBSpendUpdateWriter()
+        self.session_spend_totals: Final = SessionSpendTotals(lambda: self.internal_usage_cache.dual_cache.redis_cache)
+        self.db_spend_update_writer = DBSpendUpdateWriter(session_spend_totals=self.session_spend_totals)
         self.proxy_hook_mapping: dict[str, CustomLogger] = {}
 
         # Guard flags to prevent duplicate background tasks
