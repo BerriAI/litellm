@@ -24,6 +24,12 @@ from litellm.scheduler import FlowItem, Scheduler, SchedulerCacheKeys
 from litellm.litellm_core_utils.model_cost_table import publish
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
+_cache_key = f"{SchedulerCacheKeys.queue.value}"
+
+
+def legacy_key(model_name: str) -> str:
+    return f"{_cache_key}:{model_name}"
+
 
 @pytest.mark.asyncio
 async def test_scheduler_diff_model_names():
@@ -63,7 +69,7 @@ async def test_scheduler_poll_persists_queue_to_cache():
 
     await scheduler.poll(request=item1, health_deployments=[])
 
-    queue_key = f"{SchedulerCacheKeys.queue.value}:{item1.model_name}"
+    queue_key = legacy_key(item1.model_name)
     updated_queue = redis_cache.store[queue_key]
     assert updated_queue[0][1] == "11"
 
@@ -90,7 +96,7 @@ async def test_scheduler_prioritized_requests(p0, p1, healthy_deployments):
                 health_deployments=healthy_deployments,
             )
             == True
-        ), "queue={}".format(await scheduler.get_queue(model_name="gpt-3.5-turbo"))
+        ), "queue={}".format(await scheduler.get_queue(legacy_key("gpt-3.5-turbo")))
         assert (
             await scheduler.peek(
                 id="11",
@@ -136,14 +142,14 @@ async def test_scheduler_queue_cleanup_on_timeout():
     await scheduler.add_request(item3)
 
     # Verify initial queue size
-    queue_before = await scheduler.get_queue(model_name="gpt-3.5-turbo")
+    queue_before = await scheduler.get_queue(legacy_key("gpt-3.5-turbo"))
     assert len(queue_before) == 3, f"Expected 3 items in queue, got {len(queue_before)}"
 
     # Simulate timeout cleanup - remove a non-front request (item2)
     await scheduler.remove_request(request_id="req-1", model_name="gpt-3.5-turbo")
 
     # Verify queue was cleaned up
-    queue_after = await scheduler.get_queue(model_name="gpt-3.5-turbo")
+    queue_after = await scheduler.get_queue(legacy_key("gpt-3.5-turbo"))
     assert len(queue_after) == 2, f"Expected 2 items after cleanup, got {len(queue_after)}"
 
     # Verify the correct request was removed
@@ -176,7 +182,7 @@ async def test_poll_during_cooldown_admits_only_the_head_of_the_queue():
 
     assert not await scheduler.poll(request=later, health_deployments=[])
     assert await scheduler.poll(request=head, health_deployments=[])
-    assert await scheduler.get_queue("sched-model") == [(2, "later")]
+    assert await scheduler.get_queue(legacy_key("sched-model")) == [(2, "later")]
 
 
 @pytest.mark.asyncio
@@ -187,10 +193,10 @@ async def test_poll_during_cooldown_re_enqueues_a_request_a_concurrent_writer_er
     await scheduler.add_request(still_queued)
 
     assert not await scheduler.poll(request=erased, health_deployments=[])
-    assert await scheduler.get_queue("sched-model") == [(0, "still-queued"), (1, "erased-by-concurrent-write")]
+    assert await scheduler.get_queue(legacy_key("sched-model")) == [(0, "still-queued"), (1, "erased-by-concurrent-write")]
     assert await scheduler.poll(request=still_queued, health_deployments=[])
     assert await scheduler.poll(request=erased, health_deployments=[])
-    assert await scheduler.get_queue("sched-model") == []
+    assert await scheduler.get_queue(legacy_key("sched-model")) == []
 
 
 @pytest.mark.asyncio
@@ -201,7 +207,7 @@ async def test_poll_during_cooldown_admits_an_erased_request_that_outranks_the_q
     assert await scheduler.poll(
         request=FlowItem(priority=0, request_id="erased-urgent", model_name="sched-model"), health_deployments=[]
     )
-    assert await scheduler.get_queue("sched-model") == [(2, "still-queued")]
+    assert await scheduler.get_queue(legacy_key("sched-model")) == [(2, "still-queued")]
 
 
 class _ExpiringCache:
@@ -238,10 +244,10 @@ async def test_waiter_observes_shared_expiry_after_reading_just_before_it(monkey
     scheduler: Final = Scheduler(redis_cache=cache)
     scheduler.cache.in_memory_cache = InMemoryCache(clock=clock)
     waiter: Final = FlowItem(priority=2, request_id="waiter", model_name="expiry")
-    key: Final = f"{SchedulerCacheKeys.queue.value}:{waiter.model_name}"
+    key: Final = legacy_key(waiter.model_name)
     try:
         await cache.async_set_cache(key, [(1, "dead-replica")])
-        assert await scheduler.get_queue(waiter.model_name) == [(1, "dead-replica")]
+        assert await scheduler.get_queue(key) == [(1, "dead-replica")]
         clock.now = 1000.1
         await scheduler.add_request(waiter)
         clock.now = 1005.05
@@ -251,12 +257,12 @@ async def test_waiter_observes_shared_expiry_after_reading_just_before_it(monkey
         assert not await scheduler.poll(waiter, [])
         server.connected = True
         assert await cache.async_get_cache(key) is None
-        assert await scheduler.get_queue(waiter.model_name) == []
+        assert await scheduler.get_queue(key) == []
         server.connected = False
-        assert await scheduler.get_queue(waiter.model_name) == []
+        assert await scheduler.get_queue(key) == []
         server.connected = True
         assert await scheduler.poll(waiter, [])
-        assert await scheduler.get_queue(waiter.model_name) == []
+        assert await scheduler.get_queue(key) == []
     finally:
         server.connected = True
         await cache.disconnect()
@@ -279,7 +285,7 @@ async def test_wait_for_turn_during_cooldown_survives_the_queue_key_expiring():
         get_healthy_deployments=no_healthy_deployments_after_the_key_expired,
     )
 
-    assert await scheduler.get_queue("sched-model") == []
+    assert await scheduler.get_queue(legacy_key("sched-model")) == []
 
 
 
@@ -306,11 +312,11 @@ async def test_second_replica_enqueues_behind_a_queue_decoded_from_redis():
 
     await replica_b.add_request(urgent_on_b)
 
-    assert await replica_b.get_queue("sched-model") == [(0, "urgent-on-b"), (1, "waiting-on-a")]
+    assert await replica_b.get_queue(legacy_key("sched-model")) == [(0, "urgent-on-b"), (1, "waiting-on-a")]
     assert await replica_b.poll(request=urgent_on_b, health_deployments=[])
     assert await replica_b.poll(request=waiting_on_a, health_deployments=[])
     await replica_b.remove_request(request_id="waiting-on-a", model_name="sched-model")
-    assert await replica_b.get_queue("sched-model") == []
+    assert await replica_b.get_queue(legacy_key("sched-model")) == []
 
 class _PausesAfterEnqueueScheduler(Scheduler):
     def __init__(self) -> None:
@@ -338,13 +344,13 @@ async def test_wait_for_turn_removes_entry_when_cancelled_mid_enqueue():
         )
     )
     await scheduler.enqueued.wait()
-    assert await scheduler.get_queue("sched-model") == [(1, "cancelled")]
+    assert await scheduler.get_queue(legacy_key("sched-model")) == [(1, "cancelled")]
 
     waiting.cancel()
     with pytest.raises(asyncio.CancelledError):
         await waiting
 
-    assert await scheduler.get_queue("sched-model") == []
+    assert await scheduler.get_queue(legacy_key("sched-model")) == []
 
 
 class _HeldRemovalScheduler(Scheduler):
@@ -384,7 +390,7 @@ async def test_wait_for_turn_finishes_removal_when_cancelled_again_during_cleanu
     with pytest.raises(asyncio.CancelledError):
         await waiting
 
-    assert await scheduler.get_queue("sched-model") == [(0, "head")]
+    assert await scheduler.get_queue(legacy_key("sched-model")) == [(0, "head")]
 
 
 @pytest.fixture(autouse=True)

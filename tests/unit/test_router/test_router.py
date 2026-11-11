@@ -13668,14 +13668,14 @@ async def test_prioritized_request_leaves_queue_when_it_stops_waiting(stop_waiti
     await router.scheduler.add_request(FlowItem(priority=0, request_id="head-of-queue", model_name="sched-model"))
     waiting: Final = asyncio.create_task(_send_scheduled_chat(router, 5))
     await asyncio.sleep(0.05)
-    assert len(await router.scheduler.get_queue("sched-model")) == 2
+    assert len(await router.scheduler.get_queue("scheduler:queue:sched-model:_")) == 2
 
     if stop_waiting == "cancel":
         waiting.cancel()
     with pytest.raises(asyncio.CancelledError if stop_waiting == "cancel" else litellm.Timeout):
         await waiting
 
-    assert await router.scheduler.get_queue("sched-model") == [(0, "head-of-queue")]
+    assert await router.scheduler.get_queue("scheduler:queue:sched-model:_") == [(0, "head-of-queue")]
 
 
 @pytest.mark.asyncio

@@ -192,6 +192,21 @@ def _resolve_model_group_alias_via_proxy_router(model: str) -> str | None:
     return resolve_model_group_alias(llm_router.registry().aliases(), model)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # registry().aliases() is the untyped model_group_alias dict
 
 
+def _resolve_parallel_model_allowlist_via_general_settings() -> frozenset[str]:
+    from litellm.proxy.proxy_server import general_settings
+
+    raw: Final = general_settings.get("parallel_model_allowlist")
+    if not raw:
+        return frozenset()
+    if isinstance(raw, str):
+        items: Final[Sequence[str]] = [item.strip() for item in raw.split(",")]
+    elif isinstance(raw, (list, tuple)):
+        items = tuple(item for item in raw if isinstance(item, str))
+    else:
+        return frozenset()
+    return frozenset(item for item in items if item)
+
+
 def _resolve_counted_models_via_proxy_router(model: str, team_id: str | None) -> Sequence[str]:
     from litellm.proxy.proxy_server import llm_router
 
@@ -399,6 +414,7 @@ class ParallelRequestGauge(TypedDict):
 class ParallelSlotAcquisition(TypedDict):
     slot_id: str
     gauges: tuple[RateLimitScope, ...]
+    pending_parallel_slot: NotRequired[ReadOnly[str]]
 
 
 class RateLimitStatus(TypedDict):
@@ -466,31 +482,13 @@ class CallTypeRateLimiter(Protocol):
         cache: DualCache,
         data: dict[str, object],
         call_type: str,
+        deferred_parallel_slot_check: str | None = None,
     ) -> Exception | str | dict[str, object] | None: ...
 
 
 @dataclass(slots=True)
 class RequestRateLimiterStash:
-    """
-    Per-request bookkeeping the pre-call hook hands to the success/failure/
-    disconnect callbacks. Lives on a ContextVar instead of the request body so
-    it never reaches provider-facing ``metadata`` channels.
-
-    A single mutable instance is shared by every context forked from the
-    request task (the SDK call, streaming generators, and the logging worker's
-    captured context all see the same object), which is what makes the
-    released flags and ``parallel_slot`` clearing effective
-    across sibling callbacks: the first release wins, later callbacks observe
-    the cleared state.
-
-    Because the stash is context-inherited, nested LiteLLM calls made inside
-    the request (LLM-judge guardrails, silent experiments) would also see it
-    from their own logging callbacks. ``owner_litellm_call_id`` pins the stash
-    to the proxy request's ``litellm_call_id`` so those callbacks can tell the
-    owning request's events apart from a nested call's: router retries and
-    fallbacks reuse the request's call id and keep access, while nested calls
-    mint fresh ids and are ignored.
-    """
+    """Per-request bookkeeping the pre-call hook hands to the success/failure/disconnect callbacks."""
 
     owner_litellm_call_id: str | None = None
     rate_limit_response: RateLimitResponse | None = None
@@ -720,6 +718,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         ] = _resolve_ptu_team_ceiling_via_proxy_router,
         fail_closed_resolver: Callable[[], bool] = _fail_closed_rate_limit_enforcement_from_general_settings,
         force_hash_tag_grouping_resolver: Callable[[], bool] = _force_redis_hash_tag_grouping_from_litellm_settings,
+        parallel_model_allowlist_resolver: Callable[[], frozenset[str]] = _resolve_parallel_model_allowlist_via_general_settings,
         rate_limit_store: RateLimitStore | None = None,
     ):
         self.internal_usage_cache = internal_usage_cache
@@ -731,6 +730,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self._ptu_team_ceiling_resolver = ptu_team_ceiling_resolver
         self._fail_closed_resolver = fail_closed_resolver
         self._force_hash_tag_grouping_resolver = force_hash_tag_grouping_resolver
+        self._parallel_model_allowlist_resolver = parallel_model_allowlist_resolver
+
         self.rate_limits: Final = rate_limit_store or RateLimitStore(
             connect(internal_usage_cache.dual_cache.redis_cache).rate_limits(
                 internal_usage_cache.dual_cache.default_in_memory_ttl
@@ -764,6 +765,22 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # follow-up because Lua dominates wall-time and the lock is held for
         # one round-trip.
         self._check_and_increment_lock = asyncio.Lock()
+
+    def _resolve_parallel_slot_id(
+        self,
+        reuses_request_slot: bool,
+        parallel_gauges: tuple[RateLimitScope, ...],
+        deferred_parallel_slot_check: Literal["deferred", "immediate"] | None,
+        requested_model: str | None,
+    ) -> str | None:
+        if reuses_request_slot or not parallel_gauges:
+            return None
+        if deferred_parallel_slot_check is not None:
+            allowlist: Final = self._parallel_model_allowlist_resolver()
+            group: Final = self._model_group_resolver(requested_model) or requested_model
+            if requested_model in allowlist or group in allowlist:
+                return None
+        return uuid.uuid4().hex
 
     def _get_batch_rate_limiter(self) -> CallTypeRateLimiter | None:
         """Get or lazy-load the batch rate limiter."""
@@ -1372,6 +1389,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         skip_tpm_check: bool = False,
         parallel_slot_id: str | None = None,
         skip_parallel_check: bool = False,
+        defer_parallel_check: bool = False,
     ) -> RateLimitResponse:
         """
         Check if any of the rate limit descriptors should be rate limited.
@@ -1391,6 +1409,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             skip_parallel_check: If True, ``max_parallel_requests`` gauges are
                 neither checked nor acquired, for a call that runs inside a
                 request already holding its slot.
+            defer_parallel_check: If True, ``max_parallel_requests`` gauges are
+                checked in read-only mode without acquiring a slot. The caller
+                is expected to run a separate admission-time check later; this
+                flag lets the proxy gate skip the fail-fast 503 on pre-call for
+                model groups that queue traffic through the router scheduler.
 
         ``max_parallel_requests`` descriptors are enforced by the dedicated
         concurrency-gauge path (``_check_parallel_request_gauges``), never by
@@ -1440,7 +1463,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if windowed_response["overall_code"] == "OVER_LIMIT":
                 return windowed_response
 
-        if not gauges or skip_parallel_check:
+        if not gauges or skip_parallel_check or defer_parallel_check:
             return windowed_response
 
         gauge_response: Final = await self._check_parallel_request_gauges(
@@ -3863,6 +3886,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         data: dict,
         call_type: str,
         endpoint_type: EndpointType = EndpointType.GENERIC,
+        deferred_parallel_slot_check: str | None = None,
     ) -> Exception | str | dict[str, object] | None:
         """
         Pre-call hook to check rate limits before making the API call.
@@ -3886,6 +3910,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 cache=cache,
                 data=data,
                 call_type=call_type,
+                deferred_parallel_slot_check=deferred_parallel_slot_check,
             )
 
         request_data: Final = _REQUEST_RATE_LIMIT_DATA.validate_python(data)
@@ -3928,7 +3953,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     if (d.get("rate_limit") or {}).get("max_parallel_requests") is not None
                 )
             )
-            parallel_slot_id: Final = uuid.uuid4().hex if parallel_gauges else None
+            parallel_slot_id: Final = self._resolve_parallel_slot_id(
+                reuses_request_slot, parallel_gauges, deferred_parallel_slot_check, requested_model
+            )
+            # When the model group is allowlisted for parallel queueing, _resolve_parallel_slot_id
+            # returns None and the proxy skips slot acquisition. The router runs a deferred
+            # admission-time check instead, so the proxy gate must not fail-fast here.
+            defer_parallel_check: Final = parallel_slot_id is None and deferred_parallel_slot_check is not None
 
             first_pass_descriptors: Final = (
                 descriptors
@@ -3943,6 +3974,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 skip_tpm_check=self.tpm_reservation_enabled,
                 parallel_slot_id=parallel_slot_id,
                 skip_parallel_check=reuses_request_slot,
+                defer_parallel_check=defer_parallel_check,
             )
 
             if response["overall_code"] == "OVER_LIMIT":
@@ -3955,10 +3987,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 if not reuses_request_slot:
                     stash.rate_limit_response = response
                 if parallel_slot_id is not None:
-                    stash.parallel_slot = ParallelSlotAcquisition(
+                    parallel_slot = ParallelSlotAcquisition(
                         slot_id=parallel_slot_id,
                         gauges=parallel_gauges,
                     )
+                    if deferred_parallel_slot_check:
+                        parallel_slot["pending_parallel_slot"] = deferred_parallel_slot_check
+                    stash.parallel_slot = parallel_slot
 
             # ----------------------------------------------------------------
             # TPM token reservation

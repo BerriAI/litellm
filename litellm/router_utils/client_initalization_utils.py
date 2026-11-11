@@ -1,3 +1,5 @@
+import asyncio
+from dataclasses import asdict, dataclass
 from types import TracebackType
 from typing import TYPE_CHECKING, Final
 
@@ -7,7 +9,33 @@ from litellm.types.router import RouterErrors
 from litellm.utils import calculate_max_parallel_requests
 
 if TYPE_CHECKING:
+    from litellm.caching.caching import RedisCache
     from litellm.router_api import RoutingContext
+
+SLOT_FREED_CHANNEL: Final = "litellm:slots"
+
+
+@dataclass(frozen=True, slots=True)
+class SlotFreedMessage:
+    deployment_id: str
+    in_flight: int
+    max: int
+
+
+def slot_freed_channel(namespace: str | None, deployment_id: str) -> str:
+    if namespace is None:
+        return f"{SLOT_FREED_CHANNEL}:{deployment_id}"
+    return f"{namespace}:{SLOT_FREED_CHANNEL}:{deployment_id}"
+
+
+def slot_freed_payload(message: SlotFreedMessage) -> str:
+    import json
+
+    return json.dumps(asdict(message))
+
+
+# mutable-ok: fire-and-forget task registry shared across all slots, cleared by each task's done callback
+_SLOT_FREED_TASKS: Final = set()
 
 
 class MaxParallelRequestsLimit:
@@ -45,6 +73,42 @@ class MaxParallelRequestsLimit:
 
     def release(self) -> None:
         self.in_flight -= 1
+        self._publish_slot_freed()
+
+    def _publish_slot_freed(self) -> None:
+        from litellm.scheduler import _get_scheduler_redis_cache
+
+        redis_cache = _get_scheduler_redis_cache()
+        if redis_cache is None:
+            return
+        channel: Final = slot_freed_channel(
+            redis_cache.namespace,
+            self.model_id,
+        )
+        payload: Final = slot_freed_payload(
+            SlotFreedMessage(deployment_id=self.model_id, in_flight=self.in_flight, max=self.max_parallel_requests)
+        )
+        # Hold the fire-and-forget task so it is not garbage-collected before
+        # it finishes; the registry clears itself as tasks complete.
+        task: Final = asyncio.create_task(
+            self._publish(redis_cache=redis_cache, channel=channel, payload=payload),
+            name="litellm-slot-freed-publish",
+        )
+        _SLOT_FREED_TASKS.add(task)
+        task.add_done_callback(_SLOT_FREED_TASKS.discard)
+
+    @staticmethod
+    async def _publish(*, redis_cache: "RedisCache", channel: str, payload: str) -> None:
+        try:
+            client = redis_cache.init_pubsub_client()
+            await client.publish(channel, payload)
+        except Exception:
+            pass
+
+    def slots(self, deployment_id: str) -> tuple[int, int] | None:
+        if deployment_id != self.model_id:
+            return None
+        return (self.in_flight, self.max_parallel_requests)
 
 
 class InitalizeCachedClient:

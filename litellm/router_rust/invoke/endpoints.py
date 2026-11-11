@@ -1109,6 +1109,20 @@ class _Handler:
     __name__: str
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class _DeferredLimits:
+    """`_DeploymentSlotLimits` over a single `MaxParallelRequestsLimit`."""
+
+    limit: object
+
+    def slots(self, deployment_id: str) -> tuple[int, int] | None:
+        from litellm.router_utils.client_initalization_utils import MaxParallelRequestsLimit
+
+        if isinstance(self.limit, MaxParallelRequestsLimit):
+            return self.limit.in_flight, self.limit.max_parallel_requests
+        return None
+
+
 def _session_with_model(session: object, model_name: str) -> Mapping[str, object]:
     if not isinstance(session, Mapping):
         return {}
@@ -1962,16 +1976,45 @@ class RustEndpoints:
             try:
                 healthy: Final = await self._core.select(model, dict(request), kind="healthy")
             except Exception:  # noqa: BLE001  # `_async_get_healthy_deployments` lists none on any lookup failure
-                # It lists none while every deployment cools down, or for a group it cannot look up:
-                # the request keeps its place in the queue, and the call itself raises the error.
                 return []
             return list(healthy) if isinstance(healthy, Sequence) else [healthy]
 
+        selected: Final
+        try:
+            selected = await self._core.select(model, dict(request), kind="healthy")
+        except Exception:  # noqa: BLE001
+            selected: Final = []  # rebind-ok: the select failure path
+        healthy_list: Final = list(selected) if isinstance(selected, Sequence) else ([selected] if selected else [])
+        deployment_id: Final = (
+            str(as_dict(healthy_list[0].get("model_info")).get("id"))
+            if healthy_list
+            and as_dict(healthy_list[0].get("model_info")).get("id") is not None
+            else None
+        )
+        queued_key: Final = model if deployment_id is None else f"{model}:{deployment_id}"
+
         await scheduler.wait_for_turn(
-            request=FlowItem(priority=priority, request_id=str(uuid.uuid4()), model_name=model),
+            request=FlowItem(
+                priority=priority, request_id=str(uuid.uuid4()), model_name=model, deployment_id=deployment_id
+            ),
             timeout=self._core.resolved.timeout,  # pyright: ignore[reportArgumentType]  # the router timeout
             get_healthy_deployments=healthy_deployments,
         )
+        if deployment_id is not None and healthy_list:
+            from litellm.router_rust.invoke.slots import max_parallel_requests_limit
+            from litellm.router_utils.client_initalization_utils import MaxParallelRequestsLimit
+            from litellm.scheduler import DeferredParallelSlotCheck
+
+            limit: Final = max_parallel_requests_limit(
+                self._core, healthy_list[0], {}
+            )
+            if isinstance(limit, MaxParallelRequestsLimit):
+                DeferredParallelSlotCheck(
+                    model_group=model,
+                    limits={str(deployment_id): _DeferredLimits(limit)},
+                    deployment_id=str(deployment_id),
+                    deferred=True,
+                )()
         try:
             response: Final = await run()
         except Exception as error:
@@ -1981,7 +2024,13 @@ class RustEndpoints:
         if hidden is not None:
             headers: Final = hidden.setdefault("additional_headers", {})
             if isinstance(headers, dict):
-                headers.update({"x-litellm-request-prioritization-used": True})  # pyright: ignore[reportUnknownMemberType]  # litellm's untyped helpers and request values
+                headers.update(
+                    {
+                        "x-litellm-request-prioritization-used": True,
+                        "x-litellm-queued": True,
+                        "x-litellm-queued-key": queued_key,  # pyright: ignore[reportUnknownMemberType]
+                    }
+                )
         return response
 
     async def acompletion(self, request: Mapping[str, object]) -> object:
