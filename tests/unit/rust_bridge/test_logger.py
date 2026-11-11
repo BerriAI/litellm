@@ -69,6 +69,32 @@ def test_native_logging_observes_level_changes(caplog: pytest.LogCaptureFixture)
     assert [record.getMessage() for record in caplog.records] == ["visible"]
 
 
+def test_native_redis_timeouts_share_the_redis_py_timeout_throttle(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+
+    from litellm.caching import redis_cache as redis_cache_module
+    from litellm.caching.redis_cache import RedisTimeoutLogThrottle, log_redis_failure
+
+    monkeypatch.setattr(
+        redis_cache_module, "redis_timeout_log_throttle", RedisTimeoutLogThrottle(interval=5.0, clock=lambda: 1_000.0)
+    )
+    store: Final = "litellm_redis_store::rate_limits"
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        logger.emit(logging.WARNING, "native timeout", "mod.rs", 1, store, {"redis.failure": "timeout"}, ("", ""))
+        log_redis_failure(verbose_logger, logging.WARNING, "redis-py timeout", RedisTimeoutError("timed out"))
+        logger.emit(logging.WARNING, "native timeout again", "mod.rs", 2, store, {"redis.failure": "timeout"}, ("", ""))
+        logger.emit(logging.WARNING, "native refused", "mod.rs", 3, store, {"redis.failure": "transport"}, ("", ""))
+
+    assert [(record.getMessage(), record.levelno) for record in caplog.records] == [
+        ("native timeout", logging.WARNING),
+        ("redis-py timeout: timed out", logging.DEBUG),
+        ("native timeout again", logging.DEBUG),
+        ("native refused", logging.WARNING),
+    ]
+
+
 @pytest.mark.parametrize(
     "text",
     (

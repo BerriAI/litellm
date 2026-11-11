@@ -5,6 +5,7 @@ Canonical definition for ``litellm_budgettable``. Re-exported from
 ``litellm.proxy._types`` for backwards compatibility.
 """
 
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Final
 
@@ -29,6 +30,8 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
     rpm_limit: int | None = None
     tpd_limit: int | None = None
     model_max_budget: dict | None = None
+    model_tpm_limit: Mapping[str, int] | None = None
+    model_rpm_limit: Mapping[str, int] | None = None
     budget_duration: str | None = None
     allowed_models: list[str] | None = None  # per-member model scope; empty = inherit team models
     temp_budget_increase: float | None = None
@@ -70,3 +73,6 @@ class LiteLLM_TeamMemberTable(LiteLLM_BudgetTable):
     budget_id: str | None = None
 
     model_config = ConfigDict(protected_namespaces=())
+
+
+CUSTOMER_ONLY_BUDGET_FIELDS: Final = frozenset({"model_tpm_limit", "model_rpm_limit"})

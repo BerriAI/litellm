@@ -29,6 +29,8 @@ struct PriceBlocks {
     regional_processing_uplift_multiplier_eu: Option<Multiplier>,
     /// Multiplier applied to all token costs for US data residency (e.g. 1.10 = +10%).
     regional_processing_uplift_multiplier_us: Option<Multiplier>,
+    /// Multiplier applied to all token costs when served from the OpenAI FedRAMP endpoint (e.g. 1.10 = +10%).
+    fedramp_uplift_multiplier: Option<Multiplier>,
     /// USD cost per web search query, keyed by search context size.
     search_context_cost_per_query: Option<SearchContextCostPerQuery>,
     /// Context-length or result-count tiered rates; each tier's costs apply within its range.
@@ -102,9 +104,18 @@ pub fn registry_json_schema() -> Schema {
         "title".into(),
         "LiteLLM model prices and context window registry".into(),
     );
+    definitions.insert(
+        "aliasRow".into(),
+        json!({
+            "type": "object",
+            "required": ["alias_of"],
+            "properties": {"alias_of": {"type": "string"}},
+            "additionalProperties": false,
+        }),
+    );
     root.insert(
         "additionalProperties".into(),
-        json!({"$ref": "#/$defs/modelEntry"}),
+        json!({"anyOf": [{"$ref": "#/$defs/modelEntry"}, {"$ref": "#/$defs/aliasRow"}]}),
     );
     root.insert("$defs".into(), Value::Object(definitions));
     Schema::from(root.clone())
@@ -151,6 +162,7 @@ fn decorate_model_entry(schema: &mut Value) {
     let rates = json!({FLAT_KEY_PATTERN: {"type": "number", "minimum": 0}});
     let object = schema.as_object_mut().unwrap();
     object.insert("required".into(), json!(["litellm_provider"]));
+    object.insert("not".into(), json!({"required": ["alias_of"]}));
     object.insert("additionalProperties".into(), Value::Bool(true));
     object.insert(
         "patternProperties".into(),

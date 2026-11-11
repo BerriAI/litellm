@@ -18,7 +18,7 @@ import json
 import os
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, ClassVar, Final
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter, with_config
@@ -29,6 +29,7 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.web_identity_session_policy import SECRETS_MANAGER_SESSION_POLICY, WebIdentitySessionPolicy
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     get_httpx_client,
@@ -53,6 +54,8 @@ _AWS_SECRET_MANAGER_RESPONSE: Final = TypeAdapter(dict[str, object], config=Conf
 
 
 class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = SECRETS_MANAGER_SESSION_POLICY
+
     def __init__(
         self,
         aws_region_name: str | None = None,
