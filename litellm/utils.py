@@ -9607,7 +9607,6 @@ def validate_chat_completion_user_messages(
                 body={
                     "type": "invalid_request_error",
                     "param": f"messages[{idx}].role",
-                    "code": "missing_required_parameter",
                 },
             )
         try:

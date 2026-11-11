@@ -57,6 +57,8 @@ from litellm.litellm_core_utils.thread_pool_executor import executor as logging_
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, headers
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+from litellm.proxy.db.request_error_tracking import status_code_from_metadata
 from litellm.proxy.utils import is_valid_api_key
 from litellm.responses.main import aresponses, responses
 from litellm.types.caching import CachingSupportedCallTypes
@@ -8959,7 +8961,8 @@ def test_completion_message_without_role_is_a_400(messages: list[dict[str, str |
     assert exc_info.value.model == MODEL
     assert exc_info.value.llm_provider == "anthropic"
     assert exc_info.value.param == f"messages[{index}].role"
-    assert exc_info.value.code == "missing_required_parameter"
+    error_information: Final = StandardLoggingPayloadSetup.get_error_information(exc_info.value)
+    assert status_code_from_metadata({"error_information": error_information}) == 400
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
