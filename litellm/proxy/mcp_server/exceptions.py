@@ -1,10 +1,11 @@
 """Exceptions raised by the LiteLLM MCP proxy."""
 
 from typing import Final
+from urllib.parse import quote
 
 from fastapi import HTTPException
 
-from litellm.proxy.mcp_server.oauth_utils import encode_upstream_scope
+from litellm.proxy.mcp_server.oauth_utils import encode_upstream_scope, well_known_root_suffix
 
 TOKEN_EXCHANGE_SUBJECT_ERROR: Final = (
     "Missing or invalid subject token. Authenticate with your identity provider and send its token "
@@ -101,12 +102,14 @@ class MCPUpstreamAuthError(Exception):
         challenge: str | None = self.www_authenticate
         if challenge is None and (self.status_code == 401 or self.required_scope is not None) and base_url:
             prefix: Final = base_url.rstrip("/")
-            if aggregate_step_up:
-                resource_metadata_url = f"{prefix}/.well-known/oauth-protected-resource"
-            elif request_path and request_path.startswith(f"/{self.server_name}/mcp"):
-                resource_metadata_url = f"{prefix}/.well-known/oauth-protected-resource/{self.server_name}/mcp"
-            else:
-                resource_metadata_url = f"{prefix}/.well-known/oauth-protected-resource/mcp/{self.server_name}"
+            name: Final = quote(self.server_name, safe="/:@!$&'()*+,;=")
+            resource_metadata_url: Final = (
+                f"{prefix}/.well-known/oauth-protected-resource"
+                if aggregate_step_up
+                else f"{prefix}/.well-known/oauth-protected-resource{well_known_root_suffix()}/{name}/mcp"
+                if request_path and request_path.startswith(f"/{self.server_name}/mcp")
+                else f"{prefix}/.well-known/oauth-protected-resource{well_known_root_suffix()}/mcp/{name}"
+            )
             challenge = f'Bearer resource_metadata="{resource_metadata_url}"'
         scoped_challenge: Final = (
             (f'{challenge}, error="insufficient_scope"' if challenge else 'Bearer error="insufficient_scope"')

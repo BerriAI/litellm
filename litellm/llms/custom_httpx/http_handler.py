@@ -694,7 +694,9 @@ class HTTPResponseLimitError(ValueError):
 
 
 class MaskedHTTPStatusError(httpx.HTTPStatusError):
-    def __init__(self, original_error: httpx.HTTPStatusError, message: str | None = None, text: str | None = None):
+    def __init__(
+        self, original_error: httpx.HTTPStatusError, message: str | None = None, text: str | None = None
+    ) -> None:
         # Create a new error with the masked URL
         masked_url: Final = mask_sensitive_info(str(original_error.request.url))
         # Mask the original exception message too (it contains the full URL)

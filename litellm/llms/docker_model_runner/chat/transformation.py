@@ -25,6 +25,9 @@ class DockerModelRunnerChatConfig(OpenAIGPTConfig):
     The engine name (e.g., "llama.cpp") is part of the API endpoint path.
     """
 
+    def _flattens_content_lists(self) -> bool:
+        return True
+
     @overload
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
