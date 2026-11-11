@@ -72,6 +72,7 @@ from litellm.constants import (
     SPEND_LOG_READ_STATEMENT_TIMEOUT_SECONDS,
     SPEND_LOG_WRITE_BATCH_MAX_BYTES,
     SPEND_LOG_WRITE_BATCH_MAX_ROWS,
+    TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS,
     VLLM_CHOICE_FIELDS,
 )
 from litellm.cost_calculator import BaseTokenUsageProcessor
@@ -5355,6 +5356,7 @@ _deprecated_key_cache: Final[LimitedSizeOrderedDict] = LimitedSizeOrderedDict(ma
 _DEPRECATED_KEY_CACHE_TTL_SECONDS: Final = 60
 _PRISMA_DEFAULT_TX_TIMEOUT: Final = timedelta(seconds=5)
 _PRISMA_DEFAULT_TX_MAX_WAIT: Final = timedelta(seconds=2)
+_TEAM_DELETE_TX_BUDGET: Final = timedelta(seconds=TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS)
 _SPEND_LOG_READ_STATEMENT_TIMEOUT: Final = timedelta(seconds=SPEND_LOG_READ_STATEMENT_TIMEOUT_SECONDS)
 _STATEMENT_TIMEOUT_TRANSACTION_GRACE: Final = timedelta(seconds=5)
 
@@ -6977,7 +6979,7 @@ class PrismaClient:
                 return {"deleted_teams": team_id_list}
             elif table_name == "key" and team_id_list is not None and isinstance(team_id_list, list):
                 # admin only endpoint -> `/team/delete`
-                async with self.tx() as transaction:
+                async with self.tx(max_wait=_TEAM_DELETE_TX_BUDGET, timeout=_TEAM_DELETE_TX_BUDGET) as transaction:
                     _ = await transaction.query_raw(_LOCK_KEYS_BY_TEAM_SQL, team_id_list)
                     _ = await transaction.litellm_verificationtoken.delete_many(where={"team_id": {"in": team_id_list}})
         except Exception as e:

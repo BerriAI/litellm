@@ -295,7 +295,9 @@ class _TxModelTables(Protocol):
 
 @runtime_checkable
 class _TransactionFactory(Protocol):
-    def __call__(self, *, timeout: datetime.timedelta = ...) -> AbstractAsyncContextManager[_TxModelTables]: ...
+    def __call__(
+        self, *, timeout: datetime.timedelta = ..., max_wait: datetime.timedelta = ...
+    ) -> AbstractAsyncContextManager[_TxModelTables]: ...
 
 
 class _ModelTransactionClient(LiteLLMBaseModel):
@@ -2449,7 +2451,8 @@ async def delete_team_models(
     """
     deleted_model_ids: Final[list[str]] = []
     transaction_client: Final = _ModelTransactionClient.model_validate(prisma_client.db)
-    async with transaction_client.tx(timeout=datetime.timedelta(seconds=TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS)) as tx:
+    tx_budget: Final = datetime.timedelta(seconds=TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS)
+    async with transaction_client.tx(max_wait=tx_budget, timeout=tx_budget) as tx:
         for team_id in team_ids:
             rows = await _get_team_deployments(team_id, prisma_client, table=tx.litellm_proxymodeltable)
             model_ids = [row.model_id for row in rows]
