@@ -89,6 +89,10 @@ from litellm.proxy.hooks.batch_enqueued_tokens import (
     batch_response_view,
     canonical_provider_batch_id,
 )
+from litellm.proxy.hooks.model_concurrency_metrics import (
+    DEFAULT_MODEL_CONCURRENCY_QUEUE_OBSERVER,
+    ModelConcurrencyQueueObserver,
+)
 from litellm.proxy.hooks.model_concurrency_queue import (
     MODEL_CONCURRENCY_DESCRIPTOR_KEY,
     MODEL_CONCURRENCY_QUEUE_POLL_INTERVAL_SECONDS,
@@ -730,6 +734,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         model_concurrency_limit_resolver: Callable[
             [], Mapping[str, ModelConcurrencyLimit]
         ] = model_concurrency_limits_from_general_settings,
+        model_concurrency_queue_observer: ModelConcurrencyQueueObserver = DEFAULT_MODEL_CONCURRENCY_QUEUE_OBSERVER,
     ):
         self.internal_usage_cache = internal_usage_cache
         self._time_provider = time_provider or datetime.now
@@ -741,6 +746,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self._fail_closed_resolver = fail_closed_resolver
         self._force_hash_tag_grouping_resolver = force_hash_tag_grouping_resolver
         self._model_concurrency_limit_resolver = model_concurrency_limit_resolver
+        self._model_concurrency_queue_observer = model_concurrency_queue_observer
         self.rate_limits: Final = rate_limit_store or RateLimitStore(
             connect(internal_usage_cache.dual_cache.redis_cache).rate_limits(
                 internal_usage_cache.dual_cache.default_in_memory_ttl
@@ -1696,11 +1702,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         slot_id: Final = uuid.uuid4().hex
         loop: Final = asyncio.get_running_loop()
         deadline: Final = loop.time() + configured.queue_timeout_seconds
-        while not await self._try_acquire_model_concurrency_slot(scope, configured.limit, slot_id):
-            remaining = deadline - loop.time()
-            if remaining <= 0:
-                raise self._model_concurrency_timeout_error(model_group, configured, requested_model)
-            await asyncio.sleep(min(MODEL_CONCURRENCY_QUEUE_POLL_INTERVAL_SECONDS, remaining))
+        if await self._try_acquire_model_concurrency_slot(scope, configured.limit, slot_id):
+            return ModelConcurrencySlot(scope=scope, slot_id=slot_id)
+        self._model_concurrency_queue_observer.request_queued(model_group)
+        try:
+            while not await self._try_acquire_model_concurrency_slot(scope, configured.limit, slot_id):
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    raise self._model_concurrency_timeout_error(model_group, configured, requested_model)
+                await asyncio.sleep(min(MODEL_CONCURRENCY_QUEUE_POLL_INTERVAL_SECONDS, remaining))
+        finally:
+            self._model_concurrency_queue_observer.request_dequeued(model_group)
         return ModelConcurrencySlot(scope=scope, slot_id=slot_id)
 
     async def _try_acquire_model_concurrency_slot(

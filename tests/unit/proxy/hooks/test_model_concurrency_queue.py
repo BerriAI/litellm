@@ -1,12 +1,15 @@
 import asyncio
+import os
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from types import MappingProxyType
+from typing import Final
 
 import pytest
 
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.hooks.model_concurrency_metrics import ModelConcurrencyQueueObserver
 from litellm.proxy.hooks.model_concurrency_queue import (
     MODEL_CONCURRENCY_DESCRIPTOR_KEY,
     ModelConcurrencyLimit,
@@ -24,6 +27,7 @@ from tests.unit.redis.stores.fake_rate_limits import FakeRateLimits
 
 _MODEL_GROUP = "gpt-4o"
 _AUTH = UserAPIKeyAuth(api_key="sk-model-concurrency")
+_HOST_PROMETHEUS_MULTIPROC_DIR: Final = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
 
 
 @pytest.fixture(autouse=True)
@@ -60,17 +64,38 @@ def _install_gauge_scripts(
     return gauges
 
 
+class _RecordingQueueObserver(ModelConcurrencyQueueObserver):
+    def __init__(self) -> None:
+        self.depths: dict[str, int] = {}
+        self.events: list[tuple[str, str]] = []
+        self.queued_event: asyncio.Event = asyncio.Event()
+
+    def request_queued(self, model_group: str) -> None:
+        self.depths[model_group] = self.depths.get(model_group, 0) + 1
+        self.events.append(("queued", model_group))
+        self.queued_event.set()
+
+    def request_dequeued(self, model_group: str) -> None:
+        self.depths[model_group] = self.depths.get(model_group, 0) - 1
+        self.events.append(("dequeued", model_group))
+
+    def depth(self, model_group: str = _MODEL_GROUP) -> int:
+        return self.depths.get(model_group, 0)
+
+
 def _handler(
     fakes: FakeRateLimits,
     limits: Mapping[str, ModelConcurrencyLimit],
     *,
     model_group_resolver: Callable[[str], str | None] | None = None,
+    queue_observer: ModelConcurrencyQueueObserver | None = None,
 ) -> PROXY_MaxParallelRequestsHandler_v3:
     return PROXY_MaxParallelRequestsHandler_v3(
         internal_usage_cache=InternalUsageCache(DualCache()),
         rate_limit_store=fakes.store(),
         model_concurrency_limit_resolver=lambda: limits,
         model_group_resolver=model_group_resolver or (lambda name: name),
+        model_concurrency_queue_observer=queue_observer or _RecordingQueueObserver(),
     )
 
 
@@ -142,6 +167,105 @@ async def test_waiter_is_admitted_when_a_slot_frees() -> None:
 
 
 @pytest.mark.asyncio
+async def test_waiter_is_counted_in_the_queue_until_it_gets_a_slot() -> None:
+    fakes = FakeRateLimits()
+    _install_gauge_scripts(fakes)
+    observer = _RecordingQueueObserver()
+    handler = _handler(
+        fakes,
+        {_MODEL_GROUP: ModelConcurrencyLimit(limit=1, queue_timeout_seconds=5)},
+        queue_observer=observer,
+    )
+    cache = DualCache()
+
+    await handler.async_pre_call_hook(_AUTH, cache, {"model": _MODEL_GROUP}, "acompletion")
+    assert observer.depth() == 0
+
+    async def waiter() -> None:
+        _request_stash.set(None)
+        await handler.async_pre_call_hook(_AUTH, cache, {"model": _MODEL_GROUP}, "acompletion")
+        await handler.async_release_max_parallel_requests_on_disconnect(_AUTH)
+
+    task = asyncio.create_task(waiter())
+    await asyncio.wait_for(observer.queued_event.wait(), timeout=5)
+    assert observer.depth() == 1
+    assert not task.done()
+
+    await handler.async_release_max_parallel_requests_on_disconnect(_AUTH)
+    await asyncio.wait_for(task, timeout=5)
+
+    assert observer.depth() == 0
+    assert observer.events == [("queued", _MODEL_GROUP), ("dequeued", _MODEL_GROUP)]
+
+
+@pytest.mark.asyncio
+async def test_waiter_that_times_out_leaves_the_queue() -> None:
+    fakes = FakeRateLimits()
+    _install_gauge_scripts(fakes)
+    observer = _RecordingQueueObserver()
+    handler = _handler(
+        fakes,
+        {_MODEL_GROUP: ModelConcurrencyLimit(limit=1, queue_timeout_seconds=0)},
+        queue_observer=observer,
+    )
+    cache = DualCache()
+
+    await handler.async_pre_call_hook(_AUTH, cache, {"model": _MODEL_GROUP}, "acompletion")
+
+    with pytest.raises(ProxyRateLimitError):
+        await _fresh_request(lambda: handler.async_pre_call_hook(_AUTH, cache, {"model": _MODEL_GROUP}, "acompletion"))
+
+    assert observer.depth() == 0
+    assert observer.events == [("queued", _MODEL_GROUP), ("dequeued", _MODEL_GROUP)]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_waiter_leaves_the_queue() -> None:
+    fakes = FakeRateLimits()
+    _install_gauge_scripts(fakes)
+    observer = _RecordingQueueObserver()
+    handler = _handler(
+        fakes,
+        {_MODEL_GROUP: ModelConcurrencyLimit(limit=1, queue_timeout_seconds=5)},
+        queue_observer=observer,
+    )
+    cache = DualCache()
+
+    await handler.async_pre_call_hook(_AUTH, cache, {"model": _MODEL_GROUP}, "acompletion")
+
+    async def waiter() -> None:
+        _request_stash.set(None)
+        await handler.async_pre_call_hook(_AUTH, cache, {"model": _MODEL_GROUP}, "acompletion")
+
+    task = asyncio.create_task(waiter())
+    await asyncio.wait_for(observer.queued_event.wait(), timeout=5)
+    assert observer.depth() == 1
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert observer.depth() == 0
+
+
+@pytest.mark.asyncio
+async def test_request_that_gets_a_slot_immediately_is_not_queued() -> None:
+    fakes = FakeRateLimits()
+    _install_gauge_scripts(fakes)
+    observer = _RecordingQueueObserver()
+    handler = _handler(
+        fakes,
+        {_MODEL_GROUP: ModelConcurrencyLimit(limit=1, queue_timeout_seconds=5)},
+        queue_observer=observer,
+    )
+
+    await handler.async_pre_call_hook(_AUTH, DualCache(), {"model": _MODEL_GROUP}, "acompletion")
+
+    assert observer.events == []
+    assert observer.depth() == 0
+
+
+@pytest.mark.asyncio
 async def test_post_call_success_releases_the_slot() -> None:
     fakes = FakeRateLimits()
     _install_gauge_scripts(fakes)
@@ -164,10 +288,12 @@ async def test_post_call_success_releases_the_slot() -> None:
 async def test_model_group_alias_shares_the_group_slot() -> None:
     fakes = FakeRateLimits()
     _install_gauge_scripts(fakes)
+    observer = _RecordingQueueObserver()
     handler = _handler(
         fakes,
         {_MODEL_GROUP: ModelConcurrencyLimit(limit=1, queue_timeout_seconds=0)},
         model_group_resolver=lambda name: {"my-alias": _MODEL_GROUP}.get(name),
+        queue_observer=observer,
     )
     cache = DualCache()
 
@@ -176,6 +302,8 @@ async def test_model_group_alias_shares_the_group_slot() -> None:
 
     with pytest.raises(ProxyRateLimitError):
         await _fresh_request(lambda: handler.async_pre_call_hook(_AUTH, cache, {"model": "my-alias"}, "acompletion"))
+
+    assert observer.events == [("queued", _MODEL_GROUP), ("dequeued", _MODEL_GROUP)]
 
 
 @pytest.mark.asyncio
@@ -221,3 +349,28 @@ def test_general_settings_reads_the_model_concurrency_key() -> None:
     }
     assert _general_settings_model_concurrency({}) == {}
     assert _general_settings_model_concurrency({"model_concurrency": "nope"}) == {}
+
+
+def test_prometheus_observer_tracks_queue_depth_per_model_group(monkeypatch: pytest.MonkeyPatch) -> None:
+    if _HOST_PROMETHEUS_MULTIPROC_DIR is not None:
+        monkeypatch.setenv("PROMETHEUS_MULTIPROC_DIR", _HOST_PROMETHEUS_MULTIPROC_DIR)
+
+    from prometheus_client import REGISTRY
+
+    from litellm.proxy.hooks.model_concurrency_metrics import (
+        MODEL_CONCURRENCY_QUEUE_SIZE_METRIC,
+        PrometheusModelConcurrencyQueueObserver,
+    )
+
+    observer = PrometheusModelConcurrencyQueueObserver()
+    labels = {"model_group": "gpt-4o-metrics-test"}
+
+    observer.request_queued(labels["model_group"])
+    observer.request_queued(labels["model_group"])
+    try:
+        assert REGISTRY.get_sample_value(MODEL_CONCURRENCY_QUEUE_SIZE_METRIC, labels) == 2
+    finally:
+        observer.request_dequeued(labels["model_group"])
+        observer.request_dequeued(labels["model_group"])
+
+    assert REGISTRY.get_sample_value(MODEL_CONCURRENCY_QUEUE_SIZE_METRIC, labels) == 0

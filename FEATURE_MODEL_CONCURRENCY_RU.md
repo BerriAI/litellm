@@ -22,17 +22,48 @@ general_settings:
 - **Сессия** — один HTTP-запрос занимает один слот на всё время жизни, включая стриминг
 - **Интервал опроса** — 0.1 секунды (`MODEL_CONCURRENCY_QUEUE_POLL_INTERVAL_SECONDS`)
 
+## Метрики Prometheus
+
+Глубина очереди отдаётся как gauge на эндпоинте `/metrics`:
+
+```
+litellm_model_concurrency_queue_size{model_group="gpt-4o"}
+```
+
+- Метка `model_group` — та же группа модели, для которой задан лимит
+- Значение — сколько запросов **в этом воркере** прямо сейчас ждут свободный слот
+- Запрос, получивший слот с первой попытки, в метрике не появляется
+- Запрос уходит из метрики при получении слота, таймауте и отмене клиентом
+
+Gauge создаётся лениво, при первом запросе, который встал в очередь. Пока очередь ни разу не заполнялась, серии с этой меткой может не быть. Это нормальное поведение Prometheus, `rate`/`sum` по отсутствующей серии даёт пустой результат.
+
+С `PROMETHEUS_MULTIPROC_DIR` метрика использует `multiprocess_mode="livesum"`, поэтому scrape внутри пода суммирует ожидающих по всем воркерам. Между репликами прокси сумма считается на стороне Prometheus. Запрос для панели Grafana:
+
+```promql
+sum by (model_group) (litellm_model_concurrency_queue_size)
+```
+
+Проверить, что метрика отдаётся:
+
+```bash
+curl -s localhost:4000/metrics | grep litellm_model_concurrency_queue_size
+```
+
+Таймаут ожидания отдаётся клиенту как 429 с `rate_limit_type="concurrent_requests"`, отдельной метрики для таймаутов очереди нет.
+
 ## Изменённые файлы
 
 | Файл | Изменение |
 |------|-----------|
 | `litellm/proxy/hooks/model_concurrency_queue.py` | Новый модуль: модель конфигурации и парсер |
-| `litellm/proxy/hooks/parallel_request_limiter_v3.py` | Интеграция очереди: acquire/release слотов |
-| `tests/unit/proxy/hooks/test_model_concurrency_queue.py` | Новые тесты поведения |
+| `litellm/proxy/hooks/model_concurrency_metrics.py` | Prometheus gauge глубины очереди и интерфейс наблюдателя |
+| `litellm/proxy/hooks/parallel_request_limiter_v3.py` | Интеграция очереди: acquire/release слотов и учёт глубины |
+| `tests/unit/proxy/hooks/test_model_concurrency_queue.py` | Новые тесты поведения и метрики |
 
 ## Тесты
 
 - 564 теста в v3-лимитере + batch post-call + legacy-лимитер + новая очередь
+- Метрика очереди: тесты проверяют рост при ожидании и возврат к нулю после слота, таймаута и отмены
 - Ruff strict gate: OK (правила не выросли относительно merge-base)
 - Type discipline gate: OK (LIT-правила не выросли относительно merge-base)
 - Live e2e: последовательные запросы проходят, параллельные встают в очередь, 429 при таймауте во время стриминга
