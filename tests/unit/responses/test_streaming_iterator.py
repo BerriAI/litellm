@@ -8,6 +8,7 @@ import functools
 import gc
 import json
 import threading
+import time
 import weakref
 from collections.abc import Callable, Mapping
 from datetime import datetime
@@ -450,6 +451,45 @@ async def test_stream_ending_without_terminal_event_names_the_deployment(prefix)
     with pytest.raises((litellm.APIConnectionError, MidStreamFallbackError)) as exc_info:
         async for _ in iterator:
             pass
+
+    debug_info: Final = exc_info.value.litellm_debug_info
+    assert isinstance(debug_info, str)
+    assert "API Base: `https://relay.example/openai/v1`" in debug_info
+    assert "deployment: `openai/gpt-4o-mini`" in debug_info
+
+
+_DEPLOYMENT_LITELLM_PARAMS: Final = {
+    "metadata": {
+        "api_base": "https://relay.example/openai/v1",
+        "model_group": "responses-alias",
+        "deployment": "openai/gpt-4o-mini",
+    }
+}
+
+
+async def _drain_async(iterator: ResponsesAPIStreamingIterator) -> None:
+    async for _ in iterator:
+        pass
+
+
+async def _drain_sync(iterator: SyncResponsesAPIStreamingIterator) -> None:
+    for _ in iterator:
+        pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("make_iterator", "drain"), [(_make_iterator, _drain_async), (_make_sync_iterator, _drain_sync)]
+)
+async def test_max_streaming_duration_timeout_names_the_deployment(monkeypatch, make_iterator, drain):
+    monkeypatch.setattr(streaming_module, "LITELLM_MAX_STREAMING_DURATION_SECONDS", 10.0)
+    logging_obj: Final = _failure_tracking_logging_obj()
+    logging_obj.model_call_details = {"litellm_params": _DEPLOYMENT_LITELLM_PARAMS}
+    iterator: Final = make_iterator(sse_events=_PARTIAL_OUTPUT_EVENTS, logging_obj=logging_obj)
+    iterator._stream_created_time = time.time() - 20
+
+    with pytest.raises(litellm.Timeout, match="max streaming duration") as exc_info:
+        await drain(iterator)
 
     debug_info: Final = exc_info.value.litellm_debug_info
     assert isinstance(debug_info, str)

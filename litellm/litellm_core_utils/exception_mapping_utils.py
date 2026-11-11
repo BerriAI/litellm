@@ -2606,7 +2606,13 @@ def exception_type(
     extra_kwargs: object = _NO_LITELLM_PARAMS,
 ):
     """Maps an LLM Provider Exception to OpenAI Exception Format"""
-    if any(isinstance(original_exception, exc_type) for exc_type in litellm.LITELLM_EXCEPTION_TYPES):
+    request_debug_info: Final = (
+        _request_debug_info(model, extra_kwargs, completion_kwargs)
+        if model or custom_llm_provider
+        else _NO_REQUEST_DEBUG_INFO
+    )
+    if isinstance(original_exception, tuple(litellm.LITELLM_EXCEPTION_TYPES)):
+        _attach_debug_info(original_exception, request_debug_info.without_prompt)
         return original_exception
     if _is_guardrail_block(original_exception):
         return original_exception
@@ -2628,11 +2634,6 @@ def exception_type(
         print()  # noqa: T201
 
     litellm_response_headers: Final = _get_response_headers(original_exception=original_exception)
-    request_debug_info: Final = (
-        _request_debug_info(model, extra_kwargs, completion_kwargs)
-        if model or custom_llm_provider
-        else _NO_REQUEST_DEBUG_INFO
-    )
     extra_information: Final = request_debug_info.with_prompt
     try:
         error_str = (

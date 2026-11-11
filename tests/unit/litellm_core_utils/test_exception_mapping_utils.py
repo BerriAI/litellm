@@ -212,6 +212,62 @@ def test_mapper_that_passes_its_debug_info_keeps_the_prompt_line() -> None:
     assert "deployment: `openai/gpt-5.4-mini`" in debug_info
 
 
+def test_debug_info_has_no_messages_line_when_the_request_has_no_messages() -> None:
+    assert "Messages" not in _debug_info_for_api_base("https://gateway.example/v1")
+
+
+@pytest.mark.parametrize(
+    "already_mapped",
+    [
+        litellm.InternalServerError(
+            message="Upstream generation aborted (finish_reason=abort)", model="gpt-5.4-mini", llm_provider="openai"
+        ),
+        litellm.Timeout(
+            message="Stream exceeded max streaming duration of 10s", model="gpt-5.4-mini", llm_provider="openai"
+        ),
+    ],
+    ids=["finish_reason_abort", "max_streaming_duration"],
+)
+def test_already_mapped_error_gains_the_deployment_debug_info(already_mapped: Exception) -> None:
+    returned: Final = exception_type(
+        model="gpt-5.4-mini",
+        original_exception=already_mapped,
+        custom_llm_provider="openai",
+        completion_kwargs={"messages": [{"role": "user", "content": "CONFIDENTIAL patient record"}]},
+        extra_kwargs={
+            "api_base": "https://relay.example/v1",
+            "metadata": {"model_group": "gpt-alias", "deployment": "openai/gpt-5.4-mini"},
+        },
+    )
+    assert returned is already_mapped
+    debug_info: Final = returned.litellm_debug_info
+    assert isinstance(debug_info, str)
+    assert "API Base: `https://relay.example/v1`" in debug_info
+    assert "deployment: `openai/gpt-5.4-mini`" in debug_info
+    assert "CONFIDENTIAL" not in debug_info
+
+
+class _ErrorWhoseMessageCannotBeRead(Exception):
+    @property
+    def message(self) -> str:
+        raise RuntimeError("message unavailable")
+
+
+def test_error_that_breaks_the_mapping_still_names_the_deployment() -> None:
+    with pytest.raises(litellm.APIConnectionError) as caught:
+        exception_type(
+            model="claude-opus-5-5",
+            original_exception=_ErrorWhoseMessageCannotBeRead("upstream failed"),
+            custom_llm_provider="anthropic",
+            completion_kwargs={},
+            extra_kwargs={"api_base": "https://relay.example", "metadata": {"deployment": "anthropic/claude-opus-5-5"}},
+        )
+    debug_info: Final = caught.value.litellm_debug_info
+    assert isinstance(debug_info, str)
+    assert "API Base: `https://relay.example`" in debug_info
+    assert "deployment: `anthropic/claude-opus-5-5`" in debug_info
+
+
 # Test cases for is_error_str_context_window_exceeded
 # Tuple format: (error_message, expected_result)
 context_window_test_cases = [
