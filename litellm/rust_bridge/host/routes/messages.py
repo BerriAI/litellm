@@ -9,7 +9,7 @@ import ipaddress
 import json
 import os
 import socket
-from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from typing import Final, TypeAlias, cast  # noqa: TID251  # narrows native payloads to public TypedDicts
 
@@ -379,6 +379,7 @@ async def pre_request_hooks(request: Mapping[str, object]) -> Mapping[str, objec
         _litellm_messages_presanitized=True,
         **kwargs,
     )
+    _python_handler_params({**named, **kwargs}, hooked_provider)
     if hooked_provider != requested_provider:
         raise _unsupported(requested_provider, model, f"a pre-request hook routing the call to {hooked_provider}")
     return {**named, **kwargs}
@@ -490,6 +491,12 @@ def _rejection(error: Exception, request: Mapping[str, object], request_provider
             _validate_metadata(_METADATA.validate_python(metadata))
         except ValidationError as invalid:
             return invalid
+    provider_rejection: Final = getattr(error, "messages_provider_rejection", None)
+    if isinstance(provider_rejection, str):
+        _log_resolved_call(request, request_provider)
+        return _public_provider_error(
+            _config_error(400, provider_rejection, (), request, request_provider), error, request, request_provider
+        )
     if getattr(error, "messages_unsupported_param", False):
         return litellm.UnsupportedParamsError(message=str(error))
     return litellm.BadRequestError(
@@ -633,6 +640,20 @@ def _provider_error(error: Exception, request: Mapping[str, object], request_pro
     if failure is None:
         return None
     status, text, headers = failure
+    provider_error: Final = _config_error(status, text, headers, request, request_provider)
+    if transport is not None and isinstance(provider_error, BaseLLMException):
+        # Python's `_handle_error` gives a failure without a response the status 500.
+        provider_error.status_code_is_synthesized = True
+    return provider_error
+
+
+def _config_error(
+    status: int,
+    text: str,
+    headers: Sequence[tuple[str, str]],
+    request: Mapping[str, object],
+    request_provider: str,
+) -> Exception:
     api_base: Final = request.get("api_base")
     config: Final = native_messages_config(
         str(request["model"]).removeprefix(f"{request_provider}/"),
@@ -640,17 +661,26 @@ def _provider_error(error: Exception, request: Mapping[str, object], request_pro
         request.get("model_info"),
         api_base if isinstance(api_base, str) else None,
     )
-    provider_error: Final = (
-        cast(_ERROR_CLASS, config.get_error_class)(  # cast-ok: the config's untyped headers parameter
-            error_message=text, status_code=status, headers=dict(headers)
-        )
-        if config is not None
-        else AnthropicError(status_code=status, message=text, headers=httpx.Headers(headers))
+    if config is None:
+        return AnthropicError(status_code=status, message=text, headers=httpx.Headers(headers))
+    return cast(_ERROR_CLASS, config.get_error_class)(  # cast-ok: the config's untyped headers parameter
+        error_message=text, status_code=status, headers=dict(headers)
     )
-    if transport is not None and isinstance(provider_error, BaseLLMException):
-        # Python's `_handle_error` gives a failure without a response the status 500.
-        provider_error.status_code_is_synthesized = True
-    return provider_error
+
+
+def _public_provider_error(
+    provider_error: Exception, error: Exception, request: Mapping[str, object], request_provider: str
+) -> Exception:
+    try:
+        return _exception_type(
+            model=str(request["model"]),
+            custom_llm_provider=request_provider,
+            original_exception=provider_error,
+            extra_kwargs=dict(request),
+        )
+    except Exception as mapped:  # noqa: BLE001  # exception_type raises the mapped public error
+        mapped.__context__ = error
+        return mapped
 
 
 def _log_resolved_call(request: Mapping[str, object], request_provider: str) -> None:
@@ -701,23 +731,33 @@ def map_failure(error: Exception, request: Mapping[str, object], request_provide
         return failures.map_native_failure(
             error, str(request["model"]), request_provider, request, optional_str(request.get("api_base"))
         )
-    try:
-        return _exception_type(
-            model=str(request["model"]),
-            custom_llm_provider=request_provider,
-            original_exception=provider_error,
-            extra_kwargs=dict(request),
-        )
-    except Exception as mapped:  # noqa: BLE001  # exception_type raises the mapped public error
-        mapped.__context__ = error
-        return mapped
+    return _public_provider_error(provider_error, error, request, request_provider)
 
 
 def _drop_params(kwargs: Mapping[str, object]) -> bool:
     return bool(litellm.drop_params) or normalize_drop_params(kwargs.get("drop_params")) is True
 
 
+def _python_handler_params(request: Mapping[str, object], custom_llm_provider: object) -> GenericLiteLLMParams:
+    return GenericLiteLLMParams(
+        **{name: value for name, value in request.items() if name not in _HANDLER_PARAMS},
+        api_key=request.get("api_key"),
+        api_base=request.get("api_base"),
+        custom_llm_provider=custom_llm_provider,
+    )
+
+
+def _raise_as_python_does(request: Mapping[str, object]) -> None:
+    iter(cast(Iterable[object], request.get("messages")))  # cast-ok: iterated unchecked, as Python's handler does
+    tools: Final = request.get("tools")
+    if tools is not None and not isinstance(tools, list | tuple) and has_interceptors():
+        interceptor(request)
+    _python_handler_params(request, request.get("custom_llm_provider"))
+
+
 def settings(kwargs: Mapping[str, object], request: Mapping[str, object] | None = None) -> dict[str, object]:
+    if request is not None:
+        _raise_as_python_does(request)
     configured: Final = MessagesSettings(
         drop_params=_drop_params(kwargs),
         reasoning_auto_summary=is_reasoning_auto_summary_enabled(),

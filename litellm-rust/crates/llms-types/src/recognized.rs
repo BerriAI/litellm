@@ -33,6 +33,26 @@ impl<T> Recognized<T> {
     }
 }
 
+impl Recognized<bool> {
+    pub fn is_truthy(&self) -> bool {
+        match self {
+            Self::Known(flag) => *flag,
+            Self::Unrecognized(other) => python_truthy(other),
+        }
+    }
+}
+
+pub fn python_truthy(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(flag) => *flag,
+        Value::Number(number) => number.as_f64().is_none_or(|number| number != 0.0),
+        Value::String(text) => !text.is_empty(),
+        Value::Array(items) => !items.is_empty(),
+        Value::Object(fields) => !fields.is_empty(),
+    }
+}
+
 pub fn map_known_runs<T>(
     items: Vec<Recognized<T>>,
     mut f: impl FnMut(Vec<T>) -> Vec<T>,
@@ -65,6 +85,24 @@ mod tests {
     use super::*;
     use rstest::rstest;
     use serde_json::json;
+
+    #[rstest]
+    #[case::known_true(Recognized::Known(true), true)]
+    #[case::known_false(Recognized::Known(false), false)]
+    #[case::string_true(Recognized::Unrecognized(json!("true")), true)]
+    #[case::string_false(Recognized::Unrecognized(json!("false")), true)]
+    #[case::empty_string(Recognized::Unrecognized(json!("")), false)]
+    #[case::zero(Recognized::Unrecognized(json!(0)), false)]
+    #[case::negative_zero(Recognized::Unrecognized(json!(-0.0)), false)]
+    #[case::one(Recognized::Unrecognized(json!(1)), true)]
+    #[case::null(Recognized::Unrecognized(Value::Null), false)]
+    #[case::empty_list(Recognized::Unrecognized(json!([])), false)]
+    #[case::list(Recognized::Unrecognized(json!([0])), true)]
+    #[case::empty_object(Recognized::Unrecognized(json!({})), false)]
+    #[case::object(Recognized::Unrecognized(json!({"a": 0})), true)]
+    fn flags_are_read_by_python_truthiness(#[case] flag: Recognized<bool>, #[case] expected: bool) {
+        assert_eq!(flag.is_truthy(), expected);
+    }
 
     #[test]
     fn runs_of_known_items_are_mapped_around_unrecognized_ones() {

@@ -272,10 +272,12 @@ async fn provider_call(
         drops_unsupported_params: shaping.settings.drops_unsupported_params,
         ..MessagesTransformContext::new(shaping.capabilities, shaping.settings.drop_params)
     };
-    let without_listed =
-        without_additional_drop_params(sanitized, &shaping.settings.additional_drop_params)?;
-    let trimmed = requested_optional_params(without_listed, provider, &transform_context)?;
-    let requested_params = serde_json::to_value(&trimmed.params).map_err(serialize_failure)?;
+    let dropped_keys = top_level_paths(&shaping.settings.additional_drop_params);
+    let without_keys = without_additional_drop_params(sanitized, &dropped_keys)?;
+    let requested = requested_optional_params(without_keys, provider, &transform_context)?;
+    let requested_params = serde_json::to_value(&requested.params).map_err(serialize_failure)?;
+    let trimmed =
+        without_additional_drop_params(requested, &shaping.settings.additional_drop_params)?;
 
     let scoped =
         get_provider_specific_headers(provider_specific_header.as_ref(), provider.as_str());
@@ -312,7 +314,7 @@ async fn provider_call(
     let body = config.request_body(
         tool_custom_field.apply(
             config.transform_anthropic_messages_request(trimmed, &transform_context)?,
-            shaping.settings.drop_params,
+            shaping.settings.drops_unsupported_params,
         ),
         &validated.headers,
         shaping.settings.drop_params,
@@ -321,7 +323,7 @@ async fn provider_call(
         api_base.as_deref(),
         &body.model,
         &connection_params,
-        body.params.stream == Some(true),
+        body.params.streams(),
         &env_lookup,
     )?;
     let environment = ValidatedEnvironment {
@@ -358,19 +360,10 @@ async fn provider_call(
             request_context,
         )
         .await?;
-    let stream = match wire.body.get("stream") {
-        None | Some(Value::Null) => false,
-        Some(Value::Bool(stream)) => *stream,
-        Some(value) => {
-            return Err(Error::invalid_request(
-                litellm_llms::ErrorDetail::InvalidValue {
-                    field: "stream",
-                    expected: "a boolean",
-                    actual: value.clone(),
-                },
-            ));
-        }
-    };
+    let stream = wire
+        .body
+        .get("stream")
+        .is_some_and(litellm_llms_types::recognized::python_truthy);
     Ok(ProviderCall {
         identity,
         wire,
@@ -439,6 +432,14 @@ fn requested_optional_params(
         },
         ..request
     })
+}
+
+fn top_level_paths(paths: &[String]) -> Vec<String> {
+    paths
+        .iter()
+        .filter(|path| !path.contains(['.', '[']))
+        .cloned()
+        .collect()
 }
 
 fn without_additional_drop_params(
@@ -810,11 +811,34 @@ fn decode_response(
             return Ok(MessagesBody::Unchecked(body));
         }
     };
-    config
+    let message = config
         .transform_anthropic_messages_response(model, response)
-        .map(|message| MessagesBody::Message(Box::new(message)))
         .map_err(Error::from)
-        .map_err(Error::after_send)
+        .map_err(Error::after_send)?;
+    if text_has_stop_reason(text) {
+        return Ok(MessagesBody::Message(Box::new(message)));
+    }
+    match serde_json::to_value(message).map_err(serialize_failure)? {
+        Value::Object(mut body) => {
+            body.remove("stop_reason");
+            Ok(MessagesBody::Unchecked(body))
+        }
+        _ => unreachable!("a message serializes as a JSON object"),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct StopReasonKey {
+    #[serde(default, deserialize_with = "key_present")]
+    stop_reason: bool,
+}
+
+fn key_present<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    <serde::de::IgnoredAny as serde::Deserialize<'de>>::deserialize(deserializer).map(|_| true)
+}
+
+fn text_has_stop_reason(text: &str) -> bool {
+    serde_json::from_str::<StopReasonKey>(text).is_ok_and(|key| key.stop_reason)
 }
 
 fn streaming_response(

@@ -876,7 +876,14 @@ impl LegacyLogging {
                 ),
             )?;
         }
-        Streaming::Opened.call(py, (self.logger()?.object(py), head.bind(py)))?;
+        Streaming::Opened.call(
+            py,
+            (
+                self.logger()?.object(py),
+                head.bind(py),
+                self.operation == LoggingOperation::Messages,
+            ),
+        )?;
         self.stream = Some(DeliveredStream {
             chunks: PyList::empty(py).unbind(),
             first_chunk: None,

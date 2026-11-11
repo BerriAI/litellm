@@ -337,7 +337,7 @@ pub struct MessagesOptionalParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop_sequences: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub stream: Option<bool>,
+    pub stream: Option<Recognized<bool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<Recognized<f64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -372,6 +372,12 @@ pub struct MessagesOptionalParams {
     pub compaction: Option<Value>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+impl MessagesOptionalParams {
+    pub fn streams(&self) -> bool {
+        self.stream.as_ref().is_some_and(Recognized::is_truthy)
+    }
 }
 
 impl Message {
@@ -448,7 +454,7 @@ mod tests {
         assert_eq!(
             (
                 request.params.max_tokens.clone(),
-                request.params.stream,
+                request.params.stream.clone(),
                 request
                     .params
                     .extra
@@ -458,7 +464,7 @@ mod tests {
             ),
             (
                 Some(Recognized::Known(16_u64)),
-                Some(true),
+                Some(Recognized::Known(true)),
                 vec!["safeguards"]
             )
         );
@@ -467,6 +473,8 @@ mod tests {
 
     #[rstest]
     #[case::numeric_string(json!({"max_tokens": "1024", "temperature": "0.5", "top_p": "x", "top_k": "5"}))]
+    #[case::string_stream(json!({"stream": "true"}))]
+    #[case::integer_stream(json!({"stream": 0}))]
     #[case::floats(json!({"max_tokens": 1024.0, "top_k": 1.5}))]
     #[case::booleans(json!({"max_tokens": true, "temperature": false}))]
     #[case::wide_integers(json!({"max_tokens": 18_446_744_073_709_551_615_u64, "top_k": 9_223_372_036_854_775_808_u64}))]

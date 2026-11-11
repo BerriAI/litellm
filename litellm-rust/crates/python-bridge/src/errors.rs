@@ -36,6 +36,28 @@ const MESSAGES_MISSING_CREDENTIAL: &str = "messages_missing_credential";
 /// Python refuses the request only once its logger knows the resolved model and provider (the
 /// provider config's request transform), so the failure logs them.
 const MESSAGES_LATE_REJECTION: &str = "messages_late_rejection";
+/// The text of a refusal Python's provider config raises from its request transform, which its
+/// HTTP handler maps as a provider error.
+const MESSAGES_PROVIDER_REJECTION: &str = "messages_provider_rejection";
+
+fn provider_rejection(rejection: &(dyn StdError + 'static)) -> Option<String> {
+    match rejection.downcast_ref::<litellm_llms::Error>() {
+        Some(litellm_llms::Error::MissingField("max_tokens")) => {
+            return Some("max_tokens is required for Anthropic /v1/messages API".to_owned());
+        }
+        Some(_) => return None,
+        None => {}
+    }
+    match rejection.downcast_ref::<litellm_llms::ErrorDetail>() {
+        Some(
+            detail @ litellm_llms::ErrorDetail::InvalidChoice {
+                field: "reasoning effort",
+                ..
+            },
+        ) => Some(format!("litellm.BadRequestError: {detail}")),
+        _ => None,
+    }
+}
 
 pub(crate) fn upstream_error(
     py: Python<'_>,
@@ -125,6 +147,9 @@ pub(crate) fn route_failure(
                 Some(litellm_llms::ErrorDetail::NonNumericThinkingBudget { .. })
             ) {
                 value.setattr(MESSAGES_LATE_REJECTION, true)?;
+            }
+            if let Some(text) = provider_rejection(rejection) {
+                value.setattr(MESSAGES_PROVIDER_REJECTION, text)?;
             }
             native
         }
@@ -324,6 +349,45 @@ mod tests {
             let failure = route_error_to_pyerr(error);
             assert_eq!(failure.value(py).to_string(), report);
             assert!(report.contains("hook backend down"), "{report}");
+        });
+    }
+
+    #[rstest::rstest]
+    #[case::missing_max_tokens(
+        litellm_llms::Error::MissingField("max_tokens").into(),
+        Some("max_tokens is required for Anthropic /v1/messages API")
+    )]
+    #[case::unmapped_effort(
+        Error::invalid_request(litellm_llms::ErrorDetail::InvalidChoice {
+            field: "reasoning effort",
+            actual: "'ultra'".into(),
+            choices: vec!["low", "none"],
+        }),
+        Some("litellm.BadRequestError: Unmapped reasoning effort: 'ultra'. Must be one of: 'low', 'none'.")
+    )]
+    #[case::other_missing_field(litellm_llms::Error::MissingField("model").into(), None)]
+    #[case::unsupported_param(
+        Error::invalid_request(litellm_llms::ErrorDetail::UnsupportedParameter {
+            model: "claude".into(),
+            param: "top_k".into(),
+            value: "5".into(),
+            hint: String::new(),
+        }),
+        None
+    )]
+    fn provider_config_rejections_carry_python_text(
+        #[case] error: Error,
+        #[case] expected: Option<&str>,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let native = route_failure(py, error, RequestMarker::Messages, Ok).unwrap();
+            let text = native
+                .value(py)
+                .getattr_opt(MESSAGES_PROVIDER_REJECTION)
+                .unwrap()
+                .map(|value| value.extract::<String>().unwrap());
+            assert_eq!(text.as_deref(), expected);
         });
     }
 

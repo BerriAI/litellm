@@ -3,7 +3,7 @@
 //! duplication. All of it expires with the legacy callback contract.
 
 use litellm_host::interceptors::{RequestContext, WireRequest};
-use litellm_host_python::to_py;
+use litellm_host_python::json_to_py;
 use pyo3::{exceptions::PyBaseException, prelude::*, types::PyDict};
 use serde_json::Value;
 
@@ -124,9 +124,7 @@ impl LegacyCallbacks for PythonLogger {
         let redacted_kwargs = redact(py, kwargs, &secret_fields)?;
         let optional_params = redact(
             py,
-            &to_py(py, &context.optional_params)?
-                .into_bound(py)
-                .cast_into::<PyDict>()?,
+            &json_to_py(py, &context.optional_params)?.cast_into::<PyDict>()?,
             &secret_fields,
         )?;
         let params = PyDict::new(py);
@@ -145,7 +143,7 @@ impl LegacyCallbacks for PythonLogger {
             }
         }
         for (name, value) in request_params.into_iter().flatten() {
-            params.set_item(name, to_py(py, value)?)?;
+            params.set_item(name, json_to_py(py, value)?)?;
         }
         Logging::Update.call(
             py,

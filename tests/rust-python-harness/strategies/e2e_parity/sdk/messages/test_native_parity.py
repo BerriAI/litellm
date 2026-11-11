@@ -345,6 +345,8 @@ CALLBACK_ASPECTS: Final = (
     "logged_call",
     "logged_request",
     "logged_sent_request",
+    "logged_model_parameters",
+    "logged_error",
 )
 ASPECTS: Final = ("dispatch", "request", "outcome", "hidden_params", "logged", *CALLBACK_ASPECTS)
 
@@ -367,6 +369,7 @@ class Case:
     loggers: Callable[[], Sequence[CustomLogger]] | None = None
     gateway: bool = False
     racy: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
+    nones: tuple[str, ...] = ()
 
     def aspects(self) -> tuple[str, ...]:
         return (
@@ -416,6 +419,9 @@ KNOWN_GAPS: Final[Mapping[str, Mapping[str, str | None]]] = MappingProxyType(
                 "legacy_thinking_null_budget_on_adaptive_model",
                 "missing_api_key",
                 "tls_security_level_python_cannot_apply",
+                "max_tokens_none",
+                "reasoning_effort_unknown",
+                "output_config_effort_unknown",
             )
         },
     }
@@ -721,6 +727,107 @@ INPUT_VALUE_CASES: Final = (
             tools=[
                 {**WEATHER_TOOL, "input_schema": {"type": "number", "maximum": float("inf"), "minimum": -float("inf")}}
             ]
+        ),
+    ),
+)
+
+LOOSE_TOOL: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"name": "lookup", "description": "lookup", "input_schema": {"type": "object", "properties": {}}}
+)
+
+
+class _StringStreamHook(CustomLogger):
+    async def async_pre_request_hook(
+        self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+    ) -> dict[str, object] | None:
+        kwargs["stream"] = "true"
+        return kwargs
+
+
+class _IntegerStreamHook(CustomLogger):
+    async def async_pre_request_hook(
+        self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+    ) -> dict[str, object] | None:
+        kwargs["stream"] = 1
+        return kwargs
+
+
+class _StringParamsHook(CustomLogger):
+    async def async_pre_request_hook(
+        self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+    ) -> dict[str, object] | None:
+        kwargs["litellm_params"] = "not-a-mapping"
+        return kwargs
+
+
+class _IntegerProviderHook(CustomLogger):
+    async def async_pre_request_hook(
+        self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+    ) -> dict[str, object] | None:
+        params: Final = kwargs.setdefault("litellm_params", {})
+        assert isinstance(params, dict)
+        params["custom_llm_provider"] = 5
+        return kwargs
+
+
+ARGUMENT_TYPE_CASES: Final = (
+    Case("stream_string_true", _kw(stream="true"), upstream=(_stream(TEXT_STREAM),)),
+    Case("stream_string_false", _kw(stream="false"), upstream=(_stream(TEXT_STREAM),)),
+    Case("stream_zero", _kw(stream=0)),
+    Case("stream_one", _kw(stream=1), upstream=(_stream(TEXT_STREAM),)),
+    Case("stream_one_sync", _kw(stream=1), upstream=(_stream(TEXT_STREAM),), sync=True),
+    Case(
+        "pre_request_hook_streams_on_a_string",
+        _kw(stream=True),
+        callbacks=(_StringStreamHook,),
+        upstream=(_stream(TEXT_STREAM),),
+    ),
+    Case("pre_request_hook_streams_on_an_integer", callbacks=(_IntegerStreamHook,), upstream=(_stream(TEXT_STREAM),)),
+    Case("pre_request_hook_sets_string_litellm_params", callbacks=(_StringParamsHook,), model="claude-sonnet-4-5"),
+    Case("pre_request_hook_sets_integer_provider", callbacks=(_IntegerProviderHook,), model="claude-sonnet-4-5"),
+    Case("model_info_string", _kw(model_info="not-a-mapping")),
+    Case("tools_mapping", _kw(tools=dict(LOOSE_TOOL)), upstream=()),
+    Case("messages_none", _kw(messages=None), nones=("messages",), upstream=()),
+    Case("max_tokens_none", _kw(max_tokens=None), nones=("max_tokens",), upstream=()),
+    Case("reasoning_effort_unknown", _kw(reasoning_effort="ultra"), upstream=()),
+    Case("output_config_effort_unknown", _kw(output_config={"effort": "ultra"})),
+    Case(
+        "global_drop_params_string_true",
+        _kw(tools=[{**LOOSE_TOOL, "custom": {"note": "opaque"}}]),
+        settings=_kw(drop_params="true"),
+    ),
+    Case(
+        "global_drop_params_string_false",
+        _kw(tools=[{**LOOSE_TOOL, "custom": {"note": "opaque"}}]),
+        settings=_kw(drop_params="false"),
+    ),
+    Case(
+        "request_drop_params_string_true",
+        _kw(drop_params="true", tools=[{**LOOSE_TOOL, "custom": {"note": "opaque"}}]),
+    ),
+    Case(
+        "additional_drop_params_tool_custom",
+        _kw(
+            additional_drop_params=["tools[*].custom"],
+            tools=[{**LOOSE_TOOL, "custom": {"defer_loading": True, "note": "x"}}],
+        ),
+    ),
+    Case(
+        "additional_drop_params_tool_input_examples",
+        _kw(
+            additional_drop_params=["tools[*].input_examples", "metadata.user_id", "fz.nope"],
+            metadata={"user_id": "u1"},
+            tools=[{**LOOSE_TOOL, "input_examples": [{"q": "x"}]}],
+        ),
+    ),
+    Case(
+        "response_without_stop_reason",
+        upstream=(_ok({key: value for key, value in TEXT_RESPONSE.items() if key != "stop_reason"}),),
+    ),
+    Case(
+        "response_without_stop_fields",
+        upstream=(
+            _ok({key: value for key, value in TEXT_RESPONSE.items() if key not in ("stop_reason", "stop_sequence")}),
         ),
     ),
 )
@@ -2502,6 +2609,7 @@ MCP_CASES: Final = (
 CASES: Final = (
     *REQUEST_CASES,
     *INPUT_VALUE_CASES,
+    *ARGUMENT_TYPE_CASES,
     *AGENTIC_CASES,
     *PROMPT_CACHING_CASES,
     *SYNC_PROMPT_CACHING_CASES,
@@ -2659,7 +2767,7 @@ def _kwargs(case: Case, server: RecordingServer) -> dict[str, object]:
         "api_base": f"{server.base_url}{suffix}",
         **supplied,
     }
-    return {name: value for name, value in kwargs.items() if value is not None or name in ("safeguards",)}
+    return {name: value for name, value in kwargs.items() if value is not None or name in ("safeguards", *case.nones)}
 
 
 def _mapping(value: object) -> Mapping[str, object]:
@@ -2850,8 +2958,24 @@ def _logged(
             "complete_input_dict": _mapping(details.get("additional_args")).get("complete_input_dict"),
         },
         "logged_sent_request": _sent_request(details.get("httpx_response")),
+        "logged_model_parameters": standard.get("model_parameters"),
+        "logged_error": _logged_error(details, standard),
     }
     return logged, callback_kwargs
+
+
+def _logged_error(details: Mapping[str, object], standard: Mapping[str, object]) -> Mapping[str, object]:
+    exception: Final = details.get("exception")
+    information: Final = _mapping(standard.get("error_information"))
+    return {
+        "error_str": _normalized(str(standard.get("error_str"))),
+        "error_message": _normalized(str(information.get("error_message"))),
+        "error_code": information.get("error_code"),
+        "llm_provider": information.get("llm_provider"),
+        "exception": None if exception is None else _normalized(str(exception)),
+        "exception_model": getattr(exception, "model", None),
+        "exception_provider": getattr(exception, "llm_provider", None),
+    }
 
 
 async def _prime(case: Case, server: RecordingServer, recorder: RecordingLogger, native: bool) -> int:

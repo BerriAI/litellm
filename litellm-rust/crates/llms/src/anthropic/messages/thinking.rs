@@ -11,7 +11,6 @@ use litellm_llms_types::{
 };
 use litellm_python_compat::{json::from_json, repr::repr, truthy::truthy};
 use serde_json::Value;
-use strum::VariantArray;
 
 use super::scalar::{is_one, python_number};
 use crate::base_llm::messages::context::{
@@ -58,10 +57,7 @@ fn unmapped_effort(effort: &Value) -> Error {
     Error::InvalidRequest(crate::ErrorDetail::InvalidChoice {
         field: "reasoning effort",
         actual: repr(&from_json(effort.clone())),
-        choices: ReasoningEffort::VARIANTS
-            .iter()
-            .map(|effort| <&'static str>::from(*effort))
-            .collect(),
+        choices: vec!["minimal", "low", "medium", "high", "xhigh", "max", "none"],
     })
 }
 
@@ -487,7 +483,7 @@ mod tests {
     use super::*;
     use crate::base_llm::messages::context::SupportedEffortTiers;
 
-    const EFFORT_CHOICES: &str = "'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'";
+    const EFFORT_CHOICES: &str = "'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'none'";
 
     fn request(fields: Value) -> MessagesRequest {
         let mut body = serde_json::json!({"model": "claude", "messages": [{"role": "user", "content": "Hello"}]});
