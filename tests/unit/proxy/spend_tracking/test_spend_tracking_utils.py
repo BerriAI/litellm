@@ -4521,6 +4521,105 @@ def test_get_spend_logs_id_prefers_the_response_id_for_batch_and_file_calls(call
     assert get_spend_logs_id(call_type, {"id": "batch_abc123"}, {"litellm_call_id": "call-id-1"}) == expected
 
 
+@pytest.mark.parametrize("status_call_type", ["avideo_status", "video_status"])
+@pytest.mark.parametrize(
+    ("response_cost", "status_id"),
+    [
+        (0.42, "video_abc_video_cost"),
+        (0.0, "video_abc"),
+        (None, "video_abc"),
+        (float("nan"), "video_abc"),
+    ],
+    ids=["charged", "free", "unpriced", "non_finite"],
+)
+def test_get_logging_payload_gives_only_a_charged_video_poll_a_row_of_its_own(status_call_type, response_cost, status_id):
+    """A custom provider charges the video on the poll that sees it completed, so that poll needs
+    a row apart from the create row, which answers with the same video id and would drop it on the
+    skip_duplicates insert. A poll that charges nothing keeps the bare id, so it still lands on the
+    create row and adds no row of its own."""
+    from litellm.types.videos.main import VideoObject
+
+    video = VideoObject(id="video_abc", object="video", status="completed")
+    create, status = (
+        get_logging_payload(
+            kwargs={
+                "call_type": call_type,
+                "litellm_call_id": call_id,
+                "response_cost": cost,
+                "polled_video_status": "completed",
+                "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+            },
+            response_obj=video,
+            start_time=datetime.datetime.now(timezone.utc),
+            end_time=datetime.datetime.now(timezone.utc),
+        )
+        for call_type, call_id, cost in (("avideo_generation", "call-1", 0.42), (status_call_type, "call-2", response_cost))
+    )
+
+    assert create["request_id"] == "video_abc"
+    assert status["request_id"] == status_id
+
+
+@pytest.mark.parametrize(("response_cost", "pays_the_job"), [(0.01, False), (0.43, True)])
+def test_a_video_poll_that_pays_only_its_guardrail_gets_a_row_of_its_own(response_cost, pays_the_job):
+    """A guardrail charges every poll, so a poll paying only that must neither land on the create row
+    nor take the row the video's own charge goes on, either of which the skip_duplicates insert drops."""
+    kwargs = {
+        "litellm_call_id": "poll-call-id",
+        "response_cost": response_cost,
+        "polled_video_status": "completed",
+        "standard_logging_object": {
+            "response_cost": response_cost,
+            "guardrail_information": [{"guardrail_name": "priced", "guardrail_cost": 0.01}],
+        },
+    }
+
+    assert get_spend_logs_id("avideo_status", {"id": "video_abc", "status": "completed"}, kwargs) == (
+        "video_abc_video_cost" if pays_the_job else "poll-call-id_guardrail_cost"
+    )
+
+
+@pytest.mark.parametrize("status", ["failed", "completed"])
+def test_a_finished_batch_retrieve_paying_only_its_guardrail_charges_under_the_batch_row(status):
+    """The retrieve that settles a batch charges its whole cost once, guardrails included, so a batch whose own
+    cost is $0 must still land on the row that makes its repeat retrieves free."""
+    from litellm.types.utils import LiteLLMBatch
+
+    kwargs = {
+        "litellm_call_id": "poll-call-id",
+        "response_cost": 0.01,
+        "standard_logging_object": {
+            "response_cost": 0.01,
+            "guardrail_information": [{"guardrail_name": "priced", "guardrail_cost": 0.01}],
+        },
+    }
+    polled_batch = LiteLLMBatch(
+        id="batch_abc",
+        completion_window="24h",
+        created_at=1,
+        endpoint="/v1/chat/completions",
+        input_file_id="file-in",
+        object="batch",
+        status=status,
+        output_file_id="file-out",
+    )
+
+    assert get_spend_logs_id("aretrieve_batch", polled_batch.model_dump(), kwargs) == "batch_abc_batch_cost"
+
+
+def test_a_video_polled_with_or_without_its_base64_padding_charges_one_row():
+    from litellm.types.videos.utils import encode_video_id_with_provider
+
+    padded = encode_video_id_with_provider("job-1", "custom_video", "deployment-a")
+    assert padded.endswith("=")
+
+    def row_id(polled_id: str) -> str | None:
+        kwargs = {"response_cost": 0.42, "polled_video_status": "completed", "litellm_params": {"video_id": polled_id}}
+        return get_spend_logs_id("avideo_status", {"id": "job-1", "status": "completed"}, kwargs)
+
+    assert row_id(padded.rstrip("=")) == row_id(padded) == f"{padded}_video_cost"
+
+
 def test_get_logging_payload_gives_redacted_batch_and_file_rows_distinct_request_ids():
     """End to end at the payload level: a batch retrieve and a file create whose bodies
     were both flattened to the same redaction placeholder must still produce two

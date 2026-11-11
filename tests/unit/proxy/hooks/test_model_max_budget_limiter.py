@@ -16,6 +16,8 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
 )
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import LiteLLMBatch, Usage
+from litellm.types.videos.main import VideoObject
+from litellm.types.videos.utils import POLLED_VIDEO_STATUS_KWARG
 
 KEY_HASH: Final = "key-hash-batch"
 USER_ID: Final = "user-batch"
@@ -36,6 +38,7 @@ def _batch(batch_id: str, status: str) -> LiteLLMBatch:
         input_file_id="file-batch",
         object="batch",
         status=status,
+        output_file_id="file-output",
         usage=Usage(prompt_tokens=20, completion_tokens=18, total_tokens=38),
     )
 
@@ -46,12 +49,14 @@ def _event(
     team_member_model_max_budget: Mapping[str, object] | None = None,
     user_id: str = USER_ID,
     team_id: str = TEAM_ID,
+    guardrail_information: tuple[Mapping[str, object], ...] = (),
 ) -> dict[str, object]:
     return {
         "call_type": call_type,
         "standard_logging_object": {
             "call_type": call_type,
             "response_cost": response_cost,
+            "guardrail_information": guardrail_information,
             "model": "openai/gpt-5.4-mini",
             "model_group": MODEL_GROUP,
             "metadata": {
@@ -72,6 +77,12 @@ def _event(
             }
         },
     }
+
+
+async def _log_success(
+    limiter: PROXY_VirtualKeyModelMaxBudgetLimiter, event: dict[str, object], response_obj: object = None
+) -> None:
+    await limiter.async_log_success_event(event, response_obj=response_obj, start_time=None, end_time=None)
 
 
 async def _poll(limiter: PROXY_VirtualKeyModelMaxBudgetLimiter, batch: LiteLLMBatch, response_cost: float) -> None:
@@ -311,3 +322,54 @@ async def test_a_batch_polled_within_every_budget_window_is_never_charged_again(
     await _poll(limiter, finished, BATCH_COST)
 
     assert _local_spend(limiter, KEY_SPEND_KEY) == pytest.approx(BATCH_COST)
+
+async def _poll_video(
+    limiter: PROXY_VirtualKeyModelMaxBudgetLimiter, video_id: str, status: str, response_cost: float
+) -> None:
+    await _log_success(
+        limiter,
+        {**_event("avideo_status", response_cost), POLLED_VIDEO_STATUS_KWARG: status},
+        response_obj=VideoObject(id=video_id, object="video", status=status),
+    )
+
+
+@pytest.mark.asyncio
+async def test_polls_of_a_finished_video_charge_each_per_model_budget_once():
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+
+    await _poll_video(limiter, "video_first", "in_progress", response_cost=0)
+    for _ in range(3):
+        await _poll_video(limiter, "video_first", "completed", response_cost=BATCH_COST)
+    await _poll_video(limiter, "video_second", "completed", response_cost=BATCH_COST)
+    await _poll(limiter, _batch("video_first", "completed"), response_cost=BATCH_COST)
+
+    assert await _spend(limiter, KEY_SPEND_KEY) == pytest.approx(3 * BATCH_COST)
+    assert await _spend(limiter, USER_SPEND_KEY) == pytest.approx(3 * BATCH_COST)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_type", "polled", "guardrail_charges"),
+    (
+        ("avideo_status", lambda status: VideoObject(id="job_first", object="video", status=status), 4),
+        ("aretrieve_batch", lambda status: _batch("job_first", status), 1),
+    ),
+)
+async def test_only_the_finished_poll_pays_the_job_and_only_a_video_repoll_pays_its_guardrail(
+    call_type, polled, guardrail_charges
+):
+    """A running video poll pays its guardrail like any request, while a batch retrieve before its cost is final
+    charges nothing, as key spend defers it, so the retrieve that settles the batch pays the only guardrail."""
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+    guardrail_cost: Final = 0.01
+    priced: Final = ({"guardrail_name": "priced", "guardrail_cost": guardrail_cost},)
+
+    def poll(status: str, response_cost: float) -> dict[str, object]:
+        return {**_event(call_type, response_cost, guardrail_information=priced), POLLED_VIDEO_STATUS_KWARG: status}
+
+    await _log_success(limiter, poll("in_progress", guardrail_cost), polled("in_progress"))
+    for _ in range(3):
+        await _log_success(limiter, poll("completed", BATCH_COST + guardrail_cost), polled("completed"))
+
+    assert await _spend(limiter, KEY_SPEND_KEY) == pytest.approx(BATCH_COST + guardrail_charges * guardrail_cost)
+

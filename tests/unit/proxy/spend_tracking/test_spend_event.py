@@ -194,9 +194,11 @@ def test_undecodable_line_is_an_error_value():
     assert isinstance(decode_spend_event(b"not json\n"), SpendEventDecodeError)
 
 
-def test_batch_retrieves_stay_in_process():
-    assert is_offloadable_success(_response()) is True
-    assert is_offloadable_success(None) is True
+def test_batch_retrieves_and_video_status_polls_stay_in_process():
+    assert is_offloadable_success(_response(), "acompletion") is True
+    assert is_offloadable_success(None, None) is True
+    assert is_offloadable_success(None, "avideo_generation") is True
+    assert is_offloadable_success(None, "avideo_status") is False
     assert (
         is_offloadable_success(
             LiteLLMBatch(
@@ -207,7 +209,8 @@ def test_batch_retrieves_stay_in_process():
                 input_file_id="f",
                 object="batch",
                 status="completed",
-            )
+            ),
+            "aretrieve_batch",
         )
         is False
     )
