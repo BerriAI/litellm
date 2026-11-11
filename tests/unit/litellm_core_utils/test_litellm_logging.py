@@ -3684,7 +3684,10 @@ async def test_shadow_snapshot_stays_private_and_is_invalidated_before_logging_g
 @pytest.mark.asyncio
 @pytest.mark.parametrize("is_async", [False, True])
 @pytest.mark.parametrize("stream", [False, True])
-async def test_a_logging_only_guardrail_keeps_vllm_prompt_fields_out_of_the_logs(is_async: bool, stream: bool) -> None:
+@pytest.mark.parametrize("masks", [True, False])
+async def test_a_logging_only_guardrail_drops_vllm_prompt_fields_from_the_logs_only_when_it_masks(
+    is_async: bool, stream: bool, masks: bool
+) -> None:
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.types.guardrails import GuardrailEventHooks
 
@@ -3706,9 +3709,9 @@ async def test_a_logging_only_guardrail_keeps_vllm_prompt_fields_out_of_the_logs
         ) -> None:
             logged.append((kwargs, response_obj))
 
-    class MaskingGuardrail(CustomGuardrail):
+    class LoggingOnlyGuardrail(CustomGuardrail):
         def logging_hook(self, kwargs: dict[str, object], result: object, call_type: str) -> tuple[dict, object]:
-            return {**kwargs, "messages": masked_messages}, result
+            return ({**kwargs, "messages": masked_messages} if masks else {**kwargs, "scanned": True}), result
 
         async def async_logging_hook(
             self, kwargs: dict[str, object], result: object, call_type: str
@@ -3716,7 +3719,7 @@ async def test_a_logging_only_guardrail_keeps_vllm_prompt_fields_out_of_the_logs
             return self.logging_hook(kwargs, result, call_type)
 
     callbacks: Final[list[str | Callable[..., object] | CustomLogger]] = [
-        MaskingGuardrail(guardrail_name="mask", default_on=True, event_hook=GuardrailEventHooks.logging_only),
+        LoggingOnlyGuardrail(guardrail_name="mask", default_on=True, event_hook=GuardrailEventHooks.logging_only),
         RecordingLogger(),
     ]
     client_response: Final = ModelResponse(
@@ -3743,9 +3746,9 @@ async def test_a_logging_only_guardrail_keeps_vllm_prompt_fields_out_of_the_logs
 
     assert len(logged) == 1
     logged_kwargs, logged_response = logged[0]
-    assert logged_kwargs["messages"] == masked_messages
-    assert phone not in json.dumps(logged_response, default=str)
-    assert phone not in json.dumps(logged_kwargs["standard_logging_object"]["response"], default=str)
+    assert (logged_kwargs["messages"] == masked_messages) is masks
+    assert (phone in json.dumps(logged_response, default=str)) is not masks
+    assert (phone in json.dumps(logged_kwargs["standard_logging_object"]["response"], default=str)) is not masks
     assert client_response.model_dump(include=set(prompt_fields)) == prompt_fields
 
 

@@ -500,7 +500,7 @@ class ChunkProcessor:
                     if service_tier is not None
                     else MappingProxyType({})
                 ),
-                **_streamed_prompt_fields(chunks),
+                **streamed_prompt_fields(chunks),
                 "choices": (
                     [ChunkProcessor.build_base_choice(index, choice_chunks) for index, choice_chunks in choice_streams]
                     if len(choice_streams) > 1
@@ -1515,7 +1515,7 @@ def _first_streamed_value(chunks: Sequence[object], field: str) -> object:
     return next((value for chunk in chunks if (value := _field_of(chunk, field)) is not None), None)
 
 
-def _streamed_prompt_fields(chunks: Sequence[object]) -> Mapping[str, object]:
+def streamed_prompt_fields(chunks: Sequence[object]) -> Mapping[str, object]:
     return MappingProxyType(
         {
             field: value

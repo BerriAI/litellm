@@ -24,6 +24,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
+from litellm.litellm_core_utils.streaming_chunk_builder_utils import streamed_prompt_fields
 from litellm.llms import get_guardrail_translation_mapping, load_guardrail_translation_mappings
 from litellm.llms.anthropic.common_utils import anthropic_server_call_fields
 from litellm.proxy._types import UserAPIKeyAuth
@@ -152,6 +153,15 @@ def _passthrough_delta(delta: object) -> Delta:
     if not server_call_fields:
         return Delta(content=None, role=role, tool_calls=tool_calls)
     return Delta(content=None, role=role, tool_calls=tool_calls, provider_specific_fields=dict(server_call_fields))
+
+
+def _with_stream_prompt_fields(
+    chunk: ModelResponseStream, responses_so_far: Sequence[object], responses_yielded: Sequence[object]
+) -> ModelResponseStream:
+    prompt_fields: Final = streamed_prompt_fields(responses_so_far)
+    if responses_yielded or not prompt_fields:
+        return chunk
+    return chunk.model_copy(update=dict(prompt_fields))
 
 
 def _held_choices(held_chars_per_choice: Mapping[int, int]) -> frozenset[int]:
@@ -737,8 +747,9 @@ class UnifiedLLMGuardrails(CustomLogger):
             raise _StreamTerminated()
 
         if synthetic is not None:
-            responses_yielded.append(synthetic)
-            yield synthetic
+            emitted: Final = _with_stream_prompt_fields(synthetic, responses_so_far, responses_yielded)
+            responses_yielded.append(emitted)
+            yield emitted
 
     async def _run_incremental_transform_stream(
         self,
@@ -821,10 +832,14 @@ class UnifiedLLMGuardrails(CustomLogger):
                     # passthrough so a mixed content+tool_call chunk defers its
                     # finish_reason to the final text terminator (see the
                     # _tool_call_passthrough_chunk docstring).
-                    tool_only = self._tool_call_passthrough_chunk(
-                        item,
-                        finish_reason_per_choice=finish_reason_per_choice,
-                        held_choices=_held_choices(held_chars_per_choice),
+                    tool_only = _with_stream_prompt_fields(
+                        self._tool_call_passthrough_chunk(
+                            item,
+                            finish_reason_per_choice=finish_reason_per_choice,
+                            held_choices=_held_choices(held_chars_per_choice),
+                        ),
+                        responses_so_far,
+                        responses_yielded,
                     )
                     responses_yielded.append(tool_only)
                     tool_calls_released = True
