@@ -310,7 +310,6 @@ _AMBIENT_AWS_ENV: Final = (
 )
 
 
-
 def _isolate_from_ambient_aws(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     for name in _AMBIENT_AWS_ENV:
         monkeypatch.delenv(name, raising=False)
@@ -434,9 +433,7 @@ class _CredentialSourceThatCannotRefresh(BaseAWSLLM):
         )
 
 
-@pytest.mark.parametrize(
-    "refresh", [_refresh_returning_expired_credentials, _refresh_after_the_token_file_is_gone]
-)
+@pytest.mark.parametrize("refresh", [_refresh_returning_expired_credentials, _refresh_after_the_token_file_is_gone])
 @pytest.mark.parametrize(
     "sign",
     [
@@ -467,7 +464,9 @@ def test_credentials_that_fail_to_refresh_at_signing_are_a_500(
 @pytest.mark.asyncio
 async def test_the_index_pass_through_answers_500_when_credentials_fail_to_refresh() -> None:
     refused: Final = await prepare_index_request(
-        config=OpenSearchVectorStoreConfig(aws=_CredentialSourceThatCannotRefresh(_refresh_after_the_token_file_is_gone)),
+        config=OpenSearchVectorStoreConfig(
+            aws=_CredentialSourceThatCannotRefresh(_refresh_after_the_token_file_is_gone)
+        ),
         method="GET",
         path=IndexPath(index_name="docs", api=("_mapping",)),
         operation=index_operation("GET", ("_mapping",)),
@@ -537,15 +536,32 @@ async def test_no_op_values_of_unsupported_params_are_accepted() -> None:
     assert response["data"] == EXPECTED_RESULTS
 
 
+HR_EXACT: Final = {
+    "bool": {
+        "should": [
+            {"term": {"category.keyword": "hr"}},
+            {
+                "bool": {
+                    "filter": [{"term": {"category": "hr"}}],
+                    "must_not": [{"exists": {"field": "category.keyword"}}],
+                }
+            },
+        ],
+        "minimum_should_match": 1,
+    }
+}
+
+
 @pytest.mark.parametrize(
     "search_filter,opensearch_filter",
     [
-        pytest.param({"type": "eq", "key": "category", "value": "hr"}, {"term": {"category": "hr"}}, id="eq"),
+        pytest.param({"type": "eq", "key": "category", "value": "hr"}, HR_EXACT, id="eq"),
         pytest.param({"type": "eq", "key": "published", "value": True}, {"term": {"published": True}}, id="eq-bool"),
+        pytest.param({"type": "ne", "key": "category", "value": "hr"}, {"bool": {"must_not": [HR_EXACT]}}, id="ne"),
         pytest.param(
-            {"type": "ne", "key": "category", "value": "hr"},
-            {"bool": {"must_not": [{"term": {"category": "hr"}}]}},
-            id="ne",
+            {"type": "ne", "key": "revision", "value": 7},
+            {"bool": {"must_not": [{"term": {"revision": 7}}]}},
+            id="ne-int",
         ),
         *(
             pytest.param(
@@ -561,9 +577,23 @@ async def test_no_op_values_of_unsupported_params_are_accepted() -> None:
         ),
         pytest.param(
             {"type": "in", "key": "category", "value": ["hr", "legal"]},
-            {"terms": {"category": ["hr", "legal"]}},
+            {
+                "bool": {
+                    "should": [
+                        {"terms": {"category.keyword": ["hr", "legal"]}},
+                        {
+                            "bool": {
+                                "filter": [{"terms": {"category": ["hr", "legal"]}}],
+                                "must_not": [{"exists": {"field": "category.keyword"}}],
+                            }
+                        },
+                    ],
+                    "minimum_should_match": 1,
+                }
+            },
             id="in",
         ),
+        pytest.param({"type": "in", "key": "revision", "value": [6, 7]}, {"terms": {"revision": [6, 7]}}, id="in-int"),
         pytest.param(
             {"type": "nin", "key": "revision", "value": [6, 7]},
             {"bool": {"must_not": [{"terms": {"revision": [6, 7]}}]}},
@@ -586,7 +616,7 @@ async def test_no_op_values_of_unsupported_params_are_accepted() -> None:
             {
                 "bool": {
                     "filter": [
-                        {"term": {"category": "hr"}},
+                        HR_EXACT,
                         {
                             "bool": {
                                 "should": [{"range": {"revision": {"gte": 7}}}, {"term": {"published": False}}],
@@ -618,6 +648,87 @@ async def test_filters_narrow_the_knn_query_with_the_matching_opensearch_filter(
     }
 
 
+def _rejection(reason: str) -> httpx.Response:
+    return httpx.Response(
+        400,
+        json={
+            "error": {"root_cause": [{"type": "query_shard_exception", "reason": reason}], "type": "x"},
+            "status": 400,
+        },
+    )
+
+
+ENGINE_REFUSES_FILTERS: Final = "failed to create query: Engine [NMSLIB] does not support filters"
+FILTERED_KNN: Final = {"knn": {"embedding": {"vector": QUERY_VECTOR, "k": 3, "filter": HR_EXACT}}}
+UNFILTERED_KNN: Final = {"knn": {"embedding": {"vector": QUERY_VECTOR, "k": 3}}}
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.asyncio
+async def test_a_filter_the_index_engine_refuses_is_dropped_under_drop_params(asynchronous: bool) -> None:
+    respond: Final = MagicMock(
+        side_effect=[
+            _rejection(ENGINE_REFUSES_FILTERS),
+            httpx.Response(200, json=_opensearch_hits("text", "embedding")),
+        ]
+    )
+
+    response: Final = await _search(
+        asynchronous,
+        respond,
+        RecordingEmbeddingExecutor(),
+        {"filters": {"type": "eq", "key": "category", "value": "hr"}, "drop_params": True, "max_num_results": 3},
+    )
+
+    assert response["data"] == EXPECTED_RESULTS
+    sent: Final = _sent(respond)
+    assert [json.loads(request.content)["query"] for request in sent] == [FILTERED_KNN, UNFILTERED_KNN]
+    assert _signature_scope(sent[1]) == ("aoss", "us-east-1")
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize(
+    "drop_params,rejections,sent_queries,reason",
+    [
+        pytest.param({}, [ENGINE_REFUSES_FILTERS], [FILTERED_KNN], "does not support filters", id="no-drop"),
+        pytest.param(
+            {"drop_params": True},
+            ["failed to create query: unknown field [category]"],
+            [FILTERED_KNN],
+            "unknown field",
+            id="other-400",
+        ),
+        pytest.param(
+            {"drop_params": True},
+            [ENGINE_REFUSES_FILTERS, "index is read-only"],
+            [FILTERED_KNN, UNFILTERED_KNN],
+            "index is read-only",
+            id="retry-rejected",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_rejected_filtered_search_is_a_400_unless_drop_params_can_drop_the_filter(
+    asynchronous: bool,
+    drop_params: Mapping[str, object],
+    rejections: list[str],
+    sent_queries: list[Mapping[str, object]],
+    reason: str,
+) -> None:
+    respond: Final = MagicMock(side_effect=[_rejection(reason) for reason in rejections])
+
+    with pytest.raises(openai.BadRequestError) as error:
+        await _search(
+            asynchronous,
+            respond,
+            RecordingEmbeddingExecutor(),
+            {"filters": {"type": "eq", "key": "category", "value": "hr"}, "max_num_results": 3, **drop_params},
+        )
+
+    assert reason in str(error.value)
+    assert [json.loads(request.content)["query"] for request in _sent(respond)] == sent_queries
+
+
 HYBRID: Final = {
     "opensearch_hybrid_search": True,
     "opensearch_search_pipeline": "hybrid norm",
@@ -635,8 +746,8 @@ HR_ONLY: Final = {"type": "eq", "key": "category", "value": "hr"}
         pytest.param(
             {"filters": HR_ONLY},
             [
-                {"bool": {"must": [KEYWORD_QUERY], "filter": [{"term": {"category": "hr"}}]}},
-                {"knn": {"embedding": {"vector": QUERY_VECTOR, "k": 3, "filter": {"term": {"category": "hr"}}}}},
+                {"bool": {"must": [KEYWORD_QUERY], "filter": [HR_EXACT]}},
+                {"knn": {"embedding": {"vector": QUERY_VECTOR, "k": 3, "filter": HR_EXACT}}},
             ],
             id="filtered",
         ),

@@ -10681,73 +10681,105 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        if isinstance(vector_store_provider_config, BaseQueryEmbeddingVectorStoreConfig):
-            (
-                url,
-                request_body,
-            ) = await vector_store_provider_config.atransform_search_vector_store_request(
-                vector_store_id=vector_store_id,
-                query=query,
-                vector_store_search_optional_params=vector_store_search_optional_params,
-                api_base=api_base,
-                litellm_logging_obj=logging_obj,
-                litellm_params=MappingProxyType(dict(litellm_params, timeout=timeout)),
-                extra_body=extra_body,
-                embedding_executor=embedding_executor,
+        async def send(search_params: VectorStoreSearchOptionalRequestParams) -> httpx.Response:
+            if isinstance(vector_store_provider_config, BaseQueryEmbeddingVectorStoreConfig):
+                (
+                    url,
+                    request_body,
+                ) = await vector_store_provider_config.atransform_search_vector_store_request(
+                    vector_store_id=vector_store_id,
+                    query=query,
+                    vector_store_search_optional_params=search_params,
+                    api_base=api_base,
+                    litellm_logging_obj=logging_obj,
+                    litellm_params=MappingProxyType(dict(litellm_params, timeout=timeout)),
+                    extra_body=extra_body,
+                    embedding_executor=embedding_executor,
+                )
+            else:
+                (
+                    url,
+                    request_body,
+                ) = await vector_store_provider_config.atransform_search_vector_store_request(
+                    vector_store_id=vector_store_id,
+                    query=query,
+                    vector_store_search_optional_params=search_params,
+                    api_base=api_base,
+                    litellm_logging_obj=logging_obj,
+                    litellm_params=dict(litellm_params),
+                    extra_body=extra_body,
+                )
+            signed_headers, signed_json_body = await run_off_loop_if_aws(
+                vector_store_provider_config,
+                vector_store_provider_config.sign_request,
+                headers=headers,
+                optional_params={**dict(litellm_params), **(search_params or {})},
+                request_data=request_body,
+                api_base=url,
             )
-        else:
-            (
-                url,
-                request_body,
-            ) = await vector_store_provider_config.atransform_search_vector_store_request(
-                vector_store_id=vector_store_id,
-                query=query,
-                vector_store_search_optional_params=vector_store_search_optional_params,
-                api_base=api_base,
-                litellm_logging_obj=logging_obj,
-                litellm_params=dict(litellm_params),
-                extra_body=extra_body,
+
+            logging_obj.pre_call(
+                input="",
+                api_key="",
+                additional_args={
+                    "complete_input_dict": request_body,
+                    "api_base": api_base,
+                    "headers": signed_headers,
+                },
             )
-        all_optional_params: Final[dict[str, object]] = dict(litellm_params)
-        all_optional_params.update(vector_store_search_optional_params or {})
-        headers, signed_json_body = await run_off_loop_if_aws(
-            vector_store_provider_config,
-            vector_store_provider_config.sign_request,
-            headers=headers,
-            optional_params=all_optional_params,
-            request_data=request_body,
-            api_base=url,
-        )
 
-        logging_obj.pre_call(
-            input="",
-            api_key="",
-            additional_args={
-                "complete_input_dict": request_body,
-                "api_base": api_base,
-                "headers": headers,
-            },
-        )
+            request_data: Final = json.dumps(request_body) if signed_json_body is None else signed_json_body
 
-        request_data: Final = json.dumps(request_body) if signed_json_body is None else signed_json_body
+            try:
+                return await _asend_with_goaway_retry(
+                    partial(
+                        async_httpx_client.post, url=url, headers=signed_headers, data=request_data, timeout=timeout
+                    )
+                )
+            except httpx.TimeoutException:
+                raise vector_store_provider_config.get_error_class(
+                    error_message="Vector store search exceeded the caller timeout.",
+                    status_code=408,
+                    headers=httpx.Headers(),
+                ) from None
+            except httpx.HTTPStatusError:
+                raise
+            except Exception as e:
+                raise self._handle_error(e=e, provider_config=vector_store_provider_config)
 
         try:
-            response: Final = await _asend_with_goaway_retry(
-                partial(async_httpx_client.post, url=url, headers=headers, data=request_data, timeout=timeout)
+            response: Final = await send(vector_store_search_optional_params)
+        except httpx.HTTPStatusError as rejection:
+            retry_params: Final = self._vector_store_search_retry_params(
+                rejection, vector_store_provider_config, vector_store_search_optional_params, litellm_params
             )
-        except httpx.TimeoutException:
-            raise vector_store_provider_config.get_error_class(
-                error_message="Vector store search exceeded the caller timeout.",
-                status_code=408,
-                headers=httpx.Headers(),
-            ) from None
-        except Exception as e:
-            raise self._handle_error(e=e, provider_config=vector_store_provider_config)
+            try:
+                retry_response: Final = await send(retry_params)
+            except httpx.HTTPStatusError as retry_rejection:
+                raise self._handle_error(e=retry_rejection, provider_config=vector_store_provider_config) from None
+            return vector_store_provider_config.transform_search_vector_store_response(
+                response=retry_response,
+                litellm_logging_obj=logging_obj,
+            )
 
         return vector_store_provider_config.transform_search_vector_store_response(
             response=response,
             litellm_logging_obj=logging_obj,
         )
+
+    def _vector_store_search_retry_params(
+        self,
+        rejection: httpx.HTTPStatusError,
+        vector_store_provider_config: BaseVectorStoreConfig,
+        vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
+        litellm_params: GenericLiteLLMParams,
+    ) -> VectorStoreSearchOptionalRequestParams:
+        retry_params: Final = vector_store_provider_config.retry_params_for_rejected_search(
+            rejection.response, vector_store_search_optional_params, MappingProxyType(dict(litellm_params))
+        )
+        if retry_params is None:
+            raise self._handle_error(e=rejection, provider_config=vector_store_provider_config)
+        return retry_params
 
     def vector_store_search_handler(
         self,
@@ -10815,68 +10847,83 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        if isinstance(vector_store_provider_config, BaseQueryEmbeddingVectorStoreConfig):
-            (
-                url,
-                request_body,
-            ) = vector_store_provider_config.transform_search_vector_store_request(
-                vector_store_id=vector_store_id,
-                query=query,
-                vector_store_search_optional_params=vector_store_search_optional_params,
-                api_base=api_base,
-                litellm_logging_obj=logging_obj,
-                litellm_params=MappingProxyType(dict(litellm_params, timeout=timeout)),
-                extra_body=extra_body,
-                embedding_executor=embedding_executor,
+        def send(search_params: VectorStoreSearchOptionalRequestParams) -> httpx.Response:
+            if isinstance(vector_store_provider_config, BaseQueryEmbeddingVectorStoreConfig):
+                (
+                    url,
+                    request_body,
+                ) = vector_store_provider_config.transform_search_vector_store_request(
+                    vector_store_id=vector_store_id,
+                    query=query,
+                    vector_store_search_optional_params=search_params,
+                    api_base=api_base,
+                    litellm_logging_obj=logging_obj,
+                    litellm_params=MappingProxyType(dict(litellm_params, timeout=timeout)),
+                    extra_body=extra_body,
+                    embedding_executor=embedding_executor,
+                )
+            else:
+                (
+                    url,
+                    request_body,
+                ) = vector_store_provider_config.transform_search_vector_store_request(
+                    vector_store_id=vector_store_id,
+                    query=query,
+                    vector_store_search_optional_params=search_params,
+                    api_base=api_base,
+                    litellm_logging_obj=logging_obj,
+                    litellm_params=dict(litellm_params),
+                    extra_body=extra_body,
+                )
+
+            signed_headers, signed_json_body = vector_store_provider_config.sign_request(
+                headers=headers,
+                optional_params={**dict(litellm_params), **(search_params or {})},
+                request_data=request_body,
+                api_base=url,
             )
-        else:
-            (
-                url,
-                request_body,
-            ) = vector_store_provider_config.transform_search_vector_store_request(
-                vector_store_id=vector_store_id,
-                query=query,
-                vector_store_search_optional_params=vector_store_search_optional_params,
-                api_base=api_base,
-                litellm_logging_obj=logging_obj,
-                litellm_params=dict(litellm_params),
-                extra_body=extra_body,
+
+            logging_obj.pre_call(
+                input="",
+                api_key="",
+                additional_args={
+                    "complete_input_dict": request_body,
+                    "api_base": api_base,
+                    "headers": signed_headers,
+                },
             )
 
-        all_optional_params: Final[dict[str, object]] = dict(litellm_params)
-        all_optional_params.update(vector_store_search_optional_params or {})
+            request_data: Final = json.dumps(request_body) if signed_json_body is None else signed_json_body
 
-        headers, signed_json_body = vector_store_provider_config.sign_request(
-            headers=headers,
-            optional_params=all_optional_params,
-            request_data=request_body,
-            api_base=url,
-        )
-
-        logging_obj.pre_call(
-            input="",
-            api_key="",
-            additional_args={
-                "complete_input_dict": request_body,
-                "api_base": api_base,
-                "headers": headers,
-            },
-        )
-
-        request_data: Final = json.dumps(request_body) if signed_json_body is None else signed_json_body
+            try:
+                return _send_with_goaway_retry(
+                    partial(sync_httpx_client.post, url=url, headers=signed_headers, data=request_data, timeout=timeout)
+                )
+            except httpx.TimeoutException:
+                raise vector_store_provider_config.get_error_class(
+                    error_message="Vector store search exceeded the caller timeout.",
+                    status_code=408,
+                    headers=httpx.Headers(),
+                ) from None
+            except httpx.HTTPStatusError:
+                raise
+            except Exception as e:
+                raise self._handle_error(e=e, provider_config=vector_store_provider_config)
 
         try:
-            response: Final = _send_with_goaway_retry(
-                partial(sync_httpx_client.post, url=url, headers=headers, data=request_data, timeout=timeout)
+            response: Final = send(vector_store_search_optional_params)
+        except httpx.HTTPStatusError as rejection:
+            retry_params: Final = self._vector_store_search_retry_params(
+                rejection, vector_store_provider_config, vector_store_search_optional_params, litellm_params
             )
-        except httpx.TimeoutException:
-            raise vector_store_provider_config.get_error_class(
-                error_message="Vector store search exceeded the caller timeout.",
-                status_code=408,
-                headers=httpx.Headers(),
-            ) from None
-        except Exception as e:
-            raise self._handle_error(e=e, provider_config=vector_store_provider_config)
+            try:
+                retry_response: Final = send(retry_params)
+            except httpx.HTTPStatusError as retry_rejection:
+                raise self._handle_error(e=retry_rejection, provider_config=vector_store_provider_config) from None
+            return vector_store_provider_config.transform_search_vector_store_response(
+                response=retry_response,
+                litellm_logging_obj=logging_obj,
+            )
 
         return vector_store_provider_config.transform_search_vector_store_response(
             response=response,

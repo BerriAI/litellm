@@ -2471,25 +2471,24 @@ def test_rag_query_rejects_caller_embedding_selection_params(client_internal_use
 
 
 @pytest.mark.parametrize(
-    "store_key",
+    ("store_key", "provider", "expected_status", "expected_searches"),
     [
-        "opensearch_index_name",
-        "opensearch_search_pipeline",
-        "opensearch_hybrid_search",
-        "opensearch_text_field",
-        "opensearch_embedding_field",
+        ("opensearch_index_name", "opensearch", 400, 0),
+        ("opensearch_index_name", "opensearch/x", 400, 0),
+        ("opensearch_index_name", "openai", 200, 1),
+        ("opensearch_search_pipeline", "opensearch", 400, 0),
+        ("opensearch_hybrid_search", "opensearch/x", 400, 0),
+        ("opensearch_search_pipeline", "openai", 200, 1),
+        ("opensearch_text_field", "opensearch", 200, 1),
+        ("opensearch_embedding_field", "opensearch/x", 200, 1),
     ],
-)
-@pytest.mark.parametrize(
-    ("provider", "expected_status", "expected_searches"),
-    [("opensearch", 400, 0), ("opensearch/x", 400, 0), ("openai", 200, 1)],
 )
 def test_rag_query_rejects_caller_opensearch_store_params_only_on_opensearch_stores(
     client_internal_user, store_key, provider, expected_status, expected_searches
 ):
     """
-    Regression: retrieval_config must not change how an OpenSearch store searches (its index,
-    fields, pipeline, or hybrid mode), while other providers keep ignoring the keys as before.
+    Regression: retrieval_config must not change which index, pipeline, or hybrid mode an OpenSearch
+    store searches with, while the field keys and other providers' requests are answered as before.
     """
     import litellm
     from litellm import Router

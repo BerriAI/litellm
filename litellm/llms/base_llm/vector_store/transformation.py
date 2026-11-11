@@ -260,6 +260,14 @@ class BaseVectorStoreConfig:
         """
         return headers, None
 
+    def retry_params_for_rejected_search(
+        self,
+        rejection: httpx.Response,
+        vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
+        litellm_params: Mapping[str, object],
+    ) -> VectorStoreSearchOptionalRequestParams | None:
+        return None
+
     def calculate_vector_store_cost(
         self,
         response: VectorStoreSearchResponse,

@@ -3052,25 +3052,24 @@ def test_vector_store_search_rejects_caller_embedding_selection_params(blocked_k
 
 
 @pytest.mark.parametrize(
-    "store_key",
+    ("store_key", "provider", "expected_status", "expected_searches"),
     [
-        "opensearch_index_name",
-        "opensearch_search_pipeline",
-        "opensearch_hybrid_search",
-        "opensearch_text_field",
-        "opensearch_embedding_field",
+        ("opensearch_index_name", "opensearch", 400, 0),
+        ("opensearch_index_name", "opensearch/x", 400, 0),
+        ("opensearch_index_name", "openai", 200, 1),
+        ("opensearch_search_pipeline", "opensearch", 400, 0),
+        ("opensearch_hybrid_search", "opensearch/x", 400, 0),
+        ("opensearch_search_pipeline", "openai", 200, 1),
+        ("opensearch_text_field", "opensearch", 200, 1),
+        ("opensearch_embedding_field", "opensearch/x", 200, 1),
     ],
-)
-@pytest.mark.parametrize(
-    ("provider", "expected_status", "expected_searches"),
-    [("opensearch", 400, 0), ("opensearch/x", 400, 0), ("openai", 200, 1)],
 )
 def test_vector_store_search_rejects_caller_opensearch_store_params_only_on_opensearch_stores(
     store_key, provider, expected_status, expected_searches
 ):
     """
-    Regression: a caller must not change how an OpenSearch store searches (its index, fields,
-    pipeline, or hybrid mode), while other providers keep ignoring the keys as before.
+    Regression: a caller must not change which index, pipeline, or hybrid mode an OpenSearch store
+    searches with, while the field keys and other providers' requests pass through as before.
     """
     from fastapi.testclient import TestClient
 
@@ -3110,7 +3109,7 @@ def test_vector_store_search_rejects_caller_opensearch_store_params_only_on_open
         app.dependency_overrides = original_overrides
 
     assert response.status_code == expected_status, response.json()
-    assert fake_search.await_count == expected_searches
+    assert [call.kwargs.get(store_key) for call in fake_search.await_args_list] == ["_none"] * expected_searches
     assert expected_status == 200 or store_key in str(response.json())
 
 

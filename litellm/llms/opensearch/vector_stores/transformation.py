@@ -55,6 +55,7 @@ _AWS_HOSTS: Final = (
     re.compile(r"\.(?P<service>aoss|aos)\.(?P<region>[a-z0-9-]+)\.on\.aws\Z"),
 )
 _ACCOUNT_ID_LABEL: Final = re.compile(r"\A\d{12}\.")
+_UNFILTERABLE_ENGINE: Final = "does not support filters"
 _QUERY_VECTOR: Final = TypeAdapter(tuple[float, ...])
 _ATTRIBUTE_VALUE_TYPES: Final = (str, int, float, bool)
 _SEARCH_ONLY_MESSAGE: Final = (
@@ -180,6 +181,21 @@ _Compound.model_rebuild()
 _FILTER: Final = TypeAdapter[_Equality | _Range | _Membership | _Compound](_Filter)
 
 
+def _exact_match(query: Literal["term", "terms"], key: str, value: object, has_text: bool) -> Mapping[str, object]:
+    if not has_text:
+        return {query: {key: value}}
+    keyword: Final = f"{key}.keyword"
+    return {
+        "bool": {
+            "should": (
+                {query: {keyword: value}},
+                {"bool": {"filter": ({query: {key: value}},), "must_not": ({"exists": {"field": keyword}},)}},
+            ),
+            "minimum_should_match": 1,
+        }
+    }
+
+
 def _opensearch_filter(search_filter: _Filter) -> Mapping[str, object]:
     match search_filter:
         case _Compound(type="and", filters=filters):
@@ -189,13 +205,17 @@ def _opensearch_filter(search_filter: _Filter) -> Mapping[str, object]:
                 "bool": {"should": tuple(_opensearch_filter(child) for child in filters), "minimum_should_match": 1}
             }
         case _Equality(type="eq", key=key, value=value):
-            return {"term": {key: value}}
+            return _exact_match("term", key, value, isinstance(value, str))
         case _Equality(key=key, value=value):
-            return {"bool": {"must_not": ({"term": {key: value}},)}}
+            return {"bool": {"must_not": (_exact_match("term", key, value, isinstance(value, str)),)}}
         case _Membership(type="in", key=key, value=values):
-            return {"terms": {key: values}}
+            return _exact_match("terms", key, values, any(isinstance(value, str) for value in values))
         case _Membership(key=key, value=values):
-            return {"bool": {"must_not": ({"terms": {key: values}},)}}
+            return {
+                "bool": {
+                    "must_not": (_exact_match("terms", key, values, any(isinstance(value, str) for value in values)),)
+                }
+            }
         case _Range(type=operator, key=key, value=value):
             return {"range": {key: {operator: value}}}
 
@@ -515,6 +535,20 @@ class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequ
             search.params.require_embedding_model(), query_text, self.query_embedding_configuration(litellm_params)
         )
         return self._search_request(vector_store_id, query_text, embedding, search, api_base)
+
+    def retry_params_for_rejected_search(
+        self,
+        rejection: httpx.Response,
+        vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
+        litellm_params: Mapping[str, object],
+    ) -> VectorStoreSearchOptionalRequestParams | None:
+        if (
+            rejection.status_code != 400
+            or _UNFILTERABLE_ENGINE not in rejection.text
+            or not drops_unsupported_params(litellm_params.get("drop_params"))
+        ):
+            return None
+        return {**vector_store_search_optional_params, "filters": None}
 
     def sign_request(
         self,

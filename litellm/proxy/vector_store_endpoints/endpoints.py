@@ -80,13 +80,18 @@ def reject_caller_embedding_selection_params(payload: Mapping[str, object], sour
         )
 
 
+_REGISTRATION_ONLY_OPENSEARCH_PARAMS: Final = frozenset(
+    ("opensearch_index_name", "opensearch_search_pipeline", "opensearch_hybrid_search")
+)
+
+
 def reject_caller_opensearch_store_params(
     caller_body: Mapping[str, object], request_fields: Mapping[str, object], source: str
 ) -> None:
     provider: Final = request_fields.get("custom_llm_provider")
     if not isinstance(provider, str) or provider.split("/", 1)[0] != LlmProviders.OPENSEARCH.value:
         return
-    blocked: Final = next((key for key in caller_body if key.startswith("opensearch_")), None)
+    blocked: Final = next((key for key in caller_body if key in _REGISTRATION_ONLY_OPENSEARCH_PARAMS), None)
     if blocked is not None:
         raise HTTPException(
             status_code=400,
