@@ -20,7 +20,7 @@ import secrets
 import traceback
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
-from types import MappingProxyType
+from types import MappingProxyType, TracebackType
 from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeVar, cast
 
 import fastapi
@@ -245,13 +245,20 @@ class _UserRowLike(Protocol):
 
 
 class _TxTables(Protocol):
-    litellm_proxymodeltable: TableActions[object]
+    @property
+    def litellm_proxymodeltable(self) -> TableActions[object]: ...
 
 
 class _ModelReencryptTransaction(Protocol):
     async def __aenter__(self) -> _TxTables: ...
 
-    async def __aexit__(self, *exc_info: object) -> None: ...
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+        /,
+    ) -> None: ...
 
 
 class _ModelParamsUpdate(TypedDict):

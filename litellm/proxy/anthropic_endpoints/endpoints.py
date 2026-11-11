@@ -7,7 +7,7 @@ from types import MappingProxyType
 from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
@@ -55,6 +55,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     forwarded_anthropic_oauth_token,
     should_auto_drop_params_for_agentic_cli,
 )
+from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.types.utils import TokenCountResponse
 
@@ -126,9 +127,35 @@ def _strip_total_tokens_from_anthropic_response(response: object) -> None:
         usage.pop("total_tokens", None)
 
 
+async def _record_passthrough_block(
+    e: ModifyResponseException, proxy_logging_obj: ProxyLogging, user_api_key_dict: UserAPIKeyAuth
+) -> None:
+    await proxy_logging_obj.post_call_failure_hook(
+        user_api_key_dict=user_api_key_dict,
+        original_exception=e,
+        request_data=e.request_data,
+    )
+
+
+async def _stream_passthrough_block(
+    e: ModifyResponseException,
+    proxy_logging_obj: ProxyLogging,
+    user_api_key_dict: UserAPIKeyAuth,
+    headers: Mapping[str, str],
+) -> StreamingResponse | JSONResponse:
+    await _record_passthrough_block(e, proxy_logging_obj, user_api_key_dict)
+    block_chunks: Final = AnthropicMessagesHandler().build_block_sse_chunks(e)
+
+    async def _blocked_stream() -> AsyncGenerator[str, None]:
+        for chunk in block_chunks:
+            yield chunk.decode()
+
+    return await create_response(generator=_blocked_stream(), media_type="text/event-stream", headers=headers)
+
+
 @router.post(
     "/v1/messages",
-    tags=["[beta] Anthropic `/v1/messages`"],
+    tags=["Anthropic `/v1/messages`"],
     dependencies=[Depends(user_api_key_auth)],
 )
 async def anthropic_response(
@@ -174,6 +201,9 @@ async def anthropic_response(
             user_max_tokens=user_max_tokens,
             user_api_base=user_api_base,
             version=version,
+            on_passthrough_block=lambda block: _stream_passthrough_block(
+                block, proxy_logging_obj, user_api_key_dict, _NO_HEADERS
+            ),
         )
         # Optionally strip the non-Anthropic `usage.total_tokens` field
         # LiteLLM adds internally. Anthropic's official /v1/messages spec
@@ -189,30 +219,12 @@ async def anthropic_response(
             _strip_total_tokens_from_anthropic_response(result)
         return result
     except ModifyResponseException as e:
-        # Guardrail flagged content in passthrough mode - return 200 with violation message
-        _data: Final = e.request_data
-        await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict,
-            original_exception=e,
-            request_data=_data,
-        )
-
         block_headers: Final = litellm_call_id_headers(base_llm_response_processor.litellm_call_id) or _NO_HEADERS
-        block_handler: Final = AnthropicMessagesHandler()
-
         if data.get("stream") is True:
-            block_chunks: Final = block_handler.build_block_sse_chunks(e)
-
-            async def _blocked_stream() -> AsyncGenerator[str, None]:
-                for chunk in block_chunks:
-                    yield chunk.decode()
-
-            return await create_response(
-                generator=_blocked_stream(), media_type="text/event-stream", headers=block_headers
-            )
-
+            return await _stream_passthrough_block(e, proxy_logging_obj, user_api_key_dict, block_headers)
+        await _record_passthrough_block(e, proxy_logging_obj, user_api_key_dict)
         fastapi_response.headers.update(block_headers)
-        return block_handler.build_block_response(e)
+        return AnthropicMessagesHandler().build_block_response(e)
     except AnthropicContextManagementError as e:
         if e.status_code >= 500:
             # Server-side polyfill failures hit the failure hook for spend/alert
@@ -319,7 +331,7 @@ def _provider_context_management(response: TokenCountResponse) -> Mapping[str, o
 
 @router.post(
     "/v1/messages/count_tokens",
-    tags=["[beta] Anthropic Messages Token Counting"],
+    tags=["Anthropic Messages Token Counting"],
     dependencies=[Depends(user_api_key_auth)],
 )
 async def count_tokens(

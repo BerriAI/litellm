@@ -6,7 +6,17 @@ import time
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    Literal,
+    Optional,
+    Protocol,
+    SupportsIndex,
+    SupportsInt,
+    overload,
+    runtime_checkable,
+)
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import httpx
@@ -15,6 +25,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from mcp.client.auth.utils import get_client_metadata_scopes, union_scopes
 from mcp.shared.auth import OAuthMetadata
 from pydantic import ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
+from typing_extensions import Buffer
 
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -673,10 +684,24 @@ def _validate_token_response(
             )
 
 
+@runtime_checkable
+class _SupportsTrunc(Protocol):
+    def __trunc__(self) -> int: ...
+
+
+class _OAuthTokenResponseFields(Protocol):
+    @overload
+    def get(self, key: Literal["access_token", "refresh_token"], /) -> str | None: ...
+    @overload
+    def get(self, key: Literal["expires_in"], /) -> object: ...
+    @overload
+    def get(self, key: Literal["scope"], default: str | None, /) -> object: ...
+
+
 async def _store_per_user_token_server_side(
     server: MCPServer,
     user_id: str,
-    token_response: dict[str, Any],
+    token_response: _OAuthTokenResponseFields,
     identity_binding_proof: str | None = None,
     cimd_client_id: str | None = None,
     requested_scope: str | None = None,
@@ -699,7 +724,11 @@ async def _store_per_user_token_server_side(
 
     raw_expires: Final = token_response.get("expires_in")
     try:
-        expires_in: int | None = int(raw_expires) if raw_expires is not None else None
+        expires_in: int | None = (
+            int(raw_expires)
+            if isinstance(raw_expires, (str, Buffer, SupportsInt, SupportsIndex, _SupportsTrunc))
+            else None
+        )
     except (TypeError, ValueError):
         expires_in = None
 

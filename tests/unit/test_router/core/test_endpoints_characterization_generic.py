@@ -195,7 +195,7 @@ async def test_sync_generic_endpoints_set_no_routing_hidden_params(
     assert response._hidden_params == {}
 
 
-@pytest.mark.parametrize("endpoint", ["ocr", "generate_content"])
+@pytest.mark.parametrize("endpoint", ["ocr", "video_generation"])
 async def test_sync_generic_endpoints_are_not_retried(make_core: MakeCore, host: EndpointHost, endpoint: str):
     host.answer("openai/d1", litellm.InternalServerError(message="boom", llm_provider="openai", model="d1"))
     _, request = ROUTED_SYNC[endpoint]

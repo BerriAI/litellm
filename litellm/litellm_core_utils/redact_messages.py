@@ -352,7 +352,7 @@ def _redacted_web_search_action(action: object) -> object:
 
 def _redacted_web_search_call(item: object) -> object:
     if isinstance(item, BaseModel):
-        action: Final = getattr(item, "action", None)
+        action: Final = attribute_or_none(item, "action")
         return item if action is None else item.model_copy(update={"action": _redacted_web_search_action(action)})
     mapping: Final = _as_mapping(item)
     if mapping is None or mapping.get("action") is None:

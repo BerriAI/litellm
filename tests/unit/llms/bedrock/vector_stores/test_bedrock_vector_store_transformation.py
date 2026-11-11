@@ -7,6 +7,7 @@ import pytest
 import respx
 
 import litellm
+from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.vector_stores.transformation import BedrockVectorStoreConfig
 
 
@@ -531,3 +532,37 @@ def test_transform_search_response_image_hit_media_type_falls_back_to_the_data_u
     assert response["data"][0]["content"] == [
         {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}}
     ]
+
+
+class _SearchLogging:
+    def __init__(self, query: str) -> None:
+        self.model_call_details: Final = {"query": query}
+
+
+def test_search_response_keeps_each_text_result_with_its_score_and_metadata() -> None:
+    metadata: Final = {"x-amz-bedrock-kb-source-uri": "s3://docs/setup.md", "x-amz-bedrock-kb-chunk-id": "chunk-1"}
+    body: Final = {
+        "retrievalResults": [
+            {"content": {"text": "Run litellm --config config.yaml"}, "metadata": metadata, "score": 0.42},
+            {"content": {"type": "IMAGE"}, "score": 0.9},
+        ]
+    }
+
+    response: Final = BedrockVectorStoreConfig().transform_search_vector_store_response(
+        httpx.Response(200, json=body), _SearchLogging("how do I start the proxy")
+    )
+
+    assert response["search_query"] == "how do I start the proxy"
+    assert [(result["score"], result["content"][0]["text"], result["attributes"]) for result in response["data"]] == [
+        (0.42, "Run litellm --config config.yaml", metadata)
+    ]
+
+
+@pytest.mark.parametrize("body", [[], [{"retrievalResults": []}], "retrievalResults"])
+def test_search_response_that_is_not_a_json_object_raises_a_bedrock_error(body: object) -> None:
+    with pytest.raises(BedrockError) as raised:
+        BedrockVectorStoreConfig().transform_search_vector_store_response(
+            httpx.Response(200, json=body), _SearchLogging("query")
+        )
+
+    assert raised.value.status_code == 200
