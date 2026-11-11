@@ -58,6 +58,7 @@ import { Panel, Segmented, Sparkline, Stat } from "../overview/Primitives";
 import TopModelView from "./TopModelView";
 import TeamUserSpendCard from "./TeamUserSpendCard";
 import { ProviderSpendBreakdown } from "./SpendByProvider";
+import SpendByCustomerTeam from "./SpendByCustomerTeam";
 
 const BRAND = "#2b3fd6";
 const FLAT_COST_SERIES: ParseKeys = "usage.entityUsage.chart.flatCostSeries";
@@ -649,6 +650,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
 
       <Panel icon={Server} title={t("usage.entityUsage.providerUsage")}>
         <ProviderSpendBreakdown rows={providerSpend} />
+        {entityType === "customer" && <SpendByCustomerTeam response={spendDataRaw} />}
       </Panel>
     </div>
   );

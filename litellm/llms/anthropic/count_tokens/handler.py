@@ -125,6 +125,8 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
                 status_code=e.response.status_code,
                 message=e.response.text,
             )
+        except litellm.Timeout as e:
+            raise AnthropicError(status_code=e.status_code, message=str(e)) from e
         except Exception as e:
             verbose_logger.error("Error in CountTokens handler: %s", e)
             raise AnthropicError(

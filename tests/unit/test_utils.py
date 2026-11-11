@@ -57,6 +57,8 @@ from litellm.litellm_core_utils.thread_pool_executor import executor as logging_
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, headers
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+from litellm.proxy.db.request_error_tracking import status_code_from_metadata
 from litellm.proxy.utils import is_valid_api_key
 from litellm.responses.main import aresponses, responses
 from litellm.types.caching import CachingSupportedCallTypes
@@ -88,7 +90,6 @@ from litellm.secret_managers.main import oidc_cache
 from litellm.types.videos.main import VideoObject
 from litellm.utils import (
     acredential_updates,
-    _invalidate_model_cost_lowercase_map,
     add_custom_logger_callback_to_specific_event,
     check_valid_key,
     CustomStreamWrapper,
@@ -120,7 +121,9 @@ from litellm.utils import (
     trim_messages,
     validate_environment,
     validate_chat_completion_tool_choice,
+    validate_and_fix_openai_messages,
 )
+from litellm.litellm_core_utils.model_cost_table import publish
 
 
 @pytest.mark.parametrize("root_base_model", [42, ["gemini-3.5-flash"], {"model": "gemini-3.5-flash"}])
@@ -1023,6 +1026,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "cache_creation_input_token_cost_above_1hr_above_200k_tokens": {"type": "number"},
             "cache_read_input_audio_token_cost": {"type": "number"},
             "cache_read_input_audio_token_cost_batches": {"type": "number"},
+            "cache_read_input_image_token_cost_batches": {"type": "number"},
             "cache_read_input_audio_token_cost_flex": {"type": "number"},
             "cache_read_input_audio_token_cost_priority": {"type": "number"},
             "cache_read_input_image_token_cost": {"type": "number"},
@@ -1452,6 +1456,10 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         "fal_ai/bytedance/seedance-2.0/text-to-video",
         "fal_ai/bytedance/seedance-2.0/image-to-video",
         "fal_ai/bytedance/seedance-2.0/reference-to-video",
+        "fal_ai/bytedance/seedance-2.5/us/draft/complete",  # 1080p is $1.164/second per fal.ai
+        "fal_ai/bytedance/seedance-2.5/us/image-to-video",  # 1080p is $1.164/second per fal.ai
+        "fal_ai/bytedance/seedance-2.5/us/reference-to-video",  # 1080p is $1.164/second per fal.ai
+        "fal_ai/bytedance/seedance-2.5/us/text-to-video",  # 1080p is $1.164/second per fal.ai
     ]
 
     is_valid, violations = validate_model_cost_values(actual_json, exceptions)
@@ -2524,11 +2532,9 @@ def test_register_model_with_scientific_notation():
     test_model_name = f"test-scientific-notation-model-{uuid.uuid4().hex[:12]}"
 
     # Clear LRU caches that might have stale data
-    from litellm.utils import (
-        _invalidate_model_cost_lowercase_map,
-    )
+    from litellm.litellm_core_utils.model_cost_table import publish
 
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     model_cost_dict = {
         test_model_name: {
             "max_tokens": 8192,
@@ -2551,27 +2557,7 @@ def test_register_model_with_scientific_notation():
     # Clean up after test
     if test_model_name in litellm.model_cost:
         del litellm.model_cost[test_model_name]
-    _invalidate_model_cost_lowercase_map()
-
-
-@pytest.mark.usefixtures("isolated_openai_model_sets")
-@respx.mock
-def test_register_model_url_fetch_uses_single_attempt(monkeypatch):
-    monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
-    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
-    before = dict(litellm.model_cost)
-    threads_before = {thread.name for thread in threading.enumerate()}
-    route = respx.get("https://example.invalid/custom_pricing.json").mock(return_value=httpx.Response(503))
-
-    litellm.register_model(model_cost="https://example.invalid/custom_pricing.json")
-
-    threads_after = {thread.name for thread in threading.enumerate()}
-    assert route.call_count == 1
-    assert not (threads_after - threads_before) & {"litellm-model-cost-map-retry"}
-    assert not any(
-        thread.name == "litellm-model-cost-map-retry" and thread.is_alive() for thread in threading.enumerate()
-    )
-    assert litellm.model_cost.keys() >= before.keys()
+    publish(litellm.model_cost)
 
 
 def test_register_model_openrouter_without_slash():
@@ -5188,15 +5174,10 @@ def test_reapply_runtime_registrations_replays_register_model_overrides(
     """
     from litellm import utils as litellm_utils
     from litellm.utils import (
-        _invalidate_model_cost_lowercase_map,
         reapply_runtime_model_cost_registrations,
     )
+    from litellm.litellm_core_utils.model_cost_table import publish
 
-    monkeypatch.setattr(
-        litellm_utils,
-        "_runtime_registered_model_cost",
-        dict(litellm_utils._runtime_registered_model_cost),
-    )
     # Only the recorded half is under test here; the live-router rebuild is covered
     # in test_router_model_cost_isolation.py. Routers built by earlier tests in this
     # process stay in the weak set until they are collected, so leaving the callback
@@ -5230,7 +5211,7 @@ def test_reapply_runtime_registrations_replays_register_model_overrides(
                 "max_input_tokens": 4242,
             }
         }
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)
         reapply_runtime_model_cost_registrations()
 
         expected_rate: Final = rate if updated_rate is None else updated_rate
@@ -5238,8 +5219,7 @@ def test_reapply_runtime_registrations_replays_register_model_overrides(
         assert litellm.model_cost["openai/gpt-4o"]["supports_function_calling"] is False
         assert litellm.model_cost["openai/gpt-4o"]["max_input_tokens"] == 4242
     finally:
-        litellm.model_cost = saved_model_cost
-        _invalidate_model_cost_lowercase_map()
+        publish(saved_model_cost)
 
 
 @pytest.mark.usefixtures("isolated_openai_model_sets", "local_model_cost_map")
@@ -5250,17 +5230,10 @@ def test_reapply_runtime_registrations_drops_request_scoped_registrations(monkey
     the catalog generation it was applied to and silently beat fresh upstream
     pricing forever, while a durable override registered alongside it survives.
     """
-    from litellm import utils as litellm_utils
     from litellm.utils import (
-        _invalidate_model_cost_lowercase_map,
         reapply_runtime_model_cost_registrations,
     )
-
-    monkeypatch.setattr(
-        litellm_utils,
-        "_runtime_registered_model_cost",
-        dict(litellm_utils._runtime_registered_model_cost),
-    )
+    from litellm.litellm_core_utils.model_cost_table import publish
 
     saved_model_cost = litellm.model_cost
     try:
@@ -5277,23 +5250,17 @@ def test_reapply_runtime_registrations_drops_request_scoped_registrations(monkey
             "openai/gpt-4o": {"litellm_provider": "openai", "input_cost_per_token": 0.000999},
             "openai/gpt-4o-mini": {"litellm_provider": "openai", "input_cost_per_token": 0.000888},
         }
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)
         reapply_runtime_model_cost_registrations()
 
         assert litellm.model_cost["openai/gpt-4o"]["input_cost_per_token"] == 0.000111
         assert litellm.model_cost["openai/gpt-4o-mini"]["input_cost_per_token"] == 0.000888
     finally:
-        litellm.model_cost = saved_model_cost
-        _invalidate_model_cost_lowercase_map()
+        publish(saved_model_cost)
 
 
 def test_model_cost_walks_survive_a_registration_landing_mid_walk(monkeypatch: pytest.MonkeyPatch) -> None:
-    from litellm.utils import _invalidate_model_cost_lowercase_map, _rebuild_model_cost_lowercase_map
-
-    class _KeyRegisteredMidWalk(str):
-        def lower(self) -> str:
-            litellm.model_cost.setdefault("lit-5853-registered-during-the-rebuild", {"mode": "chat"})
-            return super().lower()
+    from litellm.litellm_core_utils.model_cost_table import publish
 
     class _EntryRegisteredMidWalk(dict):
         def get(self, field: str, default: object = None) -> object:
@@ -5301,35 +5268,12 @@ def test_model_cost_walks_survive_a_registration_landing_mid_walk(monkeypatch: p
             return super().get(field, default)
 
     monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
-    litellm.model_cost[_KeyRegisteredMidWalk("LIT-5853-WALKED-LAST")] = _EntryRegisteredMidWalk(mode="chat")
+    litellm.model_cost["LIT-5853-WALKED-LAST"] = _EntryRegisteredMidWalk(mode="chat")
     try:
-        assert _rebuild_model_cost_lowercase_map()["lit-5853-walked-last"] == "LIT-5853-WALKED-LAST"
         litellm.add_known_models(model_cost_map=litellm.model_cost)
-        assert "lit-5853-registered-during-the-rebuild" in litellm.model_cost
         assert "lit-5853-registered-during-add-known-models" in litellm.model_cost
     finally:
-        _invalidate_model_cost_lowercase_map()
-
-
-class _KeyWhoseLoweringLosesTheRace(str):
-    """Lowering the key is the one Python-level step between the lookup map's rebuild and
-    its read, so another thread's registration invalidating the map lands right there."""
-
-    def lower(self) -> str:
-        from litellm.utils import _invalidate_model_cost_lowercase_map
-
-        _invalidate_model_cost_lowercase_map()
-        return super().lower()
-
-
-def test_case_insensitive_model_cost_lookup_survives_an_invalidation_mid_lookup() -> None:
-    from litellm.utils import _get_model_cost_key, _invalidate_model_cost_lowercase_map
-
-    _invalidate_model_cost_lowercase_map()
-    try:
-        assert _get_model_cost_key(_KeyWhoseLoweringLosesTheRace("GPT-4O")) == "gpt-4o"
-    finally:
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)
 
 
 def _register_a_model_mid_walk() -> None:
@@ -5357,7 +5301,7 @@ class _EntryReadDuringARegistration(dict[str, object]):
         return super().__contains__(key)
 
 
-@pytest.mark.parametrize("walk", ["fal_ai", "fireworks_ai", "ollama", "gpt-5", "case-insensitive scan"])
+@pytest.mark.parametrize("walk", ["fal_ai", "fireworks_ai", "ollama", "gpt-5"])
 def test_request_path_cost_map_walks_survive_a_registration_mid_walk(
     monkeypatch: pytest.MonkeyPatch, walk: str
 ) -> None:
@@ -5365,14 +5309,13 @@ def test_request_path_cost_map_walks_survive_a_registration_mid_walk(
     from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
     from litellm.llms.ollama.common_utils import OllamaModelInfo
     from litellm.llms.openai.chat.gpt_reasoning_transformation import _catalogue_declares_default_effort
-    from litellm.utils import _handle_new_key_with_scan, _invalidate_model_cost_lowercase_map
+    from litellm.litellm_core_utils.model_cost_table import publish
 
     walks: Final[Mapping[str, Callable[[], object]]] = {
         "fal_ai": lambda: _keyed_rows("lit-5853-model", "standard"),
         "fireworks_ai": FireworksAIConfig._get_fireworks_index,
         "ollama": lambda: OllamaModelInfo._is_static_ollama_model("ollama/lit-5853-model"),
         "gpt-5": _catalogue_declares_default_effort,
-        "case-insensitive scan": lambda: _handle_new_key_with_scan("lit-5853-model"),
     }
     monkeypatch.setattr(
         litellm,
@@ -5384,7 +5327,7 @@ def test_request_path_cost_map_walks_survive_a_registration_mid_walk(
         walks[walk]()
         assert "lit-5853-registered-mid-walk" in litellm.model_cost
     finally:
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)
 
 
 class _JsonCapture(logging.Handler):
@@ -5770,20 +5713,17 @@ async def test_wrapper_async_logs_converted_responses_stream_with_standard_loggi
 
 
 @pytest.mark.parametrize(
-    "kwargs, is_async, expected",
+    "kwargs, expected",
     [
-        ({"metadata": {"model_group": "g"}}, False, True),
-        ({"metadata": {"model_group": "g"}}, True, True),
-        ({"litellm_metadata": {"model_group": "g"}}, False, False),
-        ({"litellm_metadata": {"model_group": "g"}}, True, True),
-        ({}, False, False),
-        ({}, True, False),
-        ({"metadata": None}, False, False),
-        ({"metadata": None}, True, False),
+        ({"metadata": {"model_group": "g"}}, True),
+        ({"litellm_metadata": {"model_group": "g"}}, True),
+        ({"metadata": {"user": "u"}, "litellm_metadata": {"user": "u"}}, False),
+        ({}, False),
+        ({"metadata": None}, False),
     ],
 )
-def test_is_litellm_router_call_is_async_aware(kwargs: Mapping[str, object], is_async: bool, expected: bool) -> None:
-    assert _is_litellm_router_call(kwargs, is_async=is_async) is expected
+def test_is_litellm_router_call_reads_both_metadata_buckets(kwargs: Mapping[str, object], expected: bool) -> None:
+    assert _is_litellm_router_call(kwargs) is expected
 
 
 @pytest.mark.asyncio
@@ -5822,11 +5762,24 @@ async def test_router_aresponses_does_not_run_sdk_retries(monkeypatch: pytest.Mo
         litellm.in_memory_llm_clients_cache.flush_cache()
 
 
-def test_router_responses_keeps_sdk_retries_for_sync_router_call(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+SYNC_ROUTER_RETRIED_CALLS: Final[dict[str, tuple[str, Callable[[litellm.Router], object]]]] = {
+    "responses": ("/v1/responses", lambda router: router.responses(model="responses-retry", input="hi")),
+    "generate_content": (
+        "/v1/chat/completions",
+        lambda router: router.generate_content(
+            model="responses-retry", contents=[{"role": "user", "parts": [{"text": "hi"}]}]
+        ),
+    ),
+}
+
+
+def _count_sync_router_attempts(
+    monkeypatch: pytest.MonkeyPatch, endpoint: str, router_num_retries: int, deployment_num_retries: int | None
+) -> int:
+    path, call = SYNC_ROUTER_RETRIED_CALLS[endpoint]
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
+    retries: Final = {} if deployment_num_retries is None else {"num_retries": deployment_num_retries}
     model_list: Final = [
         {
             "model_name": "responses-retry",
@@ -5834,15 +5787,16 @@ def test_router_responses_keeps_sdk_retries_for_sync_router_call(
                 "model": "openai/gpt-4o-mini",
                 "api_key": "sk-test",
                 "api_base": "https://responses-retry.local/v1",
-                "num_retries": 2,
+                **retries,
             },
         }
     ]
-    router: Final = litellm.Router(model_list=model_list, num_retries=0, retry_after=0, disable_cooldowns=True)
-
+    router: Final = litellm.Router(
+        model_list=model_list, num_retries=router_num_retries, retry_after=0, disable_cooldowns=True
+    )
     try:
         with respx.mock(assert_all_called=True) as respx_mock:
-            upstream: Final = respx_mock.post("https://responses-retry.local/v1/responses").mock(
+            upstream: Final = respx_mock.post(f"https://responses-retry.local{path}").mock(
                 return_value=httpx.Response(
                     503,
                     headers={"retry-after": "0"},
@@ -5850,12 +5804,27 @@ def test_router_responses_keeps_sdk_retries_for_sync_router_call(
                 )
             )
             with pytest.raises(litellm.ServiceUnavailableError):
-                router.responses(model="responses-retry", input="hi")
-
-        assert upstream.call_count == 3
+                call(router)
+        return upstream.call_count
     finally:
         router.discard()
         litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+@pytest.mark.parametrize("router_num_retries", [0, 1])
+@pytest.mark.parametrize("endpoint", sorted(SYNC_ROUTER_RETRIED_CALLS))
+def test_sync_router_call_retries_as_often_as_the_deployment_num_retries(
+    monkeypatch: pytest.MonkeyPatch, router_num_retries: int, endpoint: str
+) -> None:
+    assert _count_sync_router_attempts(monkeypatch, endpoint, router_num_retries, deployment_num_retries=2) == 3
+
+
+@pytest.mark.parametrize("endpoint", sorted(SYNC_ROUTER_RETRIED_CALLS))
+def test_sync_router_call_does_not_nest_the_global_num_retries_under_router_retries(
+    monkeypatch: pytest.MonkeyPatch, endpoint: str
+) -> None:
+    monkeypatch.setattr(litellm, "num_retries", 2)
+    assert _count_sync_router_attempts(monkeypatch, endpoint, router_num_retries=1, deployment_num_retries=None) == 2
 
 
 @pytest.mark.asyncio
@@ -7382,6 +7351,71 @@ def test_load_credentials_from_list_fills_kwargs_from_the_loaded_credential_with
     assert _credential_warnings(caplog) == []
 
 
+@pytest.mark.asyncio
+async def test_a_call_by_credential_name_leaves_its_headers_intact_for_later_uploads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="team-openai",
+                credential_values={
+                    "api_key": "team-openai-key",
+                    "api_base": "https://team-openai.example/v1",
+                    "extra_headers": {"X-Team": "team-a"},
+                },
+                credential_info={},
+            )
+        ],
+    )
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.get("https://team-openai.example/v1/vector_stores/vs-1/files/file-1").respond(
+            200,
+            json={
+                "id": "file-1",
+                "object": "vector_store.file",
+                "created_at": 1,
+                "usage_bytes": 1,
+                "vector_store_id": "vs-1",
+                "status": "completed",
+                "last_error": None,
+                "chunking_strategy": {"type": "auto"},
+                "attributes": {},
+            },
+        )
+        upload: Final = upstream.post("https://team-openai.example/v1/files").respond(
+            200,
+            json={
+                "id": "file-uploaded",
+                "object": "file",
+                "bytes": 5,
+                "created_at": 1,
+                "filename": "notes.txt",
+                "purpose": "assistants",
+                "status": "processed",
+            },
+        )
+        await litellm.avector_store_file_retrieve(
+            vector_store_id="vs-1",
+            file_id="file-1",
+            custom_llm_provider="openai",
+            litellm_credential_name="team-openai",
+        )
+        await litellm.acreate_file(
+            file=("notes.txt", b"hello", "text/plain"),
+            purpose="assistants",
+            custom_llm_provider="openai",
+            litellm_credential_name="team-openai",
+        )
+
+    assert upload.calls.last.request.headers["Content-Type"].startswith("multipart/form-data")
+    assert upload.calls.last.request.headers["X-Team"] == "team-a"
+
+
 _MISTRAL_CHAT_URL: Final = "https://api.mistral.ai/v1/chat/completions"
 _MISTRAL_REPLY: Final = {
     "id": "chatcmpl-oidc",
@@ -8506,7 +8540,7 @@ def test_get_model_info_gemini(monkeypatch):
 def test_register_model_without_a_provider_never_inherits_another_providers_entry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from litellm.utils import _invalidate_model_cost_lowercase_map
+    from litellm.litellm_core_utils.model_cost_table import publish
 
     key: Final = "azure/claude-sonnet-4-6"
     monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
@@ -8521,7 +8555,7 @@ def test_register_model_without_a_provider_never_inherits_another_providers_entr
         assert info["input_cost_per_token"] == 1e-07
         assert info["output_cost_per_token"] == 4e-07
     finally:
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)
 
 
 @pytest.mark.parametrize(
@@ -8539,7 +8573,7 @@ def test_register_model_without_a_provider_never_inherits_another_providers_entr
 def test_register_model_over_a_builtin_row_bills_explicit_cache_hits(
     monkeypatch: pytest.MonkeyPatch, registered_prices: dict[str, float], billed_cache_read_rate: float
 ) -> None:
-    from litellm.utils import _invalidate_model_cost_lowercase_map
+    from litellm.litellm_core_utils.model_cost_table import publish
 
     key: Final = "dashscope/qwen-register-explicit-cache-test"
     monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
@@ -8551,7 +8585,7 @@ def test_register_model_over_a_builtin_row_bills_explicit_cache_hits(
         "cache_read_input_token_cost": 5e-07,
         "explicit_cache_read_input_token_cost": 2.5e-07,
     }
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     try:
         litellm.register_model({key: registered_prices}, persist_across_reloads=False)
         explicit_hit: Final = ModelResponse(
@@ -8566,7 +8600,7 @@ def test_register_model_over_a_builtin_row_bills_explicit_cache_hits(
             1000 * billed_cache_read_rate
         )
     finally:
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)
 
 
 @pytest.mark.parametrize(
@@ -8837,22 +8871,29 @@ def test_validate_tool_choice_forcing_a_hosted_tool_passes_through(tool_choice: 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.parametrize("mode", ["auto", "required"])
-def test_validate_tool_choice_allowed_tools_chat_layout_passes_through(mode: str):
-    tool_choice: Final = {
+def test_validate_tool_choice_allowed_tools_either_layout_comes_back_in_the_chat_layout(mode: str):
+    chat_layout: Final = {
         "type": "allowed_tools",
         "allowed_tools": {
             "mode": mode,
             "tools": [{"type": "function", "function": {"name": "get_time"}}, {"type": "mcp", "server_label": "docs"}],
         },
     }
-    assert validate_chat_completion_tool_choice(tool_choice, model=MODEL) is tool_choice
+    responses_layout: Final = {
+        "type": "allowed_tools",
+        "mode": mode,
+        "tools": [{"type": "function", "name": "get_time"}, {"type": "mcp", "server_label": "docs"}],
+    }
+    assert validate_chat_completion_tool_choice(chat_layout, model=MODEL) == chat_layout
+    assert validate_chat_completion_tool_choice(responses_layout, model=MODEL) == chat_layout
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.parametrize(
     "tool_choice",
     [
-        {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "get_time"}]},
+        {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function"}]},
+        {"type": "allowed_tools", "mode": "required", "tools": []},
         {"type": "allowed_tools"},
         {"type": "allowed_tools", "allowed_tools": {"mode": "required"}},
         {"type": "allowed_tools", "allowed_tools": {"mode": "required", "tools": []}},
@@ -8867,6 +8908,18 @@ def test_validate_tool_choice_allowed_tools_malformed_is_a_400(tool_choice: dict
     assert exc_info.value.status_code == 400
     assert exc_info.value.model == MODEL
     assert '"mode": "auto" | "required"' in str(exc_info.value)
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        {"type": "allowed_tools", "mode": "required", "tools": []},
+        {"type": "allowed_tools", "allowed_tools": {"mode": "none", "tools": [{"type": "function"}]}},
+    ],
+)
+def test_validate_tool_choice_allowed_tools_malformed_is_dropped_under_drop_params(tool_choice: dict[str, object]):
+    assert validate_chat_completion_tool_choice(tool_choice, model=MODEL, drop_params=True) is None
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
@@ -8887,6 +8940,57 @@ def test_validate_tool_choice_without_model_is_still_a_400():
         validate_chat_completion_tool_choice({"type": "bogus"})
     assert exc_info.value.status_code == 400
     assert exc_info.value.model == ""
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize(
+    ("messages", "index"),
+    [
+        ([{"content": "Say hi in two words."}], 0),
+        ([{"role": "user", "content": "hi"}, {"role": None, "content": "hello"}], 1),
+        ([{"role": "user", "content": "hi"}, {"role": "", "content": "hello"}], 1),
+    ],
+)
+def test_completion_message_without_role_is_a_400(messages: list[dict[str, str | None]], index: int):
+    """A message with no role is the caller's mistake, rejected before any provider sees it, never sent as assistant."""
+    with pytest.raises(
+        litellm.MissingMessageRoleError, match=re.escape(f"Missing required parameter: 'messages[{index}].role'.")
+    ) as exc_info:
+        litellm.completion(model=MODEL, messages=messages, mock_response="Hello there!")
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.model == MODEL
+    assert exc_info.value.llm_provider == "anthropic"
+    assert exc_info.value.param == f"messages[{index}].role"
+    error_information: Final = StandardLoggingPayloadSetup.get_error_information(exc_info.value)
+    assert status_code_from_metadata({"error_information": error_information}) == 400
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize(
+    "call_turn",
+    [
+        {
+            "content": "",
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+            ],
+        },
+        {"content": None, "function_call": {"name": "get_weather", "arguments": "{}"}},
+        {"content": "ok", "tool_calls": []},
+        {"content": "ok", "tool_calls": None},
+        {"content": "ok", "function_call": None},
+        {"content": "Sunny.", "reasoning_content": "The user wants the weather."},
+        {"content": "Sunny.", "reasoning_items": []},
+        {"content": "Sunny.", "thinking_blocks": [{"type": "thinking", "thinking": "Weather.", "signature": "sig"}]},
+        {"content": None, "refusal": "I can't help with that."},
+        {"content": None, "audio": {"id": "audio_1"}},
+    ],
+)
+def test_completion_role_less_assistant_turn_is_sent_as_assistant(call_turn: dict[str, object]):
+    """Only an assistant turn carries these keys, so one replayed without a role still goes upstream as assistant."""
+    messages: Final = [{"role": "user", "content": "Weather in Paris?"}, call_turn]
+
+    assert validate_and_fix_openai_messages(messages)[1]["role"] == "assistant"
 
 
 @pytest.fixture()
@@ -8946,7 +9050,7 @@ def isolate_litellm_state():
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 _SCALAR_DEFAULTS = {
@@ -10681,12 +10785,12 @@ def test_dict_to_response_format_helper():
 def test_validate_user_messages_invalid_content_type():
     from litellm.utils import validate_chat_completion_user_messages
 
-    messages = [{"content": [{"type": "invalid_type", "text": "Hello"}]}]
+    messages = [{"role": "user", "content": [{"type": "invalid_type", "text": "Hello"}]}]
 
-    with pytest.raises(Exception, match="Please ensure all messages are valid OpenAI chat completion") as e:
+    with pytest.raises(Exception, match="Please ensure all user messages are valid OpenAI chat completion") as e:
         validate_chat_completion_user_messages(messages)
 
-    assert "Invalid message" in str(e)
+    assert "Invalid user message at index 0" in str(e)
     print(e)
 
 
@@ -11609,7 +11713,7 @@ def test_the_catalog_with_register_model_entries_lists_each_model_once_and_leave
 )
 def test_runtime_model_cost_registrations_resolve_bedrock_routing(monkeypatch: pytest.MonkeyPatch, key: str) -> None:
     from litellm import utils as model_utils
-    from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
+    from litellm.litellm_core_utils.model_cost_table import AliasedCostEntry
 
     rates: Final = {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002}
     alias: Final = "openai.test-converse-alias"
