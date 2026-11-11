@@ -31,6 +31,7 @@ from litellm.proxy.db.pgbouncer import (
     start_in_container_pgbouncer,
 )
 from litellm.proxy.db.query_engine_reaper import start_query_engine_reaper
+from litellm.proxy.server_listener import PrivateListener, gunicorn_overrides
 from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
@@ -686,6 +687,7 @@ class ProxyInitializationHelpers:
         max_requests_before_restart: int | None = None,
         max_requests_before_restart_jitter: int | None = None,
         max_request_header_size: int | None = None,
+        private_listener: PrivateListener | None = None,
     ):
         """
         Run litellm with `gunicorn`
@@ -766,6 +768,7 @@ class ProxyInitializationHelpers:
             "accesslog": "-",  # Log to stdout
             "timeout": 600,  # default to very high number, bedrock/anthropic.claude-v2:1 can take 30+ seconds for the 1st chunk to come in
             "access_log_format": '%(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s',
+            **gunicorn_overrides(private_listener),
         }
 
         # Optional: recycle workers after N requests to mitigate memory growth
@@ -821,13 +824,17 @@ class ProxyInitializationHelpers:
     _run_ollama_serve = run_ollama_serve
 
     @staticmethod
-    def is_port_in_use(port):
+    def is_port_in_use(port: int):
         import socket
 
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             return s.connect_ex(("localhost", port)) == 0
 
     _is_port_in_use = is_port_in_use
+
+    @staticmethod
+    def serving_port(port: int) -> int:
+        return random.randint(1024, 49152) if port == 4000 and ProxyInitializationHelpers.is_port_in_use(port) else port
 
     @staticmethod
     def get_loop_type():
@@ -1228,8 +1235,8 @@ class ProxyInitializationHelpers:
 )
 def run_server(
     cli_args,
-    host,
-    port,
+    host: str,
+    port: int,
     api_base,
     api_version,
     model,
@@ -1717,8 +1724,7 @@ def run_server(
                 )
                 sys.exit(1)
             export_pooled_database_url(pooled_database_url)
-        if port == 4000 and ProxyInitializationHelpers.is_port_in_use(port):
-            port = random.randint(1024, 49152)
+        port = ProxyInitializationHelpers.serving_port(port)
         if prometheus_metrics_port == port:
             raise click.UsageError("--prometheus_metrics_port must differ from --port")
 
