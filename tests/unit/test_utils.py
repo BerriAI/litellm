@@ -11850,6 +11850,11 @@ async def test_success_enqueue_is_tracked_without_starting_callbacks_synchronous
     assert logging_obj.model_call_details["has_logged_async_success"] is True
 
 
+@pytest.mark.parametrize("kwargs", [None, "not a mapping"], ids=["none", "string"])
+def test_get_first_chars_messages_returns_empty_text_for_input_that_is_not_a_mapping(kwargs: object) -> None:
+    assert litellm.get_first_chars_messages(kwargs=kwargs) == ""
+
+
 def test_get_response_string_joins_the_text_parts_of_a_completed_responses_event() -> None:
     from litellm.types.llms.openai import ResponseCompletedEvent
     from litellm.utils import get_response_string
