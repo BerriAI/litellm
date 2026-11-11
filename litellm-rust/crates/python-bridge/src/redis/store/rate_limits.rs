@@ -192,16 +192,27 @@ pub(crate) struct PyAtomicOverLimit {
     index: usize,
     current: i64,
     limit: i64,
+    window_start: Option<i64>,
+    window_observed_at: Option<i64>,
 }
 
 #[pymethods]
 impl PyAtomicOverLimit {
     #[new]
-    fn new(index: usize, current: i64, limit: i64) -> Self {
+    #[pyo3(signature = (index, current, limit, window_start = None, window_observed_at = None))]
+    fn new(
+        index: usize,
+        current: i64,
+        limit: i64,
+        window_start: Option<i64>,
+        window_observed_at: Option<i64>,
+    ) -> Self {
         Self {
             index,
             current,
             limit,
+            window_start,
+            window_observed_at,
         }
     }
 }
@@ -299,10 +310,14 @@ fn atomic(reply: AtomicReply) -> PyAtomicReply {
             index,
             current,
             limit,
+            window_start,
+            window_observed_at,
         } => PyAtomicReply::OverLimit(PyAtomicOverLimit {
             index,
             current,
             limit,
+            window_start: Some(window_start),
+            window_observed_at: Some(window_observed_at),
         }),
     }
 }

@@ -57,6 +57,7 @@ from litellm.proxy.spend_tracking.input_tokens import models_counted_for
 from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.redis.stores.rate_limits import (
+    AtomicOverLimit,
     CounterIncrement,
     CounterKind,
     LocalValue,
@@ -6854,6 +6855,123 @@ async def test_reserve_tpm_tokens_never_evaluates_the_requests_dimension():
         f"an exhausted requests budget (limit 0) must not block the token reservation pass, got: {response}"
     )
     assert [s["rate_limit_type"] for s in response["statuses"]] == ["tokens"]
+
+
+@pytest.mark.asyncio
+async def test_rpm_rate_limit_headers_follow_fixed_window_reset(time_controller):
+    time_controller._current = datetime.fromtimestamp(1_000, tz=timezone.utc)
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache),
+        time_provider=time_controller.now,
+    )
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-reset-rpm"), rpm_limit=1)
+
+    await handler.async_pre_call_hook(auth, cache, {}, "")
+    time_controller.advance(1)
+    with pytest.raises(HTTPException) as first_denial:
+        await handler.async_pre_call_hook(auth, cache, {}, "")
+
+    time_controller.advance(58)
+    with pytest.raises(HTTPException) as second_denial:
+        await handler.async_pre_call_hook(auth, cache, {}, "")
+
+    reset_at: Final = datetime.fromtimestamp(1_060, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    assert first_denial.value.headers["reset_at"] == reset_at
+    assert second_denial.value.headers["reset_at"] == reset_at
+    assert first_denial.value.headers["retry-after"] == "59"
+    assert second_denial.value.headers["retry-after"] == "1"
+
+
+@pytest.mark.asyncio
+async def test_rpm_headers_use_the_enforced_handler_window(time_controller):
+    time_controller._current = datetime.fromtimestamp(3_000, tz=timezone.utc)
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()),
+        time_provider=time_controller.now,
+    )
+    descriptor: Final = RateLimitDescriptor(
+        key="api_key",
+        value="rpm-handler-window",
+        rate_limit={"requests_per_unit": 1, "window_size": 90},
+    )
+
+    await handler.should_rate_limit(descriptors=[descriptor])
+    time_controller.advance(59)
+    denied: Final = await handler.should_rate_limit(descriptors=[descriptor])
+    with pytest.raises(HTTPException) as exc_info:
+        handler._handle_rate_limit_error(denied, [descriptor])
+
+    assert exc_info.value.headers["retry-after"] == "1"
+    assert exc_info.value.headers["reset_at"] == datetime.fromtimestamp(3_060, tz=timezone.utc).strftime(
+        "%Y-%m-%d %H:%M:%S UTC"
+    )
+
+    time_controller.advance(1.01)
+    assert (await handler.should_rate_limit(descriptors=[descriptor]))["overall_code"] == "OK"
+
+
+@pytest.mark.asyncio
+async def test_atomic_tpm_in_memory_rejection_has_window_timing(time_controller):
+    time_controller._current = datetime.fromtimestamp(2_059, tz=timezone.utc)
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache),
+        time_provider=time_controller.now,
+    )
+    descriptor: Final = RateLimitDescriptor(
+        key="api_key",
+        value="atomic-tpm-reset",
+        rate_limit={"tokens_per_unit": 10, "window_size": 60},
+    )
+    counter: Final = handler.rate_limit_counter("api_key", "atomic-tpm-reset", "tokens")
+    handler.rate_limits.set_local(counter.window, "2000", 60)
+    handler.rate_limits.set_local(counter, 10, 60)
+
+    response: Final = await handler.atomic_check_and_increment_by_n(
+        descriptors=[descriptor],
+        increments=[{"tokens": 1}],
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        handler._handle_rate_limit_error(response, [descriptor])
+
+    assert exc_info.value.headers["retry-after"] == "1"
+    assert exc_info.value.headers["reset_at"] == datetime.fromtimestamp(2_060, tz=timezone.utc).strftime(
+        "%Y-%m-%d %H:%M:%S UTC"
+    )
+
+    time_controller.advance(1)
+    assert (await handler.atomic_check_and_increment_by_n(descriptors=[descriptor], increments=[{"tokens": 1}]))[
+        "overall_code"
+    ] == "OK"
+
+
+@pytest.mark.parametrize("redis_now, expected_retry_after", [(9_998, "2"), (9_999, "1")])
+def test_atomic_redis_rejection_uses_server_window_clock(redis_now: int, expected_retry_after: str) -> None:
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()),
+        time_provider=lambda: datetime.fromtimestamp(100_000, tz=timezone.utc),
+    )
+    descriptor: Final = RateLimitDescriptor(
+        key="api_key",
+        value="redis-tpm-reset",
+        rate_limit={"tokens_per_unit": 10, "window_size": 90},
+    )
+    _counters, meta = handler._build_descriptor_atomic_payload(
+        descriptor=descriptor, increment_amounts={"tokens": 1}
+    )
+    response: Final = handler._build_atomic_response(
+        reply=AtomicOverLimit(0, 10, 10, 9_910, redis_now),
+        per_counter_meta=meta,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        handler._handle_rate_limit_error(response, [descriptor])
+
+    assert exc_info.value.headers["retry-after"] == expected_retry_after
+    assert exc_info.value.headers["reset_at"] == datetime.fromtimestamp(10_000, tz=timezone.utc).strftime(
+        "%Y-%m-%d %H:%M:%S UTC"
+    )
 
 
 STATIC_OUTPUT_FLOOR = 1024

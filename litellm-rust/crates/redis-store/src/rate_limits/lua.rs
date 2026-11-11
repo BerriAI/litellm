@@ -60,7 +60,7 @@ pub(super) const CHECK_AND_INCREMENT_BY_N: &str = r#"
 --
 -- Return on success:
 --     { 0, new_counter_1, window_start_1, new_counter_2, window_start_2, ... }
--- Return on over-limit: { 1, descriptor_index, current_counter, limit }
+-- Return on over-limit: { 1, descriptor_index, current_counter, limit, window_start, now }
 local time_reply = redis.call('TIME')
 local now = tonumber(time_reply[1])
 local descriptor_count = #KEYS / 2
@@ -94,7 +94,8 @@ for i = 1, descriptor_count do
         blocked = current_counter >= limit
     end
     if blocked then
-        return { 1, i, current_counter, limit }
+        local active_window_start = window_expired and now or tonumber(window_start)
+        return { 1, i, current_counter, limit, active_window_start, now }
     end
 
     descriptor_state[i] = { window_expired, current_counter, window_start }

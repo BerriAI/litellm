@@ -15,6 +15,7 @@ from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from math import ceil
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -414,6 +415,9 @@ class RateLimitStatus(TypedDict):
     # models' project ITPM/OTPM in one call, or a request carrying multiple
     # rate-limited tags, produces statuses sharing the same descriptor_key.
     descriptor_value: NotRequired[ReadOnly[str]]
+    window_start: NotRequired[ReadOnly[float]]
+    window_size: NotRequired[ReadOnly[int]]
+    window_observed_at: NotRequired[ReadOnly[float]]
 
 
 class RateLimitResponse(TypedDict):
@@ -1203,6 +1207,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         cache_values: Sequence[CounterState],
         key_metadata: Mapping[RateLimitScope, WindowKeyMetadata],
         read_only: bool = False,
+        observed_at: float | None = None,
     ) -> RateLimitResponse:
         """
         Check if the cache values are over the limit.
@@ -1211,7 +1216,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         statuses: Final[list[RateLimitStatus]] = []
         overall_code = "OK"
 
-        for counter, (_window_start, counter_value) in zip(counters, cache_values):
+        for counter, (window_start, counter_value) in zip(counters, cache_values):
             item_code = "OK"
             metadata = key_metadata[counter.scope]
             current_limit = metadata["requests_limit"] if counter.kind == "requests" else metadata["tokens_limit"]
@@ -1224,6 +1229,23 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
             limit_remaining = current_limit - int(counter_value) if counter_value is not None else current_limit
 
+            if item_code == "OVER_LIMIT" and window_start is not None:
+                statuses.append(
+                    RateLimitStatus(
+                        code=item_code,
+                        current_limit=current_limit,
+                        limit_remaining=limit_remaining,
+                        rate_limit_type=counter.kind,
+                        descriptor_key=metadata["descriptor_key"],
+                        descriptor_value=metadata["descriptor_value"],
+                        window_start=float(window_start),
+                        window_size=self.window_size,
+                        window_observed_at=(
+                            observed_at if observed_at is not None else self._get_current_time().timestamp()
+                        ),
+                    )
+                )
+                continue
             statuses.append(
                 {
                     "code": item_code,
@@ -1415,7 +1437,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         windowed_response = RateLimitResponse(overall_code="OK", statuses=[])
         if counters:
             local_response: Final = self.is_cache_list_over_limit(
-                counters, self._local_counter_states(counters), key_metadata, read_only=read_only
+                counters, self._local_counter_states(counters), key_metadata, read_only=read_only, observed_at=now
             )
             if local_response["overall_code"] == "OVER_LIMIT":
                 return local_response
@@ -1436,7 +1458,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     window_size=self.window_size,
                 )
 
-            windowed_response = self.is_cache_list_over_limit(counters, cache_values, key_metadata, read_only=read_only)
+            windowed_response = self.is_cache_list_over_limit(
+                counters, cache_values, key_metadata, read_only=read_only, observed_at=now
+            )
             if windowed_response["overall_code"] == "OVER_LIMIT":
                 return windowed_response
 
@@ -2077,20 +2101,32 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         level when modifying this code.
         """
         if isinstance(reply, AtomicOverLimit):
-            meta = per_counter_meta[reply.index]
-            return RateLimitResponse(
-                overall_code="OVER_LIMIT",
-                statuses=[
-                    RateLimitStatus(
-                        code="OVER_LIMIT",
-                        current_limit=reply.limit,
-                        limit_remaining=max(0, reply.limit - reply.current),
-                        rate_limit_type=meta["rate_limit_type"],
-                        descriptor_key=meta["descriptor_key"],
-                        descriptor_value=meta["descriptor_value"],
-                    )
-                ],
+            over_limit_meta: Final = per_counter_meta[reply.index]
+            window_start: Final = reply.window_start
+            window_observed_at: Final = reply.window_observed_at
+            status: Final = (
+                RateLimitStatus(
+                    code="OVER_LIMIT",
+                    current_limit=reply.limit,
+                    limit_remaining=max(0, reply.limit - reply.current),
+                    rate_limit_type=over_limit_meta["rate_limit_type"],
+                    descriptor_key=over_limit_meta["descriptor_key"],
+                    descriptor_value=over_limit_meta["descriptor_value"],
+                    window_start=float(window_start),
+                    window_size=over_limit_meta["window_size"],
+                    window_observed_at=float(window_observed_at),
+                )
+                if window_start is not None and window_observed_at is not None
+                else RateLimitStatus(
+                    code="OVER_LIMIT",
+                    current_limit=reply.limit,
+                    limit_remaining=max(0, reply.limit - reply.current),
+                    rate_limit_type=over_limit_meta["rate_limit_type"],
+                    descriptor_key=over_limit_meta["descriptor_key"],
+                    descriptor_value=over_limit_meta["descriptor_value"],
+                )
             )
+            return RateLimitResponse(overall_code="OVER_LIMIT", statuses=[status])
         statuses: Final[list[RateLimitStatus]] = [
             RateLimitStatus(
                 code="OK",
@@ -2124,7 +2160,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         # Use a single 'now' for the duration of this critical section so all
         # descriptors evaluate window expiry consistently.
-        now_int: Final = int(self._get_current_time().timestamp())
+        now: Final = self._get_current_time().timestamp()
+        now_int: Final = int(now)
 
         # Pass 1: read state, validate.
         descriptor_state: Final[list[AtomicCounterState]] = []
@@ -2150,6 +2187,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                             rate_limit_type=meta["rate_limit_type"],
                             descriptor_key=meta["descriptor_key"],
                             descriptor_value=meta["descriptor_value"],
+                            window_start=float(now_int if window_expired else int(window_start)),
+                            window_size=meta["window_size"],
+                            window_observed_at=now,
                         )
                     ],
                 )
@@ -3324,9 +3364,20 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
                 descriptor_value = matching_descriptor["value"] if matching_descriptor is not None else "unknown"
 
-                now = self._get_current_time().timestamp()
-                reset_time = now + self.window_size
-                reset_time_formatted = datetime.fromtimestamp(reset_time, tz=timezone.utc).strftime(
+                window_start: Final = status.get("window_start")
+                window_size: Final = status.get("window_size")
+                window_observed_at: Final = status.get("window_observed_at")
+                reset_time: Final = (
+                    window_start + window_size
+                    if window_start is not None and window_size is not None and window_observed_at is not None
+                    else self._get_current_time().timestamp() + self.window_size
+                )
+                retry_after: Final = (
+                    max(1, ceil(reset_time - window_observed_at))
+                    if window_observed_at is not None
+                    else self.window_size
+                )
+                reset_time_formatted: Final = datetime.fromtimestamp(reset_time, tz=timezone.utc).strftime(
                     "%Y-%m-%d %H:%M:%S UTC"
                 )
 
@@ -3341,14 +3392,15 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     f"Limit resets at: {reset_time_formatted}"
                 )
 
+                headers: Final = {
+                    "retry-after": str(retry_after),
+                    "rate_limit_type": str(status["rate_limit_type"]),
+                    "reset_at": reset_time_formatted,
+                }
                 resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(requested_model)
                 raise ProxyRateLimitError(
                     detail=detail,
-                    headers={
-                        "retry-after": str(self.window_size),
-                        "rate_limit_type": str(status["rate_limit_type"]),
-                        "reset_at": reset_time_formatted,
-                    },
+                    headers=headers,
                     rate_limit_type=map_v3_rate_limit_type(status["rate_limit_type"]),
                     model=resolved_model,
                     llm_provider=llm_provider,

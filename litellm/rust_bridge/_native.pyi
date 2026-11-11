@@ -307,13 +307,24 @@ class AtomicApplied:
 
 @final
 class AtomicOverLimit:
-    def __new__(cls, index: int, current: int, limit: int) -> AtomicOverLimit: ...
+    def __new__(
+        cls,
+        index: int,
+        current: int,
+        limit: int,
+        window_start: int | None = None,
+        window_observed_at: int | None = None,
+    ) -> AtomicOverLimit: ...
     @property
     def index(self) -> int: ...
     @property
     def current(self) -> int: ...
     @property
     def limit(self) -> int: ...
+    @property
+    def window_start(self) -> int | None: ...
+    @property
+    def window_observed_at(self) -> int | None: ...
 
 @final
 class GuardedReply:
