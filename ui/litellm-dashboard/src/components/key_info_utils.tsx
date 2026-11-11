@@ -2,7 +2,7 @@
  * Utility functions for handling key information and metadata
  */
 
-import { KEY_MAX_BUDGET_ALERT_EMAILS_KEY } from "./key_team_helpers/budgetAlertEmails";
+import { budgetAlertEmailsMetadata, KEY_MAX_BUDGET_ALERT_EMAILS_KEY } from "./key_team_helpers/budgetAlertEmails";
 
 // Fields that should be filtered out from metadata display due to security concerns
 const SENSITIVE_METADATA_FIELDS = ["logging"] as const;
@@ -72,5 +72,5 @@ export const stripFieldManagedKeysFromMetadata = (
     return withoutTags;
   }
   const { [KEY_MAX_BUDGET_ALERT_EMAILS_KEY]: _maxBudgetAlertEmails, ...rest } = withoutTags;
-  return rest;
+  return { ...rest, ...budgetAlertEmailsMetadata({}, KEY_MAX_BUDGET_ALERT_EMAILS_KEY, withoutTags) };
 };

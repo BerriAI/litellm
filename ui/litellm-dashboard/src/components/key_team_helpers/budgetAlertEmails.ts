@@ -71,15 +71,26 @@ export const budgetAlertRowsFromMetadata = (
     })
     .sort((a, b) => (a.threshold ?? 0) - (b.threshold ?? 0));
 
-export const budgetAlertEmailsRowsCannotShow = (
+const storedBudgetAlertEntries = (
   metadata: unknown,
   metadataKey: BudgetAlertEmailsMetadataKey,
+  rowsCanShow: boolean,
 ): Readonly<Record<string, unknown>> =>
   Object.fromEntries(
     Object.entries(storedBudgetAlertConfig(metadata, metadataKey)).filter(
-      (entry) => budgetAlertRowFromEntry(entry) === null,
+      (entry) => (budgetAlertRowFromEntry(entry) !== null) === rowsCanShow,
     ),
   );
+
+export const budgetAlertEmailsRowsCanShow = (
+  metadata: unknown,
+  metadataKey: BudgetAlertEmailsMetadataKey,
+): Readonly<Record<string, unknown>> => storedBudgetAlertEntries(metadata, metadataKey, true);
+
+export const budgetAlertEmailsRowsCannotShow = (
+  metadata: unknown,
+  metadataKey: BudgetAlertEmailsMetadataKey,
+): Readonly<Record<string, unknown>> => storedBudgetAlertEntries(metadata, metadataKey, false);
 
 export const budgetAlertEmailsFromRows = (rows: readonly BudgetAlertRow[]): BudgetAlertEmails =>
   Object.fromEntries(
@@ -89,23 +100,15 @@ export const budgetAlertEmailsFromRows = (rows: readonly BudgetAlertRow[]): Budg
   );
 
 export const budgetAlertEmailsMetadata = (
-  rows: readonly BudgetAlertRow[] | undefined,
+  rowEntries: Readonly<Record<string, unknown>>,
   metadataKey: BudgetAlertEmailsMetadataKey,
   metadataWithHiddenEntries: unknown,
 ): Readonly<Partial<Record<BudgetAlertEmailsMetadataKey, Readonly<Record<string, unknown>>>>> => {
   const emails = {
     ...budgetAlertEmailsRowsCannotShow(metadataWithHiddenEntries, metadataKey),
-    ...budgetAlertEmailsFromRows(rows ?? []),
+    ...rowEntries,
   };
   return Object.keys(emails).length > 0 ? { [metadataKey]: emails } : {};
-};
-
-export const storedBudgetAlertEmailsMetadata = (
-  metadata: unknown,
-  metadataKey: BudgetAlertEmailsMetadataKey,
-): Readonly<Partial<Record<BudgetAlertEmailsMetadataKey, unknown>>> => {
-  if (typeof metadata !== "object" || metadata === null || !(metadataKey in metadata)) return {};
-  return { [metadataKey]: (metadata as Record<string, unknown>)[metadataKey] };
 };
 
 export const budgetAlertRowsSchema = (message: (issue: BudgetAlertRowIssue) => string) =>

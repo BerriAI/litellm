@@ -38,9 +38,10 @@ import RouterSettingsSummary from "../common_components/RouterSettingsSummary";
 import { hasRouterSettings } from "../common_components/routerSettingsPayload";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
 import {
+  budgetAlertEmailsFromRows,
   budgetAlertEmailsMetadata,
+  budgetAlertEmailsRowsCanShow,
   KEY_MAX_BUDGET_ALERT_EMAILS_KEY,
-  storedBudgetAlertEmailsMetadata,
 } from "../key_team_helpers/budgetAlertEmails";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import LoggingSettingsView from "../logging_settings_view";
@@ -339,13 +340,11 @@ export default function KeyInfoView({
       formValues.tpd_limit = mapEmptyStringToNull(formValues.tpd_limit);
       formValues.max_parallel_requests = mapEmptyStringToNull(formValues.max_parallel_requests);
 
-      const budgetAlertEmails = dirtyFields.includes(KEY_MAX_BUDGET_ALERT_EMAILS_KEY)
-        ? budgetAlertEmailsMetadata(
-            formValues.max_budget_alert_emails,
-            KEY_MAX_BUDGET_ALERT_EMAILS_KEY,
-            currentKeyData.metadata,
-          )
-        : storedBudgetAlertEmailsMetadata(currentKeyData.metadata, KEY_MAX_BUDGET_ALERT_EMAILS_KEY);
+      const budgetAlertRowEntries = dirtyFields.includes(KEY_MAX_BUDGET_ALERT_EMAILS_KEY)
+        ? budgetAlertEmailsFromRows(formValues.max_budget_alert_emails ?? [])
+        : budgetAlertEmailsRowsCanShow(currentKeyData.metadata, KEY_MAX_BUDGET_ALERT_EMAILS_KEY);
+      const budgetAlertEmailsWithBoxEntries = (boxMetadata: unknown) =>
+        budgetAlertEmailsMetadata(budgetAlertRowEntries, KEY_MAX_BUDGET_ALERT_EMAILS_KEY, boxMetadata);
 
       // Convert metadata back to an object if it exists and is a string
       if (formValues.metadata && typeof formValues.metadata === "string") {
@@ -355,6 +354,7 @@ export default function KeyInfoView({
           if ("tags" in parsedMetadata) {
             delete parsedMetadata["tags"];
           }
+          const budgetAlertEmails = budgetAlertEmailsWithBoxEntries(parsedMetadata);
           delete parsedMetadata[KEY_MAX_BUDGET_ALERT_EMAILS_KEY];
           formValues.metadata = {
             ...parsedMetadata,
@@ -377,11 +377,11 @@ export default function KeyInfoView({
         }
       } else {
         const baseMetadata = formValues.metadata || {};
-        const { tags: _omitTags, ...rest } = baseMetadata;
+        const { tags: _omitTags, [KEY_MAX_BUDGET_ALERT_EMAILS_KEY]: _boxAlertEmails, ...rest } = baseMetadata;
         formValues.metadata = {
           ...rest,
           ...(Array.isArray(formValues.tags) && formValues.tags.length > 0 ? { tags: formValues.tags } : {}),
-          ...budgetAlertEmails,
+          ...budgetAlertEmailsWithBoxEntries(baseMetadata),
           ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {}),
           ...(Array.isArray(formValues.logging_settings) && formValues.logging_settings.length > 0
             ? { logging: formValues.logging_settings }

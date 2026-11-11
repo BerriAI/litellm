@@ -3,6 +3,7 @@ import { NEVER_RESETS_BUDGET_DURATION } from "../common_components/budget_durati
 import type { RouterSettingsAccordionValue } from "../common_components/RouterSettingsAccordion";
 import {
   type BudgetAlertRow,
+  budgetAlertEmailsFromRows,
   budgetAlertEmailsMetadata,
   KEY_MAX_BUDGET_ALERT_EMAILS_KEY,
 } from "../key_team_helpers/budgetAlertEmails";
@@ -110,7 +111,7 @@ const buildMetadataJson = (values: Record<string, unknown>, input: KeyCreateInpu
       : logged;
   const metadataObject = disabled ?? {};
   const alertEmails = budgetAlertEmailsMetadata(
-    values[KEY_MAX_BUDGET_ALERT_EMAILS_KEY] as readonly BudgetAlertRow[] | undefined,
+    budgetAlertEmailsFromRows((values[KEY_MAX_BUDGET_ALERT_EMAILS_KEY] as readonly BudgetAlertRow[] | undefined) ?? []),
     KEY_MAX_BUDGET_ALERT_EMAILS_KEY,
     metadataObject,
   );

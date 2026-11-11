@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   budgetAlertEmailsFromRows,
   budgetAlertEmailsMetadata,
+  budgetAlertEmailsRowsCanShow,
   budgetAlertRowsFromMetadata,
   isValidThreshold,
   KEY_MAX_BUDGET_ALERT_EMAILS_KEY,
@@ -88,19 +89,25 @@ describe("budgetAlertRowsFromMetadata", () => {
 describe("budgetAlertEmailsMetadata", () => {
   it("writes the threshold map under the given metadata key", () => {
     expect(
-      budgetAlertEmailsMetadata([{ threshold: 80, emails: "dl@example.com" }], KEY_MAX_BUDGET_ALERT_EMAILS_KEY, {}),
+      budgetAlertEmailsMetadata(
+        budgetAlertEmailsFromRows([{ threshold: 80, emails: "dl@example.com" }]),
+        KEY_MAX_BUDGET_ALERT_EMAILS_KEY,
+        {},
+      ),
     ).toEqual({ max_budget_alert_emails: { "80": ["dl@example.com"] } });
   });
 
-  it.each([undefined, [], [{ threshold: null, emails: "dl@example.com" }]])(
-    "leaves the key out when no row has a valid threshold %j",
-    (rows) => {
-      expect(budgetAlertEmailsMetadata(rows, KEY_MAX_BUDGET_ALERT_EMAILS_KEY, {})).toEqual({});
+  it.each([{ rows: [] }, { rows: [{ threshold: null, emails: "dl@example.com" }] }])(
+    "leaves the key out when no row has a valid threshold $rows",
+    ({ rows }) => {
+      expect(budgetAlertEmailsMetadata(budgetAlertEmailsFromRows(rows), KEY_MAX_BUDGET_ALERT_EMAILS_KEY, {})).toEqual(
+        {},
+      );
     },
   );
 
-  it("keeps the stored entries the rows cannot show and lets the rows own every threshold they can", () => {
-    const stored = {
+  it("keeps the entries the rows cannot show and lets the rows own every threshold they can", () => {
+    const boxMetadata = {
       max_budget_alert_emails: {
         "50": ["old@example.com"],
         "80": ["removed@example.com"],
@@ -114,9 +121,9 @@ describe("budgetAlertEmailsMetadata", () => {
 
     expect(
       budgetAlertEmailsMetadata(
-        [{ threshold: 50, emails: "new@example.com" }],
+        budgetAlertEmailsFromRows([{ threshold: 50, emails: "new@example.com" }]),
         KEY_MAX_BUDGET_ALERT_EMAILS_KEY,
-        stored,
+        boxMetadata,
       ),
     ).toEqual({
       max_budget_alert_emails: {
@@ -127,6 +134,28 @@ describe("budgetAlertEmailsMetadata", () => {
         soon: "label@example.com",
       },
     });
+  });
+});
+
+describe("budgetAlertEmailsRowsCanShow", () => {
+  it("rebuilds the stored map together with the entries the rows cannot show, values untouched", () => {
+    const stored = {
+      max_budget_alert_emails: {
+        "50": "a@example.com, b@example.com",
+        "75": null,
+        "80": ["c@example.com", null],
+        "150": ["over@example.com"],
+      },
+    };
+
+    expect(
+      budgetAlertEmailsMetadata(
+        budgetAlertEmailsRowsCanShow(stored, KEY_MAX_BUDGET_ALERT_EMAILS_KEY),
+        KEY_MAX_BUDGET_ALERT_EMAILS_KEY,
+        stored,
+      ),
+    ).toEqual(stored);
+    expect(budgetAlertEmailsRowsCanShow(stored, KEY_MAX_BUDGET_ALERT_EMAILS_KEY)).not.toHaveProperty("150");
   });
 });
 

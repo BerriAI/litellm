@@ -774,7 +774,7 @@ describe("KeyInfoView handleKeyUpdate max_budget_alert_emails", () => {
     expect(sentPayload.metadata).toEqual({ max_budget_alert_emails: { "90": ["dl@example.com"] } });
   });
 
-  it("keeps an API-written map the rows cannot show when the rows were not edited", async () => {
+  it("sends the stored map verbatim on a save that does not edit the rows", async () => {
     const storedAlertEmails = {
       "50": ["a@example.com"],
       "75": null,
@@ -784,7 +784,7 @@ describe("KeyInfoView handleKeyUpdate max_budget_alert_emails", () => {
     const sentPayload = await submit(
       {
         key_alias: "renamed",
-        metadata: JSON.stringify({ cost_center: "ops" }),
+        metadata: JSON.stringify({ cost_center: "ops", max_budget_alert_emails: { "150": ["c@example.com"] } }),
         max_budget_alert_emails: [{ threshold: 50, emails: "a@example.com" }],
       },
       ["key_alias"],
@@ -793,29 +793,73 @@ describe("KeyInfoView handleKeyUpdate max_budget_alert_emails", () => {
 
     expect(sentPayload.metadata).toEqual({ cost_center: "ops", max_budget_alert_emails: storedAlertEmails });
   });
-  it("keeps the stored entries the rows cannot show when the rows were edited", async () => {
+  const KEY_WITH_HIDDEN_ALERT = {
+    ...baseKeyData,
+    metadata: {
+      cost_center: "ops",
+      max_budget_alert_emails: {
+        "50": ["old@example.com"],
+        "80": ["removed@example.com"],
+        "150": ["c@example.com"],
+      },
+    },
+  };
+
+  it("keeps the entry the rows cannot show that the JSON box still holds when the rows were edited", async () => {
     const sentPayload = await submit(
       {
-        metadata: JSON.stringify({ cost_center: "ops" }),
+        metadata: JSON.stringify({ cost_center: "ops", max_budget_alert_emails: { "150": ["c@example.com"] } }),
         max_budget_alert_emails: [{ threshold: 50, emails: "new@example.com" }],
       },
       ["max_budget_alert_emails"],
-      {
-        ...baseKeyData,
-        metadata: {
-          cost_center: "ops",
-          max_budget_alert_emails: {
-            "50": ["old@example.com"],
-            "80": ["removed@example.com"],
-            "150": ["c@example.com"],
-          },
-        },
-      },
+      KEY_WITH_HIDDEN_ALERT,
     );
 
     expect(sentPayload.metadata).toEqual({
       cost_center: "ops",
       max_budget_alert_emails: { "50": ["new@example.com"], "150": ["c@example.com"] },
+    });
+  });
+
+  it("keeps only the box's hidden entry when every row is removed", async () => {
+    const sentPayload = await submit(
+      {
+        metadata: JSON.stringify({ cost_center: "ops", max_budget_alert_emails: { "150": ["c@example.com"] } }),
+        max_budget_alert_emails: [],
+      },
+      ["max_budget_alert_emails"],
+      KEY_WITH_HIDDEN_ALERT,
+    );
+
+    expect(sentPayload.metadata).toEqual({
+      cost_center: "ops",
+      max_budget_alert_emails: { "150": ["c@example.com"] },
+    });
+  });
+
+  it("clears the map when every row is removed and the hidden entry is deleted from the JSON box", async () => {
+    const sentPayload = await submit(
+      { metadata: JSON.stringify({ cost_center: "ops" }), max_budget_alert_emails: [] },
+      ["max_budget_alert_emails"],
+      KEY_WITH_HIDDEN_ALERT,
+    );
+
+    expect(sentPayload.metadata).toEqual({ cost_center: "ops" });
+  });
+
+  it("saves an entry the rows cannot show typed into the JSON box on an untouched-rows edit", async () => {
+    const sentPayload = await submit(
+      {
+        metadata: JSON.stringify({ cost_center: "ops", max_budget_alert_emails: { "0": ["zero@example.com"] } }),
+        max_budget_alert_emails: [],
+      },
+      ["metadata"],
+      { ...baseKeyData, metadata: { cost_center: "ops" } },
+    );
+
+    expect(sentPayload.metadata).toEqual({
+      cost_center: "ops",
+      max_budget_alert_emails: { "0": ["zero@example.com"] },
     });
   });
 });

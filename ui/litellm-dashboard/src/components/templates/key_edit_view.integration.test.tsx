@@ -3325,10 +3325,11 @@ describe("KeyEditView", () => {
     const renderAlerts = (
       onSubmit: (values: Record<string, unknown>) => Promise<void>,
       editingMemberKeyAsTeamAdmin = false,
+      keyData: KeyResponse = KEY_WITH_ALERTS,
     ) =>
       renderWithProviders(
         <KeyEditView
-          keyData={KEY_WITH_ALERTS}
+          keyData={keyData}
           onCancel={() => {}}
           onSubmit={onSubmit}
           accessToken={"test-token"}
@@ -3355,6 +3356,23 @@ describe("KeyEditView", () => {
       );
       expect(JSON.parse((screen.getByLabelText("Metadata") as HTMLTextAreaElement).value)).toEqual({
         cost_center: "ops",
+      });
+    });
+
+    it("shows only the stored entries the rows cannot show in the metadata JSON box", async () => {
+      renderAlerts(vi.fn(), false, {
+        ...KEY_WITH_ALERTS,
+        metadata: {
+          cost_center: "ops",
+          max_budget_alert_emails: { "80": ["row@example.com"], "150": ["over@example.com"], "0": [] },
+        },
+      });
+
+      const thresholds = await screen.findAllByPlaceholderText("% of budget");
+      expect(thresholds.map((input) => (input as HTMLInputElement).value)).toEqual(["80"]);
+      expect(JSON.parse((screen.getByLabelText("Metadata") as HTMLTextAreaElement).value)).toEqual({
+        cost_center: "ops",
+        max_budget_alert_emails: { "150": ["over@example.com"], "0": [] },
       });
     });
 
