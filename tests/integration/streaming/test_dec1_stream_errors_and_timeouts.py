@@ -69,7 +69,9 @@ def test_failed_stream_open_writes_one_failure_row_and_no_spend(gateway: Gateway
     """A stream fails on open with a provider 400. One SpendLogs row lands for the key with
     `status == "failure"`, `spend == 0` and zero completion tokens. Failed calls are visible in the
     logs UI but must never cost anything."""
-    with scripted(gateway, lambda request: _provider_error(400), input_cost_per_token=0.001, output_cost_per_token=0.002) as rig:
+    with scripted(
+        gateway, lambda request: _provider_error(400), input_cost_per_token=0.001, output_cost_per_token=0.002
+    ) as rig:
         assert rig.chat().status_code == 400
         row: Final = rig.spend_rows()[0]
         assert row["status"] == "failure"
@@ -88,17 +90,18 @@ def test_unknown_key_on_a_streaming_request_is_a_json_401_and_never_reaches_the_
         assert rig.upstream_bodies() == []
 
 
-def test_key_without_access_to_the_model_gets_a_json_401_before_any_stream(gateway: Gateway) -> None:
-    """A key scoped to one deployment streams against a different deployment. The proxy answers 401 with
-    a JSON error whose type is `key_model_access_denied` and neither provider is called. UNVERIFIED on
-    the exact type string: read from `ProxyErrorTypes.key_model_access_denied` in
-    `litellm/proxy/_types.py`."""
+def test_key_without_access_to_the_model_gets_a_json_403_before_any_stream(gateway: Gateway) -> None:
+    """A key scoped to one deployment streams against a different deployment. The proxy answers 403 with
+    a JSON error whose type is `key_model_access_denied` and neither provider is called. The key is valid,
+    so this is an authorization refusal (403), not an authentication one (401):
+    `_can_object_call_model` in `litellm/proxy/auth/auth_checks.py` raises
+    `ModelAccessDeniedProxyException` with `HTTP_403_FORBIDDEN`."""
     with (
         scripted(gateway, serving(text_frames(f"chatcmpl-{marker()}", ("mine",)))) as allowed,
         scripted(gateway, serving(text_frames(f"chatcmpl-{marker()}", ("theirs",)))) as other,
     ):
         response: Final = allowed.post("/v1/chat/completions", other.chat_body())
-        assert response.status_code == 401, response.text
+        assert response.status_code == 403, response.text
         assert object_value(response.json()["error"])["type"] == "key_model_access_denied"
         assert other.upstream_bodies() == [] and allowed.upstream_bodies() == []
 
@@ -119,7 +122,9 @@ def test_second_stream_over_the_key_rpm_limit_is_a_json_429(gateway: Gateway) ->
     """A key with `rpm_limit: 1` streams twice in the same minute. The first stream completes. The second
     is refused with a 429 JSON error before the provider is called, so the provider sees exactly one
     request."""
-    with scripted(gateway, lambda request: sse(text_frames(f"chatcmpl-{marker()}", ("first",))), key_fields={"rpm_limit": 1}) as rig:
+    with scripted(
+        gateway, lambda request: sse(text_frames(f"chatcmpl-{marker()}", ("first",))), key_fields={"rpm_limit": 1}
+    ) as rig:
         assert rig.chat().status_code == 200
         second: Final = rig.chat()
         assert second.status_code == 429, second.text

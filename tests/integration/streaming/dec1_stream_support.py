@@ -45,8 +45,13 @@ GEMINI: Final = "gemini-3.8-flash"
 BEDROCK_CLAUDE: Final = "anthropic.claude-3-5-sonnet-20240620-v1:0"
 SPEND_COLUMNS: Final = (
     "request_id, call_type, status, model, model_group, custom_llm_provider, prompt_tokens, completion_tokens, "
-    'total_tokens, spend, cache_hit, metadata, litellm_call_id, "startTime", "endTime", "completionStartTime"'
+    "total_tokens, spend, cache_hit, metadata, litellm_call_id, "
+    + ", ".join(
+        f'to_char("{column}", \'YYYY-MM-DD"T"HH24:MI:SS.US\') AS "{column}"'
+        for column in ("startTime", "endTime", "completionStartTime")
+    )
 )
+"""Timestamps come back as fixed width ISO text so the JSON row adapter accepts them and they sort as text."""
 
 
 def marker() -> str:
@@ -173,11 +178,7 @@ def choices_of(chunks: Sequence[Mapping[str, JsonValue]]) -> list[dict[str, Json
 
 
 def deltas_of(chunks: Sequence[Mapping[str, JsonValue]], index: int = 0) -> list[dict[str, JsonValue]]:
-    return [
-        object_value(choice.get("delta") or {})
-        for choice in choices_of(chunks)
-        if choice.get("index", 0) == index
-    ]
+    return [object_value(choice.get("delta") or {}) for choice in choices_of(chunks) if choice.get("index", 0) == index]
 
 
 def content_of(chunks: Sequence[Mapping[str, JsonValue]], index: int = 0, field: str = "content") -> str:
@@ -273,7 +274,9 @@ class Rig:
     def spend_rows(self, expected: int = 1, *, settle: float = 3) -> list[dict[str, JsonValue]]:
         """The SpendLogs rows written for this rig's key, once `expected` of them exist and no more arrive."""
         digest: Final = sha256(self.key.encode()).hexdigest()
-        query: Final = f'SELECT {SPEND_COLUMNS} FROM "LiteLLM_SpendLogs" WHERE api_key=%s ORDER BY "startTime"'
+        query: Final = (
+            f'SELECT {SPEND_COLUMNS} FROM "LiteLLM_SpendLogs" WHERE api_key=%s ORDER BY "LiteLLM_SpendLogs"."startTime"'
+        )
         eventually(lambda: read_rows(query, (digest,)), lambda rows: len(rows) >= expected, seconds=70)  # type: ignore[arg-type]
         return held(lambda: read_rows(query, (digest,)), lambda rows: len(rows) == expected, holding=settle)  # type: ignore[arg-type]
 

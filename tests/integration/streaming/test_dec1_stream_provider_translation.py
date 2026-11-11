@@ -43,14 +43,27 @@ from integration.streaming.dec1_stream_support import (
 )
 
 _CHAT_TOOLS: Final = [
-    {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}}}
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+        },
+    }
 ]
 
 
 def _anthropic_tail(stop_reason: str, output_tokens: int = 3, index: int = 0) -> tuple[bytes, ...]:
     return (
         event("content_block_stop", {"type": "content_block_stop", "index": index}),
-        event("message_delta", {"type": "message_delta", "delta": {"stop_reason": stop_reason, "stop_sequence": None}, "usage": {"output_tokens": output_tokens}}),
+        event(
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": stop_reason, "stop_sequence": None},
+                "usage": {"output_tokens": output_tokens},
+            },
+        ),
         event("message_stop", {"type": "message_stop"}),
     )
 
@@ -58,7 +71,10 @@ def _anthropic_tail(stop_reason: str, output_tokens: int = 3, index: int = 0) ->
 def _anthropic_text(identity: str, pieces: tuple[str, ...], stop_reason: str = "end_turn") -> tuple[bytes, ...]:
     return (
         message_start(identity, CLAUDE),
-        event("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+        event(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
         event("ping", {"type": "ping"}),
         *map(text_delta, pieces),
         *_anthropic_tail(stop_reason),
@@ -99,7 +115,9 @@ def test_anthropic_stream_chunks_share_one_id_and_the_public_model_name(gateway:
     ("stop_reason", "finish"),
     [("end_turn", "stop"), ("stop_sequence", "stop"), ("max_tokens", "length"), ("refusal", "content_filter")],
 )
-def test_anthropic_stop_reason_maps_to_the_openai_finish_reason(gateway: Gateway, stop_reason: str, finish: str) -> None:
+def test_anthropic_stop_reason_maps_to_the_openai_finish_reason(
+    gateway: Gateway, stop_reason: str, finish: str
+) -> None:
     """An Anthropic stream ends with each stop reason in turn. The chat caller's finish reason is the
     OpenAI equivalent from `_FINISH_REASON_MAP`: `end_turn` and `stop_sequence` give `stop`, `max_tokens`
     gives `length`, `refusal` gives `content_filter`."""
@@ -138,13 +156,20 @@ def test_anthropic_cache_read_tokens_are_added_to_prompt_tokens_and_reported_as_
                 "content": [],
                 "stop_reason": None,
                 "stop_sequence": None,
-                "usage": {"input_tokens": 5, "cache_read_input_tokens": 7, "cache_creation_input_tokens": 0, "output_tokens": 1},
+                "usage": {
+                    "input_tokens": 5,
+                    "cache_read_input_tokens": 7,
+                    "cache_creation_input_tokens": 0,
+                    "output_tokens": 1,
+                },
             },
         },
     )
     frames: Final = (start, *_anthropic_text(identity, ("cached",))[1:])
     with _anthropic(gateway, frames) as rig:
-        usage: Final = object_value(usage_chunks(chunks_of(rig.chat(stream_options={"include_usage": True}).text))[-1]["usage"])
+        usage: Final = object_value(
+            usage_chunks(chunks_of(rig.chat(stream_options={"include_usage": True}).text))[-1]["usage"]
+        )
         assert usage["prompt_tokens"] == 12
         assert object_value(usage["prompt_tokens_details"])["cached_tokens"] == 7
         assert usage["completion_tokens"] == 3
@@ -158,9 +183,30 @@ def test_anthropic_tool_use_block_becomes_openai_tool_call_fragments(gateway: Ga
     identity: Final = f"msg_{marker()}"
     frames: Final = (
         message_start(identity, CLAUDE),
-        event("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "tool_use", "id": "toolu_dec1", "name": "get_weather", "input": {}}}),
-        event("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": '{"city":'}}),
-        event("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": '"Paris"}'}}),
+        event(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "tool_use", "id": "toolu_dec1", "name": "get_weather", "input": {}},
+            },
+        ),
+        event(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": '{"city":'},
+            },
+        ),
+        event(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": '"Paris"}'},
+            },
+        ),
         *_anthropic_tail("tool_use"),
     )
     with _anthropic(gateway, frames) as rig:
@@ -180,13 +226,39 @@ def test_anthropic_thinking_block_becomes_reasoning_content_before_the_answer(ga
     identity: Final = f"msg_{marker()}"
     frames: Final = (
         message_start(identity, CLAUDE),
-        event("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": "", "signature": ""}}),
-        event("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "consider "}}),
-        event("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "carefully"}}),
-        event("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "signature_delta", "signature": "c2lnbmF0dXJl"}}),
+        event(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "thinking", "thinking": "", "signature": ""},
+            },
+        ),
+        event(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "consider "}},
+        ),
+        event(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "carefully"}},
+        ),
+        event(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "signature_delta", "signature": "c2lnbmF0dXJl"},
+            },
+        ),
         event("content_block_stop", {"type": "content_block_stop", "index": 0}),
-        event("content_block_start", {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}}),
-        event("content_block_delta", {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": "answer"}}),
+        event(
+            "content_block_start",
+            {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}},
+        ),
+        event(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": "answer"}},
+        ),
         *_anthropic_tail("end_turn", index=1),
     )
     with _anthropic(gateway, frames) as rig:
@@ -195,12 +267,27 @@ def test_anthropic_thinking_block_becomes_reasoning_content_before_the_answer(ga
         assert content_of(chunks) == "answer"
 
 
+GEMINI_USAGE: Final = {"promptTokenCount": 9, "candidatesTokenCount": 7, "totalTokenCount": 16}
+
+
 def _gemini_text(parts: tuple[str, ...], finish: str = "STOP") -> tuple[bytes, ...]:
-    frames: Final = tuple(
-        data({"candidates": [{"content": {"parts": [{"text": part}], "role": "model"}, "index": 0, **({"finishReason": finish} if part == parts[-1] else {})}]})
-        for part in parts
-    )
-    return (*frames, data({"usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 7, "totalTokenCount": 16}}))
+    """One Gemini object per text part; the last carries `finishReason` and `usageMetadata` together.
+
+    That is the shape Gemini sends: usage rides on the finishing object rather than on a separate
+    trailing object. The proxy reads a Gemini finish reason as provisional (`chunk_parser` marks every
+    chunk `is_finished: False`) and keeps the latest one it saw, so a trailing candidate free object
+    would reset any non STOP reason to the default `stop`."""
+
+    def frame(part: str) -> bytes:
+        last: Final = part == parts[-1]
+        candidate: Final = {
+            "content": {"parts": [{"text": part}], "role": "model"},
+            "index": 0,
+            **({"finishReason": finish} if last else {}),
+        }
+        return data({"candidates": [candidate], **({"usageMetadata": GEMINI_USAGE} if last else {})})
+
+    return tuple(frame(part) for part in parts)
 
 
 def _gemini(gateway: Gateway, frames: tuple[bytes, ...]):  # type: ignore[no-untyped-def]
@@ -209,7 +296,7 @@ def _gemini(gateway: Gateway, frames: tuple[bytes, ...]):  # type: ignore[no-unt
 
 def test_gemini_candidate_parts_become_openai_content_chunks(gateway: Gateway) -> None:
     """A Gemini deployment streams two `candidates[0].content.parts[0].text` objects, the second with
-    `finishReason: STOP`, then a usage only object. The chat caller receives OpenAI chunks whose content
+    `finishReason: STOP` and the usage. The chat caller receives OpenAI chunks whose content
     is the two parts, one `finish_reason: stop`, `[DONE]`, and no `candidates` key anywhere. The peer was
     called on a `:streamGenerateContent` path."""
     with _gemini(gateway, _gemini_text(("Guten ", "Tag"))) as rig:
@@ -219,11 +306,18 @@ def test_gemini_candidate_parts_become_openai_content_chunks(gateway: Gateway) -
         assert finish_reasons(chunks) == ["stop"]
         assert payloads(body)[-1] == "[DONE]"
         assert "candidates" not in body
-        assert all(":streamGenerateContent" in request.target for request in rig.wire.drain() if request.method == "POST")
+        assert all(
+            ":streamGenerateContent" in request.target for request in rig.wire.drain() if request.method == "POST"
+        )
 
 
-@pytest.mark.parametrize(("gemini_reason", "finish"), [("MAX_TOKENS", "length"), ("SAFETY", "content_filter"), ("RECITATION", "content_filter")])
-def test_gemini_finish_reason_maps_to_the_openai_finish_reason(gateway: Gateway, gemini_reason: str, finish: str) -> None:
+@pytest.mark.parametrize(
+    ("gemini_reason", "finish"),
+    [("MAX_TOKENS", "length"), ("SAFETY", "content_filter"), ("RECITATION", "content_filter")],
+)
+def test_gemini_finish_reason_maps_to_the_openai_finish_reason(
+    gateway: Gateway, gemini_reason: str, finish: str
+) -> None:
     """A Gemini stream ends with `MAX_TOKENS`, `SAFETY` or `RECITATION`. The chat caller's finish reason
     is `length`, `content_filter` and `content_filter` respectively (`_FINISH_REASON_MAP`)."""
     with _gemini(gateway, _gemini_text(("mapped ", "reason"), gemini_reason)) as rig:
@@ -267,9 +361,30 @@ def test_gemini_thought_parts_become_reasoning_content(gateway: Gateway) -> None
     UNVERIFIED: read from the `thought` handling in
     `litellm/llms/vertex_ai/gemini/vertex_and_google_ai_studio_gemini.py`."""
     frames: Final = (
-        data({"candidates": [{"content": {"parts": [{"text": "pondering", "thought": True}], "role": "model"}, "index": 0}]}),
-        data({"candidates": [{"content": {"parts": [{"text": "answer"}], "role": "model"}, "index": 0, "finishReason": "STOP"}]}),
-        data({"usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 7, "totalTokenCount": 16, "thoughtsTokenCount": 2}}),
+        data(
+            {
+                "candidates": [
+                    {"content": {"parts": [{"text": "pondering", "thought": True}], "role": "model"}, "index": 0}
+                ]
+            }
+        ),
+        data(
+            {
+                "candidates": [
+                    {"content": {"parts": [{"text": "answer"}], "role": "model"}, "index": 0, "finishReason": "STOP"}
+                ]
+            }
+        ),
+        data(
+            {
+                "usageMetadata": {
+                    "promptTokenCount": 9,
+                    "candidatesTokenCount": 7,
+                    "totalTokenCount": 16,
+                    "thoughtsTokenCount": 2,
+                }
+            }
+        ),
     )
     with _gemini(gateway, frames) as rig:
         chunks: Final = chunks_of(rig.chat().text)
@@ -281,7 +396,10 @@ def _converse(*events: tuple[str, dict]) -> Reply:
     return Reply(content_type=EVENT_STREAM, chunks=tuple(bedrock_frame(kind, payload) for kind, payload in events))
 
 
-_CONVERSE_USAGE: Final = ("metadata", {"usage": {"inputTokens": 9, "outputTokens": 5, "totalTokens": 14}, "metrics": {"latencyMs": 1}})
+_CONVERSE_USAGE: Final = (
+    "metadata",
+    {"usage": {"inputTokens": 9, "outputTokens": 5, "totalTokens": 14}, "metrics": {"latencyMs": 1}},
+)
 
 
 def _converse_text(stop_reason: str = "end_turn") -> Reply:
@@ -315,7 +433,15 @@ def test_bedrock_binary_event_stream_becomes_openai_sse_chunks(gateway: Gateway)
         assert all(_is_converse_stream(request) for request in rig.wire.drain() if request.method == "POST")
 
 
-@pytest.mark.parametrize(("stop_reason", "finish"), [("max_tokens", "length"), ("stop_sequence", "stop"), ("content_filtered", "content_filter"), ("guardrail_intervened", "content_filter")])
+@pytest.mark.parametrize(
+    ("stop_reason", "finish"),
+    [
+        ("max_tokens", "length"),
+        ("stop_sequence", "stop"),
+        ("content_filtered", "content_filter"),
+        ("guardrail_intervened", "content_filter"),
+    ],
+)
 def test_bedrock_stop_reason_maps_to_the_openai_finish_reason(gateway: Gateway, stop_reason: str, finish: str) -> None:
     """A Bedrock Converse stream ends with each `stopReason`. The chat caller's finish reason is
     `length` for `max_tokens`, `stop` for `stop_sequence`, and `content_filter` for `content_filtered`
@@ -343,7 +469,10 @@ def test_bedrock_tool_use_events_become_openai_tool_call_fragments(gateway: Gate
     to `{"city":"Paris"}`, and `finish_reason: tool_calls`."""
     reply: Final = _converse(
         ("messageStart", {"role": "assistant"}),
-        ("contentBlockStart", {"start": {"toolUse": {"toolUseId": "tooluse_dec1", "name": "get_weather"}}, "contentBlockIndex": 0}),
+        (
+            "contentBlockStart",
+            {"start": {"toolUse": {"toolUseId": "tooluse_dec1", "name": "get_weather"}}, "contentBlockIndex": 0},
+        ),
         ("contentBlockDelta", {"delta": {"toolUse": {"input": '{"city":'}}, "contentBlockIndex": 0}),
         ("contentBlockDelta", {"delta": {"toolUse": {"input": '"Paris"}'}}, "contentBlockIndex": 0}),
         ("contentBlockStop", {"contentBlockIndex": 0}),

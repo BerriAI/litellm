@@ -31,7 +31,10 @@ from integration.streaming.dec1_stream_support import (
     usage_only,
 )
 
-_BRIDGED: Final = "hosted_vllm/dec1-chat-backend"
+_BRIDGED: Final = "deepseek/dec1-chat-backend"
+"""A chat only provider. `hosted_vllm/` would not do: it has a native Responses config
+(`HostedVLLMResponsesAPIConfig`), so its `/v1/responses` calls go to the peer's own `/v1/responses` route
+instead of through the chat completions bridge."""
 _TEXT_LIFECYCLE: Final = [
     "response.created",
     "response.in_progress",
@@ -56,7 +59,9 @@ def test_bridged_text_stream_emits_the_full_responses_lifecycle_in_order(gateway
     order: created, in_progress, output_item.added, content_part.added, the text deltas,
     output_text.done, content_part.done, output_item.done, completed. Status is 200 with content type
     `text/event-stream`."""
-    with scripted(gateway, serving(text_frames(f"chatcmpl-{marker()}", ("one ", "two ", "three"))), model=_BRIDGED) as rig:
+    with scripted(
+        gateway, serving(text_frames(f"chatcmpl-{marker()}", ("one ", "two ", "three"))), model=_BRIDGED
+    ) as rig:
         response: Final = rig.responses()
         assert response.status_code == 200, response.text
         assert response.headers["content-type"].split(";")[0] == "text/event-stream"
@@ -143,7 +148,12 @@ def test_bridged_tool_call_streams_function_call_argument_events(gateway: Gatewa
     `response.function_call_arguments.done` with the same full string, and the completed response lists
     the function call in `output`."""
     identity: Final = f"chatcmpl-{marker()}"
-    opening: Final = {"index": 0, "id": "call_dec1", "type": "function", "function": {"name": "get_weather", "arguments": ""}}
+    opening: Final = {
+        "index": 0,
+        "id": "call_dec1",
+        "type": "function",
+        "function": {"name": "get_weather", "arguments": ""},
+    }
     frames: Final = (
         delta(identity, {"role": "assistant", "content": None, "tool_calls": [opening]}),
         delta(identity, {"tool_calls": [{"index": 0, "function": {"arguments": '{"city":'}}]}),
@@ -152,12 +162,22 @@ def test_bridged_tool_call_streams_function_call_argument_events(gateway: Gatewa
         usage_only(identity),
         DONE,
     )
-    tools: Final = [{"type": "function", "name": "get_weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}}]
+    tools: Final = [
+        {
+            "type": "function",
+            "name": "get_weather",
+            "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+        }
+    ]
     with scripted(gateway, serving(frames), model=_BRIDGED) as rig:
         events: Final = chunks_of(rig.responses(tools=tools).text)
         added: Final = [object_value(item["item"]) for item in events if item["type"] == "response.output_item.added"]
-        assert [(item["type"], item.get("name")) for item in added if item["type"] == "function_call"] == [("function_call", "get_weather")]
-        pieces: Final = [str(item["delta"]) for item in events if item["type"] == "response.function_call_arguments.delta"]
+        assert [(item["type"], item.get("name")) for item in added if item["type"] == "function_call"] == [
+            ("function_call", "get_weather")
+        ]
+        pieces: Final = [
+            str(item["delta"]) for item in events if item["type"] == "response.function_call_arguments.delta"
+        ]
         assert json.loads("".join(pieces)) == {"city": "Paris"}
         done: Final = [item for item in events if item["type"] == "response.function_call_arguments.done"]
         assert [json.loads(str(item["arguments"])) for item in done] == [{"city": "Paris"}]
@@ -235,7 +255,12 @@ def test_native_responses_stream_is_billed_from_the_completed_event(gateway: Gat
     ) as rig:
         assert rig.responses().status_code == 200
         row: Final = rig.spend_rows()[0]
-        assert (row["prompt_tokens"], row["completion_tokens"], row["call_type"], row["status"]) == (5, 3, "aresponses", "success")
+        assert (row["prompt_tokens"], row["completion_tokens"], row["call_type"], row["status"]) == (
+            5,
+            3,
+            "aresponses",
+            "success",
+        )
         assert float(str(row["spend"])) == pytest.approx(5 * 0.001 + 3 * 0.002)
 
 
