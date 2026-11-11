@@ -1143,6 +1143,40 @@ class TestBuildCompleteStreamingResponseRobustness:
         assert result is not None
         assert result.choices[0].message.content == "Hello"
 
+    @pytest.mark.parametrize(
+        "content_events",
+        [
+            [
+                'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+                'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}',
+                'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
+            ],
+            [
+                'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"Bash","input":{}}}',
+                'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"command\\": \\"ls\\"}"}}',
+                'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
+            ],
+        ],
+        ids=["text", "tool_use"],
+    )
+    @pytest.mark.parametrize("non_object_data_line", ["data: 5", "data: []", 'data: "x"', "data: null"])
+    def test_data_line_that_is_not_a_json_object_is_skipped(
+        self, content_events: list[str], non_object_data_line: str
+    ) -> None:
+        chunks: Final = [
+            'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-3-sonnet-20240229","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}',
+            *content_events,
+            'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}}',
+            'event: message_stop\ndata: {"type":"message_stop"}',
+        ]
+        expected: Final = self._build(chunks)
+
+        result: Final = self._build([non_object_data_line, *chunks[:2], non_object_data_line, *chunks[2:]])
+
+        assert result is not None
+        assert result.choices[0].message == expected.choices[0].message
+        assert result.usage == expected.usage
+
     def test_done_in_text_payload_is_not_dropped(self):
         """A valid event whose text content contains '[DONE]' must NOT be skipped."""
         chunks = [
@@ -2071,6 +2105,18 @@ class TestAnthropicUsageOnlyFallback:
         assert usage.prompt_tokens_details.cached_tokens == 40
         assert usage.server_tool_use.web_search_requests == 2
 
+    @pytest.mark.parametrize("non_object_data_line", ["data: 5", 'data: "x"', "data: [1]"])
+    def test_build_usage_only_skips_a_data_line_that_is_not_a_json_object(self, non_object_data_line: str) -> None:
+        response = AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
+            all_chunks=[f"{non_object_data_line}\n\n", *self._CHUNKS], model="claude-3-5-haiku-20241022"
+        )
+        expected = AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
+            all_chunks=self._CHUNKS, model="claude-3-5-haiku-20241022"
+        )
+
+        assert response is not None and expected is not None
+        assert response.usage == expected.usage
+
     def test_build_usage_only_returns_none_without_usage_events(self):
         chunks = [_sse_bytes({"type": "content_block_delta", "delta": {"text": "hi"}})]
         assert (
@@ -2143,6 +2189,10 @@ class TestAnthropicUsageOnlyFallback:
             ("data: {not-json", None),
             ("event: ping", None),
             ('data: {"a": 1}', {"a": 1}),
+            ("data: 5", None),
+            ("data: []", None),
+            ('data: "x"', None),
+            ("data: null", None),
         ],
     )
     def test_extract_sse_data_handles_malformed_and_sentinel_lines(self, event_str, expected):

@@ -21,6 +21,7 @@ from litellm.constants import ANTHROPIC_BILLING_METADATA_PREFIX
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE, warn_non_string_reasoning_effort
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.anthropic.messages.convertible_blocks import drop_non_string_tool_result_texts
 from litellm.llms.anthropic.messages.safeguards import proxy_serves_safeguards
@@ -40,6 +41,7 @@ from litellm.types.llms.anthropic_tool_search import get_tool_search_beta_header
 from litellm.types.router import GenericLiteLLMParams
 
 from ...common_utils import (
+    NATIVE_COMPACTION_PROVIDERS,
     OBJECT_LIST_ADAPTER,
     AnthropicError,
     AnthropicModelInfo,
@@ -103,6 +105,7 @@ _MESSAGES_ADAPTER: Final = TypeAdapter(list[dict[str, object]])
 
 class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
     _workload_identity_eligible: ClassVar[bool] = True
+    _report_reasoning_drops: ClassVar[bool] = True
 
     @property
     def custom_llm_provider(self) -> str | None:
@@ -126,7 +129,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             "tool_choice",
             "thinking",
             "context_management",
-            *(("compaction",) if self._resolved_provider == "anthropic" else ()),
+            *(("compaction",) if self._resolved_provider in NATIVE_COMPACTION_PROVIDERS else ()),
             "output_format",
             "inference_geo",
             "speed",
@@ -468,7 +471,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         """Map OpenAI-style ``reasoning_effort`` to native Anthropic params.
 
         Caller-supplied ``thinking`` / ``output_config`` win over the alias.
-        ``effort='none'`` clears both. Invalid efforts raise a 400. A mapped
+        ``effort='none'`` disables optional default thinking and clears effort. Invalid efforts raise a 400. A mapped
         thinking budget is capped below ``max_tokens`` and dropped when even
         the minimum budget cannot fit.
         """
@@ -482,6 +485,10 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if not isinstance(reasoning_effort, str):
             return
 
+        if reasoning_effort == "none":
+            optional_params.pop("thinking", None)
+            optional_params.pop("output_config", None)
+
         try:
             mapped_thinking: Final = AnthropicConfig.map_reasoning_effort(
                 reasoning_effort=reasoning_effort,
@@ -492,8 +499,6 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             raise AnthropicError(message=str(e.message), status_code=400)
 
         if mapped_thinking is None:
-            optional_params.pop("thinking", None)
-            optional_params.pop("output_config", None)
             return
 
         fitted_thinking: Final = AnthropicConfig.cap_thinking_budget_to_max_tokens(mapped_thinking, max_tokens)
@@ -502,7 +507,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             return
 
         optional_params.setdefault("thinking", fitted_thinking)
-        if AnthropicModelInfo.is_adaptive_thinking_model(model, custom_llm_provider):
+        if fitted_thinking.get("type") != "disabled" and AnthropicModelInfo.is_adaptive_thinking_model(
+            model, custom_llm_provider
+        ):
             mapped_effort: Final = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(reasoning_effort)
             if mapped_effort is None:
                 raise AnthropicError(
@@ -695,12 +702,17 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         ):
             anthropic_messages_optional_request_params.pop("output_format")  # pyright: ignore[reportUnknownMemberType]  # the request params arrive as a bare dict
 
+        requested_reasoning_effort: Final = OPAQUE_VALUE.validate_python(
+            anthropic_messages_optional_request_params.get("reasoning_effort")  # pyright: ignore[reportUnknownMemberType]  # the request params arrive as a bare dict
+        )
         self._translate_reasoning_effort_to_anthropic(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
             max_tokens=max_tokens,
             custom_llm_provider=self._resolved_provider,
         )
+        if self._report_reasoning_drops:
+            warn_non_string_reasoning_effort(requested_reasoning_effort, model)
 
         AnthropicModelInfo.maybe_drop_disabled_thinking(
             model=model,
@@ -708,12 +720,14 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             custom_llm_provider=self._resolved_provider,
         )
 
-        AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
+        dropped_budget: Final = AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model_silently(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
             custom_llm_provider=self._resolved_provider,
             drop_params=getattr(litellm_params, "drop_params", None) is True,
         )
+        if dropped_budget is not None and self._report_reasoning_drops:
+            dropped_budget.warn(model)
 
         self._translate_adaptive_effort_for_non_adaptive_model(
             model=model,

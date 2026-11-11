@@ -22,6 +22,13 @@ const baseInput: KeyCreateInput = {
 const build = (formValues: Record<string, unknown>, overrides: Partial<KeyCreateInput> = {}): KeyPayloadResult =>
   buildKeyCreatePayload({ ...baseInput, ...overrides, formValues });
 
+it.each([false, true])("preserves the prompt storage restriction %s in key metadata", (store) => {
+  const result = build({ metadata: JSON.stringify({ note: "keep", store_prompts_in_spend_logs: store }) });
+  expect(result.kind).toBe("ok");
+  if (result.kind !== "ok") throw new Error(result.kind);
+  expect(JSON.parse(String(result.payload.metadata))).toEqual({ note: "keep", store_prompts_in_spend_logs: store });
+});
+
 const payloadOf = (result: KeyPayloadResult): Record<string, unknown> => {
   expect(result.kind).toBe("ok");
   if (result.kind !== "ok") throw new Error("unreachable");

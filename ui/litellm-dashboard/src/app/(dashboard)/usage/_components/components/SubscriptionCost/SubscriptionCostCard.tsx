@@ -1,6 +1,7 @@
 import type { ColumnDef } from "@tanstack/react-table";
 import { Info } from "lucide-react";
 import React from "react";
+import { Trans, useTranslation } from "react-i18next";
 import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
 import { ChartLoader } from "@/components/shared/chart_loader";
 import { DataTable } from "@/components/shared/DataTable";
@@ -19,6 +20,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import i18n from "@/i18n/i18n";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { ATTRIBUTION_RULE, fixedCostByCurrency, formatBillingPeriod, formatFee } from "./formatting";
 import type { SubscriptionAccountUsage, SubscriptionUsageResponse } from "./types";
@@ -41,8 +43,9 @@ const accountRowId = (account: SubscriptionAccountUsage): string =>
   `${account.custom_llm_provider}:${account.account_id ?? "unresolved"}`;
 
 const AccountCell = ({ account }: { account: SubscriptionAccountUsage }) => {
+  const { t } = useTranslation();
   if (account.account_id === null) {
-    return <span className="text-muted-foreground">Account not signed in on the proxy</span>;
+    return <span className="text-muted-foreground">{t("usage.subscriptionCost.card.accountNotSignedIn")}</span>;
   }
   return (
     <div className="flex flex-col">
@@ -58,33 +61,38 @@ const ActionsCell = ({
   onEditFee,
   onRemoveFee,
 }: { account: SubscriptionAccountUsage } & FeeActions) => {
+  const { t } = useTranslation();
   if (account.account_id === null) return null;
   if (account.fee === null) {
     return (
       <Button variant="outline" size="xs" onClick={() => onSetFee(account)}>
-        Set monthly fee
+        {t("usage.subscriptionCost.card.setFee")}
       </Button>
     );
   }
   return (
     <div className="flex justify-end gap-2">
       <Button variant="outline" size="xs" onClick={() => onEditFee(account)}>
-        Edit
+        {t("usage.subscriptionCost.card.edit")}
       </Button>
       <AlertDialog>
-        <AlertDialogTrigger render={<Button variant="outline" size="xs" />}>Remove</AlertDialogTrigger>
+        <AlertDialogTrigger render={<Button variant="outline" size="xs" />}>
+          {t("usage.subscriptionCost.card.remove")}
+        </AlertDialogTrigger>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Remove this monthly fee?</AlertDialogTitle>
+            <AlertDialogTitle>{t("usage.subscriptionCost.removeDialog.title")}</AlertDialogTitle>
             <AlertDialogDescription>
-              {account.account_id} goes back to &quot;Fixed cost not tracked&quot;. Its requests stay included in the
-              subscription
+              <Trans
+                i18nKey="usage.subscriptionCost.removeDialog.description"
+                components={{ account: <>{account.account_id}</> }}
+              />
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{t("usage.subscriptionCost.removeDialog.cancel")}</AlertDialogCancel>
             <AlertDialogAction variant="destructive" onClick={() => onRemoveFee(account)}>
-              Remove fee
+              {t("usage.subscriptionCost.removeDialog.confirm")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -95,7 +103,7 @@ const ActionsCell = ({
 
 const baseColumns: ColumnDef<SubscriptionAccountUsage>[] = [
   {
-    header: "Provider",
+    header: () => i18n.t("usage.subscriptionCost.columns.provider"),
     accessorKey: "custom_llm_provider",
     cell: ({ row }) => (
       <div className="flex items-center gap-2 whitespace-nowrap">
@@ -105,32 +113,35 @@ const baseColumns: ColumnDef<SubscriptionAccountUsage>[] = [
     ),
   },
   {
-    header: "Account",
+    header: () => i18n.t("usage.subscriptionCost.columns.account"),
     accessorKey: "account_id",
     cell: ({ row }) => <AccountCell account={row.original} />,
   },
   {
-    header: "Deployments",
+    header: () => i18n.t("usage.subscriptionCost.columns.deployments"),
     id: "deployments",
-    cell: ({ row }) => (row.original.deployments.length === 0 ? "None" : row.original.deployments.join(", ")),
+    cell: ({ row }) =>
+      row.original.deployments.length === 0
+        ? i18n.t("usage.subscriptionCost.card.noDeployments")
+        : row.original.deployments.join(", "),
   },
   {
-    header: "Monthly fee",
+    header: () => i18n.t("usage.subscriptionCost.columns.monthlyFee"),
     id: "monthly_fee",
     meta: { numeric: true },
     cell: ({ row }) =>
       row.original.fee === null ? (
-        <Badge variant="outline">Fixed cost not tracked</Badge>
+        <Badge variant="outline">{i18n.t("usage.subscriptionCost.card.notTracked")}</Badge>
       ) : (
         formatFee(row.original.fee.monthly_fee, row.original.fee.currency)
       ),
   },
   {
-    header: "Billing periods in range",
+    header: () => i18n.t("usage.subscriptionCost.columns.billingPeriods"),
     id: "billing_periods",
     cell: ({ row }) =>
       row.original.billing_periods.length === 0 ? (
-        <span className="text-muted-foreground">None in range</span>
+        <span className="text-muted-foreground">{i18n.t("usage.subscriptionCost.card.noPeriodsInRange")}</span>
       ) : (
         <div className="flex flex-col">
           {row.original.billing_periods.map((period) => (
@@ -140,7 +151,7 @@ const baseColumns: ColumnDef<SubscriptionAccountUsage>[] = [
       ),
   },
   {
-    header: "Fixed cost in range",
+    header: () => i18n.t("usage.subscriptionCost.columns.fixedCost"),
     id: "fixed_cost",
     meta: { numeric: true },
     cell: ({ row }) =>
@@ -168,6 +179,7 @@ const SubscriptionCostCard: React.FC<SubscriptionCostCardProps> = ({
   onEditFee,
   onRemoveFee,
 }) => {
+  const { t } = useTranslation();
   if (!failed && (usage === null || usage.accounts.length === 0)) return null;
   const columns = canEdit ? [...baseColumns, actionsColumn({ onSetFee, onEditFee, onRemoveFee })] : baseColumns;
   const accounts = usage?.accounts ?? [];
@@ -177,15 +189,15 @@ const SubscriptionCostCard: React.FC<SubscriptionCostCardProps> = ({
     <Card className="col-span-2">
       <CardHeader>
         <CardTitle className="flex items-center gap-1">
-          Subscription fixed costs
+          {t("usage.subscriptionCost.card.title")}
           <Tooltip>
             <TooltipTrigger render={<Info className="size-4 text-muted-foreground hover:text-foreground" />} />
-            <TooltipContent>{ATTRIBUTION_RULE}</TooltipContent>
+            <TooltipContent>{t(ATTRIBUTION_RULE)}</TooltipContent>
           </Tooltip>
         </CardTitle>
       </CardHeader>
       <CardContent>
-        {failed && <p className="text-sm text-destructive">Could not load subscription accounts for this range.</p>}
+        {failed && <p className="text-sm text-destructive">{t("usage.subscriptionCost.card.loadFailed")}</p>}
         {!failed && loading && <ChartLoader isDateChanging={isDateChanging} />}
         {!failed && !loading && (
           <div className="flex flex-col gap-4">
@@ -193,24 +205,24 @@ const SubscriptionCostCard: React.FC<SubscriptionCostCardProps> = ({
               columns={columns}
               data={accounts}
               getRowId={accountRowId}
-              noDataMessage="No subscription accounts"
+              noDataMessage={t("usage.subscriptionCost.card.noAccounts")}
               size="compact"
             />
             <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm">
               {totals.length === 0 ? (
-                <span data-testid="fixed-cost-total">Fixed cost in range: none</span>
+                <span data-testid="fixed-cost-total">{t("usage.subscriptionCost.card.fixedCostNone")}</span>
               ) : (
                 totals.map(({ currency, total }) => (
                   <span key={currency} data-testid="fixed-cost-total">
-                    Fixed cost in range: {formatFee(total, currency)}
+                    {t("usage.subscriptionCost.card.fixedCostTotal", { total: formatFee(total, currency) })}
                   </span>
                 ))
               )}
               <span data-testid="metered-spend">
-                Usage-billed spend in range, all providers: ${formatNumberWithCommas(meteredSpend, 2)}
+                {t("usage.subscriptionCost.card.meteredSpend", { spend: formatNumberWithCommas(meteredSpend, 2) })}
               </span>
             </div>
-            <p className="text-xs text-muted-foreground">{ATTRIBUTION_RULE}</p>
+            <p className="text-xs text-muted-foreground">{t(ATTRIBUTION_RULE)}</p>
           </div>
         )}
       </CardContent>
