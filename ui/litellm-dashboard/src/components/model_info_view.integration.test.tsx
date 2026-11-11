@@ -1888,7 +1888,7 @@ describe("ModelInfoView", () => {
       const user = userEvent.setup();
       await enterEditMode(user);
 
-      const paramsJson = (screen.getByPlaceholderText(/"rpm": 100/) as HTMLTextAreaElement).value;
+      const paramsJson = (screen.getByRole("textbox", { name: "LiteLLM Params" }) as HTMLTextAreaElement).value;
 
       expect(paramsJson).not.toContain("weight");
       expect(paramsJson).not.toContain("order");
