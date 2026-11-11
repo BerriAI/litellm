@@ -15,6 +15,7 @@ from litellm.types.vector_stores import RETRIEVAL_QUERY_PARAMS, VectorStoreSearc
 _QUERY_IMAGE: Final = TypeAdapter(VectorStoreSearchQueryImage)
 _Query: Final = TypeVar("_Query", bound=str | Sequence[str])
 _CALLER_QUERY_PARAMS: Final = ("query_image", *RETRIEVAL_QUERY_PARAMS)
+_BASE64_LINE_BREAKS: Final = str.maketrans("", "", "\r\n")
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,7 +77,7 @@ def _problem(detail: ErrorDetails) -> str:
 
 def _is_base64(data: str) -> bool:
     try:
-        base64.b64decode(data, validate=True)
+        base64.b64decode(data.translate(_BASE64_LINE_BREAKS), validate=True)
     except ValueError:
         return False
     return True
