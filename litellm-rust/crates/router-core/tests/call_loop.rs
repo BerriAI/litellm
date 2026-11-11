@@ -1245,6 +1245,169 @@ async fn a_served_fallback_and_a_disabled_walk_report_no_failure(config: RouterC
     assert_eq!(fallbacks_failed(&host), vec![]);
 }
 
+fn azure_chat_and_batch_tiers() -> RouterConfig {
+    serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "primary", "litellm_params": {"model": "azure/chat", "order": 1}, "model_info": {"id": "c1", "mode": "chat"}},
+            {"model_name": "primary", "litellm_params": {"model": "azure/batch-a", "order": 2}, "model_info": {"id": "b2", "mode": "batch"}},
+            {"model_name": "primary", "litellm_params": {"model": "azure/batch-b", "order": 3}, "model_info": {"id": "b3", "mode": "batch"}},
+        ]
+    }))
+    .unwrap()
+}
+
+fn azure_chat_tiers() -> RouterConfig {
+    serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "primary", "litellm_params": {"model": "azure/chat-a", "order": 1}, "model_info": {"id": "c1", "mode": "chat"}},
+            {"model_name": "primary", "litellm_params": {"model": "azure/chat-b", "order": 2}, "model_info": {"id": "c2", "mode": "chat"}},
+        ]
+    }))
+    .unwrap()
+}
+
+#[rstest]
+#[case::batch_create_moves_past_the_level_it_used(azure_chat_and_batch_tiers(), true, vec!["b2", "b3"])]
+#[case::other_calls_walk_every_level(azure_chat_and_batch_tiers(), false, vec!["c1", "b2"])]
+#[case::batch_create_without_a_batch_deployment_walks_every_level(azure_chat_tiers(), true, vec!["c1", "c2"])]
+#[tokio::test]
+async fn a_failed_order_level_falls_back_to_the_next_level_its_pick_can_use(
+    #[case] config: RouterConfig,
+    #[case] batch_create: bool,
+    #[case] expected: Vec<&str>,
+) {
+    let host = Arc::new(ScriptedHost::failing("primary", vec![server_error()]));
+    let router = router(config, json!({"num_retries": 0}), host.clone());
+    let request = RouterRequest {
+        batch_create,
+        ..request()
+    };
+    router
+        .call(Op::from("acreate_batch"), request)
+        .await
+        .unwrap();
+    assert_eq!(host.selected(), expected);
+}
+
+fn azure_chat_then_batch() -> RouterConfig {
+    serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "primary", "litellm_params": {"model": "azure/chat", "order": 1}, "model_info": {"id": "c1", "mode": "chat"}},
+            {"model_name": "primary", "litellm_params": {"model": "azure/batch", "order": 2}, "model_info": {"id": "b2", "mode": "batch"}},
+        ]
+    }))
+    .unwrap()
+}
+
+#[rstest]
+#[case::a_batch_upload_finds_no_deployment(true, vec![])]
+#[case::a_batch_create_falls_back_to_chat(false, vec!["c1"])]
+#[tokio::test]
+async fn while_the_batch_deployment_cools_down_a_batch_upload_finds_no_healthy_deployment(
+    #[case] batch_upload: bool,
+    #[case] expected: Vec<&str>,
+) {
+    let host = Arc::new(ScriptedHost::failing(
+        "primary",
+        vec![failure(FailureKind::RateLimit, 429)],
+    ));
+    let router = router(
+        azure_chat_then_batch(),
+        json!({"num_retries": 0}),
+        host.clone(),
+    );
+    let create = RouterRequest {
+        batch_create: true,
+        ..request()
+    };
+    router
+        .call(Op::from("acreate_file"), create.clone())
+        .await
+        .unwrap_err();
+    let upload = RouterRequest {
+        batch_upload,
+        ..create
+    };
+    let healthy: Vec<String> = router
+        .healthy(&Op::from("acreate_file"), &upload)
+        .await
+        .map(|candidates| {
+            candidates
+                .healthy
+                .iter()
+                .map(|d| d.id.to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    assert_eq!(host.selected(), vec!["b2"]);
+    assert_eq!(healthy, expected);
+}
+
+#[rstest]
+#[case::a_batch_upload_finds_no_deployment(true, vec![])]
+#[case::a_batch_create_falls_back_to_chat(false, vec!["c1"])]
+#[tokio::test]
+async fn while_the_batch_deployment_is_paused_a_batch_upload_finds_no_healthy_deployment(
+    #[case] batch_upload: bool,
+    #[case] expected: Vec<&str>,
+) {
+    let config: RouterConfig = serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "primary", "litellm_params": {"model": "azure/chat", "order": 1}, "model_info": {"id": "c1", "mode": "chat"}},
+            {"model_name": "primary", "litellm_params": {"model": "azure/batch", "order": 2}, "model_info": {"id": "b2", "mode": "batch", "blocked": true}},
+        ]
+    }))
+    .unwrap();
+    let router = router(config, json!({}), Arc::new(ScriptedHost::default()));
+    let upload = RouterRequest {
+        batch_create: true,
+        batch_upload,
+        ..request()
+    };
+    let healthy: Vec<String> = router
+        .healthy(&Op::from("acreate_file"), &upload)
+        .await
+        .map(|candidates| {
+            candidates
+                .healthy
+                .iter()
+                .map(|d| d.id.to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    assert_eq!(healthy, expected);
+}
+
+#[rstest]
+#[case::a_rate_limit(FailureKind::RateLimit, 429)]
+#[case::a_wrong_key(FailureKind::Authentication, 401)]
+#[tokio::test]
+async fn a_batch_upload_the_batch_deployment_refuses_keeps_its_error_with_retries_on(
+    #[case] kind: FailureKind,
+    #[case] status: u16,
+) {
+    let host = Arc::new(ScriptedHost::failing(
+        "primary",
+        (0..3).map(|_| failure(kind, status)).collect(),
+    ));
+    let router = router(
+        azure_chat_then_batch(),
+        json!({"num_retries": 2}),
+        host.clone(),
+    );
+    let upload = RouterRequest {
+        batch_create: true,
+        batch_upload: true,
+        ..request()
+    };
+    let error = router
+        .call(Op::from("acreate_file"), upload)
+        .await
+        .unwrap_err();
+    assert_eq!(host.selected(), vec!["b2"]);
+    assert!(matches!(error, Error::Attempt(refused) if refused.kind == kind));
+}
+
 #[tokio::test]
 async fn the_order_path_reports_no_failed_fallbacks() {
     let host = Arc::new(ScriptedHost::failing("primary", vec![server_error()]));

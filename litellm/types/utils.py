@@ -4029,6 +4029,13 @@ ARIZE_OTLP_PROTOCOLS: Final[frozenset[str]] = frozenset(get_args(ArizeOtlpProtoc
 
 CAPTURE_MESSAGE_CONTENT_VAR: Final = "capture_message_content"
 EXCLUDED_SERVICES_VAR: Final = "excluded_services"
+BAGGAGE_METADATA_KEYS_VAR: Final = "baggage_metadata_keys"
+#: Team and key callback vars that tune that callback's own OTel v2 destination, never sent to the backend.
+OTEL_DESTINATION_VARS: Final[tuple[str, ...]] = (
+    CAPTURE_MESSAGE_CONTENT_VAR,
+    EXCLUDED_SERVICES_VAR,
+    BAGGAGE_METADATA_KEYS_VAR,
+)
 
 
 class CaptureMessageContent(str):
@@ -4833,7 +4840,7 @@ OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS: set[str] = {
 }
 
 FILE_CONTENT_STREAMING_PROVIDERS: Final[frozenset[str]] = frozenset(
-    {*OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS, LlmProviders.VERTEX_AI.value}
+    {*OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS, LlmProviders.VERTEX_AI.value, LlmProviders.GEMINI.value}
 )
 
 LITELLM_EXECUTED_BATCH_PROVIDERS: Final[frozenset[str]] = frozenset({LlmProviders.HOSTED_VLLM.value})
@@ -4869,6 +4876,7 @@ class SearchProviders(str, Enum):
     AGENTCORE = "agentcore"
     NIMBLE = "nimble"
     BING_GROUNDING = "bing_grounding"
+    WEBIQ = "webiq"
     DEEPSEEK = "deepseek"
     XAI = "xai"
 

@@ -369,6 +369,10 @@ class MalformedRequestFieldError(BadRequestError):
     pass
 
 
+class MissingMessageRoleError(MalformedRequestFieldError):
+    pass
+
+
 class UnsupportedEndpointError(BadRequestError):
     pass
 

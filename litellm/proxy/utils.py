@@ -65,6 +65,7 @@ from litellm.constants import (
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     MAX_TEAM_LIST_LIMIT,
+    MESSAGE_THREAD_MAX_TRACKED_OWNERS,
     PROXY_REJECTED_BEFORE_ROUTING_KEY,
     REDACTED_BY_LITELLM,
     REDIS_SPEND_LOGS_BUFFER_DEQUEUE_COUNT,
@@ -72,6 +73,7 @@ from litellm.constants import (
     SPEND_LOG_READ_STATEMENT_TIMEOUT_SECONDS,
     SPEND_LOG_WRITE_BATCH_MAX_BYTES,
     SPEND_LOG_WRITE_BATCH_MAX_ROWS,
+    TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS,
     VLLM_CHOICE_FIELDS,
 )
 from litellm.cost_calculator import BaseTokenUsageProcessor
@@ -149,6 +151,7 @@ from litellm.caching.dual_cache import LimitedSizeOrderedDict
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.exceptions import (
     GuardrailRaisedException,
+    MissingMessageRoleError,
     RejectedRequestError,
     SensitiveDataRouteException,
 )
@@ -166,6 +169,7 @@ from litellm.litellm_core_utils.core_helpers import (
     attribute_or_none,
     coerce_token_limit,
     get_or_create_metadata_bucket,
+    has_attributes,
     independent_snapshot,
     is_expected_client_error,
     require_attributes,
@@ -285,6 +289,7 @@ from litellm.proxy.policy_engine.pipeline_executor import (
 )
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
+from litellm.proxy.spend_tracking.session_spend_total import SessionSpendTotals
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.spend_log_insert import RejectedSpendLogRow
@@ -668,6 +673,8 @@ class _BudgetAlertEmailer(Protocol):
 
 
 def _is_client_error_exception(exc: Exception) -> bool:
+    if isinstance(exc, MissingMessageRoleError):
+        return True
     if isinstance(exc, HTTPException):
         return exc.status_code < 500
     if isinstance(exc, ProxyException):
@@ -1962,6 +1969,9 @@ class ProxyLogging:
         self.file_usage_cache: Final = InternalUsageCache(
             dual_cache=DualCache(in_memory_cache=InMemoryCache(max_size_in_memory=FILE_USAGE_MAX_TRACKED_COUNTERS))
         )
+        self.message_thread_owner_cache: Final = InternalUsageCache(
+            dual_cache=DualCache(in_memory_cache=InMemoryCache(max_size_in_memory=MESSAGE_THREAD_MAX_TRACKED_OWNERS))
+        )
         self.max_parallel_request_limiter = PROXY_MaxParallelRequestsHandler(self.internal_usage_cache)
         self.cache_control_check = PROXY_CacheControlCheck()
         self.alerting: list[str] | None = None
@@ -1983,7 +1993,8 @@ class ProxyLogging:
                 )
         self.premium_user = premium_user
         self.service_logging_obj = ServiceLogging()
-        self.db_spend_update_writer = DBSpendUpdateWriter()
+        self.session_spend_totals: Final = SessionSpendTotals(lambda: self.internal_usage_cache.dual_cache.redis_cache)
+        self.db_spend_update_writer = DBSpendUpdateWriter(session_spend_totals=self.session_spend_totals)
         self.proxy_hook_mapping: dict[str, CustomLogger] = {}
 
         # Guard flags to prevent duplicate background tasks
@@ -2120,6 +2131,7 @@ class ProxyLogging:
         if redis_cache is not None:
             self.internal_usage_cache.dual_cache.redis_cache = redis_cache
             self.file_usage_cache.dual_cache.redis_cache = redis_cache
+            self.message_thread_owner_cache.dual_cache.redis_cache = redis_cache
             self.db_spend_update_writer.redis_update_buffer.redis_cache = redis_cache
             self.db_spend_update_writer.pod_lock_manager.redis_cache = redis_cache
 
@@ -2139,6 +2151,7 @@ class ProxyLogging:
                 continue
             available_args: Mapping[str, object] = {
                 "internal_usage_cache": self.internal_usage_cache,
+                "message_thread_owner_cache": self.message_thread_owner_cache,
                 "prisma_client": prisma_client,
             }
             passed_in_args = {name: value for name, value in available_args.items() if name in expected_args}
@@ -2361,10 +2374,12 @@ class ProxyLogging:
                             modified_args = self._extract_modified_arguments_from_content(new_content, request_obj)
                             if modified_args is not None:
                                 # Return the masked/redacted arguments for the MCP call to use
-                                return MCPPreCallResponseObject(
-                                    should_proceed=True,
-                                    error_message=None,
-                                    modified_arguments=modified_args,
+                                return MCPPreCallResponseObject.model_validate(
+                                    {
+                                        "should_proceed": True,
+                                        "error_message": None,
+                                        "modified_arguments": modified_args,
+                                    }
                                 )
                             else:
                                 # Could not parse modified arguments, allow original call but warn
@@ -2383,7 +2398,7 @@ class ProxyLogging:
 
         return None
 
-    def _extract_modified_arguments_from_content(self, masked_content: str, request_obj) -> dict | None:
+    def _extract_modified_arguments_from_content(self, masked_content: str, request_obj) -> object:
         """
         Extract modified/masked arguments from the guardrail response content.
         """
@@ -2404,7 +2419,7 @@ class ProxyLogging:
 
                     # Try to parse as JSON first
                     try:
-                        modified_args = json.loads(args_text)
+                        modified_args = _DECODED_JSON.validate_python(json.loads(args_text))
                         verbose_proxy_logger.debug("Successfully parsed JSON args: %s", modified_args)
                         return modified_args
                     except json.JSONDecodeError as e:
@@ -5353,6 +5368,7 @@ _deprecated_key_cache: Final[LimitedSizeOrderedDict] = LimitedSizeOrderedDict(ma
 _DEPRECATED_KEY_CACHE_TTL_SECONDS: Final = 60
 _PRISMA_DEFAULT_TX_TIMEOUT: Final = timedelta(seconds=5)
 _PRISMA_DEFAULT_TX_MAX_WAIT: Final = timedelta(seconds=2)
+_TEAM_DELETE_TX_BUDGET: Final = timedelta(seconds=TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS)
 _SPEND_LOG_READ_STATEMENT_TIMEOUT: Final = timedelta(seconds=SPEND_LOG_READ_STATEMENT_TIMEOUT_SECONDS)
 _STATEMENT_TIMEOUT_TRANSACTION_GRACE: Final = timedelta(seconds=5)
 
@@ -5630,8 +5646,13 @@ _LOCK_TEAMS_BY_ID_SQL: Final = (
 )
 
 
-def _user_unique_conflict_message(metadata: object, user_id: object) -> str:
-    match metadata:
+class _UniqueConflictMetadata(Protocol):
+    @property
+    def meta(self) -> object: ...
+
+
+def _user_unique_conflict_message(error: _UniqueConflictMetadata, user_id: object) -> str:
+    match error.meta:
         case {"target": ["user_id"]}:
             return f"User with id {user_id} already exists"
         case {"target": ["sso_user_id"]}:
@@ -5645,7 +5666,7 @@ def _raise_user_unique_conflict(error: "UniqueViolationError", user_id: object, 
         raise error
     raise HTTPException(
         status_code=409,
-        detail={"error": _user_unique_conflict_message(error.meta, user_id)},
+        detail={"error": _user_unique_conflict_message(error, user_id)},
     ) from error
 
 
@@ -6975,7 +6996,7 @@ class PrismaClient:
                 return {"deleted_teams": team_id_list}
             elif table_name == "key" and team_id_list is not None and isinstance(team_id_list, list):
                 # admin only endpoint -> `/team/delete`
-                async with self.tx() as transaction:
+                async with self.tx(max_wait=_TEAM_DELETE_TX_BUDGET, timeout=_TEAM_DELETE_TX_BUDGET) as transaction:
                     _ = await transaction.query_raw(_LOCK_KEYS_BY_TEAM_SQL, team_id_list)
                     _ = await transaction.litellm_verificationtoken.delete_many(where={"team_id": {"in": team_id_list}})
         except Exception as e:
@@ -8325,6 +8346,10 @@ class PrismaClient:
 ### HELPER FUNCTIONS ###
 
 
+class _JsonDumpableRow(Protocol):
+    def model_dump_json(self) -> object: ...
+
+
 async def cache_user_row(user_id: str, cache: DualCache, db: PrismaClient) -> None:
     """
     Check if a user_id exists in cache,
@@ -8336,8 +8361,8 @@ async def cache_user_row(user_id: str, cache: DualCache, db: PrismaClient) -> No
         user_row: Final = await db.get_data(user_id=user_id)
         if user_row is not None:
             print_verbose(f"User Row: {user_row}, type = {type(user_row)}")
-            if hasattr(user_row, "model_dump_json") and callable(getattr(user_row, "model_dump_json")):
-                cache_value: Final[str] = user_row.model_dump_json()
+            if has_attributes(user_row, _JsonDumpableRow, "model_dump_json") and callable(user_row.model_dump_json):
+                cache_value: Final = user_row.model_dump_json()
                 cache.set_cache(key=cache_key, value=cache_value, ttl=600)  # store for 10 minutes
 
 

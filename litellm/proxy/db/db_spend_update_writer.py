@@ -18,7 +18,7 @@ from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from functools import reduce
-from types import MappingProxyType
+from types import MappingProxyType, TracebackType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast, overload
 from urllib.parse import quote, unquote
 
@@ -92,6 +92,7 @@ from litellm.proxy.spend_tracking.savings import (
     extract_cache_read_tokens,
     marks_gateway_injection,
 )
+from litellm.proxy.spend_tracking.session_spend_total import SessionSpendTotals
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.repositories.prisma_protocols import BatchTable
 from litellm.responses.streaming_iterator import spawn_logging_task
@@ -248,21 +249,43 @@ class SpendUpsertTable(Protocol):
 
 
 class _SpendBatch(Protocol):
-    litellm_usertable: BatchTable
-    litellm_endusertable: SpendUpsertTable
-    litellm_dailymodelusage: SpendUpsertTable
+    @property
+    def litellm_usertable(self) -> BatchTable: ...
+
+    @property
+    def litellm_endusertable(self) -> SpendUpsertTable: ...
+
+    @property
+    def litellm_dailymodelusage(self) -> SpendUpsertTable: ...
 
     def execute_raw(self, query: LiteralString, *args: object) -> None: ...
 
-    litellm_verificationtoken: BatchTable
-    litellm_teamtable: BatchTable
-    litellm_teammembership: BatchTable
-    litellm_organizationtable: BatchTable
-    litellm_organizationmembership: BatchTable
-    litellm_projecttable: BatchTable
-    litellm_tagtable: BatchTable
-    litellm_agentstable: BatchTable
-    litellm_modelaccessgroupbudgettable: BatchTable
+    @property
+    def litellm_verificationtoken(self) -> BatchTable: ...
+
+    @property
+    def litellm_teamtable(self) -> BatchTable: ...
+
+    @property
+    def litellm_teammembership(self) -> BatchTable: ...
+
+    @property
+    def litellm_organizationtable(self) -> BatchTable: ...
+
+    @property
+    def litellm_organizationmembership(self) -> BatchTable: ...
+
+    @property
+    def litellm_projecttable(self) -> BatchTable: ...
+
+    @property
+    def litellm_tagtable(self) -> BatchTable: ...
+
+    @property
+    def litellm_agentstable(self) -> BatchTable: ...
+
+    @property
+    def litellm_modelaccessgroupbudgettable(self) -> BatchTable: ...
 
 
 _EntitySpendTable: TypeAlias = Literal[
@@ -287,7 +310,13 @@ def _entity_spend_table(batcher: _SpendBatch, table_accessor: _EntitySpendTable)
 class SpendBatchManager(Protocol):
     async def __aenter__(self) -> _SpendBatch: ...
 
-    async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> bool | None: ...
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+        /,
+    ) -> bool | None: ...
 
 
 class _SpendTransaction(Protocol):
@@ -299,7 +328,13 @@ class _SpendTransaction(Protocol):
 class _SpendTransactionManager(Protocol):
     async def __aenter__(self) -> _SpendTransaction: ...
 
-    async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> bool | None: ...
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+        /,
+    ) -> bool | None: ...
 
 
 _DailySpendTransactionT = TypeVar("_DailySpendTransactionT", bound=BaseDailySpendTransaction)
@@ -685,8 +720,10 @@ class DBSpendUpdateWriter:
         self,
         redis_cache: RedisCache | None = None,
         accounting_clock: Callable[[], float] = time.monotonic,
+        session_spend_totals: SessionSpendTotals | None = None,
     ):
         self.redis_cache = redis_cache
+        self.session_spend_totals: Final = session_spend_totals
         self.accounting_storage_checks = Cadence(accounting_clock)
         self.accounting_delay_alerts = Cadence(accounting_clock)
         self.redis_update_buffer = RedisUpdateBuffer(redis_cache=self.redis_cache)
@@ -768,6 +805,13 @@ class DBSpendUpdateWriter:
                 llm_router=llm_router,
             )
             billable_cost: Final = _billable_cost(response_cost, payload)
+            if (
+                proxy_settings.get("disable_responses_id_security") is True
+                and payload["call_type"] in {"aget_responses", "acancel_responses"}
+                and payload["status"] == "success"
+                and not billable_cost
+            ):
+                return True
             payload["spend"] = billable_cost or 0.0
             payload["startTime"] = _iso_timestamp(payload["startTime"])
             payload["endTime"] = _iso_timestamp(payload["endTime"])
@@ -819,6 +863,7 @@ class DBSpendUpdateWriter:
                 prisma_client=prisma_client,
                 spend_logs_kept=keep_spend_logs,
             )
+            await self._record_session_spend(hashed_token, billable_cost or 0.0, request_fields)
             if keep_spend_logs:
                 await self._enqueue_tool_usage_transaction(
                     payload=payload,
@@ -873,6 +918,19 @@ class DBSpendUpdateWriter:
                 end_user_id,
             )
             return True
+
+    async def _record_session_spend(
+        self, api_key: str | None, spend: float, request_fields: Mapping[str, object]
+    ) -> None:
+        from litellm.proxy.spend_tracking.spend_tracking_utils import caller_session_for_accounting
+
+        totals: Final = self.session_spend_totals
+        if totals is None or not api_key or spend <= 0:
+            return
+        session_id: Final = caller_session_for_accounting(request_fields)
+        if session_id is None:
+            return
+        await totals.record(api_key=api_key, session_id=session_id, spend=spend)
 
     async def _record_spend_log(
         self,

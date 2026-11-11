@@ -25,7 +25,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import MAX_FILE_LIST_LIMIT
 from litellm.litellm_core_utils.batch_utils import batch_cost_is_final
 from litellm.litellm_core_utils.cloud_storage_security import REQUEST_S3_BUCKET_PARAMS
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.llms.base_llm.managed_resources.utils import is_base64_encoded_unified_id
 from litellm.proxy._types import ProxyException
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
@@ -1567,7 +1567,7 @@ async def resolve_output_file_ids_to_unified(response, prisma_client) -> None:
     if not prisma_client:
         return
     for attr in ("output_file_id", "error_file_id"):
-        raw_id = getattr(response, attr, None)
+        raw_id = attribute_or_none(response, attr)
         if not raw_id or is_base64_encoded_unified_file_id(raw_id):
             continue
         try:

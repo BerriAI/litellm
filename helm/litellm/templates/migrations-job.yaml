@@ -1,7 +1,7 @@
 {{- if .Values.migrationJob.enabled -}}
 # Pre-install / pre-upgrade hook that runs `prisma migrate deploy` against
-# the writer database before the gateway and backend Deployments are rolled
-# out. Required because the gateway and backend both spin up Prisma at
+# the writer database before the application Deployments are rolled out.
+# Required because the proxy, gateway and backend all spin up Prisma at
 # startup and assume the LiteLLM schema (LiteLLM_Config,
 # LiteLLM_VerificationToken, LiteLLM_SpendLogs, ...) already exists.
 #
@@ -16,9 +16,13 @@ metadata:
   labels:
     {{- include "litellm.commonLabels" . | nindent 4 }}
     app.kubernetes.io/component: migrations
-  {{- if or .Values.migrationJob.hooks.helm.enabled .Values.migrationJob.hooks.argocd.enabled }}
+    {{- with .Values.migrationJob.jobLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- $helmHook := .Values.migrationJob.hooks.helm.enabled }}
+  {{- if or $helmHook .Values.migrationJob.hooks.argocd.enabled .Values.migrationJob.jobAnnotations }}
   annotations:
-    {{- if .Values.migrationJob.hooks.helm.enabled }}
+    {{- if $helmHook }}
     helm.sh/hook: pre-install,pre-upgrade
     helm.sh/hook-delete-policy: before-hook-creation
     helm.sh/hook-weight: {{ .Values.migrationJob.hooks.helm.weight | default "0" | quote }}
@@ -26,6 +30,9 @@ metadata:
     {{- if .Values.migrationJob.hooks.argocd.enabled }}
     argocd.argoproj.io/hook: PreSync
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    {{- end }}
+    {{- with .Values.migrationJob.jobAnnotations }}
+    {{- toYaml . | nindent 4 }}
     {{- end }}
   {{- end }}
 spec:
@@ -43,6 +50,10 @@ spec:
       {{- $chartLabels := merge (dict "app.kubernetes.io/component" "migrations") (fromYaml (include "litellm.commonLabels" .)) }}
       labels:
         {{- toYaml (merge (deepCopy .Values.migrationJob.podLabels) $chartLabels) | nindent 8 }}
+      {{- with .Values.migrationJob.annotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
     spec:
       restartPolicy: Never
       serviceAccountName: {{ include "litellm.migrations.serviceAccountName" . }}
@@ -55,13 +66,28 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with .Values.migrationJob.extraInitContainers }}
+      initContainers:
+        {{- tpl (toYaml .) $ | nindent 8 }}
+      {{- end }}
       containers:
         - name: prisma-migrations
-          image: "{{ .Values.migrationJob.image.repository }}:{{ .Values.migrationJob.image.tag | default .Chart.AppVersion }}"
-          imagePullPolicy: {{ .Values.migrationJob.image.pullPolicy }}
+          image: {{ include "litellm.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           {{- with .Values.migrationJob.securityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.migrationJob.command }}
+          command: {{ toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.migrationJob.args }}
+          args: {{ toYaml .Values.migrationJob.args | nindent 12 }}
+          {{- else if .Values.migrationJob.command }}
+          args: []
+          {{- else }}
+          args:
+            - migrations
           {{- end }}
           env:
             {{- include "litellm.serverEnv" (dict "root" $ "component" .Values.migrationJob) | nindent 12 }}
@@ -73,6 +99,9 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+      {{- with .Values.migrationJob.extraContainers }}
+        {{- tpl (toYaml .) $ | nindent 8 }}
+      {{- end }}
       {{- with .Values.migrationJob.volumes }}
       volumes:
         {{- toYaml . | nindent 8 }}

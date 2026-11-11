@@ -2510,21 +2510,23 @@ async def _relay_router_model(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> Response:
     try:
-        result: Final = await llm_router.allm_passthrough_route(
-            model=model,
-            method=request.method,
-            endpoint=endpoint,
-            request_query_params=request.query_params,
-            request_headers=safe_get_request_headers(request),
-            stream=is_streaming_request,
-            content=None,
-            data=None,
-            files=None,
-            json=(request_body if is_json_content_type(request.headers.get("content-type", "")) else None),
-            params=None,
-            headers=None,
-            cookies=None,
-            litellm_metadata=get_passthrough_router_request_metadata(user_api_key_dict, request),
+        result: Final = _DECODED_JSON.validate_python(
+            await llm_router.allm_passthrough_route(
+                model=model,
+                method=request.method,
+                endpoint=endpoint,
+                request_query_params=request.query_params,
+                request_headers=safe_get_request_headers(request),
+                stream=is_streaming_request,
+                content=None,
+                data=None,
+                files=None,
+                json=(request_body if is_json_content_type(request.headers.get("content-type", "")) else None),
+                params=None,
+                headers=None,
+                cookies=None,
+                litellm_metadata=get_passthrough_router_request_metadata(user_api_key_dict, request),
+            )
         )
     except httpx.HTTPStatusError as upstream_error:
         return await _relay_upstream_response(upstream_error.response)
