@@ -35,10 +35,15 @@ from litellm.types.utils import CountContextManagement, LlmProviders, TokenCount
 DEEPSEEK_TOKENIZER_TYPE: Final = "deepseek_api"
 _CHAT_REASONING_PARAMS: Final = ("thinking", "reasoning_effort")
 _COUNT_ROUTE_MISSING: Final = frozenset({404, 405})
+_COUNT_ROUTE_UNAVAILABLE: Final = frozenset({408, 429})
 _TOOLS: Final = TypeAdapter(list[dict[str, JsonValue]])
 _OPTIONS: Final = TypeAdapter(dict[str, JsonValue])
 
 deepseek_count_tokens_handler: Final = AnthropicCountTokensHandler()
+
+
+def _count_route_unavailable(status_code: int) -> bool:
+    return status_code in _COUNT_ROUTE_UNAVAILABLE or status_code >= 500
 
 
 def _chat_reasoning_options(chat_params: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
@@ -185,6 +190,11 @@ class DeepSeekTokenCounter(BaseTokenCounter):
             if e.status_code in _COUNT_ROUTE_MISSING:
                 verbose_logger.debug(
                     "DeepSeek count_tokens route answered %s, so the count is estimated", e.status_code
+                )
+                return None
+            if _count_route_unavailable(e.status_code):
+                verbose_logger.warning(
+                    "DeepSeek count_tokens route answered %s, so the count is estimated: %s", e.status_code, e.message
                 )
                 return None
             verbose_logger.warning("DeepSeek CountTokens error: status=%s, message=%s", e.status_code, e.message)

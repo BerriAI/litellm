@@ -159,7 +159,7 @@ async def _with_previous_turns(
     )
 
 
-def _counted_params(
+def counted_chat_params(
     chat_body: Mapping[str, object],
     deployment_params: Mapping[str, object],
     tools: tuple[Mapping[str, object], ...],
@@ -218,7 +218,7 @@ async def chat_count_request(
         return ChatCountRequest(
             messages=tuple(map(_unmarked, _mappings(chat_body.get("messages")))),
             tools=tools or None,
-            params=_counted_params(chat_body, deployment_params, tools, policy),
+            params=counted_chat_params(chat_body, deployment_params, tools, policy),
         )
     except BadRequestError as e:
         return ChatCountBridgeError(message=str(e.message))

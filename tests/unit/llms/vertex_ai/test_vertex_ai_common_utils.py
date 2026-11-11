@@ -1,7 +1,7 @@
 import copy
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from enum import Enum
 from typing import Final
@@ -1873,6 +1873,52 @@ async def test_vertex_claude_count_forwards_the_context_edits_and_beta_vertex_in
     ((headers, body),) = fake_http_client.posted
     assert body["context_management"] == spec
     assert headers["anthropic-beta"] == expected_beta
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_drops", "thinking_sent"),
+    (({}, True), ({"additional_drop_params": ["thinking"]}, False)),
+)
+async def test_vertex_claude_count_sends_the_thinking_vertex_inference_sends(
+    deployment_drops: Mapping[str, JsonValue], thinking_sent: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens import handler
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self) -> dict[str, int]:
+            return {"input_tokens": 21}
+
+    class FakeHttpClient:
+        posted: tuple[dict[str, object], ...] = ()
+
+        async def post(
+            self, url: str, headers: dict[str, str], json: dict[str, object], timeout: float
+        ) -> FakeResponse:
+            self.posted = (*self.posted, json)
+            return FakeResponse()
+
+    fake_http_client: Final = FakeHttpClient()
+    application_default_credentials: Final = MagicMock(token="fake-token", valid=True, expiry=None)
+    monkeypatch.setattr("google.auth.default", lambda *args, **kwargs: (application_default_credentials, "test-project"))
+    with patch.object(handler, "get_async_httpx_client", return_value=fake_http_client):
+        result: Final = await VertexAITokenCounter().count_tokens(
+            model_to_use="claude-opus-4-8",
+            messages=[{"role": "user", "content": "Hello"}],
+            contents=None,
+            deployment={
+                "litellm_params": {"vertex_project": "test-project", "vertex_location": "us-east5", **deployment_drops}
+            },
+            messages_format="anthropic",
+            count_options={"thinking": {"type": "enabled", "budget_tokens": 2048}},
+        )
+
+    assert result is not None
+    assert result.total_tokens == 21
+    (body,) = fake_http_client.posted
+    assert ("thinking" in body) is thinking_sent
 
 
 @pytest.mark.asyncio

@@ -15268,6 +15268,7 @@ from litellm.repositories.verification_token_repository import VerificationToken
 from litellm.responses.litellm_completion_transformation.count_request import (
     ChatCountBridgeError,
     chat_count_request,
+    counted_chat_params,
     with_provider_file_ids,
 )
 
@@ -16290,6 +16291,13 @@ async def _count_request_tokens(
     )
     if isinstance(chat_count, ChatCountBridgeError):
         raise ProxyException(message=chat_count.message, type="invalid_request_error", param=None, code=400)
+    chat_params: Final[Mapping[str, JsonValue]] = (
+        chat_count.params
+        if chat_count is not None
+        else counted_chat_params({}, deployment_defaults, (), drop_policy(count_litellm_params))
+        if messages_format == "openai"
+        else MappingProxyType({})
+    )
     ladder: Final = (
         None
         if provider_counter is None
@@ -16320,7 +16328,7 @@ async def _count_request_tokens(
                 messages_format=messages_format,
                 output_format=output_format,
                 context_management=None if edited_request is not None else context_edits,
-                chat_params=MappingProxyType({}) if chat_count is None else chat_count.params,
+                chat_params=chat_params,
                 count_options=_count_options_with_defaults(
                     count_options,
                     deployment_defaults,

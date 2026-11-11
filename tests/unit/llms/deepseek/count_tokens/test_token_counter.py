@@ -32,7 +32,7 @@ def _deepseek_env_unset(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 async def _count(
-    reply: httpx.Response,
+    reply: httpx.Response | Exception,
     count_route: str = _DEFAULT_COUNT_ROUTE,
     litellm_params: Mapping[str, JsonValue] = MappingProxyType({"api_key": "sk-deepseek-test"}),
     messages_format: TokenCountMessagesFormat = "anthropic",
@@ -42,7 +42,10 @@ async def _count(
     messages: list[dict[str, JsonValue]] = _WEATHER_IN_SF,
 ) -> tuple[TokenCountResponse | None, respx.Route]:
     with respx.mock:
-        route: Final = respx.post(count_route).mock(return_value=reply)
+        route: Final = respx.post(count_route).mock(
+            return_value=reply if isinstance(reply, httpx.Response) else None,
+            side_effect=None if isinstance(reply, httpx.Response) else reply,
+        )
         result: Final = await DeepSeekTokenCounter().count_tokens(
             model_to_use="deepseek-v4-pro",
             messages=messages,
@@ -162,6 +165,33 @@ async def test_a_missing_count_route_leaves_the_count_to_the_estimate(status_cod
 
     assert route.called
     assert result is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reply",
+    (
+        httpx.Response(408, text="timed out"),
+        httpx.Response(429, json={"error": {"message": "Rate limit reached"}}),
+        httpx.Response(500, text="internal error"),
+        httpx.Response(503, text="overloaded"),
+        httpx.ConnectError("connection refused"),
+    ),
+)
+async def test_an_unavailable_count_route_leaves_the_count_to_the_estimate(reply: httpx.Response | Exception) -> None:
+    result, route = await _count(reply)
+
+    assert route.called
+    assert result is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", (401, 422))
+async def test_a_count_deepseek_refuses_answers_with_its_status(status_code: int) -> None:
+    result, _ = await _count(httpx.Response(status_code, json={"error": {"message": "refused"}}))
+
+    assert result is not None
+    assert (result.error, result.status_code, result.total_tokens) == (True, status_code, 0)
 
 
 @pytest.mark.asyncio

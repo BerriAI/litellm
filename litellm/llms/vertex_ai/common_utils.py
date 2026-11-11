@@ -100,6 +100,7 @@ class VertexAILyriaModelInfo(TypedDict):
 
 
 _VERTEX_AI_LYRIA_MODEL_INFO_ADAPTER: Final = TypeAdapter(VertexAILyriaModelInfo)
+_JSON_MESSAGES: Final = TypeAdapter(list[dict[str, JsonValue]])
 
 
 def _validate_vertex_ai_lyria_model_info(raw_model_info: object) -> VertexAILyriaModelInfo | None:
@@ -1425,6 +1426,37 @@ class VertexAITokenCounter(BaseTokenCounter):
             return translated.response(request_model, model_to_use, "vertex_ai_partner_models")
         return translated
 
+    async def _claude_count_options(
+        self,
+        model_to_use: str,
+        messages: Sequence[Mapping[str, object]],
+        request_model: str,
+        count_options: Mapping[str, JsonValue],
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, JsonValue] | TokenCountResponse:
+        from litellm.litellm_core_utils.asyncify import asyncify
+        from litellm.llms.anthropic.count_tokens.transformation import (
+            ChatCountTranslationError,
+            messages_count_options,
+        )
+        from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.messages.transformation import (
+            VertexAIPartnerModelsAnthropicMessagesConfig,
+        )
+        from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import count_tokens_publisher
+
+        if count_tokens_publisher(model_to_use) != "anthropic":
+            return count_options
+        options: Final = await asyncify(messages_count_options)(
+            VertexAIPartnerModelsAnthropicMessagesConfig(),
+            model_to_use,
+            _JSON_MESSAGES.validate_python(messages),
+            count_options,
+            litellm_params,
+        )
+        if isinstance(options, ChatCountTranslationError):
+            return options.response(request_model, model_to_use, "vertex_ai_partner_models")
+        return options
+
     async def count_tokens(
         self,
         model_to_use: str,
@@ -1489,12 +1521,21 @@ class VertexAITokenCounter(BaseTokenCounter):
             )
             if isinstance(translated, TokenCountResponse):
                 return translated
+            partner_litellm_params: Final[dict[str, object]] = count_tokens_params_request
+            partner_count_options: Final = (
+                translated.options
+                if translated is not None
+                else await self._claude_count_options(
+                    model_to_use, messages or [], request_model, count_options, partner_litellm_params
+                )
+            )
+            if isinstance(partner_count_options, TokenCountResponse):
+                return partner_count_options
 
             # Use partner models token counter
             partner_models_handler: Final = VertexAIPartnerModels()
 
             # Extract vertex-specific params from litellm_params
-            partner_litellm_params: Final[dict[str, object]] = count_tokens_params_request
             vertex_project = partner_litellm_params.get("vertex_project") or partner_litellm_params.get(
                 "vertex_ai_project"
             )
@@ -1528,7 +1569,7 @@ class VertexAITokenCounter(BaseTokenCounter):
                         if translated.tools is None
                         else [dict(tool) for tool in translated.tools]
                     ),
-                    count_options=MappingProxyType({}) if translated is None else translated.options,
+                    count_options=partner_count_options,
                     context_management=(
                         None if context_management is None else context_management_with_edits(context_management.spec)
                     ),
