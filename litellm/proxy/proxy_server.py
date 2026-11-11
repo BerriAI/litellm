@@ -3183,6 +3183,10 @@ def general_settings_view() -> Mapping[str, object]:
     return _GENERAL_SETTINGS_VIEW.validate_python(general_settings)
 
 
+def user_model_view() -> str | None:
+    return user_model if isinstance(user_model, str) else None
+
+
 config_passthrough_endpoints: list[dict[str, object]] | None = None
 log_file: Final = "api_log.json"
 worker_config: Final = None
