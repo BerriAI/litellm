@@ -1,5 +1,7 @@
+from collections.abc import Mapping
 from typing import Final
 
+import litellm
 from litellm.llms.azure.image_edit.transformation import AzureImageEditConfig
 from litellm.llms.azure_ai.common_utils import (
     AzureFoundryModelInfo,
@@ -7,6 +9,8 @@ from litellm.llms.azure_ai.common_utils import (
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
+
+AZURE_AI_GPT_IMAGE_EDIT_DEFAULT_API_VERSION: Final = "2025-04-01-preview"
 
 
 class AzureFoundryGPTImageEditConfig(AzureImageEditConfig):
@@ -16,42 +20,42 @@ class AzureFoundryGPTImageEditConfig(AzureImageEditConfig):
     Foundry serves gpt-image deployments on the same
     ``/openai/deployments/{deployment}/images/edits`` route as Azure OpenAI, so the
     request and URL handling is shared with ``AzureImageEditConfig``. Only the
-    credential source is Foundry-specific.
+    credential source and the default api-version are Foundry-specific.
     """
 
     def validate_environment(
         self,
-        headers: dict[str, str],
+        headers: Mapping[str, str],
         model: str,
         api_key: str | None = None,
-        litellm_params: dict[str, object] | None = None,
+        litellm_params: Mapping[str, object] | None = None,
         api_base: str | None = None,
-    ) -> dict[str, str]:
+    ) -> dict[str, str]:  # mutable-ok: llm_http_handler adds extra_headers to the returned dict in place
         params: Final = GenericLiteLLMParams(**(litellm_params or {}))
-        resolved_api_key: Final = params.api_key or api_key
-        headers.update(
-            get_azure_ai_auth_headers(
-                api_key=AzureFoundryModelInfo.get_api_key(resolved_api_key),
+        return {
+            **headers,
+            **get_azure_ai_auth_headers(
+                api_key=AzureFoundryModelInfo.get_api_key(params.api_key or api_key),
                 litellm_params=litellm_params,
                 api_key_header="api-key",
-            )
-        )
-        return headers
+            ),
+        }
 
     def get_complete_url(
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict[str, object],
+        litellm_params: Mapping[str, object],
     ) -> str:
-        azure_ai_api_version: Final = litellm_params.get("api_version") or get_secret_str("AZURE_AI_API_VERSION")
-        resolved_params: Final = (
-            {**litellm_params, "api_version": azure_ai_api_version}
-            if azure_ai_api_version is not None
-            else litellm_params
+        api_version: Final = (
+            litellm_params.get("api_version")
+            or get_secret_str("AZURE_AI_API_VERSION")
+            or litellm.api_version
+            or get_secret_str("AZURE_API_VERSION")
+            or AZURE_AI_GPT_IMAGE_EDIT_DEFAULT_API_VERSION
         )
         return super().get_complete_url(  # pyright: ignore[reportUnknownMemberType]  # bare dict in base
             model=model,
             api_base=AzureFoundryModelInfo.get_api_base(api_base),
-            litellm_params=resolved_params,
+            litellm_params={**litellm_params, "api_version": api_version},
         )

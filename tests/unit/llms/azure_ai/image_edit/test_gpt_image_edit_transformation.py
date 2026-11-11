@@ -4,7 +4,6 @@ import httpx
 import pytest
 
 import litellm
-from litellm.llms.azure_ai.image_edit import get_azure_ai_image_edit_config
 from litellm.llms.azure_ai.image_edit.gpt_transformation import (
     AzureFoundryGPTImageEditConfig,
 )
@@ -16,28 +15,25 @@ DEPLOYMENT_EDIT_URL: Final = (
 )
 
 
-@pytest.mark.parametrize(
-    "model",
-    [
-        "gpt-image-1",
-        "gpt-image-2",
-        "gpt-image-2.5-flare",
-        "gpt-image-2.5-flare-2026-09-08",
-        "gpt-image-2.5-sunburst",
-        "gpt-image-2.5-sunburst-2026-09-08",
-    ],
-)
-def test_gpt_image_models_get_gpt_image_edit_config(model: str):
-    assert isinstance(get_azure_ai_image_edit_config(model), AzureFoundryGPTImageEditConfig)
-
-
-def test_gpt_image_edit_url_uses_foundry_deployment_route():
-    config: Final = AzureFoundryGPTImageEditConfig()
-
-    url: Final = config.get_complete_url(
+def test_gpt_image_edit_url_uses_foundry_deployment_route_and_configured_version():
+    url: Final = AzureFoundryGPTImageEditConfig().get_complete_url(
         model="gpt-image-2.5-flare",
         api_base=FOUNDRY_API_BASE,
-        litellm_params={"api_version": "2025-04-01-preview"},
+        litellm_params={"api_version": "2025-06-01-preview"},
+    )
+
+    assert url == f"{FOUNDRY_API_BASE}/openai/deployments/gpt-image-2.5-flare/images/edits?api-version=2025-06-01-preview"
+
+
+def test_gpt_image_edit_url_defaults_to_an_edit_capable_version(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("AZURE_AI_API_VERSION", raising=False)
+    monkeypatch.delenv("AZURE_API_VERSION", raising=False)
+    monkeypatch.setattr(litellm, "api_version", None)
+
+    url: Final = AzureFoundryGPTImageEditConfig().get_complete_url(
+        model="gpt-image-2.5-flare",
+        api_base=FOUNDRY_API_BASE,
+        litellm_params={},
     )
 
     assert url == DEPLOYMENT_EDIT_URL
@@ -69,14 +65,17 @@ def test_gpt_image_edit_url_uses_v1_surface_for_preview_version():
     assert url == f"{FOUNDRY_API_BASE}/openai/v1/images/edits?api-version=preview"
 
 
-def test_gpt_image_edit_sends_api_key_header():
+def test_gpt_image_edit_sends_api_key_header_without_changing_caller_headers():
+    caller_headers: Final = {"x-trace": "abc"}
+
     headers: Final = AzureFoundryGPTImageEditConfig().validate_environment(
-        {},
+        caller_headers,
         "gpt-image-2.5-flare",
         api_key="test-key",
     )
 
-    assert headers == {"api-key": "test-key"}
+    assert headers == {"x-trace": "abc", "api-key": "test-key"}
+    assert caller_headers == {"x-trace": "abc"}
 
 
 def test_gpt_image_edit_prefers_litellm_params_api_key():
@@ -133,10 +132,22 @@ def test_gpt_image_edit_keeps_model_on_v1_multipart():
     assert data == {"model": "gpt-image-2.5-flare", "prompt": "Add a hat"}
 
 
-def test_gpt_image_edit_end_to_end_posts_multipart_to_deployment_route(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("AZURE_AI_API_VERSION", "2025-04-01-preview")
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gpt-image-1",
+        "gpt-image-2",
+        "gpt-image-2.5-flare",
+        "gpt-image-2.5-flare-2026-09-08",
+        "gpt-image-2.5-sunburst",
+        "gpt-image-2.5-sunburst-2026-09-08",
+    ],
+)
+def test_gpt_image_edit_end_to_end_posts_multipart_to_deployment_route(monkeypatch: pytest.MonkeyPatch, model: str):
+    monkeypatch.delenv("AZURE_AI_API_VERSION", raising=False)
     monkeypatch.delenv("AZURE_API_VERSION", raising=False)
-    captured: Final[list[httpx.Request]] = []
+    monkeypatch.setattr(litellm, "api_version", None)
+    captured: Final[list[httpx.Request]] = []  # mutable-ok: the fake Foundry endpoint records what litellm sent
 
     def respond(request: httpx.Request) -> httpx.Response:
         captured.append(request)
@@ -144,7 +155,7 @@ def test_gpt_image_edit_end_to_end_posts_multipart_to_deployment_route(monkeypat
 
     client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
     response: Final = litellm.image_edit(
-        model="azure_ai/gpt-image-2.5-flare",
+        model=f"azure_ai/{model}",
         image=b"image",
         prompt="Add a hat",
         api_key="test-key",
@@ -155,7 +166,9 @@ def test_gpt_image_edit_end_to_end_posts_multipart_to_deployment_route(monkeypat
     assert response.data[0]["b64_json"] == "aW1n"
     assert len(captured) == 1
     request: Final = captured[0]
-    assert str(request.url) == DEPLOYMENT_EDIT_URL
+    assert str(request.url) == (
+        f"{FOUNDRY_API_BASE}/openai/deployments/{model}/images/edits?api-version=2025-04-01-preview"
+    )
     assert request.headers["api-key"] == "test-key"
     assert b'name="prompt"' in request.content
     assert b'name="model"' not in request.content
