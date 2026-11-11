@@ -3188,7 +3188,7 @@ def _cut_responses_sse(response_id: str, words: tuple[str, ...], failed_usage: M
     )
 
 
-def _mock_backup_responses(respx_mock: respx.MockRouter) -> None:
+def _mock_backup_responses(respx_mock: respx.MockRouter, model: str = "gpt-4o-mini") -> None:
     respx_mock.post("https://backup.example/v1/responses").mock(
         return_value=httpx.Response(
             200,
@@ -3196,13 +3196,13 @@ def _mock_backup_responses(respx_mock: respx.MockRouter) -> None:
             text=_responses_sse(
                 {
                     "type": "response.created",
-                    "response": _responses_envelope("resp_backup", "gpt-4o-mini", "in_progress"),
+                    "response": _responses_envelope("resp_backup", model, "in_progress"),
                 },
                 {
                     "type": "response.completed",
                     "response": _responses_envelope(
                         "resp_backup",
-                        "gpt-4o-mini",
+                        model,
                         "completed",
                         output=[
                             {
@@ -3222,7 +3222,10 @@ def _mock_backup_responses(respx_mock: respx.MockRouter) -> None:
 
 
 async def _stream_responses_through_cut_legs(
-    respx_mock: respx.MockRouter, cut_groups: tuple[str, ...], failed_usage: Mapping[str, int] | None
+    respx_mock: respx.MockRouter,
+    cut_groups: tuple[str, ...],
+    failed_usage: Mapping[str, int] | None,
+    backup_model: str = "gpt-4o-mini",
 ) -> LiteLLMLogging:
     for group, words in (("primary", ("Once ", "upon ", "a ", "time ", "there")), ("middle", (" lived", " a"))):
         respx_mock.post(f"https://{group}.example/v1/responses").mock(
@@ -3232,7 +3235,7 @@ async def _stream_responses_through_cut_legs(
                 text=_cut_responses_sse(f"resp_{group}", words, failed_usage),
             )
         )
-    _mock_backup_responses(respx_mock)
+    _mock_backup_responses(respx_mock, backup_model)
     router: Final = Router(
         model_list=[
             *(
@@ -3251,7 +3254,7 @@ async def _stream_responses_through_cut_legs(
             {
                 "model_name": "backup",
                 "litellm_params": {
-                    "model": "openai/gpt-4o-mini",
+                    "model": f"openai/{backup_model}",
                     "api_key": "k2",
                     "api_base": "https://backup.example/v1",
                 },
@@ -3335,6 +3338,27 @@ async def test_responses_fallback_sharing_the_proxy_logging_object_bills_the_cut
         0,
         0.0,
     )
+
+
+@pytest.mark.asyncio
+async def test_responses_fallback_to_an_unpriced_deployment_still_bills_the_cut_partial(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _SpendRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+
+    await _stream_responses_through_cut_legs(respx_mock, ("primary",), None, backup_model="litellm-unpriced-backup")
+    await asyncio.wait_for(recorder.succeeded.wait(), timeout=10)
+
+    (cut_leg,) = recorder.failures
+    assert cut_leg["response_cost"] > 0
+    (success,) = recorder.successes
+    assert (success["prompt_tokens"], success["completion_tokens"]) == (
+        1000 + cut_leg["prompt_tokens"],
+        700 + cut_leg["completion_tokens"],
+    )
+    assert success["response_cost"] == pytest.approx(cut_leg["response_cost"])
 
 
 @pytest.mark.asyncio
