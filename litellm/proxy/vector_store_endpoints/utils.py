@@ -2,10 +2,11 @@ import json
 import re
 from collections.abc import Iterable, Mapping
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import Final, Literal, Protocol
 
 from fastapi import HTTPException, Request
 from pydantic import ConfigDict, TypeAdapter
+from typing_extensions import TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -25,6 +26,18 @@ from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 from litellm.utils import ProviderConfigManager
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
+
+
+class _ManagedVectorStoreFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
+class _DumpableRow(Protocol):
+    def model_dump(self) -> Mapping[str, object]: ...
+
+
+def _managed_vector_store_from_row(row: _DumpableRow) -> LiteLLM_ManagedVectorStore:
+    return LiteLLM_ManagedVectorStore(**_ManagedVectorStoreFields(**row.model_dump()))
 
 
 def normalize_litellm_params(
@@ -316,7 +329,7 @@ async def get_litellm_managed_vector_store(
         )
         if not rows:
             return None
-        return normalize_litellm_params(LiteLLM_ManagedVectorStore(**rows[0].model_dump()))
+        return normalize_litellm_params(_managed_vector_store_from_row(rows[0]))
     except Exception as e:
         verbose_proxy_logger.warning(
             "Failed to resolve vector store id=%s from shared cache: %s",

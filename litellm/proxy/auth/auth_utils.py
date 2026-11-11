@@ -37,7 +37,11 @@ from litellm.llms.azure.passthrough.transformation import azure_router_model_in_
 from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_model_group_in_path
 from litellm.proxy._types import *
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.common_utils.http_parsing_utils import extract_nested_form_metadata
+from litellm.proxy.common_utils.http_parsing_utils import (
+    extract_nested_form_metadata,
+    read_request_path_params,
+    resolve_inference_model,
+)
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
 )
@@ -2678,6 +2682,7 @@ def get_model_from_request(
     llm_router: Router | None = None,
     request: Request | None = None,
     team_id: str | None = None,
+    path_params: Mapping[str, object] | None = None,
 ) -> str | list[str] | None:
     """Resolve the model(s) a request targets, for model-access and budget checks.
 
@@ -2695,6 +2700,12 @@ def get_model_from_request(
     """
     if request_dispatched_to_pass_through_endpoint(request):
         return None
+
+    handler_request_data: Final = _MODEL_REQUEST_DATA.validate_python(request_data)
+    handler_path_params: Final = read_request_path_params(request) if request is not None else path_params
+    handler_model: Final = _handler_selected_model(route, handler_request_data, handler_path_params)
+    if handler_model is not None:
+        return handler_model
 
     candidates: Final = _extract_model_candidates_from_request(
         request_data=request_data,
@@ -2723,6 +2734,39 @@ def get_model_from_request(
         return model if nvidia_nim_model is None else nvidia_nim_model
 
     return model
+
+
+_HandlerModelKind: TypeAlias = Literal["completion", "image_generation", "image_edit"]
+_MODEL_REQUEST_DATA: Final = TypeAdapter(Mapping[str, object])
+_HANDLER_MODEL_ROUTES: Final[tuple[tuple[re.Pattern[str], str, _HandlerModelKind], ...]] = (
+    (re.compile(r"^(?:/v1beta)?/models/(.+):(?:generateContent|streamGenerateContent)$"), "model_name", "completion"),
+    (re.compile(r"^/openai/deployments/(.+)/images/generations$"), "model", "image_generation"),
+    (re.compile(r"^/openai/deployments/(.+)/images/edits$"), "model", "image_edit"),
+)
+
+
+def _handler_selected_model(
+    route: str, request_data: Mapping[str, object], path_params: Mapping[str, object] | None
+) -> str | None:
+    selection: Final[tuple[re.Match[str], str, _HandlerModelKind] | None] = next(
+        ((match, name, kind) for pattern, name, kind in _HANDLER_MODEL_ROUTES if (match := pattern.match(route))),
+        None,
+    )
+    if selection is None:
+        return None
+    from litellm.proxy.proxy_server import general_settings_view, user_model_view
+
+    route_match, path_param_name, kind = selection
+    route_model: Final = route_match.group(1)
+    path_model: Final = path_params.get(path_param_name) if path_params is not None else None
+    model: Final = resolve_inference_model(
+        request_data.get("model"),
+        general_settings_view(),
+        user_model_view(),
+        path_model if isinstance(path_model, str) and path_model else route_model,
+        kind=kind,
+    )
+    return model if isinstance(model, str) and model else route_model
 
 
 def _model_from_route_path(route: str) -> str | None:
