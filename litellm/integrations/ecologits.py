@@ -261,17 +261,14 @@ class EcoLogitsLogger(CustomLogger):
 
     @staticmethod
     def _attach_to_metadata(kwargs: dict, ecologits_data: object) -> None:
-        """Place the impacts payload where downstream loggers actually look.
-
-        Langfuse reads from ``kwargs["litellm_params"]["metadata"]`` and
-        Datadog/SpendLogs read from ``kwargs["standard_logging_object"]["metadata"]``.
-        Writing to the top level of kwargs (the previous behaviour) was only
-        visible to OTEL, which dumps the raw kwargs.
-        """
         litellm_params = kwargs.setdefault("litellm_params", {})
         metadata = litellm_params.get("metadata") or {}
         metadata[ECOLOGITS_KWARGS_RESULT_KEY] = ecologits_data
         litellm_params["metadata"] = metadata
+
+        litellm_metadata = litellm_params.get("litellm_metadata")
+        if isinstance(litellm_metadata, dict):
+            litellm_metadata[ECOLOGITS_KWARGS_RESULT_KEY] = ecologits_data
 
         standard_logging_object = kwargs.get("standard_logging_object")
         if isinstance(standard_logging_object, dict):
