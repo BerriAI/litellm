@@ -5778,6 +5778,84 @@
     "dismiss": "Dismiss banner"
   },
   "alerts": {
+    "unified": {
+      "title": "Alerts",
+      "saveError": "Could not save status. Please try again.",
+      "resourceHeading": "This alert is tied to the following resource",
+      "migrationDetails": "View migration details",
+      "loading": "Loading alerts…",
+      "adminRequired": "Only gateway admins can view alerts.",
+      "back": "Back to Alerts",
+      "loadError": "Could not load this alert. It may have been removed or you may no longer have access.",
+      "unavailable": "This alert is no longer available.",
+      "typeFilter": "Alert type",
+      "refresh": "Refresh",
+      "deprecationsError": "Could not load model deprecations.",
+      "performanceError": "Could not load performance alerts.",
+      "loadingMore": "Loading…",
+      "loadMore": "Load more",
+      "empty": {
+        "open": "No open alerts.",
+        "resolved": "No resolved alerts.",
+        "dismissed": "No dismissed alerts."
+      },
+      "types": {
+        "all": "All alerts",
+        "performance": "Performance",
+        "spend": "Spend",
+        "traffic": "Traffic",
+        "latency": "Latency",
+        "reliability": "Reliability"
+      },
+      "retiredTitle": "{{name}} retired on {{date}}",
+      "retiresTitle": "{{name}} retires on {{date}}",
+      "deprecationDescription": "{{requests}} recorded requests. Last used {{date}} UTC.",
+      "retired": "Retired",
+      "retires": "Retires",
+      "lastUsed": "Last used",
+      "keyFallback": "Key {{id}}",
+      "deprecation": "Model deprecation",
+      "metrics": {
+        "spend": "Spend",
+        "traffic": "Traffic",
+        "latency": "Mean response time",
+        "reliability": "Error rate",
+        "model_deprecation": "Usage"
+      },
+      "comparison": {
+        "fell": "{{label}} on {{name}} fell to {{ratio}}× its baseline",
+        "rose": "{{label}} on {{name}} rose to {{ratio}}× its baseline"
+      },
+      "value": {
+        "fell": "{{label}} on {{name}} fell to {{value}}",
+        "rose": "{{label}} on {{name}} rose to {{value}}"
+      },
+      "description": "{{value}} on {{date}} UTC, compared with the usual {{baseline}}.",
+      "links": {
+        "gateway": "View Usage",
+        "model": "View model routing",
+        "key": "View key activity",
+        "team": "View team activity",
+        "user": "View user activity"
+      },
+      "observed": "Observed",
+      "firstDetected": "First detected",
+      "chart": {
+        "unavailable": "Daily history is unavailable. The saved alert comparison is shown above.",
+        "baseline": "Dashed line: saved baseline of {{value}}. ",
+        "missingDays": "Missing days are left blank.",
+        "currentUsage": " Bars show current Usage, which may have changed since detection.",
+        "values": "{{title}} values",
+        "date": "Date",
+        "value": "Value",
+        "titles": {
+          "usd": "Daily spend",
+          "requests": "Daily requests",
+          "milliseconds": "Mean response time per day",
+          "ratio": "Daily error rate"
+        }
+      }
+    },
     "page": {
       "tabs": {
         "modelDeprecations": "Model deprecations"
