@@ -139,6 +139,18 @@ fn a_bad_entry_is_reported_by_model_and_key_and_kept_raw() {
     json!({"First": {"litellm_provider": "t", "aliases": ["shared"]}, "Second": {"litellm_provider": "t", "aliases": ["shared"]}}),
     r#"Second: alias "shared" already belongs to First"#
 )]
+#[case::alias_of_target_missing(
+    json!({"Real": {"litellm_provider": "t"}, "ghost-latest": {"alias_of": "Ghost"}}),
+    r#"ghost-latest: alias_of "Ghost" is not a model name"#
+)]
+#[case::alias_of_row_with_other_fields(
+    json!({"Real": {"litellm_provider": "t"}, "real-latest": {"alias_of": "Real", "mode": "chat"}}),
+    "real-latest.mode: an alias_of row carries no other field"
+)]
+#[case::alias_of_claimed_by_a_list(
+    json!({"Real": {"litellm_provider": "t"}, "real-latest": {"alias_of": "Real"}, "Other": {"litellm_provider": "t", "aliases": ["real-latest"]}}),
+    r#"real-latest: alias "real-latest" already belongs to Other"#
+)]
 #[case::aliases_not_a_list(
     json!({"a": {"litellm_provider": "t", "aliases": "bad"}}),
     "a.aliases: invalid value: invalid type: string \"bad\", expected a sequence"
@@ -366,18 +378,14 @@ fn written_is_the_document_in_order_including_sections_and_bad_entries() {
 }
 
 #[rstest]
-fn the_bundled_registry_parses_with_no_problems_and_every_key_understood() {
-    let loaded = Catalog::parse(BUNDLED_REGISTRY).unwrap();
-    let catalog = loaded.value;
-    assert!(loaded.errors.is_empty(), "{:#?}", loaded.errors);
-    let unrecognized: Vec<_> = catalog.unrecognized().collect();
-    assert!(unrecognized.is_empty(), "{unrecognized:#?}");
-    assert!(
-        catalog
-            .fallback_rules()
-            .is_some_and(|rules| !rules.is_empty())
-    );
+fn the_bundled_registry_has_no_problems() {
+    let problems: Vec<_> = Catalog::problems(BUNDLED_REGISTRY)
+        .iter()
+        .map(report)
+        .collect();
+    assert!(problems.is_empty(), "{problems:#?}");
     const REFERENCE_MODEL_COUNT: usize = 4303;
+    let catalog = Catalog::parse(BUNDLED_REGISTRY).unwrap().value;
     assert!(catalog.model_count() as f64 >= REFERENCE_MODEL_COUNT as f64 * 0.9);
 }
 
@@ -402,4 +410,71 @@ fn a_bad_value_keeps_its_json_error_as_the_source_and_names_its_key_and_field() 
     assert!(!error.to_string().contains(&cause));
     assert_eq!(error.key().as_deref(), Some("open/router"));
     assert_eq!(error.field().as_deref(), Some("input_cost_per_token"));
+}
+
+#[rstest]
+fn an_alias_of_row_is_served_as_its_target_and_written_as_itself() {
+    let catalog = catalog(json!({
+        "Real": {"litellm_provider": "t", "input_cost_per_token": 1e-6},
+        "real-latest": {"alias_of": "Real"},
+        "After": {"litellm_provider": "t"}
+    }));
+    let found = catalog.lookup("REAL-LATEST").unwrap();
+    assert_eq!(
+        (found.matched_key, found.canonical_key),
+        ("real-latest", "Real")
+    );
+    assert_eq!(
+        found.entry.field("input_cost_per_token"),
+        Some(&json!(1e-6))
+    );
+    assert_eq!(catalog.model_count(), 2);
+    assert_eq!(
+        catalog.served().map(|(key, _)| key).collect::<Vec<_>>(),
+        ["Real", "After", "real-latest"]
+    );
+    assert_eq!(
+        written(&catalog),
+        r#"{"Real":{"litellm_provider":"t","input_cost_per_token":1e-6},"real-latest":{"alias_of":"Real"},"After":{"litellm_provider":"t"}}"#
+    );
+}
+
+#[rstest]
+fn a_dangling_alias_of_row_is_rejected_and_dropped_from_the_written_document() {
+    let parsed = loaded(json!({
+        "Real": {"litellm_provider": "t"},
+        "ghost-latest": {"alias_of": "Ghost"}
+    }));
+    let (catalog, removed) = parsed.value.without_rejected(&parsed.errors);
+    assert_eq!(removed.len(), 1);
+    assert!(catalog.lookup("ghost-latest").is_none());
+    assert_eq!(written(&catalog), r#"{"Real":{"litellm_provider":"t"}}"#);
+}
+
+#[rstest]
+fn an_alias_of_row_with_other_fields_is_never_served() {
+    let parsed = loaded(json!({
+        "Real": {"litellm_provider": "t"},
+        "real-latest": {"alias_of": "Real", "mode": "chat"}
+    }));
+    assert!(parsed.value.lookup("real-latest").is_none());
+    let (catalog, removed) = parsed.value.without_rejected(&parsed.errors);
+    assert_eq!(removed.len(), 1);
+    assert!(catalog.lookup("real-latest").is_none());
+    assert_eq!(written(&catalog), r#"{"Real":{"litellm_provider":"t"}}"#);
+}
+
+#[rstest]
+fn a_pointer_row_that_repeats_a_listed_alias_is_dropped_and_the_model_is_kept() {
+    let parsed = loaded(json!({
+        "Real": {"litellm_provider": "t", "aliases": ["real-latest"]},
+        "real-latest": {"alias_of": "Real"}
+    }));
+    let (catalog, removed) = parsed.value.without_rejected(&parsed.errors);
+    assert_eq!(removed.len(), 1);
+    assert_eq!(catalog.lookup("real-latest").unwrap().canonical_key, "Real");
+    assert_eq!(
+        written(&catalog),
+        r#"{"Real":{"litellm_provider":"t","aliases":["real-latest"]}}"#
+    );
 }

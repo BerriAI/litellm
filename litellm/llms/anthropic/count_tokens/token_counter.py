@@ -12,6 +12,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
 from litellm.llms.anthropic.count_tokens.transformation import (
     AnthropicCountFields,
@@ -19,7 +20,7 @@ from litellm.llms.anthropic.count_tokens.transformation import (
     anthropic_count_fields,
     messages_count_options,
 )
-from litellm.llms.base_llm.base_utils import BaseTokenCounter
+from litellm.llms.base_llm.base_utils import BaseTokenCounter, deployment_timeout
 from litellm.types.utils import CountContextManagement, LlmProviders, TokenCountMessagesFormat, TokenCountResponse
 
 # Global handler instance - reuse across all token counting requests
@@ -86,6 +87,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
                     tools=translated.tools,
                     system=translated.system,
                     count_options=translated.options,
+                    context_management=context_management,
                 )
             case None:
                 pass
@@ -108,6 +110,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
                     tools=tools,
                     system=system,
                     count_options=options,
+                    context_management=context_management,
                 )
 
     async def _count(
@@ -119,6 +122,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
         tools: Sequence[Mapping[str, JsonValue]] | None,
         system: JsonValue,
         count_options: Mapping[str, JsonValue],
+        context_management: CountContextManagement | None,
     ) -> TokenCountResponse | None:
         from litellm.llms.anthropic.common_utils import AnthropicError, AnthropicModelInfo
 
@@ -159,6 +163,9 @@ class AnthropicTokenCounter(BaseTokenCounter):
                 tools=None if tools is None else [dict(tool) for tool in tools],
                 system=system,
                 optional_params=count_options,
+                context_management=context_management.spec if context_management is not None else None,
+                drop_params=drops_unsupported_params(litellm_params.get("drop_params")),
+                timeout=deployment_timeout(litellm_params),
             )
 
             if result is not None:

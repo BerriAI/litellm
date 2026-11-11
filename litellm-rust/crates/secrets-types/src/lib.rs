@@ -18,5 +18,4 @@ pub use context::{
     HashicorpOperationContext, SecretOperationContext, SecretWriteContext,
 };
 pub use error::Error;
-pub use litellm_auth_types::SecretValue;
 pub use value::{PythonSecretRead, Secret};

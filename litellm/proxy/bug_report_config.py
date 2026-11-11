@@ -19,8 +19,8 @@ from litellm.litellm_core_utils.bug_report import (
     build_bug_report,
     build_environment_report,
 )
+from litellm.litellm_core_utils.routing_groups import VALID_ROUTING_STRATEGIES
 from litellm.proxy._types import ConfigGeneralSettings
-from litellm.router_utils.routing_groups import VALID_ROUTING_STRATEGIES
 from litellm.types.caching import LiteLLMCacheType
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams, SupportedGuardrailIntegrations
 from litellm.types.secret_managers.main import KeyManagementSystem

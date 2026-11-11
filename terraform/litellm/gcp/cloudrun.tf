@@ -62,32 +62,19 @@ locals {
     { name = "OTEL_HEADERS", secret = var.otel_headers_secret, version = "latest" },
   ] : []
 
-  # Enterprise request metering, gated on billing_metrics_endpoint. The
-  # endpoint rides in as a plain env var; the mTLS material lives in Secret
-  # Manager (secrets.tf) and is injected as PEM-valued env vars, which the
-  # proxy accepts in place of file paths. Each PEM is wired only when the
-  # operator supplied it, so an empty ca_cert_pem falls back to the system
-  # trust store.
-  billing_metrics_enabled             = var.billing_metrics_endpoint != ""
-  billing_metrics_client_cert_enabled = local.billing_metrics_enabled && var.billing_metrics_client_cert_pem != ""
-  billing_metrics_client_key_enabled  = local.billing_metrics_enabled && var.billing_metrics_client_key_pem != ""
-  billing_metrics_ca_cert_enabled     = local.billing_metrics_enabled && var.billing_metrics_ca_cert_pem != ""
+  # Enterprise request metering, gated on billing_metrics_endpoint.
+  billing_metrics_enabled               = var.billing_metrics_endpoint != ""
+  billing_metrics_client_secret_enabled = local.billing_metrics_enabled && var.billing_metrics_client_secret != ""
 
   billing_metrics_env_kv = local.billing_metrics_enabled ? [
     { name = "LITELLM_BILLING_METRICS_ENDPOINT", value = var.billing_metrics_endpoint },
+    { name = "LITELLM_BILLING_METRICS_CLIENT_ID", value = var.billing_metrics_client_id },
+    { name = "LITELLM_BILLING_METRICS_TOKEN_URL", value = var.billing_metrics_token_url },
   ] : []
 
-  billing_metrics_env_secrets = concat(
-    local.billing_metrics_client_cert_enabled ? [
-      { name = "LITELLM_BILLING_METRICS_CLIENT_CERT", secret = google_secret_manager_secret.billing_metrics_client_cert[0].id, version = "latest" },
-    ] : [],
-    local.billing_metrics_client_key_enabled ? [
-      { name = "LITELLM_BILLING_METRICS_CLIENT_KEY", secret = google_secret_manager_secret.billing_metrics_client_key[0].id, version = "latest" },
-    ] : [],
-    local.billing_metrics_ca_cert_enabled ? [
-      { name = "LITELLM_BILLING_METRICS_CA_CERT", secret = google_secret_manager_secret.billing_metrics_ca_cert[0].id, version = "latest" },
-    ] : [],
-  )
+  billing_metrics_env_secrets = local.billing_metrics_client_secret_enabled ? [
+    { name = "LITELLM_BILLING_METRICS_CLIENT_SECRET", secret = google_secret_manager_secret.billing_metrics_client_secret[0].id, version = "latest" },
+  ] : []
 
   # Cloud Run v2 secret env vars use value_source.secret_key_ref pointing at a
   # secret resource ID. Shared between gateway and backend (the migrations
@@ -481,9 +468,7 @@ resource "google_cloud_run_v2_service" "gateway" {
     google_secret_manager_secret_iam_member.license,
     google_secret_manager_secret_iam_member.extras,
     google_secret_manager_secret_iam_member.otel_headers,
-    google_secret_manager_secret_iam_member.billing_metrics_client_cert,
-    google_secret_manager_secret_iam_member.billing_metrics_client_key,
-    google_secret_manager_secret_iam_member.billing_metrics_ca_cert,
+    google_secret_manager_secret_iam_member.billing_metrics_client_secret,
     google_secret_manager_secret_iam_member.metrics_run_monitoring,
     google_project_iam_member.runtime_metric_writer,
     google_storage_bucket_iam_member.proxy_config_runtime,
@@ -603,9 +588,7 @@ resource "google_cloud_run_v2_service" "backend" {
     google_secret_manager_secret_iam_member.ui_password,
     google_secret_manager_secret_iam_member.extras,
     google_secret_manager_secret_iam_member.otel_headers,
-    google_secret_manager_secret_iam_member.billing_metrics_client_cert,
-    google_secret_manager_secret_iam_member.billing_metrics_client_key,
-    google_secret_manager_secret_iam_member.billing_metrics_ca_cert,
+    google_secret_manager_secret_iam_member.billing_metrics_client_secret,
     google_storage_bucket_iam_member.proxy_config_runtime,
     google_sql_user.app,
     terraform_data.migration,

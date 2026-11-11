@@ -1,4 +1,5 @@
-use crate::{Error, SecretValue, SecretWriteContext};
+use crate::{Error, SecretWriteContext};
+use litellm_secret_value::SecretValue;
 
 pub fn validate_secret_name(name: &str) -> Result<(), Error> {
     if name.split('/').any(|segment| segment == "..")

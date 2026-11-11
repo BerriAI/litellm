@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Mapping
 from typing import Final
 
@@ -277,6 +278,29 @@ def test_azure_gpt5_reasoning_effort_none_dropped(config: AzureOpenAIGPT5Config)
         api_version="2024-05-01-preview",
     )
     assert "reasoning_effort" not in params or params.get("reasoning_effort") != "none"
+
+
+@pytest.mark.parametrize(("model", "names_base_model"), [("azure/litellm-qa-sol-alias", True), ("azure/gpt-5", False)])
+def test_azure_dropped_effort_warning_suggests_base_model_only_for_a_name_the_map_lacks(
+    config: AzureOpenAIGPT5Config, caplog: pytest.LogCaptureFixture, model: str, names_base_model: bool
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        params: Final = config.map_openai_params(
+            non_default_params={"reasoning_effort": "none"},
+            optional_params={},
+            model=model,
+            drop_params=True,
+            api_version="2025-04-01-preview",
+            declared_reasoning_efforts=(),
+        )
+
+    assert "reasoning_effort" not in params
+    drop_warnings: Final = [
+        record.getMessage() for record in caplog.records if "Dropping reasoning_effort='none'" in record.getMessage()
+    ]
+    assert len(drop_warnings) == 1
+    assert "model_info.reasoning_effort_levels" in drop_warnings[0]
+    assert ("model_info.base_model" in drop_warnings[0]) is names_base_model
 
 
 # Logprobs support tests for Azure GPT-5.2

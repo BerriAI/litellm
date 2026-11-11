@@ -33,6 +33,7 @@ from litellm.constants import (
     PTU_ROLLUP_MAX_BACKFILL_DAYS,
     PTU_SENTINEL_API_KEY,
 )
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.ptu_pricing import ptu_terms
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import POD_LOCK_TARGET
 from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
@@ -46,6 +47,7 @@ if TYPE_CHECKING:
 
     from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
     from litellm.proxy.utils import PrismaClient
+    from litellm.router import Router
 
 
 class _DailyTeamSpendRepository(PrismaTableRepository["prisma_models.LiteLLM_DailyTeamSpend"]):
@@ -76,6 +78,10 @@ class _SentinelBatchManager(Protocol):
     async def __aenter__(self) -> _SentinelBatch: ...
 
     async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> bool | None: ...
+
+
+class _SupportsGet(Protocol):
+    def get(self, key: str, /) -> object: ...
 
 
 def _sentinel_batch(prisma_client: "PrismaClient") -> _SentinelBatchManager:
@@ -170,7 +176,7 @@ class _PTUDeployment:
     model_info: Mapping[str, object]
 
 
-def _router_deployment(deployment: Mapping[str, object]) -> _PTUDeployment | None:
+def _router_deployment(deployment: _SupportsGet) -> _PTUDeployment | None:
     """A router ``model_list`` entry in the shape the parser reads, else None.
 
     An id is required rather than defaulted because it keys the sentinel row: every
@@ -412,7 +418,7 @@ class _LoadedDeployments:
     scanned_ids: frozenset[str]
 
 
-def _config_deployments(router: object | None, *, owned_by_db: frozenset[str]) -> tuple[_PTUDeployment, ...]:
+def _config_deployments(router: "Router | None", *, owned_by_db: frozenset[str]) -> tuple[_PTUDeployment, ...]:
     """Deployments the router holds that no ``LiteLLM_ProxyModelTable`` row owns.
 
     ``db_model`` is forced True on every deployment loaded from that table and defaults to
@@ -420,8 +426,8 @@ def _config_deployments(router: object | None, *, owned_by_db: frozenset[str]) -
     credential clone carries ``original_model_id`` and reuses its source's PTU config under
     a fresh id, so pricing it would bill one reservation once per distinct client key.
     """
-    entries: Final = tuple(getattr(router, "model_list", None) or ())
-    records: Final = tuple(_router_deployment(entry) for entry in entries)
+    entries: Final[tuple[object, ...]] = tuple((router.registry().all() if router is not None else None) or ())
+    records: Final = tuple(_router_deployment(require_attributes(entry, _SupportsGet, "get")) for entry in entries)
     return tuple(
         record
         for record in records
@@ -432,7 +438,7 @@ def _config_deployments(router: object | None, *, owned_by_db: frozenset[str]) -
     )
 
 
-async def _load_ptu_models(prisma_client: "PrismaClient", *, router: object | None) -> _LoadedDeployments:
+async def _load_ptu_models(prisma_client: "PrismaClient", *, router: "Router | None") -> _LoadedDeployments:
     """Every deployment carrying valid manual PTU config, and every id the scan saw.
 
     Reserved capacity is billed by the provider whichever file declared it, so a
@@ -456,7 +462,7 @@ async def run_ptu_flat_cost_rollup(
     prisma_client: "PrismaClient",
     target_date: date | None = None,
     may_prune: bool = True,
-    router: object | None = None,
+    router: "Router | None" = None,
 ) -> RollupResult:
     """Rollup one UTC day of flat PTU cost across all PTU-configured model deployments.
 
@@ -613,7 +619,7 @@ async def _existing_sentinel_keys(
 async def run_ptu_flat_cost_backfill(
     prisma_client: "PrismaClient",
     today: date | None = None,
-    router: object | None = None,
+    router: "Router | None" = None,
 ) -> BackfillResult:
     """Price the elapsed days of every PTU window that carry no sentinel row yet.
 
@@ -670,7 +676,7 @@ async def run_scheduled_ptu_rollup(
     pod_lock_manager: "PodLockManager | None" = None,
     target_date: date | None = None,
     alert: Callable[[str], Awaitable[None]] | None = None,
-    router: object | None = None,
+    router: "Router | None" = None,
     *,
     clock: Callable[[], datetime] = get_utc_datetime,
 ) -> RollupResult | None:
@@ -749,7 +755,7 @@ async def _run_and_alert(
     today: date,
     alert: "Callable[[str], Awaitable[None]] | None",
     may_prune: bool = True,
-    router: object | None = None,
+    router: "Router | None" = None,
 ) -> RollupResult:
     """Reconcile the day, catch up any days left unpriced, and alert on charges that did not land.
 
@@ -791,7 +797,7 @@ async def _backfill_and_alert(
     *,
     today: date,
     alert: "Callable[[str], Awaitable[None]] | None",
-    router: object | None = None,
+    router: "Router | None" = None,
 ) -> None:
     """Catch up unpriced PTU days, alerting on charges that did not land.
 

@@ -7,11 +7,12 @@ so reads return the stored values verbatim.
 """
 
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
 
 from litellm.models.credentials import CredentialItem
 from litellm.repositories.base_repository import DbRecord, record_to_dict
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.repositories.table_repositories import PrismaTableRepository
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -29,27 +30,24 @@ class _PrismaClientView(Protocol):
     def db(self) -> _PrismaCredentialsDb: ...
 
 
+class _CredentialsTableRepository(PrismaTableRepository["prisma_models.LiteLLM_CredentialsTable"]):
+    table_name = "litellm_credentialstable"
+
+
 class CredentialsRepository:
     """Repository for credentials database operations, keyed by credential name."""
 
-    def __init__(self, prisma_client: Any):  # any-ok: PrismaClient is an untyped runtime wrapper
+    def __init__(self, prisma_client: object):
         self._prisma_client = prisma_client
 
     @property
     def prisma_client(self) -> _PrismaClientView:
-        if self._prisma_client is None:
-            raise RuntimeError("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
-        client: Final[_PrismaClientView] = self._prisma_client
+        client: Final[_PrismaClientView] = _CredentialsTableRepository(self._prisma_client).prisma_client
         return client
 
     @property
     def table(self) -> "_CredentialsTable":
-        from litellm.proxy.common_utils.config_sync_pubsub import wrap_table_actions_for_config_sync
-
-        return wrap_table_actions_for_config_sync(
-            actions=self.prisma_client.db.litellm_credentialstable,
-            table_name="litellm_credentialstable",
-        )
+        return _CredentialsTableRepository(self._prisma_client).table
 
     @staticmethod
     def _to_model(record: DbRecord | None) -> CredentialItem | None:

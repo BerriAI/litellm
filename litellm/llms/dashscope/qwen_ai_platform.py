@@ -3,7 +3,7 @@ from typing import Final
 from litellm.secret_managers.main import get_secret_str
 
 from .chat.transformation import DashScopeChatConfig
-from .common_utils import resolve_dashscope_family_rerank_api_base
+from .common_utils import resolve_dashscope_family_rerank_api_base, resolve_dashscope_openai_api_base
 from .embed.transformation import DashScopeEmbeddingConfig
 from .image_generation.transformation import DashScopeImageGenerationConfig
 from .rerank.transformation import DashScopeRerankConfig
@@ -38,7 +38,7 @@ class QwenAIPlatformChatConfig(DashScopeChatConfig):
         return self._resolve_chat_api_base(api_base), _resolve_qwen_ai_platform_api_key(api_key)
 
     def _resolve_chat_api_base(self, api_base: str | None) -> str:
-        return api_base or get_secret_str("QWEN_AI_PLATFORM_API_BASE") or QWEN_AI_PLATFORM_API_BASE
+        return resolve_dashscope_openai_api_base(api_base, "QWEN_AI_PLATFORM_API_BASE", QWEN_AI_PLATFORM_API_BASE)
 
 
 class QwenAIPlatformEmbeddingConfig(DashScopeEmbeddingConfig):
@@ -46,7 +46,7 @@ class QwenAIPlatformEmbeddingConfig(DashScopeEmbeddingConfig):
         return _require_qwen_ai_platform_api_key(api_key)
 
     def _resolve_embedding_api_base(self, api_base: str | None) -> str:
-        return api_base or get_secret_str("QWEN_AI_PLATFORM_API_BASE") or QWEN_AI_PLATFORM_API_BASE
+        return resolve_dashscope_openai_api_base(api_base, "QWEN_AI_PLATFORM_API_BASE", QWEN_AI_PLATFORM_API_BASE)
 
 
 class QwenAIPlatformRerankConfig(DashScopeRerankConfig):
@@ -63,8 +63,14 @@ class QwenAIPlatformImageGenerationConfig(DashScopeImageGenerationConfig):
     def _resolve_api_key(self, api_key: str | None) -> str:
         return _require_qwen_ai_platform_api_key(api_key)
 
-    def _resolve_image_api_base(self, image_api_base: str | None) -> str:
-        return image_api_base or get_secret_str("QWEN_AI_PLATFORM_API_BASE_IMAGE") or QWEN_AI_PLATFORM_IMAGE_API_BASE
+    def _image_api_base_env(self) -> str | None:
+        return get_secret_str("QWEN_AI_PLATFORM_API_BASE_IMAGE")
+
+    def _default_image_api_base(self) -> str:
+        return QWEN_AI_PLATFORM_IMAGE_API_BASE
+
+    def _configured_chat_api_base(self) -> str | None:
+        return get_secret_str("QWEN_AI_PLATFORM_API_BASE")
 
 
 class QwenAIPlatformVideoConfig(DashScopeVideoConfig):

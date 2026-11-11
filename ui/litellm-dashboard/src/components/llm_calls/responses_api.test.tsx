@@ -207,6 +207,46 @@ describe("responses_api", () => {
     expect(onTimingData).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [["__all__"], [], [{ server_label: "litellm", server_url: "litellm_proxy/mcp" }]],
+    [
+      ["server-1"],
+      [{ server_id: "server-1", server_name: "my server" }],
+      [{ server_label: "my server", server_url: "litellm_proxy/mcp/my server" }],
+    ],
+  ])(
+    "sends MCP selection %j as gateway references the proxy runs for any model",
+    async (selected, servers, expected) => {
+      await makeOpenAIResponsesRequest(
+        messages,
+        mockUpdateTextUI,
+        "gemini-pro",
+        "test-token",
+        undefined, // tags
+        undefined, // signal
+        undefined, // onReasoningContent
+        undefined, // onTimingData
+        undefined, // onUsageData
+        undefined, // traceId
+        undefined, // vector_store_ids
+        undefined, // guardrails
+        undefined, // policies
+        selected,
+        undefined, // previousResponseId
+        undefined, // onResponseId
+        undefined, // onMCPEvent
+        undefined, // codeInterpreterEnabled
+        undefined, // onCodeInterpreterResult
+        undefined, // customBaseUrl
+        servers as never,
+      );
+
+      expect(mockResponsesCreate.mock.calls[0][0].tools).toEqual(
+        expected.map((tool) => ({ type: "mcp", require_approval: "never", ...tool })),
+      );
+    },
+  );
+
   it("should report total latency in both streaming and non-streaming modes", async () => {
     const onTotalLatency = vi.fn();
     const callWithStreaming = (streamingEnabled: boolean) =>
@@ -475,14 +515,14 @@ describe("responses_api", () => {
       {
         type: "mcp",
         server_label: "Alpha",
-        server_url: "https://backend.example.com/mcp/Alpha",
+        server_url: "litellm_proxy/mcp/Alpha",
         require_approval: "never",
         allowed_tools: ["toolA"],
       },
       {
         type: "mcp",
         server_label: "Beta",
-        server_url: "https://backend.example.com/mcp/Beta",
+        server_url: "litellm_proxy/mcp/Beta",
         require_approval: "never",
         allowed_tools: ["toolB", "toolC"],
       },

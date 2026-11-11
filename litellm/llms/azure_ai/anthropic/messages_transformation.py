@@ -3,7 +3,7 @@ Azure Anthropic messages transformation config - extends AnthropicMessagesConfig
 """
 
 from collections.abc import Sequence
-from typing import Any, Final
+from typing import Final
 
 from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
@@ -109,14 +109,10 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
         Processes both `system` and `messages` content blocks.
         """
 
-        def _sanitize(cache_control: Any) -> None:
-            if isinstance(cache_control, dict):
-                cache_control.pop("scope", None)
-
         def _process_content_list(content: list) -> None:
             for item in content:
-                if isinstance(item, dict) and "cache_control" in item:
-                    _sanitize(item["cache_control"])
+                if isinstance(item, dict) and "cache_control" in item and isinstance(item["cache_control"], dict):
+                    item["cache_control"].pop("scope", None)
 
         if "system" in anthropic_messages_request:
             system: Final = anthropic_messages_request["system"]
@@ -145,6 +141,8 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
             litellm_params=litellm_params,
             headers=headers,
         )
-        self._normalize_system_role_messages(anthropic_messages_request, model=model)
+        self._normalize_system_role_messages(
+            anthropic_messages_request, model=model, drop_params=getattr(litellm_params, "drop_params", None)
+        )
         self._remove_scope_from_cache_control(anthropic_messages_request)
         return anthropic_messages_request
