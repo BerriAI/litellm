@@ -12453,7 +12453,7 @@ class ProxyStartupEvent:
                 _scheduled_weekly_spend_report,
                 "interval",
                 days=days,
-                next_run_time=datetime.now() + timedelta(seconds=10 + random.randint(0, 300)),
+                next_run_time=datetime.now(timezone.utc) + timedelta(seconds=10 + random.randint(0, 300)),
                 id=WEEKLY_SPEND_REPORT_JOB_ID,
                 replace_existing=True,
                 misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
