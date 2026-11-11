@@ -743,21 +743,16 @@ def _map_incomplete_reason_to_finish_reason(incomplete_reason: str | None) -> Li
     return "length"
 
 
-def _is_remote_file_id(key: str, value: object) -> bool:
-    return key == "file_id" and isinstance(value, str) and value.startswith(REMOTE_URL_PREFIXES)
-
-
 def _input_file_from_file_value(file_value: object) -> dict[str, object]:
     if not isinstance(file_value, dict):
         return {"type": "input_file"}
     file_dict: Final = cast("dict[str, object]", file_value)  # cast-ok: runtime dict checked
+    file_id: Final = file_dict.get("file_id")
+    if isinstance(file_id, str) and file_id.startswith(REMOTE_URL_PREFIXES):
+        return {"type": "input_file", "file_url": file_id}
     return {
         "type": "input_file",
-        **{
-            ("file_url" if _is_remote_file_id(key, file_dict[key]) else key): file_dict[key]
-            for key in ("file_id", "file_data", "filename")
-            if key in file_dict
-        },
+        **{key: file_dict[key] for key in ("file_id", "file_data", "filename") if key in file_dict},
     }
 
 

@@ -7066,7 +7066,7 @@ def test_stream_structured_output_drops_text_after_first_message_item(
     [
         pytest.param(
             {"file_id": "https://docs.example/report.pdf", "filename": "report.pdf"},
-            {"type": "input_file", "file_url": "https://docs.example/report.pdf", "filename": "report.pdf"},
+            {"type": "input_file", "file_url": "https://docs.example/report.pdf"},
             id="remote_link",
         ),
         pytest.param({"file_id": "file-123"}, {"type": "input_file", "file_id": "file-123"}, id="uploaded_file_id"),
