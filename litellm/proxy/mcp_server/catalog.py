@@ -1365,6 +1365,7 @@ class _DiscoveryCache(Generic[_DiscoveryPage]):
         self._pending: dict[_DiscoveryKey, asyncio.Task[_DiscoveryPage]] = {}
         self._waiters: dict[asyncio.Task[_DiscoveryPage], int] = {}  # mutable-ok: constant-time waiter accounting
         self._oversized_server_ids: frozenset[str] = frozenset()
+        self.invalidations = 0
 
     def _entry_keys(self, server_id: str) -> tuple[str, ...]:
         prefix: Final = f"[{json.dumps(server_id)},"
@@ -1377,11 +1378,13 @@ class _DiscoveryCache(Generic[_DiscoveryPage]):
         return bool(self._entry_keys(server_id))
 
     def clear(self) -> None:
+        self.invalidations += 1
         self._entries.flush_cache()
         self._pending.clear()
         self._oversized_server_ids = frozenset()
 
     def invalidate(self, server_id: str) -> None:
+        self.invalidations += 1
         self._oversized_server_ids = self._oversized_server_ids - {server_id}
         for entry_key in self._entry_keys(server_id):
             self._entries.delete_cache(entry_key)

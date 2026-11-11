@@ -1907,6 +1907,10 @@ def _is_whole_tool_listing(page: ListToolsResult) -> bool:
     return not page.next_cursor
 
 
+def _tool_page_cursor(params: PaginatedRequestParams | None) -> tuple[str | None] | None:
+    return None if params is None else (params.cursor,)
+
+
 def _mcp_tools_list_cache_ttl() -> int | None:
     raw: Final = os.environ.get("LITELLM_MCP_TOOLS_LIST_CACHE_TTL")
     if raw is None:
@@ -4633,16 +4637,15 @@ class MCPServerManager:
                     client,
                     params,
                     partial(
-                        self._tool_cache_key,
-                        client,
+                        self._discovery_key,
                         server,
                         user_api_key_auth,
                         mcp_auth_header,
                         extra_headers,
                         stdio_env,
                         subject_token,
-                        raw_headers,
-                        params,
+                        raw_headers=raw_headers,
+                        page_cursor=_tool_page_cursor(params),
                     ),
                     use_cache=use_tool_list_cache,
                 )
@@ -4711,30 +4714,6 @@ class MCPServerManager:
         per_server: Final = server.tools_list_cache_ttl_seconds
         return self._tools_list_cache_ttl if per_server is None else per_server
 
-    async def _tool_cache_key(
-        self,
-        client: MCPClient,
-        server: MCPServer,
-        user_api_key_auth: UserAPIKeyAuth | None,
-        mcp_auth_header: str | dict[str, str] | None,
-        extra_headers: dict[str, str] | None,
-        stdio_env: dict[str, str] | None,
-        subject_token: str | None,
-        raw_headers: Mapping[str, str] | None,
-        params: PaginatedRequestParams | None,
-    ) -> _DiscoveryKey:
-        return self._discovery_key(
-            server,
-            user_api_key_auth,
-            mcp_auth_header,
-            extra_headers,
-            stdio_env,
-            subject_token,
-            await client.discovery_auth_fingerprint(),
-            raw_headers=raw_headers,
-            page_cursor=None if params is None else (params.cursor,),
-        )
-
     def _tools_fetch(
         self, client: MCPClient, server: MCPServer, params: PaginatedRequestParams | None
     ) -> Callable[[], Awaitable[ListToolsResult]]:
@@ -4752,13 +4731,17 @@ class MCPServerManager:
         server: MCPServer,
         client: MCPClient,
         params: PaginatedRequestParams | None,
-        cache_key: Callable[[], Awaitable[_DiscoveryKey]],
+        key_for_credential: Callable[[str], _DiscoveryKey],
         *,
         use_cache: bool,
     ) -> ListToolsResult:
         fetch: Final = self._tools_fetch(client, server, params)
         if not use_cache or (params is not None and params.cursor is not None):
             return await fetch()
+
+        async def cache_key() -> _DiscoveryKey:
+            return key_for_credential(await client.discovery_auth_fingerprint())
+
         admin_ttl: Final = self._admin_tools_list_ttl(server)
         if admin_ttl is None:
             return await self._list_tools_for_upstream_ttl(server, cache_key, fetch)
@@ -4779,9 +4762,13 @@ class MCPServerManager:
     ) -> ListToolsResult:
         if self._tool_discovery_cache.holds(server.server_id):
             return await self._tool_discovery_cache.get(await cache_key(), fetch)
+        invalidations_before: Final = self._tool_discovery_cache.invalidations
         page: Final = await fetch()
-        if self._list_caching_enabled and page.ttl_ms > 0 and not page.next_cursor:
-            self._tool_discovery_cache.keep(await cache_key(), page)
+        if not self._list_caching_enabled or page.ttl_ms <= 0 or page.next_cursor:
+            return page
+        key: Final = await cache_key()
+        if self._tool_discovery_cache.invalidations == invalidations_before:
+            self._tool_discovery_cache.keep(key, page)
         return page
 
     def clear_initialize_instructions(self) -> None:

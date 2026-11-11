@@ -17136,6 +17136,52 @@ async def test_proxy_tool_lookup_for_a_tool_call_asks_the_upstream_each_time(mon
 
 
 @pytest.mark.asyncio
+async def test_listing_before_a_first_tool_call_asks_the_upstream_even_when_the_tool_list_is_cached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.mcp_server import operations
+
+    manager: Final = MCPServerManager(discovery_clock=_DiscoveryClock())
+    server: Final = _server_with_tools_list_ttl(300)
+    manager.registry = {server.server_id: server}
+    manager.config_mcp_servers = dict(manager.registry)
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", manager)
+    admin: Final = UserAPIKeyAuth(api_key="hashed-admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    upstream: Final = _DiscoveryUpstream()
+    with _mcp_upstream(upstream.respond):
+        for _ in range(2):
+            await operations._get_tools_from_mcp_servers(admin, None, [server.server_id], enforce_rate_limits=False)
+        cached_fetches: Final = sum(method == "tools/list" for method, _auth in upstream.requests)
+        upstream.tools = (*upstream.tools, {"name": "added_later", "inputSchema": {"type": "object"}})
+        exposed_before: Final = manager.server_exposes_tool(server, "added_later")
+        await operations._list_tools_before_first_call(server, "added_later", [server], admin, None, None, None, None)
+    assert cached_fetches == 1
+    assert exposed_before is False
+    assert manager.server_exposes_tool(server, "added_later") is True
+    assert sum(method == "tools/list" for method, _auth in upstream.requests) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalidation", ("invalidate_discovery_lists", "clear_initialize_instructions"))
+async def test_tools_list_fetched_across_an_invalidation_is_not_stored(invalidation: str) -> None:
+    manager: Final = MCPServerManager(discovery_clock=_DiscoveryClock())
+    upstream: Final = _DiscoveryUpstream()
+    upstream.release.clear()
+    with _mcp_upstream(upstream.respond):
+        listing: Final = asyncio.create_task(_list_discovery_tools(manager))
+        await upstream.entered.wait()
+        if invalidation == "invalidate_discovery_lists":
+            manager.invalidate_discovery_lists("discovery")
+        else:
+            manager.clear_initialize_instructions()
+        upstream.release.set()
+        assert len((await listing).tools) == 1
+        assert len((await _list_discovery_tools(manager)).tools) == 1
+    assert upstream.initializes == 2
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("params_cursor", (..., None), ids=("full_walk", "first_page"))
 async def test_filtered_tool_listing_can_be_asked_to_skip_the_tool_list_cache(
     params_cursor: None | EllipsisType, monkeypatch: pytest.MonkeyPatch
