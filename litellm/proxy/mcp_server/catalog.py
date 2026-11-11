@@ -1344,15 +1344,25 @@ _DISCOVERY_ENTRY: Final = TypeAdapter(tuple[float, bytes])
 
 
 class _DiscoveryCache(Generic[_DiscoveryPage]):
-    def __init__(self, ttl: float, clock: Callable[[], float], adapter: TypeAdapter[_DiscoveryPage]) -> None:
+    def __init__(
+        self,
+        ttl: float,
+        clock: Callable[[], float],
+        adapter: TypeAdapter[_DiscoveryPage],
+        max_entry_kb: int = 64,
+    ) -> None:
         self._ttl = ttl
         self._clock = clock
         self._adapter = adapter
-        self._entries = InMemoryCache(max_size_in_memory=_DISCOVERY_CACHE_LIMIT, max_size_per_item=64, clock=clock)
+        self._entries = InMemoryCache(
+            max_size_in_memory=_DISCOVERY_CACHE_LIMIT, max_size_per_item=max_entry_kb, clock=clock
+        )
         self._pending: dict[_DiscoveryKey, asyncio.Task[_DiscoveryPage]] = {}
         self._waiters: dict[asyncio.Task[_DiscoveryPage], int] = {}  # mutable-ok: constant-time waiter accounting
+        self._oversized_server_ids: set[str] = set()  # mutable-ok: one warning per server
 
     def invalidate(self, server_id: str) -> None:
+        self._oversized_server_ids.discard(server_id)
         prefix: Final = f"[{json.dumps(server_id)},"
         keys: Final = cast(  # cast-ok: private cache contains only JSON string keys
             "tuple[str, ...]", tuple(self._entries.cache_dict)
@@ -1369,7 +1379,9 @@ class _DiscoveryCache(Generic[_DiscoveryPage]):
         if not task.cancelled():
             task.exception()
 
-    async def get(self, key: _DiscoveryKey, fetch: Callable[[], Awaitable[_DiscoveryPage]]) -> _DiscoveryPage:
+    async def get(
+        self, key: _DiscoveryKey, fetch: Callable[[], Awaitable[_DiscoveryPage]], *, capped: bool = True
+    ) -> _DiscoveryPage:
         if self._ttl <= 0:
             return await fetch()
         entry: Final[object] = self._entries.get_cache(json.dumps(key))
@@ -1384,7 +1396,7 @@ class _DiscoveryCache(Generic[_DiscoveryPage]):
             return await self._await_fetch(key, pending)
         if len(self._pending) >= _DISCOVERY_CACHE_LIMIT:
             return await fetch()
-        task: Final = asyncio.create_task(self._fetch(key, fetch))
+        task: Final = asyncio.create_task(self._fetch(key, fetch, capped))
         self._pending[key] = task
         task.add_done_callback(self._observe_completion)
         return await self._await_fetch(key, task)
@@ -1404,17 +1416,31 @@ class _DiscoveryCache(Generic[_DiscoveryPage]):
                 if not task.done():
                     task.cancel()
 
-    async def _fetch(self, key: _DiscoveryKey, fetch: Callable[[], Awaitable[_DiscoveryPage]]) -> _DiscoveryPage:
+    async def _fetch(
+        self, key: _DiscoveryKey, fetch: Callable[[], Awaitable[_DiscoveryPage]], capped: bool
+    ) -> _DiscoveryPage:
         try:
             items: Final = await fetch()
-            ttl: Final = min(self._ttl, items.ttl_ms / 1000)
+            declared: Final = items.ttl_ms / 1000
+            ttl: Final = min(self._ttl, declared) if capped else declared
             if ttl > 0 and self._pending.get(key) is asyncio.current_task():
-                self._entries.set_cache(
-                    json.dumps(key),
-                    _DISCOVERY_ENTRY.dump_json((self._clock() + ttl, self._adapter.dump_json(items))),
-                    ttl=ttl,
-                )
+                self._store(key, _DISCOVERY_ENTRY.dump_json((self._clock() + ttl, self._adapter.dump_json(items))), ttl)
             return items
         finally:
             if self._pending.get(key) is asyncio.current_task():
                 self._pending.pop(key)
+
+    def _store(self, key: _DiscoveryKey, entry: bytes, ttl: float) -> None:
+        if self._entries.check_value_size(entry):
+            self._entries.set_cache(json.dumps(key), entry, ttl=ttl)
+            return
+        server_id: Final = key[0]
+        if server_id in self._oversized_server_ids:
+            return
+        self._oversized_server_ids.add(server_id)
+        verbose_logger.warning(
+            "MCP server %s returned a %s KB listing, above the %s KB cache entry limit. It is fetched on every request",
+            server_id,
+            len(entry) // 1024,
+            self._entries.max_size_per_item,
+        )

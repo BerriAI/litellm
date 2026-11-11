@@ -16715,11 +16715,20 @@ async def test_discovery_cache_reuses_raw_results_and_expires(kind: str) -> None
         assert upstream.initializes == 2
 
 
-def _list_discovery_tools(manager: MCPServerManager, cursor: str | None | EllipsisType = ..., **kwargs):
+def _list_discovery_tools(
+    manager: MCPServerManager,
+    cursor: str | None | EllipsisType = ...,
+    server: MCPServer | None = None,
+    **kwargs,
+):
     from mcp.types import PaginatedRequestParams
 
     params: Final = None if cursor is ... else PaginatedRequestParams(cursor=cursor)
-    return manager.get_tools_page(_discovery_server(), params=params, **kwargs)
+    return manager.get_tools_page(server or _discovery_server(), params=params, **kwargs)
+
+
+def _server_with_tools_list_ttl(seconds: int) -> MCPServer:
+    return _discovery_server().model_copy(update={"mcp_info": {"tools_list_cache_ttl_seconds": seconds}})
 
 
 @pytest.mark.asyncio
@@ -16807,6 +16816,152 @@ async def test_tools_list_failures_are_not_cached() -> None:
         upstream.outcome = "supported"
         assert len((await _list_discovery_tools(manager)).tools) == 1
         assert upstream.initializes == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cursor", (..., None), ids=("full_walk", "first_page"))
+@pytest.mark.parametrize(
+    ("admin_seconds", "upstream_ttl_ms"),
+    ((300, 0), (300, 5000), (10, 50000)),
+    ids=("upstream_declares_none", "upstream_declares_less", "upstream_declares_more"),
+)
+async def test_tools_list_is_kept_for_the_server_ttl_whatever_the_upstream_declares(
+    cursor: str | None | EllipsisType, admin_seconds: int, upstream_ttl_ms: int
+) -> None:
+    clock: Final = _DiscoveryClock()
+    manager: Final = MCPServerManager(discovery_clock=clock)
+    upstream: Final = _DiscoveryUpstream()
+    upstream.ttl_ms = upstream_ttl_ms
+    server: Final = _server_with_tools_list_ttl(admin_seconds)
+    with _mcp_upstream(upstream.respond):
+        first: Final = await _list_discovery_tools(manager, cursor, server)
+        assert first.ttl_ms == admin_seconds * 1000
+        clock.now = admin_seconds - 0.1
+        cached: Final = await _list_discovery_tools(manager, cursor, server)
+        assert 0 < cached.ttl_ms <= 100
+        assert upstream.initializes == 1
+        clock.now = admin_seconds + 0.001
+        assert len((await _list_discovery_tools(manager, cursor, server)).tools) == 1
+        assert upstream.initializes == 2
+
+
+@pytest.mark.asyncio
+async def test_tools_list_upstream_ttl_above_the_discovery_ceiling_is_kept_only_for_the_ceiling() -> None:
+    clock: Final = _DiscoveryClock()
+    manager: Final = MCPServerManager(discovery_clock=clock)
+    upstream: Final = _DiscoveryUpstream()
+    upstream.ttl_ms = 120000
+    with _mcp_upstream(upstream.respond):
+        await _list_discovery_tools(manager)
+        clock.now = 59.9
+        await _list_discovery_tools(manager)
+        assert upstream.initializes == 1
+        clock.now = 60.001
+        await _list_discovery_tools(manager)
+        assert upstream.initializes == 2
+
+
+@pytest.mark.asyncio
+async def test_tools_list_is_never_cached_for_a_server_whose_ttl_is_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_MCP_TOOLS_LIST_CACHE_TTL", "300")
+    manager: Final = MCPServerManager(discovery_clock=_DiscoveryClock())
+    upstream: Final = _DiscoveryUpstream()
+    server: Final = _server_with_tools_list_ttl(0)
+    with _mcp_upstream(upstream.respond):
+        for _ in range(2):
+            assert (await _list_discovery_tools(manager, server=server)).ttl_ms == 0
+        assert upstream.initializes == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("server_seconds", "kept_for"), ((None, 300), (10, 10)), ids=("global", "server_wins"))
+async def test_tools_list_global_ttl_applies_unless_the_server_sets_its_own(
+    monkeypatch: pytest.MonkeyPatch, server_seconds: int | None, kept_for: int
+) -> None:
+    monkeypatch.setenv("LITELLM_MCP_TOOLS_LIST_CACHE_TTL", "300")
+    clock: Final = _DiscoveryClock()
+    manager: Final = MCPServerManager(discovery_clock=clock)
+    upstream: Final = _DiscoveryUpstream()
+    upstream.ttl_ms = 0
+    server: Final = _discovery_server() if server_seconds is None else _server_with_tools_list_ttl(server_seconds)
+    with _mcp_upstream(upstream.respond):
+        assert (await _list_discovery_tools(manager, server=server)).ttl_ms == kept_for * 1000
+        clock.now = kept_for - 0.1
+        await _list_discovery_tools(manager, server=server)
+        assert upstream.initializes == 1
+        clock.now = kept_for + 0.001
+        await _list_discovery_tools(manager, server=server)
+        assert upstream.initializes == 2
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    ((None, None), ("invalid", None), ("nan", None), ("inf", None), ("-1", None), ("0", 0.0), ("12.5", 12.5)),
+)
+def test_tools_list_cache_ttl_env_validation(
+    value: str | None, expected: float | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.mcp_server.mcp_server_manager import _mcp_tools_list_cache_ttl
+
+    monkeypatch.delenv("LITELLM_MCP_TOOLS_LIST_CACHE_TTL", raising=False)
+    if value is not None:
+        monkeypatch.setenv("LITELLM_MCP_TOOLS_LIST_CACHE_TTL", value)
+    assert _mcp_tools_list_cache_ttl() == expected
+
+
+@pytest.mark.asyncio
+async def test_tools_list_admin_ttl_does_nothing_when_discovery_caching_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_MCP_DISCOVERY_CACHE_TTL", "0")
+    monkeypatch.setenv("LITELLM_MCP_TOOLS_LIST_CACHE_TTL", "300")
+    manager: Final = MCPServerManager(discovery_clock=_DiscoveryClock())
+    upstream: Final = _DiscoveryUpstream()
+    upstream.ttl_ms = 30000
+    server: Final = _server_with_tools_list_ttl(300)
+    with _mcp_upstream(upstream.respond):
+        for _ in range(2):
+            assert 29000 < (await _list_discovery_tools(manager, server=server)).ttl_ms <= 30000
+        assert upstream.initializes == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failing", "working", "tool_count"), (("failure", "supported", 1), ("paged_failure", "paged", 2))
+)
+async def test_tools_list_failures_are_not_cached_under_a_server_ttl(
+    failing: str, working: str, tool_count: int
+) -> None:
+    manager: Final = MCPServerManager(discovery_clock=_DiscoveryClock())
+    upstream: Final = _DiscoveryUpstream()
+    upstream.outcome = failing
+    server: Final = _server_with_tools_list_ttl(300)
+    with _mcp_upstream(upstream.respond):
+        with pytest.raises(MCPServerListError):
+            await _list_discovery_tools(manager, server=server)
+        upstream.outcome = working
+        for _ in range(2):
+            assert len((await _list_discovery_tools(manager, server=server)).tools) == tool_count
+        assert upstream.initializes == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("description_kb", "upstream_fetches", "warnings"), ((200, 1, 0), (1100, 3, 1)), ids=("fits", "too_large")
+)
+async def test_tools_list_above_the_entry_limit_is_fetched_every_time_and_warned_once(
+    caplog: pytest.LogCaptureFixture, description_kb: int, upstream_fetches: int, warnings: int
+) -> None:
+    manager: Final = MCPServerManager(discovery_clock=_DiscoveryClock())
+    upstream: Final = _DiscoveryUpstream()
+    upstream.tools = (
+        {"name": "example", "description": "x" * (description_kb * 1024), "inputSchema": {"type": "object"}},
+    )
+    with _mcp_upstream(upstream.respond), caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        for _ in range(3):
+            assert len((await _list_discovery_tools(manager)).tools) == 1
+    assert upstream.initializes == upstream_fetches
+    assert sum("cache entry limit" in record.getMessage() for record in caplog.records) == warnings
 
 
 @pytest.mark.asyncio

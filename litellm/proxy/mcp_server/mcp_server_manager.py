@@ -1899,6 +1899,24 @@ def _mcp_discovery_cache_ttl() -> float:
     return ttl
 
 
+_TOOL_LIST_ENTRY_LIMIT_KB: Final = 1024
+
+
+def _mcp_tools_list_cache_ttl() -> float | None:
+    raw: Final = os.environ.get("LITELLM_MCP_TOOLS_LIST_CACHE_TTL")
+    if raw is None:
+        return None
+    try:
+        ttl: Final = float(raw)
+    except ValueError:
+        verbose_logger.warning("Invalid LITELLM_MCP_TOOLS_LIST_CACHE_TTL; ignoring it")
+        return None
+    if not math.isfinite(ttl) or ttl < 0:
+        verbose_logger.warning("Invalid LITELLM_MCP_TOOLS_LIST_CACHE_TTL; ignoring it")
+        return None
+    return ttl
+
+
 def _listing_task_was_cancelled(error: asyncio.CancelledError) -> bool:
     """The MCP client raises its own CancelledError(SESSION_CLEANUP_TIMEOUT_MESSAGE) when a session's
     teardown outlives its budget while the listing task keeps running. That one is the server's fault,
@@ -2045,8 +2063,10 @@ class MCPServerManager:
             discovery_ttl, discovery_clock, TypeAdapter(ListResourceTemplatesResult)
         )
         self._tool_discovery_cache = _DiscoveryCache[ListToolsResult](
-            discovery_ttl, discovery_clock, TypeAdapter(ListToolsResult)
+            discovery_ttl, discovery_clock, TypeAdapter(ListToolsResult), max_entry_kb=_TOOL_LIST_ENTRY_LIMIT_KB
         )
+        self._list_caching_enabled = discovery_ttl > 0
+        self._tools_list_cache_ttl = _mcp_tools_list_cache_ttl()
         from litellm.proxy.mcp_server.catalog import CatalogSnapshots
 
         self.catalog = CatalogSnapshots(self)
@@ -4608,7 +4628,8 @@ class MCPServerManager:
                     raw_headers=raw_headers,
                     page_cursor=None if params is None else (params.cursor,),
                 )
-                page: Final = await self._tool_discovery_cache.get(
+                page: Final = await self._list_upstream_tools(
+                    server,
                     key,
                     partial(self._fetch_tools_with_timeout, client, server.name)
                     if params is None
@@ -4677,6 +4698,24 @@ class MCPServerManager:
                 "Failed to get tools from server %s: %s%s", server.name, type(e).__name__, _upstream_failure_suffix(e)
             )
             raise_classified_list_failure(e, server.name, suppress_challenge=server.is_dcr_bridge)
+
+    def _admin_tools_list_ttl(self, server: MCPServer) -> float | None:
+        if not self._list_caching_enabled:
+            return None
+        per_server: Final = server.tools_list_cache_ttl_seconds
+        return self._tools_list_cache_ttl if per_server is None else float(per_server)
+
+    async def _list_upstream_tools(
+        self, server: MCPServer, key: _DiscoveryKey, fetch: Callable[[], Awaitable[ListToolsResult]]
+    ) -> ListToolsResult:
+        admin_ttl: Final = self._admin_tools_list_ttl(server)
+        if admin_ttl is None:
+            return await self._tool_discovery_cache.get(key, fetch)
+
+        async def fetch_with_admin_ttl() -> ListToolsResult:
+            return (await fetch()).model_copy(update={"ttl_ms": int(admin_ttl * 1000)})
+
+        return await self._tool_discovery_cache.get(key, fetch_with_admin_ttl, capped=False)
 
     def clear_initialize_instructions(self) -> None:
         self._upstream_initialize_instructions_by_server_id.clear()
