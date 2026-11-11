@@ -4726,6 +4726,7 @@ def get_optional_params_embeddings(
     drop_params: bool | None = None,
     additional_drop_params: list[str] | None = None,
     allowed_openai_params: list[str] | None = None,
+    api_base: str | None = None,
     **kwargs,
 ):
     # Lazy load get_supported_openai_params
@@ -4734,6 +4735,7 @@ def get_optional_params_embeddings(
     # retrieve all parameters passed to the function
     passed_params: Final = locals()
     passed_params.pop("custom_llm_provider", None)
+    passed_params.pop("api_base", None)
     special_params: Final = passed_params.pop("kwargs")
 
     passed_params.pop("drop_params", None)
@@ -4775,6 +4777,7 @@ def get_optional_params_embeddings(
         provider_config = ProviderConfigManager.get_provider_embedding_config(
             model=model,
             provider=LlmProviders(custom_llm_provider),
+            api_base=api_base,
         )
 
     if provider_config is not None:
@@ -10075,6 +10078,7 @@ class ProviderConfigManager:
     def get_provider_embedding_config(
         model: str,
         provider: LlmProviders,
+        api_base: str | None = None,
     ) -> BaseEmbeddingConfig | None:
         if (
             litellm.LlmProviders.VOYAGE == provider
@@ -10102,6 +10106,12 @@ class ProviderConfigManager:
             from litellm.llms.oci.embed.transformation import OCIEmbedConfig
 
             return OCIEmbedConfig()
+        elif litellm.LlmProviders.AZURE_AI == provider:
+            from litellm.llms.azure_ai.embed.cohere_transformation import AzureAICohereNativeEmbeddingConfig
+
+            if AzureAICohereNativeEmbeddingConfig.supports_model(model, api_base):
+                return AzureAICohereNativeEmbeddingConfig()
+            return None
         elif litellm.LlmProviders.COHERE == provider or litellm.LlmProviders.COHERE_CHAT == provider:
             from litellm.llms.cohere.embed.transformation import CohereEmbeddingConfig
 

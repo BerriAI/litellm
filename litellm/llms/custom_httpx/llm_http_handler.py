@@ -1409,7 +1409,7 @@ class BaseLLMHTTPHandler:
         headers: dict[str, Any] | None = None,
     ) -> EmbeddingResponse:
         provider_config: Final = ProviderConfigManager.get_provider_embedding_config(
-            model=model, provider=litellm.LlmProviders(custom_llm_provider)
+            model=model, provider=litellm.LlmProviders(custom_llm_provider), api_base=api_base
         )
         if provider_config is None:
             raise ValueError(f"Provider {custom_llm_provider} does not support embedding")
