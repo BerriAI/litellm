@@ -113,6 +113,12 @@ def test_coordination_failure_does_not_label_tls_failures_as_unreachable(
             "Name or service not known",
             "certificate-db.invalid",
         ),
+        (
+            "postgresql://u:pw@localhost:5432/db?host=/cloudsql/proj:us-central1:inst",
+            'connection failed: connection to server on socket "/cloudsql/proj:us-central1:inst/.s.PGSQL.5432" '
+            "failed: No such file or directory",
+            "/cloudsql/proj:us-central1:inst",
+        ),
     ],
 )
 def test_coordination_failure_labels_unreachable_hosts_named_like_tls_markers(
@@ -1548,6 +1554,15 @@ class TestStripPrismaQueryParams:
             == "postgresql://u:p@writer/db"
         )
 
+    def test_a_prisma_socket_host_param_reaches_libpq(self) -> None:
+        from psycopg.conninfo import conninfo_to_dict
+
+        url: Final = "postgresql://u:p@localhost/litellm?host=/cloudsql/proj:us-central1:inst&schema=tenant"
+
+        conninfo: Final = conninfo_to_dict(ProxyExtrasDBManager._strip_prisma_query_params(url))
+
+        assert conninfo["host"] == "/cloudsql/proj:us-central1:inst"
+
 
 class TestBuildRequestLogIndexes:
     """The migration job hands the index build the direct database URL and the schema
@@ -1587,12 +1602,21 @@ class TestBuildRequestLogIndexes:
         assert builds.get_nowait() == ("postgresql://u:p@primary:5432/db", "public")
         assert builds.empty()
 
-    def test_a_build_that_leaves_indexes_missing_is_reported_so_the_job_reruns(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_a_build_that_leaves_indexes_missing_is_reported(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@primary:5432/db")
 
         assert ProxyExtrasDBManager.build_request_log_indexes(build=lambda url, schema: False) is False
+
+    def test_without_psycopg_the_build_warns_and_reports_the_indexes_missing(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setitem(sys.modules, "psycopg", None)
+        monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@primary:5432/db")
+
+        with caplog.at_level("WARNING", logger="litellm_proxy_extras"):
+            assert ProxyExtrasDBManager.build_request_log_indexes() is False
+
+        assert any("psycopg is not installed" in record.message for record in caplog.records)
 
     def test_without_a_database_url_nothing_is_built(
         self, monkeypatch: pytest.MonkeyPatch, builds: SimpleQueue[tuple[str, str]], build: Callable[[str, str], bool]
@@ -1628,8 +1652,8 @@ class TestStartRequestLogIndexBuild:
 
 
 class TestRunMigrationJob:
-    """`run_migration_job` is `setup_database` followed by the index build, each step's
-    result deciding whether the job reports success."""
+    """`run_migration_job` is `setup_database` followed by the index build, the migrations'
+    result alone deciding whether the job reports success."""
 
     @pytest.fixture
     def calls(self) -> SimpleQueue[tuple[str, bool, bool] | tuple[str]]:
@@ -1681,13 +1705,13 @@ class TestRunMigrationJob:
         assert calls.get_nowait() == ("setup", True, True)
         assert calls.empty()
 
-    def test_the_job_fails_when_an_index_could_not_be_built(
+    def test_the_job_succeeds_by_the_migrations_when_an_index_could_not_be_built(
         self,
         calls: SimpleQueue[tuple[str, bool, bool] | tuple[str]],
         setup: Callable[[bool], Callable[[bool, bool], bool]],
         build: Callable[[bool], Callable[[], bool]],
     ) -> None:
-        assert ProxyExtrasDBManager.run_migration_job(True, True, setup=setup(True), build=build(False)) is False
+        assert ProxyExtrasDBManager.run_migration_job(True, True, setup=setup(True), build=build(False)) is True
 
         assert (calls.get_nowait(), calls.get_nowait()) == (("setup", True, True), ("build",))
         assert calls.empty()

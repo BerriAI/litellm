@@ -113,6 +113,33 @@
     "tests/integration/database/test_transaction_atomicity.py::test_access_group_second_key_constraint_failure_rolls_back_all_writes": [
       "other.database.access_group.failed_second_write_rolls_back_first"
     ],
+    "tests/integration/database/test_request_log_indexes_at_boot.py::test_the_migration_job_gives_a_partitioned_table_at_the_pre_index_schema_both_indexes_per_partition[v2]": [
+      "other.database.request_log_indexes.migration_job_builds_both_indexes_per_partition"
+    ],
+    "tests/integration/database/test_request_log_indexes_at_boot.py::test_the_migration_job_gives_a_partitioned_table_at_the_pre_index_schema_both_indexes_per_partition[legacy]": [
+      "other.database.request_log_indexes.migration_job_builds_both_indexes_per_partition"
+    ],
+    "tests/integration/database/test_request_log_indexes_at_boot.py::test_the_migration_job_heals_a_partitioned_table_left_with_the_failed_call_id_ledger_row[v2]": [
+      "other.database.request_log_indexes.migration_job_heals_failed_call_id_ledger_row"
+    ],
+    "tests/integration/database/test_request_log_indexes_at_boot.py::test_the_migration_job_heals_a_partitioned_table_left_with_the_failed_call_id_ledger_row[legacy]": [
+      "other.database.request_log_indexes.migration_job_heals_failed_call_id_ledger_row"
+    ],
+    "tests/integration/database/test_request_log_indexes_at_boot.py::test_the_migration_job_leaves_a_plain_table_that_applied_the_original_index_migrations_alone[v2]": [
+      "other.database.request_log_indexes.migration_job_leaves_existing_indexes_alone"
+    ],
+    "tests/integration/database/test_request_log_indexes_at_boot.py::test_the_migration_job_leaves_a_plain_table_that_applied_the_original_index_migrations_alone[legacy]": [
+      "other.database.request_log_indexes.migration_job_leaves_existing_indexes_alone"
+    ],
+    "tests/integration/database/test_request_log_indexes_at_boot.py::test_a_serving_proxy_that_runs_the_migrations_itself_builds_both_indexes_after_it_is_ready[v2]": [
+      "other.database.request_log_indexes.serving_proxy_builds_both_indexes_after_ready"
+    ],
+    "tests/integration/database/test_request_log_indexes_at_boot.py::test_a_serving_proxy_that_runs_the_migrations_itself_builds_both_indexes_after_it_is_ready[legacy]": [
+      "other.database.request_log_indexes.serving_proxy_builds_both_indexes_after_ready"
+    ],
+    "tests/integration/database/test_request_log_indexes_at_boot.py::test_the_cli_run_as_a_migration_job_builds_both_indexes_before_it_exits": [
+      "other.database.request_log_indexes.cli_migration_job_builds_both_indexes_before_exit"
+    ],
     "tests/integration/spend/test_cache_and_quota.py::test_repeated_hits_keep_response_identity_and_create_distinct_zero_cost_rows": [
       "quota_management.response_cache.repeated_hits_preserve_identity_and_single_charge"
     ],

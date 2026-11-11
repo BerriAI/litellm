@@ -26,6 +26,7 @@ from litellm_proxy_extras.request_log_indexes import (
 from litellm_proxy_extras.utils import ProxyExtrasDBManager
 from psycopg import sql
 from psycopg.abc import Params, QueryNoTemplate
+from psycopg.conninfo import make_conninfo
 from psycopg.rows import class_row
 
 pytestmark = pytest.mark.timeout(900)
@@ -436,6 +437,79 @@ def test_an_invalid_index_of_the_managed_name_on_a_plain_table_is_rebuilt(scratc
     assert _index_validity(scratch_database, "litellm_call_id_idx") == {CALL_ID_INDEX: True}
 
 
+def _close_a_second_after_a_build_waits_on_it(database_url: str, pin: "psycopg.Connection[tuple[object, ...]]") -> None:
+    deadline: Final = time.monotonic() + 60
+    with psycopg.connect(database_url, autocommit=True) as watcher:
+        while time.monotonic() < deadline and not watcher.execute(
+            "SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event = 'virtualxid'"
+        ).fetchone():
+            time.sleep(0.01)
+    time.sleep(1)
+    pin.close()
+
+
+@requires_db
+@pytest.mark.parametrize(("setting", "first_server_version"), [("lock_timeout", 0), ("transaction_timeout", 170000)])
+def test_a_timeout_the_database_url_sets_does_not_cancel_the_online_build(
+    scratch_database: str, setting: str, first_server_version: int
+) -> None:
+    with psycopg.connect(scratch_database) as conn:
+        if conn.info.server_version < first_server_version:
+            pytest.skip(f"{setting} needs server version {first_server_version} or later")
+    with_timeout: Final = make_conninfo(scratch_database, options=f"-c {setting}=200")
+    pin: Final = _pin_a_snapshot_on(scratch_database, "LiteLLM_SpendLogs")
+    release_the_pin: Final = threading.Thread(
+        target=_close_a_second_after_a_build_waits_on_it, args=(scratch_database, pin)
+    )
+    release_the_pin.start()
+    try:
+        assert ensure_request_log_indexes(with_timeout, "public") is True
+    finally:
+        release_the_pin.join()
+
+    assert _index_validity(scratch_database, "litellm_call_id_idx") == {CALL_ID_INDEX: True}
+
+
+class _PooledServerSession(psycopg.Connection[tuple[object, ...]]):
+    def close(self) -> None:
+        return None
+
+
+@requires_db
+@pytest.mark.parametrize(
+    ("setting", "first_server_version"),
+    [("statement_timeout", 0), ("lock_timeout", 0), ("transaction_timeout", 170000)],
+)
+def test_a_pooled_server_session_gets_its_timeout_back_after_the_build(
+    scratch_database: str, setting: str, first_server_version: int
+) -> None:
+    with psycopg.connect(scratch_database) as conn:
+        if conn.info.server_version < first_server_version:
+            pytest.skip(f"{setting} needs server version {first_server_version} or later")
+    with_timeout: Final = make_conninfo(scratch_database, options=f"-c {setting}=4000")
+    session: Final = _PooledServerSession.connect(with_timeout, autocommit=True)
+    try:
+        assert ensure_request_log_indexes(with_timeout, "public", connect=lambda _: session) is True
+        shown: Final = session.execute(sql.SQL("SHOW {}").format(sql.Identifier(setting))).fetchone()
+    finally:
+        psycopg.Connection.close(session)
+
+    assert shown == ("4s",)
+
+
+@requires_db
+def test_a_pooled_server_session_keeps_the_search_path_another_client_set(scratch_database: str) -> None:
+    session: Final = _PooledServerSession.connect(scratch_database, autocommit=True)
+    try:
+        session.execute("SET search_path = public, pg_catalog")
+        assert ensure_request_log_indexes(scratch_database, "public", connect=lambda _: session) is True
+        shown: Final = session.execute("SHOW search_path").fetchone()
+    finally:
+        psycopg.Connection.close(session)
+
+    assert shown == ("public, pg_catalog",)
+
+
 def _rebuild_as_another_replica(database_url: str, name: str, table: str, column: str) -> int:
     """Drop and rebuild the index from a second connection, as a replica that won the
     race would, and return the oid of the index it built."""
@@ -581,15 +655,14 @@ def test_a_process_holding_the_migration_lock_makes_the_build_wait_for_the_next_
 
 @requires_db
 @RESOLVERS
-def test_a_migration_job_that_could_not_build_the_indexes_reports_failure_and_succeeds_when_rerun(
+def test_a_migration_job_that_could_not_build_the_indexes_succeeds_and_a_rerun_builds_them(
     scratch_database: str, use_v2_resolver: bool
 ) -> None:
-    """The migration job waits for the build and exits by run_migration_job's result; a job
-    that exits 0 with the indexes missing would leave the table unindexed until the next
-    deploy or until a serving proxy's background build gets to them."""
+    """The migration job exits by the migrations' result, so an index another replica's lock kept
+    it from building never fails an upgrade, and the next run builds it."""
     with psycopg.connect(scratch_database, autocommit=True) as other_replica:
         other_replica.execute("SELECT pg_advisory_lock(%s)", (MIGRATION_LOCK_KEY,))
-        assert _migration_job(use_v2_resolver) is False
+        assert _migration_job(use_v2_resolver) is True
         _assert_every_ledger_row_is_finished(scratch_database)
         assert _index_validity(scratch_database, "litellm_call_id_idx") == {}
 

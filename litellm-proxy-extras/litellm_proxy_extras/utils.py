@@ -29,6 +29,7 @@ from litellm_proxy_extras.replica_identity import (
 from litellm_proxy_extras.request_log_indexes import (
     ensure_request_log_indexes,
     filter_request_log_index_diff,
+    lifted_time_limits,
     request_log_index_names,
 )
 
@@ -97,6 +98,7 @@ LIBPQ_URL_PARAMS: Final = frozenset(
         "gssencmode",
         "krbsrvname",
         "target_session_attrs",
+        "host",
     }
 )
 
@@ -876,8 +878,7 @@ class ProxyExtrasDBManager:
         schema: Final = ProxyExtrasDBManager._prisma_schema_param(prisma_url) or "public"
         cleaned_url: Final = ProxyExtrasDBManager._strip_prisma_query_params(os.getenv("DIRECT_URL") or prisma_url)
         try:
-            with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True) as conn:
-                conn.execute("SET statement_timeout = 0")
+            with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True) as conn, lifted_time_limits(conn):
                 conn.execute(sql.SQL("SET lock_timeout = {}").format(sql.Literal(lock_timeout)))
                 deferred: Final = request_log_index_names(conn, schema) if skip_request_log_indexes else frozenset()
                 found: Final = tuple(
@@ -1303,8 +1304,7 @@ class ProxyExtrasDBManager:
     def build_request_log_indexes(build: Callable[[str, str], bool] = ensure_request_log_indexes) -> bool:
         """Build the indexes in `REQUEST_LOG_INDEXES` on the writer, in the schema the
         migrations target. Idempotent and never raises; False when an index is still
-        missing or invalid, so the migration job reports it and gets rerun instead of
-        leaving the table unindexed until the next deploy."""
+        missing or invalid, which the builder logs for the next index build to pick up."""
         database_url: Final = os.environ.get("DATABASE_URL")
         if not database_url:
             return True
@@ -1322,9 +1322,13 @@ class ProxyExtrasDBManager:
         build: Callable[[], bool] = build_request_log_indexes,
     ) -> bool:
         """The migration job's whole run: `setup_database`, then the request-log indexes,
-        built synchronously so the job exits only once they are in place. False when the
-        migrations failed or an index could not be built, so the Job is rerun."""
-        return setup(use_migrate, use_v2_resolver) and build()
+        built synchronously so the job exits only once the build has finished. The result is
+        the migrations' alone, so an index that could not be built never fails an upgrade
+        whose migrations passed."""
+        if not setup(use_migrate, use_v2_resolver):
+            return False
+        build()
+        return True
 
     @staticmethod
     def start_request_log_index_build(build: Callable[[], bool] = build_request_log_indexes) -> threading.Thread:

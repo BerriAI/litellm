@@ -17,6 +17,8 @@ from integration._support.process import LEGACY_MIGRATE_DEPLOY, MIGRATE_DEPLOY, 
 from psycopg import sql
 from psycopg.rows import class_row
 
+pytestmark: Final = pytest.mark.timeout(240)
+
 REPO_ROOT: Final = Path(__file__).resolve().parents[3]
 PRISMA_DIR: Final = REPO_ROOT / "litellm-proxy-extras" / "litellm_proxy_extras"
 PARTITION_SCRIPT: Final = REPO_ROOT / "db_scripts" / "partition_spend_logs.sql"
@@ -283,6 +285,7 @@ def assert_the_serving_proxy_boots_and_finds_the_indexes_in_place(
 
 
 @RESOLVERS
+@pytest.mark.covers("other.database.request_log_indexes.migration_job_builds_both_indexes_per_partition")
 def test_the_migration_job_gives_a_partitioned_table_at_the_pre_index_schema_both_indexes_per_partition(
     gateway: Gateway, tmp_path: Path, resolver: Resolver
 ) -> None:
@@ -297,6 +300,7 @@ def test_the_migration_job_gives_a_partitioned_table_at_the_pre_index_schema_bot
 
 
 @RESOLVERS
+@pytest.mark.covers("other.database.request_log_indexes.migration_job_heals_failed_call_id_ledger_row")
 def test_the_migration_job_heals_a_partitioned_table_left_with_the_failed_call_id_ledger_row(
     gateway: Gateway, tmp_path: Path, resolver: Resolver
 ) -> None:
@@ -311,6 +315,7 @@ def test_the_migration_job_heals_a_partitioned_table_left_with_the_failed_call_i
 
 
 @RESOLVERS
+@pytest.mark.covers("other.database.request_log_indexes.migration_job_leaves_existing_indexes_alone")
 def test_the_migration_job_leaves_a_plain_table_that_applied_the_original_index_migrations_alone(
     gateway: Gateway, tmp_path: Path, resolver: Resolver
 ) -> None:
@@ -330,6 +335,7 @@ def test_the_migration_job_leaves_a_plain_table_that_applied_the_original_index_
 
 
 @RESOLVERS
+@pytest.mark.covers("other.database.request_log_indexes.serving_proxy_builds_both_indexes_after_ready")
 def test_a_serving_proxy_that_runs_the_migrations_itself_builds_both_indexes_after_it_is_ready(
     gateway: Gateway, tmp_path: Path, resolver: Resolver
 ) -> None:
@@ -354,6 +360,7 @@ def test_a_serving_proxy_that_runs_the_migrations_itself_builds_both_indexes_aft
         assert_both_indexes_cover_every_partition(database_url)
 
 
+@pytest.mark.covers("other.database.request_log_indexes.cli_migration_job_builds_both_indexes_before_exit")
 def test_the_cli_run_as_a_migration_job_builds_both_indexes_before_it_exits(gateway: Gateway, tmp_path: Path) -> None:
     with scratch_database() as database_url:
         deploy_schema_before_the_index_migrations(database_url, tmp_path)
