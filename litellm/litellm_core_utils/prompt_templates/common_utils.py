@@ -928,6 +928,17 @@ def _estimate_json_bytes(obj: object) -> int:
     return total
 
 
+_DefsScope: TypeAlias = tuple[Mapping[str, object], ...]
+
+
+def _scope_with_local_defs(scope: _DefsScope, local_defs: Mapping[str, object]) -> _DefsScope:
+    return (local_defs, *scope) if local_defs else scope
+
+
+def _resolve_in_scope(scope: _DefsScope, name: str) -> object:
+    return next((defs[name] for defs in scope if name in defs), None)
+
+
 def unpack_defs(
     schema: dict,
     defs: dict,
@@ -960,15 +971,11 @@ def unpack_defs(
     # Combine the defs handed down by the caller with defs/definitions found on
     # the current node.  Local keys shadow parent keys to match JSON-schema
     # scoping rules.
-    root_defs: Final[dict] = {
-        **defs,
-        **schema.get("$defs", {}),
-        **schema.get("definitions", {}),
-    }
+    root_defs: Final[_DefsScope] = ({**defs, **schema.get("$defs", {}), **schema.get("definitions", {})},)
 
     # Use iterative approach with queue to avoid recursion
     # Each item in queue is (node, parent_container, key/index, active_defs, ref_chain)
-    queue: Final[deque[tuple[object, dict | list | None, str | int | None, dict, set]]] = deque(
+    queue: Final[deque[tuple[object, dict | list | None, str | int | None, _DefsScope, set]]] = deque(
         [(schema, None, None, root_defs, set())]
     )
     inlined_bytes = 0
@@ -980,16 +987,16 @@ def unpack_defs(
         if isinstance(node, dict):
             # --- Case 1: this node *is* a reference ---
             if "$ref" in node:
-                ref_name = node["$ref"].split("/")[-1]
+                ref_name: str = node["$ref"].split("/")[-1]
 
                 # Check for circular reference in the resolution chain
                 if ref_name in ref_chain:
                     # Circular reference detected - leave as-is to prevent infinite recursion
                     continue
 
-                target_schema = active_defs.get(ref_name)
+                target_schema = _resolve_in_scope(active_defs, ref_name)
                 # Unknown reference – leave untouched
-                if target_schema is None:
+                if not isinstance(target_schema, dict):
                     continue
 
                 if max_inlined_bytes is not None:
@@ -1003,11 +1010,11 @@ def unpack_defs(
                         )
 
                 # Merge defs from the target to capture nested definitions
-                child_defs = {
-                    **active_defs,
+                target_local_defs: Mapping[str, object] = {
                     **target_schema.get("$defs", {}),
                     **target_schema.get("definitions", {}),
                 }
+                child_defs = _scope_with_local_defs(active_defs, target_local_defs)
 
                 # Replace the reference with resolved copy
                 resolved = copy.deepcopy(target_schema)
@@ -1035,11 +1042,8 @@ def unpack_defs(
 
             # --- Case 2: regular dict – process its values ---
             # Update defs with any nested $defs/definitions present *here*.
-            current_defs = {
-                **active_defs,
-                **node.get("$defs", {}),
-                **node.get("definitions", {}),
-            }
+            local_defs: Mapping[str, object] = {**node.get("$defs", {}), **node.get("definitions", {})}
+            current_defs = _scope_with_local_defs(active_defs, local_defs)
 
             # Add all dict values to queue
             for k, v in node.items():

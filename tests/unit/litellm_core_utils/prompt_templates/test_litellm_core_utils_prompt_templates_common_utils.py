@@ -2,6 +2,7 @@ import contextlib
 import copy
 import importlib
 import json
+import tracemalloc
 import warnings
 from collections.abc import Mapping
 from typing import Final, cast
@@ -324,6 +325,52 @@ class TestUnpackLegacyDefs:
         out = unpack_legacy_defs(schema)
         assert "components" not in out
         assert out["properties"]["r0"]["properties"]["p0"] == {"type": "string"}
+
+    def test_memory_stays_linear_in_schema_size_with_many_definitions(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_legacy_defs,
+        )
+
+        n: Final = 2_000
+        schema: Final = {
+            "type": "object",
+            "properties": {f"f{i}": {"$ref": f"#/definitions/T{i}"} for i in range(n)},
+            "definitions": {f"T{i}": {"type": "string"} for i in range(n)},
+        }
+        schema_bytes: Final = len(json.dumps(schema))
+
+        tracemalloc.start()
+        try:
+            out: Final = unpack_legacy_defs(schema)
+            peak_bytes: Final = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+
+        assert all(out["properties"][f"f{i}"] == {"type": "string"} for i in range(n))
+        assert peak_bytes < 50 * schema_bytes
+
+    def test_nested_definitions_shadow_outer_ones_of_the_same_name(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_legacy_defs,
+        )
+
+        schema: Final = {
+            "type": "object",
+            "properties": {
+                "outer": {"$ref": "#/definitions/T"},
+                "inner": {
+                    "type": "object",
+                    "properties": {"value": {"$ref": "#/definitions/T"}},
+                    "definitions": {"T": {"type": "integer"}},
+                },
+            },
+            "definitions": {"T": {"type": "string"}},
+        }
+
+        out: Final = unpack_legacy_defs(schema)
+
+        assert out["properties"]["outer"] == {"type": "string"}
+        assert out["properties"]["inner"]["properties"]["value"] == {"type": "integer"}
 
 
 class TestTextCompletionPromptToMessages:
