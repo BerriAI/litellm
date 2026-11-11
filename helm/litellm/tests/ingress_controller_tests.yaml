@@ -38,6 +38,33 @@ tests:
                 name: RELEASE-NAME-litellm-ui
                 port:
                   number: 3000
+      - equal:
+          path: spec.rules[0].http.paths[-1]
+          value:
+            path: /*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-backend
+                port:
+                  number: 4001
+      - notContains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /
+            pathType: Prefix
+          any: true
+
+  - it: rejects an extra wildcard that would take over the ALB backend catch-all
+    set:
+      ingress.enabled: true
+      ingress.extraPaths:
+        - path: /*
+          pathType: ImplementationSpecific
+          service: ui
+    asserts:
+      - failedTemplate:
+          errorMessage: "ingress.extraPaths[0]: path /* with pathType ImplementationSpecific is already routed by this chart, and a duplicate would take it over rather than add to it"
 
   - it: renders no dotted Exact or Prefix path for ingress-nginx, whose admission webhook rejects them
     set:

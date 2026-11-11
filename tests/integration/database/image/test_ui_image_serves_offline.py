@@ -23,6 +23,7 @@ import subprocess
 import time
 import uuid
 from collections.abc import Iterator
+from typing import Final
 
 import pytest
 
@@ -86,11 +87,13 @@ def _is_running(container: str) -> bool:
     )
 
 
-def _probe(network: str, container: str, path: str) -> "subprocess.CompletedProcess[str]":
+def _probe(
+    network: str, container: str, path: str, write_out: str = "%{http_code}"
+) -> "subprocess.CompletedProcess[str]":
     return _docker(
         "run", "--rm", "--network", network, CURL_IMAGE,
         "--silent", "--show-error", "--max-time", "10",
-        "--output", "/dev/null", "--write-out", "%{http_code}",
+        "--output", "/dev/null", "--write-out", write_out,
         f"http://{container}:{UI_PORT}{path}",
         check=False,
     )
@@ -124,9 +127,19 @@ def test_ui_serves_as_arbitrary_uid_read_only(ui_container: tuple[str, str]) -> 
         f"{ARBITRARY_UID}.\n{_container_logs(container)}"
     )
 
-    for path in ("/", "/ui", "/ui/login"):
+    for path in ("/ui", "/ui/", "/ui/login"):
         page = _probe(network, container, path)
         assert page.stdout.strip() == "200", (
             f"GET {path} returned {page.stdout.strip()!r} as uid {ARBITRARY_UID}.\n"
             f"{_container_logs(container)}"
         )
+
+    root: Final = _probe(network, container, "/?page=logs&limit=10", "%{http_code} %header{location}")
+    assert root.stdout.strip() == "307 /ui/?page=logs&limit=10", root.stderr
+
+    for path in ("/index.txt", "/ui.txt", "/ui/index.txt", "/ui/home/index.txt", "/ui/login/index.txt"):
+        payload: Final = _probe(network, container, f"{path}?_rsc=regression", "%{http_code} %{content_type}")
+        assert payload.stdout.strip() == "200 text/plain", f"GET {path}: {payload.stdout!r}\n{payload.stderr}"
+
+    missing: Final = _probe(network, container, "/ui/missing-route/index.txt")
+    assert missing.stdout.strip() == "404", missing.stderr
