@@ -62,7 +62,7 @@ import anyio.lowlevel
 import websockets
 import websockets.exceptions
 from openai.types.audio import TranscriptionStreamEvent
-from pydantic import BaseModel, ConfigDict, Json, JsonValue, TypeAdapter, ValidationError, with_config
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError, with_config
 from pydantic.fields import FieldInfo, PydanticUndefined
 from pydantic.main import IncEx
 from pydantic_core import PydanticSerializationError, to_jsonable_python
@@ -143,6 +143,7 @@ from litellm.proxy._types import (
     ConfigList,
     ConfigYAML,
     CoordinationRedisParams,
+    DbModelsReload,
     EnterpriseLicenseData,
     FieldDetail,
     InvitationClaim,
@@ -5997,6 +5998,7 @@ class ProxyConfig:
         self._last_cleanup_schedule_attempt: tuple[object, ...] | None = None
         self._cleanup_reschedule_failed: bool = False
         self._warned_db_mcp_stdio_flag_ignored: bool = False
+        self._last_db_models_reload: DbModelsReload | None = None
         self._cyberark_boot_env: dict[str, str | None] | None = None  # mutable-ok: deployment env snapshot, set once
         self.worker_registry: list[WorkerRegistryEntry] = []
         self.config_sync_subscriber: ConfigSyncSubscriber | None = None
@@ -8108,7 +8110,7 @@ class ProxyConfig:
 
     async def _update_llm_router(
         self,
-        new_models: Json | None,
+        new_models: Sequence[_ProxyModelRow] | None,
         proxy_logging_obj: ProxyLogging,
     ) -> RouterUpdateOutcome:
         global llm_router, llm_model_list, master_key, general_settings
@@ -9064,10 +9066,24 @@ class ProxyConfig:
         return ReconcileOutcome(
             still_desired=router_update.still_desired,
             live_after=None if router_update.still_desired is None else live_model_ids_snapshot(),
-            routes_current=router_update.routes_current,
         )
 
     _add_deployment_locked = add_deployment_locked
+
+    async def reconcile_db_models(
+        self, prisma_client: PrismaClient, proxy_logging_obj: ProxyLogging
+    ) -> RouterUpdateOutcome:
+        requested_at: Final = time.monotonic()
+        async with DB_RECONCILE_LOCK:
+            last_reload: Final = self._last_db_models_reload
+            if last_reload is not None and last_reload.started_at >= requested_at:
+                return last_reload.outcome
+            started_at: Final = time.monotonic()
+            new_models: Final = await self.get_models_from_db(prisma_client=prisma_client)
+            await self.get_credentials(prisma_client=prisma_client)
+            outcome: Final = await self._update_llm_router(new_models=new_models, proxy_logging_obj=proxy_logging_obj)
+            self._last_db_models_reload = DbModelsReload(started_at=started_at, outcome=outcome)
+            return outcome
 
     def start_config_sync_subscriber(
         self,

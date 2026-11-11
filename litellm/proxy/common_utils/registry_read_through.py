@@ -11,8 +11,8 @@ genuinely unknown names. An auto router's tiers are deployment rows of their
 own, so a miss on an auto router reconciles every row instead of just its own,
 or the first routed request on this replica would pick a tier it has not loaded.
 A check that judges a model by the provider it routes to, rather than by whether it
-exists, reconciles the whole router first, since a sibling's edit leaves the name
-loaded here with its old route, and answers 503 when that reconcile fails rather than judge by the old route.
+exists, reloads every model row first, since a sibling's edit leaves the name loaded
+here with its old route, and answers 503 when that reload fails rather than judge by the old route.
 """
 
 import asyncio
@@ -318,7 +318,7 @@ async def _reconcile_model_router_with_db() -> "Router | None | ModelRoutesUncon
     if prisma_client is None or not _db_backed_registries_enabled("models"):
         return proxy_server.llm_router
     router_before: Final = proxy_server.llm_router
-    outcome: Final = await proxy_server.proxy_config.add_deployment(
+    outcome: Final = await proxy_server.proxy_config.reconcile_db_models(
         prisma_client=prisma_client, proxy_logging_obj=proxy_server.proxy_logging_obj
     )
     if router_before is not None and not outcome.routes_current:

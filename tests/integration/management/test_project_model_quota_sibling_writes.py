@@ -1,3 +1,4 @@
+import os
 import uuid
 from pathlib import Path
 from typing import Final
@@ -12,6 +13,7 @@ from tests.integration._support.process import owned_proxy
 STRICT_ROUTE: Final = "vertex_ai/gemini-3.8-flash"
 EXEMPT_ROUTE: Final = "runwayml/gen4_turbo"
 TEAM_MODEL: Final = "clip-studio"
+REDIS_VARIABLES: Final = tuple(name for name in os.environ if name.startswith("REDIS_"))
 
 
 def _policy_config(directory: Path) -> Path:
@@ -44,7 +46,9 @@ def test_quota_checks_read_the_route_a_sibling_proxy_just_wrote(gateway: Gateway
     config: Final = _policy_config(tmp_path)
     with scratch_database() as database_url:
         environment: Final = {"DATABASE_URL": database_url, "PROXY_CONFIG_RELOAD_INTERVAL_SECONDS": "3600"}
-        with owned_proxy(gateway, tmp_path / "writer", environment, config=config) as writer:
+        with owned_proxy(
+            gateway, tmp_path / "writer", environment, config=config, remove_environment=REDIS_VARIABLES
+        ) as writer:
             team_id: Final = string_value(writer.post("/team/new", {"team_alias": "media-team"})["team_id"])
             created: Final = writer.post(
                 "/model/new",
@@ -61,6 +65,7 @@ def test_quota_checks_read_the_route_a_sibling_proxy_just_wrote(gateway: Gateway
                 tmp_path / "sibling",
                 {**environment, "DISABLE_SCHEMA_UPDATE": "true"},
                 config=config,
+                remove_environment=REDIS_VARIABLES,
                 database_setup=(),
             ) as sibling_loaded_the_exempt_route:
                 moved_to_strict: Final = _move_team_model(writer, model_id, STRICT_ROUTE)

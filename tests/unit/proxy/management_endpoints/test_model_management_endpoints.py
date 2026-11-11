@@ -28,6 +28,7 @@ from litellm.proxy._types import (
     Member,
     ProxyException,
     ReconcileOutcome,
+    RouterUpdateOutcome,
     UserAPIKeyAuth,
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
@@ -8303,13 +8304,12 @@ def _use_quota_proxy(monkeypatch: pytest.MonkeyPatch, prisma: MagicMock, router:
 def _use_db_backed_quota_proxy(monkeypatch: pytest.MonkeyPatch, prisma: MagicMock, router: Router) -> None:
     from litellm.proxy import proxy_server
 
-    async def reload_finds_the_router_current(prisma_client: object, proxy_logging_obj: object) -> ReconcileOutcome:
-        model_ids: Final = frozenset(router.registry().names(kind="ids"))
-        return ReconcileOutcome(still_desired=model_ids, live_after=model_ids, routes_current=True)
+    async def reload_finds_the_router_current(prisma_client: object, proxy_logging_obj: object) -> RouterUpdateOutcome:
+        return RouterUpdateOutcome(still_desired=frozenset(router.registry().names(kind="ids")), routes_current=True)
 
     _use_quota_proxy(monkeypatch, prisma, router)
     monkeypatch.setattr(proxy_server, "store_model_in_db", True)
-    monkeypatch.setattr(proxy_server.proxy_config, "add_deployment", reload_finds_the_router_current)
+    monkeypatch.setattr(proxy_server.proxy_config, "reconcile_db_models", reload_finds_the_router_current)
 
 
 _ADMIN: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
@@ -8546,8 +8546,8 @@ def _use_quota_proxy_whose_model_reload_fails(monkeypatch: pytest.MonkeyPatch, p
     monkeypatch.setattr(proxy_server, "store_model_in_db", True)
     monkeypatch.setattr(
         proxy_server.proxy_config,
-        "add_deployment",
-        AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
+        "reconcile_db_models",
+        AsyncMock(return_value=RouterUpdateOutcome(still_desired=None, routes_current=False)),
     )
 
 
