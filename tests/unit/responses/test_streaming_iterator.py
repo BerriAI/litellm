@@ -33,10 +33,12 @@ from litellm.responses.streaming_iterator import (
     _MAX_CONCURRENT_SYNC_UPSTREAM_RELEASES,
     _UPSTREAM_RELEASE_TIMEOUT_SECONDS,
     _estimate_usage_from_text,
+    _start_upstream_release_sync,
 )
 from litellm.types.llms.openai import (
     ResponseAPIUsage,
     ResponseCompletedEvent,
+    ResponseFailedEvent,
     ResponseIncompleteEvent,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
@@ -76,6 +78,13 @@ def _mock_config() -> Mock:
             return ResponseIncompleteEvent(
                 type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
                 response=mock_responses_api_response,
+            )
+        if evt_type == "response.failed":
+            return ResponseFailedEvent(
+                type=ResponsesAPIStreamEvents.RESPONSE_FAILED,
+                response=mock_responses_api_response.model_copy(
+                    update={"status": "failed", "error": parsed_chunk["response"]["error"]}
+                ),
             )
         stub = Mock()
         stub.type = evt_type
@@ -507,6 +516,48 @@ def test_sync_client_disconnect_before_completed_event_closes_the_upstream():
     iterator.close()
 
     assert closed.is_set()
+
+
+def test_sync_closing_the_stream_at_its_completed_event_closes_the_upstream_at_once():
+    release: Final = threading.Event()
+    iterator, closed = _sync_stream_over(_sync_upstream(None, release))
+
+    seen: Final = [next(iterator).type for _ in _COMPLETE_STREAM_EVENTS]
+    iterator.close()
+    release.set()
+
+    assert seen[-1] == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    assert closed.is_set()
+
+
+def test_sync_stream_ending_in_failed_event_still_closes_the_upstream():
+    failed: Final = _sse_event(
+        {"type": "response.failed", "response": {"error": {"code": "server_error", "message": "boom"}}}
+    )
+    iterator, closed = _sync_stream_over(iter((*_COMPLETE_STREAM_EVENTS[:-1], failed)))
+
+    with pytest.raises(MidStreamFallbackError):
+        for _ in iterator:
+            pass
+
+    assert closed.wait(timeout=5)
+
+
+def test_sync_release_that_cannot_start_a_thread_closes_the_upstream_and_frees_its_slot():
+    def refuse(thread: threading.Thread) -> None:
+        raise RuntimeError("can't start new thread")
+
+    refused: Final = tuple(Mock() for _ in range(_MAX_CONCURRENT_SYNC_UPSTREAM_RELEASES + 1))
+    for response in refused:
+        _start_upstream_release_sync(iter(()), response, start_thread=refuse)
+
+    assert all(response.close.call_count == 1 for response in refused)
+    release: Final = threading.Event()
+    iterator, closed = _sync_stream_over(_sync_upstream(None, release))
+    assert [event.type for event in iterator][-1] == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    assert not closed.is_set(), "a failed thread start kept its slot"
+    release.set()
+    assert closed.wait(timeout=5)
 
 
 _DONE_MARKER: Final = b"data: [DONE]\n\n"

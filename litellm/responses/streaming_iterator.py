@@ -271,6 +271,11 @@ async def _release_upstream_after_terminal_event(
             await response.aclose()
 
 
+def _close_upstream_now(response: httpx.Response) -> None:
+    with contextlib.suppress(httpx.HTTPError, httpx.StreamError):
+        response.close()
+
+
 def _release_upstream_after_terminal_event_sync(upstream_bytes: Iterator[bytes], response: httpx.Response) -> None:
     try:
         for _ in range(_MAX_CHUNKS_READ_AFTER_TERMINAL_EVENT):
@@ -283,8 +288,7 @@ def _release_upstream_after_terminal_event_sync(upstream_bytes: Iterator[bytes],
         verbose_logger.debug("Upstream Responses stream kept sending after its terminal event, closing it")
     finally:
         _SYNC_UPSTREAM_RELEASE_SLOTS.release()
-        with contextlib.suppress(httpx.HTTPError, httpx.StreamError):
-            response.close()
+        _close_upstream_now(response)
 
 
 def _spawn_upstream_release(upstream_bytes: AsyncIterator[bytes], response: httpx.Response) -> asyncio.Task[None]:
@@ -299,18 +303,28 @@ def _spawn_upstream_release(upstream_bytes: AsyncIterator[bytes], response: http
     return task
 
 
-def _start_upstream_release_sync(upstream_bytes: Iterator[bytes], response: httpx.Response) -> None:
+def _start_upstream_release_sync(
+    upstream_bytes: Iterator[bytes],
+    response: httpx.Response,
+    start_thread: Callable[[threading.Thread], None] = threading.Thread.start,
+) -> None:
     if not _SYNC_UPSTREAM_RELEASE_SLOTS.acquire(blocking=False):
         verbose_logger.debug("Too many upstream Responses streams are still draining, closing this one now")
-        with contextlib.suppress(httpx.HTTPError, httpx.StreamError):
-            response.close()
+        _close_upstream_now(response)
         return
-    threading.Thread(
-        target=_release_upstream_after_terminal_event_sync,
-        args=(upstream_bytes, response),
-        name="litellm-responses-upstream-release",
-        daemon=True,
-    ).start()
+    try:
+        start_thread(
+            threading.Thread(
+                target=_release_upstream_after_terminal_event_sync,
+                args=(upstream_bytes, response),
+                name="litellm-responses-upstream-release",
+                daemon=True,
+            )
+        )
+    except RuntimeError as e:
+        _SYNC_UPSTREAM_RELEASE_SLOTS.release()
+        verbose_logger.debug("Could not start a thread to drain the upstream Responses stream, closing it now: %s", e)
+        _close_upstream_now(response)
 
 
 _ERROR_CODE_HTTP_STATUS: Final[Mapping[str, int]] = MappingProxyType(
@@ -1435,8 +1449,15 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         if not self._releasing_upstream:
             self.response.close()
 
-    def __next__(self):
+    def _release_upstream(self) -> None:
         if self._releasing_upstream:
+            return
+        self._releasing_upstream = True
+        _start_upstream_release_sync(self._upstream_bytes, self.response)
+
+    def __next__(self):
+        if self.completed_response is not None:
+            self._release_upstream()
             self.finished = True
             raise StopIteration
         try:
@@ -1452,9 +1473,6 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 
                 self._check_max_streaming_duration()
                 result = self._process_chunk(sse.data)
-                if self.completed_response is not None:
-                    self._releasing_upstream = True
-                    _start_upstream_release_sync(self._upstream_bytes, self.response)
 
                 if self.finished:
                     self._raise_if_ended_without_terminal_event()
@@ -1490,6 +1508,8 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             raise e
         except Exception as e:
             self.finished = True
+            if self.completed_response is not None:
+                self._release_upstream()
             self._handle_failure(e)
             raise e
 
