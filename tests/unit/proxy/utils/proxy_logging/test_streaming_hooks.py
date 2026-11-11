@@ -10,7 +10,7 @@ Covers ``_wrap_streaming_iterator_with_enrichment``,
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from datetime import datetime
 from typing import Any, Dict, Final, List
 from unittest.mock import AsyncMock, MagicMock
@@ -737,11 +737,31 @@ async def test_chat_stream_generic_callback_error_after_stream_end_still_flushes
     assert snapshot == {"events": ["success_dispatched"], "args_cleared": True, "failure_usage_recorded": False}
 
 
+_EARLIER_ATTEMPT: Final = (Usage(prompt_tokens=20, completion_tokens=3, total_tokens=23), 0.00004)
+
+
+def _stash_an_attempt_cut_before_any_text(logging_obj: LiteLLMLoggingObj) -> None:
+    logging_obj.record_partial_usage_for_failure(*_EARLIER_ATTEMPT)
+    logging_obj.carry_failed_attempt_usage()
+
+
+def _stash_an_attempt_the_continuation_bills(logging_obj: LiteLLMLoggingObj) -> None:
+    logging_obj.record_partial_usage_for_failure(*_EARLIER_ATTEMPT)
+    logging_obj.mark_stash_billed_by_continuation()
+    logging_obj.carry_failed_attempt_usage()
+    logging_obj.record_continued_partial(*_EARLIER_ATTEMPT, None)
+
+
+def _stash_served_rounds_owed_on_success(logging_obj: LiteLLMLoggingObj) -> None:
+    logging_obj.record_served_rounds_for_failure((_EARLIER_ATTEMPT,))
+    logging_obj.carry_failed_attempt_usage()
+
+
 async def _chat_stream_parked_for_the_proxy(
     test_name: str,
     request_data: dict[str, object],
     events: list[str],
-    earlier_cut_attempt: tuple[Usage, float] | None = None,
+    stash_earlier_attempt: Callable[[LiteLLMLoggingObj], None] | None = None,
 ) -> CustomStreamWrapper:
     messages: Final = [{"role": "user", "content": "hi"}]
     logging_obj, _ = litellm.utils.function_setup(
@@ -753,9 +773,8 @@ async def _chat_stream_parked_for_the_proxy(
         stream=True,
         litellm_call_id=test_name,
     )
-    if earlier_cut_attempt is not None:
-        logging_obj.record_partial_usage_for_failure(*earlier_cut_attempt)
-        logging_obj.carry_failed_attempt_usage()
+    if stash_earlier_attempt is not None:
+        stash_earlier_attempt(logging_obj)
 
     async def _dispatch_deferred_logging(*args: object) -> None:
         events.append("success_dispatched")
@@ -806,7 +825,7 @@ async def test_chat_stream_callback_error_after_its_success_dispatch_still_bills
         "stream-success-after-a-cut-attempt-then-callback-error",
         request_data,
         events,
-        earlier_cut_attempt=(Usage(prompt_tokens=20, completion_tokens=3, total_tokens=23), 0.00004),
+        stash_earlier_attempt=_stash_an_attempt_cut_before_any_text,
     )
     monkeypatch.setattr(litellm, "callbacks", [_raising_at_end_of_stream(RuntimeError("callback crashed"))])
 
@@ -823,6 +842,36 @@ async def test_chat_stream_callback_error_after_its_success_dispatch_still_bills
     assert events == ["success_dispatched"]
     assert (failure_row["prompt_tokens"], failure_row["completion_tokens"]) == (20, 3)
     assert failure_row["spend"] == pytest.approx(0.00004)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stash_earlier_attempt",
+    [_stash_an_attempt_the_continuation_bills, _stash_served_rounds_owed_on_success],
+    ids=["continued_partial", "served_rounds"],
+)
+async def test_chat_stream_callback_error_while_its_success_is_pending_leaves_what_success_bills_off_the_failure_row(
+    proxy_logging, make_user_api_key_auth, monkeypatch, stash_earlier_attempt
+):
+    events: Final[list[str]] = []
+    request_data: Final[dict[str, object]] = {"metadata": {}}
+    stream: Final = await _chat_stream_parked_for_the_proxy(
+        "stream-success-pending-then-callback-error", request_data, events, stash_earlier_attempt
+    )
+    monkeypatch.setattr(litellm, "callbacks", [_raising_at_end_of_stream(RuntimeError("callback crashed"))])
+
+    with pytest.raises(RuntimeError):
+        async for _ in proxy_logging.async_post_call_streaming_iterator_hook(
+            response=stream, user_api_key_dict=make_user_api_key_auth(), request_data=request_data
+        ):
+            pass
+    await asyncio.sleep(0)
+
+    failure_row: Final = get_logging_payload(
+        dict(_failure_fields_to_lift(request_data, provider_billed=True)), None, datetime.now(), datetime.now()
+    )
+    assert events == ["success_dispatched"]
+    assert (failure_row["prompt_tokens"], failure_row["completion_tokens"], failure_row["spend"]) == (0, 0, 0.0)
 
 
 @pytest.mark.asyncio

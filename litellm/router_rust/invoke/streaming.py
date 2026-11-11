@@ -69,6 +69,7 @@ from litellm.router_rust.surface.health import failure_already_logged, logged_ca
 from litellm.types.utils import ModelResponseStream, Usage
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
     from litellm.router_python_host import PythonHost
     from litellm.router_rust.core import RustCore
@@ -763,18 +764,22 @@ def _price_cut_partial(cut_stream: CustomStreamWrapper, partial_response: object
     )
 
 
-def _billed_responses_cut_partial(cut_stream: "BaseResponsesAPIStreamingIterator") -> "ContinuedPartial | None":
-    from litellm.cost_calculator import BaseTokenUsageProcessor
+def _responses_cut_logging(cut_stream: "BaseResponsesAPIStreamingIterator") -> "LiteLLMLoggingObj":
     from litellm.responses.litellm_completion_transformation.streaming_iterator import (
         LiteLLMCompletionStreamingIterator,
     )
-    from litellm.router_utils.pre_call_checks.continuation_prefill_check import ContinuedPartial
 
-    cut_logging: Final = (
+    return (
         cut_stream.litellm_logging_obj
         if isinstance(cut_stream, LiteLLMCompletionStreamingIterator)
         else cut_stream.logging_obj
     )
+
+
+def _billed_responses_cut_partial(cut_logging: "LiteLLMLoggingObj") -> "ContinuedPartial | None":
+    from litellm.cost_calculator import BaseTokenUsageProcessor
+    from litellm.router_utils.pre_call_checks.continuation_prefill_check import ContinuedPartial
+
     details: Final = cut_logging.model_call_details
     candidate_legs: Final = (
         (details.get("combined_usage_object"), details.get("response_cost")),
@@ -1824,7 +1829,10 @@ async def _responses_fallback_attempt(
     continued: Final = _responses_continuation_request(attempt, e, source_iterator)
     seam: Final = ResponsesContinuationSeam(e.generated_content if continued is not None else "")
     partial_usage: Final = _extract_partial_responses_usage(source_iterator)
-    cut_partial: Final = _billed_responses_cut_partial(source_iterator)
+    cut_logging: Final = _responses_cut_logging(source_iterator)
+    cut_partial: Final = _billed_responses_cut_partial(cut_logging)
+    if cut_partial is not None:
+        cut_logging.mark_stash_billed_by_continuation()
     trigger: Final = _fallback_trigger(
         e, (litellm_exceptions.ContentPolicyViolationError, litellm_exceptions.ContextWindowExceededError)
     )

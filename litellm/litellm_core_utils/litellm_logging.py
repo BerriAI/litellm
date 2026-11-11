@@ -937,6 +937,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self._stash_owed_on_success: bool = False
         self._stash_billed_by_continuation: bool = False
         self._failed_attempts_owed_on_success: tuple[ServedRound, ...] = ()
+        self._failed_attempts_unbilled_on_success: tuple[ServedRound, ...] = ()
         self.failed_attempts_billed_on_success: tuple[ServedRound, ...] = ()
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
 
@@ -2783,7 +2784,10 @@ class Logging(LiteLLMLoggingBaseClass):
             *self.model_call_details.get("failed_attempts_usage", ()),
             attempt,
         )
-        if not owed_on_success or billed_by_continuation:
+        if billed_by_continuation:
+            return
+        if not owed_on_success:
+            self._failed_attempts_unbilled_on_success = (*self._failed_attempts_unbilled_on_success, attempt)
             return
         self._failed_attempts_owed_on_success = (*self._failed_attempts_owed_on_success, attempt)
 
@@ -2931,6 +2935,10 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def withdraw_stream_success_dispatch(self) -> None:
         self._stream_success_dispatched_attempt = _NO_STREAM_SUCCESS_DISPATCHED
+
+    @property
+    def failed_attempts_unbilled_on_success(self) -> tuple[ServedRound, ...]:
+        return self._failed_attempts_unbilled_on_success
 
     @property
     def stream_success_dispatched_for_current_attempt(self) -> bool:

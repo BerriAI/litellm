@@ -1814,15 +1814,15 @@ def _failure_fields_to_lift(
     _base_model: Final = get_base_model_from_metadata(model_call_details=_model_call_details)
     _deployment_id: Final = _logging_obj.get_router_model_id() if isinstance(_logging_obj, Logging) else None
     _success_already_logged: Final = isinstance(_logging_obj, Logging) and _logging_obj.async_success_log_enqueued
-    _stream_success_bills_this_attempt: Final = (
-        isinstance(_logging_obj, Logging) and _logging_obj.stream_success_dispatched_for_current_attempt
+    _left_by_stream_success: Final = (
+        _logging_obj.failed_attempts_unbilled_on_success
+        if isinstance(_logging_obj, Logging) and _logging_obj.stream_success_dispatched_for_current_attempt
+        else None
     )
-    _billed: Final = provider_billed and not (_success_already_logged or _stream_success_bills_this_attempt)
+    _billed: Final = provider_billed and not (_success_already_logged or _left_by_stream_success is not None)
     _usage_to_lift: Final = (
-        _billed_across_attempts(
-            _FAILED_ATTEMPTS_USAGE.validate_python(_model_call_details.get("failed_attempts_usage", ())), None, None
-        )
-        if _stream_success_bills_this_attempt
+        _billed_across_attempts(_left_by_stream_success, None, None)
+        if _left_by_stream_success is not None
         else _failure_usage_to_lift(
             model_call_details=_model_call_details,
             request_body=request_data,
