@@ -25,9 +25,9 @@ def test_gpt_image_edit_url_uses_foundry_deployment_route_and_configured_version
     assert url == f"{FOUNDRY_API_BASE}/openai/deployments/gpt-image-2.5-flare/images/edits?api-version=2025-06-01-preview"
 
 
-def test_gpt_image_edit_url_defaults_to_an_edit_capable_version(monkeypatch: pytest.MonkeyPatch):
+def test_gpt_image_edit_url_defaults_to_an_edit_capable_version_on_a_proxy(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("AZURE_AI_API_VERSION", raising=False)
-    monkeypatch.delenv("AZURE_API_VERSION", raising=False)
+    monkeypatch.setenv("AZURE_API_VERSION", litellm.AZURE_DEFAULT_API_VERSION)
     monkeypatch.setattr(litellm, "api_version", None)
 
     url: Final = AzureFoundryGPTImageEditConfig().get_complete_url(
@@ -41,8 +41,8 @@ def test_gpt_image_edit_url_defaults_to_an_edit_capable_version(monkeypatch: pyt
 
 def test_gpt_image_edit_url_uses_azure_ai_api_base_and_version_env(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("AZURE_AI_API_BASE", FOUNDRY_API_BASE)
-    monkeypatch.setenv("AZURE_AI_API_VERSION", "2025-04-01-preview")
-    monkeypatch.delenv("AZURE_API_VERSION", raising=False)
+    monkeypatch.setenv("AZURE_AI_API_VERSION", "2025-06-01-preview")
+    monkeypatch.setenv("AZURE_API_VERSION", litellm.AZURE_DEFAULT_API_VERSION)
     monkeypatch.setattr(litellm, "api_base", None)
     monkeypatch.setattr(litellm, "api_version", None)
 
@@ -52,7 +52,7 @@ def test_gpt_image_edit_url_uses_azure_ai_api_base_and_version_env(monkeypatch: 
         litellm_params={},
     )
 
-    assert url == DEPLOYMENT_EDIT_URL
+    assert url == f"{FOUNDRY_API_BASE}/openai/deployments/gpt-image-2.5-flare/images/edits?api-version=2025-06-01-preview"
 
 
 def test_gpt_image_edit_url_uses_v1_surface_for_preview_version():
@@ -145,7 +145,7 @@ def test_gpt_image_edit_keeps_model_on_v1_multipart():
 )
 def test_gpt_image_edit_end_to_end_posts_multipart_to_deployment_route(monkeypatch: pytest.MonkeyPatch, model: str):
     monkeypatch.delenv("AZURE_AI_API_VERSION", raising=False)
-    monkeypatch.delenv("AZURE_API_VERSION", raising=False)
+    monkeypatch.setenv("AZURE_API_VERSION", litellm.AZURE_DEFAULT_API_VERSION)
     monkeypatch.setattr(litellm, "api_version", None)
     captured: Final[list[httpx.Request]] = []  # mutable-ok: the fake Foundry endpoint records what litellm sent
 
