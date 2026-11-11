@@ -16053,15 +16053,16 @@ async def token_counter(
     litellm_call_id: Annotated[str | None, Header(alias=LITELLM_CALL_ID_HEADER)] = None,
 ):
     """
-    Args:
-        request: TokenCountRequest
-        http_request: carries the call id to the error handler when the count fails
-        fastapi_response: answers the x-litellm-call-id header the count's log line names
-        call_endpoint: bool - When set to "True" it will call the token counting endpoint - e.g Anthropic or Google AI Studio Token Counting APIs.
-        litellm_call_id: the x-litellm-call-id header, logged with the count so it joins the inference call's logs
-
     Returns:
         TokenCountResponse
+
+    Args:
+        request: TokenCountRequest
+        call_endpoint: bool - When set to "True" it will call the token counting endpoint - e.g Anthropic or Google AI Studio Token Counting APIs.
+        litellm_call_id: the x-litellm-call-id header, logged with the count so it joins the inference call's logs
+        \f
+        http_request: carries the call id to the error handler when the count fails
+        fastapi_response: answers the x-litellm-call-id header the count's log line names
     """
     call_id: Final = resolve_litellm_call_id(litellm_call_id)
     return await answered_with_litellm_call_id(

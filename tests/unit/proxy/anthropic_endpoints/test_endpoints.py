@@ -1313,14 +1313,22 @@ def test_count_tokens_answers_the_call_id_its_count_line_names(
     assert client_call_id in (None, line["litellm_call_id"])
 
 
+@pytest.mark.parametrize(
+    ("provider_status", "extra_body"),
+    [(400, MappingProxyType({})), (200, MappingProxyType({"tools": 5}))],
+    ids=["provider_rejection", "malformed_tools_rejection"],
+)
 def test_count_tokens_error_body_names_the_call_id_its_header_carries_when_opted_in(
-    monkeypatch: pytest.MonkeyPatch, token_count_log_lines: Callable[[], tuple[dict[str, object], ...]]
+    monkeypatch: pytest.MonkeyPatch,
+    token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
+    provider_status: int,
+    extra_body: Mapping[str, object],
 ) -> None:
     import litellm.proxy.proxy_server as proxy_server
 
     monkeypatch.setattr(proxy_server, "general_settings", {"include_call_id_in_error_body": True})
 
-    response: Final = _count_on_claude(monkeypatch, _claude_count_reply(400), {})
+    response: Final = _count_on_claude(monkeypatch, _claude_count_reply(provider_status), {}, extra_body)
 
     (line,) = token_count_log_lines()
     assert response.json()["error"]["litellm_call_id"] == response.headers.get("x-litellm-call-id")

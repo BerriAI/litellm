@@ -19880,15 +19880,13 @@ export interface paths {
         put?: never;
         /**
          * Token Counter
-         * @description Args:
+         * @description Returns:
+         *         TokenCountResponse
+         *
+         *     Args:
          *         request: TokenCountRequest
-         *         http_request: carries the call id to the error handler when the count fails
-         *         fastapi_response: answers the x-litellm-call-id header the count's log line names
          *         call_endpoint: bool - When set to "True" it will call the token counting endpoint - e.g Anthropic or Google AI Studio Token Counting APIs.
          *         litellm_call_id: the x-litellm-call-id header, logged with the count so it joins the inference call's logs
-         *
-         *     Returns:
-         *         TokenCountResponse
          */
         post: operations["token_counter_utils_token_counter_post"];
         delete?: never;
