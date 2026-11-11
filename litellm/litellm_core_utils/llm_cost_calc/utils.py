@@ -194,9 +194,13 @@ def get_billable_input_tokens(usage: Usage) -> int:
     """
     Returns the number of billable input tokens.
     Subtracts cached tokens from prompt tokens if applicable.
+
+    Clamped at 0: providers that report cache reads *outside* `prompt_tokens`
+    (Anthropic) can hand back more cached tokens than prompt tokens, and a negative
+    count would turn into a negative (credit) prompt cost downstream.
     """
     details: Final = parse_prompt_tokens_details(usage)
-    return usage.prompt_tokens - details["cache_hit_tokens"]
+    return max(usage.prompt_tokens - details["cache_hit_tokens"], 0)
 
 
 def select_cost_metric_for_model(
