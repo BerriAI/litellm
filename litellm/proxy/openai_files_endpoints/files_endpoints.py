@@ -1236,10 +1236,29 @@ async def get_file_content(
         if httpx_response is None:
             raise ValueError(f"Invalid response - response.response is None - got {response}")
 
+        # Fix #50941: Drop hop-by-hop and payload-framing headers (content-encoding, content-length, transfer-encoding)
+        # because httpx has already decompressed the body into httpx_response.content.
+        excluded_headers: Final = {
+            "content-encoding",
+            "content-length",
+            "transfer-encoding",
+            "connection",
+            "keep-alive",
+            "proxy-authenticate",
+            "proxy-authorization",
+            "te",
+            "trailer",
+            "upgrade",
+        }
+        filtered_headers: dict[str, str] = {
+            k: v for k, v in dict(httpx_response.headers or {}).items() if k.lower() not in excluded_headers
+        }
+        filtered_headers.update(custom_headers)
+
         return Response(
             content=httpx_response.content,
             status_code=httpx_response.status_code,
-            headers=httpx_response.headers,
+            headers=filtered_headers,
         )
 
     except Exception as e:

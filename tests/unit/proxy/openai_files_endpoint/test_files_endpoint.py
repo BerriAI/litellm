@@ -2367,6 +2367,54 @@ def test_get_file_content_forwards_upstream_download_headers(monkeypatch, llm_ro
     assert response.headers["x-request-id"] == upstream_request_id
 
 
+@respx.mock
+def test_get_file_content_strips_content_encoding_and_stale_content_length_from_decompressed_upstream(
+    monkeypatch, llm_router: Router
+):
+    import gzip
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    setup_proxy_logging_object(monkeypatch, llm_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+
+    raw_html = b"<!DOCTYPE html><html><body>Hello World</body></html>"
+    compressed_body = gzip.compress(raw_html)
+
+    upstream_route: Final = respx.get("https://api.anthropic.com/v1/files/file-anthropic123/content").mock(
+        return_value=httpx.Response(
+            status_code=200,
+            content=raw_html,
+            headers={
+                "content-type": "text/html",
+                "content-encoding": "gzip",
+                "content-length": str(len(compressed_body)),
+                "x-request-id": "req_anthropic_123",
+            },
+        )
+    )
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="test-user",
+    )
+    try:
+        response: Final = client.get(
+            "/anthropic/v1/files/file-anthropic123/content",
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    assert response.content == raw_html
+    assert "content-encoding" not in response.headers
+    assert int(response.headers["content-length"]) == len(raw_html)
+
+
 def test_get_file_content_routed_provider_skips_streaming_when_resolved_provider_is_not_supported(
     mocker: MockerFixture, monkeypatch, llm_router: Router
 ):
