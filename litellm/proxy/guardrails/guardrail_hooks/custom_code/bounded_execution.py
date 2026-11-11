@@ -6,7 +6,7 @@ variable, and the sandbox compiler routes every ``while`` test, ``for`` iteratio
 :func:`budget_ok`, which raises ``ExecutionInterrupted`` once that deadline has passed, whatever the code
 catches around the loop body. As a backstop, a worker thread still running at the deadline has
 ``ExecutionInterrupted`` injected with ``PyThreadState_SetAsyncExc`` and a task still running is cancelled
-repeatedly. A long-running C call (a catastrophic regex, for one) only sees any of this once it returns, so
+repeatedly. A long-running C call without its own timeout only sees any of this once it returns, so
 the caller still gets its timeout on schedule while the worker keeps burning CPU until that call ends.
 """
 
@@ -54,6 +54,16 @@ class SandboxExit(Exception):
 def _past_deadline() -> bool:
     deadline: Final = _deadline.get()
     return deadline is not None and time.monotonic() > deadline
+
+
+def remaining_execution_time() -> float | None:
+    deadline: Final = _deadline.get()
+    if deadline is None:
+        return None
+    remaining: Final = deadline - time.monotonic()
+    if remaining <= 0:
+        raise ExecutionInterrupted
+    return remaining
 
 
 def budget_ok() -> bool:
