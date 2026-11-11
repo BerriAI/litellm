@@ -42,9 +42,10 @@ import subprocess
 import sys
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from itertools import chain
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final
+from typing import Final, TypeAlias
 
 MIGRATIONS_DIR: Final = "litellm-proxy-extras/litellm_proxy_extras/migrations"
 # git pathspec wildcards cross directory boundaries, so these reach every file under each tree.
@@ -211,7 +212,7 @@ class Column:
     prisma_type: str
 
 
-Schema = Mapping[str, Mapping[str, Column]]
+Schema: TypeAlias = Mapping[str, Mapping[str, Column]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -259,7 +260,7 @@ class Finding:
     statement: str
     effect: str
 
-    def as_dict(self) -> dict[str, str]:
+    def as_dict(self) -> Mapping[str, str]:
         return {
             "severity": self.severity,
             "migration": self.migration,
@@ -314,7 +315,7 @@ def split_statements(sql: str) -> tuple[str, ...]:
     bodies: Final = tuple(match.group("body") for match in _DOLLAR_QUOTED.finditer(cleaned))
     outer: Final = _DOLLAR_QUOTED.sub(" ", cleaned)
     top_level: Final = tuple(normalize(part) for part in outer.split(";"))
-    nested: Final = tuple(statement for body in bodies for statement in split_statements(body))
+    nested: Final = tuple(chain.from_iterable(split_statements(body) for body in bodies))
     return tuple(statement for statement in top_level + nested if statement)
 
 
@@ -394,10 +395,12 @@ def _identifiers(fragment: str) -> tuple[str, ...]:
 
 def _defaulted_columns(statements: Iterable[str]) -> frozenset[tuple[str, str]]:
     """(table, column) pairs these statements add with a DEFAULT."""
+    clauses: Final = chain.from_iterable(
+        ((statement, clause) for clause in _CLAUSE_SPLIT.split(statement)) for statement in statements
+    )
     return frozenset(
         (statement_table(statement), added.group("column"))
-        for statement in statements
-        for clause in _CLAUSE_SPLIT.split(statement)
+        for statement, clause in clauses
         if (added := _ADDED_COLUMN_NAME.search(clause)) is not None and _DEFAULT.search(clause) is not None
     )
 
@@ -412,11 +415,11 @@ def unique_indexes_at(repo: Path, ref: str) -> Mapping[str, tuple[str, tuple[str
     )
     paths: Final = tuple(line.split(":", 1)[1] if ":" in line else line for line in (listing or "").splitlines())
     sources: Final = tuple(text for path in paths if (text := _git_or_none(repo, "show", f"{ref}:{path}")) is not None)
+    statements: Final = chain.from_iterable(split_statements(source) for source in sources)
     return MappingProxyType(
         {
             named.group("index"): (statement_table(statement), _index_columns(statement))
-            for source in sources
-            for statement in split_statements(source)
+            for statement in statements
             if _UNIQUE_INDEX.search(statement) is not None and (named := _INDEX_NAME.search(statement)) is not None
         }
     )
@@ -425,7 +428,7 @@ def unique_indexes_at(repo: Path, ref: str) -> Mapping[str, tuple[str, tuple[str
 def _constraint_columns(statement: str) -> tuple[str, ...]:
     """Names a new constraint mentions: the listed columns, and every name inside a CHECK expression."""
     listed: Final = tuple(
-        name for match in _CONSTRAINT_COLUMNS.finditer(statement) for name in _identifiers(match.group("columns"))
+        chain.from_iterable(_identifiers(match.group("columns")) for match in _CONSTRAINT_COLUMNS.finditer(statement))
     )
     check: Final = _CHECK_BODY.search(statement)
     inside: Final = _identifiers(check.group("body")) if check is not None else ()
@@ -467,15 +470,19 @@ def _star_reads_in_literal(body: str, location: str) -> tuple[StarRead, ...]:
 
 def star_reads_in_source(text: str, path: str) -> tuple[StarRead, ...]:
     """Find whole-row reads (`SELECT v.*`, `SELECT *`) in the SQL literals of one source file."""
-    return tuple(
-        read
+    literals: Final = (
+        literal
         for literal in _SQL_LITERAL.finditer(text)
         if TABLE_MARKER in literal.group("body")
         and "SELECT" in literal.group("body").upper()
         and VIEW_MARKER.search(literal.group("body")) is None
-        # `-- Added comma to separate b.* columns` is a comment, not a read.
-        for read in _star_reads_in_literal(
-            _LINE_COMMENT.sub(" ", literal.group("body")), f"{path}:{text.count(chr(10), 0, literal.start()) + 1}"
+    )
+    return tuple(
+        chain.from_iterable(
+            _star_reads_in_literal(
+                _LINE_COMMENT.sub(" ", literal.group("body")), f"{path}:{text.count(chr(10), 0, literal.start()) + 1}"
+            )
+            for literal in literals
         )
     )
 
@@ -483,12 +490,10 @@ def star_reads_in_source(text: str, path: str) -> tuple[StarRead, ...]:
 def discover_star_reads(repo: Path, ref: str) -> tuple[StarRead, ...]:
     listing: Final = _git_or_none(repo, "grep", "-l", "--fixed-strings", TABLE_MARKER, ref, "--", *SOURCE_GLOBS)
     paths: Final = tuple(line.split(":", 1)[1] if ":" in line else line for line in (listing or "").splitlines())
-    return tuple(
-        read
-        for path in paths
-        if (text := _git_or_none(repo, "show", f"{ref}:{path}")) is not None
-        for read in star_reads_in_source(text, path)
+    sources: Final = (
+        (path, text) for path in paths if (text := _git_or_none(repo, "show", f"{ref}:{path}")) is not None
     )
+    return tuple(chain.from_iterable(star_reads_in_source(text, path) for path, text in sources))
 
 
 def _shape(read: StarRead) -> str:
@@ -743,22 +748,26 @@ def build_report(repo: Path, base: str, head: str) -> Report:
     statements_by_migration: Final = MappingProxyType(
         {name: split_statements(sql) for name in new_names if (sql := read_migration(repo, head, name)) is not None}
     )
+    all_statements: Final = tuple(chain.from_iterable(statements_by_migration.values()))
     created_here: Final = frozenset(
-        match.group("table")
-        for statements in statements_by_migration.values()
-        for statement in statements
-        if (match := _CREATE_TABLE.search(statement)) is not None
+        match.group("table") for statement in all_statements if (match := _CREATE_TABLE.search(statement)) is not None
     )
     # A re-declared `CREATE TABLE IF NOT EXISTS` of a table the old pods already use is not a new table.
     fresh_tables: Final = created_here - tables_created_before(repo, base)
     schema: Final = load_base_schema(repo, base)
-    defaulted: Final = _defaulted_columns(s for statements in statements_by_migration.values() for s in statements)
+    defaulted: Final = _defaulted_columns(all_statements)
     base_unique: Final = unique_indexes_at(repo, base)
 
     findings: Final = tuple(
-        classify(name, statement, _context_for(statements, fresh_tables, star_reads, schema, defaulted, base_unique))
-        for name, statements in statements_by_migration.items()
-        for statement in statements
+        chain.from_iterable(
+            (
+                classify(
+                    name, statement, _context_for(statements, fresh_tables, star_reads, schema, defaulted, base_unique)
+                )
+                for statement in statements
+            )
+            for name, statements in statements_by_migration.items()
+        )
     )
     ranked: Final = sorted(findings, key=lambda finding: (SEVERITY_ORDER.index(finding.severity), finding.migration))
     return Report(
