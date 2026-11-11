@@ -77,6 +77,7 @@ interface KeyInfoViewProps {
   onDelete?: () => void;
   teams: any[] | null;
   backButtonText?: string;
+  tabParam?: string;
 }
 
 // Premium fields (from LiteLLM_ManagementEndpoint_MetadataFields_Premium in
@@ -107,6 +108,7 @@ export default function KeyInfoView({
   onKeyDataUpdate,
   onDelete,
   backButtonText = i18n.t("keyDetail.keyInfoView.backToKeys"),
+  tabParam = "detail_tab",
 }: KeyInfoViewProps) {
   const { t } = useTranslation();
   const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
@@ -115,7 +117,7 @@ export default function KeyInfoView({
   const [activeTab, setActiveTab] = useUrlTab(
     ["overview", "activity", "savings", "auto-router-usage", "settings"],
     "overview",
-    "detail_tab",
+    tabParam,
   );
   const queryClient = useQueryClient();
   const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
