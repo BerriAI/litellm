@@ -3465,6 +3465,29 @@ class TestGuardrailsSeeAuthenticatedIdentity:
         assert len(vendor_payloads) == 1
         assert "user_api_key_token" not in data["litellm_metadata"]
         assert vendor_payloads[0]["request_data"].get("user_api_key_hash") is None, "a kept token becomes the hash"
+
+    @pytest.mark.asyncio
+    async def test_custom_auth_key_keeps_the_logged_key_id_in_the_route_bucket(self, monkeypatch) -> None:
+        _patch_translation_mappings(monkeypatch, discover_guardrail_translation_mappings())
+        raw_credential = "opaque-custom-auth-token"
+        key = UserAPIKeyAuth(api_key=raw_credential, key_alias="custom-auth-app")
+        key.authenticated_by_custom_auth = True
+        data = {
+            "guardrail_to_apply": self._generic_guardrail([]),
+            "prompt": "hello",
+            "litellm_metadata": {"user_api_key_hash": raw_credential, "user_api_key": raw_credential},
+        }
+
+        await UnifiedLLMGuardrails().async_pre_call_hook(
+            user_api_key_dict=key, cache=DualCache(), data=data, call_type=CallTypes.pass_through.value
+        )
+
+        assert (data["litellm_metadata"]["user_api_key_hash"], data["litellm_metadata"]["user_api_key"]) == (
+            raw_credential,
+            raw_credential,
+        ), "spend and rate-limit accounting key on the same id the auth layer recorded"
+
+
 class AttachmentScanningGuardrail(RecordingGuardrail):
     """Records the raw request it is handed for an attachment scan."""
 

@@ -764,7 +764,11 @@ def caller_metadata_with_authenticated_identity(
         for key, value in (caller_metadata or {}).items()
         if not (is_untrusted_caller_metadata_key(key) or key == "headers")
     }
-    return {**caller_fields, **LiteLLMProxyRequestSetup.get_authenticated_identity_metadata(user_api_key_dict)}
+    return {
+        **caller_fields,
+        **LiteLLMProxyRequestSetup.get_authenticated_identity_metadata(user_api_key_dict),
+        **LiteLLMProxyRequestSetup.get_vendor_key_fields(user_api_key_dict),
+    }
 
 
 def _is_false_like(value: object) -> bool:
@@ -2172,13 +2176,16 @@ class LiteLLMProxyRequestSetup:
 
     @staticmethod
     def get_authenticated_identity_metadata(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, object]:
-        vendor_safe_api_key: Final = LiteLLMProxyRequestSetup.get_vendor_safe_api_key(user_api_key_dict)
         return {
             **LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict),
-            "user_api_key_hash": vendor_safe_api_key,
-            "user_api_key": vendor_safe_api_key,
+            "user_api_key": LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict),
             **LiteLLMProxyRequestSetup.get_key_scoped_metadata(user_api_key_dict),
         }
+
+    @staticmethod
+    def get_vendor_key_fields(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, object]:
+        vendor_safe_api_key: Final = LiteLLMProxyRequestSetup.get_vendor_safe_api_key(user_api_key_dict)
+        return {"user_api_key_hash": vendor_safe_api_key, "user_api_key": vendor_safe_api_key}
 
     @staticmethod
     def get_inherited_tags(user_api_key_dict: UserAPIKeyAuth) -> tuple[str, ...]:

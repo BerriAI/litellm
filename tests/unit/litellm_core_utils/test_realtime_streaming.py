@@ -35,7 +35,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy.guardrails.guardrail_hooks.grayswan.grayswan import GraySwanGuardrail
 from litellm.llms.xai.realtime.usage_meter import XAIRealtimeUsageMeter
 
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import UserAPIKeyAuth, hash_token
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.xai import RealtimeMeteredUsage
 from litellm.types.realtime import RealtimeResponseTransformInput, RealtimeResponseTypedDict
@@ -6250,8 +6250,27 @@ async def test_unbridged_backend_receives_session_update_and_response_create_as_
     assert tuple(json.loads(call.args[0]) for call in backend_ws.send.call_args_list) == client_events
 
 
+def _realtime_key(custom_auth: bool) -> UserAPIKeyAuth:
+    key = UserAPIKeyAuth(
+        api_key="opaque-custom-auth-token" if custom_auth else "sk-real-caller-key",
+        key_alias="prod-app",
+        team_id="team-prod",
+    )
+    key.authenticated_by_custom_auth = custom_auth
+    return key
+
+
 @pytest.mark.asyncio
-async def test_realtime_transcript_guardrail_receives_authenticated_identity(monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.parametrize(
+    ("key", "expected_hash"),
+    [
+        pytest.param(_realtime_key(False), hash_token("sk-real-caller-key"), id="virtual-key"),
+        pytest.param(_realtime_key(True), hash_token("opaque-custom-auth-token"), id="custom-auth-hashed"),
+    ],
+)
+async def test_realtime_transcript_guardrail_receives_authenticated_identity(
+    monkeypatch: pytest.MonkeyPatch, key: UserAPIKeyAuth, expected_hash: str
+):
     received_request_data = []
 
     class IdentityRecordingGuardrail(CustomGuardrail):
@@ -6270,7 +6289,6 @@ async def test_realtime_transcript_guardrail_receives_authenticated_identity(mon
             )
         ],
     )
-    key = UserAPIKeyAuth(api_key="sk-real-caller-key", key_alias="prod-app", team_id="team-prod")
     streaming = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock(), user_api_key_dict=key)
 
     blocked = await streaming.run_realtime_guardrails("hello there")
@@ -6278,9 +6296,8 @@ async def test_realtime_transcript_guardrail_receives_authenticated_identity(mon
     assert blocked is False
     assert len(received_request_data) == 1
     identity = received_request_data[0]["litellm_metadata"]
-    assert identity["user_api_key_alias"] == "prod-app"
-    assert identity["user_api_key_team_id"] == "team-prod"
-    assert identity["user_api_key_hash"] == key.api_key
+    assert (identity["user_api_key_alias"], identity["user_api_key_team_id"]) == ("prod-app", "team-prod")
+    assert (identity["user_api_key_hash"], identity["user_api_key"]) == (expected_hash, expected_hash)
 
 
 @pytest.mark.asyncio

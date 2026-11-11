@@ -242,9 +242,16 @@ def _litellm_metadata_with_identity(
     request_data: Mapping[str, object], user_api_key_dict: object | None
 ) -> Mapping[str, object]:
     from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
     existing: Final = _json_object(request_data.get("litellm_metadata"))
-    return {**(existing or {}), **BaseTranslation.transform_user_api_key_dict_to_metadata(user_api_key_dict)}
+    identity: Final = BaseTranslation.transform_user_api_key_dict_to_metadata(user_api_key_dict)
+    if not isinstance(user_api_key_dict, UserAPIKeyAuth):
+        return {**(existing or {}), **identity}
+    # Lazy: needs the proxy extras, which an auth key implies
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    return {**(existing or {}), **identity, **LiteLLMProxyRequestSetup.get_vendor_key_fields(user_api_key_dict)}
 
 
 def realtime_runner_guardrail(
