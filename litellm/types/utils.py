@@ -5395,6 +5395,11 @@ class PriorityReservationSettings(LiteLLMBaseModel):
         description="TTL in seconds for local cache when reading saturation check values from Redis.",
     )
 
+    priority_metadata_field: str = Field(
+        default="priority",
+        description="Team or key metadata field whose value names the priority in litellm.priority_reservation. Team metadata is read first, then key metadata.",
+    )
+
     model_config = ConfigDict(protected_namespaces=())
 
 

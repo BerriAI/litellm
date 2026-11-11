@@ -7,6 +7,7 @@ Core tests to validate that priority weights are respected (0.9/0.1) instead of 
 import asyncio
 import os
 import time
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
@@ -22,7 +23,7 @@ from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROXY_MaxParallelRequestsHandler_v3,
 )
-from litellm.redis.stores.rate_limits import RateLimitScope
+from litellm.redis.stores.rate_limits import CounterIncrement, RateLimitScope
 from tests.unit.redis.stores.fake_rate_limits import FakeRateLimits
 
 
@@ -1819,3 +1820,92 @@ async def test_post_call_success_hook_priority_header_is_always_http_encodable(t
     http_response = Response(headers={key: str(value) for key, value in additional_headers.items()})
     assert http_response.headers.get("x-litellm-priority") == expected_priority_header
     assert http_response.headers["x-litellm-rate-limiter-version"] == "v3"
+
+
+@pytest.mark.parametrize(
+    ("field", "team_metadata", "key_metadata", "expected"),
+    (
+        ("priority", {"priority": "prod"}, {"priority": "dev"}, "prod"),
+        ("priority", None, {"priority": "dev"}, "dev"),
+        ("priority_class", {"priority_class": "batch"}, {"priority_class": "interactive"}, "batch"),
+        ("priority_class", None, {"priority_class": "interactive"}, "interactive"),
+        ("priority_class", {"priority": "batch"}, {"priority": "interactive"}, None),
+    ),
+)
+def test_priority_is_read_from_the_configured_metadata_field_team_first(
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    team_metadata: dict[str, str] | None,
+    key_metadata: dict[str, str],
+    expected: str | None,
+) -> None:
+    from litellm.types.utils import PriorityReservationSettings
+
+    monkeypatch.setattr(
+        litellm, "priority_reservation_settings", PriorityReservationSettings(priority_metadata_field=field)
+    )
+    handler = DynamicRateLimitHandler(internal_usage_cache=DualCache())
+    user = UserAPIKeyAuth(metadata=key_metadata, team_metadata=team_metadata)
+
+    assert handler._get_priority_from_user_api_key_dict(user) == expected
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_event_settles_tokens_on_the_configured_metadata_field_pool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import MagicMock
+
+    from litellm.types.utils import ModelResponse, PriorityReservationSettings, Usage
+
+    monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
+    monkeypatch.setattr(litellm, "priority_reservation", {"batch": 0.4, "interactive": 0.6})
+    monkeypatch.setattr(
+        litellm,
+        "priority_reservation_settings",
+        PriorityReservationSettings(priority_metadata_field="priority_class"),
+    )
+    handler = DynamicRateLimitHandler(internal_usage_cache=DualCache())
+    model = "priority-class-settlement"
+    handler.update_variables(
+        llm_router=Router(
+            model_list=[
+                {
+                    "model_name": model,
+                    "litellm_params": {
+                        "model": "gpt-3.5-turbo",
+                        "api_key": "test-key",
+                        "api_base": "test-base",
+                        "tpm": 1000,
+                    },
+                }
+            ]
+        )
+    )
+    incremented: list[RateLimitScope] = []
+
+    async def record(pipeline_operations: Sequence[CounterIncrement], parent_otel_span: object = None) -> None:
+        incremented.extend(op.counter.scope for op in pipeline_operations)
+
+    handler.v3_limiter.async_increment_tokens_with_ttl_preservation = record
+    response = MagicMock(spec=ModelResponse)
+    response.usage = MagicMock(spec=Usage)
+    response.usage.prompt_tokens = 10
+    response.usage.completion_tokens = 20
+    response.usage.total_tokens = 30
+    kwargs = {
+        "standard_logging_object": {
+            "metadata": {"user_api_key_auth_metadata": {"priority_class": "batch"}},
+            "model_group": model,
+        },
+        "litellm_params": {"metadata": {"model_group": model}},
+    }
+
+    with patch(
+        "litellm.proxy.common_utils.callback_utils.get_model_group_from_litellm_kwargs",
+        return_value=model,
+    ):
+        await handler.async_log_success_event(kwargs=kwargs, response_obj=response, start_time=None, end_time=None)
+
+    pools = [scope.descriptor_value for scope in incremented if scope.descriptor_key == "priority_model"]
+    assert pools == [f"{model}:batch"], pools

@@ -149,17 +149,11 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         Returns:
             Priority string if found, None otherwise
         """
-        priority: str | None = None
-
-        # Check team metadata first (takes precedence)
-        if user_api_key_dict.team_metadata is not None:
-            priority = user_api_key_dict.team_metadata.get("priority", None)
-
-        # Fall back to key metadata
-        if priority is None:
-            priority = user_api_key_dict.metadata.get("priority", None)
-
-        return priority
+        field: Final = _get_priority_settings().priority_metadata_field
+        team_priority: Final = (
+            user_api_key_dict.team_metadata.get(field) if user_api_key_dict.team_metadata is not None else None
+        )
+        return team_priority if team_priority is not None else user_api_key_dict.metadata.get(field)
 
     def _normalize_priority_weights(self, model_info: ModelGroupInfo) -> dict[str, float]:
         """
@@ -711,7 +705,10 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             # Get priority from user_api_key_auth_metadata in standard_logging_metadata
             # This is where user_api_key_dict.metadata is stored during pre-call
             user_api_key_auth_metadata: Final = standard_logging_metadata.get("user_api_key_auth_metadata") or {}
-            key_priority: Final[str | None] = user_api_key_auth_metadata.get("priority")
+            configured_priority: Final = user_api_key_auth_metadata.get(
+                _get_priority_settings().priority_metadata_field
+            )
+            key_priority: Final[str | None] = configured_priority if isinstance(configured_priority, str) else None
 
             # Get total tokens from response
             total_tokens = 0
