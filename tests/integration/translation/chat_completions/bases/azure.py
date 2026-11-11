@@ -780,7 +780,7 @@ GPT_6_ASTRA_CONTENT_FILTERS: Final[JsonValue] = [
             "self_harm": {"filtered": False, "severity": "safe"},
         },
         "content_filter_offsets": {"start_offset": 0, "end_offset": 511, "check_offset": 0},
-    }
+    },
 ]
 
 GPT_6_ASTRA_ENCRYPTED_REASONING: Final = (
@@ -1028,6 +1028,7 @@ GPT_5_4_MINI_TEST_CASE: Final = TranslationTestCase(
                             "type": "function",
                         },
                     ],
+                    "provider_specific_fields": {"phase": "commentary", "openai_responses_replay": ANY},
                 },
             }
         ],

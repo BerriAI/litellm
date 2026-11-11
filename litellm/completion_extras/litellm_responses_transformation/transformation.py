@@ -2209,7 +2209,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             replays_openai_history: Record the completed output's item sequence for the next turn
             structured_output: Only the first message item became content
             item_phase: Phase of the message item this chunk belongs to
-            streamed_phases: An earlier text delta of this stream carried a phase
+            streamed_phases: A response.output_item.added event of this stream named a message phase
             reasoning_summary_streamed: Whether earlier chunks already streamed reasoning summary text
 
         Returns:

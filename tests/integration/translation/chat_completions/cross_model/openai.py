@@ -1,4 +1,3 @@
-from collections.abc import Mapping
 from dataclasses import replace
 from typing import Final
 from unittest.mock import ANY
@@ -8,7 +7,6 @@ from integration.translation.case import (
     SSEFrame,
     StreamingTranslationTestCase,
 )
-from integration.translation.chat_completions.cross_model.contracts import followup_request
 from integration.translation.chat_completions.bases.openai import (
     GPT_5_4_MINI_TEST_CASE,
     GPT_5_6_LUNA_TEST_CASE,
@@ -20,10 +18,11 @@ from integration.translation.chat_completions.bases.openai import (
     GPT_6_LUNA_TEST_CASE,
     GPT_6_SOL_TEST_CASE,
 )
+from integration.translation.chat_completions.cross_model.contracts import followup_request, without_replay_record
 from integration.translation.chat_completions.templates import (
     CODING_AGENT_REQUEST,
-    coding_agent_stream_message,
     CODING_AGENT_RESPONSE,
+    coding_agent_stream_message,
 )
 from integration.translation.templates.openai import (
     OPENAI_CHAT_AGENT_REQUEST,
@@ -31,30 +30,6 @@ from integration.translation.templates.openai import (
     OPENAI_RESPONSES_AGENT_REQUEST,
     OPENAI_RESPONSES_AGENT_RESPONSE,
 )
-from pydantic import JsonValue
-
-
-def _without_replay_record(response: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
-    choices: Final = response["choices"]
-    assert isinstance(choices, list) and isinstance(choices[0], dict), choices
-    message: Final = choices[0]["message"]
-    assert isinstance(message, dict), message
-    fields: Final = message["provider_specific_fields"]
-    assert isinstance(fields, dict), fields
-    kept: Final = {key: value for key, value in fields.items() if key != "openai_responses_replay"}
-    return {
-        **response,
-        "choices": [
-            {
-                **choices[0],
-                "message": {
-                    **{key: value for key, value in message.items() if key != "provider_specific_fields"},
-                    **({"provider_specific_fields": kept} if kept else {}),
-                },
-            }
-        ],
-    }
-
 
 GPT_5_MINI_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
     GPT_5_MINI_TEST_CASE,
@@ -585,7 +560,7 @@ GPT_5_4_MINI_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
     GPT_5_4_MINI_TEST_CASE,
     scenario="agent_followup",
     litellm_request=followup_request(
-        GPT_5_4_MINI_TEST_CASE.litellm_request, _without_replay_record(GPT_5_4_MINI_TEST_CASE.expected_litellm_response)
+        GPT_5_4_MINI_TEST_CASE.litellm_request, without_replay_record(GPT_5_4_MINI_TEST_CASE.expected_litellm_response)
     ),
     expected_provider_endpoint="/responses",
     expected_provider_request={
@@ -1373,7 +1348,7 @@ GPT_5_6_LUNA_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
     scenario="agent_followup",
     litellm_request=followup_request(
         GPT_5_6_LUNA_AGENT_TEST_CASE.litellm_request,
-        _without_replay_record(GPT_5_6_LUNA_AGENT_TEST_CASE.expected_litellm_response),
+        without_replay_record(GPT_5_6_LUNA_AGENT_TEST_CASE.expected_litellm_response),
     ),
     expected_provider_endpoint="/responses",
     expected_provider_request={
@@ -1885,7 +1860,7 @@ GPT_5_6_SOL_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
     scenario="agent_followup",
     litellm_request=followup_request(
         GPT_5_6_SOL_AGENT_TEST_CASE.litellm_request,
-        _without_replay_record(GPT_5_6_SOL_AGENT_TEST_CASE.expected_litellm_response),
+        without_replay_record(GPT_5_6_SOL_AGENT_TEST_CASE.expected_litellm_response),
     ),
     expected_provider_endpoint="/responses",
     expected_provider_request={
@@ -2347,7 +2322,7 @@ GPT_5_6_TERRA_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
     scenario="agent_followup",
     litellm_request=followup_request(
         GPT_5_6_TERRA_AGENT_TEST_CASE.litellm_request,
-        _without_replay_record(GPT_5_6_TERRA_AGENT_TEST_CASE.expected_litellm_response),
+        without_replay_record(GPT_5_6_TERRA_AGENT_TEST_CASE.expected_litellm_response),
     ),
     expected_provider_endpoint="/responses",
     expected_provider_request={
@@ -2808,7 +2783,7 @@ GPT_6_ASTRA_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
     scenario="agent_followup",
     litellm_request=followup_request(
         GPT_6_ASTRA_AGENT_TEST_CASE.litellm_request,
-        _without_replay_record(GPT_6_ASTRA_AGENT_TEST_CASE.expected_litellm_response),
+        without_replay_record(GPT_6_ASTRA_AGENT_TEST_CASE.expected_litellm_response),
     ),
     expected_provider_endpoint="/responses",
     expected_provider_request={
@@ -3269,7 +3244,7 @@ GPT_6_LUNA_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
     scenario="agent_followup",
     litellm_request=followup_request(
         GPT_6_LUNA_AGENT_TEST_CASE.litellm_request,
-        _without_replay_record(GPT_6_LUNA_AGENT_TEST_CASE.expected_litellm_response),
+        without_replay_record(GPT_6_LUNA_AGENT_TEST_CASE.expected_litellm_response),
     ),
     expected_provider_endpoint="/responses",
     expected_provider_request={
@@ -3630,7 +3605,7 @@ GPT_6_SOL_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
     GPT_6_SOL_TEST_CASE,
     scenario="agent_followup",
     litellm_request=followup_request(
-        GPT_6_SOL_TEST_CASE.litellm_request, _without_replay_record(GPT_6_SOL_TEST_CASE.expected_litellm_response)
+        GPT_6_SOL_TEST_CASE.litellm_request, without_replay_record(GPT_6_SOL_TEST_CASE.expected_litellm_response)
     ),
     expected_provider_endpoint="/responses",
     expected_provider_request={
@@ -4085,7 +4060,7 @@ GPT_6_1_SOL_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
     scenario="agent_followup",
     litellm_request=followup_request(
         GPT_6_1_SOL_AGENT_TEST_CASE.litellm_request,
-        _without_replay_record(GPT_6_1_SOL_AGENT_TEST_CASE.expected_litellm_response),
+        without_replay_record(GPT_6_1_SOL_AGENT_TEST_CASE.expected_litellm_response),
     ),
     expected_provider_endpoint="/responses",
     expected_provider_request={
