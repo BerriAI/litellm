@@ -133,13 +133,13 @@ def build_upstream_authorize_url(authorization_url: str, params: Mapping[str, st
 
 
 def grant_covers_scopes(
-    granted: tuple[str, ...], requested: tuple[str, ...], server_scopes: Callable[[], frozenset[str]]
+    granted: tuple[object, ...], requested: tuple[str, ...], server_scopes: Callable[[], frozenset[str]]
 ) -> bool:
     """Whether a stored grant holds every requested scope. A grant stored as one comma-joined token, the form
     Slack and GitHub reply with, counts as its parts only when every part is a requested or server scope."""
     if all(scope in granted for scope in requested):
         return True
-    if len(granted) != 1 or "," not in granted[0]:
+    if len(granted) != 1 or not isinstance(granted[0], str) or "," not in granted[0]:
         return False
     parts: Final = frozenset(granted[0].split(","))
     known: Final = frozenset(requested) | server_scopes()

@@ -15299,6 +15299,7 @@ async def test_connect_requires_the_requested_vendor_grant(monkeypatch, granted,
 
 _SLACK_SCOPES: Final = frozenset(("channels:read", "chat:write", "files:write"))
 _COMMA_NAMED_SCOPES: Final = frozenset(("files:read", "files:read,write"))
+_LONG_COMMA_TOKEN: Final = ",".join(f"scope{index}" for index in range(10_000))
 
 
 @pytest.mark.parametrize(
@@ -15316,6 +15317,7 @@ _COMMA_NAMED_SCOPES: Final = frozenset(("files:read", "files:read,write"))
         (("read", "write"), ("read", "write"), frozenset[str](), True),
         ((), ("read",), frozenset(("read",)), False),
         ((), (), frozenset[str](), True),
+        ((_LONG_COMMA_TOKEN,), ("scope1",), _SLACK_SCOPES, False),
     ],
 )
 def test_grant_covers_scopes_splits_a_lone_token_only_into_known_scopes(
@@ -15345,6 +15347,65 @@ def test_grant_covers_scopes_answers_like_a_subset_check_without_reading_server_
         raise AssertionError("server scopes read for a grant with no comma token")
 
     assert grant_covers_scopes(granted, requested, unreachable_server_scopes) is expected
+
+
+@pytest.mark.parametrize(
+    ("granted", "requested", "expected"),
+    [
+        ((None,), ("chat:write",), False),
+        ((5,), ("chat:write",), False),
+        ((1.5,), ("chat:write",), False),
+        ((True,), ("chat:write",), False),
+        ((None,), (), True),
+        (("chat:write", None), ("chat:write",), True),
+        (("channels:read", None), ("chat:write",), False),
+        (("channels:read,chat:write", 5), ("channels:read", "chat:write"), False),
+        ((5, "channels:read,chat:write"), ("channels:read", "chat:write"), False),
+        ((), ("chat:write",), False),
+        (("",), ("chat:write",), False),
+    ],
+)
+def test_grant_covers_scopes_answers_a_grant_with_no_lone_comma_token_like_the_subset_check(
+    granted: tuple[object, ...], requested: tuple[str, ...], expected: bool
+) -> None:
+    from litellm.proxy.mcp_server.oauth_utils import grant_covers_scopes
+
+    def unreachable_server_scopes() -> frozenset[str]:
+        raise AssertionError("server scopes read for a grant with no lone comma token")
+
+    answer_before_comma_split: Final = set(requested).issubset(granted)
+    assert answer_before_comma_split is expected
+    assert grant_covers_scopes(granted, requested, unreachable_server_scopes) is expected
+
+
+@pytest.mark.parametrize("granted", [(["a,b"],), ([","],), ({",": 1},), ({"a": 1},)])
+@pytest.mark.parametrize(("requested", "expected"), [(("chat:write",), False), ((), True)])
+def test_grant_covers_scopes_answers_an_unhashable_grant_without_raising(
+    granted: tuple[object, ...], requested: tuple[str, ...], expected: bool
+) -> None:
+    from litellm.proxy.mcp_server.oauth_utils import grant_covers_scopes
+
+    def unreachable_server_scopes() -> frozenset[str]:
+        raise AssertionError("server scopes read for a non-string grant")
+
+    assert grant_covers_scopes(granted, requested, unreachable_server_scopes) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lone_scope", [None, 5, [","]])
+async def test_connect_reads_a_lone_non_string_grant_as_absent(
+    monkeypatch: pytest.MonkeyPatch, lone_scope: object
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.mcp_server import db
+    from litellm.proxy.mcp_server import discoverable_endpoints as endpoints
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "non-string-grant-test-salt")
+    stored: Final = db.encrypt_value_helper(json.dumps({**_stored_grant(), "scopes": [lone_scope]}))
+    prisma: Final = MagicMock()
+    prisma.db.litellm_mcpusercredentials.find_unique = AsyncMock(return_value=SimpleNamespace(credential_b64=stored))
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    assert await endpoints._vendor_credential_state("owner", "server", ("chat:write",)) == "absent"
 
 
 def test_server_scope_names_joins_configured_and_published_scopes() -> None:
