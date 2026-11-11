@@ -48,7 +48,9 @@ export const getAvailablePages = (): PageMetadata[] => {
           page: item.page,
           label: labelText(item),
           group: groupText(group.groupLabel),
-          description: pageDescriptions[item.page] ? i18n.t(pageDescriptions[item.page]) : "No description available",
+          description: pageDescriptions[item.page]
+            ? i18n.t(pageDescriptions[item.page])
+            : i18n.t("adminPanel.pageVisibility.noDescription"),
         });
       }
 
@@ -64,7 +66,7 @@ export const getAvailablePages = (): PageMetadata[] => {
               group: `${groupText(group.groupLabel)} > ${parentLabel}`,
               description: pageDescriptions[child.page]
                 ? i18n.t(pageDescriptions[child.page])
-                : "No description available",
+                : i18n.t("adminPanel.pageVisibility.noDescription"),
             });
           }
         });

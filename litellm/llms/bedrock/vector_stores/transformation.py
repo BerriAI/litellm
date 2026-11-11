@@ -1,11 +1,12 @@
 from collections.abc import Mapping
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast, runtime_checkable
 from urllib.parse import urlparse
 
 import httpx
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
@@ -32,6 +33,32 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+@runtime_checkable
+class _SupportsSetDefault(Protocol):
+    def setdefault(self, key: str, default: object, /) -> object: ...
+
+
+@runtime_checkable
+class _SupportsSetItem(Protocol):
+    def __setitem__(self, key: str, value: object, /) -> None: ...
+
+
+def _setdefault_target(value: object) -> _SupportsSetDefault:
+    if isinstance(value, _SupportsSetDefault):
+        return value
+    raise AttributeError(f"{type(value).__name__!r} object has no attribute 'setdefault'", name="setdefault", obj=value)
+
+
+def _item_assignment_target(value: object) -> _SupportsSetItem:
+    if isinstance(value, _SupportsSetItem):
+        return value
+    raise TypeError(f"'{type(value).__name__}' object does not support item assignment")
+
+
+def _vector_search_configuration(retrieval_config: object) -> Mapping[str, object]:
+    return decoded_json_object(decoded_json_object(retrieval_config).get("vectorSearchConfiguration", {}))
 
 
 class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
@@ -206,7 +233,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
-        extra_body: dict[str, Any] | None = None,
+        extra_body: dict[str, object] | None = None,
     ) -> tuple[str, dict]:
         if isinstance(query, list):
             query = " ".join(query)
@@ -218,30 +245,33 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             "retrievalQuery": BedrockKBRetrievalQuery(text=query),
         }
 
-        retrieval_config: dict[str, Any] = {}
-
-        if isinstance(extra_body, dict):
-            retrieval_config = deepcopy(
-                extra_body.get("retrievalConfiguration") or extra_body.get("retrieval_configuration") or {}
-            )
+        retrieval_config: Final[object] = (
+            deepcopy(extra_body.get("retrievalConfiguration") or extra_body.get("retrieval_configuration") or {})
+            if isinstance(extra_body, dict)
+            else {}
+        )
         max_results: Final = vector_store_search_optional_params.get("max_num_results")
         if max_results is not None:
-            existing_number_of_results = retrieval_config.get("vectorSearchConfiguration", {}).get("numberOfResults")
+            existing_number_of_results: Final = _vector_search_configuration(retrieval_config).get("numberOfResults")
             if existing_number_of_results is not None and existing_number_of_results != max_results:
                 verbose_logger.debug(
                     "Overriding extra_body retrievalConfiguration.vectorSearchConfiguration.numberOfResults (%s) with max_num_results=%s",
                     existing_number_of_results,
                     max_results,
                 )
-            retrieval_config.setdefault("vectorSearchConfiguration", {})["numberOfResults"] = max_results
+            _item_assignment_target(_setdefault_target(retrieval_config).setdefault("vectorSearchConfiguration", {}))[
+                "numberOfResults"
+            ] = max_results
         filters: Final = vector_store_search_optional_params.get("filters")
         if filters is not None:
-            existing_filter: Final = retrieval_config.get("vectorSearchConfiguration", {}).get("filter")
+            existing_filter: Final = _vector_search_configuration(retrieval_config).get("filter")
             if existing_filter is not None and existing_filter != filters:
                 verbose_logger.debug(
                     "Overriding extra_body retrievalConfiguration.vectorSearchConfiguration.filter with filters from vector_store_search_optional_params"
                 )
-            retrieval_config.setdefault("vectorSearchConfiguration", {})["filter"] = filters
+            _item_assignment_target(_setdefault_target(retrieval_config).setdefault("vectorSearchConfiguration", {}))[
+                "filter"
+            ] = filters
         if retrieval_config:
             request_body["retrievalConfiguration"] = cast(BedrockKBRetrievalConfiguration, retrieval_config)
         user_context: Final = self._user_context(extra_body=extra_body, litellm_params=litellm_params)

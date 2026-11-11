@@ -6,10 +6,11 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from functools import partial
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, NoReturn, cast
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Final, NoReturn, cast
 
 import httpx
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch
+from pydantic import BaseModel, BeforeValidator, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -30,6 +31,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.asyncify import is_event_loop_running
 from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
     coerce_token_limit,
     drops_unsupported_params,
     map_finish_reason,
@@ -71,7 +73,8 @@ from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE, warn
 from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp
 from litellm.llms.base_llm.base_utils import (
     ResponseFormatSchema,
-    as_json_object,
+    answer_json_text,
+    decoded_answer_object,
     response_format_answer_json,
     response_format_schema,
     split_response_format_answer,
@@ -110,11 +113,11 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParam,
-    OpenAIChatCompletionFinishReason,
     OpenAIMcpServerTool,
     OpenAIWebSearchOptions,
 )
 from litellm.types.responses.main import (
+    HOSTED_WEB_TOOL_NAMES,
     OutputCodeInterpreterCall,
     build_code_interpreter_log_outputs,
     build_web_search_call,
@@ -149,7 +152,10 @@ from ..common_utils import (
     requires_native_compaction_beta,
     stop_reason_provider_specific_fields,
     strip_advisor_blocks_from_messages,
+    tool_search_result_renamed,
     tools_marked_for_a_tool_config_point,
+    validated_object_mapping,
+    without_stale_tool_search_results,
 )
 
 if TYPE_CHECKING:
@@ -187,9 +193,9 @@ _ANTHROPIC_TOOL_NAME_MAX_LEN: Final = 128
 _DEFER_LOADING_ADAPTER: Final = TypeAdapter(bool)
 _TOOL_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _TOOLS_ADAPTER: Final = TypeAdapter(list[object])
-_LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_CONTENT_BLOCKS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
 _RESPONSE_BLOCKS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
-_PENDING_WEB_SEARCH_RESULT: Final = MappingProxyType({"content": ()})
+_LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _REQUEST_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _NATIVE_OUTPUT_STRING_FORMATS: Final = frozenset(
     ("date-time", "time", "date", "duration", "email", "hostname", "uri", "ipv4", "ipv6", "uuid")
@@ -346,6 +352,51 @@ def _validated_defer_loading(value: object) -> bool:
         raise ValueError("defer_loading must be a boolean") from exc
 
 
+def _hosted_web_tool_use(block: object) -> tuple[str, str, object] | None:
+    match block:
+        case {
+            "type": "server_tool_use",
+            "name": str() as name,
+            "id": str() as call_id,
+            "input": object() as tool_input,
+        } if name in HOSTED_WEB_TOOL_NAMES:
+            return call_id, name, tool_input
+        case _:
+            return None
+
+
+def _server_tool_use_id(block: object) -> str | None:
+    match block:
+        case {"type": "server_tool_use", "id": str() as call_id}:
+            return call_id
+        case _:
+            return None
+
+
+def _dict_or_empty(value: object) -> object:
+    return validated_object_mapping(value) or {}
+
+
+_RESPONSE_BODY_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(
+    Annotated[Mapping[str, object], BeforeValidator(_dict_or_empty)]
+)
+
+
+def _server_tool_use_ids(completion_response: Mapping[str, object]) -> frozenset[str]:
+    blocks: Final = _CONTENT_BLOCKS_ADAPTER.validate_python(completion_response.get("content") or ())
+    return frozenset(filter(None, map(_server_tool_use_id, blocks)))
+
+
+def _hosted_web_call(call_id: str, tool_name: str, tool_input: object, result: object) -> ResponseFunctionWebSearch:
+    return build_web_search_call(
+        tool_id=call_id,
+        tool_input=tool_input,
+        result=result,
+        status=None if result is not None else "in_progress",
+        tool_name=tool_name,
+    )
+
+
 class _AnthropicUsageIteration(TypedDict, total=False):
     """One entry of the ``usage.iterations`` array on an Anthropic response."""
 
@@ -361,6 +412,17 @@ class _AnthropicToolResultBlock(TypedDict, total=False):
     type: ReadOnly[str]
     tool_use_id: ReadOnly[str]
     content: ReadOnly[object]
+
+
+def _provider_fields_with_tool_names(message: object, forward_map: Mapping[str, str]) -> Mapping[str, object] | None:
+    provider_fields: Final = as_str_mapping(message_field(message, "provider_specific_fields"))
+    replayed_results: Final = parts_of(provider_fields.get("tool_results")) if provider_fields is not None else ()
+    if provider_fields is None or not replayed_results:
+        return None
+    return {
+        **provider_fields,
+        "tool_results": [tool_search_result_renamed(result, forward_map) for result in replayed_results],
+    }
 
 
 _ENUM_TYPE_CHECKS: Final[Mapping[object, Callable[[object], bool]]] = MappingProxyType(
@@ -409,7 +471,7 @@ def _basic_sanitize_anthropic_tool_name(name: str) -> str:
     return _ANTHROPIC_TOOL_NAME_INVALID_CHARS.sub("_", name)[:_ANTHROPIC_TOOL_NAME_MAX_LEN]
 
 
-def _build_anthropic_tool_name_maps(
+def build_anthropic_tool_name_maps(
     original_names: list[str],
 ) -> tuple[dict[str, str], dict[str, str]]:
     """Build (forward, reverse) tool-name maps for a single request.
@@ -1410,8 +1472,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         messages: list[AllMessageValues],
         name_forward_map: dict[str, str],
     ) -> list[AllMessageValues]:
-        """Return a copy of `messages` with tool_call/function_call names
-        rewritten using the per-request forward map.
+        """Return a copy of `messages` with tool_call/function_call names, and
+        the tools a replayed tool search found, rewritten using the per-request
+        forward map.
 
         Only mutates messages whose tool_call/function_call name is *in* the
         forward map. Names absent from the map (already valid, no collision)
@@ -1427,7 +1490,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 continue
             tool_calls = msg.get("tool_calls")
             function_call = msg.get("function_call")
-            if not tool_calls and not function_call:
+            renamed_provider_fields = _provider_fields_with_tool_names(msg, name_forward_map)
+            if not tool_calls and not function_call and renamed_provider_fields is None:
                 new_messages.append(msg)
                 continue
             new_msg = dict(msg)
@@ -1453,6 +1517,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 new_fc = dict(function_call)
                 new_fc["name"] = name_forward_map[fc_name]
                 new_msg["function_call"] = new_fc
+            if renamed_provider_fields is not None:
+                new_msg["provider_specific_fields"] = renamed_provider_fields
             new_messages.append(cast(AllMessageValues, new_msg))
         return new_messages
 
@@ -1469,7 +1535,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         callers that need to compute the maps from the raw OpenAI shape --
         e.g. test setup or future pre-mapping consumers.
 
-        See _build_anthropic_tool_name_maps for the collision rules. Pulls
+        See build_anthropic_tool_name_maps for the collision rules. Pulls
         the original name out of either ``{"function": {"name": ...}}``
         (legacy OpenAI shape) or ``{"name": ...}`` (rare top-level shape).
         """
@@ -1482,7 +1548,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 original = tool.get("name")
             if isinstance(original, str) and original:
                 original_names.append(original)
-        return _build_anthropic_tool_name_maps(original_names)
+        return build_anthropic_tool_name_maps(original_names)
 
     @staticmethod
     def _sanitize_tool_names_in_request(
@@ -1510,7 +1576,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # 1. Collect originals from the Anthropic-shaped custom-tool entries.
         #    Order matters: the first occurrence wins the canonical slot;
         #    later collisions get numeric suffixes (see
-        #    ``_build_anthropic_tool_name_maps``).
+        #    ``build_anthropic_tool_name_maps``).
         original_names: Final[list[str]] = []
         for t in tools:
             if not isinstance(t, dict):
@@ -1524,7 +1590,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if not original_names:
             return {}, {}
 
-        forward, reverse = _build_anthropic_tool_name_maps(original_names)
+        forward, reverse = build_anthropic_tool_name_maps(original_names)
         if not forward:
             # Every name was already valid -- nothing to do.
             return forward, reverse
@@ -1670,7 +1736,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         llm_provider: str = "anthropic",
     ) -> AnthropicThinkingParam | None:
         """Capability probes read the cost map under ``custom_llm_provider``; ``llm_provider`` only tags raised exceptions."""
-        if reasoning_effort is None or reasoning_effort == "none":
+        if reasoning_effort is None:
+            return None
+        if reasoning_effort == "none":
+            if AnthropicModelInfo.thinks_by_default(
+                model, custom_llm_provider
+            ) and not AnthropicModelInfo._is_always_on_thinking_model(model, custom_llm_provider):
+                return AnthropicThinkingParam(type="disabled")
             return None
         if AnthropicConfig._is_adaptive_thinking_model(model, custom_llm_provider):
             # without display, Anthropic defaults adaptive thinking to
@@ -2078,12 +2150,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     custom_llm_provider=self._resolved_provider,
                     llm_provider=self._resolved_provider,
                 )
-                if mapped_thinking is None:
+                if mapped_thinking is None or mapped_thinking.get("type") == "disabled":
                     optional_params.pop("thinking", None)
                     optional_params.pop("output_config", None)
-                else:
+                if mapped_thinking is not None:
                     optional_params["thinking"] = mapped_thinking
-                    if AnthropicConfig._is_adaptive_thinking_model(model, self._resolved_provider):
+                    if mapped_thinking.get("type") != "disabled" and AnthropicConfig._is_adaptive_thinking_model(
+                        model, self._resolved_provider
+                    ):
                         mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(effort_value)
                         if mapped_effort is None:
                             AnthropicConfig._raise_invalid_reasoning_effort(
@@ -2488,7 +2562,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # The reverse map only contains entries for names that were actually
         # rewritten -- so a tool legitimately named ``foo_bar`` is never
         # incorrectly retyped to ``foo/bar`` on the response side.
-        # See _build_anthropic_tool_name_maps for the collision-handling
+        # See build_anthropic_tool_name_maps for the collision-handling
         # rules and rationale.
         _name_forward_map, _name_reverse_map = self._sanitize_tool_names_in_request(
             optional_params=optional_params,
@@ -2544,8 +2618,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         ## Prevents Anthropic 400: advisor_tool_result in history requires advisor tool.
         _all_tools: Final = optional_params.get("tools") or []
         _has_advisor = any(isinstance(t, dict) and t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE for t in _all_tools)
-        if not _has_advisor:
-            anthropic_messages = strip_advisor_blocks_from_messages(anthropic_messages)
+        anthropic_messages = list(
+            without_stale_tool_search_results(
+                anthropic_messages if _has_advisor else strip_advisor_blocks_from_messages(anthropic_messages),
+                _TOOLS_ADAPTER.validate_python(_all_tools),
+            )
+        )
 
         ## Add code_execution tool if container_upload is in messages
         _tools: Final = (
@@ -3079,25 +3157,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         self,
         web_search_results: Sequence[object],
         completion_response: Mapping[str, object],
-    ) -> list[object]:
-        blocks: Final = _RESPONSE_BLOCKS.validate_python(completion_response.get("content") or ())
-        results_by_id: Final = {
-            tool_use_id: result
+    ) -> list[ResponseFunctionWebSearch]:
+        blocks: Final = _CONTENT_BLOCKS_ADAPTER.validate_python(completion_response.get("content") or ())
+        results_by_call: Final = {
+            (tool_use_id, result.get("type")): result
             for result in _RESPONSE_BLOCKS.validate_python(web_search_results)
-            if result.get("type") == "web_search_tool_result"
-            and isinstance((tool_use_id := result.get("tool_use_id")), str)
+            if isinstance((tool_use_id := result.get("tool_use_id")), str)
         }
         return [
-            build_web_search_call(
-                tool_id=call_id,
-                tool_input=block.get("input"),
-                result=results_by_id.get(call_id, _PENDING_WEB_SEARCH_RESULT),
-                status=None if call_id in results_by_id else "in_progress",
-            )
-            for block in blocks
-            if block.get("type") == "server_tool_use"
-            and block.get("name") == "web_search"
-            and isinstance((call_id := block.get("id")), str)
+            _hosted_web_call(call_id, tool_name, tool_input, results_by_call.get((call_id, f"{tool_name}_tool_result")))
+            for call_id, tool_name, tool_input in filter(None, map(_hosted_web_tool_use, blocks))
         ]
 
     def _build_provider_specific_fields(
@@ -3109,6 +3178,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         tool_results: Sequence[_AnthropicToolResultBlock] | None,
         compaction_blocks: Sequence[object] | None,
         tool_calls: list[ChatCompletionToolCallChunk],
+        server_tool_use_ids: frozenset[str],
     ) -> dict[str, object]:
         provider_specific_fields: Final[dict[str, object]] = {
             "citations": citations,
@@ -3147,6 +3217,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         if compaction_blocks is not None:
             provider_specific_fields["compaction_blocks"] = compaction_blocks
+
+        server_tool_calls: Final = [tc for tc in tool_calls if tc["id"] in server_tool_use_ids]
+        if server_tool_calls:
+            provider_specific_fields["server_tool_calls"] = server_tool_calls
 
         stop_reason_fields: Final = stop_reason_provider_specific_fields(
             STOP_REASON_FIELDS.validate_python(completion_response)
@@ -3187,7 +3261,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         # Reverse-map rewritten tool names back to caller's originals so a
         # downstream OpenAI-style dispatcher can match on the registered name.
-        # See _build_anthropic_tool_name_maps for why this is keyed on the
+        # See build_anthropic_tool_name_maps for why this is keyed on the
         # per-request reverse map (so a tool legitimately named `foo_bar` is
         # never incorrectly retyped to `foo/bar`). No-op when the map is
         # empty (the common case).
@@ -3207,6 +3281,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         ):
             text_content = prefix_prompt + text_content
 
+        server_tool_use_ids: Final = _server_tool_use_ids(_RESPONSE_BODY_ADAPTER.validate_python(completion_response))
+        client_tool_calls: Final = [tc for tc in tool_calls if tc["id"] not in server_tool_use_ids]
         provider_specific_fields: Final = self._build_provider_specific_fields(
             completion_response,
             citations,
@@ -3215,11 +3291,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             tool_results,
             compaction_blocks,
             tool_calls,
+            server_tool_use_ids,
         )
 
         json_mode_message, tool_calls_for_message, json_extra_content = self._resolve_json_mode_non_streaming(
             json_mode=json_mode,
-            tool_calls=tool_calls,
+            tool_calls=client_tool_calls,
             response_format_schema=response_format_schema,
         )
         merged_text = text_content or ""
@@ -3258,10 +3335,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         model_response.choices[0].message = _message
         model_response.hidden_params["original_response"] = completion_response["content"]
-        model_response.choices[0].finish_reason = cast(
-            OpenAIChatCompletionFinishReason,
-            map_finish_reason(completion_response["stop_reason"]),
-        )
+        model_response.choices[0].finish_reason = map_finish_reason(completion_response["stop_reason"])
 
         usage: Final = self.calculate_usage(
             usage_object=completion_response["usage"],
@@ -3373,22 +3447,21 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
         if split_answer is not None:
             return litellm.Message(content=response_format_answer_json(split_answer))
-        try:
-            payload: Final = _DECODED_JSON.validate_python(json.loads(json_mode_content_str))
-        except (json.JSONDecodeError, RecursionError):
-            # json decode error does occur, return the original tool response str
+        payload_object: Final = decoded_answer_object(json_mode_content_str)
+        if payload_object is None:
             return litellm.Message(content=json_mode_content_str)
         if response_format_schema is not None:
             return litellm.Message(
                 content=response_format_answer_json(
-                    unwrap_response_format_envelope(payload, response_format_schema, RESPONSE_FORMAT_TOOL_NAME)
+                    unwrap_response_format_envelope(payload_object, response_format_schema, RESPONSE_FORMAT_TOOL_NAME)
                 )
             )
         # a lot of the times the `values` key is not present in the tool response
         # relevant issue: https://github.com/BerriAI/litellm/issues/6741
-        payload_object: Final = as_json_object(payload)
-        values: Final = None if payload_object is None else payload_object.get("values")
-        return litellm.Message(content=json.dumps(payload if values is None else values))
+        values: Final = payload_object.get("values")
+        return litellm.Message(
+            content=answer_json_text(payload_object if values is None else values, ensure_ascii=True)
+        )
 
     @classmethod
     def convert_tool_response_to_message(

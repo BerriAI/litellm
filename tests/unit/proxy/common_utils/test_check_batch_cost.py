@@ -362,17 +362,19 @@ class TestCheckBatchCost:
         assert update_data["status"] == "complete"
 
     @pytest.mark.asyncio
-    async def test_output_fetch_passes_deployment_credentials_as_trusted_snapshot(
-        self, check_batch_cost_instance, mock_prisma_client, mock_llm_router
+    async def test_output_fetch_reads_from_the_deployment_bucket(
+        self, check_batch_cost_instance, mock_prisma_client, mock_llm_router, monkeypatch
     ):
-        """Bedrock resolves the output bucket ONLY from the immutable snapshot kwarg.
+        """Without the deployment's s3_bucket_name the cost poller cannot read a Bedrock
+        batch's output file, and every completed Bedrock batch stays unbilled."""
+        import httpx
 
-        Spreading the credentials as plain kwargs is not enough: get_litellm_params drops
-        s3_bucket_name, so without _litellm_internal_model_credentials the cost poller
-        cannot read the output file and every completed Bedrock batch stays unbilled.
-        """
-        from types import MappingProxyType
-        from unittest.mock import patch
+        import litellm
+
+        monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+        monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
 
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=1)
         mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
@@ -386,7 +388,7 @@ class TestCheckBatchCost:
 
         mock_response = MagicMock()
         mock_response.status = "completed"
-        mock_response.output_file_id = "file-output-123"
+        mock_response.output_file_id = "s3://configured-batch-bucket/litellm-batch-outputs/job-1/input.jsonl.out"
         mock_response.model_dump_json.return_value = '{"id":"batch-1","status":"completed"}'
 
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
@@ -395,6 +397,8 @@ class TestCheckBatchCost:
                 "custom_llm_provider": "bedrock",
                 "s3_bucket_name": "configured-batch-bucket",
                 "aws_region_name": "us-east-1",
+                "aws_access_key_id": "AKIAEXAMPLE",
+                "aws_secret_access_key": "secret",
             }
         )
 
@@ -404,12 +408,10 @@ class TestCheckBatchCost:
         mock_deployment.model_info.model_dump.return_value = {}
         mock_llm_router.registry.return_value.deployment = MagicMock(return_value=mock_deployment)
 
-        mock_file_content = MagicMock()
-        mock_file_content.content = b'{"recordId":"req-1"}'
-
         decoded_id = "llm_model_id,model-123;llm_batch_id,batch-456;"
 
         with (
+            respx.mock(assert_all_called=False) as s3,
             patch(
                 "litellm.proxy.openai_files_endpoints.common_utils._is_base64_encoded_unified_file_id",
                 side_effect=[decoded_id, None],
@@ -422,11 +424,6 @@ class TestCheckBatchCost:
                 "litellm.proxy.openai_files_endpoints.common_utils.get_batch_id_from_unified_batch_id",
                 return_value="batch-456",
             ),
-            patch(
-                "litellm.files.main.afile_content",
-                new_callable=AsyncMock,
-                return_value=mock_file_content,
-            ) as mock_afile_content,
             patch(
                 "litellm.batches.batch_utils.get_file_content_as_dictionary",
                 return_value=[{"recordId": "req-1"}],
@@ -447,17 +444,15 @@ class TestCheckBatchCost:
             mock_logging_obj = MagicMock()
             mock_logging_obj.async_success_handler = AsyncMock()
             mock_logging_cls.return_value = mock_logging_obj
+            s3.get(url__regex=r"^https://s3\.us-east-1\.amazonaws\.com/").mock(
+                return_value=httpx.Response(200, content=b'{"recordId":"req-1"}')
+            )
 
             await check_batch_cost_instance.check_batch_cost()
 
-        mock_afile_content.assert_awaited()
-        passed_kwargs = mock_afile_content.await_args[1]
-        snapshot = passed_kwargs.get("_litellm_internal_model_credentials")
-        assert snapshot is not None, "cost poller must pass the trusted credential snapshot"
-        assert isinstance(snapshot, MappingProxyType), (
-            "snapshot must be a MappingProxyType; a plain dict is rejected by get_configured_s3_bucket_name"
-        )
-        assert snapshot["s3_bucket_name"] == "configured-batch-bucket"
+            assert [str(call.request.url) for call in s3.calls] == [
+                "https://s3.us-east-1.amazonaws.com/configured-batch-bucket/litellm-batch-outputs/job-1/input.jsonl.out"
+            ]
 
     @pytest.mark.asyncio
     async def test_poller_prices_with_deployment_registered_batch_rates(
@@ -2302,6 +2297,10 @@ class TestManagedOutputFileIdEncodesPublicModelGroup:
         return job
 
     async def _run(self, job: MagicMock) -> str:
+        output_file_id, _ = await self._run_capturing(job, self._RAW_OUTPUT_FILE_ID)
+        return output_file_id
+
+    async def _run_capturing(self, job: MagicMock, raw_output_file_id: str) -> tuple[str, Mapping[str, object]]:
         from litellm_enterprise.proxy.common_utils.check_batch_cost import (
             CheckBatchCost,
         )
@@ -2347,7 +2346,7 @@ class TestManagedOutputFileIdEncodesPublicModelGroup:
             object="batch",
             status="completed",
         )
-        response.output_file_id = self._RAW_OUTPUT_FILE_ID
+        response.output_file_id = raw_output_file_id
 
         file_content = MagicMock()
         file_content.content = b'{"id":"req-1"}'
@@ -2357,7 +2356,7 @@ class TestManagedOutputFileIdEncodesPublicModelGroup:
                 "litellm.files.main.afile_content",
                 new_callable=AsyncMock,
                 return_value=file_content,
-            ),
+            ) as provider_file_content,
             patch(
                 "litellm.batches.batch_utils.get_file_content_as_dictionary",
                 return_value=[{"id": "req-1"}],
@@ -2381,7 +2380,17 @@ class TestManagedOutputFileIdEncodesPublicModelGroup:
                 prom_logger=None,
             )
 
-        return response.output_file_id
+        return response.output_file_id, provider_file_content.call_args.kwargs
+
+    @pytest.mark.asyncio
+    async def test_output_written_to_a_team_bucket_is_billed_from_that_bucket(self):
+        team_output: Final = "s3://team-a-bucket/litellm-batch-outputs/job-1/input.jsonl.out"
+
+        _, download = await self._run_capturing(
+            self._job(self._managed_input_file_id(self._PUBLIC_MODEL_GROUP)), team_output
+        )
+
+        assert (download["file_id"], download["stored_s3_bucket_name"]) == (team_output, "team-a-bucket")
 
     @pytest.mark.asyncio
     async def test_target_model_names_comes_from_input_file_not_provider_model(self):

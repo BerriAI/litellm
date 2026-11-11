@@ -49,6 +49,7 @@ PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS: Final = frozenset(
     {
         "model_per_key",
         "model_per_team",
+        "model_per_end_user",
         "model_per_organization",
         "model_per_project",
         "model_per_project_itpm",

@@ -17,6 +17,7 @@ import {
   DataTable,
   DataTableFilterDrawer,
   DataTableFilterField,
+  type FilterDraft,
   DataTableToolbar,
 } from "@/components/shared/DataTable";
 import { SearchSelect } from "@/components/shared/SearchSelect";
@@ -183,7 +184,7 @@ export function UsersTable({
             title={t("users.table.filters.title")}
             description={t("users.table.filters.description")}
           >
-            {({ get, set }) => (
+            {({ get, set }: FilterDraft<"sso_user_id" | "team" | "user_id" | "user_role">) => (
               <>
                 <DataTableFilterField label={t("users.table.filters.userId")}>
                   <Input

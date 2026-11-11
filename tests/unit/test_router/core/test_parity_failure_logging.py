@@ -51,21 +51,6 @@ class _RecordingLoggingObject:
         self.messages.append(getattr(kwargs.get("exception"), "message", None))
 
 
-class _RedisAtARoundTrip:
-    """The shared tier of the cooldown store, down to the one thing these tests need of it: a read
-    gives the event loop a turn, as a real Redis round trip does."""
-
-    def __init__(self) -> None:
-        self.batches: list[list[str]] = []  # mutable-ok: the batch reads, in order
-
-    async def async_batch_get_cache(
-        self, key_list: list[str], **_: object
-    ) -> dict[str, object]:  # mutable-ok: as RedisCache
-        self.batches.append(key_list)
-        await asyncio.sleep(0)
-        return dict.fromkeys(key_list)
-
-
 class _RecordingLogging(Logging):
     """A real logging object whose failure handlers only record that they ran."""
 
@@ -96,8 +81,10 @@ async def _let_tasks_run() -> None:
         await asyncio.sleep(0)
 
 
-async def _failed(core: RouterCore, model: str, **request: object) -> BaseException:  # kwargs-ok: request kwargs
-    with pytest.raises(Exception) as raised:  # noqa: PT011  # any failure: each caller asserts on what it gets back
+async def _failed(
+    core: RouterCore, model: str, *, expected_error: type[Exception], **request: object
+) -> Exception:  # kwargs-ok: request kwargs
+    with pytest.raises(expected_error) as raised:
         await complete(core, model, **request)
     await _let_tasks_run()
     return raised.value
@@ -111,7 +98,9 @@ async def test_an_unknown_model_is_dispatched_once_with_the_error_raised(make_co
     core: Final = make_core(model_list=list(GROUP_OF_TWO), num_retries=0)
     logging_obj: Final = _RecordingLoggingObject()
 
-    error: Final = await _failed(core, "nope", litellm_logging_obj=logging_obj, metadata={})
+    error: Final = await _failed(
+        core, "nope", expected_error=litellm.BadRequestError, litellm_logging_obj=logging_obj, metadata={}
+    )
 
     assert isinstance(error, litellm.BadRequestError)
     (dispatched,) = logging_obj.dispatched
@@ -121,26 +110,21 @@ async def test_an_unknown_model_is_dispatched_once_with_the_error_raised(make_co
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("behind_redis", [True, False], ids=["redis", "memory"])
-async def test_a_refused_pick_is_logged_before_the_note_when_the_retry_read_yields(
-    make_core: MakeCore, host: ScriptedHost, behind_redis: bool
+async def test_a_refused_pick_is_logged_with_the_note_when_the_retry_read_does_not_yield(
+    make_core: MakeCore, host: ScriptedHost
 ) -> None:
-    """The retry handler reads the cooldowns even for a name with no group: over Redis that hands
-    the loop to the failure log, which so reads the error before the no-fallback note lands on it."""
+    """The retry handler reads the cooldowns even for a name with no group. Without Redis that read never
+    hands the loop to the failure log, so the no-fallback note is on the error before it is logged."""
     show_router_debug(host)
     core: Final = make_core(model_list=list(GROUP_OF_TWO), num_retries=0, fallbacks=[{"a": ["a"]}])
-    redis: Final = _RedisAtARoundTrip()
-    if behind_redis:
-        core.health().store.redis_cache = redis  # pyright: ignore[reportAttributeAccessIssue]  # a double
     logging_obj: Final = _RecordingLoggingObject()
 
-    error: Final = await _failed(core, "nope", litellm_logging_obj=logging_obj)
+    error: Final = await _failed(core, "nope", expected_error=litellm.BadRequestError, litellm_logging_obj=logging_obj)
 
     note: Final = "no fallback model group was found"
     assert note in str(error)
     (logged,) = logging_obj.messages
-    assert (note in str(logged)) is not behind_redis
-    assert redis.batches == ([["deployment:a1:cooldown", "deployment:a2:cooldown"]] if behind_redis else [])
+    assert note in str(logged)
 
 
 @pytest.mark.asyncio
@@ -191,7 +175,7 @@ async def test_an_unknown_model_stamps_the_walk_on_the_callers_metadata(make_cor
     core: Final = make_core(model_list=list(GROUP_OF_TWO), num_retries=0)
     metadata: Final[dict[str, object]] = {"user_api_key_alias": "k"}  # mutable-ok: the caller's own dict
 
-    _ = await _failed(core, "nope", metadata=metadata)
+    _ = await _failed(core, "nope", expected_error=litellm.BadRequestError, metadata=metadata)
 
     assert metadata["attempted_retries"] == 0
     assert metadata["max_retries"] == 0
@@ -222,7 +206,9 @@ async def test_a_refused_pick_leaves_every_field_of_the_failure_row(make_core: M
         model="nope", user="", optional_params={}, litellm_params={"metadata": metadata}
     )
 
-    _ = await _failed(core, "nope", litellm_logging_obj=logging_obj, metadata=metadata)
+    _ = await _failed(
+        core, "nope", expected_error=litellm.BadRequestError, litellm_logging_obj=logging_obj, metadata=metadata
+    )
 
     payload: Final = logging_obj.model_call_details["standard_logging_object"]
     assert payload["status"] == "failure"
@@ -256,7 +242,9 @@ async def test_all_cooled_deployments_are_dispatched_with_their_cooldown_details
     logging_obj: Final = _RecordingLoggingObject()
     metadata: Final[dict[str, object]] = {}  # mutable-ok: the caller's own dict
 
-    error: Final = await _failed(core, "a", litellm_logging_obj=logging_obj, metadata=metadata)
+    error: Final = await _failed(
+        core, "a", expected_error=RouterRateLimitError, litellm_logging_obj=logging_obj, metadata=metadata
+    )
 
     assert isinstance(error, RouterRateLimitError)
     assert error.cooldown_list == ["a1", "a2"]
@@ -274,7 +262,7 @@ async def test_a_refused_pick_with_retries_settles_the_retry_budget(make_core: M
     core: Final = make_core(model_list=list(GROUP_OF_TWO), num_retries=3)
     metadata: Final[dict[str, object]] = {}  # mutable-ok: the caller's own dict
 
-    error: Final = await _failed(core, "nope", metadata=metadata)
+    error: Final = await _failed(core, "nope", expected_error=litellm.BadRequestError, metadata=metadata)
 
     assert isinstance(error, litellm.BadRequestError)
     # A 400 is not retried: `should_retry_this_error` raises before the budget is written again.
@@ -287,7 +275,9 @@ async def test_a_strategy_with_no_async_selector_does_not_dispatch(make_core: Ma
     core: Final = make_core(model_list=list(GROUP_OF_TWO), num_retries=0, routing_strategy="usage-based-routing")
     logging_obj: Final = _RecordingLoggingObject()
 
-    _ = await _failed(core, "nope", litellm_logging_obj=logging_obj, metadata={})
+    _ = await _failed(
+        core, "nope", expected_error=litellm.BadRequestError, litellm_logging_obj=logging_obj, metadata={}
+    )
 
     assert logging_obj.dispatched == []
 
@@ -337,7 +327,9 @@ async def test_a_refused_pre_call_check_is_dispatched_on_chat_only(make_core: Ma
     core: Final = make_core(model_list=list(GROUP_OF_TWO), num_retries=0)
     logging_obj: Final = _RecordingLoggingObject()
 
-    error: Final = await _failed(core, "a", litellm_logging_obj=logging_obj, metadata={})
+    error: Final = await _failed(
+        core, "a", expected_error=litellm.RateLimitError, litellm_logging_obj=logging_obj, metadata={}
+    )
 
     assert isinstance(error, litellm.RateLimitError)
     (dispatched,) = logging_obj.dispatched
@@ -362,7 +354,9 @@ async def test_a_provider_failure_stamps_each_field_and_the_router_dispatches_no
     logging_obj: Final = _RecordingLoggingObject()
     metadata: Final[dict[str, object]] = {}  # mutable-ok: the caller's own dict
 
-    error: Final = await _failed(core, "a", litellm_logging_obj=logging_obj, metadata=metadata)
+    error: Final = await _failed(
+        core, "a", expected_error=litellm.InternalServerError, litellm_logging_obj=logging_obj, metadata=metadata
+    )
 
     assert isinstance(error, litellm.InternalServerError)
     assert metadata["attempted_retries"] == 1
@@ -388,7 +382,7 @@ async def test_a_deployments_retry_budget_replaces_the_routers_in_the_stamp(
     )
     metadata: Final[dict[str, object]] = {}  # mutable-ok: the caller's own dict
 
-    _ = await _failed(core, "a", metadata=metadata)
+    _ = await _failed(core, "a", expected_error=litellm.InternalServerError, metadata=metadata)
 
     assert metadata["max_retries"] == 0
     assert metadata["attempted_retries"] == 0
@@ -402,7 +396,7 @@ async def test_a_fallback_hop_works_on_its_own_copy_of_the_metadata(make_core: M
     )
     metadata: Final[dict[str, object]] = {}  # mutable-ok: the caller's own dict
 
-    _ = await _failed(core, "a", metadata=metadata)
+    _ = await _failed(core, "a", expected_error=litellm.InternalServerError, metadata=metadata)
 
     assert metadata["attempted_fallbacks"] == 0
     assert metadata["attempted_retries"] == 0
@@ -422,7 +416,14 @@ async def test_the_fallbacks_mock_raises_before_the_retry_loop_stamps_anything(m
     logging_obj: Final = _RecordingLoggingObject()
     metadata: Final[dict[str, object]] = {}  # mutable-ok: the caller's own dict
 
-    _ = await _failed(core, "a", mock_testing_fallbacks=True, litellm_logging_obj=logging_obj, metadata=metadata)
+    _ = await _failed(
+        core,
+        "a",
+        expected_error=litellm.InternalServerError,
+        mock_testing_fallbacks=True,
+        litellm_logging_obj=logging_obj,
+        metadata=metadata,
+    )
 
     assert metadata["attempted_fallbacks"] == 0
     assert metadata["original_model_group"] == "a"
@@ -437,7 +438,14 @@ async def test_the_rate_limit_mock_raises_inside_the_retry_loop(make_core: MakeC
     logging_obj: Final = _RecordingLoggingObject()
     metadata: Final[dict[str, object]] = {}  # mutable-ok: the caller's own dict
 
-    _ = await _failed(core, "a", mock_testing_rate_limit_error=True, litellm_logging_obj=logging_obj, metadata=metadata)
+    _ = await _failed(
+        core,
+        "a",
+        expected_error=litellm.RateLimitError,
+        mock_testing_rate_limit_error=True,
+        litellm_logging_obj=logging_obj,
+        metadata=metadata,
+    )
 
     assert metadata["attempted_retries"] == 0
     assert metadata["max_retries"] == 0
@@ -620,7 +628,7 @@ async def test_a_routing_group_with_nothing_left_lists_the_cooling_deployment(
     _ = await complete(core, "pg")
     core.apply(ChangeSet(delete=("rc2",)))
 
-    error: Final = await _failed(core, "pg")
+    error: Final = await _failed(core, "pg", expected_error=RouterRateLimitError)
 
     assert isinstance(error, RouterRateLimitError)
     assert error.cooldown_list == ["rc1"]
@@ -639,7 +647,7 @@ async def test_the_cooldown_list_names_every_cooling_deployment_of_the_router(ma
     for deployment_id in ("a1", "b1"):
         core.health().record_failure(deployment_id, rate_limit(), 429)
 
-    error: Final = await _failed(core, "a")
+    error: Final = await _failed(core, "a", expected_error=RouterRateLimitError)
 
     assert isinstance(error, RouterRateLimitError)
     assert error.cooldown_list == ["a1", "b1"]

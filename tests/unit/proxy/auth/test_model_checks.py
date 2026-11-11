@@ -35,6 +35,15 @@ def test_get_team_models_for_all_models_and_team_only_models():
     assert set(result) == set(combined_models)
 
 
+def test_get_team_models_lists_models_in_the_order_the_team_set_them() -> None:
+    from litellm.proxy.auth.model_checks import get_team_models
+
+    team_models: Final = ["zeta", "alpha", "mu", "beta", "omega", "kappa", "delta", "all-proxy-models"]
+    result: Final = get_team_models(team_models, ["proxy-b", "proxy-a"], {"grp": ["g1"]}, True)
+
+    assert result == [*team_models, "proxy-b", "proxy-a", "grp", "g1"]
+
+
 def test_get_team_models_all_proxy_models_includes_access_groups():
     """
     When a team has 'all-proxy-models' and include_model_access_groups=True,
@@ -1411,24 +1420,21 @@ def test_get_complete_model_list_sentinel_only_grants_nothing():
     assert result == []
 
 
-def test_get_provider_models_admits_providers_without_a_static_catalog():
-    """Providers without a static model list are no longer rejected up front.
+@pytest.fixture
+def fresh_available_models_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm.utils as litellm_utils
 
-    With endpoint discovery off, get_valid_models falls back to the (empty)
-    static list, so the result is [] rather than None. Before the fix this
-    returned None and the wildcard was never expanded.
-    """
-    import litellm
+    monkeypatch.setattr(litellm_utils, "_model_cache", litellm_utils.AvailableModelsCache())
+
+
+def test_get_provider_models_admits_providers_without_a_static_catalog():
     from litellm.proxy.auth.model_checks import get_provider_models
     from litellm.types.router import LiteLLM_Params
 
-    assert "litellm_proxy" not in litellm.models_by_provider
-    assert "hosted_vllm" not in litellm.models_by_provider
-
     result = get_provider_models(
-        "litellm_proxy",
+        "hosted_vllm",
         litellm_params=LiteLLM_Params(
-            model="litellm_proxy/*",
+            model="hosted_vllm/*",
             api_base="http://upstream:4000",
             api_key="sk-upstream",
         ),
@@ -1437,47 +1443,103 @@ def test_get_provider_models_admits_providers_without_a_static_catalog():
     assert result == []
 
 
-def test_get_complete_model_list_discovers_litellm_proxy_wildcard_models(monkeypatch):
-    """A litellm_proxy/* deployment lists the upstream proxy's models when endpoint discovery is on."""
+@pytest.mark.parametrize("wildcard", ["litellm_proxy/*", "team-proxy/*"])
+@pytest.mark.usefixtures("fresh_available_models_cache")
+@respx.mock
+def test_get_complete_model_list_discovers_litellm_proxy_wildcard_models_by_default(
+    monkeypatch: pytest.MonkeyPatch, wildcard: str
+) -> None:
     import litellm
-    from litellm import Router
-    from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
     from litellm.proxy.auth.model_checks import get_complete_model_list
 
-    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
-    captured = {}
-
-    def fake_get_models(self, api_key=None, api_base=None):
-        captured["api_key"] = api_key
-        captured["api_base"] = api_base
-        return ["gpt-4o", "claude-sonnet"]
-
-    monkeypatch.setattr(OpenAIGPTConfig, "get_models", fake_get_models)
-
-    router = Router(
+    monkeypatch.setattr(litellm, "check_provider_endpoint", False)
+    catalog: Final = respx.get(
+        "http://upstream-discovery.test:4000/gateway/v1/models",
+        headers={"Authorization": "Bearer test-upstream-key"},
+    ).mock(return_value=httpx.Response(200, json={"data": [{"id": "chat-model"}, {"id": "vendor/chat-model"}]}))
+    router: Final = Router(
         model_list=[
             {
-                "model_name": "litellm_proxy/*",
+                "model_name": wildcard,
                 "litellm_params": {
                     "model": "litellm_proxy/*",
-                    "api_base": "http://upstream:4000",
-                    "api_key": "sk-upstream",
+                    "api_base": "http://upstream-discovery.test:4000/gateway/v1",
+                    "api_key": "test-upstream-key",
                 },
             }
         ]
     )
-    result = get_complete_model_list(
+    result: Final = get_complete_model_list(
         key_models=[],
         team_models=[],
-        proxy_model_list=["litellm_proxy/*"],
+        proxy_model_list=list(router.registry().names(kind="group_set")),
         user_model=None,
         infer_model_from_keys=False,
         llm_router=router,
     )
 
-    assert captured == {"api_key": "sk-upstream", "api_base": "http://upstream:4000"}
-    assert "litellm_proxy/gpt-4o" in result
-    assert "litellm_proxy/claude-sonnet" in result
+    assert result == [wildcard.replace("*", "chat-model"), wildcard.replace("*", "vendor/chat-model")]
+    assert catalog.call_count == 1
+
+
+@pytest.mark.usefixtures("fresh_available_models_cache")
+@respx.mock
+def test_litellm_proxy_discovery_cache_is_scoped_to_the_upstream_key_and_gateway(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", False)
+    first: Final = respx.get(
+        "http://first-proxy.test:4000/v1/models", headers={"Authorization": "Bearer test-first-key"}
+    ).mock(return_value=httpx.Response(200, json={"data": [{"id": "first-key-model"}]}))
+    second: Final = respx.get(
+        "http://first-proxy.test:4000/v1/models", headers={"Authorization": "Bearer test-second-key"}
+    ).mock(return_value=httpx.Response(200, json={"data": [{"id": "second-key-model"}]}))
+    other_gateway: Final = respx.get(
+        "http://other-proxy.test:4000/v1/models", headers={"Authorization": "Bearer test-first-key"}
+    ).mock(return_value=httpx.Response(200, json={"data": [{"id": "other-gateway-model"}]}))
+    deployment: Final = LiteLLM_Params(
+        model="litellm_proxy/*", api_base="http://first-proxy.test:4000/v1", api_key="test-first-key"
+    )
+
+    assert get_known_models_from_wildcard("litellm_proxy/*", deployment) == ["litellm_proxy/first-key-model"]
+    assert get_known_models_from_wildcard(
+        "litellm_proxy/*", deployment.model_copy(update={"api_key": "test-second-key"})
+    ) == ["litellm_proxy/second-key-model"]
+    assert get_known_models_from_wildcard(
+        "litellm_proxy/*", deployment.model_copy(update={"api_base": "http://other-proxy.test:4000/v1"})
+    ) == ["litellm_proxy/other-gateway-model"]
+    assert get_known_models_from_wildcard("litellm_proxy/*", deployment) == ["litellm_proxy/first-key-model"]
+    assert (first.call_count, second.call_count, other_gateway.call_count) == (1, 1, 1)
+
+
+@pytest.mark.usefixtures("fresh_available_models_cache")
+@respx.mock
+def test_undeployed_litellm_proxy_wildcard_does_not_list_the_environment_gateway(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", False)
+    monkeypatch.setenv("LITELLM_PROXY_API_BASE", "http://environment-proxy.test:4000")
+    monkeypatch.setenv("LITELLM_PROXY_API_KEY", "test-environment-key")
+    catalog: Final = respx.get("http://environment-proxy.test:4000/v1/models").mock(
+        return_value=httpx.Response(200, json={"data": [{"id": "environment-only-model"}]})
+    )
+    listed: Final = get_complete_model_list(
+        key_models=["litellm_proxy/*"],
+        team_models=[],
+        proxy_model_list=[],
+        user_model=None,
+        infer_model_from_keys=False,
+        llm_router=Router(model_list=[]),
+    )
+
+    assert (listed, catalog.call_count) == ([], 0)
 
 
 def test_get_provider_models_returns_none_for_an_unknown_provider():
@@ -2422,3 +2484,58 @@ def test_prefixed_alias_over_a_bare_catch_all_lists_ids_that_route_through_it(mo
     ]
     assert f"team-partial-route/{_ROUTE_OPENAI_ID}" in v1_models
     assert unrouted_ids == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested_model, token_aliases",
+    [
+        ("free-key", {"aliases": {"free-key": "free-model"}}),
+        ("free-team", {"team_model_aliases": {"free-team": "free-model"}}),
+        ("free-team", {"team_model_aliases": {"free-team": "free-model"}, "aliases": {"free-model": "paid-model"}}),
+        ("free-model", {"aliases": {"paid-model": "free-model"}}),
+        ("free-team", {"team_model_aliases": {"free-team": ""}}),
+        (
+            "free-team",
+            {"team_id": "t1", "team_model_aliases": {"free-team": "model_name_t1_deleted"}},
+        ),
+    ],
+)
+async def test_caller_alias_target_matches_the_model_add_litellm_data_to_request_dispatches(
+    requested_model: str, token_aliases: Mapping[str, object]
+) -> None:
+    from unittest.mock import MagicMock
+
+    from fastapi import Request
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.litellm_pre_call_utils import caller_alias_target
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    router: Final = Router(
+        model_list=[
+            {"model_name": "free-model", "litellm_params": {"model": "openai/free-backend", "api_key": "sk-fixture"}},
+            {"model_name": "paid-model", "litellm_params": {"model": "openai/paid-backend", "api_key": "sk-fixture"}},
+        ]
+    )
+    valid_token: Final = UserAPIKeyAuth(api_key="hashed-key", **token_aliases)
+    request: Final = MagicMock(spec=Request)
+    request.url = MagicMock()
+    request.url.path = "/v1/chat/completions"
+    request.method = "POST"
+    request.query_params = {}
+    request.headers = {"Content-Type": "application/json"}
+    request.client = MagicMock()
+    request.client.host = "127.0.0.1"
+
+    with patch("litellm.proxy.proxy_server.llm_router", router):
+        dispatched: Final = await add_litellm_data_to_request(
+            data={"model": requested_model},
+            request=request,
+            user_api_key_dict=valid_token,
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+        )
+        served: Final = caller_alias_target(requested_model, valid_token, router)
+        assert served == dispatched["model"]

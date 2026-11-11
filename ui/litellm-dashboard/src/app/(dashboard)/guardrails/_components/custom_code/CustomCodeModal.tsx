@@ -54,6 +54,7 @@ import {
   TEMPLATE_ITEMS,
   type ModeOption,
 } from "./custom_code_catalog";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 // Data for editing an existing guardrail
 
@@ -696,7 +697,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
                             i18nKey="guardrails.customCode.test.fields.structuredMessages"
                             components={{ field: <strong>structured_messages</strong> }}
                           />{" "}
-                          <span className="text-warning">(pre_call)</span>
+                          <span className="text-warning">{codeSamples.guardrails.customCodeHook}</span>
                         </div>
                         <div>
                           <Trans
@@ -711,7 +712,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
                       onChange={(e) => setTestInput(e.target.value)}
                       rows={8}
                       className="font-mono text-xs field-sizing-fixed"
-                      placeholder='{"texts": ["test message"], ...}'
+                      placeholder={codeSamples.guardrails.customCodeInputJson}
                     />
                   </div>
                   <div className="flex items-center gap-3">
