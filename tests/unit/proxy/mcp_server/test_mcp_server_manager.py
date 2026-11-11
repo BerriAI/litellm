@@ -3,6 +3,7 @@ import asyncio
 # Add the parent directory to the path so we can import litellm
 import contextlib
 import functools
+import itertools
 import importlib
 import json
 import logging
@@ -16783,7 +16784,12 @@ async def test_tools_list_is_not_cached_without_an_upstream_ttl(cursor: str | No
 
 
 @pytest.mark.asyncio
-async def test_tools_list_full_walk_takes_the_shortest_page_ttl_and_pages_of_a_longer_listing_are_not_stored() -> None:
+async def test_tools_list_full_walk_takes_the_shortest_page_ttl_and_pages_of_a_longer_listing_are_not_stored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "litellm.mcp_client.tools.time", SimpleNamespace(monotonic=functools.partial(next, itertools.count(100.0, 0.5)))
+    )
     clock: Final = _DiscoveryClock()
     manager: Final = MCPServerManager(discovery_clock=clock)
     upstream: Final = _DiscoveryUpstream()
@@ -16792,7 +16798,7 @@ async def test_tools_list_full_walk_takes_the_shortest_page_ttl_and_pages_of_a_l
     with _mcp_upstream(upstream.respond):
         walk: Final = await _list_discovery_tools(manager)
         assert len(walk.tools) == 2
-        assert 19000 < walk.ttl_ms <= 20000
+        assert walk.ttl_ms == 19500
         clock.now = 20.001
         assert len((await _list_discovery_tools(manager)).tools) == 2
         assert upstream.initializes == 2
@@ -17030,10 +17036,16 @@ async def test_tools_list_page_of_a_longer_listing_is_fetched_every_time_under_a
 
 
 @pytest.mark.asyncio
-async def test_tools_list_cache_outlives_an_instructions_clear_and_a_hit_puts_the_instructions_back() -> None:
+async def test_tools_list_cache_outlives_an_instructions_clear_and_a_hit_puts_the_instructions_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.mcp_server import operations
+
     manager: Final = MCPServerManager(discovery_clock=_DiscoveryClock())
     upstream: Final = _DiscoveryUpstream()
     server: Final = _server_with_tools_list_ttl(300)
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    served: Final = functools.partial(operations._merge_gateway_initialize_instructions, [server])
 
     async def respond_with_instructions(request: httpx2.Request) -> httpx2.Response:
         response: Final = await upstream.respond(request)
@@ -17044,15 +17056,17 @@ async def test_tools_list_cache_outlives_an_instructions_clear_and_a_hit_puts_th
 
     with _mcp_upstream(respond_with_instructions):
         await _list_discovery_tools(manager, server=server)
-        remembered: Final = manager._upstream_initialize_instructions_by_server_id.get(server.server_id)
+        remembered: Final = served()
         manager.clear_initialize_instructions()
-        cleared: Final = manager._upstream_initialize_instructions_by_server_id.get(server.server_id)
+        cleared: Final = served()
         await _list_discovery_tools(manager, server=server)
-        restored: Final = manager._upstream_initialize_instructions_by_server_id.get(server.server_id)
-        manager._upstream_initialize_instructions_by_server_id[server.server_id] = "newer text from a tool call"
+        restored: Final = served()
+        manager._remember_upstream_initialize_instructions(
+            server, SimpleNamespace(_last_initialize_instructions="newer text from a tool call")
+        )
         await _list_discovery_tools(manager, server=server)
     assert (remembered, cleared, restored) == ("use with care", None, "use with care")
-    assert manager._upstream_initialize_instructions_by_server_id.get(server.server_id) == "newer text from a tool call"
+    assert served() == "newer text from a tool call"
     assert upstream.initializes == 1
 
 

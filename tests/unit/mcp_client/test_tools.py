@@ -1,4 +1,7 @@
 import json
+from functools import partial
+from itertools import count
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -174,8 +177,9 @@ async def test_pagination_walk_stops_on_repeated_cursor(mock_session):
 @pytest.mark.asyncio()
 @pytest.mark.parametrize("last_cursor", [None, "page-1"])
 async def test_pagination_walk_keeps_the_shortest_ttl_only_for_a_complete_walk(
-    mock_session: MagicMock, last_cursor: str | None
+    mock_session: MagicMock, last_cursor: str | None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr("litellm.mcp_client.tools.time", SimpleNamespace(monotonic=partial(next, count(100.0, 0.5))))
     mock_session.list_tools.side_effect = [
         ListToolsResult(tools=[MCPTool(name="tool_0", inputSchema={})], nextCursor="page-1", ttl_ms=30000),
         ListToolsResult(tools=[MCPTool(name="tool_1", inputSchema={})], nextCursor=last_cursor, ttl_ms=20000),
@@ -184,7 +188,7 @@ async def test_pagination_walk_keeps_the_shortest_ttl_only_for_a_complete_walk(
 
     assert [tool.name for tool in result.tools] == ["tool_0", "tool_1"]
     if last_cursor is None:
-        assert 19000 < result.ttl_ms <= 20000
+        assert result.ttl_ms == 19500
     else:
         assert result.ttl_ms == 0
 
