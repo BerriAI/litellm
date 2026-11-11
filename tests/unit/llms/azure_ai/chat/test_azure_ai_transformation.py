@@ -58,6 +58,10 @@ async def test_get_openai_compatible_provider_info():
         ),
         ("azure_ai/mistral-large-latest", "https://my-resource.services.ai.azure.com", "azure_ai"),
         ("azure_ai/mistral-large-latest", "https://my-resource.openai.azure.com", "azure_ai"),
+        ("azure_ai/gpt-4o", "https://my-resource.openai.azure.com/openai/v1", "azure_ai"),
+        ("azure_ai/gpt-4o", "https://my-resource.openai.azure.com/openai/v1/", "azure_ai"),
+        ("azure_ai/gpt-4o", "https://apim.example.com/api/projects/p", "azure_ai"),
+        ("azure_ai/gpt-4o", "https://apim.example.com/foundry/api/projects/p", "azure_ai"),
     ],
 )
 def test_foundry_base_keeps_azure_ai_provider(model: str, api_base: str, expected_provider: str):
@@ -176,12 +180,20 @@ CHAT_COMPLETION_PAYLOAD: Final = {
             id="full-deployment-url",
         ),
         pytest.param(FOUNDRY_PROJECT_BASE, None, FOUNDRY_PROJECT_CHAT_PATH, b"", id="project"),
+        pytest.param(FOUNDRY_PROJECT_BASE, "preview", FOUNDRY_PROJECT_CHAT_PATH, b"", id="project-drops-api-version"),
         pytest.param(
-            FOUNDRY_PROJECT_BASE,
-            "preview",
+            f"{FOUNDRY_PROJECT_BASE}?api-version=2024-05-01-preview&subscription-key=gateway-key",
+            None,
             FOUNDRY_PROJECT_CHAT_PATH,
-            b"api-version=preview",
-            id="project-keeps-user-api-version",
+            b"subscription-key=gateway-key",
+            id="project-drops-base-api-version-keeps-other-query",
+        ),
+        pytest.param(
+            f"{FOUNDRY_RESOURCE_BASE}/gateway{FOUNDRY_PROJECT_BASE.removeprefix(FOUNDRY_RESOURCE_BASE)}",
+            None,
+            f"/gateway{FOUNDRY_PROJECT_CHAT_PATH}",
+            b"",
+            id="prefixed-project",
         ),
         pytest.param(
             f"{FOUNDRY_PROJECT_BASE}/openai/v1/", None, FOUNDRY_PROJECT_CHAT_PATH, b"", id="project-openai-v1"
@@ -236,6 +248,56 @@ def test_azure_ai_completion_routes_flexible_api_base(
 
 
 @pytest.mark.parametrize(
+    ("api_base", "expected_headers"),
+    [
+        pytest.param(FOUNDRY_PROJECT_BASE, {"Authorization": "Bearer azure-ai-test-key"}, id="project-bearer"),
+        pytest.param(f"{FOUNDRY_RESOURCE_BASE}/openai/v1", {"api-key": "azure-ai-test-key"}, id="resource-api-key"),
+    ],
+)
+def test_azure_ai_completion_sends_the_key_in_the_header_the_base_accepts(
+    respx_mock: respx.MockRouter, api_base: str, expected_headers: dict[str, str]
+) -> None:
+    route: Final = respx_mock.post(
+        host="example-resource.services.ai.azure.com", path__regex=r"/openai/v1/chat/completions$"
+    ).mock(return_value=Response(200, json=CHAT_COMPLETION_PAYLOAD))
+
+    litellm.completion(
+        model="azure_ai/gpt-4.1-mini",
+        api_base=api_base,
+        api_key="azure-ai-test-key",
+        messages=[{"role": "user", "content": "What is 2+2?"}],
+    )
+
+    sent: Final = route.calls.last.request.headers
+    assert {name: sent.get(name) for name in ("Authorization", "api-key")} == {
+        "Authorization": None,
+        "api-key": None,
+        **expected_headers,
+    }
+
+
+@pytest.mark.parametrize("api_version", [None, "preview"])
+def test_azure_ai_completion_keeps_azure_openai_host_v1_base_on_azure_ai(
+    respx_mock: respx.MockRouter, api_version: str | None
+) -> None:
+    route: Final = respx_mock.post(host="example-resource.openai.azure.com", path="/openai/v1/chat/completions").mock(
+        return_value=Response(200, json=CHAT_COMPLETION_PAYLOAD)
+    )
+
+    response: Final = litellm.completion(
+        model="azure_ai/gpt-4.1-mini",
+        api_base="https://example-resource.openai.azure.com/openai/v1",
+        api_version=api_version,
+        api_key="azure-ai-test-key",
+        messages=[{"role": "user", "content": "What is the meaning of life?"}],
+    )
+
+    assert route.calls.last.request.headers["api-key"] == "azure-ai-test-key"
+    assert response.choices[0].message.content == "42"
+    assert response._hidden_params["custom_llm_provider"] == "azure_ai"
+
+
+@pytest.mark.parametrize(
     ("api_base", "configured_scope", "env_scope", "expected_scope"),
     [
         pytest.param(FOUNDRY_PROJECT_BASE, None, None, AZURE_AI_AGENTS_SCOPE, id="project-default"),
@@ -255,6 +317,13 @@ def test_azure_ai_completion_routes_flexible_api_base(
             None,
             "https://cognitiveservices.azure.com/.default",
             id="resource-openai-v1-default",
+        ),
+        pytest.param(
+            f"{FOUNDRY_RESOURCE_BASE}/gateway{FOUNDRY_PROJECT_BASE.removeprefix(FOUNDRY_RESOURCE_BASE)}",
+            None,
+            None,
+            AZURE_AI_AGENTS_SCOPE,
+            id="prefixed-project-default",
         ),
     ],
 )
