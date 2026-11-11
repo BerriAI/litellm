@@ -24,6 +24,7 @@ import EmailSettings from "./email_settings";
 import MSTeamsSettings from "./MSTeamsSettings";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { toast } from "@/lib/toast";
+import { useUrlTab } from "@/hooks/useUrlTab";
 
 import AlertingSettings from "./alerting/alerting_settings";
 import CloudZeroCostTracking from "./CloudZeroCostTracking/CloudZeroCostTracking";
@@ -38,6 +39,9 @@ import {
 import { LoggingCallbacksTable } from "./Settings/LoggingAndAlerts/LoggingCallbacks/LoggingCallbacksTable";
 import { AlertingObject } from "./Settings/LoggingAndAlerts/LoggingCallbacks/types";
 import { parseErrorMessage } from "./shared/errorUtils";
+
+const DEFAULT_DYNAMIC_PARAM_TYPE = "text";
+const SLACK_SERVICE = "slack";
 interface SettingsPageProps {
   accessToken: string | null;
   userRole: string | null;
@@ -46,6 +50,15 @@ interface SettingsPageProps {
 }
 
 type CallbackFormValues = Record<string, string>;
+const SETTINGS_TABS = [
+  "logging-callbacks",
+  "cloudzero-cost-tracking",
+  "alerting-types",
+  "alerting-settings",
+  "email-alerts",
+  "ms-teams-alerts",
+] as const;
+type SettingsTab = (typeof SETTINGS_TABS)[number];
 
 const assetsLogoFolder = "/ui/assets/logos/";
 
@@ -75,7 +88,7 @@ const DynamicParamsFields: React.FC<DynamicParamsFieldsProps> = ({ params, callb
     <div className="space-y-4 mt-6 p-4 bg-muted rounded-lg border">
       {params.map((param) => {
         const paramConfig = callbackConfig?.dynamic_params?.[param] || {};
-        const paramType = paramConfig.type || "text";
+        const paramType = paramConfig.type || DEFAULT_DYNAMIC_PARAM_TYPE;
         const fieldLabel = paramConfig.ui_name || param.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
         const isRequired = paramConfig.required || false;
         const selectOptions: string[] = Array.isArray(paramConfig.options) ? paramConfig.options : [];
@@ -129,7 +142,7 @@ const DynamicParamsFields: React.FC<DynamicParamsFieldsProps> = ({ params, callb
                   <Switch
                     id={fieldId}
                     checked={/^(true|1)$/i.test(String(field.value ?? ""))}
-                    onCheckedChange={(checked: boolean) => field.onChange(checked ? "true" : "false")}
+                    onCheckedChange={(checked: boolean) => field.onChange(String(checked))}
                     onBlur={field.onBlur}
                   />
                 )}
@@ -313,6 +326,7 @@ const buildCallbackPayload = (formValues: Record<string, any>, callbackName: str
 };
 
 const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, premiumUser }) => {
+  const [activeTab, setActiveTab] = useUrlTab(SETTINGS_TABS, "logging-callbacks");
   const { t } = useTranslation();
   const [callbacks, setCallbacks] = useState<AlertingObject[]>([]);
   const [isLoadingCallbacks, setIsLoadingCallbacks] = useState(true);
@@ -597,7 +611,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   return (
     <div className="mx-4">
       <div className="grid grid-cols-1 gap-2 p-8 w-full mt-2">
-        <Tabs defaultValue="logging-callbacks">
+        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as SettingsTab)}>
           <TabsList variant="line">
             <TabsTrigger value="logging-callbacks">{t("loggingAndAlerts.page.tabs.loggingCallbacks")}</TabsTrigger>
             <TabsTrigger value="cloudzero-cost-tracking">{t("loggingAndAlerts.page.tabs.cloudZero")}</TabsTrigger>
@@ -706,7 +720,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
               <Button
                 onClick={async () => {
                   try {
-                    await serviceHealthCheck(accessToken, "slack");
+                    await serviceHealthCheck(accessToken, SLACK_SERVICE);
                     toast.success(t("loggingAndAlerts.alertTypes.toasts.testTriggered"));
                   } catch (error) {
                     toast.fromError(parseErrorMessage(error));

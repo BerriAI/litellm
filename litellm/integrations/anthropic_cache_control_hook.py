@@ -9,6 +9,7 @@ Supported for both `v1/chat/completions` (via the prompt-management hook) and
 
 """
 
+import bisect
 import copy
 import itertools
 import os
@@ -21,18 +22,22 @@ from urllib.parse import urlparse
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.exceptions import UnsupportedParamsError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.integrations.prompt_management_base import PromptManagementClient
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    cache_control_as_prompt_cache_breakpoint,
-    with_prompt_cache_breakpoint,
-)
 from litellm.litellm_core_utils.prompt_templates.factory import (
     tool_call_ids_answered_by_client,
     tool_call_ids_answered_in,
 )
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import string_field
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
+    PROMPT_CACHE_BREAKPOINT_DROP_PARAMS_HINT,
+    cache_control_as_prompt_cache_breakpoint,
+    prompt_cache_breakpoint_as_cache_control,
+    with_prompt_cache_breakpoint,
+    without_prompt_cache_breakpoints,
+)
 from litellm.llms.anthropic.common_utils import (
     is_claude_code_one_shot_subagent_request,
     supports_anthropic_cache_control,
@@ -327,6 +332,12 @@ def _part_with_cache_control_renamed(part: object) -> object:
     return cache_control_as_prompt_cache_breakpoint(_CONTENT_PART_ADAPTER.validate_python(part))
 
 
+def _part_with_prompt_cache_breakpoint_renamed(part: object, drop_params: bool) -> object:
+    if not _carries_prompt_cache_breakpoint(part):
+        return part
+    return prompt_cache_breakpoint_as_cache_control(_CONTENT_PART_ADAPTER.validate_python(part), drop_params)
+
+
 def configured_injection_points(value: object) -> Sequence[CacheControlInjectionPoint]:
     if not isinstance(value, (list, tuple)):
         return ()
@@ -551,6 +562,10 @@ def _carries_cache_breakpoint(block: object) -> bool:
     return any(_attribute_or_key(block, key) is not None for key in CACHE_BREAKPOINT_KEYS)
 
 
+def _carries_cache_control(block: object) -> bool:
+    return _attribute_or_key(block, "cache_control") is not None
+
+
 def _attribute_or_key(value: object, key: str) -> object | None:
     if hasattr(value, key):
         return _ATTRIBUTE_VALUE.validate_python(getattr(value, key))
@@ -630,6 +645,12 @@ def _builds_anthropic_messages(model: str, custom_llm_provider: str | None) -> b
     return isinstance(chat_config, AnthropicConfig) and not isinstance(chat_config, OpenAIGPTConfig)
 
 
+def _translates_prompt_cache_breakpoint(model: str, custom_llm_provider: str | None) -> bool:
+    return (custom_llm_provider or _served_provider_for_model(model)) == "bedrock" or _builds_anthropic_messages(
+        model, custom_llm_provider
+    )
+
+
 def _custom_llm_provider(non_default_params: Mapping[str, object], point: Mapping[str, object]) -> str | None:
     provider: Final = non_default_params.get("custom_llm_provider") or point.get(CUSTOM_LLM_PROVIDER_STAMP)
     return provider if isinstance(provider, str) else None
@@ -673,8 +694,77 @@ def _accepts_prompt_cache_breakpoint(block: object) -> bool:
     return isinstance(block, dict) and block.get("type") in OPENAI_PROMPT_CACHE_BREAKPOINT_BLOCK_TYPES
 
 
+def _carries_prompt_cache_breakpoint(block: object) -> bool:
+    return _accepts_prompt_cache_breakpoint(block) and _attribute_or_key(block, "prompt_cache_breakpoint") is not None
+
+
 def _may_carry_prompt_cache_breakpoint(message: Mapping[str, object]) -> bool:
     return message.get("role") != "assistant"
+
+
+def _tool_result_carries_prompt_cache_breakpoint(message: Mapping[str, object]) -> bool:
+    return message.get("role") == "tool" and any(
+        _carries_prompt_cache_breakpoint(part) for part in _as_object_list(message.get("content")) or ()
+    )
+
+
+def _part_without_prompt_cache_breakpoint(part: object) -> object:
+    if not _carries_prompt_cache_breakpoint(part):
+        return part
+    return {
+        key: value
+        for key, value in _CONTENT_PART_ADAPTER.validate_python(part).items()
+        if key != "prompt_cache_breakpoint"
+    }
+
+
+def _tool_result_without_prompt_cache_breakpoints(message: AllMessageValues) -> AllMessageValues:
+    if not _tool_result_carries_prompt_cache_breakpoint(message):
+        return message
+    parts: Final = _as_object_list(_attribute_or_key(message, "content")) or []
+    return cast(  # cast-ok: the same tool message with its part marks removed
+        AllMessageValues, {**message, "content": [_part_without_prompt_cache_breakpoint(part) for part in parts]}
+    )
+
+
+def _created_cache_control(original: object, translated: object) -> bool:
+    return (
+        _attribute_or_key(original, "cache_control") is None
+        and _attribute_or_key(translated, "cache_control") is not None
+    )
+
+
+def _created_cache_controls(original: object, translated: object) -> tuple[bool, ...]:
+    if translated is original:
+        return ()
+    original_parts: Final = _as_object_list(_attribute_or_key(original, "content")) or []
+    translated_parts: Final = _as_object_list(_attribute_or_key(translated, "content")) or []
+    return tuple(_created_cache_control(before, after) for before, after in zip(original_parts, translated_parts))
+
+
+def _part_without_cache_control(part: object) -> object:
+    return {key: value for key, value in _CONTENT_PART_ADAPTER.validate_python(part).items() if key != "cache_control"}
+
+
+def _message_dropping_created_cache_controls_between(
+    message: AllMessageValues, created: Sequence[bool], marks_before: int, first_dropped: int, first_kept_after: int
+) -> AllMessageValues:
+    if not any(created):
+        return message
+    parts: Final = _as_object_list(_attribute_or_key(message, "content")) or []
+    ordinals: Final = itertools.accumulate((int(flag) for flag in created), initial=marks_before)
+    return cast(  # cast-ok: the same message with its middle translated marks removed
+        AllMessageValues,
+        {
+            **message,
+            "content": [
+                _part_without_cache_control(part)
+                if is_created and first_dropped <= ordinal < first_kept_after
+                else part
+                for part, is_created, ordinal in zip(parts, created, ordinals)
+            ],
+        },
+    )
 
 
 # Set by a caller whose message list is not the one that goes upstream -- today the
@@ -762,9 +852,6 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         if not injection_points:
             return model, messages, non_default_params
 
-        # Create a deep copy of messages to avoid modifying the original list
-        processed_messages = copy.deepcopy(messages)
-
         message_points: Final = tuple(
             cast(CacheControlMessageInjectionPoint, point)
             for point in injection_points
@@ -775,6 +862,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         request_params: Final = cast(Mapping[str, object], non_default_params)  # cast-ok: base hook's bare dict
         custom_llm_provider: Final = _custom_llm_provider(request_params, injection_points[0])
         stamped_dialect: Final = injection_points[0].get("_litellm_openai_dialect")
+        model_info: Final = routed_model_info(request_params.get("model_info"))
         openai_dialect: Final = (
             stamped_dialect
             if isinstance(stamped_dialect, bool)
@@ -783,8 +871,13 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 custom_llm_provider,
                 request_params.get("api_base") or request_params.get("base_url"),
                 request_params.get("prompt_cache_options"),
-                routed_model_info(request_params.get("model_info")),
+                model_info,
             )
+        )
+        processed_messages = copy.deepcopy(
+            [without_prompt_cache_breakpoints(message) for message in messages]
+            if not openai_dialect and message_points and _translates_prompt_cache_breakpoint(model, custom_llm_provider)
+            else messages
         )
         # A provisional message list defers every role-targeted point to the pass holding
         # the final one: a role with no message here may have one there, and settling all
@@ -876,7 +969,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             )
         )
         if hosted_flag is not None:
-            return hosted_flag
+            return hosted_flag and not _translates_prompt_cache_breakpoint(model, custom_llm_provider)
         if not supports_openai_prompt_cache_breakpoint(model, model_info=model_info):
             return False
         if (custom_llm_provider or AnthropicCacheControlHook._resolve_provider(model)) != "openai":
@@ -928,6 +1021,19 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             _validated_object_list(extra_body.get("messages")) or (), extra_body.get("system")
         )
         return int(wire_cache_control is not None) + tool_blocks + envelope_blocks
+
+    @staticmethod
+    def tools_keeping_cache_control_on_chat(tools: object) -> tuple[object, ...]:
+        return tuple(
+            tool for tool in _as_object_list(tools) or () if not _chat_transform_drops_tool_cache_control(tool)
+        )
+
+    @staticmethod
+    def count_chat_external_cache_breakpoints(optional_params: object) -> int:
+        params: Final = _validated_object_mapping(optional_params) or {}
+        return AnthropicCacheControlHook.count_external_cache_breakpoints(
+            _as_object_list(params.get("tools")), params.get("cache_control")
+        )
 
     @staticmethod
     def count_external_cache_breakpoints_on_messages_route(
@@ -1085,6 +1191,16 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         return message_count + content_count + tool_call_count
 
     @staticmethod
+    def count_converse_cache_points(message: AllMessageValues) -> int:
+        content: Final = _as_object_list(_attribute_or_key(message, "content"))
+        tool_calls: Final = _as_object_list(_attribute_or_key(message, "tool_calls")) or []
+        marked_parts: Final = sum(1 for block in content or () if _carries_cache_control(block))
+        marked_tool_calls: Final = sum(1 for tool_call in tool_calls if _carries_cache_control(tool_call))
+        if message.get("role") == "tool":
+            return int(_carries_cache_control(message) or marked_parts > 0)
+        return (int(_carries_cache_control(message)) if content is None else marked_parts) + marked_tool_calls
+
+    @staticmethod
     def _message_has_cache_control(message: AllMessageValues, answered_tool_ids: Container[str]) -> bool:
         """Return True if the message already carries any cache_control."""
         return AnthropicCacheControlHook._count_cache_control_blocks(message, answered_tool_ids) > 0
@@ -1141,6 +1257,92 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         if fields.get("cache_control") is None:
             return renamed
         return AnthropicCacheControlHook._insert_prompt_cache_breakpoint_in_message(renamed)
+
+    @staticmethod
+    def prompt_cache_breakpoints_as_cache_control(message: AllMessageValues, drop_params: bool) -> AllMessageValues:
+        """Every OpenAI ``prompt_cache_breakpoint`` on a part OpenAI accepts one on moved to Anthropic's
+        ``cache_control``. Marks with no OpenAI slot are left for the caller to strip."""
+        if not _may_carry_prompt_cache_breakpoint(message):
+            return message
+        parts: Final = _as_object_list(_attribute_or_key(message, "content"))
+        if parts is None or not any(_carries_prompt_cache_breakpoint(part) for part in parts):
+            return message
+        return cast(  # cast-ok: the same message with its part marks renamed
+            AllMessageValues,
+            {**message, "content": [_part_with_prompt_cache_breakpoint_renamed(part, drop_params) for part in parts]},
+        )
+
+    @staticmethod
+    def prompt_cache_breakpoints_dropped_from_tool_results(
+        messages: Sequence[AllMessageValues], drop_params: bool, model: str
+    ) -> tuple[AllMessageValues, ...]:
+        if not any(_tool_result_carries_prompt_cache_breakpoint(message) for message in messages):
+            return tuple(messages)
+        if not drop_params:
+            raise UnsupportedParamsError(
+                message=(
+                    f"{model} takes no cache breakpoint on a tool result, so prompt_cache_breakpoint on a tool "
+                    f"message has no equivalent. Remove it, or {PROMPT_CACHE_BREAKPOINT_DROP_PARAMS_HINT} to drop it."
+                ),
+                status_code=400,
+            )
+        verbose_logger.debug("Dropping prompt_cache_breakpoint from tool results for %s under drop_params", model)
+        return tuple(_tool_result_without_prompt_cache_breakpoints(message) for message in messages)
+
+    @staticmethod
+    def prompt_cache_breakpoints_as_capped_cache_control(
+        messages: Sequence[AllMessageValues],
+        drop_params: bool,
+        sent_breakpoints: Callable[[AllMessageValues], int],
+        external_breakpoints: Callable[[], int],
+    ) -> tuple[AllMessageValues, ...]:
+        """``prompt_cache_breakpoints_as_cache_control`` over the whole request, held to the provider's
+        breakpoint cap, counting each message by the breakpoints ``sent_breakpoints`` says its provider sends.
+        Under ``drop_params`` the first and last translated marks fill the slots the client's own
+        ``cache_control`` marks leave, the first half taking the odd slot, so the stable prefix and the newest
+        turns stay cached, and without it a request over the cap is rejected."""
+        translated: Final = tuple(
+            AnthropicCacheControlHook.prompt_cache_breakpoints_as_cache_control(message, drop_params)
+            for message in messages
+        )
+        if all(after is before for before, after in zip(messages, translated)):
+            return translated
+        created: Final = tuple(_created_cache_controls(before, after) for before, after in zip(messages, translated))
+        created_marks: Final = sum(sum(flags) for flags in created)
+        if created_marks == 0:
+            return translated
+        external: Final = external_breakpoints()
+        breakpoints: Final = sum(map(sent_breakpoints, translated)) + external
+        excess: Final = breakpoints - MAX_CACHE_CONTROL_BLOCKS
+        if excess <= 0:
+            return translated
+        if not drop_params:
+            raise UnsupportedParamsError(
+                message=(
+                    f"This model takes at most {MAX_CACHE_CONTROL_BLOCKS} cache breakpoints per request, and this "
+                    f"request has {breakpoints} once its prompt_cache_breakpoint marks are translated. Remove {excess} "
+                    f"of them, or {PROMPT_CACHE_BREAKPOINT_DROP_PARAMS_HINT} to keep the first and last of them."
+                ),
+                status_code=400,
+            )
+        verbose_logger.debug("Dropping the middle prompt_cache_breakpoint marks past the cap under drop_params")
+        marks_before: Final = tuple(itertools.accumulate((sum(flags) for flags in created), initial=0))
+
+        def capped_request(kept_marks: int) -> tuple[AllMessageValues, ...]:
+            first_dropped: Final = (kept_marks + 1) // 2
+            first_kept_after: Final = created_marks - kept_marks // 2
+            return tuple(
+                _message_dropping_created_cache_controls_between(
+                    message, flags, before, first_dropped, first_kept_after
+                )
+                for message, flags, before in zip(translated, created, marks_before)
+            )
+
+        def over_cap(kept_marks: int) -> bool:
+            return sum(map(sent_breakpoints, capped_request(kept_marks))) + external > MAX_CACHE_CONTROL_BLOCKS
+
+        first_over_cap: Final = bisect.bisect_left(range(max(0, created_marks - excess) + 1), True, key=over_cap)
+        return capped_request(max(0, first_over_cap - 1))
 
     @staticmethod
     def _insert_prompt_cache_breakpoint_in_message(message: AllMessageValues) -> AllMessageValues:
@@ -1487,9 +1689,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
         configured: Final = configured_injection_points(non_default_params.get("cache_control_injection_points"))
         if configured:
-            tools_keeping_marks: Final = tuple(
-                tool for tool in tools or () if not _chat_transform_drops_tool_cache_control(tool)
-            )
+            tools_keeping_marks: Final = AnthropicCacheControlHook.tools_keeping_cache_control_on_chat(tools)
             stamped: Final = AnthropicCacheControlHook._stamped_for_prompt_hook(
                 configured,
                 AnthropicCacheControlHook.count_external_cache_breakpoints(
@@ -1782,9 +1982,17 @@ def messages_within_cache_control_cap(
 
     Tool hints and a top-level ``cache_control`` stay on the wire, so they are reserved first.
     """
-    reserved_marks: Final = AnthropicCacheControlHook.count_external_cache_breakpoints(
-        _validated_object_list(tools), cache_control, request_kwargs
+    return messages_within_reserved_cache_control_cap(
+        messages,
+        AnthropicCacheControlHook.count_external_cache_breakpoints(
+            _validated_object_list(tools), cache_control, request_kwargs
+        ),
     )
+
+
+def messages_within_reserved_cache_control_cap(
+    messages: Sequence[_MessageT], reserved_marks: int
+) -> Sequence[_MessageT]:
     kept: Final = newest_marks_within_cache_control_limit(messages, reserved_marks)
     dropped: Final = sum(map(cache_control_count, messages)) - sum(map(cache_control_count, kept))
     if dropped > 0:

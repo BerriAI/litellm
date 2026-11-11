@@ -14,6 +14,7 @@ from litellm.rust_bridge.public_call import (
     AsyncFlag,
     NativeCall,
     bind,
+    native_acall_hook,
     native_call,
     native_call_hook,
     optional_str,
@@ -150,7 +151,7 @@ async def aresponses(*args: object, **kwargs: object) -> ResponsesResult:  # kwa
         _FLAG.dropped(kwargs),
         python=python,
         binding=NATIVE_ARESPONSES,
-        native=native_call_hook,
+        native=native_acall_hook,
     )
 
 

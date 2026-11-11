@@ -826,6 +826,20 @@ async def prepare_tool_listing_headers(
     return server_auth_header, extra_headers, catalog_auth_header
 
 
+def challenge_rejected_credential(server: MCPServer, outcome: ServerOutcome, listed: Sequence[MCPServer]) -> None:
+    """Answer a listing of this one server with the gateway's 401 when the caller can fix the rejection."""
+    from litellm.proxy.mcp_server.legacy_callbacks import get_listing_scope_response
+
+    scope_response: Final = get_listing_scope_response()
+    if (
+        scope_response is not None
+        and len(listed) == 1
+        and outcome.tag == "auth_required"
+        and server.reauthorizes_in_client
+    ):
+        scope_response.deny_reauth()
+
+
 async def get_filtered_server_tools(
     server: MCPServer,
     *,
@@ -943,14 +957,11 @@ async def get_filtered_server_tools(
         )
         return page.model_copy(update={"tools": filtered_tools}), ServerListOk(tool_count=len(filtered_tools))
     except MCPUpstreamAuthError as e:
-        # Absorb so one unauthenticated server does not empty every other server's
-        # tools. Surfacing the upstream 401 to the client as a re-auth challenge is
-        # intentionally not done here: raising from this list handler cannot produce a
-        # 401 + WWW-Authenticate (the MCP session manager serializes it as a JSON-RPC
-        # error). Single-server routes surface it via the request-scope preemptive
-        # check in _raise_preemptive_401_for_unauthenticated_servers instead.
+        # Absorbed so peers keep their tools; a raise here would reach the client as a JSON-RPC error, not a 401
         verbose_logger.debug("MCP list_tools: omitting %s; it needs upstream auth", server.name)
-        return ListToolsResult(tools=[]), classify_list_exception(e)
+        outcome: Final = classify_list_exception(e)
+        challenge_rejected_credential(server, outcome, allowed_mcp_servers)
+        return ListToolsResult(tools=[]), outcome
     except Exception as e:
         verbose_logger.exception("Error getting tools from server %s: %s", server.name, e)
         return ListToolsResult(tools=[]), classify_list_exception(e)
@@ -1199,6 +1210,8 @@ async def list_gateway_catalog(
                     update={"meta": {key: value for key, value in page_meta.items() if key != SERVER_OUTCOMES_META_KEY}}
                 )
             except Exception as error:
+                outcome: Final = classify_list_exception(error)
+                challenge_rejected_credential(server, outcome, allowed)
                 if cursor is not None:
                     raise MCPError(
                         code=INVALID_PARAMS, message="Upstream continuation failed; start a fresh listing"
@@ -1207,11 +1220,7 @@ async def list_gateway_catalog(
                     request,
                     (),
                     None,
-                    {
-                        "litellm.ai/server_outcomes": {
-                            _aggregate_server_key(server): classify_list_exception(error).model_dump(mode="json")
-                        }
-                    },
+                    {"litellm.ai/server_outcomes": {_aggregate_server_key(server): outcome.model_dump(mode="json")}},
                 )
 
         pages, next_cursor, outcomes = await paginate_catalog(

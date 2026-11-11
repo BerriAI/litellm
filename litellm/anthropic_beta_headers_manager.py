@@ -198,7 +198,6 @@ def _load_beta_headers_config() -> dict:
         if _BETA_HEADERS_CONFIG is not None:
             return _BETA_HEADERS_CONFIG
 
-        # Get the URL from environment or use default
         from litellm import anthropic_beta_headers_url
 
         _BETA_HEADERS_CONFIG = get_beta_headers_config(url=anthropic_beta_headers_url)
@@ -428,6 +427,7 @@ def update_headers_with_filtered_beta(
     provider: str,
     api_base: str | None = None,
     unlisted: UnlistedBetas = "drop",
+    keep: frozenset[str] = frozenset(),
 ) -> dict:
     """
     Update headers dict by filtering and transforming anthropic-beta header values.
@@ -438,6 +438,7 @@ def update_headers_with_filtered_beta(
         provider: Provider name
         api_base: Deployment api_base, used to pick the allowlist row (Foundry hosts use ``azure_ai``)
         unlisted: Whether a beta missing from the row is dropped or forwarded as sent
+        keep: Betas the routed model accepts, forwarded as sent whatever the row says
 
     Returns:
         Updated headers dict
@@ -447,13 +448,20 @@ def update_headers_with_filtered_beta(
         return headers
 
     # Parse existing beta headers
-    beta_values: Final = [b.strip() for b in existing_beta.split(",") if b.strip()]
+    beta_values: Final[tuple[str, ...]] = tuple(b.strip() for b in existing_beta.split(",") if b.strip())
 
     # Filter and transform based on provider
-    filtered_beta_values: Final = filter_and_transform_beta_headers(
-        beta_headers=beta_values,
-        provider=resolve_beta_provider(provider, api_base),
-        unlisted=unlisted,
+    filtered_beta_values: Final = tuple(
+        dict.fromkeys(
+            [
+                *filter_and_transform_beta_headers(
+                    beta_headers=[b for b in beta_values if b not in keep],
+                    provider=resolve_beta_provider(provider, api_base),
+                    unlisted=unlisted,
+                ),
+                *(b for b in beta_values if b in keep),
+            ]
+        )
     )
 
     # Update or remove the header

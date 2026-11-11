@@ -28,7 +28,7 @@ GITHUB_COPILOT_PER_USER_AUTH_TYPE: Final = "per_user_oauth"
 GITHUB_COPILOT_AUTH_TYPE_KEY: Final = "github_copilot_auth_type"
 GITHUB_COPILOT_HOST_KEY: Final = "github_copilot_host"
 GITHUB_COPILOT_DEFAULT_HOST: Final = "github.com"
-GITHUB_COPILOT_USER_TOKEN_SAFETY_MARGIN_SECONDS: Final = 60
+GITHUB_COPILOT_USER_SESSION_TTL_SECONDS: Final = 1800
 GITHUB_COPILOT_USER_CREDENTIAL_CACHE_TTL_SECONDS: Final = 60
 GITHUB_COPILOT_DEVICE_FLOW_CACHE_PREFIX: Final = "github_copilot_device_flow"
 USER_PROVIDER_CREDENTIAL_CACHE_PREFIX: Final = "user_provider_credential"
@@ -89,6 +89,7 @@ ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG: Final[frozenset[str]] = frozenset(
         "ignore_invalid_deployments",
         "fallback_access_check",
         "fallback_budget_check",
+        "fallback_rate_limit_check",
         "auto_router_capability_limit",
     }
 )
@@ -135,6 +136,7 @@ ANTHROPIC_DEFAULT_FILE_LIST_LIMIT: Final = 20
 DEFAULT_SQS_FLUSH_INTERVAL_SECONDS: Final = get_env_int("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10)
 DEFAULT_NUM_WORKERS_LITELLM_PROXY: Final = get_env_int("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1)
 GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS: Final = 10
+DEFAULT_MAX_REQUEST_HEADER_SIZE: Final = 16 * 1024
 budget_reservation_disabled_info_emitted = False
 DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE = get_env_int("DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE", 1)
 DEFAULT_SQS_BATCH_SIZE: Final = get_env_int("DEFAULT_SQS_BATCH_SIZE", 512)
@@ -158,6 +160,7 @@ DEFAULT_ALLOWED_FAILS: Final = get_env_int("DEFAULT_ALLOWED_FAILS", 3)
 DEFAULT_REDIS_SYNC_INTERVAL: Final = get_env_int("DEFAULT_REDIS_SYNC_INTERVAL", 1)
 DEFAULT_COOLDOWN_TIME_SECONDS: Final = get_env_int("DEFAULT_COOLDOWN_TIME_SECONDS", 5)
 DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS: Final = get_env_float("DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS", 1.0)
+DEFAULT_REDIS_BATCH_CACHE_EXPIRY_SECONDS: Final = 10
 DEFAULT_REPLICATE_POLLING_RETRIES: Final = get_env_int("DEFAULT_REPLICATE_POLLING_RETRIES", 5)
 DEFAULT_REPLICATE_POLLING_DELAY_SECONDS: Final = get_env_int("DEFAULT_REPLICATE_POLLING_DELAY_SECONDS", 1)
 DEFAULT_IMAGE_TOKEN_COUNT: Final = get_env_int("DEFAULT_IMAGE_TOKEN_COUNT", 250)
@@ -1092,6 +1095,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://api.scx.ai/v1",
     "https://api.prisminference.com/v1",
     "https://api.reka.ai/v1",
+    "https://inference.runanywhere.ai/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
     "https://api.openinfer.ai/v1",
     "https://vanchin.streamlake.ai/api/gateway/v1/endpoints",
@@ -1179,6 +1183,7 @@ openai_compatible_providers: Final[list[str]] = [
     "sail",
     "reka",
     "streamlake",
+    "wally",
 ]
 
 OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))
@@ -1529,6 +1534,7 @@ BEDROCK_CONVERSE_MODELS: Final = [
     "openai.gpt-oss-120b-1:0",
     "anthropic.claude-haiku-4-5-20251001-v1:0",
     "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "anthropic.claude-fable-5-2",
     "anthropic.claude-fable-5-1",
     "anthropic.claude-fable-5",
     "anthropic.claude-sonnet-5",
@@ -1670,6 +1676,9 @@ OPENAI_FINISH_REASONS: Final = [
 ]
 HUMANLOOP_PROMPT_CACHE_TTL_SECONDS: Final = get_env_int("HUMANLOOP_PROMPT_CACHE_TTL_SECONDS", 60)  # 1 minute
 RESPONSE_FORMAT_TOOL_NAME = "json_tool_call"  # default tool name used when converting response format to tool call
+RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION: Final = (
+    "When you are ready to answer, call this tool with your final answer as its input. Do not reply in plain text."
+)
 
 ########################### Logging Callback Constants ###########################
 AZURE_STORAGE_MSFT_VERSION: Final = "2019-07-07"
@@ -1698,11 +1707,13 @@ ROUTING_REQUEST_TAGS_METADATA_KEY: Final = "_routing_request_tags"
 BAGGAGE_MAPPED_TAGS_METADATA_KEY: Final = "_baggage_mapped_tags"
 VECTOR_STORE_CALLER_METADATA_KWARG: Final = "litellm_vector_store_caller_metadata"
 ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY: Final = "_litellm_router_usage_counted_tokens"
+USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY: Final = "_litellm_usage_based_routing_counted_tokens"
 INTERNAL_CALL_ORIGIN_METADATA_KEY: Final = "internal_call_origin"
 RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY: Final = "responses_websocket_call_id"
 BILLED_RETRY_ATTEMPT_METADATA_KEY: Final = "billed_retry_attempt"
 MANAGED_BACKGROUND_RESPONSE_METADATA_KEY: Final = "_managed_background_response"
 SESSION_ID_GENERATED_METADATA_KEY: Final = "litellm_session_id_generated"
+SESSION_SPEND_TOTAL_TTL_SECONDS: Final = 3600
 SESSION_ID_OMITTED_METADATA_KEY: Final = "litellm_session_id_omitted"
 CALLER_SESSION_ID_METADATA_KEY: Final = "litellm_caller_session_id"
 COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY: Final = "_complexity_router_child_session_id"
@@ -1780,6 +1791,7 @@ AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX: Final = "/azure_speech"
 AZURE_SPEECH_SHORT_AUDIO_PATH_PREFIX: Final = "/speech/"
 AZURE_SPEECH_BATCH_PATH_PREFIX: Final = "/speechtotext/"
 AZURE_SPEECH_FAST_TRANSCRIPTION_PATH: Final = "/speechtotext/transcriptions:transcribe"
+OPENSEARCH_PASS_THROUGH_ROUTE_PREFIX: Final = "/opensearch"
 AZURE_SPEECH_STT_DOMAIN: Final = "stt.speech.microsoft.com"
 AZURE_SPEECH_COGNITIVE_SERVICES_DOMAIN: Final = "api.cognitive.microsoft.com"
 AZURE_SPEECH_SUBSCRIPTION_KEY_HEADER: Final = "Ocp-Apim-Subscription-Key"
@@ -1933,6 +1945,7 @@ SPEND_ROLLUP_LOCK_TIMEOUT_MS: Final = max(1, get_env_int("SPEND_ROLLUP_LOCK_TIME
 SPEND_LOG_QUEUE_SIZE_THRESHOLD: Final = get_env_int("SPEND_LOG_QUEUE_SIZE_THRESHOLD", 100)
 SPEND_LOG_QUEUE_MAX_BYTES: Final = max(1, get_env_int("SPEND_LOG_QUEUE_MAX_BYTES", 64000000))
 SPEND_LOG_QUEUE_POLL_INTERVAL: Final = get_env_float("SPEND_LOG_QUEUE_POLL_INTERVAL", 2.0)
+SPEND_LOG_QUEUE_MAX_BACKOFF_SECONDS: Final = 30.0
 RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS: Final = max(1, get_env_int("RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS", 3))
 RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL: Final = get_env_float("RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL", 0.2)
 SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE: Final = get_env_int("SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE", 10000)
@@ -1958,6 +1971,7 @@ BATCH_LINE_ITEMS_MAX_PART_BYTES: Final = get_env_int_in_range(
 MANAGED_OBJECT_STALENESS_CUTOFF_DAYS: Final = max(1, get_env_int("MANAGED_OBJECT_STALENESS_CUTOFF_DAYS", 7))
 PENDING_RESPONSE_STATUSES: Final = ("queued", "in_progress")
 TERMINAL_RESPONSE_STATUSES: Final = frozenset({"completed", "failed", "cancelled", "incomplete"})
+BACKGROUND_RESPONSE_SETTLEMENT_TIMEOUT_SECONDS: Final = 2.0
 BATCH_OUTPUT_FILE_LOOKUP_TIMEOUT_SECONDS: Final = 10.0
 BATCH_OUTPUT_FILE_FALLBACK_RETRY_AFTER_SECONDS: Final = 60
 STALE_OBJECT_CLEANUP_BATCH_SIZE: Final = max(1, get_env_int("STALE_OBJECT_CLEANUP_BATCH_SIZE", 1000))
@@ -2067,6 +2081,7 @@ SPEND_LOG_KEY_METADATA_CACHE_TTL: Final = 600
 SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL: Final = 30
 SPEND_LOG_KEY_METADATA_CACHE_MAX_ITEMS: Final = 10000
 SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS: Final = 5000
+SPEND_LOG_READ_STATEMENT_TIMEOUT_SECONDS: Final = 30
 SPEND_LOG_KEY_METADATA_ROWS_PER_PROBE: Final = 100
 # Short TTL for negative MCP access-group existence lookups. Keeps unauthenticated
 # callers from forcing a DB query per request for unknown names, while bounding
@@ -2359,6 +2374,7 @@ ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS: Final = (
     MAX_FILE_DOWNLOADS_PER_MINUTE_KEY,
 )
 FILE_USAGE_MAX_TRACKED_COUNTERS: Final = 20_000
+MESSAGE_THREAD_MAX_TRACKED_OWNERS: Final = 20_000
 
 # Shared read-only empty mapping, for defaulting optional Mapping parameters without
 # constructing a fresh mutable dict at each call site.

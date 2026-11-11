@@ -7,6 +7,7 @@
  */
 
 import { type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import type { DailyData } from "@/components/UsagePage/types";
 import { KeyRound, Users } from "lucide-react";
 import type { OverviewTotals } from "./overviewData";
@@ -41,6 +42,7 @@ export default function UsageOverview({
   providerBreakdown,
   budget,
 }: UsageOverviewProps) {
+  const { t } = useTranslation();
   return (
     <div className="grid gap-3">
       <UsageStatStrip
@@ -58,10 +60,10 @@ export default function UsageOverview({
       {topAgents}
       {providerBreakdown}
 
-      <Panel icon={KeyRound} title="Top Virtual Keys">
+      <Panel icon={KeyRound} title={t("usage.overview.topVirtualKeys")}>
         {topKeys}
       </Panel>
-      <Panel icon={Users} title="Top Users by Spend">
+      <Panel icon={Users} title={t("usage.overview.topUsersBySpend")}>
         {topUsers}
       </Panel>
       {gatewayByEndpoint}

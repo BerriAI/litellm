@@ -12,10 +12,12 @@ from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.models.user import LiteLLM_UserTable, SCIMPlaceholder
 from litellm.repositories.base_repository import BaseRepository, DbRecord, record_to_dict
 from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.repositories.table_repositories import PrismaTableRepository
 
 if TYPE_CHECKING:
     from prisma import Prisma
@@ -62,13 +64,11 @@ class _UserTransaction(_UserDb, Protocol):
 
 
 class _PrismaClientView(Protocol):
-    @property
-    def db(self) -> _UserDb: ...
-
-    @property
-    def writer_db(self) -> _UserDb: ...
-
     def tx(self) -> AbstractAsyncContextManager[_UserTransaction]: ...
+
+
+class _UserTable(PrismaTableRepository["prisma_models.LiteLLM_UserTable"]):
+    table_name = "litellm_usertable"
 
 
 async def _count_billable_users(table: TableActions["prisma_models.LiteLLM_UserTable"]) -> int:
@@ -88,9 +88,7 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
 
     @property
     def table(self) -> TableActions["prisma_models.LiteLLM_UserTable"]:
-        client: Final[_PrismaClientView] = self.prisma_client
-        database: Final = client.writer_db if self._use_writer else client.db
-        return database.litellm_usertable
+        return _UserTable(self._prisma_client, use_writer=self._use_writer).table
 
     @property
     def model_class(self) -> type[LiteLLM_UserTable]:
@@ -168,7 +166,9 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
         """
         return await _count_billable_users(self.table)
 
-    async def upsert_user(self, data: Mapping[str, object]) -> "prisma_models.LiteLLM_UserTable | None":
+    async def upsert_user(
+        self, data: Mapping[str, object], *, allow_existing: bool = True
+    ) -> "prisma_models.LiteLLM_UserTable | None":
         """Return the user row, or None when a new free SSO user would exceed capacity."""
         scope: Final = _FREE_SSO_CREATION.get()
         if (
@@ -176,11 +176,13 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
             or (scope[0] is not None and scope[0] != data["user_id"])
             or scope[1] is not asyncio.current_task()
         ):
+            if not allow_existing:
+                return await self.table.create(data=dict(data))
             return await self.table.upsert(
                 where={"user_id": data["user_id"]}, data={"create": dict(data), "update": {}}
             )
 
-        client: Final[_PrismaClientView] = self.prisma_client
+        client: Final = require_attributes(self._connected_client(), _PrismaClientView, "tx")
         async with client.tx() as transaction:
             await transaction.execute_raw("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
             await transaction.query_raw("SELECT 1 AS locked FROM pg_advisory_xact_lock(468530001)")

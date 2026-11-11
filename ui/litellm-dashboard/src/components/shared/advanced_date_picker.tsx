@@ -4,6 +4,8 @@ import { cn } from "@/lib/cva.config";
 import type { DateRangePickerValue } from "./date_picker_types";
 import moment from "moment";
 import React, { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import i18n from "@/i18n/i18n";
 
 import { relativeTimeOptions, type RelativeTimeOption } from "./date_range_presets";
 export { relativeTimeOptions, type RelativeTimeOption } from "./date_range_presets";
@@ -35,12 +37,13 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   value,
   onValueChange,
   presetShortLabel = null,
-  label = "Select Time Range",
+  label = i18n.t("shared.advancedDatePicker.selectTimeRange"),
   className,
   showTimeRange = true,
   align = "right",
   compact = false,
 }) => {
+  const { t } = useTranslation();
   const inputId = useId();
   const [isOpen, setIsOpen] = useState(false);
   const [tempValue, setTempValue] = useState<DateRangePickerValue>(value);
@@ -74,15 +77,15 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
     const end = moment(endDate, "YYYY-MM-DD");
 
     if (!start.isValid() || !end.isValid()) {
-      return { isValid: false, error: "Invalid date format" };
+      return { isValid: false, error: t("shared.advancedDatePicker.invalidDateFormat") };
     }
 
     if (end.isBefore(start)) {
-      return { isValid: false, error: "End date cannot be before start date" };
+      return { isValid: false, error: t("shared.advancedDatePicker.endBeforeStart") };
     }
 
     return { isValid: true, error: "" };
-  }, [startDate, endDate]);
+  }, [startDate, endDate, t]);
 
   const validation = validateDateRange();
 
@@ -115,15 +118,18 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
     };
   }, [isOpen]);
 
-  const formatDisplayRange = useCallback((from: Date | undefined, to: Date | undefined) => {
-    if (!from || !to) return "Select date range";
+  const formatDisplayRange = useCallback(
+    (from: Date | undefined, to: Date | undefined) => {
+      if (!from || !to) return t("shared.advancedDatePicker.selectDateRange");
 
-    const formatDateTime = (date: Date) => {
-      return moment(date).format("D MMM, HH:mm");
-    };
+      const formatDateTime = (date: Date) => {
+        return moment(date).format("D MMM, HH:mm");
+      };
 
-    return `${formatDateTime(from)} - ${formatDateTime(to)}`;
-  }, []);
+      return `${formatDateTime(from)} - ${formatDateTime(to)}`;
+    },
+    [t],
+  );
 
   // CRITICAL: Apply the same date adjustment logic as the original component
   const adjustDateRange = useCallback((newValue: DateRangePickerValue): DateRangePickerValue => {
@@ -285,7 +291,9 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
               {/* Left side - Relative time options */}
               <div className={cn("border-border", compact ? "w-full border-b" : "w-1/2 border-r")}>
                 <div className="p-3 border-b border-border">
-                  <span className="text-sm font-semibold text-foreground">Relative time</span>
+                  <span className="text-sm font-semibold text-foreground">
+                    {t("shared.advancedDatePicker.relativeTime")}
+                  </span>
                 </div>
                 <div className={cn("overflow-y-auto", compact ? "grid h-auto grid-cols-2" : "h-[350px]")}>
                   {relativeTimeOptions.map((option) => {
@@ -304,7 +312,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                         onClick={() => handleRelativeTimeSelect(option)}
                       >
                         <span className={`text-sm ${isSelected ? "text-info font-medium" : "text-foreground"}`}>
-                          {option.label}
+                          {t(option.label)}
                         </span>
                         <span
                           className={`text-xs px-2 py-1 rounded capitalize ${
@@ -324,7 +332,9 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                 <div className="p-3.5 border-b border-border">
                   <div className="flex items-center gap-2">
                     <Calendar className="size-4 text-muted-foreground" />
-                    <span className="text-sm font-semibold text-foreground">Start and end dates</span>
+                    <span className="text-sm font-semibold text-foreground">
+                      {t("shared.advancedDatePicker.startAndEndDates")}
+                    </span>
                   </div>
                 </div>
 
@@ -332,7 +342,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                   {/* Start date */}
                   <div className={compact ? "min-w-0" : undefined}>
                     <label htmlFor={`${inputId}-start`} className="text-sm text-foreground mb-1 block">
-                      Start date
+                      {t("shared.advancedDatePicker.startDate")}
                     </label>
                     <input
                       id={`${inputId}-start`}
@@ -355,7 +365,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                   {/* End date */}
                   <div className={compact ? "min-w-0" : undefined}>
                     <label htmlFor={`${inputId}-end`} className="text-sm text-foreground mb-1 block">
-                      End date
+                      {t("shared.advancedDatePicker.endDate")}
                     </label>
                     <input
                       id={`${inputId}-end`}
@@ -401,11 +411,11 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                   {tempValue.from && tempValue.to && validation.isValid && (
                     <div className={cn("bg-info/10 p-3 rounded-md space-y-1", compact && "col-span-2")}>
                       <div className="text-xs text-info">
-                        <span className="font-medium">From:</span>{" "}
+                        <span className="font-medium">{t("shared.advancedDatePicker.from")}</span>{" "}
                         {moment(tempValue.from).format("MMM D, YYYY [at] HH:mm:ss")}
                       </div>
                       <div className="text-xs text-info">
-                        <span className="font-medium">To:</span>{" "}
+                        <span className="font-medium">{t("shared.advancedDatePicker.to")}</span>{" "}
                         {moment(tempValue.to).format("MMM D, YYYY [at] HH:mm:ss")}
                       </div>
                     </div>
@@ -415,10 +425,10 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                 <div className={compact ? "flex justify-end px-3 pb-3" : "absolute bottom-4 right-4"}>
                   <div className="flex gap-2">
                     <Button variant="secondary" onClick={handleCancel}>
-                      Cancel
+                      {t("shared.advancedDatePicker.cancel")}
                     </Button>
                     <Button onClick={handleApply} disabled={!tempValue.from || !tempValue.to || !validation.isValid}>
-                      Apply
+                      {t("shared.advancedDatePicker.apply")}
                     </Button>
                   </div>
                 </div>
