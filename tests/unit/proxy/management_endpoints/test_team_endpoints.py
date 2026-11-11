@@ -14152,6 +14152,34 @@ async def test_explicit_null_metadata_with_budget_field_still_clears_metadata(ki
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["post", "patch"])
+async def test_a_stored_env_reference_encrypted_at_rest_still_blocks_a_metadata_save(kind, monkeypatch):
+    from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-unit-test-salt-key-for-callback-vars")
+    stored: Final = encrypt_callback_vars(
+        {
+            "logging": [
+                {
+                    "callback_name": "arize",
+                    "callback_type": "success",
+                    "callback_vars": {"arize_api_key": "os.environ/ARIZE_API_KEY_TENANT_1"},
+                }
+            ]
+        }
+    )
+    assert "os.environ" not in json.dumps(stored)
+    resend: Final = stored if kind == "post" else {"cost_center": "1234"}
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _drive_team_write(kind, existing_metadata=stored, payload={"metadata": resend})
+
+    assert exc_info.value.code == "400"
+    assert f"Team {_PATCH_TEAM_ID} already stores this reference" in exc_info.value.message
+    assert "arize_api_key" in exc_info.value.message
+
+
+@pytest.mark.asyncio
 async def test_metadata_only_update_keeps_team_member_budget_link():
     """LIT-5150: rewriting metadata without any team member field must not drop the
     server-owned ``team_member_budget_id``, or the member budget silently resets."""
