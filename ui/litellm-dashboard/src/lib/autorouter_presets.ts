@@ -1,3 +1,5 @@
+import type { TFunction } from "i18next";
+import i18n from "@/i18n/i18n";
 import { hydrateOssClassifier } from "@/components/add_model/jev_classifier_config";
 import {
   ComplexityRouterConfigPayload,
@@ -255,13 +257,14 @@ export const getReferencedModelsError = (
     defaultModel?: string;
   },
   availability: ModelAvailability,
+  t: TFunction = i18n.t.bind(i18n),
 ): string | null => {
   if (
     params.classifierType === "jev" &&
     params.decisionDeploymentName &&
     !resolveAvailableModel(params.decisionDeploymentName, availability)
   ) {
-    return `Model(s) no longer available: ${params.decisionDeploymentName}`;
+    return t("autorouterPresets.errors.modelsUnavailable", { models: params.decisionDeploymentName });
   }
   const references = {
     tiers: params.tiers,
@@ -270,7 +273,7 @@ export const getReferencedModelsError = (
     embedding_model: params.semanticMatchingEnabled ? params.embeddingModel : undefined,
   };
   const missing = getMissingModels(references, availability);
-  return missing.length > 0 ? `Model(s) no longer available: ${missing.join(", ")}` : null;
+  return missing.length > 0 ? t("autorouterPresets.errors.modelsUnavailable", { models: missing.join(", ") }) : null;
 };
 
 // Every piece of AddAutoRouterTab's config state that a preset (or a reset to Custom) prefills in

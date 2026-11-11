@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useReducer } from "react";
+import { Trans, useTranslation } from "react-i18next";
 
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { chatGPTLoginPollCall, chatGPTLoginStartCall, type ChatGPTLoginStartRequest } from "@/components/networking";
@@ -26,6 +27,7 @@ interface ChatGPTSignInModalProps {
 }
 
 export default function ChatGPTSignInModal({ credentialName, request, onClose, onConnected }: ChatGPTSignInModalProps) {
+  const { t } = useTranslation();
   const { accessToken } = useAuthorized();
   const [state, dispatch] = useReducer(signInFlowReducer, initialSignInFlowState);
 
@@ -74,49 +76,57 @@ export default function ChatGPTSignInModal({ credentialName, request, onClose, o
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Sign in with ChatGPT</DialogTitle>
-          <DialogDescription>Credential: {credentialName}</DialogDescription>
+          <DialogTitle>{t("modelAdd.chatgptSignIn.title")}</DialogTitle>
+          <DialogDescription>{t("modelAdd.chatgptSignIn.credential", { credentialName })}</DialogDescription>
         </DialogHeader>
 
-        {state.kind === "starting" && <p className="text-sm">Requesting a sign-in code from ChatGPT...</p>}
+        {state.kind === "starting" && <p className="text-sm">{t("modelAdd.chatgptSignIn.requestingCode")}</p>}
 
         {state.kind === "awaiting" && (
           <div className="flex flex-col gap-3">
             <p className="text-sm">
-              Open{" "}
-              <a
-                href={state.verificationUri}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-primary underline-offset-4 hover:underline"
-              >
-                {state.verificationUri}
-              </a>{" "}
-              and enter this code:
+              <Trans
+                i18nKey="modelAdd.chatgptSignIn.enterCode"
+                values={{ verificationUri: state.verificationUri }}
+                components={{
+                  verification: (
+                    <a
+                      href={state.verificationUri}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary underline-offset-4 hover:underline"
+                    />
+                  ),
+                }}
+              />
             </p>
             <div className="flex items-center gap-2">
               <code data-testid="chatgpt-user-code" className="rounded-md bg-muted px-3 py-2 font-mono text-lg">
                 {state.userCode}
               </code>
-              <CopyButton value={state.userCode} label="Copy code" copiedLabel="Code copied" />
+              <CopyButton
+                value={state.userCode}
+                label={t("modelAdd.chatgptSignIn.copyCode")}
+                copiedLabel={t("modelAdd.chatgptSignIn.codeCopied")}
+              />
             </div>
-            <p className="text-sm text-muted-foreground">Waiting for you to finish signing in on ChatGPT...</p>
+            <p className="text-sm text-muted-foreground">{t("modelAdd.chatgptSignIn.waiting")}</p>
           </div>
         )}
 
         {state.kind === "failed" && (
           <p role="alert" className="text-sm text-destructive">
-            {signInFailureMessage(state)}
+            {signInFailureMessage(state, t)}
           </p>
         )}
 
         <DialogFooter>
           {state.kind === "failed" && (
             <Button variant="outline" onClick={() => dispatch({ type: "restarted" })}>
-              Start again
+              {t("modelAdd.chatgptSignIn.startAgain")}
             </Button>
           )}
-          <Button onClick={onClose}>Close</Button>
+          <Button onClick={onClose}>{t("modelAdd.chatgptSignIn.close")}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

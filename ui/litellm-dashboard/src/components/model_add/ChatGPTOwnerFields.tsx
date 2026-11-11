@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+
 import TeamDropdown from "@/components/common_components/team_dropdown";
 import { requiredRule } from "@/components/common_components/formRules";
 import { MountedFormField } from "@/components/common_components/MountedFormField";
@@ -22,11 +24,12 @@ export default function ChatGPTOwnerFields({
   storedOwnerTeamId,
   storedOwnerKeyHash,
 }: ChatGPTOwnerFieldsProps) {
+  const { t } = useTranslation();
   return (
     <>
       <div className="mb-4 flex flex-col gap-2">
         <span id={OWNER_KIND_LABEL_ID} className="text-sm font-medium">
-          {labelWithHint("Owner:", "Only the team or virtual key you pick can use this ChatGPT subscription.")}
+          {labelWithHint(t("modelAdd.chatgptSignIn.owner"), t("modelAdd.chatgptSignIn.ownerHint"))}
         </span>
         <RadioGroup
           aria-labelledby={OWNER_KIND_LABEL_ID}
@@ -36,22 +39,22 @@ export default function ChatGPTOwnerFields({
         >
           <label className="flex items-center gap-2 text-sm">
             <RadioGroupItem value="team" />
-            Team
+            {t("modelAdd.chatgptSignIn.ownerTeam")}
           </label>
           <label className="flex items-center gap-2 text-sm">
             <RadioGroupItem value="key" />
-            Virtual key
+            {t("modelAdd.chatgptSignIn.ownerKey")}
           </label>
         </RadioGroup>
       </div>
       {ownerKind === "team" ? (
         <MountedFormField
           key={CHATGPT_OWNER_FIELDS.team}
-          label="Team:"
+          label={t("modelAdd.chatgptSignIn.team")}
           name={CHATGPT_OWNER_FIELDS.team}
           required
           defaultValue={storedOwnerTeamId}
-          rules={{ validate: { required: requiredRule("Pick the team that owns this login") } }}
+          rules={{ validate: { required: requiredRule(t("modelAdd.chatgptSignIn.teamRequired")) } }}
           className="mb-4"
         >
           {(control) => (
@@ -65,11 +68,11 @@ export default function ChatGPTOwnerFields({
       ) : (
         <MountedFormField
           key={CHATGPT_OWNER_FIELDS.key}
-          label="Key ID:"
+          label={t("modelAdd.chatgptSignIn.keyId")}
           name={CHATGPT_OWNER_FIELDS.key}
           required
           defaultValue={storedOwnerKeyHash}
-          rules={{ validate: { required: requiredRule("Enter the ID of the key that owns this login") } }}
+          rules={{ validate: { required: requiredRule(t("modelAdd.chatgptSignIn.keyIdRequired")) } }}
           className="mb-4"
         >
           {(control) => (
@@ -78,7 +81,7 @@ export default function ChatGPTOwnerFields({
               value={typeof control.value === "string" ? control.value : ""}
               onChange={control.onChange}
               onBlur={control.onBlur}
-              placeholder="The Key ID shown on the Virtual Keys page"
+              placeholder={t("modelAdd.chatgptSignIn.keyIdPlaceholder")}
             />
           )}
         </MountedFormField>

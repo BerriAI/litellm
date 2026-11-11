@@ -1,3 +1,6 @@
+import type { ParseKeys, TFunction } from "i18next";
+
+import i18n from "@/i18n/i18n";
 import type {
   ChatGPTLoginPollResponse,
   ChatGPTLoginStartRequest,
@@ -89,13 +92,16 @@ export const chatGPTSignInFrom = (
   };
 };
 
-const SUBMIT_LABELS = {
-  chatgpt: { add: "Sign in with ChatGPT", edit: "Sign in again" },
-  credential: { add: "Add Credential", edit: "Update Credential" },
-} as const;
+const SUBMIT_LABEL_KEYS = {
+  chatgpt: {
+    add: "modelAdd.credentialModal.chatgptSignInSubmit",
+    edit: "modelAdd.credentialModal.chatgptSignInAgainSubmit",
+  },
+  credential: { add: "modelAdd.credentialModal.addSubmit", edit: "modelAdd.credentialModal.updateSubmit" },
+} as const satisfies Record<string, Record<"add" | "edit", ParseKeys>>;
 
-export const credentialSubmitLabel = (signsInWithChatGPT: boolean, mode: "add" | "edit"): string =>
-  SUBMIT_LABELS[signsInWithChatGPT ? "chatgpt" : "credential"][mode];
+export const credentialSubmitLabelKey = (signsInWithChatGPT: boolean, mode: "add" | "edit"): ParseKeys =>
+  SUBMIT_LABEL_KEYS[signsInWithChatGPT ? "chatgpt" : "credential"][mode];
 
 const safeVerificationUri = (uri: string): string => {
   try {
@@ -149,11 +155,14 @@ export const signInFlowReducer = (state: SignInFlowState, event: SignInFlowEvent
   }
 };
 
-export const signInFailureMessage = (state: Extract<SignInFlowState, { kind: "failed" }>): string => {
+export const signInFailureMessage = (
+  state: Extract<SignInFlowState, { kind: "failed" }>,
+  t: TFunction = i18n.t.bind(i18n),
+): string => {
   switch (state.reason) {
     case "expired":
-      return "The sign-in code expired before it was used. Start again to get a new code.";
+      return t("modelAdd.chatgptSignIn.codeExpired");
     case "error":
-      return state.message ?? "Something went wrong while signing in to ChatGPT.";
+      return state.message ?? t("modelAdd.chatgptSignIn.failed");
   }
 };

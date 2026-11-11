@@ -1,4 +1,4 @@
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from types import MappingProxyType
 from typing import Final
 
@@ -23,6 +23,14 @@ def deployment_pricing_models(deployment: object) -> tuple[str, ...]:
     params: Final = str_keyed(view.get("litellm_params"))
     info: Final = str_keyed(view.get("model_info"))
     return pricing_models(info.get("base_model") or params.get("base_model"), params.get("model"))
+
+
+def deployment_backend_model(deployment: object) -> str:
+    return next(iter(deployment_pricing_models(deployment)), "")
+
+
+def deployment_backend_models(deployments: Iterable[object]) -> tuple[str, ...]:
+    return tuple(map(deployment_backend_model, deployments))
 
 
 def _named_models(*candidates: object) -> Iterator[str]:

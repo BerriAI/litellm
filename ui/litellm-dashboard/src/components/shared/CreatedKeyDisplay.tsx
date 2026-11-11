@@ -1,11 +1,13 @@
 import React, { useState } from "react";
 import { CopyToClipboard } from "react-copy-to-clipboard";
 import { ChevronDown, ChevronUp } from "lucide-react";
+import { Trans, useTranslation } from "react-i18next";
 import anthropicLogo from "../../../public/assets/logos/anthropic.svg";
 import openaiLogo from "../../../public/assets/logos/openai_small.svg";
 import { getProxyBaseUrl } from "@/components/networking";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/lib/toast";
+import { productNames } from "@/i18n/untranslated/productNames";
 
 interface CreatedKeyDisplayProps {
   apiKey: string;
@@ -41,6 +43,7 @@ export const buildAgentInstructions = (baseUrl: string, apiKey: string): string 
  * Used on the Virtual Keys page and in the Add Agent wizard.
  */
 const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey }) => {
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const [instructionsCopied, setInstructionsCopied] = useState(false);
   const [showInstructions, setShowInstructions] = useState(false);
@@ -49,39 +52,42 @@ const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey }) => {
 
   const handleCopy = () => {
     setCopied(true);
-    toast.success("Key copied to clipboard");
+    toast.success(t("shared.createdKeyDisplay.toasts.keyCopied"));
     setTimeout(() => setCopied(false), 2000);
   };
 
   const handleCopyInstructions = () => {
     setInstructionsCopied(true);
-    toast.success("Instructions copied");
+    toast.success(t("shared.createdKeyDisplay.toasts.instructionsCopied"));
     setTimeout(() => setInstructionsCopied(false), 2000);
   };
 
   return (
     <div>
       <p className="mb-2">
-        Please save this secret key somewhere safe and accessible. For security reasons,{" "}
-        <b>you will not be able to view it again</b> through your LiteLLM account. If you lose this secret key, you will
-        need to generate a new one.
+        <Trans i18nKey="shared.createdKeyDisplay.saveWarning" components={{ bold: <b /> }} />
       </p>
 
-      <p className="text-sm text-muted-foreground mt-3 mb-1">Virtual Key:</p>
+      <p className="text-sm text-muted-foreground mt-3 mb-1">{t("shared.createdKeyDisplay.virtualKey")}</p>
       <div className="bg-muted rounded-md p-2.5 mb-2.5">
         <pre className="m-0 whitespace-normal break-words text-foreground">{apiKey}</pre>
       </div>
 
       <CopyToClipboard text={apiKey} onCopy={handleCopy}>
-        <Button className="mt-3">{copied ? "Copied!" : "Copy Virtual Key"}</Button>
+        <Button className="mt-3">
+          {copied ? t("shared.createdKeyDisplay.copied") : t("shared.createdKeyDisplay.copyVirtualKey")}
+        </Button>
       </CopyToClipboard>
 
-      <p className="text-sm text-muted-foreground mt-4 mb-1">Gateway URL:</p>
+      <p className="text-sm text-muted-foreground mt-4 mb-1">{t("shared.createdKeyDisplay.gatewayUrl")}</p>
       <div className="bg-muted rounded-md p-2.5 mb-2.5 flex items-center justify-between gap-2">
         <pre className="m-0 whitespace-normal break-words text-foreground">{baseUrl}</pre>
-        <CopyToClipboard text={baseUrl} onCopy={() => toast.success("Gateway URL copied to clipboard")}>
+        <CopyToClipboard
+          text={baseUrl}
+          onCopy={() => toast.success(t("shared.createdKeyDisplay.toasts.gatewayUrlCopied"))}
+        >
           <Button type="button" variant="outline" className="shrink-0">
-            Copy URL
+            {t("shared.createdKeyDisplay.copyUrl")}
           </Button>
         </CopyToClipboard>
       </div>
@@ -89,13 +95,27 @@ const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey }) => {
       <div className="mt-4 rounded-md border border-border p-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
-            <p className="text-sm font-medium">Agent instructions</p>
-            <img src={anthropicLogo.src} alt="Claude Code" title="Claude Code" className="size-5 object-contain" />
-            <img src={openaiLogo.src} alt="Codex" title="Codex" className="size-5 object-contain" />
+            <p className="text-sm font-medium">{t("shared.createdKeyDisplay.agentInstructions")}</p>
+            <img
+              src={anthropicLogo.src}
+              alt={productNames.claudeCode}
+              title={productNames.claudeCode}
+              className="size-5 object-contain"
+            />
+            <img
+              src={openaiLogo.src}
+              alt={productNames.codex}
+              title={productNames.codex}
+              className="size-5 object-contain"
+            />
           </div>
           <div className="flex items-center gap-2">
             <CopyToClipboard text={instructions} onCopy={handleCopyInstructions}>
-              <Button type="button">{instructionsCopied ? "Copied!" : "Copy instructions"}</Button>
+              <Button type="button">
+                {instructionsCopied
+                  ? t("shared.createdKeyDisplay.copied")
+                  : t("shared.createdKeyDisplay.copyInstructions")}
+              </Button>
             </CopyToClipboard>
             <Button
               type="button"
@@ -103,7 +123,7 @@ const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey }) => {
               aria-expanded={showInstructions}
               onClick={() => setShowInstructions((expanded) => !expanded)}
             >
-              {showInstructions ? "Hide" : "Show"}
+              {showInstructions ? t("shared.createdKeyDisplay.hide") : t("shared.createdKeyDisplay.show")}
               {showInstructions ? (
                 <ChevronUp aria-hidden="true" className="size-4" />
               ) : (

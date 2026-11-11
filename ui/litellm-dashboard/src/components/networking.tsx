@@ -86,6 +86,7 @@ export const getAutoRouterAssembledPromptCall = async (
 /**
  * Helper file for calls being made to proxy
  */
+import i18n from "@/i18n/i18n";
 import { toast } from "@/lib/toast";
 import { clearTokenCookies, getCookie, storeLoginToken } from "@/utils/cookieUtils";
 import { decodeToken } from "@/utils/jwtUtils";
@@ -93,7 +94,12 @@ import { normalizeBackendPageUrlToUiOrigin } from "@/utils/returnUrlUtils";
 import { TagNewRequest, TagUpdateRequest, TagListResponse, TagInfoResponse } from "./tag_management/types";
 import { Team } from "./key_team_helpers/key_list";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
-import type { ListPluginsResponse, SkillRegisterRequest } from "./claude_code_plugins/types";
+import type {
+  ListPluginsResponse,
+  SkillRegisterRequest,
+  SkillMutationResponse,
+  SkillImport,
+} from "./claude_code_plugins/types";
 import type { ModelBudgetUsage, ModelMaxBudget } from "./key_team_helpers/ModelMaxBudgetEditor";
 import type { StoredModelMaxBudget } from "./key_team_helpers/modelMaxBudgetPayload";
 import type { ObjectPermission } from "./object_permission_types";
@@ -438,7 +444,7 @@ export const handleError = async (errorData: string | any) => {
     // Convert errorData to string if it isn't already
     const errorString = typeof errorData === "string" ? errorData : JSON.stringify(errorData);
     if (errorString.includes("Authentication Error - Expired Key")) {
-      toast.info("UI Session Expired. Logging out.");
+      toast.info(i18n.t("networking.sessionExpired"));
       lastErrorTime = currentTime;
       clearTokenCookies();
       const browserLocation = getWindowLocation();
@@ -750,7 +756,7 @@ export const modelCreateCall = async (accessToken: string, formValues: Model) =>
     toast.dismiss();
 
     // Sequential success messages
-    toast.success(`Model ${formValues.model_name} created successfully`);
+    toast.success(i18n.t("networking.modelCreated", { modelName: formValues.model_name }));
 
     return data;
   } catch (error) {
@@ -1694,7 +1700,7 @@ export const modelInfoCall = async (
       errorData += `error shown=${ModelListerrorShown}`;
       if (!ModelListerrorShown) {
         if (errorData.includes("No model list passed")) {
-          errorData = "No Models Exist. Click Add Model to get started.";
+          errorData = i18n.t("networking.noModelsExist");
         }
         toast.info(errorData);
         ModelListerrorShown = true;
@@ -2025,7 +2031,9 @@ export const testConnectionRequest = async (
       } else {
         return {
           status: "error",
-          message: data.error?.message || `Connection test failed: ${response.status} ${response.statusText}`,
+          message:
+            data.error?.message ||
+            i18n.t("networking.connectionTestFailed", { status: response.status, statusText: response.statusText }),
         };
       }
     }
@@ -2156,7 +2164,7 @@ export const keyInfoV1Call = async (accessToken: string, key: string) => {
     if (!response.ok) {
       const errorData = await response.text();
       handleError(errorData);
-      toast.fromError("Failed to fetch key info - " + errorData);
+      toast.fromError(i18n.t("networking.keyInfoFetchFailed", { error: errorData }));
     }
 
     const data = await response.json();
@@ -2600,7 +2608,7 @@ export const teamUpdateCall = async (
       const errorData = await response.text();
       handleError(errorData);
       console.error("Error response from the server:", errorData);
-      toast.fromError("Failed to update team settings: " + unwrapProxyErrorMessage(errorData));
+      toast.fromError(i18n.t("networking.teamUpdateFailed", { error: unwrapProxyErrorMessage(errorData) }));
       throw new Error(errorData);
     }
     const data = (await response.json()) as { data: Team; team_id: string };
@@ -2623,36 +2631,7 @@ export const modelPatchUpdateCall = async (
   accessToken: string,
   formValues: Record<string, any>, // Assuming formValues is an object
   modelId: string,
-) => {
-  try {
-    // Intentionally not logging the payload: it can contain freshly-entered
-    // provider secrets (api_key, vertex_credentials, AWS creds).
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/model/${modelId}/update` : `/model/${modelId}/update`;
-    const response = await fetch(url, {
-      method: "PATCH",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        ...formValues, // Include formValues in the request body
-      }),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error update from the server:", errorData);
-      throw new Error("Network response was not ok");
-    }
-    const data = await response.json();
-    return data;
-    // Handle success - you might want to update some state or UI based on the created key
-  } catch (error) {
-    console.error("Failed to update model:", error);
-    throw error;
-  }
-};
+) => apiClient.patch(`/model/${encodeURIComponent(modelId)}/update`, { accessToken, body: formValues });
 
 export interface Member {
   role: string;
@@ -3253,7 +3232,7 @@ export const updateConfigFieldSetting = async (accessToken: string, fieldName: s
       config_type: "general_settings",
     };
     const data = await apiClient.post(`/config/field/update`, { accessToken, body: formData });
-    toast.success("Successfully updated value!");
+    toast.success(i18n.t("networking.configValueUpdated"));
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3269,7 +3248,7 @@ export const deleteConfigFieldSetting = async (accessToken: string, fieldName: s
       config_type: "general_settings",
     };
     const data = await apiClient.post(`/config/field/delete`, { accessToken, body: formData });
-    toast.success("Field reset on proxy");
+    toast.success(i18n.t("networking.configFieldReset"));
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -4913,7 +4892,7 @@ export const listMCPTools = async (
     return {
       tools: [],
       error: "network_error",
-      message: error instanceof Error ? error.message : "Failed to fetch MCP tools",
+      message: error instanceof Error ? error.message : i18n.t("networking.mcpToolsFetchFailed"),
       stack_trace: null,
     };
   }
@@ -4926,7 +4905,7 @@ export const listMCPTools = async (
     return {
       tools: [],
       error: "parse_error",
-      message: "Failed to parse MCP tools response",
+      message: i18n.t("networking.mcpToolsParseFailed"),
       status: response.status,
       statusText: response.statusText,
       stack_trace: null,
@@ -4939,7 +4918,7 @@ export const listMCPTools = async (
     // to inspect `result.error` / `result.message`. Attach `status` so
     // callers that need to react to auth failures (e.g. the useQuery in
     // mcp_tools.tsx) can still detect 401s from the returned object.
-    const errorMessage = (data && (data.message || data.error)) || "Failed to fetch MCP tools";
+    const errorMessage = (data && (data.message || data.error)) || i18n.t("networking.mcpToolsFetchFailed");
     return {
       tools: [],
       error: (data && data.error) || `http_${response.status}`,
@@ -6302,7 +6281,7 @@ export const updatePassThroughEndpoint = async (
     }
 
     const data = await response.json();
-    toast.success("Pass through endpoint updated successfully");
+    toast.success(i18n.t("networking.passThroughEndpointUpdated"));
     return data;
   } catch (error) {
     console.error("Failed to update pass through endpoint:", error);
@@ -6376,7 +6355,7 @@ export const testMCPToolsListRequest = async (
           tools: [],
           error: true,
           status: 403,
-          message: MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE,
+          message: i18n.t(MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE),
         };
       }
       // Return the error response instead of throwing an error
@@ -6388,7 +6367,9 @@ export const testMCPToolsListRequest = async (
         tools: [],
         error: "request_failed",
         status: response.status,
-        message: data.message || `MCP tools list failed: ${response.status} ${response.statusText}`,
+        message:
+          data.message ||
+          i18n.t("networking.mcpToolsListFailed", { status: response.status, statusText: response.statusText }),
       };
     }
 
@@ -6929,11 +6910,6 @@ export const updateUserBanner = async (accessToken: string, banner: UserBannerUp
 
 // Claude Code Marketplace Networking Functions
 
-/**
- * List all Claude Code plugins (admin only)
- * @param accessToken - Admin access token
- * @param enabledOnly - If true, only return enabled plugins (default: false)
- */
 export const getClaudeCodePluginsList = async (
   accessToken: string,
   enabledOnly: boolean = false,
@@ -6946,45 +6922,86 @@ export const getClaudeCodePluginsList = async (
   return data;
 };
 
-/**
- * Register a new Claude Code plugin (admin only). Create-only: the proxy returns
- * 409 if a plugin with the same name already exists.
- * @param accessToken - Admin access token
- * @param pluginData - Plugin registration data
- */
-export const registerClaudeCodePlugin = async (accessToken: string, pluginData: SkillRegisterRequest) => {
-  try {
-    const proxyBaseUrl = getProxyBaseUrl();
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/claude-code/plugins` : `/claude-code/plugins`;
+export const registerClaudeCodePlugin = (
+  accessToken: string,
+  pluginData: SkillRegisterRequest,
+): Promise<components["schemas"]["RegisterPluginResponse"]> =>
+  apiClient.post("/claude-code/plugins", { accessToken, body: pluginData });
 
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(pluginData),
-    });
-
-    if (!response.ok) {
-      const errorBody = await response.text();
-      let errorMessage: string;
-      try {
-        errorMessage = deriveErrorMessage(JSON.parse(errorBody));
-      } catch {
-        errorMessage = errorBody || `Request failed with status ${response.status}`;
-      }
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Failed to register Claude Code plugin:", error);
-    throw error;
-  }
+export const uploadClaudeCodeSkill = async (
+  accessToken: string,
+  file: File,
+  metadata: Omit<SkillRegisterRequest, "source">,
+): Promise<components["schemas"]["RegisterPluginResponse"]> => {
+  const body = new FormData();
+  body.append("file", file);
+  body.append("metadata", JSON.stringify(metadata));
+  return apiClient.post("/claude-code/plugins/upload", { accessToken, rawBody: body });
 };
+
+export const listSkillHubSkills = (accessToken: string, query: { limit: number; offset: number }) =>
+  apiClient.get<components["schemas"]["SkillHubList"]>("/skill-hub/skills", { accessToken, query });
+
+export const getSkillHubSkill = (accessToken: string, name: string) =>
+  apiClient.get<components["schemas"]["SkillHubSkill"]>(`/skill-hub/skills/${encodeURIComponent(name)}`, {
+    accessToken,
+  });
+
+export const importSkillHubSkill = (accessToken: string, body: SkillImport) =>
+  apiClient.post<SkillMutationResponse>("/skill-hub/skills/import", { accessToken, body });
+
+export const updateSkillHubSkill = (
+  accessToken: string,
+  name: string,
+  body: components["schemas"]["SkillHubMetadata"],
+) => apiClient.put<SkillMutationResponse>(`/skill-hub/skills/${encodeURIComponent(name)}`, { accessToken, body });
+
+export const uploadSkillHubSkill = (
+  accessToken: string,
+  file: File,
+  version: string,
+  skill?: components["schemas"]["SkillHubSkill"],
+): Promise<SkillMutationResponse> => {
+  const body = new FormData();
+  body.append("file", file);
+  if (version.trim()) body.append("version", version.trim());
+  if (skill?.updated_at) body.append("expected_updated_at", skill.updated_at);
+  return skill
+    ? apiClient.put(`/skill-hub/skills/${encodeURIComponent(skill.name)}/upload`, { accessToken, rawBody: body })
+    : apiClient.post("/skill-hub/skills/upload", { accessToken, rawBody: body });
+};
+
+export const deleteSkillHubSkill = (accessToken: string, name: string) =>
+  apiClient.delete(`/skill-hub/skills/${encodeURIComponent(name)}`, { accessToken });
+
+export const listSkillSubmissions = (
+  accessToken: string,
+  query: { limit: number; offset: number },
+): Promise<components["schemas"]["SkillHubSubmissionList"]> =>
+  apiClient.get("/skill-hub/submissions", { accessToken, query });
+
+export const getSkillSubmission = (
+  accessToken: string,
+  id: string,
+): Promise<components["schemas"]["SkillHubSubmissionDetail"]> =>
+  apiClient.get(`/skill-hub/submissions/${encodeURIComponent(id)}`, { accessToken });
+
+export const reviewSkillSubmission = (
+  accessToken: string,
+  id: string,
+  action: "approve" | "reject",
+  body?: components["schemas"]["SkillHubRejection"],
+): Promise<components["schemas"]["SkillHubReviewResponse"]> =>
+  apiClient.put(`/skill-hub/submissions/${encodeURIComponent(id)}/${action}`, { accessToken, body });
+
+export const getSkillScan = (accessToken: string, id: string): Promise<components["schemas"]["SkillScanResponse"]> =>
+  apiClient.get(`/skill-hub/submissions/${encodeURIComponent(id)}/scan`, { accessToken });
+
+export const startSkillScan = (accessToken: string, id: string): Promise<components["schemas"]["SkillScanResponse"]> =>
+  apiClient.post(`/skill-hub/submissions/${encodeURIComponent(id)}/scan`, { accessToken });
+
+export const downloadSkillSubmission = (accessToken: string, id: string): Promise<Blob> =>
+  apiClient.getBlob(`/skill-hub/submissions/${encodeURIComponent(id)}/archive`, { accessToken, redirect: "error" });
 
 /**
  * Enable a Claude Code plugin (admin only)
