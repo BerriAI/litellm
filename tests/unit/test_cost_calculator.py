@@ -2503,6 +2503,36 @@ def test_vertex_gemini_flash_image_generation_regional_costs_uplift_over_global(
     assert image_cost("us-central1") == pytest.approx(global_cost * 1.10, rel=1e-9)
 
 
+@pytest.mark.parametrize("requested_tier", ["flex", "priority"])
+def test_vertex_gemini_image_generation_bills_only_the_tier_vertex_served(
+    _local_model_cost_map: None, requested_tier: str
+) -> None:
+    """Image requests never send service_tier upstream, so a request tier must not change the bill
+    when Vertex reports no trafficType, while a served ON_DEMAND_PRIORITY still bills priority rates."""
+    usage: Final = ImageUsage(
+        input_tokens=1000,
+        input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=1000),
+        output_tokens=1120,
+        total_tokens=2120,
+    )
+
+    def image_cost(traffic_type: str | None, service_tier: str | None) -> float:
+        response: Final = ImageResponse(data=[ImageObject(b64_json="img")], usage=usage)
+        response.hidden_params["provider_specific_fields"] = {"traffic_type": traffic_type} if traffic_type else {}
+        return completion_cost(
+            completion_response=response,
+            model="vertex_ai/gemini-3.1-flash-image",
+            call_type="image_generation",
+            optional_params={"service_tier": service_tier} if service_tier else {},
+        )
+
+    standard_cost: Final = image_cost(None, None)
+    assert standard_cost > 0
+    assert image_cost(None, requested_tier) == standard_cost
+    assert image_cost("ON_DEMAND", requested_tier) == standard_cost
+    assert image_cost("ON_DEMAND_PRIORITY", requested_tier) > standard_cost
+
+
 def test_vertex_uplift_composes_with_above_128k_pricing(monkeypatch):
     """The regional-endpoint uplift multiplies whatever rate the request priced at,
     including the above-128k dynamic rates, so a synthetic model carrying both keys
@@ -3227,6 +3257,37 @@ def test_completion_cost_service_tier_for_bedrock(_local_model_cost_map):
     )
 
     assert priority_cost > default_cost > flex_cost > 0
+
+
+@pytest.mark.parametrize(
+    ("model", "service_tier", "regional_row"),
+    [
+        pytest.param(
+            "bedrock/moonshotai.kimi-k2.5",
+            "priority",
+            "bedrock/us-west-2/moonshotai.kimi-k2.5",
+            id="kimi-k2.5-priority",
+        ),
+        pytest.param("zai.glm-5", "flex", "bedrock/us-west-2/zai.glm-5", id="glm-5-flex"),
+    ],
+)
+def test_cost_per_token_bedrock_service_tier_without_a_region_matches_the_regional_row(
+    _local_model_cost_map, model: str, service_tier: str, regional_row: str
+) -> None:
+    """Regression for #46880: a Bedrock priority or flex call priced without a region fell back to the
+    standard rate because the region-less row lacked the tier prices its regional rows carry."""
+    regional: Final = litellm.model_cost[regional_row]
+    tier_input: Final = regional[f"input_cost_per_token_{service_tier}"]
+    tier_output: Final = regional[f"output_cost_per_token_{service_tier}"]
+    assert tier_input != regional["input_cost_per_token"]
+
+    usage: Final = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+    prompt_usd, completion_usd = cost_per_token(
+        model=model, custom_llm_provider="bedrock", usage_object=usage, service_tier=service_tier
+    )
+
+    assert prompt_usd == pytest.approx(1000 * tier_input)
+    assert completion_usd == pytest.approx(500 * tier_output)
 
 
 def test_completion_cost_service_tier_for_anthropic(_local_model_cost_map):

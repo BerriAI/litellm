@@ -13,6 +13,7 @@
 - Pooled upstream connections are retired well before Python's keep-alive timeout, so a request never lands on a connection Python is closing
 - Idle client connections close after Python's keep-alive timeout, as uvicorn closed them, so a client that vanishes cannot hold a socket forever. Only the wait for the next request is timed, never an exchange in progress
 - WebSocket is the one protocol switch Python serves. Upgrades are relayed as raw bytes after the 101 and drained on shutdown
+- Drain on EOF of stdin exactly as on SIGTERM. The supervisor holds the only write end, so EOF means it is gone and nobody is left to stop the gateway. `input_closed` reads on a plain thread, since a read blocked on tokio's blocking pool would hold up the runtime's exit
 
 ## Layout
 
@@ -21,6 +22,8 @@ Every forwarding decision has one home. `rewrite.rs` owns what Python and the cl
 ## Environment
 
 `Settings` reads only these variables, and only when `LITELLM_FORWARD_UPSTREAM` is set. The Python supervisor in `litellm/proxy/rust_forward/` sets every one of them from the values Python actually runs with, so all of them are required and a missing or invalid one fails startup naming it. The crate never reads Python's own settings (`HOST`, `PORT`, `KEEPALIVE_TIMEOUT`, `GRACEFUL_SHUTDOWN_TIMEOUT`) and keeps no copy of Python's defaults, since Python can get those values from CLI flags the environment never shows
+
+Only the Python supervisor starts the gateway in forwarding mode, from `litellm` and from `python -m gateway.launch`, on a laptop and in every image. `supervisor/children.py` is the only writer of these variables, so adding, renaming or removing one changes `settings.rs` and `children.rust_spec` in the same change. Without `LITELLM_FORWARD_UPSTREAM` the binary runs as the standalone Rust gateway and this crate does nothing
 
 | Variable | Meaning |
 |---|---|

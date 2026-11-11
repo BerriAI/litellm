@@ -147,6 +147,7 @@ class EndpointCore(Protocol):
         kind: str = "pick",
         specific_deployment: bool | None = None,
         messages: object = None,
+        batch_upload: bool = False,
     ) -> Mapping[str, object] | Sequence[Mapping[str, object]]: ...
 
     async def acompletion(self, *args: object, **kwargs: object) -> object: ...  # kwargs-ok: endpoint payload
@@ -675,6 +676,10 @@ _DIRECT_ENDPOINTS: Final = frozenset(
         "asearch",
     }
 )
+
+
+def is_batch_upload(request: Mapping[str, object]) -> bool:
+    return request.get("purpose") == "batch"
 
 
 def endpoint_names() -> frozenset[str]:
@@ -2313,6 +2318,7 @@ class RustEndpoints:
             kind="healthy",
             specific_deployment=bool(specific) or None,
             messages=_user_message(_PICK_TEXTS["create_file"]),
+            batch_upload=is_batch_upload(kwargs),
         )
         deployments: Final = list(healthy) if isinstance(healthy, Sequence) else [healthy]
 

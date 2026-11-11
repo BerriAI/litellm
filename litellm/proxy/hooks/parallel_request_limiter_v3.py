@@ -500,6 +500,7 @@ class RequestRateLimiterStash:
     reserved_tokens: int = 0
     reserved_model: RateLimitedModel | None = None
     reserved_scopes: frozenset[tuple[str, str]] = field(default_factory=frozenset)
+    fallback_models: frozenset[str] = field(default_factory=frozenset)
     ptu_ceiling: PTUTeamCeiling | None = None
     ptu_reserved_tokens: int = 0
     ptu_reserved_window_identities: frozenset[ReservationWindowIdentity] = field(default_factory=frozenset)
@@ -3786,6 +3787,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     ) -> bool:
         """Reserve the caller's per-model limits on a router fallback target. False when any is exhausted."""
         data: Final = MappingProxyType({**request_data, "model": model})
+        stash: Final = _request_stash.get()
         hidden_stash: Final = _request_stash.set(None)
         try:
             built: Final = await self._build_request_rate_limit_descriptors(user_api_key_dict, data, None)
@@ -3794,10 +3796,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         descriptors: Final = [
             descriptor for descriptor in built if descriptor["key"] in PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS
         ]
-        if not descriptors:
-            return True
-        response: Final = await self.should_rate_limit(descriptors, parent_otel_span=user_api_key_dict.parent_otel_span)
-        return response["overall_code"] == "OK"
+        allowed: Final = (
+            not descriptors
+            or (await self.should_rate_limit(descriptors, parent_otel_span=user_api_key_dict.parent_otel_span))[
+                "overall_code"
+            ]
+            == "OK"
+        )
+        if allowed and stash is not None:
+            stash.fallback_models = stash.fallback_models | {model}
+        return allowed
 
     @asynccontextmanager
     async def request_capacity(
@@ -4720,12 +4728,21 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         reserved_tokens: Final = open_reservation.reserved_tokens if open_reservation is not None else 0
         reserved_model: Final = stash.reserved_model if stash is not None else None
         reserved_scopes: Final[frozenset[tuple[str, str]]] = stash.reserved_scopes if stash is not None else frozenset()
-        # Reconciliation must target the same model-scoped counter that the
-        # pre-call reservation incremented. If a reservation was made,
+        served_model: Final = self._rate_limited_model(model_group)
         # ``reserved_model`` (resolved at admission, so an alias map reload
-        # mid-flight cannot move the charge) is authoritative; otherwise fall
-        # back to the router's ``model_group`` (the no-reservation charge path).
-        reconcile_model: Final = reserved_model if reserved_model is not None else self._rate_limited_model(model_group)
+        # mid-flight cannot move the charge) settles the request unless the
+        # router fell back to a group this limiter admitted as a fallback
+        # target: then the served group is charged and the abandoned group's
+        # per-model reservation is refunded. Client-supplied ``model_group``
+        # metadata alone never moves the charge.
+        fell_back: Final = (
+            stash is not None
+            and reserved_model is not None
+            and served_model is not None
+            and served_model.requested != reserved_model.requested
+            and served_model.requested in stash.fallback_models
+        )
+        reconcile_model: Final = served_model if fell_back or reserved_model is None else reserved_model
         reconcile_models: Final = self._rate_limited_models(reconcile_model)
 
         pipeline_operations: Final[list[ReservationOperation]] = []
@@ -4764,6 +4781,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
         )
         charged_targets: Final = [target for target in targets if target not in key_owned_team_scopes]
+        abandoned_scopes: Final = (
+            tuple(
+                sorted(
+                    scope
+                    for scope in reserved_scopes
+                    if scope[0] in PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS and scope not in charged_targets
+                )
+            )
+            if fell_back
+            else ()
+        )
         if reserved_tokens > 0 and total_tokens < reserved_tokens:
             verbose_proxy_logger.debug(
                 "Releasing unused TPM budget on success: reserved=%s, actual=%s, release=%s",
@@ -4776,6 +4804,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 targets=charged_targets,
                 reserved_scopes=reserved_scopes,
                 actual_tokens=total_tokens,
+                reserved_tokens=reserved_tokens,
+            )
+        )
+        pipeline_operations.extend(
+            self._build_reservation_aware_tpm_ops(
+                targets=abandoned_scopes,
+                reserved_scopes=reserved_scopes,
+                actual_tokens=0,
                 reserved_tokens=reserved_tokens,
             )
         )
