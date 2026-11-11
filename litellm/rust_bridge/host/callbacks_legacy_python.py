@@ -531,7 +531,28 @@ def after_deployment_success(kwargs: dict[str, object], response: object, call_t
     hook: Final = cast(  # cast-ok: bounded adapter for the untyped deployment hook
         DeploymentSuccessHook, utils.async_post_call_success_deployment_hook
     )
-    return hook(kwargs, response, CallTypes(call_type))
+    typed: Final = CallTypes(call_type)
+    return hook(kwargs, _messages_stream(response) if typed == CallTypes.anthropic_messages else response, typed)
+
+
+def _messages_stream(response: object) -> object:
+    from litellm.llms.anthropic.messages.native.streaming_iterator import (
+        AnthropicMessagesStreamHiddenParams,
+        AnthropicMessagesStreamingResponse,
+    )
+    from litellm.rust_bridge.execution import AsyncStream
+
+    if not isinstance(response, AsyncStream):
+        return response
+    return AnthropicMessagesStreamingResponse(
+        completion_stream=cast(  # cast-ok: the native stream yields the provider's SSE bytes
+            AsyncIterator[bytes], response
+        ),
+        hidden_params=cast(  # cast-ok: the stream's stamped hidden params, shared as Python's handler shares them
+            AnthropicMessagesStreamHiddenParams,
+            response._hidden_params,  # pyright: ignore[reportPrivateUsage]  # the native stream's own hidden params
+        ),
+    )
 
 
 def after_deployment_failure(kwargs: dict[str, object], error: Exception, call_type: str) -> Awaitable[None]:

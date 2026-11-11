@@ -31,6 +31,7 @@ class ResponseSpec:
     # Splits a non-stream body into this many writes, `chunk_delay` apart, so it trickles in.
     body_chunks: int = 1
     cut_after: int | None = None
+    cut_delay: float = 0
     gzip: bool = False
     # Writes every stream event in one write, so they reach the client in one read.
     burst: bool = False
@@ -121,6 +122,7 @@ def recording_service() -> Iterator[RecordingServer]:
             try:
                 for index, payload in enumerate(payloads):
                     if index == response.cut_after:
+                        time.sleep(response.cut_delay)
                         self.close_connection = True
                         break
                     if index and response.chunk_delay:

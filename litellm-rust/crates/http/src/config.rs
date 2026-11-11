@@ -94,6 +94,8 @@ impl From<&HttpSettings> for Resolution {
     }
 }
 
+const MAX_REDIRECTS: usize = 20;
+
 impl TryFrom<&HttpClientConfig> for reqwest::ClientBuilder {
     type Error = Error;
 
@@ -102,7 +104,8 @@ impl TryFrom<&HttpClientConfig> for reqwest::ClientBuilder {
             .tls_backend_preconfigured(rustls::ClientConfig::try_from(config)?)
             .connect_timeout(config.connect_timeout)
             .pool_idle_timeout(config.pool_idle_timeout)
-            .referer(false);
+            .referer(false)
+            .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS));
         let with_keepalive = match config.tcp_keepalive {
             None => base,
             Some(keepalive) => base

@@ -1,4 +1,4 @@
-use std::io;
+use std::{borrow::Cow, io};
 
 use serde::Serialize;
 use serde_json::ser::{CharEscape, CompactFormatter, Formatter};
@@ -23,6 +23,60 @@ pub fn to_vec<T: Serialize + ?Sized>(value: &T) -> serde_json::Result<Vec<u8>> {
     let mut serializer = serde_json::Serializer::with_formatter(&mut out, RawLeaves::default());
     value.serialize(&mut serializer)?;
     Ok(out)
+}
+
+pub fn mark_wide_numbers(text: &str) -> Cow<'_, str> {
+    let bytes = text.as_bytes();
+    let mut out = String::new();
+    let mut copied = 0;
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'"' => index = string_end(bytes, index + 1),
+            b'-' | b'0'..=b'9' => {
+                let end = bytes[index..]
+                    .iter()
+                    .position(|byte| {
+                        !matches!(byte, b'0'..=b'9' | b'-' | b'+' | b'.' | b'e' | b'E')
+                    })
+                    .map_or(bytes.len(), |length| index + length);
+                if let Some(raw) = wide_number(&text[index..end]) {
+                    out.push_str(&text[copied..index]);
+                    out.push_str(&serde_json::Value::String(encode(raw)).to_string());
+                    copied = end;
+                }
+                index = end;
+            }
+            _ => index += 1,
+        }
+    }
+    if copied == 0 {
+        return Cow::Borrowed(text);
+    }
+    out.push_str(&text[copied..]);
+    Cow::Owned(out)
+}
+
+fn string_end(bytes: &[u8], mut index: usize) -> usize {
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => index += 2,
+            b'"' => return index + 1,
+            _ => index += 1,
+        }
+    }
+    index
+}
+
+fn wide_number(raw: &str) -> Option<&str> {
+    if is_integer(raw) {
+        return (raw.parse::<i64>().is_err() && raw.parse::<u64>().is_err()).then_some(raw);
+    }
+    match raw.parse::<f64>() {
+        Ok(number) if number == f64::INFINITY => Some("Infinity"),
+        Ok(number) if number == f64::NEG_INFINITY => Some("-Infinity"),
+        _ => None,
+    }
 }
 
 fn is_scalar(raw: &str) -> bool {
@@ -228,6 +282,27 @@ mod tests {
                 serde_json::to_string(&encode("NaN")).unwrap()
             )
         );
+    }
+
+    #[rstest]
+    #[case::wide_integer(r#"{"a":18446744073709551616}"#, json!({"a": encode("18446744073709551616")}))]
+    #[case::negative_wide_integer(r#"[-12345678901234567890123]"#, json!([encode("-12345678901234567890123")]))]
+    #[case::overflowing_float(r#"{"a":[1e400,-1E+400]}"#, json!({"a": [encode("Infinity"), encode("-Infinity")]}))]
+    #[case::numbers_that_fit(r#"{"a":[18446744073709551615,-9223372036854775808,-0.0,5e-324,1E2,0.30000000000000004]}"#, json!({"a": [18_446_744_073_709_551_615_u64, i64::MIN, -0.0, 5e-324, 100.0, 0.300_000_000_000_000_04]}))]
+    #[case::numbers_inside_strings(r#"{"18446744073709551616":"1e400 \" 18446744073709551616"}"#, json!({"18446744073709551616": "1e400 \" 18446744073709551616"}))]
+    fn wide_numbers_are_read_as_marked_texts(#[case] text: &str, #[case] read: Value) {
+        assert_eq!(
+            serde_json::from_str::<Value>(&mark_wide_numbers(text)).unwrap(),
+            read
+        );
+    }
+
+    #[test]
+    fn a_text_without_wide_numbers_is_borrowed() {
+        assert!(matches!(
+            mark_wide_numbers(r#"{"a":[1,2.5,"18446744073709551616"]}"#),
+            Cow::Borrowed(_)
+        ));
     }
 
     #[rstest]

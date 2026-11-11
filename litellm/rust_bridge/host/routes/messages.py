@@ -504,6 +504,7 @@ _exception_type: Final = cast(  # cast-ok: the legacy public exception mapper is
 )
 _BODY_READ_TIMEOUT: Final = "Timeout on reading data from socket"  # aiohttp's SocketTimeoutError text
 _UNREACHABLE: Final = "could not reach the provider: "
+_TOO_MANY_REDIRECTS: Final = "upstream network error: error following redirect: too many redirects"
 _SEND_FAILED: Final = "upstream network error: error sending request: client error (SendRequest): "
 _DNS_FAILURE: Final = "failed to lookup address information: "
 _HTTPX_DNS_ERRNO: Final = {
@@ -629,6 +630,8 @@ def _transport_failure(error: Exception, request: Mapping[str, object], request_
     if body_cut is not None:
         return str(_body_cut(*_BODY_CUT.validate_python(body_cut)))
     native: Final = str(error)
+    if native == _TOO_MANY_REDIRECTS:
+        return "Exceeded maximum allowed redirects."
     if native.startswith(_SEND_FAILED):
         reset: Final = native.endswith(f"Connection reset by peer (os error {errno.ECONNRESET})")
         closed: Final = native.endswith("connection closed before message completed")

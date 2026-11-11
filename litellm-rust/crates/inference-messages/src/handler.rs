@@ -824,10 +824,11 @@ fn decode_response(
     model: &str,
     text: &str,
 ) -> Result<MessagesBody, Error> {
-    let response = match serde_json::from_str::<MessagesResponse>(text) {
+    let marked = litellm_host::raw_json::mark_wide_numbers(text);
+    let response = match serde_json::from_str::<MessagesResponse>(&marked) {
         Ok(response) => response,
         Err(err) => {
-            let Ok(mut body) = serde_json::from_str::<Map<String, Value>>(text) else {
+            let Ok(mut body) = serde_json::from_str::<Map<String, Value>>(&marked) else {
                 return Err(Error::invalid_response(litellm_llms::ErrorDetail::invalid(
                     "messages response JSON",
                     err,

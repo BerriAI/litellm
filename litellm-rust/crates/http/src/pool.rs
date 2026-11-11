@@ -372,7 +372,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn provider_client_follows_redirects_without_a_referer() {
+    async fn provider_client_follows_twenty_redirects_without_a_referer() {
         let (address, _, requests) = serve("HTTP/1.1 307 Temporary Redirect").await;
         let followed = pool()
             .client(&config("a"), ClientVariant::Provider)
@@ -383,7 +383,7 @@ mod tests {
             .await;
         assert!(followed.is_err());
         let requests = requests.lock().unwrap().clone();
-        assert!(requests.len() > 1, "{requests:?}");
+        assert_eq!(requests.len(), 21, "{requests:?}");
         assert!(requests[1].starts_with("GET /elsewhere "), "{requests:?}");
         assert!(
             requests

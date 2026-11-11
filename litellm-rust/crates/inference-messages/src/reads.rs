@@ -68,14 +68,14 @@ impl<E> Reads<E> {
 
     fn read(&self) -> Option<Read<E>> {
         let mut buffer = self.buffer();
-        if let Some(failure) = buffer.failure.take() {
-            return Some(Read::Failure(failure));
-        }
         if !buffer.chunks.is_empty() {
             let chunk = buffer.take();
             drop(buffer);
             self.drained.notify_one();
             return Some(Read::Chunk(chunk));
+        }
+        if let Some(failure) = buffer.failure.take() {
+            return Some(Read::Failure(failure));
         }
         buffer.ended.then_some(Read::End)
     }
@@ -298,11 +298,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_failure_is_raised_before_the_bytes_still_buffered() {
+    async fn the_bytes_still_buffered_are_read_before_a_failure() {
         let (sender, mut reads, _) = upstream();
         sender.send(Ok(Bytes::from("event: a\n\n"))).unwrap();
+        sender.send(Ok(Bytes::from("event: b\n\n"))).unwrap();
         sender.send(Err("reset")).unwrap();
         settled().await;
+        assert_eq!(
+            reads.try_next().await.unwrap().unwrap(),
+            "event: a\n\nevent: b\n\n"
+        );
         assert_eq!(reads.try_next().await.unwrap_err(), "reset");
         assert!(reads.next().await.is_none());
     }

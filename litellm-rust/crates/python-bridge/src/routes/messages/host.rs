@@ -34,7 +34,7 @@ use super::transport::{HostedTransport, TransportCall, python_failure};
 use crate::{
     errors::{RequestMarker, route_failure},
     marshal::{
-        ArgumentError, optional_timeout, project_optional_fields, public_response,
+        ArgumentError, optional_timeout, project_optional_fields, public_json_response,
         python_timeout_seconds,
     },
     python_settings::PythonSettings,
@@ -68,6 +68,44 @@ fn ascii_headers<'py>(
         kept.set_item(name, value)?;
     }
     Ok(kept.into_any())
+}
+
+const PROVIDER_SPECIFIC_HEADERS_MODULE: &str =
+    "litellm.litellm_core_utils.get_provider_specific_headers";
+
+fn ascii_scoped_headers<'py>(value: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    let ascii_entry = |entry: Bound<'py, PyAny>| -> PyResult<Bound<'py, PyAny>> {
+        let Ok(entry) = entry.cast::<PyDict>() else {
+            return Ok(entry);
+        };
+        let Some(headers) = entry.get_item("extra_headers")? else {
+            return Ok(entry.clone().into_any());
+        };
+        let kept = entry.copy()?;
+        kept.set_item("extra_headers", ascii_headers(&headers, &mut None)?)?;
+        Ok(kept.into_any())
+    };
+    if let Ok(entries) = value.cast::<PyList>() {
+        return Ok(PyList::new(
+            value.py(),
+            entries
+                .iter()
+                .map(ascii_entry)
+                .collect::<PyResult<Vec<_>>>()?,
+        )?
+        .into_any());
+    }
+    if let Ok(entries) = value.cast::<PyTuple>() {
+        return Ok(PyTuple::new(
+            value.py(),
+            entries
+                .iter()
+                .map(ascii_entry)
+                .collect::<PyResult<Vec<_>>>()?,
+        )?
+        .into_any());
+    }
+    ascii_entry(value.clone())
 }
 
 fn json_messages(messages: &Bound<'_, PyAny>) -> PyResult<Value> {
@@ -380,10 +418,16 @@ impl MessagesPythonHost {
                 .call1((&model, api_base.as_deref()))?
                 .extract()?,
         };
-        let (extra_headers, unencodable_request_header) = match settings.extra_headers {
+        let (extra_headers, mut unencodable_request_header) = match settings.extra_headers {
             Some(headers) => (Some(headers), None),
             None => self.merged_headers(py, arguments)?,
         };
+        let provider_specific_header = self.provider_specific_header(
+            py,
+            arguments,
+            custom_llm_provider.as_deref(),
+            &mut unencodable_request_header,
+        )?;
         let shaping = MessagesShaping {
             capabilities: self.capabilities(py, &model, custom_llm_provider.as_deref())?,
             settings: MessagesSettings {
@@ -394,7 +438,6 @@ impl MessagesPythonHost {
                 ..settings.settings
             },
         };
-        let provider_specific_header = self.provider_specific_header(py, arguments)?;
         let federation_fields: &[String] = match custom_llm_provider.as_deref() {
             Some(FEDERATING_PROVIDER) => workload_identity_fields(py)?,
             _ => &[],
@@ -440,11 +483,25 @@ impl MessagesPythonHost {
         &self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
+        provider: Option<&str>,
+        unencodable: &mut Option<Vec<u8>>,
     ) -> PyResult<Option<ProviderSpecificHeaders>> {
-        self.view
+        let Some(value) = self
+            .view
             .argument(py, arguments, "provider_specific_header")?
-            .map(|value| from_py(&value))
-            .transpose()
+        else {
+            return Ok(None);
+        };
+        if unencodable.is_none()
+            && let Some(provider) = provider
+            && let Ok(scoped) = py
+                .import(PROVIDER_SPECIFIC_HEADERS_MODULE)?
+                .getattr("ProviderSpecificHeaderUtils")?
+                .call_method1("get_provider_specific_headers", (&value, provider, true))
+        {
+            ascii_headers(&scoped, unencodable)?;
+        }
+        from_py(&ascii_scoped_headers(&value)?).map(Some)
     }
 
     fn capabilities(
@@ -611,7 +668,7 @@ impl PythonBinding for MessagesPythonHost {
         if let Some(answer) = self.answer.take() {
             return Ok(answer);
         }
-        let public = public_response(py, ROUTE_HOST_MODULE, &response)?;
+        let public = public_json_response(py, ROUTE_HOST_MODULE, &response)?;
         self.safeguards.published(py, public)
     }
 

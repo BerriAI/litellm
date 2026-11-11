@@ -27,6 +27,7 @@ import json
 import math
 import os
 import re
+import time
 import uuid
 from collections.abc import (
     AsyncGenerator,
@@ -324,6 +325,20 @@ SLOW_STREAM: Final = _events(
 )
 
 
+WIDE_NUMBERS_REPLY: Final = (
+    b'{"id":"msg_01ParityWide","type":"message","role":"assistant","model":"claude-sonnet-4-5-20250929",'
+    b'"content":[{"type":"tool_use","id":"toolu_01ParityWide","name":"get_ids","input":{"big":18446744073709551616,'
+    b'"huge":12345678901234567890123,"negative":-12345678901234567890123,"neg_zero":-0.0,"overflow":1e400,'
+    b'"underflow":-1E+400,"exp":1E2,"tiny":5e-324,"precise":0.30000000000000004,"text":"1e400 18446744073709551616"}}],'
+    b'"stop_reason":"tool_use","stop_sequence":null,"usage":{"input_tokens":12,"output_tokens":9}}'
+)
+WIDE_INTEGER_REPLY: Final = (
+    b'{"id":"msg_01ParityWideCached","type":"message","role":"assistant","model":"claude-sonnet-4-5-20250929",'
+    b'"content":[{"type":"tool_use","id":"toolu_01ParityWideCached","name":"get_ids","input":{"huge":12345678901234567890123}}],'
+    b'"stop_reason":"tool_use","stop_sequence":null,"usage":{"input_tokens":12,"output_tokens":9}}'
+)
+
+
 def _upstream_error(kind: str, message: str) -> Mapping[str, JsonValue]:
     return MappingProxyType({"type": "error", "error": {"type": kind, "message": message}})
 
@@ -413,6 +428,7 @@ class Case:
     racy: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     partitioned: bool = False
     nones: tuple[str, ...] = ()
+    busy_before_reading: float = 0
 
     def aspects(self) -> tuple[str, ...]:
         return (
@@ -454,6 +470,9 @@ C_UNSENT_CALL_FLAG: Final = (
     "which Python's handler sets before it shapes the request"
 )
 
+F46_SEE_OTHER_CONTENT_TYPE: Final = (
+    "F46: httpx keeps content-type on the GET that follows a 303; reqwest's redirect follower drops it with the body"
+)
 REDIRECTED_SENT_REQUEST: Final = (
     "a followed provider redirect: Python logs the redirected request (its URL, its body already streamed) on the "
     "logged response, the native call logs the request it sent"
@@ -973,7 +992,42 @@ FAILURE_CASES: Final = (
             ResponseSpec(body=dict(TEXT_RESPONSE)),
         ),
     ),
+    Case(
+        "provider_redirect_chain_of_eleven_hops",
+        gaps=_gaps(logged_sent_request=REDIRECTED_SENT_REQUEST),
+        upstream=(
+            *(
+                ResponseSpec(body=b"moved", status=307, headers={"location": f"/hop{hop}/v1/messages"})
+                for hop in range(11)
+            ),
+            ResponseSpec(body=dict(TEXT_RESPONSE)),
+        ),
+    ),
+    Case(
+        "provider_redirect_chain_past_twenty_hops",
+        upstream=tuple(
+            ResponseSpec(body=b"moved", status=307, headers={"location": f"/hop{hop}/v1/messages"}) for hop in range(21)
+        ),
+    ),
+    Case(
+        "provider_see_other_redirect",
+        gaps=_gaps(logged_sent_request=REDIRECTED_SENT_REQUEST, request=F46_SEE_OTHER_CONTENT_TYPE),
+        upstream=(
+            ResponseSpec(body=b"see other", status=303, headers={"location": "/other/v1/messages"}),
+            ResponseSpec(body=dict(TEXT_RESPONSE)),
+        ),
+    ),
     Case("extra_header_lone_surrogate", _kw(extra_headers={"x-fz-surrogate": "h\ud800"}), upstream=()),
+    Case(
+        "provider_specific_header_lone_surrogate",
+        _kw(
+            provider_specific_header={
+                "custom_llm_provider": "anthropic",
+                "extra_headers": {"x-fz-surrogate": "h\ud800"},
+            }
+        ),
+        upstream=(),
+    ),
     Case("extra_header_non_ascii", _kw(extra_headers={"x-fz-unicode": "caf\u00e9"}), upstream=()),
     Case("response_header_latin_1", upstream=(_ok(**{"x-fz-unicode": "caf\u00e9"}),)),
     Case("response_header_utf_8", upstream=(_ok(**{"x-fz-unicode": "caf\u00c3\u00a9"}),)),
@@ -1085,6 +1139,38 @@ STREAM_CASES: Final = (
         upstream=(
             ResponseSpec(body=dict(_upstream_error("api_error", "cut")), status=500, body_chunks=2, cut_after=1),
         ),
+    ),
+    Case(
+        "stream_cut_after_four_events",
+        _kw(stream=True),
+        upstream=(replace(_stream(TEXT_STREAM), cut_after=4, cut_delay=0.1),),
+    ),
+    Case(
+        "stream_cut_after_message_start",
+        _kw(stream=True),
+        upstream=(replace(_stream(TEXT_STREAM), cut_after=1, cut_delay=0.1),),
+    ),
+    Case(
+        "stream_cut_after_events_written_apart",
+        _kw(stream=True),
+        upstream=(replace(_stream(TEXT_STREAM, chunk_delay=0.05), cut_after=6, cut_delay=0.1),),
+    ),
+    Case(
+        "stream_chunked_cut_after_four_events",
+        _kw(stream=True),
+        upstream=(replace(_chunked(TEXT_STREAM, chunk_delay=0), cut_after=4, cut_delay=0.1),),
+    ),
+    Case(
+        "stream_cut_while_the_caller_is_busy",
+        _kw(stream=True),
+        upstream=(replace(_chunked(TEXT_STREAM, chunk_delay=0), cut_after=4, cut_delay=0.1),),
+        busy_before_reading=0.4,
+    ),
+    Case(
+        "stream_cut_after_message_start_while_the_caller_is_busy",
+        _kw(stream=True),
+        upstream=(replace(_stream(TEXT_STREAM), cut_after=1, cut_delay=0.1),),
+        busy_before_reading=0.4,
     ),
     Case(
         "stream_upstream_500_body_stalls",
@@ -1402,6 +1488,8 @@ FALLBACK_CASES: Final = (
         cache=Cache,
     ),
     Case("cache_write_without_read", _kw(cache={"no-cache": True}), upstream=(_ok(), _ok()), cache=Cache),
+    Case("reply_with_wide_numbers", upstream=(ResponseSpec(body=WIDE_NUMBERS_REPLY),)),
+    Case("reply_with_a_wide_integer_cached", upstream=(ResponseSpec(body=WIDE_INTEGER_REPLY),), cache=Cache),
     Case("modify_params_sync", _kw(max_tokens=200_000), sync=True, settings=_MODIFY_PARAMS),
     Case("request_timeout_kwarg", _kw(request_timeout=30)),
     Case("stream_timeout_kwarg", _kw(stream=True, stream_timeout=30), upstream=(_stream(TEXT_STREAM),)),
@@ -2557,7 +2645,49 @@ class _DeploymentHookRecorder(CustomLogger):
         self.seen.append({"logging_obj": type(kwargs.get("litellm_logging_obj")).__name__, "call_type": str(call_type)})
 
 
+class _DeploymentResponseRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()  # pyright: ignore[reportUnknownMemberType]  # CustomLogger takes untyped kwargs
+        self.seen: list[Mapping[str, object]] = []
+
+    async def async_post_call_success_deployment_hook(  # pyright: ignore[reportIncompatibleMethodOverride]  # test double narrows the hook's types
+        self, request_data: dict[str, object], response: object, call_type: object
+    ) -> object:
+        self.seen.append({"response": type(response).__name__, "call_type": str(call_type)})
+        return None
+
+
 DEPLOYMENT_HOOK_CASES: Final = (
+    Case(
+        "deployment_hook_sees_the_stream_of_a_string_flag",
+        _kw(stream="true"),
+        upstream=(_stream(TEXT_STREAM),),
+        loggers=_loggers(_DeploymentResponseRecorder),
+    ),
+    Case(
+        "deployment_hook_sees_the_stream_of_an_integer_flag",
+        _kw(stream=1),
+        upstream=(_stream(TEXT_STREAM),),
+        loggers=_loggers(_DeploymentResponseRecorder),
+    ),
+    Case(
+        "deployment_hook_sees_the_stream_of_a_bool_flag",
+        _kw(stream=True),
+        upstream=(_stream(TEXT_STREAM),),
+        loggers=_loggers(_DeploymentResponseRecorder),
+    ),
+    Case(
+        "deployment_hook_sees_a_stream_a_hook_made",
+        upstream=(_stream(TEXT_STREAM),),
+        callbacks=(_UnstreamingHook,),
+        loggers=_loggers(_DeploymentResponseRecorder),
+    ),
+    Case(
+        "deployment_hook_sees_a_stream_a_hook_made_on_an_integer",
+        upstream=(_stream(TEXT_STREAM),),
+        callbacks=(_IntegerStreamHook,),
+        loggers=_loggers(_DeploymentResponseRecorder),
+    ),
     Case("deployment_hook_sees_the_logging_object", loggers=_loggers(_DeploymentHookRecorder)),
     Case(
         "deployment_hook_sees_the_logging_object_stream",
@@ -2878,7 +3008,9 @@ HOOKED_STREAM_AND_CACHE_CASES: Final = (
         upstream=(_stream(TEXT_STREAM),),
         loggers=_loggers(_DeploymentHooks),
     ),
-    Case("stream_one_behind_a_cache", _kw(stream=1), upstream=(_stream(TEXT_STREAM), _stream(TEXT_STREAM)), cache=Cache),
+    Case(
+        "stream_one_behind_a_cache", _kw(stream=1), upstream=(_stream(TEXT_STREAM), _stream(TEXT_STREAM)), cache=Cache
+    ),
     Case(
         "stream_one_sync_behind_a_cache",
         _kw(stream=1),
@@ -3139,9 +3271,10 @@ def _sent_request(response: object) -> Mapping[str, object] | None:
 
 def _sent_body(sent: httpx.Request) -> object:
     try:
-        return json.loads(sent.read())
+        sent_body: Final = sent.read()
     except (httpx.RequestNotRead, httpx.StreamClosed):
         return None
+    return json.loads(sent_body) if sent_body else None
 
 
 def _partition(chunks: Iterable[object]) -> tuple[int, ...]:
@@ -3224,6 +3357,7 @@ async def _invoke(
         if isinstance(result, dict):
             body = cast(Mapping[str, object], result)
             return _response(body, case.private_keys), _hidden_params(body)
+        time.sleep(case.busy_before_reading)  # noqa: ASYNC251  # holds the event loop, as a caller's own work between the call and its first read does
         chunks, failure = await _consume_async(cast(AsyncIterator[object], result))
     hidden: Final = _hidden_params(result)
     partition: Final = {"partition": _partition(chunks)} if case.partitioned else {}

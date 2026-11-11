@@ -1,6 +1,6 @@
 use litellm_cache::Error;
 use litellm_host::protocol::Reply;
-use litellm_host_python::{from_py, to_py};
+use litellm_host_python::{json_from_py, to_py};
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
     prelude::*,
@@ -177,7 +177,7 @@ impl PythonCache {
                     if value.bind(py).is_none() {
                         Ok(None)
                     } else {
-                        from_py(value.bind(py))
+                        json_from_py(value.bind(py))
                             .map(Some)
                             .map_err(Error::invalid_entry)
                     }
