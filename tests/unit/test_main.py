@@ -2451,6 +2451,261 @@ def test_openai_responses_bridge_drops_a_reasoning_effort_dict_for_a_model_witho
     assert "reasoning" not in request_body
 
 
+_AZURE_TEST_API_BASE: Final = "https://example.openai.azure.com"
+_UNLISTED_AZURE_GPT_5_MODEL: Final = "azure/gpt-5.6-litellm-unlisted"
+_FUNCTION_TOOL: Final = {"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}
+
+
+@dataclass(frozen=True, slots=True)
+class AzureUpstreamRoutes:
+    chat: respx.Route
+    responses: respx.Route
+
+    def sent_reasoning_effort(self) -> object:
+        if self.responses.called:
+            return json.loads(self.responses.calls[0].request.content).get("reasoning", {}).get("effort")
+        return json.loads(self.chat.calls[0].request.content).get("reasoning_effort")
+
+
+@pytest.fixture
+def azure_upstream_routes(
+    local_model_cost_map: None,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    openai_api_response: dict[str, object],
+) -> AzureUpstreamRoutes:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("LITELLM_REASONING_AUTO_SUMMARY", raising=False)
+    return AzureUpstreamRoutes(
+        chat=respx_mock.post(url__regex=r".*/chat/completions.*").respond(json=openai_api_response),
+        responses=respx_mock.post(url__regex=r".*/responses.*").respond(
+            json={
+                "id": "resp_test",
+                "object": "response",
+                "created_at": 1734366691,
+                "status": "completed",
+                "model": "gpt-5.6-litellm-unlisted",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "Done.", "annotations": []}],
+                    }
+                ],
+                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            }
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("request_params", "expected_sent_effort"),
+    [
+        pytest.param({"reasoning_effort": "none", "reasoningSummary": "auto"}, "none", id="summary-alias"),
+        pytest.param(
+            {"reasoning_effort": "none", "extra_body": {"reasoningSummary": "auto"}},
+            "none",
+            id="summary-alias-in-extra-body",
+        ),
+        pytest.param(
+            {"reasoning_effort": {"effort": "none", "summary": "auto"}, "tools": [_FUNCTION_TOOL]},
+            None,
+            id="dict-with-summary-and-tool",
+        ),
+        pytest.param(
+            {"reasoning_effort": {"effort": "none"}, "reasoningSummary": "auto"}, None, id="dict-with-summary-alias"
+        ),
+        pytest.param({"reasoning_effort": "none"}, None, id="chat"),
+        pytest.param({"reasoning_effort": "none", "tools": [_FUNCTION_TOOL]}, None, id="bridged-without-summary"),
+        pytest.param({"reasoning_effort": {"effort": "none", "summary": "auto"}}, None, id="dict-with-summary-on-chat"),
+        pytest.param(
+            {"reasoning_effort": "none", "extra_body": {"reasoning_effort": "none"}},
+            "none",
+            id="effort-in-extra-body",
+        ),
+        pytest.param(
+            {"reasoning_effort": "none", "tools": [_FUNCTION_TOOL], "extra_body": {"reasoning_effort": "none"}},
+            "none",
+            id="effort-in-extra-body-bridged",
+        ),
+        pytest.param(
+            {
+                "reasoning_effort": "none",
+                "tools": [_FUNCTION_TOOL],
+                "extra_body": {"reasoning_effort": {"effort": "none", "summary": "auto"}},
+            },
+            "none",
+            id="effort-dict-in-extra-body-bridged",
+        ),
+        pytest.param(
+            {
+                "reasoning_effort": "none",
+                "reasoningSummary": "auto",
+                "extra_body": {"reasoning_effort": {"summary": "detailed"}},
+            },
+            None,
+            id="summary-only-dict-in-extra-body-bridged",
+        ),
+        pytest.param(
+            {"reasoning_effort": "none", "extra_body": {"reasoning_effort": "low"}},
+            "low",
+            id="other-effort-in-extra-body",
+        ),
+        pytest.param(
+            {"reasoning_effort": "none", "tools": [_FUNCTION_TOOL], "extra_body": {"reasoning_effort": "low"}},
+            "low",
+            id="other-effort-in-extra-body-bridged",
+        ),
+    ],
+)
+def test_reasoning_effort_drop_warning_fires_unless_the_provider_gets_the_dropped_effort(
+    request_params: dict[str, object],
+    expected_sent_effort: str | None,
+    azure_upstream_routes: AzureUpstreamRoutes,
+    caplog: pytest.LogCaptureFixture,
+):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        litellm.completion(
+            model=_UNLISTED_AZURE_GPT_5_MODEL,
+            messages=[{"role": "user", "content": "hello"}],
+            api_base=_AZURE_TEST_API_BASE,
+            api_key="fake-key",
+            api_version="2025-04-01-preview",
+            drop_params=True,
+            **request_params,
+        )
+
+    sent_effort: Final = azure_upstream_routes.sent_reasoning_effort()
+    drop_warnings: Final = [r.getMessage() for r in caplog.records if "Dropping reasoning_effort" in r.getMessage()]
+    assert sent_effort == expected_sent_effort
+    assert len(drop_warnings) == (0 if sent_effort == "none" else 1)
+
+
+@pytest.mark.parametrize(
+    "request_params",
+    [
+        pytest.param(
+            {"provider_affinity_header": "x-session-affinity", "litellm_session_id": "a\nb"},
+            id="rejected-before-dispatch",
+        ),
+        pytest.param({}, id="rejected-by-the-provider"),
+    ],
+)
+def test_reasoning_effort_drop_warning_fires_once_when_the_request_fails(
+    request_params: dict[str, object],
+    azure_upstream_routes: AzureUpstreamRoutes,
+    caplog: pytest.LogCaptureFixture,
+):
+    azure_upstream_routes.chat.respond(400, json={"error": {"message": "refused", "type": "invalid_request_error"}})
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"), pytest.raises(litellm.BadRequestError):
+        litellm.completion(
+            model=_UNLISTED_AZURE_GPT_5_MODEL,
+            messages=[{"role": "user", "content": "hello"}],
+            api_base=_AZURE_TEST_API_BASE,
+            api_key="fake-key",
+            api_version="2025-04-01-preview",
+            drop_params=True,
+            reasoning_effort="none",
+            **request_params,
+        )
+
+    assert len([r for r in caplog.records if "Dropping reasoning_effort" in r.getMessage()]) == 1
+
+
+@pytest.fixture
+def github_copilot_access_token(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+    (tmp_path / "access-token").write_text("token")
+
+
+@pytest.mark.parametrize(
+    ("model", "api_base", "refused_effort", "model_info"),
+    [
+        pytest.param("openai/gpt-5.6-litellm-unlisted", "https://api.openai.com/v1", "xhigh", None, id="openai"),
+        pytest.param(
+            "azure_ai/gpt-5.6-litellm-unlisted",
+            "https://example.services.ai.azure.com/openai/v1",
+            "xhigh",
+            None,
+            id="azure_ai",
+        ),
+        pytest.param(
+            "chatgpt/gpt-5.5",
+            "https://chatgpt.example.com/backend-api/codex",
+            "minimal",
+            {"reasoning_effort_levels": ["minimal", "low", "medium", "high"]},
+            id="chatgpt-declared-level",
+        ),
+        pytest.param(
+            "github_copilot/gpt-5.5",
+            "https://api.githubcopilot.com",
+            "minimal",
+            {"reasoning_effort_levels": ["minimal", "low", "medium", "high"]},
+            id="github-copilot-declared-level",
+        ),
+    ],
+)
+def test_reasoning_effort_drop_warning_stays_quiet_when_the_summary_alias_restores_the_effort(
+    model: str,
+    api_base: str,
+    refused_effort: str,
+    model_info: dict[str, object] | None,
+    azure_upstream_routes: AzureUpstreamRoutes,
+    github_copilot_access_token: None,
+    caplog: pytest.LogCaptureFixture,
+):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "hello"}],
+            api_base=api_base,
+            api_key="fake-key",
+            drop_params=True,
+            reasoning_effort=refused_effort,
+            reasoningSummary="auto",
+            model_info=model_info,
+        )
+
+    assert azure_upstream_routes.sent_reasoning_effort() == refused_effort
+    assert not [r for r in caplog.records if "Dropping reasoning_effort" in r.getMessage()]
+
+
+def test_a_request_param_named_like_the_drop_holder_still_reaches_the_provider(
+    azure_upstream_routes: AzureUpstreamRoutes,
+):
+    litellm.completion(
+        model=_UNLISTED_AZURE_GPT_5_MODEL,
+        messages=[{"role": "user", "content": "hello"}],
+        api_base=_AZURE_TEST_API_BASE,
+        api_key="fake-key",
+        api_version="2025-04-01-preview",
+        drop_params=True,
+        reasoning_drop_logger="sent by the caller",
+    )
+
+    sent_body: Final = json.loads(azure_upstream_routes.chat.calls[0].request.content)
+    assert sent_body["reasoning_drop_logger"] == "sent by the caller"
+
+
+def test_mock_response_keeps_the_reasoning_effort_drop_warning(
+    local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        litellm.completion(
+            model=_UNLISTED_AZURE_GPT_5_MODEL,
+            messages=[{"role": "user", "content": "hello"}],
+            api_base=_AZURE_TEST_API_BASE,
+            api_key="fake-key",
+            reasoning_effort="none",
+            drop_params=True,
+            mock_response="hi",
+        )
+
+    assert any("Dropping reasoning_effort='none'" in r.getMessage() for r in caplog.records)
+
+
 @pytest.mark.parametrize(
     "drop_params, expected_reasoning",
     [
