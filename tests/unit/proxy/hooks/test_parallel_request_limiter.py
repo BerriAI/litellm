@@ -655,3 +655,55 @@ async def test_team_gauge_uses_shared_cache_not_local_only():
         f"Expected gauge=1 via local_only=False but got {gauge_val}. "
         "Team gauge must be written to the shared cache path."
     )
+
+
+@pytest.mark.asyncio
+async def test_unadmitted_request_failure_does_not_release_team_slot():
+    """Regression test for veria-ai review on 985cce9c (unadmitted requests releasing slots).
+
+    If a request is blocked prior to or during pre-call admission without successfully
+    acquiring a team concurrency slot (e.g. pre-call guardrail or rate limit), its
+    async_log_failure_event callback must NOT decrement the team concurrency gauge.
+    Otherwise, an attacker or repeated failing caller could drive the gauge negative
+    or release other active requests' slots.
+    """
+    cache = DualCache()
+    handler = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache), clock=_frozen_clock
+    )
+    team_id = "test-team-unadmitted"
+    key = f"{team_id}::max_parallel_requests"
+
+    # Set team concurrency gauge to 1 (representing another active request)
+    await handler.internal_usage_cache.async_increment_cache(
+        key=key,
+        value=1,
+        local_only=False,
+        litellm_parent_otel_span=None,
+    )
+
+    # Simulate a request that failed before acquiring the team slot (_team_slot_acquired=False)
+    failure_kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "some-key",
+                "user_api_key_team_id": team_id,
+                "_team_slot_acquired": False,
+            }
+        },
+        "exception": Exception("Blocked by guardrail"),
+    }
+
+    now = datetime(2026, 1, 31, 23, 59, 30)
+    await handler.async_log_failure_event(
+        kwargs=failure_kwargs,
+        response_obj=None,
+        start_time=now,
+        end_time=now,
+    )
+
+    # Verify the gauge remains 1 and was NOT decremented
+    val = await handler.internal_usage_cache.async_get_cache(
+        key=key, local_only=False, litellm_parent_otel_span=None
+    )
+    assert val == 1, f"Expected gauge to remain 1, but got {val}"
