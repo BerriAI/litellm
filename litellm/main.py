@@ -6386,6 +6386,7 @@ def completion(
                 reasoning_summary=_reasoning_summary_for_bridge,
                 api_base=api_base,
                 deployment_model_info=typed_deployment_model_info,
+                base_model=base_model if isinstance(base_model, str) else None,
             )
 
         # Use base_model (the true underlying model) for Azure model-type

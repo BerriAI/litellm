@@ -8,7 +8,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import (
     get_llm_provider,
     resolve_model_and_provider_for_metadata,
 )
-from litellm.llms.azure_ai.chat.transformation import AzureAIGPT5Config
+from litellm.llms.azure_ai.chat.transformation import AzureAIGPT5Config, AzureAIStudioConfig
 from litellm.llms.azure_ai.common_utils import (
     azure_ai_supports_native_responses,
     foundry_chat_rejects_function_tools_while_reasoning,
@@ -157,6 +157,7 @@ def responses_api_bridge_check(
     reasoning_summary: object | None = None,
     api_base: str | None = None,
     deployment_model_info: Mapping[str, object] | None = None,
+    base_model: str | None = None,
 ) -> tuple[dict[str, object], str]:
     model_info: dict[str, object] = {}
 
@@ -209,12 +210,17 @@ def responses_api_bridge_check(
         (tool.get("type") if isinstance(tool, dict) else getattr(tool, "type", None)) == "tool_search"
         for tool in (tools or ())
     )
+    series_model: Final = (
+        AzureAIStudioConfig.gpt_5_base_model(model, base_model) or model
+        if custom_llm_provider == LlmProviders.AZURE_AI.value
+        else model
+    )
     requested_effort: Final = reasoning_effort.get("effort") if isinstance(reasoning_effort, dict) else reasoning_effort
     requested_summary: Final = reasoning_effort.get("summary") if isinstance(reasoning_effort, dict) else None
     reasoning_active: Final = (
         requested_effort != "none"
         or requested_summary is not None
-        or _chat_gate_refuses_reasoning_effort_none(model, custom_llm_provider)
+        or _chat_gate_refuses_reasoning_effort_none(series_model, custom_llm_provider)
     )
     # The reasoning+tools constraint is enforced by the real OpenAI backend behind any api.openai.com
     # host (the default URL or a PrivateLink hostname such as <region>.privatelink.api.openai.com) and
@@ -235,7 +241,7 @@ def responses_api_bridge_check(
         and isinstance(reasoning_effort, Mapping)
         and reasoning_effort.get("summary") is not None
     )
-    gpt_series_name: Final = mantle_series_name or model
+    gpt_series_name: Final = mantle_series_name or series_model
     on_constraint_enforcing_endpoint: Final = (
         custom_llm_provider == "azure"
         or on_mantle_responses_endpoint
@@ -246,7 +252,7 @@ def responses_api_bridge_check(
         has_function_tool
         and reasoning_active
         and (
-            foundry_chat_rejects_function_tools_while_reasoning(model, reasoning_effort)
+            foundry_chat_rejects_function_tools_while_reasoning(series_model, reasoning_effort)
             if on_foundry_openai_endpoint
             else (
                 OpenAIGPT5Config.is_model_gpt_5_4_plus_model(gpt_series_name)
