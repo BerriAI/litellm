@@ -302,7 +302,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
 
     @classmethod
     def _row_declared_reasoning_efforts(cls, model: str) -> tuple[str, ...] | None:
-        from litellm.router_utils.reasoning_effort_capability import declared_reasoning_efforts_for_map_key
+        from litellm.litellm_core_utils.reasoning_effort_capability import declared_reasoning_efforts_for_map_key
 
         return declared_reasoning_efforts_for_map_key(cls._model_map_lookup_name(model))
 
