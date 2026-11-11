@@ -66,6 +66,7 @@ from litellm.types.utils import GenericImageParsingChunk
 
 from .common_utils import (
     DEFS_MAX_INLINED_BYTES,
+    DefsInliningBudgetExceededError,
     as_openai_image_part,
     converse_redacted_content,
     convert_content_list_to_str,
@@ -5899,7 +5900,6 @@ def _bedrock_tools_pt(
     ]
     """
     from litellm.llms.bedrock.common_utils import (
-        BedrockError,
         bedrock_converse_resolves_tool_schema_defs,
         bedrock_converse_supports_strict_tools,
         normalize_json_schema_custom_types_to_object,
@@ -5951,9 +5951,9 @@ def _bedrock_tools_pt(
 
         remaining_inline_bytes = DEFS_MAX_INLINED_BYTES - inlined_bytes
         try:
-            if resolves_schema_defs:
+            if resolves_schema_defs and (defs_keeping_schema := schema_with_root_ref_resolved(parameters)) is not None:
                 inlined, tool_inlined_bytes = inline_refs_outside_root_defs(
-                    schema_without_unreferenced_defs(schema_with_root_ref_resolved(parameters)), remaining_inline_bytes
+                    schema_without_unreferenced_defs(defs_keeping_schema), remaining_inline_bytes
                 )
                 parameters = dict(schema_without_unreferenced_defs(inlined))
             else:
@@ -5965,12 +5965,13 @@ def _bedrock_tools_pt(
                 # refs recursively and correctly detects/skips circular references.
                 tool_inlined_bytes = unpack_defs(parameters, defs_copy, max_inlined_bytes=remaining_inline_bytes)
                 parameters.pop("$defs", None)
-        except ValueError as e:
-            raise BedrockError(
-                status_code=400,
+        except DefsInliningBudgetExceededError as e:
+            raise litellm.ContextWindowExceededError(
                 message=f"Inlining the $ref definitions of tool '{raw_name}' copies more than "
-                f"{DEFS_MAX_INLINED_BYTES:,} bytes of definitions across the request's tools. "
-                "Reference shared $defs less often or flatten the schema.",
+                f"{DEFS_MAX_INLINED_BYTES:,} bytes of definitions across the request's tools, "
+                "more than a model context window holds. Reference shared $defs less often or flatten the schema.",
+                model=model,
+                llm_provider="bedrock",
             ) from e
         inlined_bytes += tool_inlined_bytes
         normalize_json_schema_custom_types_to_object(parameters)

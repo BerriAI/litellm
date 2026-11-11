@@ -956,6 +956,10 @@ def _definition_schema(definition: object) -> Mapping[str, object] | None:
     return definition if isinstance(definition, dict) else None
 
 
+class DefsInliningBudgetExceededError(ValueError):
+    pass
+
+
 def _keeps_no_ref(_ref: str, _scope: _DefsScope) -> bool:
     return False
 
@@ -1029,7 +1033,7 @@ def unpack_defs(
                 if max_inlined_bytes is not None:
                     inlined_bytes += _estimate_json_bytes(target_schema)
                     if inlined_bytes > max_inlined_bytes:
-                        raise ValueError(
+                        raise DefsInliningBudgetExceededError(
                             f"unpack_defs: inlined schema exceeded the "
                             f"{max_inlined_bytes:,}-byte budget. Refusing to "
                             f"deep-copy further to prevent schema-bomb "

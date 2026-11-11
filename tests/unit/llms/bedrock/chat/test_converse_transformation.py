@@ -5827,6 +5827,49 @@ def test_tool_defs_inlining_budget_covers_every_tool_in_the_request():
     mock_post.assert_not_called()
 
 
+def _legacy_doubling_defs_schema(depth: int) -> Mapping[str, object]:
+    schema: Final = _doubling_defs_schema(depth)
+    return {**{key: value for key, value in schema.items() if key != "$defs"}, "definitions": schema["$defs"]}
+
+
+@pytest.mark.timeout(30)
+@pytest.mark.parametrize(
+    ("model", "schema"),
+    [
+        ("us.anthropic.claude-sonnet-5-5", _legacy_doubling_defs_schema(17)),
+        ("us.amazon.nova-2-lite-v1:0", _doubling_defs_schema(17)),
+    ],
+    ids=["claude-legacy-definitions", "nova-defs"],
+)
+def test_tool_defs_past_the_inlining_budget_fall_back_through_context_window_fallbacks(model, schema):
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "bedrock-model",
+                "litellm_params": {
+                    "model": f"bedrock/converse/{model}",
+                    "aws_access_key_id": "AKIATOOLSCHEMAKEY",
+                    "aws_secret_access_key": "tool-schema-secret",
+                    "aws_region_name": "us-west-2",
+                },
+            },
+            {
+                "model_name": "backup",
+                "litellm_params": {"model": "openai/gpt-5.5", "api_key": "sk-backup", "mock_response": "from backup"},
+            },
+        ],
+        context_window_fallbacks=[{"bedrock-model": ["backup"]}],
+    )
+
+    response: Final = router.completion(
+        model="bedrock-model",
+        messages=[{"role": "user", "content": "Call a tool."}],
+        tools=[_tool("walk_tree", schema)],
+    )
+
+    assert response.choices[0].message.content == "from backup"
+
+
 @pytest.mark.parametrize(
     ("native_key", "forwarded"), [("legacy", True), ("bedrock", False)], ids=["legacy-key", "bedrock-key"]
 )

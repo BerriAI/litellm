@@ -3035,6 +3035,58 @@ def test_bedrock_tools_pt_spends_no_inlining_budget_on_unused_claude_defs() -> N
     assert sent == {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]}
 
 
+def test_bedrock_tools_pt_resolves_a_root_ref_targets_refs_to_its_own_defs_for_claude() -> None:
+    zip_only: Final = {"type": "object", "properties": {"zip": {"type": "string"}}, "required": ["zip"]}
+    request: Final = {
+        "type": "object",
+        "properties": {"to": {"$ref": "#/$defs/Address"}},
+        "required": ["to"],
+        "$defs": {"Address": zip_only},
+    }
+    parameters: Final = {"$ref": "#/$defs/Request", "$defs": {"Request": request, "Address": _ADDRESS_SCHEMA}}
+    tools: Final = [{"type": "function", "function": {"name": "send", "parameters": parameters}}]
+
+    sent_to_claude: Final = _bedrock_tools_pt(deepcopy(tools), model="us.anthropic.claude-sonnet-5-5")
+    sent_to_nova: Final = _bedrock_tools_pt(deepcopy(tools), model="us.amazon.nova-2-lite-v1:0")
+
+    assert sent_to_claude[0]["toolSpec"]["inputSchema"]["json"]["properties"] == {"to": zip_only}
+    assert sent_to_claude == sent_to_nova
+
+
+def test_bedrock_tools_pt_keeps_defs_a_root_ref_target_repeats_unchanged_for_claude() -> None:
+    request: Final = {
+        "type": "object",
+        "properties": {"to": {"$ref": "#/$defs/Address"}},
+        "required": ["to"],
+        "$defs": {"Address": _ADDRESS_SCHEMA},
+    }
+    parameters: Final = {"$ref": "#/$defs/Request", "$defs": {"Request": request, "Address": _ADDRESS_SCHEMA}}
+    tools: Final = [{"type": "function", "function": {"name": "send", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {
+        "type": "object",
+        "properties": {"to": {"$ref": "#/$defs/Address"}},
+        "required": ["to"],
+        "$defs": {"Address": _ADDRESS_SCHEMA},
+    }
+
+
+def test_bedrock_tools_pt_sends_claude_tools_whose_properties_have_non_string_keys() -> None:
+    parameters: Final = {
+        "type": "object",
+        "properties": {1: {"type": "string"}, "home": {"$ref": "#/$defs/Address"}},
+        "$defs": {"Address": _ADDRESS_SCHEMA},
+    }
+    tools: Final = [{"type": "function", "function": {"name": "t", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent["properties"] == {1: {"type": "string"}, "home": {"$ref": "#/$defs/Address"}}
+    assert sent["$defs"] == {"Address": _ADDRESS_SCHEMA}
+
+
 def test_bedrock_tools_pt_inlines_boolean_definitions_as_the_schemas_they_mean() -> None:
     parameters: Final = {
         "type": "object",
