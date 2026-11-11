@@ -2529,7 +2529,10 @@ class CustomStreamWrapper:
     def fetch_sync_stream(self):
         if self.completion_stream is None and self.make_call is not None:
             # Call make_call to get the completion stream
-            self.completion_stream = self.make_call(client=litellm.module_level_client)
+            try:
+                self.completion_stream = self.make_call(client=litellm.module_level_client)
+            except Exception as e:
+                raise self._map_stream_exception(e)
             self._stream_iter = self.completion_stream.__iter__()
 
         return self.completion_stream
@@ -2537,7 +2540,10 @@ class CustomStreamWrapper:
     async def fetch_stream(self):
         if self.completion_stream is None and self.make_call is not None:
             # Call make_call to get the completion stream
-            self.completion_stream = await self.make_call(client=litellm.module_level_aclient)
+            try:
+                self.completion_stream = await self.make_call(client=litellm.module_level_aclient)
+            except Exception as e:
+                raise self._map_stream_exception(e)
             self._stream_iter = self.completion_stream.__aiter__()
 
         return self.completion_stream
