@@ -2,7 +2,7 @@
 
 import { ColumnDef, FilterFn } from "@tanstack/react-table";
 import type { TFunction } from "i18next";
-import { MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { MoreHorizontal, Pencil, Trash2, Users } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { DataTableSortHeader } from "@/components/shared/DataTable";
@@ -48,9 +48,10 @@ interface BudgetRowActionsProps {
   budget: budgetItem;
   onEditClick: (budget: budgetItem) => void;
   onDeleteClick: (budget: budgetItem) => void;
+  onAssignClick: (budget: budgetItem) => void;
 }
 
-function BudgetRowActions({ budget, onEditClick, onDeleteClick }: BudgetRowActionsProps) {
+function BudgetRowActions({ budget, onEditClick, onDeleteClick, onAssignClick }: BudgetRowActionsProps) {
   const { t } = useTranslation();
   return (
     <DropdownMenu>
@@ -62,6 +63,10 @@ function BudgetRowActions({ budget, onEditClick, onDeleteClick }: BudgetRowActio
         <MoreHorizontal className="size-4" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-52">
+        <DropdownMenuItem onClick={() => onAssignClick(budget)}>
+          <Users />
+          {t("budgets.assignModal.title")}
+        </DropdownMenuItem>
         <DropdownMenuItem data-testid="budget-action-edit" onClick={() => onEditClick(budget)}>
           <Pencil />
           {t("budgets.table.rowActions.edit")}
@@ -90,10 +95,11 @@ interface BudgetTableColumnsDeps {
   canModify: boolean;
   onEditClick: (budget: budgetItem) => void;
   onDeleteClick: (budget: budgetItem) => void;
+  onAssignClick: (budget: budgetItem) => void;
 }
 
 export const getBudgetTableColumns = (
-  { canModify, onEditClick, onDeleteClick }: BudgetTableColumnsDeps,
+  { canModify, onEditClick, onDeleteClick, onAssignClick }: BudgetTableColumnsDeps,
   t: TFunction,
 ): ColumnDef<budgetItem>[] => [
   {
@@ -170,7 +176,12 @@ export const getBudgetTableColumns = (
           enableHiding: false,
           cell: ({ row }) => (
             <div className="flex justify-end">
-              <BudgetRowActions budget={row.original} onEditClick={onEditClick} onDeleteClick={onDeleteClick} />
+              <BudgetRowActions
+                budget={row.original}
+                onEditClick={onEditClick}
+                onDeleteClick={onDeleteClick}
+                onAssignClick={onAssignClick}
+              />
             </div>
           ),
         } satisfies ColumnDef<budgetItem>,

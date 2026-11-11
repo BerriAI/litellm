@@ -31395,6 +31395,11 @@ export interface components {
              */
             reject_clientside_metadata_tags?: boolean | null;
             /**
+             * Request Pattern Tag Mappings
+             * @description Map matching request headers or string body fields to existing budgeted tags. Patterns are case-sensitive shell wildcards (*, ? and character classes). Header names are case-insensitive. Body fields use dot notation. All matching tags apply, sharing each tag's budget.
+             */
+            request_pattern_tag_mappings?: components["schemas"]["RequestPatternTagMapping"][] | null;
+            /**
              * Request Tag Mappings
              * @description Map W3C baggage values to request tags. Exact value/tag rules take precedence over tag_prefix fallbacks.
              */
@@ -44419,6 +44424,20 @@ export interface components {
             failed_requests: number;
             /** Status Code */
             status_code: number;
+        };
+        /** RequestPatternTagMapping */
+        RequestPatternTagMapping: {
+            /** Field */
+            field: string;
+            /** Pattern */
+            pattern: string;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "header" | "body";
+            /** Tag */
+            tag: string;
         };
         /**
          * RequestTagMapping

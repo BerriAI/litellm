@@ -20803,6 +20803,7 @@ _PLUGIN_KEY_REDACTED: Final = "***"
 _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingProxyType(
     {
         "request_tag_mappings": "RequestTagMappings",
+        "request_pattern_tag_mappings": "RequestPatternTagMappings",
         "max_parallel_requests": "Integer",
         "global_max_parallel_requests": "Integer",
         "max_in_flight_requests_per_worker": "Integer",

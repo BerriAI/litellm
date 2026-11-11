@@ -2454,20 +2454,27 @@ class LiteLLMProxyRequestSetup:
         prisma_client: "PrismaClient | None",
         user_api_key_cache: "UserApiKeyCache",
     ) -> None:
-        """Resolve configured baggage tags before the existing tag-budget gate."""
+        """Resolve configured request tags before the existing tag-budget gate."""
         from litellm.proxy.common_utils.request_tag_mappings import (
+            REQUEST_PATTERN_TAG_MAPPINGS_ADAPTER,
             REQUEST_TAG_MAPPINGS_ADAPTER,
             mapping_rejection,
             resolve_baggage_tag_mappings,
+            resolve_pattern_tag_mappings,
         )
 
         raw_rules: Final = general_settings.get("request_tag_mappings")
-        if not isinstance(raw_rules, list) or not raw_rules:
+        raw_patterns: Final = general_settings.get("request_pattern_tag_mappings")
+        if not raw_rules and not raw_patterns:
             return
-        rules: Final = REQUEST_TAG_MAPPINGS_ADAPTER.validate_python(raw_rules)
+        rules: Final = REQUEST_TAG_MAPPINGS_ADAPTER.validate_python(raw_rules or ())
+        patterns: Final = REQUEST_PATTERN_TAG_MAPPINGS_ADAPTER.validate_python(raw_patterns or ())
         header: Final = ",".join(request.headers.getlist("baggage"))
         try:
-            mapped: Final = resolve_baggage_tag_mappings(header, rules)
+            mapped: Final = (
+                *resolve_baggage_tag_mappings(header, rules),
+                *resolve_pattern_tag_mappings(request.headers, request_data, patterns),
+            )
         except ProxyException:
             _detach_auth_metadata_from_client_body(request, request_data)
             raise
@@ -2487,7 +2494,7 @@ class LiteLLMProxyRequestSetup:
             get_metadata_variable_name_from_kwargs(request_data) == "metadata"
             and any(member.strip() for member in request.headers.get("x-litellm-tags", "").split(","))
         )
-        mapped_tags: Final = tuple(tag for tag, _ in mapped)
+        mapped_tags: Final = tuple(dict.fromkeys(tag for tag, _ in mapped))
         request.state.litellm_baggage_client_metadata_tags = client_has_tags  # rebind-ok: request input flag
         request.state.litellm_baggage_mapped_tags = mapped_tags  # rebind-ok: per-request immutable mapped tags
         LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, request_data)

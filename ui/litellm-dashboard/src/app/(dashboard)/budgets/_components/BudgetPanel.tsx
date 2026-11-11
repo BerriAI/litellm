@@ -19,6 +19,7 @@ import DeleteResourceModal from "@/components/common_components/DeleteResourceMo
 import { toast } from "@/lib/toast";
 import { useBudgetList, useDeleteBudget, budgetItem } from "@/app/(dashboard)/hooks/budgets/useBudgets";
 import BudgetModal from "./BudgetModal";
+import AssignBudgetModal from "./AssignBudgetModal";
 import BudgetTable from "./BudgetTable";
 import EditBudgetModal from "./EditBudgetModal";
 import { CREATE_END_USER_CURL_COMMAND, CHAT_COMPLETIONS_CURL_COMMAND, OPENAI_SDK_PYTHON_CODE } from "./constants";
@@ -36,6 +37,7 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [selectedBudget, setSelectedBudget] = useState<budgetItem | null>(null);
   const [isDeleteModalVisible, setIsDeleteModalVisible] = useState(false);
+  const [assignmentBudget, setAssignmentBudget] = useState<budgetItem | null>(null);
 
   const { userRole } = useAuthorized();
   // Admin Viewer follows the read-parity rule: see budgets, no writes.
@@ -109,6 +111,13 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
         <TabsContent value="budgets" className="flex min-h-0 flex-1 flex-col" keepMounted>
           <div className="flex min-h-0 flex-1 flex-col">
             <BudgetModal isModalVisible={isCreateModelVisible} setIsModalVisible={setIsCreateModelVisible} />
+            {assignmentBudget && accessToken && (
+              <AssignBudgetModal
+                budget={assignmentBudget}
+                accessToken={accessToken}
+                onClose={() => setAssignmentBudget(null)}
+              />
+            )}
             {selectedBudget && (
               <EditBudgetModal
                 isModalVisible={isEditModalVisible}
@@ -121,6 +130,7 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
               canModify={canModify}
               onEditClick={handleEditCall}
               onDeleteClick={handleDeleteClick}
+              onAssignClick={setAssignmentBudget}
             />
             <DeleteResourceModal
               isOpen={isDeleteModalVisible}

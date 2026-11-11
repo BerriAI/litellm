@@ -4413,7 +4413,9 @@ async def _authorize_authenticated_request(
                 billable=request_data.get("method")
                 in (None, "message/send", "message/stream", "SendMessage", "SendStreamingMessage"),
             )
-        if "request_tag_mappings" in general_settings and request.method == "POST":
+        if request.method == "POST" and (
+            "request_tag_mappings" in general_settings or "request_pattern_tag_mappings" in general_settings
+        ):
             from litellm.proxy.common_utils.request_tag_mappings import is_baggage_mapped_route
             from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 

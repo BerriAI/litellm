@@ -1,6 +1,6 @@
 import json
 from types import SimpleNamespace
-from typing import cast
+from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -12,10 +12,129 @@ from litellm.constants import BAGGAGE_MAPPED_TAGS_METADATA_KEY
 from litellm.models.tag import LiteLLM_TagTable
 from litellm.proxy._types import ConfigGeneralSettings, ProxyException
 from litellm.proxy.common_utils.http_parsing_utils import read_request_body
-from litellm.proxy.common_utils.request_tag_mappings import is_baggage_mapped_route, resolve_baggage_tag_mappings
+from litellm.proxy.common_utils.request_tag_mappings import (
+    is_baggage_mapped_route,
+    resolve_baggage_tag_mappings,
+    resolve_pattern_tag_mappings,
+)
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, tag_cache_key
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, add_litellm_data_to_request
-from litellm.types.proxy.request_tag_mappings import RequestTagMapping
+from litellm.types.proxy.request_tag_mappings import RequestPatternTagMapping, RequestTagMapping
+
+
+@pytest.mark.parametrize(
+    "agent,expected",
+    [("claude-code/1.0", (("coding", True),)), ("claude-code/2.0", (("coding", True),)), ("other/1.0", ())],
+)
+def test_user_agent_pattern_shares_one_budget_across_versions(
+    agent: str, expected: tuple[tuple[str, bool], ...]
+) -> None:
+    rules: Final = (
+        RequestPatternTagMapping(source="header", field="User-Agent", pattern="claude-code/*", tag="coding"),
+    )
+    assert resolve_pattern_tag_mappings({"user-agent": agent}, {}, rules) == expected
+
+
+def test_body_patterns_match_nested_string_fields_without_changing_the_request() -> None:
+    body: Final = {"user": "external-42", "metadata": {"group": "engineering"}, "count": 42}
+    rules: Final = (
+        RequestPatternTagMapping(source="body", field="user", pattern="external-*", tag="external"),
+        RequestPatternTagMapping(source="body", field="metadata.group", pattern="eng*", tag="engineering"),
+        RequestPatternTagMapping(source="body", field="count", pattern="*", tag="numbers"),
+        RequestPatternTagMapping(source="body", field="missing", pattern="*", tag="missing"),
+    )
+    assert resolve_pattern_tag_mappings({}, body, rules) == (("external", True), ("engineering", True))
+    assert body == {"user": "external-42", "metadata": {"group": "engineering"}, "count": 42}
+
+
+def test_overlapping_patterns_apply_every_budget_once() -> None:
+    rules: Final = (
+        RequestPatternTagMapping(source="header", field="user-agent", pattern="tool/*", tag="tools"),
+        RequestPatternTagMapping(source="body", field="user", pattern="qa-*", tag="qa"),
+        RequestPatternTagMapping(source="body", field="user", pattern="*", tag="tools"),
+    )
+    assert resolve_pattern_tag_mappings({"user-agent": "tool/2"}, {"user": "qa-user"}, rules) == (
+        ("tools", True),
+        ("qa", True),
+    )
+
+
+@pytest.mark.parametrize("source,field,pattern", [("query", "user", "*"), ("header", "", "*"), ("body", "user", "")])
+def test_invalid_patterns_are_rejected_at_config_validation(source: str, field: str, pattern: str) -> None:
+    with pytest.raises(ValidationError):
+        ConfigGeneralSettings.model_validate(
+            {"request_pattern_tag_mappings": [{"source": source, "field": field, "pattern": pattern, "tag": "qa"}]}
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("include_baggage", [False, True])
+@pytest.mark.parametrize(
+    "route,slot",
+    [("/chat/completions", "metadata"), ("/v1/messages", "litellm_metadata"), ("/v1/responses", "litellm_metadata")],
+)
+async def test_pattern_config_survives_body_reparse_and_enforces_the_shared_budget(
+    route: str, slot: str, include_baggage: bool
+) -> None:
+    from litellm import BudgetExceededError
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.auth_checks import tag_max_budget_check_for_tags
+    from litellm.proxy.auth.user_api_key_auth import _read_request_body_deferring_parse_failure
+    from litellm.proxy.proxy_server import ProxyConfig, proxy_logging_obj
+
+    body: Final = {"model": "qa-model", "metadata": {"tags": ["client"]}}
+
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": json.dumps(body).encode()}
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": route,
+            "scheme": "http",
+            "server": ("localhost", 4000),
+            "query_string": b"",
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"user-agent", b"claude-code/qa"),
+                (b"baggage", b"app=cli"),
+            ],
+        },
+        receive,
+    )
+    data, parse_error = await _read_request_body_deferring_parse_failure(request)
+    assert parse_error is None
+    cache: Final = await _cache_with_tag(
+        LiteLLM_TagTable(
+            tag_name="coding",
+            spend=11,
+            litellm_budget_table=LiteLLM_BudgetTable(budget_id="qa-budget", max_budget=10),
+        )
+    )
+    LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(data, route)
+    await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
+        request,
+        data,
+        {
+            **({"request_tag_mappings": [{"key": "app", "value": "cli", "tag": "coding"}]} if include_baggage else {}),
+            "request_pattern_tag_mappings": [
+                {"source": "header", "field": "user-agent", "pattern": "claude-code/*", "tag": "coding"}
+            ],
+        },
+        MagicMock(),
+        cache,
+    )
+    enriched: Final = await add_litellm_data_to_request(
+        data=await read_request_body(request),
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="qa-key"),
+        proxy_config=ProxyConfig(),
+        general_settings={},
+    )
+    assert enriched[slot]["tags"] == ["client", "coding"]
+    with pytest.raises(BudgetExceededError, match="Tag=coding"):
+        await tag_max_budget_check_for_tags(("coding",), MagicMock(), cache, proxy_logging_obj, None)
 
 
 def test_accounting_enrichment_without_request_state_preserves_legacy_metadata():
@@ -189,9 +308,7 @@ async def test_budgeted_mapper_requires_a_database():
     request = Request({"type": "http", "headers": [(b"baggage", b"service=a")]})
     config = {"request_tag_mappings": [{"key": "service", "tag_prefix": "app:", "require_budgeted_tag": True}]}
     with pytest.raises(ProxyException) as error:
-        await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
-            request, {}, config, None, MagicMock()
-        )
+        await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(request, {}, config, None, MagicMock())
     assert error.value.code == "503"
 
 

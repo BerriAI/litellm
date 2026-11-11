@@ -3272,6 +3272,48 @@
     }
   },
   "budgets": {
+    "assignModal": {
+      "title": "Assign budget",
+      "budget": "Budget {{id}}",
+      "target": "Assign to",
+      "fields": {
+        "body": "Request field",
+        "header": "Header name"
+      },
+      "assigned": "Budget assigned",
+      "cancel": "Cancel",
+      "saving": "Saving…",
+      "targets": {
+        "customer": "Customer / end user",
+        "team": "Team / group",
+        "userAgent": "User-agent pattern",
+        "body": "Request field pattern",
+        "header": "Request header pattern"
+      },
+      "customer": {
+        "label": "Customer name or end-user ID",
+        "description": "Use an existing customer name or ID, or enter a new end-user ID. Each customer has its own spend counter",
+        "loadFailed": "Could not load customers. Try reopening this dialog",
+        "ambiguousName": "More than one customer has this name. Enter the end-user ID instead"
+      },
+      "team": {
+        "label": "Team",
+        "placeholder": "Select a team",
+        "description": "Copies these budget limits to the team. Later changes to this budget do not update the team",
+        "loadFailed": "Could not load teams. Try reopening this dialog"
+      },
+      "patterns": {
+        "label": "Pattern",
+        "description": "Case-sensitive wildcards. * matches any text and ? matches one character. Body fields must contain strings. All matching requests share this budget",
+        "spendLimitRequired": "Set a spend limit on this budget before assigning patterns",
+        "configManaged": "Pattern assignments are managed in the proxy configuration file",
+        "assigned": "Assigned patterns",
+        "match": "{{source}} {{field}} matches {{pattern}}",
+        "removeLabel": "Remove {{field}} pattern {{pattern}}",
+        "remove": "Remove",
+        "removeDescription": "Removing a pattern keeps the budget and its recorded spend"
+      }
+    },
     "durationFilterOptions": {
       "hourly": "hourly",
       "daily": "daily",
@@ -3281,7 +3323,7 @@
     },
     "panel": {
       "title": "Budgets",
-      "description": "Spend, TPM and RPM limits you can assign to customers.",
+      "description": "Assign limits to customers, teams and matching requests",
       "createButton": "Create Budget",
       "tabs": {
         "budgets": "Budgets",
