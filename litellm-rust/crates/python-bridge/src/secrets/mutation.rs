@@ -2,7 +2,7 @@ use super::operations::{PythonMutationError, PythonMutationResponse};
 use litellm_error::Report;
 use litellm_host_python::{json_loads, to_py};
 use litellm_secrets::cyberark;
-use pyo3::{prelude::*, types::PyDict};
+use pyo3::prelude::*;
 
 pub(super) fn mutation_value(
     result: Result<PythonMutationResponse, PythonMutationError>,
@@ -62,14 +62,11 @@ fn cyberark_message(
             http_message(py, "POST", url, status)?
         }
         cyberark::Error::Http(source) if authentication => match os_error_code(&source) {
-            Some(code) => {
-                let reason = py.import("os")?.getattr("strerror")?.call1((code,))?;
-                py.import("builtins")?
-                    .getattr("OSError")?
-                    .call1((code, reason))?
-                    .str()?
-                    .extract()?
-            }
+            Some(code) => py
+                .import(super::SECRET_MANAGER_MODULE)?
+                .getattr("os_error_message")?
+                .call1((code,))?
+                .extract()?,
             None => Report::new(&cyberark::Error::Http(source)).to_string(),
         },
         cyberark::Error::Http(source) if source.is_connect() => {
@@ -103,13 +100,8 @@ pub(super) fn http_message(
     url: &str,
     status: u16,
 ) -> PyResult<String> {
-    let httpx = py.import("httpx")?;
-    let request = httpx.getattr("Request")?.call1((method, url))?;
-    let kwargs = PyDict::new(py);
-    kwargs.set_item("request", request)?;
-    let response = httpx.getattr("Response")?.call((status,), Some(&kwargs))?;
-    match response.call_method0("raise_for_status") {
-        Err(error) => error.value(py).str()?.extract(),
-        Ok(_) => Ok(format!("HTTP {status}")),
-    }
+    py.import(super::SECRET_MANAGER_MODULE)?
+        .getattr("http_status_message")?
+        .call1((method, url, status))?
+        .extract()
 }
