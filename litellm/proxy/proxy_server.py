@@ -418,7 +418,7 @@ from litellm.llms.anthropic.messages.convertible_blocks import (
     malformed_tool_result_count_error,
 )
 from litellm.llms.custom_httpx.aiohttp_pool_diagnostics import build_pool_wait_trace_config
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, exclude_rsa_key_exchange
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, exclude_rsa_key_exchange_and_chacha20
 from litellm.llms.openai.live import parse_live_session_start
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
@@ -6627,7 +6627,7 @@ class ProxyConfig:
         # Secret manager reads and the rest of config load make outbound TLS calls before enforce_fips_mode runs
         raw_general_settings: Final = as_str_mapping(config.get("general_settings"))
         if raw_general_settings is not None and fips_mode_setting(raw_general_settings) is True:
-            exclude_rsa_key_exchange(True)
+            exclude_rsa_key_exchange_and_chacha20(True)
 
         self._initialize_secret_manager_from_raw_config(config=config, config_file_path=config_file_path)
 

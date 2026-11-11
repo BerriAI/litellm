@@ -339,9 +339,16 @@ def test_get_ssl_configuration_integration():
     assert ssl_context.verify_mode is not None
 
 
-def _offered_ciphers(context: bool | str | ssl.SSLContext) -> tuple[tuple[str, str], ...]:
+def _offered_ciphers(context: bool | str | ssl.SSLContext) -> tuple[tuple[str, str, str, str | None], ...]:
     assert isinstance(context, ssl.SSLContext)
-    return tuple((cipher["name"], cipher["kea"]) for cipher in context.get_ciphers())
+    return tuple(
+        (cipher["name"], cipher["protocol"], cipher["kea"], cipher["symmetric"]) for cipher in context.get_ciphers()
+    )
+
+
+def _kept_in_fips_mode(cipher: tuple[str, str, str, str | None]) -> bool:
+    _, protocol, kea, symmetric = cipher
+    return kea != "kx-rsa" and (protocol, symmetric) != ("TLSv1.2", "chacha20-poly1305")
 
 
 def _use_ssl_security_level(monkeypatch: pytest.MonkeyPatch, ssl_security_level: str | None) -> None:
@@ -367,10 +374,10 @@ def _fake_fips_openssl(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.parametrize(
     "ssl_security_level",
-    [None, "AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384"],
+    [None, "AES256-GCM-SHA384:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-RSA-AES256-GCM-SHA384"],
     ids=["default-cipher-list", "ssl-security-level"],
 )
-def test_fips_mode_drops_rsa_key_exchange_from_the_outbound_cipher_list(
+def test_fips_mode_drops_rsa_key_exchange_and_tls_1_2_chacha20_from_the_outbound_cipher_list(
     monkeypatch: pytest.MonkeyPatch, ssl_security_level: str | None
 ) -> None:
     from litellm.constants import DEFAULT_SSL_CIPHERS
@@ -395,27 +402,29 @@ def test_fips_mode_drops_rsa_key_exchange_from_the_outbound_cipher_list(
     _ssl_context_cache.clear()
 
     assert standard == _offered_ciphers(configured)
-    without_rsa_key_exchange: Final = tuple(cipher for cipher in standard if cipher[1] != "kx-rsa")
-    assert held_in_fips == without_rsa_key_exchange
-    assert new_in_fips == without_rsa_key_exchange
+    kept_in_fips: Final = tuple(filter(_kept_in_fips_mode, standard))
+    assert held_in_fips == kept_in_fips
+    assert new_in_fips == kept_in_fips
     assert held_after_fips == standard
 
 
-def test_fips_mode_offers_only_tls_1_3_when_the_cipher_list_has_only_rsa_key_exchange(
+@pytest.mark.parametrize("excluded_suites", ["kRSA", "CHACHA20"])
+def test_fips_mode_offers_only_tls_1_3_when_the_cipher_list_has_only_excluded_tls_1_2_suites(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    excluded_suites: str,
 ) -> None:
     from litellm.llms.custom_httpx.http_handler import _ssl_context_cache
     from litellm.proxy.common_utils.fips import enforce_fips_mode, fips_mode_active
 
-    rsa_key_exchange: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    excluded: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     try:
-        rsa_key_exchange.set_ciphers("kRSA")
+        excluded.set_ciphers(excluded_suites)
     except ssl.SSLError:
-        pytest.skip("this OpenSSL has no RSA key exchange suites")
+        pytest.skip(f"this OpenSSL has no {excluded_suites} suites")
     _use_ssl_security_level(
         monkeypatch,
-        ":".join(cipher["name"] for cipher in rsa_key_exchange.get_ciphers() if cipher["kea"] == "kx-rsa"),
+        ":".join(cipher["name"] for cipher in excluded.get_ciphers() if cipher["protocol"] != "TLSv1.3"),
     )
     held: Final = get_ssl_configuration()
     assert isinstance(held, ssl.SSLContext)
