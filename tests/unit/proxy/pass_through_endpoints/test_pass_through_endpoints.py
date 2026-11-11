@@ -13464,6 +13464,59 @@ async def test_chat_completion_pass_through_endpoint_reads_a_body_only_json_can_
     assert forwarded["messages"] == [{"role": "user", "content": "hi"}]
 
 
+_ADAPTER_BODY_WITH_S3_IMAGE: Final = json.dumps(
+    {
+        "model": "unknown-model",
+        "messages": [
+            {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "s3://private-bucket/cat.png"}}]}
+        ],
+    }
+).encode()
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_pass_through_endpoint_refuses_an_s3_image_in_an_unlisted_bucket(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    proxy_logging: Final = _stub_adapter_proxy(monkeypatch)
+    request: Final = MagicMock(spec=Request)
+    request.body = AsyncMock(return_value=_ADAPTER_BODY_WITH_S3_IMAGE)
+
+    with pytest.raises(ProxyException) as raised:
+        await chat_completion_pass_through_endpoint(
+            fastapi_response=Response(),
+            request=request,
+            adapter_id="anthropic",
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    assert raised.value.code == "403"
+    proxy_logging.pre_call_hook.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_pass_through_endpoint_forwards_an_s3_image_in_a_listed_bucket(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    proxy_logging: Final = _stub_adapter_proxy(monkeypatch)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings", {"allowed_client_side_s3_buckets": ["private-bucket"]}
+    )
+    request: Final = MagicMock(spec=Request)
+    request.body = AsyncMock(return_value=_ADAPTER_BODY_WITH_S3_IMAGE)
+
+    with pytest.raises(ProxyException) as raised:
+        await chat_completion_pass_through_endpoint(
+            fastapi_response=Response(),
+            request=request,
+            adapter_id="anthropic",
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    assert raised.value.code != "403"
+    proxy_logging.pre_call_hook.assert_awaited_once()
+
+
 @pytest.mark.asyncio
 async def test_chat_completion_pass_through_endpoint_rejects_a_body_that_is_not_an_object(
     monkeypatch: pytest.MonkeyPatch,
