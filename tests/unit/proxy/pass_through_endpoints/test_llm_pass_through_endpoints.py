@@ -6015,7 +6015,7 @@ class TestManagedIndexCreatedOnAnotherReplica:
 
         assert response.status_code == 503
         assert response.json()["detail"]["error"] == (
-            "Could not read vector store index 'kb-new' from the database. Retry the request"
+            "Could not read vector store index 'kb-new' from the database in time. Retry the request"
         )
         assert upstream.calls.call_count == 0
 
@@ -6113,7 +6113,7 @@ class TestManagedIndexCreatedOnAnotherReplica:
 
         assert response.status_code == 503
         assert response.json()["detail"]["error"] == (
-            "Could not read vector store index 'collection-made-on-a' from the database. Retry the request"
+            "Could not read vector store index 'collection-made-on-a' from the database in time. Retry the request"
         )
 
     def test_opensearch_search_answers_503_when_the_index_table_read_fails(
@@ -6131,7 +6131,7 @@ class TestManagedIndexCreatedOnAnotherReplica:
 
         assert response.status_code == 503
         assert response.json()["detail"]["error"] == (
-            "Could not read vector store index 'docs-made-on-a' from the database. Retry the request"
+            "Could not read vector store index 'docs-made-on-a' from the database in time. Retry the request"
         )
 
 

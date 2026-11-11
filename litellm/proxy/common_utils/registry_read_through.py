@@ -409,9 +409,11 @@ async def _resync_vector_stores(vector_store_name: str) -> bool:
     if litellm.vector_store_registry is None:
         litellm.vector_store_registry = VectorStoreRegistry(vector_stores=list(stores))
         return True
+    registry: Final = litellm.vector_store_registry
     for store in stores:
-        litellm.vector_store_registry.add_vector_store_to_registry(vector_store=store)
-    return True
+        if (vector_store_id := store.get("vector_store_id")) is not None:
+            registry.update_vector_store_in_registry(vector_store_id=vector_store_id, updated_data=store)
+    return _vector_store_is_loaded(vector_store_name)
 
 
 def _model_is_loaded(model_name_or_id: str) -> bool:

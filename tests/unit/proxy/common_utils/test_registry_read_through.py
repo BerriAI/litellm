@@ -1271,6 +1271,70 @@ async def test_vector_store_read_through_keeps_stores_already_in_the_registry(
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("fresh_vector_store_read_throughs")
+async def test_vector_store_read_through_loads_a_store_renamed_on_another_instance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.common_utils.registry_read_through import get_vector_store_with_read_through
+    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+    from tests.unit.proxy.conftest import FakeVectorStoreRow
+
+    monkeypatch.setattr(
+        litellm,
+        "vector_store_registry",
+        VectorStoreRegistry(
+            vector_stores=[{"vector_store_id": "store-1", "custom_llm_provider": "azure_ai", "vector_store_name": "old"}]
+        ),
+    )
+    find_many: Final = AsyncMock(return_value=[FakeVectorStoreRow("new", "azure_ai", {}, "store-1")])
+    monkeypatch.setattr(proxy_server, "prisma_client", _store_prisma_client(find_many))
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+
+    first: Final = await get_vector_store_with_read_through("new")
+    second: Final = await get_vector_store_with_read_through("new")
+
+    assert first is not None and first.get("vector_store_id") == "store-1"
+    assert second == first
+    assert find_many.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_vector_store_read_throughs")
+async def test_vector_store_read_through_caches_the_miss_when_a_config_store_holds_the_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.common_utils.registry_read_through import get_vector_store_with_read_through
+    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+    from tests.unit.proxy.conftest import FakeVectorStoreRow
+
+    monkeypatch.setattr(
+        litellm,
+        "vector_store_registry",
+        VectorStoreRegistry(
+            vector_stores=[
+                {
+                    "vector_store_id": "store-1",
+                    "custom_llm_provider": "azure_ai",
+                    "vector_store_name": "from-config",
+                    "is_config": True,
+                }
+            ]
+        ),
+    )
+    find_many: Final = AsyncMock(return_value=[FakeVectorStoreRow("from-db", "azure_ai", {}, "store-1")])
+    monkeypatch.setattr(proxy_server, "prisma_client", _store_prisma_client(find_many))
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+
+    assert await get_vector_store_with_read_through("from-db") is None
+    assert await get_vector_store_with_read_through("from-db") is None
+    assert find_many.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_vector_store_read_throughs")
 async def test_vector_store_read_through_answers_none_for_a_store_nobody_created(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

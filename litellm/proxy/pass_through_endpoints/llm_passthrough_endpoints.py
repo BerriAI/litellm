@@ -240,7 +240,7 @@ class RelayRejection(TypedDict):
 
 def _unreadable_vector_store_index(index_name: str) -> HTTPException:
     unreadable: Final[RelayRejection] = {
-        "error": f"Could not read vector store index '{index_name}' from the database. Retry the request"
+        "error": f"Could not read vector store index '{index_name}' from the database in time. Retry the request"
     }
     return HTTPException(status_code=503, detail=unreadable)
 
