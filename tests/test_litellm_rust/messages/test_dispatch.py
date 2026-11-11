@@ -472,12 +472,6 @@ STRICT_TOOL: Final = {"name": "a", "input_schema": {"type": "object"}, "strict":
     ("feature", "model", "kwargs", "settings"),
     (
         (Feature.MOCK_RESPONSE, "anthropic/claude-sonnet-4-5", {"mock_response": "hi"}, {}),
-        (
-            Feature.PROXY_MCP_TOOLS,
-            "anthropic/claude-sonnet-4-5",
-            {"tools": [{"type": "mcp", "server_label": "gateway", "server_url": "litellm_proxy"}]},
-            {},
-        ),
         (Feature.CALLER_CLIENT, "anthropic/claude-sonnet-4-5", {"client": object()}, {}),
         (Feature.AGENTIC_LOOP_HOOK, "anthropic/claude-sonnet-4-5", {}, {"callbacks": [_Agentic()]}),
         (Feature.TLS_POLICY, "anthropic/claude-sonnet-4-5", {}, {"ssl_security_level": "DEFAULT@SECLEVEL=1"}),
@@ -939,6 +933,32 @@ async def test_anthropic_refuses_what_rust_does_not_serve(
     assert refused.value.llm_provider == "anthropic"
     assert refused.value.status_code == 400
     assert shipped_native == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", (False, True), ids=("sync", "async"))
+@pytest.mark.parametrize(
+    "server_url",
+    (
+        pytest.param("litellm_proxy", id="whole-gateway"),
+        pytest.param("litellm_proxy/mcp/deepwiki", id="one-server"),
+        pytest.param("https://gateway.example/mcp/deepwiki", id="proxy-path"),
+    ),
+)
+async def test_anthropic_serves_gateway_mcp_tools_on_rust(
+    monkeypatch: pytest.MonkeyPatch, shipped_native: list[str], asynchronous: bool, server_url: str
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    tools: Final = [{"type": "mcp", "server_label": "gateway", "server_url": server_url, "require_approval": "never"}]
+
+    def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: rejected fallback
+        pytest.fail("anthropic has no Python Messages path")
+
+    with rebound(dispatch, "_PYTHON_MESSAGES", python), rebound(dispatch, "_PYTHON_AMESSAGES", python):
+        result: Final = await _public(asynchronous, "anthropic/claude-sonnet-4-5", {"tools": tools})
+
+    assert isinstance(result, dict)
+    assert shipped_native == ["async" if asynchronous else "sync"]
 
 
 @pytest.mark.asyncio

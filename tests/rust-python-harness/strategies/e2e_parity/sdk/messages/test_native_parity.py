@@ -327,11 +327,19 @@ class Case:
     private_keys: bool = False
     cache: Callable[[], Cache] | None = None
     gaps: Mapping[str, str | None] = field(default_factory=lambda: MappingProxyType({}))
+    gateway: bool = False
+    racy: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
 
     def params(self) -> Iterator[object]:
-        for aspect in (*ASPECTS, "cached") if self.cache is not None else ASPECTS:
+        extra: Final = (*(("cached",) if self.cache is not None else ()), *(("tool_runs",) if self.gateway else ()))
+        for aspect in (*ASPECTS, *extra):
             gap = {**KNOWN_GAPS.get(self.name, {}), **self.gaps}.get(aspect)
-            marks = () if not gap else (pytest.mark.xfail(reason=gap, strict=True),)
+            race = self.racy.get(aspect)
+            marks = (
+                (pytest.mark.skip(reason=race),)
+                if race
+                else (() if not gap else (pytest.mark.xfail(reason=gap, strict=True),))
+            )
             yield pytest.param(self, aspect, id=f"{self.name}-{aspect}", marks=marks)
 
 
@@ -1161,6 +1169,150 @@ STRICT_TOOLS_RETRY_CASES: Final = (
     ),
 )
 
+MCP_REFERENCE: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        "type": "mcp",
+        "server_label": "litellm",
+        "server_url": "litellm_proxy/mcp/deepwiki",
+        "require_approval": "never",
+    }
+)
+MCP_NEEDS_APPROVAL: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {key: value for key, value in MCP_REFERENCE.items() if key != "require_approval"}
+)
+WIKI_TOOL_CALL: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"type": "tool_use", "id": "toolu_01Wiki", "name": "read_wiki", "input": {"repo": "a/b"}}
+)
+WIKI_TOOL_USE_RESPONSE: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        **TEXT_RESPONSE,
+        "id": "msg_01ParityWiki",
+        "content": [{"type": "text", "text": "Reading the wiki."}, dict(WIKI_TOOL_CALL)],
+        "stop_reason": "tool_use",
+    }
+)
+WIKI_TOOL_STREAM: Final = _events(
+    _message_start("msg_01ParityWikiStream"),
+    (
+        "content_block_start",
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "tool_use", "id": "toolu_01Wiki", "name": "read_wiki", "input": {}},
+        },
+    ),
+    (
+        "content_block_delta",
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '{"repo": "a/b"}'},
+        },
+    ),
+    ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+    *_message_end("tool_use", 9),
+)
+
+
+def _wiki(**kwargs: object) -> Mapping[str, object]:
+    return _kw(**{"tools": [dict(MCP_REFERENCE)], **kwargs})
+
+
+_SHARED_LOGGER: Final = (
+    "the gateway's follow-up call rewrites the shared Logging object while the first call's async success callback "
+    "is still queued, on Python and Rust alike, so the callback logs whichever call it saw"
+)
+SHARED_LOGGER_RACE: Final = MappingProxyType({"logged_request": _SHARED_LOGGER, "logged_metadata": _SHARED_LOGGER})
+
+
+MCP_CASES: Final = (
+    Case(
+        "mcp_tool_runs_then_answers",
+        _wiki(),
+        upstream=(_ok(WIKI_TOOL_USE_RESPONSE), _ok()),
+        gateway=True,
+        racy=SHARED_LOGGER_RACE,
+    ),
+    Case(
+        "mcp_tool_runs_then_answers_stream",
+        _wiki(stream=True),
+        upstream=(_ok(WIKI_TOOL_USE_RESPONSE), _ok()),
+        gateway=True,
+        racy=SHARED_LOGGER_RACE,
+    ),
+    Case("mcp_answers_without_a_tool", _wiki(), gateway=True),
+    Case(
+        "mcp_tool_beside_a_native_tool",
+        _wiki(tools=[dict(MCP_REFERENCE), dict(WEATHER_TOOL)], system="Be terse.", temperature=0.2),
+        upstream=(_ok(WIKI_TOOL_USE_RESPONSE), _ok()),
+        gateway=True,
+        racy=SHARED_LOGGER_RACE,
+    ),
+    Case(
+        "mcp_whole_gateway",
+        _wiki(tools=[{**MCP_REFERENCE, "server_url": "litellm_proxy"}]),
+        upstream=(_ok(WIKI_TOOL_USE_RESPONSE), _ok()),
+        gateway=True,
+        racy=SHARED_LOGGER_RACE,
+    ),
+    Case(
+        "mcp_tool_needs_approval",
+        _wiki(tools=[dict(MCP_NEEDS_APPROVAL)]),
+        upstream=(_ok(WIKI_TOOL_USE_RESPONSE),),
+        gateway=True,
+    ),
+    Case(
+        "mcp_tool_needs_approval_stream",
+        _wiki(tools=[dict(MCP_NEEDS_APPROVAL)], stream=True),
+        upstream=(_stream(WIKI_TOOL_STREAM),),
+        gateway=True,
+    ),
+    Case(
+        "mcp_follow_up_fails",
+        _wiki(),
+        upstream=(_ok(WIKI_TOOL_USE_RESPONSE), _failure(429, "rate_limit_error", "slow down")),
+        gateway=True,
+        racy=SHARED_LOGGER_RACE,
+    ),
+    Case(
+        "mcp_first_call_fails",
+        _wiki(),
+        upstream=(_failure(400, "invalid_request_error", "max_tokens: too large"),),
+        gateway=True,
+    ),
+    Case(
+        "mcp_metadata_and_litellm_metadata",
+        _wiki(metadata={"user_id": "user-123"}, litellm_metadata={"user_api_key": "hashed", "tags": ["t1"]}),
+        upstream=(_ok(WIKI_TOOL_USE_RESPONSE), _ok()),
+        gateway=True,
+        racy=SHARED_LOGGER_RACE,
+    ),
+    Case(
+        "mcp_unserved_proxy_path_passes_through",
+        _wiki(tools=[{**MCP_REFERENCE, "server_url": "https://gateway.example/mcp/unknown"}]),
+        gateway=True,
+    ),
+    Case(
+        "mcp_skip_flag_passes_the_reference_through",
+        _wiki(_skip_mcp_handler=True),
+        gateway=True,
+    ),
+    Case(
+        "mcp_tool_execution_raises",
+        _wiki(),
+        upstream=(_ok({**WIKI_TOOL_USE_RESPONSE, "content": [{**WIKI_TOOL_CALL, "input": {"repo": "boom"}}]}),),
+        gateway=True,
+    ),
+    Case(
+        "mcp_cache_hit",
+        _wiki(),
+        upstream=(_ok(WIKI_TOOL_USE_RESPONSE), _ok(), _ok(WIKI_TOOL_USE_RESPONSE), _ok()),
+        cache=Cache,
+        gateway=True,
+    ),
+    Case("mcp_sync", _wiki(), upstream=(), sync=True, gateway=True),
+)
+
 CASES: Final = (
     *REQUEST_CASES,
     *PROMPT_CACHING_CASES,
@@ -1174,6 +1326,7 @@ CASES: Final = (
     *STRICT_TOOLS_RETRY_CASES,
     *FALLBACK_CASES,
     *CACHE_CASES,
+    *MCP_CASES,
 )
 
 
@@ -1186,6 +1339,7 @@ class Leg:
     logged: Mapping[str, object]
     callback_kwargs: Mapping[str, object]
     cached: tuple[str, ...] = ()
+    tool_runs: tuple[Mapping[str, object], ...] = ()
 
 
 @dataclass(slots=True)
@@ -1440,12 +1594,66 @@ async def _prime(case: Case, server: RecordingServer, recorder: RecordingLogger,
     return len(recorder.events)
 
 
+WIKI_MCP_TOOL: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        "name": "read_wiki",
+        "description": "Read a repository wiki",
+        "inputSchema": {"type": "object", "properties": {"repo": {"type": "string"}}, "required": ["repo"]},
+    }
+)
+
+
+@contextmanager
+def _gateway(case: Case, runs: list[Mapping[str, object]]) -> Generator[None]:  # mutable-ok: records the tool runs
+    if not case.gateway:
+        yield
+        return
+    from mcp.types import Tool as MCPTool
+
+    from litellm.responses.mcp import tool_precheck
+    from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
+
+    split_mcp_tools: Final = LiteLLM_Proxy_MCP_Handler.split_mcp_tools
+
+    async def served(names: Iterable[str]) -> frozenset[str]:
+        return frozenset({"deepwiki"}) & frozenset(names)
+
+    async def split(tools: Iterable[Mapping[str, object]] | None) -> object:
+        return await split_mcp_tools(tools, served)
+
+    async def listed(**_: object) -> tuple[list[MCPTool], list[str]]:
+        return [MCPTool.model_validate(dict(WIKI_MCP_TOOL))], ["deepwiki"]
+
+    async def executed(**kwargs: object) -> list[dict[str, object]]:
+        calls: Final = cast(list[Mapping[str, object]], kwargs["tool_calls"])
+        runs.append(
+            {
+                "tool_calls": [dict(call) for call in calls],
+                "tool_server_map": kwargs["tool_server_map"],
+                "request_tags": kwargs["request_tags"],
+                "guardrail_context": json.loads(json.dumps(kwargs["guardrail_context"], default=repr)),
+            }
+        )
+        if any(call.get("input") == {"repo": "boom"} for call in calls):
+            raise RuntimeError("the wiki server went away")
+        return [{"tool_call_id": call.get("id"), "result": "9 sections", "name": call.get("name")} for call in calls]
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(tool_precheck, "_gateway_registry_loads", lambda: True)
+        patch.setattr(LiteLLM_Proxy_MCP_Handler, "split_mcp_tools", staticmethod(split))
+        patch.setattr(LiteLLM_Proxy_MCP_Handler, "_get_mcp_tools_from_manager", staticmethod(listed))
+        patch.setattr(LiteLLM_Proxy_MCP_Handler, "execute_tool_calls", staticmethod(executed))
+        yield
+
+
 async def _leg(case: Case, server: RecordingServer, probe: FallbackProbe | None) -> Leg:
+    runs: Final[list[Mapping[str, object]]] = []
     with (
         isolated_callback_registries(),
         _environment(case.env),
         _settings(case.settings),
         _cache(case.cache),
+        _gateway(case, runs),
     ):
         for spec in case.upstream:
             server.enqueue(replace(spec))
@@ -1476,6 +1684,7 @@ async def _leg(case: Case, server: RecordingServer, probe: FallbackProbe | None)
             logged=logged,
             callback_kwargs=callback_kwargs,
             cached=() if litellm.cache is None else tuple(sorted(litellm.cache.cache.cache_dict)),
+            tool_runs=tuple(runs),
         )
 
 
@@ -1524,6 +1733,8 @@ async def test_native_messages_match_python(
             assert native.logged == python.logged
         case "cached":
             assert native.cached == python.cached
+        case "tool_runs":
+            assert native.tool_runs == python.tool_runs
         case _:
             assert native.callback_kwargs.get(aspect) == python.callback_kwargs.get(aspect)
 

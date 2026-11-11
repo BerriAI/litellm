@@ -117,7 +117,12 @@ impl PythonCache {
         self.resume(py, result)
     }
 
-    pub fn store_response(&mut self, py: Python<'_>, response: &Bound<'_, PyAny>) -> PyResult<()> {
+    pub fn store_response(
+        &mut self,
+        py: Python<'_>,
+        response: &Bound<'_, PyAny>,
+        verbatim: bool,
+    ) -> PyResult<()> {
         if !std::mem::take(&mut self.deferred) {
             return Ok(());
         }
@@ -125,7 +130,11 @@ impl PythonCache {
             return Err(HandleError::Unconfigured.into());
         };
         py.import(CACHE_HOST_MODULE)?
-            .getattr("store_response")?
+            .getattr(if verbatim {
+                "store_verbatim"
+            } else {
+                "store_response"
+            })?
             .call((cache, response), Some(&arguments.bind(py).copy()?))?;
         Ok(())
     }

@@ -1,6 +1,7 @@
 mod common_utils;
 mod constants;
 mod handler;
+mod mcp_gateway;
 pub mod route;
 mod types;
 mod workload_identity;
@@ -17,6 +18,7 @@ use crate::common_utils::messages_provider;
 
 pub use common_utils::merge_messages_header_sources;
 pub use litellm_inference::Error;
+pub use mcp_gateway::McpGateway;
 pub use types::{
     MessagesBody, MessagesCall, MessagesCallResponse, MessagesSettings, MessagesShaping,
     litellm_params, messages_body,
@@ -30,6 +32,7 @@ pub struct MessagesRoute {
     secrets: Arc<dyn SecretSource>,
     cache: Option<litellm_cache_response::ScopedCache>,
     workload_identity: Option<Arc<dyn WorkloadIdentity>>,
+    mcp_gateway: Option<Arc<dyn McpGateway>>,
 }
 
 impl MessagesRoute {
@@ -44,6 +47,7 @@ impl MessagesRoute {
             secrets,
             cache: None,
             workload_identity: None,
+            mcp_gateway: None,
         }
     }
 
@@ -51,6 +55,14 @@ impl MessagesRoute {
     pub fn with_workload_identity(self, workload_identity: Arc<dyn WorkloadIdentity>) -> Self {
         Self {
             workload_identity: Some(workload_identity),
+            ..self
+        }
+    }
+
+    #[must_use]
+    pub fn with_mcp_gateway(self, mcp_gateway: Arc<dyn McpGateway>) -> Self {
+        Self {
+            mcp_gateway: Some(mcp_gateway),
             ..self
         }
     }
@@ -108,6 +120,12 @@ impl MessagesRoute {
             let model = provider.model.to_owned();
             if let Some(output) = handler::cached(self, config, &model, &context).await? {
                 return Ok(output);
+            }
+            if call.shaping.settings.mcp_gateway
+                && let Some(gateway) = &self.mcp_gateway
+            {
+                return handler::gateway(self, gateway.as_ref(), config, model, &call, &context)
+                    .await;
             }
             let secrets = self.secrets.resolve(config.config().secret_names()).await?;
             handler::execute(self, config, model, call, secrets, &context)

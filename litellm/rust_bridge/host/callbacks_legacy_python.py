@@ -513,6 +513,11 @@ def stream_opened(logger: Logging, head: Mapping[str, object]) -> None:
     )
 
 
+def stream_handed_back(logger: Logging) -> None:
+    logger.stream = True  # rebind-ok: @client marks the logger of a call that hands back a requested stream
+    logger.model_call_details["stream"] = True  # rebind-ok: @client marks the logged call streamed
+
+
 def _cancelling(task: asyncio.Task[object]) -> bool:
     return task.cancelling() > 0 if sys.version_info >= (3, 11) else True
 

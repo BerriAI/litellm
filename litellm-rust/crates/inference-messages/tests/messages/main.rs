@@ -19,6 +19,7 @@ use wiremock::ResponseTemplate;
 mod support;
 use support::*;
 
+mod gateway;
 mod host;
 mod request;
 mod response;

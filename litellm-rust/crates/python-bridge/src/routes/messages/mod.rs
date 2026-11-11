@@ -1,4 +1,5 @@
 mod host;
+mod mcp_gateway;
 mod modify_params;
 pub(crate) mod workload_identity;
 
@@ -35,6 +36,9 @@ fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyR
                       services,
                       interceptors,
                       observers| async move {
+                    let route = route.with_mcp_gateway(std::sync::Arc::new(
+                        mcp_gateway::PythonMcpGateway::new(services.clone()),
+                    ));
                     let (cache, options) = selection.attach(services);
                     let route = match cache {
                         Some(cache) => route.with_cache(cache),
@@ -67,8 +71,20 @@ const SYNC_NOT_IMPLEMENTED: &str = "anthropic_messages_handler is not implemente
 
 #[pyfunction]
 #[pyo3(signature = (call))]
-pub(crate) fn messages(call: NativeCall<'_>) -> PyResult<Py<PyAny>> {
+pub(crate) fn messages(py: Python<'_>, call: NativeCall<'_>) -> PyResult<Py<PyAny>> {
+    let gateway = py
+        .import(host::ROUTE_HOST_MODULE)?
+        .getattr("gateway")?
+        .call1((call.resolved()?, false))?;
     drop(call);
+    if !gateway.is_none() {
+        let ready = mcp_gateway::Ready::new(gateway.unbind());
+        return Ok(Py::new(
+            py,
+            litellm_host_python::Execution::new(ready, crate::routes::execution_steps),
+        )?
+        .into_any());
+    }
     Err(pyo3::exceptions::PyValueError::new_err(
         SYNC_NOT_IMPLEMENTED,
     ))

@@ -1,11 +1,13 @@
-use crate::cache::{CacheCall, Cached, PythonCache, Selection};
+use super::mcp_gateway::{HostedMessages, MessagesHostCall};
+use crate::cache::{PythonCache, Selection};
+use litellm_host::protocol::Reply;
 use litellm_host_python::{PythonHostCalls, PythonOwned};
 
 use bytes::Bytes;
 use litellm_host_python::{InvokeError, PythonBinding, effective_py_args, from_py, to_py};
 use litellm_inference_messages::{
     Error, MessagesCall, MessagesSettings, MessagesShaping, litellm_params, messages_body,
-    route::{Messages, MessagesStreamHead},
+    route::MessagesStreamHead,
 };
 use litellm_llms::base_llm::messages::context::MessagesModelCapabilities;
 use litellm_llms_types::headers::ProviderSpecificHeaders;
@@ -98,6 +100,9 @@ pub(super) struct MessagesPythonHost {
     cache: PythonCache,
     stream_cost_model: Option<String>,
     asynchronous: bool,
+    gateway: Option<Reply<()>>,
+    gateway_response: Option<Py<PyAny>>,
+    gateway_served: bool,
 }
 
 impl MessagesPythonHost {
@@ -107,7 +112,22 @@ impl MessagesPythonHost {
             cache: PythonCache::new(asynchronous),
             stream_cost_model: None,
             asynchronous,
+            gateway: None,
+            gateway_response: None,
+            gateway_served: false,
         }
+    }
+
+    fn begin_gateway(&mut self, py: Python<'_>, reply: Reply<()>) -> PyResult<Option<Py<PyAny>>> {
+        let run = py
+            .import(ROUTE_HOST_MODULE)?
+            .getattr("gateway")?
+            .call1((self.view.request(py)?, self.asynchronous))?;
+        if run.is_none() {
+            return Err(litellm_host_python::Error::MissingState.into());
+        }
+        self.gateway = Some(reply);
+        Ok(Some(run.unbind()))
     }
 
     fn host_settings(
@@ -286,7 +306,7 @@ impl MessagesPythonHost {
 }
 
 impl PythonBinding for MessagesPythonHost {
-    type Protocol = Cached<Messages>;
+    type Protocol = HostedMessages;
     type Failure = PyErr;
 
     fn decode_request(
@@ -318,11 +338,14 @@ impl PythonBinding for MessagesPythonHost {
         py: Python<'_>,
         response: litellm_inference_messages::MessagesBody,
     ) -> PyResult<Py<PyAny>> {
+        if let Some(response) = self.gateway_response.take() {
+            return Ok(response);
+        }
         public_response(py, ROUTE_HOST_MODULE, &response)
     }
 
     fn deliver_response(&mut self, py: Python<'_>, response: &Bound<'_, PyAny>) -> PyResult<()> {
-        self.cache.store_response(py, response)
+        self.cache.store_response(py, response, self.gateway_served)
     }
 
     fn encode_stream_head(
@@ -358,24 +381,25 @@ impl PythonBinding for MessagesPythonHost {
     }
 }
 
-impl PythonHostCalls<Cached<Messages>> for MessagesPythonHost {
+impl PythonHostCalls<HostedMessages> for MessagesPythonHost {
     fn handle_host_call(
         &mut self,
         py: Python<'_>,
-        op: CacheCall,
+        op: MessagesHostCall,
     ) -> Result<(), InvokeError<Error>> {
-        self.cache
-            .begin(py, op)
-            .map(|_| ())
-            .map_err(InvokeError::Python)
+        self.begin_host_call(py, op).map(|_| ())
     }
 
     fn begin_host_call(
         &mut self,
         py: Python<'_>,
-        op: CacheCall,
+        op: MessagesHostCall,
     ) -> Result<Option<Py<PyAny>>, InvokeError<Error>> {
-        self.cache.begin(py, op).map_err(InvokeError::Python)
+        match op {
+            MessagesHostCall::Cache(op) => self.cache.begin(py, op),
+            MessagesHostCall::McpGateway(reply) => self.begin_gateway(py, reply),
+        }
+        .map_err(InvokeError::Python)
     }
 
     fn resume_host_call(
@@ -383,7 +407,13 @@ impl PythonHostCalls<Cached<Messages>> for MessagesPythonHost {
         py: Python<'_>,
         result: PyResult<Py<PyAny>>,
     ) -> Result<Option<Py<PyAny>>, InvokeError<Error>> {
-        self.cache.resume(py, result).map_err(InvokeError::Python)
+        let Some(reply) = self.gateway.take() else {
+            return self.cache.resume(py, result).map_err(InvokeError::Python);
+        };
+        self.gateway_response = Some(result?);
+        self.gateway_served = true;
+        reply.send(());
+        Ok(None)
     }
 }
 
@@ -391,10 +421,13 @@ impl PythonOwned for MessagesPythonHost {
     fn close(&mut self, _: Python<'_>) {
         self.view.close();
         self.cache.close();
+        self.gateway = None;
+        self.gateway_response = None;
     }
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
         self.view.traverse(visit)?;
-        self.cache.traverse(visit)
+        self.cache.traverse(visit)?;
+        visit.call(&self.gateway_response)
     }
 }
 

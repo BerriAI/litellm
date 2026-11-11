@@ -97,6 +97,8 @@ pub(crate) enum Streaming {
     Success,
     #[strum(serialize = "stream_failure")]
     Failure,
+    #[strum(serialize = "stream_handed_back")]
+    HandedBack,
 }
 
 impl LegacyPython {

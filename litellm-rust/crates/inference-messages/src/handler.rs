@@ -87,6 +87,31 @@ pub(super) async fn cached(
     Ok(Some(output))
 }
 
+pub(super) async fn gateway(
+    route: &MessagesRoute,
+    gateway: &dyn crate::McpGateway,
+    provider: MessagesProvider,
+    model: String,
+    call: &MessagesCall,
+    context: &CallContext<'_, impl Interceptors<Error>>,
+) -> Result<MessagesCallResponse, Error> {
+    let output = MessagesCallResponse::Complete(gateway.serve().await?);
+    if call.body.params.stream == Some(true) {
+        return Ok(output);
+    }
+    let identity = ProviderIdentity {
+        model,
+        provider: provider.as_str().to_string(),
+    };
+    Ok(CallCache::<Messages>::new(
+        caller_keyed(route),
+        context.cache,
+        CacheRequest::from_wire(identity, None),
+    )
+    .finish(output, &ResultSource::Provider)
+    .await)
+}
+
 fn caller_keyed(route: &MessagesRoute) -> Option<&litellm_cache_response::ScopedCache> {
     route
         .cache

@@ -281,6 +281,22 @@ impl LegacyLogging {
             .ok_or_else(|| HostError::MissingState.into())
     }
 
+    fn hands_back_requested_stream(&self, py: Python<'_>) -> PyResult<bool> {
+        if self.operation != LoggingOperation::Messages
+            || self.stream.is_some()
+            || self.messages_cache_hit()
+        {
+            return Ok(false);
+        }
+        self.call
+            .kwargs()
+            .bind(py)
+            .get_item("stream")?
+            .map_or(Ok(false), |stream| {
+                Ok(stream.is(pyo3::types::PyBool::new(py, true)))
+            })
+    }
+
     fn messages_cache_hit(&self) -> bool {
         self.operation == LoggingOperation::Messages && self.cache_key.is_some()
     }
@@ -596,6 +612,10 @@ impl LegacyLogging {
     ) -> PyResult<HookStep<Self, Py<PyAny>>> {
         self.end = Some(datetime(py, timing.end_time)?);
         self.response = Some(response);
+        if self.hands_back_requested_stream(py)? {
+            Streaming::HandedBack.call(py, (self.logger()?.object(py),))?;
+            return self.finalize(py);
+        }
         if self.runs_deployment_hooks() && !self.messages_cache_hit() {
             return Ok(HookStep::Await(
                 DeploymentHooks::after_success(
@@ -744,6 +764,7 @@ impl LegacyLogging {
         match &self.stream {
             Some(stream) => self.stream_success(py, stream, false)?,
             None if self.messages_cache_hit() => self.dispatch_cache_hit(py)?,
+            None if self.hands_back_requested_stream(py)? => {}
             None => self.dispatch_success(py)?,
         }
         Ok(HookStep::Ready(()))
@@ -2148,6 +2169,46 @@ mod terminal_tests {
                 },
             )
             .unwrap()
+    }
+
+    #[rstest]
+    #[case::requested_stream(
+        c"kwargs = {'logger': logger, 'stream': True}",
+        true,
+        &["stream_handed_back", "finalize"]
+    )]
+    #[case::unstreamed(c"kwargs = {'logger': logger, 'stream': False}", false, &["success_hook"])]
+    #[case::stream_flag_not_true(c"kwargs = {'logger': logger, 'stream': 'true'}", false, &["success_hook"])]
+    fn a_messages_result_for_a_requested_stream_is_handed_back_without_success_logging(
+        #[case] script: &CStr,
+        #[case] handed_back: bool,
+        #[case] expected: &[&str],
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(py, c"response = object()");
+            run(py, &locals, script);
+            let mut logging = LegacyLogging {
+                operation: crate::LoggingOperation::Messages,
+                ..logged(py, &locals, true)
+            };
+            let step = logging
+                .transform_public_response(py, local(&locals, "response").unbind(), TIMING)
+                .unwrap();
+            assert_eq!(matches!(step, HookStep::Ready(_)), handed_back);
+            if handed_back {
+                assert!(matches!(
+                    succeed(py, &locals, &mut logging),
+                    HookStep::Ready(())
+                ));
+            }
+            let names: Vec<String> = local(&locals, "logger")
+                .call_method0("names")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(names, expected);
+        });
     }
 
     #[rstest]
