@@ -8,7 +8,9 @@ use std::sync::{
 
 use bytes::Bytes;
 use litellm_host::protocol::Reply;
-use litellm_host_python::{InvokeError, PythonBinding, effective_py_args, from_py, to_py};
+use litellm_host_python::{
+    InvokeError, PythonBinding, effective_py_args, from_py, json_from_py, to_py,
+};
 use litellm_inference_messages::{
     Error, MessagesCall, MessagesSettings, MessagesShaping, litellm_params, messages_body,
     route::{Messages, MessagesStreamHead},
@@ -21,7 +23,7 @@ use pyo3::{
     gc::{PyTraverseError, PyVisit},
     prelude::*,
     sync::PyOnceLock,
-    types::{PyBytes, PyDict},
+    types::{PyBytes, PyDict, PyList, PyMapping, PyTuple},
 };
 use serde_json::{Map, Value};
 
@@ -37,6 +39,13 @@ use crate::{
     python_settings::PythonSettings,
     routes::RequestView,
 };
+
+fn json_messages(messages: &Bound<'_, PyAny>) -> PyResult<Value> {
+    if messages.is_instance_of::<PyList>() || messages.is_instance_of::<PyTuple>() {
+        return json_from_py(messages);
+    }
+    json_from_py(&messages.py().get_type::<PyList>().call1((messages,))?)
+}
 
 pub(super) const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.host.routes.messages";
 const MODEL_CAPABILITIES_MODULE: &str = "litellm.rust_bridge.host.model_capabilities";
@@ -243,11 +252,24 @@ impl MessagesPythonHost {
         arguments: &Bound<'_, PyDict>,
     ) -> PyResult<Map<String, Value>> {
         let request = effective_py_args(self.view.request(py)?, arguments)?;
-        from_py(
-            &py.import(ROUTE_HOST_MODULE)?
-                .getattr("body_params")?
-                .call1((request, self.asynchronous, self.hooked))?,
-        )
+        let params = py
+            .import(ROUTE_HOST_MODULE)?
+            .getattr("body_params")?
+            .call1((request, self.asynchronous, self.hooked))?
+            .cast_into::<PyMapping>()?;
+        params
+            .items()?
+            .iter()
+            .map(|item| {
+                let (name, value): (Bound<'_, PyAny>, Bound<'_, PyAny>) = item.extract()?;
+                let name: String = name.extract()?;
+                let value = match name.as_str() {
+                    "messages" => json_messages(&value)?,
+                    _ => json_from_py(&value)?,
+                };
+                Ok((name, value))
+            })
+            .collect()
     }
 
     fn projection(
@@ -267,7 +289,7 @@ impl MessagesPythonHost {
         let presanitized = prepared.is_some();
         let messages = match prepared {
             Some(messages) => messages,
-            None => from_py(&messages)?,
+            None => json_messages(&messages)?,
         };
         let body = [
             ("model".to_string(), Value::String(model.clone())),

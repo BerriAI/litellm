@@ -23,6 +23,7 @@ import asyncio
 import copy
 import datetime
 import json
+import math
 import os
 import re
 import uuid
@@ -688,6 +689,38 @@ RESPONSE_CASES: Final = (
         ),
     ),
     Case("response_private_keys", private_keys=True),
+)
+
+INPUT_VALUE_CASES: Final = (
+    Case("max_tokens_numeric_string", _kw(max_tokens="1024")),
+    Case("max_tokens_fraction", _kw(max_tokens=1.5)),
+    Case("max_tokens_whole_float", _kw(max_tokens=1024.0)),
+    Case("max_tokens_bool", _kw(max_tokens=True)),
+    Case("max_tokens_beyond_64_bits", _kw(max_tokens=2**64)),
+    Case("reasoning_effort_with_fractional_max_tokens", _kw(reasoning_effort="high", max_tokens=1500.5)),
+    Case("temperature_numeric_string", _kw(temperature="0.5")),
+    Case("top_k_beyond_64_bits", _kw(top_k=2**70)),
+    Case("messages_mapping", _kw(messages={"role": "user", "content": "hi"})),
+    Case("messages_string", _kw(messages="hi")),
+    Case("messages_with_non_object_entries", _kw(messages=[dict(USER), "stray", 7])),
+    Case("system_lone_surrogate", _kw(system="sys \ud800 lone")),
+    Case("metadata_user_id_lone_surrogate", _kw(metadata={"user_id": "user-\udc00"})),
+    Case("message_text_lone_surrogate", _kw(messages=[{"role": "user", "content": "a\ud800b \u00e9"}])),
+    Case("text_starting_with_the_raw_leaf_mark", _kw(system="\uf8fflitellm-raw-json:1")),
+    Case("thinking_budget_beyond_64_bits", _kw(thinking={"type": "enabled", "budget_tokens": 2**70}, max_tokens=2048)),
+    Case(
+        "tool_schema_integers_beyond_64_bits",
+        _kw(tools=[{**WEATHER_TOOL, "input_schema": {"type": "integer", "maximum": 2**70, "minimum": -(2**70)}}]),
+    ),
+    Case("temperature_nan", _kw(temperature=float("nan"))),
+    Case(
+        "tool_schema_infinities",
+        _kw(
+            tools=[
+                {**WEATHER_TOOL, "input_schema": {"type": "number", "maximum": float("inf"), "minimum": -float("inf")}}
+            ]
+        ),
+    ),
 )
 
 FAILURE_CASES: Final = (
@@ -2389,6 +2422,7 @@ MCP_CASES: Final = (
 
 CASES: Final = (
     *REQUEST_CASES,
+    *INPUT_VALUE_CASES,
     *AGENTIC_CASES,
     *PROMPT_CACHING_CASES,
     *SYNC_PROMPT_CACHING_CASES,
@@ -2886,7 +2920,7 @@ async def test_native_messages_match_python(
         case "dispatch":
             assert not native.fell_back
         case "request":
-            assert native.requests == python.requests
+            assert _comparable(native.requests) == _comparable(python.requests)
         case "outcome":
             assert native.outcome == python.outcome
         case "hidden_params":
@@ -2902,7 +2936,19 @@ async def test_native_messages_match_python(
         case "tool_runs":
             assert native.tool_runs == python.tool_runs
         case _:
-            assert native.callback_kwargs.get(aspect) == python.callback_kwargs.get(aspect)
+            assert _comparable(native.callback_kwargs.get(aspect)) == _comparable(python.callback_kwargs.get(aspect))
+
+
+def _comparable(value: object) -> object:
+    match value:
+        case float() if math.isnan(value):
+            return "<NaN>"
+        case Mapping():
+            return {name: _comparable(item) for name, item in cast(Mapping[object, object], value).items()}
+        case list() | tuple():
+            return [_comparable(item) for item in cast(Sequence[object], value)]
+        case _:
+            return value
 
 
 @pytest.mark.parametrize(

@@ -1,5 +1,5 @@
 import inspect
-from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Collection, Coroutine, Iterator, Mapping
 from types import MappingProxyType
 from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding selects a sync result or an async awaitable
 
@@ -23,7 +23,6 @@ from litellm.rust_bridge.public_call import (
     native_acall_hook,
     native_call,
     native_call_hook,
-    optional_sequence,
     optional_str,
     signature,
 )
@@ -82,9 +81,7 @@ def _public_request(
     if fields is None:
         return None
     model: Final = fields.get("model")
-    messages: Final = optional_sequence(fields.get("messages"))
-    max_tokens: Final = fields.get("max_tokens")
-    if not isinstance(model, str) or messages is None or not isinstance(max_tokens, int):
+    if not isinstance(model, str) or not isinstance(fields.get("messages"), Collection):
         return None
     return native_call(legacy, args, _native_kwargs(fields, kwargs))
 

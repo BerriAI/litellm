@@ -7,12 +7,16 @@ use litellm_llms_types::{
         MessagesOptionalParams, MessagesRequest, Speed, ThinkingConfig, ThinkingDisplay,
     },
     providers::anthropic::{AnthropicBeta, BETA_HEADER, BetaProvider, BetaSet, DEFAULT_HEADERS},
-    recognized::Recognized,
+    recognized::{Recognized, map_known_runs},
 };
 use litellm_router_types::LitellmParams;
 use serde_json::{Map, Value, json};
 
-use super::{handler::shape_anthropic_messages_request, thinking::translate_thinking};
+use super::{
+    handler::shape_anthropic_messages_request,
+    scalar::{is_one, python_str},
+    thinking::translate_thinking,
+};
 use crate::anthropic::beta_headers::accepted_or_unlisted;
 use crate::base_llm::messages::{
     context::{MessagesShapeOptions, MessagesTransformContext},
@@ -297,10 +301,10 @@ pub(crate) fn transform_messages_request(
     {
         request.messages
     } else {
-        strip_advisor_blocks(request.messages)
+        map_known_runs(request.messages, strip_advisor_blocks)
     };
     Ok(MessagesRequest {
-        messages: strip_encrypted_reasoning_blocks(messages),
+        messages: map_known_runs(messages, strip_encrypted_reasoning_blocks),
         params: MessagesOptionalParams {
             context_management,
             extra: without_null_safeguards(request.params.extra),
@@ -375,7 +379,7 @@ fn is_threaded(params: &MessagesOptionalParams) -> bool {
 fn feature_betas(request: &MessagesRequest) -> BetaSet {
     let params = &request.params;
     let tools = params.tools.as_deref();
-    let scanned_messages: &[Message] = if continues_message_thread(params) {
+    let scanned_messages: &[Recognized<Message>] = if continues_message_thread(params) {
         &[]
     } else {
         &request.messages
@@ -439,9 +443,10 @@ fn carries_safeguards(params: &MessagesOptionalParams) -> bool {
         .is_some_and(|value| !value.is_null())
 }
 
-fn messages_carry_output_config(messages: &[Message]) -> bool {
+fn messages_carry_output_config(messages: &[Recognized<Message>]) -> bool {
     messages
         .iter()
+        .filter_map(Recognized::known)
         .any(|message| message.extra.contains_key("output_config"))
 }
 
@@ -486,9 +491,10 @@ fn is_tool_reference_change(block: &ContentBlock) -> bool {
         == Some("tool_reference")
 }
 
-fn messages_carry_tool_changes(messages: &[Message]) -> bool {
+fn messages_carry_tool_changes(messages: &[Recognized<Message>]) -> bool {
     messages
         .iter()
+        .filter_map(Recognized::known)
         .filter(|message| message.role == "system")
         .flat_map(Message::blocks)
         .any(is_tool_reference_change)
@@ -531,21 +537,21 @@ pub fn drop_unsupported_params(
         });
     }
     let temperature = match params.temperature {
-        Some(temperature) if temperature != 1.0 => {
+        Some(temperature) if !is_one(&temperature) => {
             reject(
                 "temperature",
-                json!(temperature).to_string(),
+                python_str(&temperature),
                 "Only temperature=1 is supported. ",
             )?;
             None
         }
         temperature => temperature,
     };
-    if let Some(top_p) = params.top_p {
-        reject("top_p", json!(top_p).to_string(), "")?;
+    if let Some(top_p) = &params.top_p {
+        reject("top_p", python_str(top_p), "")?;
     }
-    if let Some(top_k) = params.top_k {
-        reject("top_k", json!(top_k).to_string(), "")?;
+    if let Some(top_k) = &params.top_k {
+        reject("top_k", python_str(top_k), "")?;
     }
     Ok(MessagesRequest {
         params: MessagesOptionalParams {

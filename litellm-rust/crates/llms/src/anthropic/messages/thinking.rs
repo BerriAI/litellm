@@ -1,9 +1,10 @@
+use litellm_host::raw_json;
 use litellm_llms_types::{
     formats::{
         chat_completions::ReasoningEffort,
         messages::{
-            AdaptiveThinking, DisabledThinking, EffortLevel, MessagesOptionalParams,
-            MessagesRequest, OutputConfig, ThinkingConfig, ThinkingDisplay,
+            AdaptiveThinking, DisabledThinking, EffortLevel, EnabledThinking,
+            MessagesOptionalParams, MessagesRequest, OutputConfig, ThinkingConfig, ThinkingDisplay,
         },
     },
     recognized::Recognized,
@@ -12,6 +13,7 @@ use litellm_python_compat::{json::from_json, repr::repr, truthy::truthy};
 use serde_json::Value;
 use strum::VariantArray;
 
+use super::scalar::{is_one, python_number};
 use crate::base_llm::messages::context::{
     MessagesModelCapabilities, ThinkingBudgets, ThinkingContext,
 };
@@ -82,11 +84,42 @@ fn output_effort(effort: ReasoningEffort) -> Option<EffortLevel> {
     }
 }
 
-fn fit_budget_to_max_tokens(budget_tokens: u64, max_tokens: Option<u64>) -> Option<u64> {
-    let Some(max_tokens) = max_tokens else {
-        return Some(budget_tokens);
+fn fit_budget_to_max_tokens(
+    budget_tokens: u64,
+    max_tokens: Option<&Recognized<u64>>,
+) -> Option<Recognized<u64>> {
+    let max_tokens = match max_tokens {
+        None => return Some(Recognized::Known(budget_tokens)),
+        Some(Recognized::Known(max_tokens)) => *max_tokens,
+        Some(Recognized::Unrecognized(other)) => {
+            return fit_budget_to_python_number(budget_tokens, other);
+        }
     };
-    (max_tokens > ANTHROPIC_MIN_THINKING_BUDGET_TOKENS).then(|| budget_tokens.min(max_tokens - 1))
+    (max_tokens > ANTHROPIC_MIN_THINKING_BUDGET_TOKENS)
+        .then(|| Recognized::Known(budget_tokens.min(max_tokens - 1)))
+}
+
+fn enabled_thinking(budget_tokens: Recognized<u64>) -> ThinkingConfig {
+    ThinkingConfig::Enabled(EnabledThinking {
+        budget_tokens: Some(budget_tokens),
+        ..EnabledThinking::default()
+    })
+}
+
+fn fit_budget_to_python_number(budget_tokens: u64, max_tokens: &Value) -> Option<Recognized<u64>> {
+    let Some(max_tokens) = python_number(max_tokens) else {
+        return Some(Recognized::Known(budget_tokens));
+    };
+    if max_tokens <= ANTHROPIC_MIN_THINKING_BUDGET_TOKENS as f64 {
+        return None;
+    }
+    if (budget_tokens as f64) < max_tokens {
+        return Some(Recognized::Known(budget_tokens));
+    }
+    Some(Recognized::Unrecognized(
+        serde_json::Number::from_f64(max_tokens - 1.0)
+            .map_or_else(|| Value::String(raw_json::encode("NaN")), Value::Number),
+    ))
 }
 
 fn known_thinking(request: &MessagesRequest) -> Option<&ThinkingConfig> {
@@ -203,10 +236,10 @@ fn translate_reasoning_effort(
             ..request
         });
     }
-    let Some(budget) = fit_budget_to_max_tokens(budget, request.params.max_tokens) else {
+    let Some(budget) = fit_budget_to_max_tokens(budget, request.params.max_tokens.as_ref()) else {
         return Ok(request);
     };
-    let enabled = ThinkingConfig::enabled(budget);
+    let enabled = enabled_thinking(budget);
     Ok(MessagesRequest {
         params: MessagesOptionalParams {
             thinking: Some(
@@ -399,8 +432,10 @@ fn translate_adaptive_effort_for_non_adaptive_model(
     Ok(MessagesRequest {
         params: MessagesOptionalParams {
             thinking: budget
-                .and_then(|budget| fit_budget_to_max_tokens(budget, request.params.max_tokens))
-                .map(|budget| Recognized::Known(ThinkingConfig::enabled(budget))),
+                .and_then(|budget| {
+                    fit_budget_to_max_tokens(budget, request.params.max_tokens.as_ref())
+                })
+                .map(|budget| Recognized::Known(enabled_thinking(budget))),
             output_config: without_effort(request.params.output_config),
             ..request.params
         },
@@ -418,7 +453,8 @@ fn drop_incompatible_temperature_for_thinking(
     let pinned = request
         .params
         .temperature
-        .is_some_and(|temperature| temperature != 1.0);
+        .as_ref()
+        .is_some_and(|temperature| !is_one(temperature));
     let thinking_enabled = matches!(known_thinking(&request), Some(ThinkingConfig::Enabled(_)));
     let effort_enabled = known_effort(&request).is_some();
     if !pinned || !(thinking_enabled || effort_enabled) {
