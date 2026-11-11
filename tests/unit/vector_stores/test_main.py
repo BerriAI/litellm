@@ -7,6 +7,8 @@ executor, and it must never leak into litellm_params/kwargs where logging would
 model_dump() it (the #19550 serialization trap).
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import time
@@ -17,6 +19,8 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+import requests_mock as requests_mock_lib
+import respx
 
 import litellm
 import litellm.vector_stores.main as vector_stores_main
@@ -260,8 +264,8 @@ async def test_concurrent_vertex_searches_with_the_same_credentials_fetch_one_go
     api_type: str,
     search_method: str,
     search_response: dict[str, object],
-    respx_mock,
-    requests_mock,
+    respx_mock: respx.MockRouter,
+    requests_mock: requests_mock_lib.Mocker,
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -274,7 +278,9 @@ async def test_concurrent_vertex_searches_with_the_same_credentials_fetch_one_go
         }
     )
 
-    def slow_token_response(request, context) -> dict[str, object]:
+    def slow_token_response(
+        request: requests_mock_lib.Request, context: requests_mock_lib.Context
+    ) -> dict[str, object]:
         time.sleep(0.2)
         return {"access_token": "ya29.unit-token", "expires_in": 3600, "token_type": "Bearer"}
 
