@@ -1890,9 +1890,10 @@ async def _calls_the_entries_run(
     [
         ({"team": "litellm_proxy/mcp/team-toolset", "docs": "litellm_proxy/mcp/docs"}, "team", ("calc-add",)),
         ({"team": "litellm_proxy/mcp/team-toolset", "docs": "litellm_proxy/mcp/docs"}, "docs", ()),
+        ({"team": "litellm_proxy/mcp/team-toolset", "wiki": "litellm_proxy/mcp/wiki"}, "wiki", ("calc-add",)),
         ({"team": "litellm_proxy/mcp/team-toolset", "other": "litellm_proxy/mcp/other-toolset"}, "other", ()),
     ],
-    ids=["granted_toolset", "server_beside_a_toolset", "ungranted_toolset"],
+    ids=["granted_toolset", "server_beside_a_toolset", "held_access_group_beside_a_toolset", "ungranted_toolset"],
 )
 async def test_an_mcp_entry_allows_only_the_tools_its_labels_toolset_or_server_serves(
     monkeypatch: pytest.MonkeyPatch,
