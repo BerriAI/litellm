@@ -209,16 +209,30 @@ def test_search_rejects_an_invalid_query_image_without_echoing_its_data():
     assert image_data not in str(exc_info.value)
 
 
-def test_search_rejects_query_image_data_that_is_not_base64():
+@pytest.mark.parametrize("data", ["not base64!", "/9j/4AAQ SkZJRg==", "/9j/4AAQ\tSkZJRg=="])
+def test_search_rejects_query_image_data_that_is_not_base64(data: str):
     with pytest.raises(litellm.BadRequestError) as exc_info:
         _search_with_recorded_post(
             custom_llm_provider="bedrock",
-            query_image={"type": "base64", "media_type": "image/jpeg", "data": "not base64!"},
+            query_image={"type": "base64", "media_type": "image/jpeg", "data": data},
         )
 
     assert exc_info.value.status_code == 400
     assert "query_image.data: not valid base64" in str(exc_info.value)
-    assert "not base64!" not in str(exc_info.value)
+    assert data not in str(exc_info.value)
+
+
+@pytest.mark.parametrize("line_break", ["\n", "\r\n"])
+def test_search_sends_line_wrapped_query_image_data_to_bedrock_as_sent(line_break: str):
+    data: Final = line_break.join(("/9j/4AAQ", "SkZJRg=="))
+
+    client: Final = _search_with_recorded_post(
+        custom_llm_provider="bedrock",
+        query_image={"type": "base64", "media_type": "image/jpeg", "data": data},
+    )
+
+    posted: Final = json.loads(client.post.call_args.kwargs["data"])
+    assert posted["retrievalQuery"]["image"]["inlineContent"] == data
 
 
 def test_search_by_a_query_image_sent_in_extra_body_sends_a_bedrock_image_retrieval_query():
