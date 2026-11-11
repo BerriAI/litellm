@@ -5,7 +5,7 @@ Dynamic configuration class generator for JSON-based providers.
 from collections.abc import Callable, Coroutine, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal, overload
 
-from pydantic import JsonValue, TypeAdapter
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
@@ -33,6 +33,26 @@ _SCHEMA_MAP_KEYWORDS: Final = frozenset({"properties", "patternProperties", "$de
 
 if TYPE_CHECKING:
     from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
+
+_PAID_SEARCH_TOOLS: Final = frozenset({"web_search", "web_search_image", "image_search"})
+_PAYLOAD_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_TOOL_USAGE_ADAPTER: Final[TypeAdapter[Mapping[str, int]]] = TypeAdapter(Mapping[str, int])
+
+
+def web_search_requests_from_tool_usage(payload: object) -> int | None:
+    """
+    Billable search calls in a parsed OpenAI-compatible chat response whose usage carries a
+    tool_usage {tool_name: count} map, as EmpirioLabs reports built-in tool invocations.
+    Free tools (code_interpreter, web_extractor) are not counted.
+    """
+    try:
+        body: Final = _PAYLOAD_ADAPTER.validate_python(payload)
+        usage: Final = _PAYLOAD_ADAPTER.validate_python(body.get("usage"))
+        tool_usage: Final = _TOOL_USAGE_ADAPTER.validate_python(usage.get("tool_usage"), strict=True)
+    except ValidationError:
+        return None
+    calls: Final = sum(count for tool, count in tool_usage.items() if tool in _PAID_SEARCH_TOOLS and count > 0)
+    return calls if calls > 0 else None
 
 
 def _with_file_parts_as_image_url(message: AllMessageValues) -> AllMessageValues:
@@ -110,6 +130,9 @@ def create_config_class(provider: SimpleProviderConfig):
     base_class: Final[type] = OpenAIGPTConfig if provider.base_class == "openai_gpt" else OpenAILikeChatConfig
 
     class JSONProviderConfig(base_class):
+        def _flattens_content_lists(self) -> bool:
+            return bool(provider.special_handling.get("convert_content_list_to_string"))
+
         @overload
         def _transform_messages(
             self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
@@ -130,7 +153,7 @@ def create_config_class(provider: SimpleProviderConfig):
 
             content_flattened: Final = (
                 handle_messages_with_content_list_to_str_conversion(messages)
-                if provider.special_handling.get("convert_content_list_to_string")
+                if self._flattens_content_lists()
                 else messages
             )
             transformed: Final = (
@@ -294,6 +317,25 @@ def create_config_class(provider: SimpleProviderConfig):
                 optional_params["temperature"] = temp
 
             return optional_params
+
+        def transform_parsed_response_dict(
+            self,
+            parsed_response: dict[str, object],  # mutable-ok: BaseConfig signature
+        ) -> dict[str, object]:  # mutable-ok: BaseConfig signature
+            """
+            Carry the provider's usage.tool_usage search count as usage.server_tool_use.web_search_requests,
+            the field the built-in tool cost path bills per call.
+            """
+            repaired: Final = _PAYLOAD_ADAPTER.validate_python(
+                super().transform_parsed_response_dict(parsed_response)  # pyright: ignore[reportUnknownMemberType]  # base_class is picked at runtime
+            )
+            if not provider.special_handling.get("web_search_requests_from_tool_usage"):
+                return {**repaired}
+            web_search_requests: Final = web_search_requests_from_tool_usage(repaired)
+            if web_search_requests is None:
+                return {**repaired}
+            usage: Final = _PAYLOAD_ADAPTER.validate_python(repaired["usage"])
+            return {**repaired, "usage": {**usage, "server_tool_use": {"web_search_requests": web_search_requests}}}
 
         @property
         def custom_llm_provider(self) -> str | None:

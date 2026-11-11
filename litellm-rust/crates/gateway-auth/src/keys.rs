@@ -1,6 +1,6 @@
 use std::{future::Future, pin::Pin, time::SystemTime};
 
-use litellm_auth_types::SecretValue;
+use litellm_secret_value::SecretValue;
 
 use crate::{Error, hash_token};
 

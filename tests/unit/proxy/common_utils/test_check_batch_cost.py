@@ -24,12 +24,12 @@ import httpx
 import pytest
 import respx
 from fastapi import HTTPException
+from litellm_enterprise.proxy.common_utils.check_batch_cost import GIVE_UP_POLLING_AFTER
 
 import litellm
 from litellm.constants import MANAGED_OBJECT_STALENESS_CUTOFF_DAYS
 from litellm.types.router import LiteLLM_Params
 from litellm.types.utils import LiteLLMBatch
-from litellm_enterprise.proxy.common_utils.check_batch_cost import GIVE_UP_POLLING_AFTER
 
 if TYPE_CHECKING:
     from litellm.batches.batch_utils import BatchCostUsageResult
@@ -254,7 +254,6 @@ class TestCheckBatchCost:
     @pytest.mark.asyncio
     async def test_column_absence_cached_across_cycles(self, check_batch_cost_instance, mock_prisma_client):
         """After column absence is discovered, subsequent cycles skip the primary query entirely."""
-        from litellm.constants import MAX_OBJECTS_PER_POLL_CYCLE
 
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=1)
         # Simulate column already known absent from a previous cycle
@@ -363,17 +362,19 @@ class TestCheckBatchCost:
         assert update_data["status"] == "complete"
 
     @pytest.mark.asyncio
-    async def test_output_fetch_passes_deployment_credentials_as_trusted_snapshot(
-        self, check_batch_cost_instance, mock_prisma_client, mock_llm_router
+    async def test_output_fetch_reads_from_the_deployment_bucket(
+        self, check_batch_cost_instance, mock_prisma_client, mock_llm_router, monkeypatch
     ):
-        """Bedrock resolves the output bucket ONLY from the immutable snapshot kwarg.
+        """Without the deployment's s3_bucket_name the cost poller cannot read a Bedrock
+        batch's output file, and every completed Bedrock batch stays unbilled."""
+        import httpx
 
-        Spreading the credentials as plain kwargs is not enough: get_litellm_params drops
-        s3_bucket_name, so without _litellm_internal_model_credentials the cost poller
-        cannot read the output file and every completed Bedrock batch stays unbilled.
-        """
-        from types import MappingProxyType
-        from unittest.mock import patch
+        import litellm
+
+        monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+        monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
 
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=1)
         mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
@@ -387,7 +388,7 @@ class TestCheckBatchCost:
 
         mock_response = MagicMock()
         mock_response.status = "completed"
-        mock_response.output_file_id = "file-output-123"
+        mock_response.output_file_id = "s3://configured-batch-bucket/litellm-batch-outputs/job-1/input.jsonl.out"
         mock_response.model_dump_json.return_value = '{"id":"batch-1","status":"completed"}'
 
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
@@ -396,6 +397,8 @@ class TestCheckBatchCost:
                 "custom_llm_provider": "bedrock",
                 "s3_bucket_name": "configured-batch-bucket",
                 "aws_region_name": "us-east-1",
+                "aws_access_key_id": "AKIAEXAMPLE",
+                "aws_secret_access_key": "secret",
             }
         )
 
@@ -405,12 +408,10 @@ class TestCheckBatchCost:
         mock_deployment.model_info.model_dump.return_value = {}
         mock_llm_router.registry.return_value.deployment = MagicMock(return_value=mock_deployment)
 
-        mock_file_content = MagicMock()
-        mock_file_content.content = b'{"recordId":"req-1"}'
-
         decoded_id = "llm_model_id,model-123;llm_batch_id,batch-456;"
 
         with (
+            respx.mock(assert_all_called=False) as s3,
             patch(
                 "litellm.proxy.openai_files_endpoints.common_utils._is_base64_encoded_unified_file_id",
                 side_effect=[decoded_id, None],
@@ -423,11 +424,6 @@ class TestCheckBatchCost:
                 "litellm.proxy.openai_files_endpoints.common_utils.get_batch_id_from_unified_batch_id",
                 return_value="batch-456",
             ),
-            patch(
-                "litellm.files.main.afile_content",
-                new_callable=AsyncMock,
-                return_value=mock_file_content,
-            ) as mock_afile_content,
             patch(
                 "litellm.batches.batch_utils.get_file_content_as_dictionary",
                 return_value=[{"recordId": "req-1"}],
@@ -448,17 +444,15 @@ class TestCheckBatchCost:
             mock_logging_obj = MagicMock()
             mock_logging_obj.async_success_handler = AsyncMock()
             mock_logging_cls.return_value = mock_logging_obj
+            s3.get(url__regex=r"^https://s3\.us-east-1\.amazonaws\.com/").mock(
+                return_value=httpx.Response(200, content=b'{"recordId":"req-1"}')
+            )
 
             await check_batch_cost_instance.check_batch_cost()
 
-        mock_afile_content.assert_awaited()
-        passed_kwargs = mock_afile_content.await_args[1]
-        snapshot = passed_kwargs.get("_litellm_internal_model_credentials")
-        assert snapshot is not None, "cost poller must pass the trusted credential snapshot"
-        assert isinstance(snapshot, MappingProxyType), (
-            "snapshot must be a MappingProxyType; a plain dict is rejected by get_configured_s3_bucket_name"
-        )
-        assert snapshot["s3_bucket_name"] == "configured-batch-bucket"
+            assert [str(call.request.url) for call in s3.calls] == [
+                "https://s3.us-east-1.amazonaws.com/configured-batch-bucket/litellm-batch-outputs/job-1/input.jsonl.out"
+            ]
 
     @pytest.mark.asyncio
     async def test_poller_prices_with_deployment_registered_batch_rates(
@@ -1771,6 +1765,53 @@ class TestUnmanagedVertexRouting:
 
         assert result == ("deploy-ft", "8823717160934178816")
 
+    def _two_team_deployments(self):
+        """Two Vertex deployments sharing the base model, team A listed first."""
+        return [
+            {
+                "model_name": f"gemini-2.5-flash-team-{team}",
+                "litellm_params": {"model": "vertex_ai/gemini-2.5-flash", "custom_llm_provider": "vertex_ai"},
+                "model_info": {"id": f"deploy-team-{team}"},
+            }
+            for team in ("a", "b")
+        ]
+
+    def test_flag_on_prefers_the_deployment_stored_on_the_row_over_the_first_base_model_match(self):
+        """Regression (LIT-10326): two deployments share gemini-2.5-flash with different
+        buckets. A batch created on team B's deployment stores deploy-team-b in file_object,
+        so the poller must read it back through team B, not the first match (team A)."""
+        router: Final = MagicMock()
+        router.registry.return_value.resolve.return_value = None
+        router.registry.return_value.deployments.return_value = self._two_team_deployments()
+        router.registry.return_value.deployment = MagicMock(return_value=self._vertex_deployment())
+        instance: Final = self._instance(track_unmanaged=True, router=router)
+        job: Final = self._job(
+            file_object=json.dumps({**json.loads(_unmanaged_vertex_file_object()), "model_id": "deploy-team-b"})
+        )
+
+        with patch(_IS_B64, return_value=False):
+            result: Final = instance._resolve_job_routing(job, MagicMock())
+
+        assert result == ("deploy-team-b", "8823717160934178816")
+        router.registry.return_value.deployment.assert_called_once_with("deploy-team-b")
+
+    def test_flag_on_falls_back_to_base_model_match_when_the_stored_deployment_is_gone(self):
+        """The stored deployment was removed from the config after the batch was created:
+        the row still routes through today's base-model lookup instead of being skipped."""
+        router: Final = MagicMock()
+        router.registry.return_value.resolve.return_value = None
+        router.registry.return_value.deployments.return_value = self._two_team_deployments()
+        router.registry.return_value.deployment = MagicMock(return_value=None)
+        instance: Final = self._instance(track_unmanaged=True, router=router)
+        job: Final = self._job(
+            file_object=json.dumps({**json.loads(_unmanaged_vertex_file_object()), "model_id": "deploy-removed"})
+        )
+
+        with patch(_IS_B64, return_value=False):
+            result: Final = instance._resolve_job_routing(job, MagicMock())
+
+        assert result == ("deploy-team-a", "8823717160934178816")
+
     def test_flag_on_skips_non_vertex_deployment_sharing_model_group(self):
         """Flag on, but the only deployment for the model group is a non-vertex_ai
         provider: must not be selected, even though the model group name matches."""
@@ -2256,6 +2297,10 @@ class TestManagedOutputFileIdEncodesPublicModelGroup:
         return job
 
     async def _run(self, job: MagicMock) -> str:
+        output_file_id, _ = await self._run_capturing(job, self._RAW_OUTPUT_FILE_ID)
+        return output_file_id
+
+    async def _run_capturing(self, job: MagicMock, raw_output_file_id: str) -> tuple[str, Mapping[str, object]]:
         from litellm_enterprise.proxy.common_utils.check_batch_cost import (
             CheckBatchCost,
         )
@@ -2301,7 +2346,7 @@ class TestManagedOutputFileIdEncodesPublicModelGroup:
             object="batch",
             status="completed",
         )
-        response.output_file_id = self._RAW_OUTPUT_FILE_ID
+        response.output_file_id = raw_output_file_id
 
         file_content = MagicMock()
         file_content.content = b'{"id":"req-1"}'
@@ -2311,7 +2356,7 @@ class TestManagedOutputFileIdEncodesPublicModelGroup:
                 "litellm.files.main.afile_content",
                 new_callable=AsyncMock,
                 return_value=file_content,
-            ),
+            ) as provider_file_content,
             patch(
                 "litellm.batches.batch_utils.get_file_content_as_dictionary",
                 return_value=[{"id": "req-1"}],
@@ -2335,13 +2380,23 @@ class TestManagedOutputFileIdEncodesPublicModelGroup:
                 prom_logger=None,
             )
 
-        return response.output_file_id
+        return response.output_file_id, provider_file_content.call_args.kwargs
+
+    @pytest.mark.asyncio
+    async def test_output_written_to_a_team_bucket_is_billed_from_that_bucket(self):
+        team_output: Final = "s3://team-a-bucket/litellm-batch-outputs/job-1/input.jsonl.out"
+
+        _, download = await self._run_capturing(
+            self._job(self._managed_input_file_id(self._PUBLIC_MODEL_GROUP)), team_output
+        )
+
+        assert (download["file_id"], download["stored_s3_bucket_name"]) == (team_output, "team-a-bucket")
 
     @pytest.mark.asyncio
     async def test_target_model_names_comes_from_input_file_not_provider_model(self):
         from litellm.proxy.openai_files_endpoints.common_utils import (
-            is_base64_encoded_unified_file_id,
             get_models_from_unified_file_id,
+            is_base64_encoded_unified_file_id,
         )
 
         output_file_id = await self._run(self._job(self._managed_input_file_id(self._PUBLIC_MODEL_GROUP)))
@@ -2375,8 +2430,8 @@ class TestManagedOutputFileIdEncodesPublicModelGroup:
     @pytest.mark.asyncio
     async def test_falls_back_to_deployment_model_group_without_managed_input_file(self):
         from litellm.proxy.openai_files_endpoints.common_utils import (
-            is_base64_encoded_unified_file_id,
             get_models_from_unified_file_id,
+            is_base64_encoded_unified_file_id,
         )
 
         output_file_id = await self._run(self._job("file-raw-provider-input"))
@@ -3262,7 +3317,9 @@ class TestMultiPodBatchCostClaim:
             patch(
                 "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
                 new_callable=AsyncMock,
-                return_value=_batch_cost_result(0.01, {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}, ["gpt-4"]),
+                return_value=_batch_cost_result(
+                    0.01, {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}, ["gpt-4"]
+                ),
             ),
             patch(
                 "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
@@ -3276,21 +3333,25 @@ class TestMultiPodBatchCostClaim:
     @pytest.mark.parametrize("failure_phase", ("before_write", "after_write", "external"))
     @pytest.mark.parametrize("collector_enabled", (False, True))
     async def test_builtin_accounting_retries_only_before_a_possible_charge(
-        self, failure_phase: str, collector_enabled: bool
+        self, failure_phase: str, collector_enabled: bool, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         import base64
+
+        from litellm.proxy import proxy_server
+
+        monkeypatch.setitem(proxy_server.general_settings, "use_spend_logs_ledger", False)
         from datetime import datetime
 
         import httpx
-        import litellm
         import respx
 
+        import litellm
         from litellm.caching.caching import DualCache
         from litellm.integrations.custom_logger import CustomLogger
-        from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
         from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
         from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
         from litellm.proxy.utils import PrismaClient
+        from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
         from litellm.types.utils import SpecialEnums
 
@@ -3336,6 +3397,14 @@ class TestMultiPodBatchCostClaim:
             database_url="postgresql://unused:unused@localhost:5432/unused", proxy_logging_obj=dependency
         )
         create_spend_rows: Final = AsyncMock(return_value=1)
+        from litellm.proxy.db.prisma_client import PrismaWrapper
+
+        spend_prisma.db = PrismaWrapper(
+            original_prisma=MagicMock(
+                query_raw=AsyncMock(return_value=[]),
+                litellm_spendlogs=MagicMock(create_many=create_spend_rows),
+            )
+        )
         input_rate: Final = 0.000002
         litellm.register_model(
             {
@@ -3387,11 +3456,6 @@ class TestMultiPodBatchCostClaim:
             respx.mock,
             patch("litellm.proxy.proxy_server.proxy_logging_obj", dependency),
             patch("litellm.proxy.proxy_server.prisma_client", spend_prisma),
-            patch.object(
-                spend_prisma.writer_db._original_prisma,
-                "litellm_spendlogs",
-                MagicMock(create_many=create_spend_rows),
-            ),
         ):
             respx.get(f"https://api.openai.com/v1/files/{_CLAIM_OUTPUT_FILE_ID}/content").mock(
                 return_value=httpx.Response(200, content=content)
@@ -3436,9 +3500,9 @@ class TestMultiPodBatchCostClaim:
         from datetime import datetime
 
         import httpx
-        import litellm
         import respx
 
+        import litellm
         from litellm.integrations.custom_logger import CustomLogger
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
         from litellm.types.utils import LiteLLMBatch, SpecialEnums
@@ -3540,9 +3604,9 @@ class TestMultiPodBatchCostClaim:
         import base64
 
         import httpx
-        import litellm
         import respx
 
+        import litellm
         from litellm.integrations.custom_logger import CustomLogger
         from litellm.types.utils import SpecialEnums
 
@@ -4376,8 +4440,9 @@ class TestBatchLineItemsFromThePoller:
 
     @pytest.mark.asyncio
     async def test_a_batch_bigger_than_one_part_reaches_the_callbacks_as_numbered_parts(self, monkeypatch):
-        import litellm
         from litellm_enterprise.proxy.common_utils import check_batch_cost
+
+        import litellm
 
         journal: list = []
         _, instance = self._setup(journal)
@@ -4886,8 +4951,9 @@ async def test_failed_retirement_keeps_batch_available() -> None:
 @pytest.mark.parametrize("resource_id", ("batch-123", "file-123", "gs://bucket/job/predictions.jsonl"))
 @pytest.mark.parametrize("other_id", ("{id}4", "prefix-{id}", "{id}/child", "{id}.backup", "{id}?generation=2"))
 def test_another_resource_in_a_404_is_not_permanent_loss(resource_id: str, other_id: str) -> None:
-    from litellm.exceptions import NotFoundError
     from litellm_enterprise.proxy.common_utils.check_batch_cost import CheckBatchCost
+
+    from litellm.exceptions import NotFoundError
 
     error: Final = NotFoundError(
         message=f"No object found with id '{other_id.format(id=resource_id)}'.", model="test", llm_provider="openai"
@@ -4911,8 +4977,9 @@ def test_another_resource_in_a_404_is_not_permanent_loss(resource_id: str, other
     ),
 )
 def test_a_404_naming_the_exact_resource_is_permanent_loss(resource_id: str, message: str) -> None:
-    from litellm.exceptions import NotFoundError
     from litellm_enterprise.proxy.common_utils.check_batch_cost import CheckBatchCost
+
+    from litellm.exceptions import NotFoundError
 
     error: Final = NotFoundError(message=message.format(id=resource_id), model="test", llm_provider="openai")
     assert CheckBatchCost._is_batch_gone_at_provider(error, resource_id) is True
@@ -4923,8 +4990,9 @@ def test_a_404_naming_the_exact_resource_is_permanent_loss(resource_id: str, mes
     ("missing_key", "gone"), (("out/job-123/input.jsonl.out", True), ("out/job-123/other.jsonl.out", False))
 )
 def test_an_s3_no_such_key_for_the_output_object_is_permanent_loss(missing_key: str, gone: bool) -> None:
-    from litellm.llms.bedrock.common_utils import BedrockError
     from litellm_enterprise.proxy.common_utils.check_batch_cost import CheckBatchCost
+
+    from litellm.llms.bedrock.common_utils import BedrockError
 
     # S3 GetObject 404 body shape, checked live against a missing key on 2026-10-20
     error: Final = BedrockError(
@@ -4938,8 +5006,9 @@ def test_an_s3_no_such_key_for_the_output_object_is_permanent_loss(missing_key: 
 
 @pytest.mark.parametrize("output_file_id", (None, ""))
 def test_a_404_without_an_output_identity_remains_retryable(output_file_id: str | None) -> None:
-    from litellm.exceptions import NotFoundError
     from litellm_enterprise.proxy.common_utils.check_batch_cost import CheckBatchCost
+
+    from litellm.exceptions import NotFoundError
 
     error: Final = NotFoundError(message="Output file not found", model="test", llm_provider="openai")
     assert CheckBatchCost._is_output_file_gone_at_provider(error, output_file_id) is False
@@ -4956,11 +5025,12 @@ async def test_batch_cost_reaches_configured_success_callbacks(
     initialized: bool,
     claimed: bool,
 ) -> None:
+    from litellm_enterprise.proxy.common_utils.check_batch_cost import CheckBatchCost
+
     import litellm
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
     from litellm.types.utils import LiteLLMBatch
-    from litellm_enterprise.proxy.common_utils.check_batch_cost import CheckBatchCost
 
     events: Final[SimpleQueue[tuple[str, object, int, int]]] = SimpleQueue()
 

@@ -68,10 +68,11 @@ async fn azure_handler_reads_missing_and_failed_secrets() {
 async fn successful_azure_responses_do_not_fall_back_when_the_value_is_empty_or_null(
     #[case] body: serde_json::Value,
 ) {
+    use litellm_secret_value::SecretValue;
     use litellm_secrets::{
-        OidcResolver, SecretManager, SecretManagerState, SecretResolver, SecretValue,
-        azure::AzureKeyVault,
+        OidcResolver, SecretManager, SecretManagerState, SecretResolver, azure::AzureKeyVault,
     };
+
     use std::sync::Arc;
     use wiremock::{Mock, MockServer, ResponseTemplate, matchers::any};
     let server = MockServer::start().await;

@@ -9,8 +9,9 @@ use std::sync::Arc;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_core_utils::settings::Lookup;
+use litellm_secret_value::SecretValue;
 use litellm_secrets::{
-    KeyManagementSettings, SecretManager, SecretValue,
+    KeyManagementSettings, SecretManager,
     aws::AwsSecretsManagerV2,
     azure::AzureKeyVault,
     cyberark::CyberArkSecretManager,
@@ -18,6 +19,7 @@ use litellm_secrets::{
     google::GoogleSecretManager,
     hashicorp::{HashicorpVault, HashicorpVaultConfig},
 };
+
 use rstest::rstest;
 use serde_json::json;
 use wiremock::{
