@@ -87,6 +87,10 @@ pub struct RouterRequest {
     /// `model_info.mode: batch`, the Azure deployments that are not are skipped
     /// (`without_deployments_that_cannot_batch`).
     pub batch_create: bool,
+    /// A batch file upload: the batch create's narrowing also holds while those batch deployments
+    /// cool down, are paused, or fail their health check, so the file never lands on a deployment
+    /// that cannot run its batch.
+    pub batch_upload: bool,
     /// An embedding pick: the host keeps the candidates whose `max_embedding_batch_size` admits
     /// the input (`deployments_admitting_embedding_batch`).
     pub embedding_batch: bool,

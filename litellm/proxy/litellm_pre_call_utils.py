@@ -14,7 +14,6 @@ from typing import (
     Any,
     Final,
     Literal,
-    Protocol,
     TypeAlias,
     cast,  # noqa: TID251  # narrows untyped deployment and credential payloads
 )
@@ -57,7 +56,6 @@ from litellm.litellm_core_utils.core_helpers import (
     attribute_or_none,
     is_codex_user_agent,
     normalize_drop_params,
-    require_attributes,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
@@ -325,6 +323,7 @@ def sanitize_for_log(value: object) -> str:
     return _sanitize_for_log(value)
 
 
+from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.router import Router
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES, STREAM_USAGE_INJECTED_FIELD
@@ -3604,12 +3603,8 @@ def _warn_stale_team_alias_once(warning_key: str, message: str, *args: str) -> N
     verbose_proxy_logger.warning(message, *args)
 
 
-class _SupportsStartswith(Protocol):
-    def startswith(self, prefix: str, /) -> bool: ...
-
-
 def _update_model_if_team_alias_exists(
-    data: dict,
+    data: dict[str, object],  # mutable-ok: request preparation rewrites the body model in place
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
     """
@@ -3634,63 +3629,91 @@ def _update_model_if_team_alias_exists(
     Keeping the requested model name lets it resolve against the deployments that still
     exist (e.g. a gateway-level model group shared with the team).
     """
-    _model: Final = data.get("model")
-    team_model_aliases: Final = as_str_mapping(user_api_key_dict.team_model_aliases)
-    if not _model or not team_model_aliases or _model not in team_model_aliases:
-        return
-
     from litellm.proxy.proxy_server import llm_router
 
-    # Skip alias rewrite if this model resolves to team-specific deployments
-    # (team models use team_public_model_name, not model_aliases)
-    aliased_target: Final = team_model_aliases[_model]
+    rewrite: Final = _team_alias_rewrite(data.get("model"), user_api_key_dict, llm_router)
+    if rewrite.warning is not None:
+        _warn_stale_team_alias_once(rewrite.warning.key, rewrite.warning.message, *rewrite.warning.args)
+    if rewrite.target is not None:
+        data["model"] = rewrite.target
 
-    # Optional bypass for stale aliases from pre-PR deployments:
-    # only enabled via feature flag to preserve backwards compatibility.
-    # Cached at module level to avoid hot-path secret lookups on every request.
-    global _ENABLE_TEAM_STALE_ALIAS_BYPASS
-    if _ENABLE_TEAM_STALE_ALIAS_BYPASS is None:
-        _ENABLE_TEAM_STALE_ALIAS_BYPASS = get_secret_bool("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", False)
-    enable_stale_alias_bypass: Final = _ENABLE_TEAM_STALE_ALIAS_BYPASS
-    # Check if the alias points to a team-scoped UUID name
-    # (format: "model_name_{team_id}_{uuid}")
-    is_stale_team_alias: Final = require_attributes(aliased_target, _SupportsStartswith, "startswith").startswith(
-        f"model_name_{user_api_key_dict.team_id}_"
-    )
-    if is_stale_team_alias and llm_router:
-        if aliased_target not in llm_router.registry().index("model_name"):
-            _warn_stale_team_alias_once(
-                f"deleted:{user_api_key_dict.team_id}:{_model}:{aliased_target}",
+
+@dataclass(frozen=True, slots=True)
+class _StaleTeamAliasWarning:
+    key: str
+    message: str
+    args: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _TeamAliasRewrite:
+    target: str | None
+    warning: _StaleTeamAliasWarning | None = None
+
+
+_NO_TEAM_ALIAS_REWRITE: Final = _TeamAliasRewrite(target=None)
+
+
+def team_alias_target(model: object, user_api_key_dict: UserAPIKeyAuth, llm_router: Router | None) -> str | None:
+    return _team_alias_rewrite(model, user_api_key_dict, llm_router).target
+
+
+def _team_alias_rewrite(
+    model: object, user_api_key_dict: UserAPIKeyAuth, llm_router: Router | None
+) -> _TeamAliasRewrite:
+    team_model_aliases: Final = as_str_mapping(user_api_key_dict.team_model_aliases)
+    if not isinstance(model, str) or not model or not team_model_aliases or model not in team_model_aliases:
+        return _NO_TEAM_ALIAS_REWRITE
+    aliased_target: Final = team_model_aliases[model]
+    if not isinstance(aliased_target, str):
+        return _NO_TEAM_ALIAS_REWRITE
+    is_stale_team_alias: Final = aliased_target.startswith(f"model_name_{user_api_key_dict.team_id}_")
+    if not is_stale_team_alias or not llm_router:
+        return _TeamAliasRewrite(target=aliased_target)
+    if aliased_target not in llm_router.registry().index("model_name"):
+        return _TeamAliasRewrite(
+            target=None,
+            warning=_StaleTeamAliasWarning(
+                f"deleted:{user_api_key_dict.team_id}:{model}:{aliased_target}",
                 "Team model alias for model='%s', team_id='%s' targets '%s', which has no live "
                 "deployment. Routing with the requested model name instead; remove the stale "
                 "entry from the team's model_aliases to silence this warning.",
-                _sanitize_for_log(_model),
-                _sanitize_for_log(user_api_key_dict.team_id),
-                _sanitize_for_log(aliased_target),
-            )
-            return
-        # This is a stale alias from pre-PR deployments.
-        # Check if current team deployments exist for the public name.
-        key: Final = (user_api_key_dict.team_id, _model)
-        if key in llm_router.registry().index("team_model"):
-            if enable_stale_alias_bypass:
-                # Team deployments exist; skip stale alias
-                return
-            _warn_stale_team_alias_once(
-                f"{user_api_key_dict.team_id}:{_model}:{aliased_target}",
-                "Stale team model alias detected for model='%s', team_id='%s'. "
-                "New sibling deployments may be unreachable. "
-                "Set LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS=true to enable "
-                "team-scoped sibling routing.",
-                _sanitize_for_log(_model),
-                _sanitize_for_log(user_api_key_dict.team_id),
-            )
+                (
+                    _sanitize_for_log(model),
+                    _sanitize_for_log(user_api_key_dict.team_id),
+                    _sanitize_for_log(aliased_target),
+                ),
+            ),
+        )
+    if (user_api_key_dict.team_id, model) not in llm_router.registry().index("team_model"):
+        return _TeamAliasRewrite(target=aliased_target)
+    if _stale_team_alias_bypass_enabled():
+        return _NO_TEAM_ALIAS_REWRITE
+    return _TeamAliasRewrite(
+        target=aliased_target,
+        warning=_StaleTeamAliasWarning(
+            f"{user_api_key_dict.team_id}:{model}:{aliased_target}",
+            "Stale team model alias detected for model='%s', team_id='%s'. "
+            "New sibling deployments may be unreachable. "
+            "Set LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS=true to enable "
+            "team-scoped sibling routing.",
+            (_sanitize_for_log(model), _sanitize_for_log(user_api_key_dict.team_id)),
+        ),
+    )
 
-    data["model"] = aliased_target
+
+def _stale_team_alias_bypass_enabled() -> bool:
+    global _ENABLE_TEAM_STALE_ALIAS_BYPASS
+    cached: Final = _ENABLE_TEAM_STALE_ALIAS_BYPASS
+    if cached is not None:
+        return cached
+    enabled: Final = get_secret_bool("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", False) is True
+    _ENABLE_TEAM_STALE_ALIAS_BYPASS = enabled
+    return enabled
 
 
 def _update_model_if_key_alias_exists(
-    data: dict,
+    data: dict[str, object],  # mutable-ok: request preparation rewrites the body model in place
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
     """
@@ -3705,14 +3728,45 @@ def _update_model_if_key_alias_exists(
         }
         - requested_model = "xai/grok-4-fast-non-reasoning"
     """
-    _model: Final = data.get("model")
-    if (
-        _model
-        and user_api_key_dict.aliases
-        and isinstance(user_api_key_dict.aliases, dict)
-        and _model in user_api_key_dict.aliases
-    ):
-        data["model"] = user_api_key_dict.aliases[_model]
+    requested: Final = data.get("model")
+    if isinstance(requested, str):
+        data["model"] = key_alias_target(requested, user_api_key_dict)
+
+
+def key_alias_target(model: str, user_api_key_dict: UserAPIKeyAuth) -> str:
+    from litellm.proxy.auth.auth_checks import (  # noqa: PLC0415  # auth checks import request preparation
+        key_model_aliases_for_auth_check,
+    )
+
+    key_aliases: Final = key_model_aliases_for_auth_check(user_api_key_dict)
+    return key_aliases.get(model, model) if key_aliases else model
+
+
+def caller_alias_target(model: str, user_api_key_dict: UserAPIKeyAuth, llm_router: Router | None) -> str:
+    """The model `add_litellm_data_to_request` leaves after the team's and then the key's aliases."""
+    team_target: Final = team_alias_target(model, user_api_key_dict, llm_router)
+    return key_alias_target(team_target if team_target is not None else model, user_api_key_dict)
+
+
+def global_then_key_alias_target(model: str, user_api_key_dict: UserAPIKeyAuth) -> str:
+    """The model `common_processing_pre_call_logic` leaves after the global `model_alias_map` and then the
+    key's aliases, ahead of the key's or team's `router_settings.model_group_alias`."""
+    return key_alias_target(litellm.model_alias_map.get(model, model), user_api_key_dict)
+
+
+def pre_call_served_model(model: str, user_api_key_dict: UserAPIKeyAuth, model_group_alias: object) -> str:
+    """The model group `common_processing_pre_call_logic` sends `model` to."""
+    prepared: Final = global_then_key_alias_target(model, user_api_key_dict)
+    return resolve_model_group_alias(model_group_alias, prepared) or prepared
+
+
+def request_served_model(
+    model: str, user_api_key_dict: UserAPIKeyAuth, model_group_alias: object, llm_router: Router | None
+) -> str:
+    """The model group a request whose body names `model` is sent to, through every alias rewrite."""
+    return pre_call_served_model(
+        caller_alias_target(model, user_api_key_dict, llm_router), user_api_key_dict, model_group_alias
+    )
 
 
 def _apply_credential_overrides_from_model_config(

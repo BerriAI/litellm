@@ -3411,6 +3411,75 @@ def test_the_refusal_names_each_cooled_deployment_some_cooldown_state_routes_the
     assert {deployment["model_id"] for deployment in refusal.value.cooldown_deployments or ()} == reachable
 
 
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+class TestMessageThreadNotFoundCooldown:
+    THREAD_NOT_FOUND_BODY: Final = (
+        '{"type":"error","error":{"type":"not_found_error","message":"No thread state was found for the '
+        'requested `previous_message_id`.","details":{"error_code":"thread_not_found"}}}'
+    )
+
+    @staticmethod
+    def _not_found(message: str) -> Exception:
+        return litellm.NotFoundError(
+            message=f"AnthropicException - {message}",
+            model="claude-opus-4-8",
+            llm_provider="anthropic",
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_stale_thread_404_leaves_the_deployment_out_of_cooldown(self) -> None:
+        model_id: Final = "anthropic-threads"
+        router: Final = _make_router(
+            model_list=[
+                {
+                    "model_name": "claude",
+                    "litellm_params": {"model": "anthropic/claude-opus-4-8", "api_key": "synthetic-key"},
+                    "model_info": {"id": model_id},
+                }
+            ],
+        )
+
+        result: Final = router.deployment_callback_on_failure(
+            kwargs={
+                "exception": self._not_found(self.THREAD_NOT_FOUND_BODY),
+                "litellm_params": {"model_info": {"id": model_id}},
+            },
+            completion_response=None,
+            start_time=0,
+            end_time=1,
+        )
+
+        assert result is False
+        assert get_cooldown_deployments(RoutingContext(router), parent_otel_span=None) == []
+
+    @pytest.mark.asyncio
+    async def test_a_404_without_the_thread_code_still_cools_the_deployment_down(self) -> None:
+        model_id: Final = "anthropic-missing-model"
+        router: Final = _make_router(
+            model_list=[
+                {
+                    "model_name": "claude",
+                    "litellm_params": {"model": "anthropic/claude-opus-4-8", "api_key": "synthetic-key"},
+                    "model_info": {"id": model_id},
+                }
+            ],
+        )
+
+        router.deployment_callback_on_failure(
+            kwargs={
+                "exception": self._not_found(
+                    '{"type":"error","error":{"type":"not_found_error","message":"model: x"}}'
+                ),
+                "litellm_params": {"model_info": {"id": model_id}},
+            },
+            completion_response=None,
+            start_time=0,
+            end_time=1,
+        )
+
+        assert get_cooldown_deployments(RoutingContext(router), parent_otel_span=None) == [model_id]
+
+
 @pytest.mark.parametrize(
     ("status_code", "call_type", "expected"),
     [
