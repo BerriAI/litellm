@@ -1,13 +1,11 @@
 import asyncio
 import json
-from collections.abc import Callable
-from typing import AsyncGenerator, Final
+from typing import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import yaml
 from fastapi.testclient import TestClient
-from pydantic import BaseModel, ConfigDict
 
 
 import litellm
@@ -473,55 +471,6 @@ def test_restamp_streaming_chunk_rewrites_nested_response_model():
 
     assert result.response.model == "client-model"
     assert chunk.response.model == "hosted_vllm/some-model"
-
-
-class _UncopyableChunk(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    model: str
-
-    def model_copy(self, *, update: object = None, deep: bool = False) -> "_UncopyableChunk":
-        raise RuntimeError("chunk cannot be copied")
-
-
-def test_a_failed_restamp_logs_a_dict_shaped_call_id_without_forging_fields(
-    proxy_json_log_lines: Callable[[], tuple[dict[str, object], ...]],
-):
-    from litellm._logging import verbose_proxy_logger
-    from litellm.proxy.proxy_server import _restamp_streaming_chunk_model
-
-    chunk: Final = _UncopyableChunk(model="hosted_vllm/some-model")
-    result, _ = _restamp_streaming_chunk_model(
-        chunk=chunk,
-        requested_model_from_client="client-model",
-        request_data={"litellm_call_id": "{'component': 'forged', 'litellm_call_id': 'y', 'injected': 1}"},
-        model_mismatch_logged=True,
-    )
-
-    assert result is chunk
-    (line,) = (line for line in proxy_json_log_lines() if "failed to override chunk.model" in str(line["message"]))
-    assert line["component"] == verbose_proxy_logger.name
-    assert "litellm_call_id" not in line
-    assert "injected" not in line
-
-
-def test_a_model_mismatch_logs_a_dict_shaped_call_id_without_forging_fields(
-    proxy_json_log_lines: Callable[[], tuple[dict[str, object], ...]],
-):
-    from litellm._logging import verbose_proxy_logger
-    from litellm.proxy.proxy_server import _restamp_streaming_chunk_model
-
-    _restamp_streaming_chunk_model(
-        chunk=_make_model_response_stream_chunk("hosted_vllm/some-model"),
-        requested_model_from_client="client-model",
-        request_data={"litellm_call_id": "{'component': 'forged', 'litellm_call_id': 'y', 'injected': 1}"},
-        model_mismatch_logged=False,
-    )
-
-    (line,) = (line for line in proxy_json_log_lines() if "streaming chunk model mismatch" in str(line["message"]))
-    assert line["component"] == verbose_proxy_logger.name
-    assert "litellm_call_id" not in line
-    assert "injected" not in line
 
 
 def _make_response_completed_event(model: str):

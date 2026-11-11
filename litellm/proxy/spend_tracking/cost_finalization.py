@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Final
 
 import litellm
-from litellm._logging import log_text_value, verbose_proxy_logger
+from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.llm_cost_calc.finalization import FinalizedCost, PreparedCost, finalize_cost
 from litellm.proxy.hooks.search_free_tier import SharedCounter, allocate_search_free_tier
@@ -15,9 +15,7 @@ def prepare_response_cost(logging_obj: Logging, response: object, now: datetime)
     try:
         return logging_obj.prepare_response_cost(response, now)
     except Exception:  # noqa: BLE001  # preparation must not prevent serving an already completed response
-        verbose_proxy_logger.exception(
-            "Unable to prepare completed response cost for %s", log_text_value(logging_obj.litellm_call_id)
-        )
+        verbose_proxy_logger.exception("Unable to prepare completed response cost for %s", logging_obj.litellm_call_id)
         return None
 
 
@@ -34,8 +32,7 @@ async def finalize_response_cost(
         return await _finalize_response_cost(logging_obj, response, counter, now, guardrail_cost)
     except Exception:  # noqa: BLE001  # the response was already paid for; billing falls back to the callback path
         verbose_proxy_logger.exception(
-            "Cost finalization failed for %s, billing through the callback path",
-            log_text_value(logging_obj.litellm_call_id),
+            "Cost finalization failed for %s, billing through the callback path", logging_obj.litellm_call_id
         )
         return None
 

@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, PositiveInt, TypeAdapter, Validation
 
 import litellm
 from litellm import Router, constants, provider_list
-from litellm._logging import log_text_value, verbose_proxy_logger
+from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS,
     EMPTY_MAPPING,
@@ -887,7 +887,7 @@ async def pre_db_read_auth_checks(
     if not is_valid_ip:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Access forbidden: IP address {log_text_value(passed_in_ip)} not allowed.",
+            detail=f"Access forbidden: IP address {passed_in_ip} not allowed.",
         )
 
     # Check 4. Check if request route is an allowed route on the proxy

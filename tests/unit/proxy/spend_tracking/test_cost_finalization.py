@@ -1,13 +1,11 @@
 import asyncio
 from datetime import datetime, timezone
-from collections.abc import Callable
 from typing import Final, Literal
 
 import pytest
 from pydantic import TypeAdapter
 
 import litellm
-from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -389,36 +387,6 @@ async def test_finalization_failure_leaves_the_request_and_callback_billing_inta
     assert await finalize_response_cost(logging_obj, response(), counter, NOW) is None
     assert logging_obj.finalized_cost is None
     assert counter.calls == 0
-
-
-@pytest.mark.parametrize(
-    ("failing_step", "logged_message"),
-    [
-        pytest.param("prepare_response_cost", "Unable to prepare completed response cost", id="preparation"),
-        pytest.param("record_finalized_cost", "Cost finalization failed", id="finalization"),
-    ],
-)
-@pytest.mark.asyncio
-async def test_a_dict_shaped_call_id_cannot_forge_fields_on_the_cost_failure_log(
-    logging_obj: Logging,
-    monkeypatch: pytest.MonkeyPatch,
-    proxy_json_log_lines: Callable[[], tuple[dict[str, object], ...]],
-    failing_step: str,
-    logged_message: str,
-) -> None:
-    def explode(*args: object, **kwargs: object) -> object:
-        raise RuntimeError("cost step failed")
-
-    dict_shaped_call_id: Final = "{'component': 'forged', 'litellm_call_id': 'y', 'injected': 1}"
-    monkeypatch.setattr(logging_obj, "litellm_call_id", dict_shaped_call_id)
-    monkeypatch.setattr(logging_obj, failing_step, explode)
-
-    assert await finalize_response_cost(logging_obj, response(), Counter(), NOW) is None
-
-    (line,) = (line for line in proxy_json_log_lines() if logged_message in str(line["message"]))
-    assert line["component"] == verbose_proxy_logger.name
-    assert "litellm_call_id" not in line
-    assert "injected" not in line
 
 
 @pytest.mark.asyncio

@@ -331,7 +331,6 @@ from litellm import Router
 from litellm._internal_context import service_target, with_service_target
 from litellm._logging import (
     STARTUP_OUTPUT_SETTINGS,
-    log_text_value,
     print_startup_message,
     redact_internal_details_from_client_message,
     redact_string,
@@ -10315,7 +10314,7 @@ def _restamp_streaming_chunk_model(
     if not model_mismatch_logged and downstream_model != target_model:
         verbose_proxy_logger.debug(
             "litellm_call_id=%s: streaming chunk model mismatch - target=%r downstream=%r fallback_was_attempted=%s. Overriding chunk model to target.",
-            log_text_value(request_data.get("litellm_call_id")),
+            request_data.get("litellm_call_id"),
             target_model,
             downstream_model,
             fallback_was_attempted,
@@ -10336,7 +10335,7 @@ def _restamp_streaming_chunk_model(
     except Exception as e:
         verbose_proxy_logger.error(
             "litellm_call_id=%s: failed to override chunk.model=%r on chunk_type=%s. error=%s",
-            log_text_value(request_data.get("litellm_call_id")),
+            request_data.get("litellm_call_id"),
             target_model,
             type(restamped_chunk),
             str(e),

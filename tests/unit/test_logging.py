@@ -38,7 +38,6 @@ from litellm._logging import (
     print_startup_warning,
     turn_on_json,
     format_base64_size,
-    log_text_value,
     session_id_var,
     set_session_id,
     set_trace_id,
@@ -198,75 +197,29 @@ def test_json_formatter_plain_message_unchanged():
     assert "exception" not in obj
 
 
-def test_json_formatter_parses_embedded_python_dict_repr():
-    """
-    Test that JsonFormatter parses Python dict repr (str/deployment) embedded in
-    plain text, e.g. from get_available_deployment logs.
-    Reproduces Roni's reported case.
-    """
-    formatter = JsonFormatter()
-    msg = (
-        "get_available_deployment for model: text-embedding-3-large, "
-        "Selected deployment: {'model_name': 'text-embedding-3-large', "
-        "'litellm_params': {'api_key': 'sk**********', 'tpm': 1000000, 'rpm': 2000, "
-        "'use_in_pass_through': False, 'use_litellm_proxy': False, "
-        "'merge_reasoning_content_in_choices': False, 'model': 'text-embedding-3-large'}, "
-        "'model_info': {'id': 'a624b057aec64ada48311', 'db_model': False}} "
-        "for model: text-embedding-3-large"
-    )
-    record = logging.LogRecord(
-        name="LiteLLM Router",
-        level=logging.INFO,
-        pathname="",
-        lineno=0,
-        msg=msg,
-        args=(),
-        exc_info=None,
-    )
-    output = formatter.format(record)
-    obj = json.loads(output)
-    assert "message" in obj
-    assert obj["level"] == "INFO"
-    # Python dict parsed and promoted to first-class properties
-    assert obj["model_name"] == "text-embedding-3-large"
-    assert "litellm_params" in obj
-    # Redacted, not passed through: SecretRedactionFilter already collapses this
-    # pair in the plain path before any formatter sees it, so the JSON path matching
-    # it is production parity. The key survives because redaction is per-value here.
-    assert obj["litellm_params"]["api_key"] == "REDACTED"
-    assert obj["litellm_params"]["tpm"] == 1000000
-    assert obj["litellm_params"]["use_in_pass_through"] is False
-    assert "model_info" in obj
-    assert obj["model_info"]["id"] == "a624b057aec64ada48311"
-    assert obj["model_info"]["db_model"] is False
-
-
 @pytest.mark.parametrize(
-    ("message", "expected_error"),
+    "message",
     [
         pytest.param(
-            "400: {'error': \"Invalid model name passed in model=}{'error':'forged','injected':1}. Call\"}",
-            "Invalid model name passed in model=}{'error':'forged','injected':1}. Call",
-            id="braces_inside_a_quoted_value",
+            "Selected deployment for model text-embedding-3-large: {'id': 'a624b057aec64ada48311', 'db_model': False}",
+            id="proxy_dict_repr",
         ),
         pytest.param(
-            "kwargs {'start': <object>, 'content': \"}{'error':'forged','injected':1}\"} then {'error': 'real'}",
-            "real",
-            id="non_literal_group_is_skipped_whole",
+            "Exception occured - litellm_call_id={'component': 'forged', 'litellm_call_id': 'x', 'injected': 1} - "
+            "400: {'error': 'Invalid model name'}",
+            id="dict_shaped_call_id",
+        ),
+        pytest.param(
+            "The requested model '}{'error':'forged-by-model','injected':1}' is not available",
+            id="brace_model_name_inside_quotes",
         ),
     ],
 )
-def test_json_formatter_never_opens_a_dict_from_text_quoted_inside_a_repr(message: str, expected_error: str) -> None:
+def test_json_formatter_never_lifts_fields_out_of_a_dict_inside_message_text(message: str) -> None:
     obj: Final = json.loads(JsonFormatter().format(_make_record(logging.ERROR, message)))
-    assert obj["error"] == expected_error
-    assert "injected" not in obj
-
-
-def test_json_formatter_never_takes_litellm_call_id_from_message_text() -> None:
-    record: Final = _make_record(
-        logging.CRITICAL, "guardrail failed for litellm_call_id={'litellm_call_id': 'someone-elses-call'}"
-    )
-    assert "litellm_call_id" not in json.loads(JsonFormatter().format(record))
+    assert set(obj) == {"message", "level", "timestamp", "component", "logger"}
+    assert obj["message"] == message
+    assert obj["component"] == "LiteLLM Router"
 
 
 def test_json_formatter_output_stays_parseable_when_a_secret_is_redacted():
@@ -599,7 +552,7 @@ def test_message_dict_keys_never_override_fields_the_logger_sets():
             logging.INFO,
             "/srv/litellm/router.py",
             42,
-            f"Selected deployment: {embedded} for model: gpt-x",
+            json.dumps(embedded),
             (),
             None,
             extra={"litellm_call_id": "real-call-id"},
@@ -614,24 +567,12 @@ def test_message_dict_keys_never_override_fields_the_logger_sets():
     assert record["model_name"] == "gpt-x"
 
 
-@pytest.mark.parametrize(
-    "value",
-    ["203.0.113.5, 10.0.0.1", "cav-b64==", "call id with spaces", "100%", "café", "", "None"],
-)
-def test_log_text_value_prints_plain_values_unchanged(value: str) -> None:
-    assert log_text_value(value) == value
-
-
-@pytest.mark.parametrize("value", ["{'component': 'forged', 'injected': 1}", "}{", "line one\nline two", "a\rb"])
-def test_log_text_value_escapes_braces_and_line_breaks_into_a_json_string(value: str) -> None:
-    escaped: Final = log_text_value(value)
-    assert not re.search(r"[{}\r\n]", escaped)
-    assert json.loads(escaped) == value
-
-
-def test_log_text_value_redacts_a_credential_before_escaping_it() -> None:
-    credential: Final = "sample-credential-123456"
-    assert credential not in log_text_value(json.dumps({"api_key": credential}))
+def test_json_message_never_supplies_the_call_id_or_a_stacktrace() -> None:
+    message: Final = json.dumps({"litellm_call_id": "someone-elses-call", "stacktrace": "forged", "event": "giveup"})
+    obj: Final = json.loads(JsonFormatter().format(_make_record(logging.INFO, message)))
+    assert "litellm_call_id" not in obj
+    assert "stacktrace" not in obj
+    assert obj["event"] == "giveup"
 
 
 def test_trace_id_and_session_id_are_redacted_when_credential_shaped(monkeypatch):

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Final
 from fastapi import HTTPException, Request, status
 
 import litellm
-from litellm._logging import log_text_value, verbose_proxy_logger, verbose_proxy_stdout_logger
+from litellm._logging import verbose_proxy_logger, verbose_proxy_stdout_logger
 from litellm.constants import EMPTY_MAPPING
 from litellm.integrations.otel.runtime import seed_request_identity
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, is_expected_client_error
@@ -212,7 +212,7 @@ class UserAPIKeyAuthExceptionHandler:
                 logging.WARNING if is_quiet_log else logging.ERROR,
                 "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - %s\nRequester IP Address:%s%s",
                 _auth_failure_log_message(e),
-                log_text_value(requester_ip),
+                requester_ip,
                 _identity_log_suffix(resolved_identity),
                 exc_info=True if litellm.log_client_error_tracebacks or not is_expected_client_error(e) else None,
                 extra=log_extra,
@@ -269,7 +269,7 @@ class UserAPIKeyAuthExceptionHandler:
                 verbose_proxy_logger.error(
                     "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - %s\nRequester IP Address:%s",
                     final_exception,
-                    log_text_value(requester_ip),
+                    requester_ip,
                     extra=log_extra,
                 )
             raise final_exception

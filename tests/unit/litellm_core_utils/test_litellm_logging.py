@@ -8773,7 +8773,9 @@ def test_debugging_log_with_json_logs_tolerates_missing_headers(logging_obj, mon
     assert "https://api.openai.com/v1" in warning.call_args.kwargs["extra"]["api_base"]
 
 
-def test_debugging_log_keeps_client_header_names_out_of_the_line_fields(logging_obj, monkeypatch):
+def test_debugging_log_keeps_client_header_names_out_of_the_line_fields(
+    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(litellm, "json_logs", True)
     logging_obj.litellm_request_debug = True
     stream: Final = StringIO()

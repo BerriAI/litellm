@@ -1,9 +1,7 @@
-import ast
 import contextvars
 import functools
 import inspect
 import itertools
-import json
 import logging
 import os
 import re
@@ -11,7 +9,7 @@ import sys
 from collections.abc import Iterator, Mapping
 from datetime import datetime
 from logging import Formatter
-from types import FrameType, MappingProxyType
+from types import FrameType
 from typing import Final, TextIO
 from urllib.parse import unquote
 
@@ -116,25 +114,6 @@ def _plain_text(value: object) -> str:
         return str(value)
     except Exception:
         return UNSERIALIZABLE_OBJECT
-
-
-_BARE_LOGFMT_VALUE: Final = re.compile(r"[\w.:/@+-]+", re.ASCII)
-_BRACES: Final = re.compile(r"[{}]")
-_JSON_ESCAPED_BRACES: Final = str.maketrans({"{": "\\u007b", "}": "\\u007d"})
-
-
-def _escaped(text: str) -> str:
-    return json.dumps(text).translate(_JSON_ESCAPED_BRACES)
-
-
-def logfmt_value(value: object) -> str:
-    text: Final = redact_string(_plain_text(value))
-    return text if _BARE_LOGFMT_VALUE.fullmatch(text) else _escaped(text)
-
-
-def log_text_value(value: object) -> str:
-    text: Final = redact_string(_plain_text(value))
-    return text if text.isprintable() and not _BRACES.search(text) else _escaped(text)
 
 
 def redact_secrets(value: str) -> str:
@@ -758,50 +737,6 @@ def _try_parse_json_message(message: str) -> dict[str, object] | None:
     return parsed
 
 
-_DICT_REPR_TOKEN: Final = re.compile(r"""'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|[{}]""")
-_BRACE_DEPTH_STEP: Final = MappingProxyType({"{": 1, "}": -1})
-
-
-def _with_running_depth(previous: tuple[int, int], token: tuple[int, int]) -> tuple[int, int]:
-    return token[0], previous[1] + token[1]
-
-
-def _dict_repr_end(message: str, start: int) -> int | None:
-    steps: Final = (
-        (token.end(), _BRACE_DEPTH_STEP.get(token.group(), 0)) for token in _DICT_REPR_TOKEN.finditer(message, start)
-    )
-    depths: Final = itertools.accumulate(steps, _with_running_depth)
-    return next((end for end, depth in depths if depth == 0), None)
-
-
-def _literal_dict(text: str) -> dict[str, object] | None:
-    try:
-        parsed: Final[object] = _DECODED_LOG_PAYLOAD.validate_python(ast.literal_eval(text))
-    except (ValueError, SyntaxError, TypeError):
-        return None
-    return parsed if isinstance(parsed, dict) and parsed else None
-
-
-def _try_parse_embedded_python_dict(message: str) -> dict[str, object] | None:
-    """
-    Try to find and parse a Python dict repr (e.g. str(d) or repr(d)) embedded in
-    the message. Handles patterns like:
-    "get_available_deployment for model: X, Selected deployment: {'model_name': '...', ...} for model: X"
-    Uses ast.literal_eval for safe parsing. Returns the parsed dict or None.
-    """
-    start = message.find("{")  # rebind-ok: advances past each brace group
-    while start != -1:
-        end = _dict_repr_end(message, start)
-        if end is None:
-            start = message.find("{", start + 1)
-            continue
-        parsed = _literal_dict(message[start:end])
-        if parsed is not None:
-            return parsed
-        start = message.find("{", end)
-    return None
-
-
 # Standard LogRecord attribute names - used to identify 'extra' fields.
 # Derived at runtime so we automatically include version-specific attrs (e.g. taskName).
 def _get_standard_record_attrs() -> frozenset:
@@ -813,13 +748,6 @@ _STANDARD_RECORD_ATTRS: Final = _get_standard_record_attrs()
 _NON_EXTRA_RECORD_ATTRS: Final = _STANDARD_RECORD_ATTRS | {_REDACTED_RECORD_ATTR}
 
 _UNPROMOTABLE_MESSAGE_KEYS: Final = frozenset(("trace_id", "session_id", "litellm_call_id", "stacktrace"))
-
-
-def _parsed_message_fields(message: str) -> Mapping[str, object]:
-    parsed: Final = _try_parse_json_message(message)
-    if parsed is not None:
-        return parsed
-    return _try_parse_embedded_python_dict(message) or {}
 
 
 class JsonFormatter(Formatter):
@@ -849,7 +777,7 @@ class JsonFormatter(Formatter):
         }
         message_fields: Final = {
             key: value
-            for key, value in _parsed_message_fields(message_str).items()
+            for key, value in (_try_parse_json_message(message_str) or {}).items()
             if key not in logger_fields and key not in _UNPROMOTABLE_MESSAGE_KEYS
         }
         json_record: Final = {**fixed_fields, **message_fields, **logger_fields}
