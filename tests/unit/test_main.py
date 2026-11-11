@@ -11745,3 +11745,66 @@ def test_the_400_names_the_callers_message_when_litellm_adds_messages_before_it(
 
     assert rejected.value.param == "messages[2].content"
     assert not respx_mock.calls
+
+
+_CONVERSATION_ENDING_IN_A_DEVELOPER_MESSAGE_WITHOUT_CONTENT: Final = (
+    {"role": "user", "content": "What is the capital of France?"},
+    {"role": "assistant", "content": "Paris."},
+    {"role": "developer"},
+)
+
+
+def test_an_o_series_chat_model_relays_openais_own_400_for_a_developer_message_without_content(
+    respx_mock: respx.MockRouter,
+) -> None:
+    openai_error: Final = {
+        "message": "Missing required parameter: 'messages[2].content'.",
+        "type": "invalid_request_error",
+        "param": "messages[2].content",
+        "code": "missing_required_parameter",
+    }
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").respond(
+        400, json={"error": openai_error}
+    )
+
+    with pytest.raises(litellm.BadRequestError, match="OpenAIException") as rejected:
+        litellm.completion(
+            model="openai/o3",
+            messages=list(_CONVERSATION_ENDING_IN_A_DEVELOPER_MESSAGE_WITHOUT_CONTENT),
+            api_key="fake-key",
+        )
+
+    assert rejected.value.code == "missing_required_parameter"
+    assert json.loads(route.calls.last.request.content)["messages"][2] == {"role": "developer"}
+
+
+def test_an_o_series_responses_model_still_answers_a_developer_message_without_content(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post("https://api.openai.com/v1/responses").respond(
+        json={
+            "id": "resp_o3_pro",
+            "object": "response",
+            "created_at": 1,
+            "status": "completed",
+            "model": "o3-pro",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_o3_pro",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "Paris", "annotations": []}],
+                }
+            ],
+            "usage": {"input_tokens": 13, "output_tokens": 2, "total_tokens": 15},
+        }
+    )
+
+    response: Final = litellm.completion(
+        model="openai/o3-pro",
+        messages=list(_CONVERSATION_ENDING_IN_A_DEVELOPER_MESSAGE_WITHOUT_CONTENT),
+        api_key="fake-key",
+    )
+
+    assert response.choices[0].message.content == "Paris"
