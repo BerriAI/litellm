@@ -37,7 +37,11 @@ import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import RouterSettingsSummary from "../common_components/RouterSettingsSummary";
 import { hasRouterSettings } from "../common_components/routerSettingsPayload";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
-import { budgetAlertEmailsMetadata, KEY_MAX_BUDGET_ALERT_EMAILS_KEY } from "../key_team_helpers/budgetAlertEmails";
+import {
+  budgetAlertEmailsMetadata,
+  KEY_MAX_BUDGET_ALERT_EMAILS_KEY,
+  storedBudgetAlertEmailsMetadata,
+} from "../key_team_helpers/budgetAlertEmails";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import LoggingSettingsView from "../logging_settings_view";
 import { toast } from "@/lib/toast";
@@ -326,6 +330,10 @@ export default function KeyInfoView({
       formValues.tpd_limit = mapEmptyStringToNull(formValues.tpd_limit);
       formValues.max_parallel_requests = mapEmptyStringToNull(formValues.max_parallel_requests);
 
+      const budgetAlertEmails = dirtyFields.includes(KEY_MAX_BUDGET_ALERT_EMAILS_KEY)
+        ? budgetAlertEmailsMetadata(formValues.max_budget_alert_emails, KEY_MAX_BUDGET_ALERT_EMAILS_KEY)
+        : storedBudgetAlertEmailsMetadata(currentKeyData.metadata, KEY_MAX_BUDGET_ALERT_EMAILS_KEY);
+
       // Convert metadata back to an object if it exists and is a string
       if (formValues.metadata && typeof formValues.metadata === "string") {
         try {
@@ -338,7 +346,7 @@ export default function KeyInfoView({
           formValues.metadata = {
             ...parsedMetadata,
             ...(Array.isArray(formValues.tags) && formValues.tags.length > 0 ? { tags: formValues.tags } : {}),
-            ...budgetAlertEmailsMetadata(formValues.max_budget_alert_emails, KEY_MAX_BUDGET_ALERT_EMAILS_KEY),
+            ...budgetAlertEmails,
             ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {}),
             ...(Array.isArray(formValues.logging_settings) && formValues.logging_settings.length > 0
               ? { logging: formValues.logging_settings }
@@ -360,7 +368,7 @@ export default function KeyInfoView({
         formValues.metadata = {
           ...rest,
           ...(Array.isArray(formValues.tags) && formValues.tags.length > 0 ? { tags: formValues.tags } : {}),
-          ...budgetAlertEmailsMetadata(formValues.max_budget_alert_emails, KEY_MAX_BUDGET_ALERT_EMAILS_KEY),
+          ...budgetAlertEmails,
           ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {}),
           ...(Array.isArray(formValues.logging_settings) && formValues.logging_settings.length > 0
             ? { logging: formValues.logging_settings }

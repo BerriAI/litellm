@@ -3362,6 +3362,7 @@ describe("KeyEditView", () => {
         { threshold: 50, emails: "" },
         { threshold: 80, emails: "shared-mailbox@example.com, finance-dl@example.com" },
       ]);
+      expect(onSubmit.mock.calls[0][1]).not.toContain("max_budget_alert_emails");
     });
 
     it("submits an added row and drops a removed one", async () => {
@@ -3380,6 +3381,20 @@ describe("KeyEditView", () => {
         { threshold: 80, emails: "shared-mailbox@example.com, finance-dl@example.com" },
         { threshold: 100, emails: "ap-team@example.com" },
       ]);
+      expect(onSubmit.mock.calls[0][1]).toContain("max_budget_alert_emails");
+    });
+
+    it("reports the rows as edited when every row is removed, so the save clears them", async () => {
+      const onSubmit = vi.fn().mockResolvedValue(undefined);
+      renderAlerts(onSubmit);
+      await screen.findAllByPlaceholderText("% of budget");
+
+      for (const button of screen.getAllByRole("button", { name: "Remove budget alert threshold" }).reverse()) {
+        await userEvent.click(button);
+      }
+
+      expect((await save(onSubmit)).max_budget_alert_emails).toEqual([]);
+      expect(onSubmit.mock.calls[0][1]).toContain("max_budget_alert_emails");
     });
 
     it("blocks the save on a duplicate threshold", async () => {

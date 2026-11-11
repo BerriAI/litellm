@@ -194,7 +194,8 @@ vi.mock("./key_edit_view", async () => {
       React.createElement(
         "button",
         {
-          onClick: () => props.onSubmit((globalThis as any).__TEST_FORM_VALUES ?? {}),
+          onClick: () =>
+            props.onSubmit((globalThis as any).__TEST_FORM_VALUES ?? {}, (globalThis as any).__TEST_DIRTY_FIELDS ?? []),
         },
         "Mock Submit",
       ),
@@ -229,7 +230,7 @@ const baseKeyData = {
   next_rotation_at: null as any,
 };
 
-const renderView = (premiumUser: boolean) => {
+const renderView = (premiumUser: boolean, keyData: Record<string, unknown> = baseKeyData) => {
   // Configure the mock for this test
   mockUseAuthorized.mockReturnValue({
     accessToken: "access_abc",
@@ -243,19 +244,14 @@ const renderView = (premiumUser: boolean) => {
   });
 
   return render(
-    <KeyInfoView
-      keyId="tok_123"
-      onClose={() => {}}
-      keyData={baseKeyData as any}
-      onKeyDataUpdate={() => {}}
-      teams={[]}
-    />,
+    <KeyInfoView keyId="tok_123" onClose={() => {}} keyData={keyData as any} onKeyDataUpdate={() => {}} teams={[]} />,
   );
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
   (globalThis as any).__TEST_FORM_VALUES = undefined;
+  (globalThis as any).__TEST_DIRTY_FIELDS = undefined;
 });
 
 // ---- Tests ----
@@ -715,11 +711,18 @@ describe("KeyInfoView handleKeyUpdate organization", () => {
 });
 
 describe("KeyInfoView handleKeyUpdate max_budget_alert_emails", () => {
-  const submit = async (formValues: Record<string, unknown>) => {
-    renderView(true);
+  const submit = async (
+    formValues: Record<string, unknown>,
+    dirtyFields: readonly string[] = ["max_budget_alert_emails"],
+    keyData: Record<string, unknown> = baseKeyData,
+  ) => {
+    renderView(true, keyData);
     fireEvent.click(screen.getByText("Settings"));
     fireEvent.click(screen.getByText("Edit Settings"));
-    Object.assign(globalThis, { __TEST_FORM_VALUES: { token: "tok_123", ...formValues } });
+    Object.assign(globalThis, {
+      __TEST_FORM_VALUES: { token: "tok_123", ...formValues },
+      __TEST_DIRTY_FIELDS: dirtyFields,
+    });
     fireEvent.click(screen.getByText("Mock Submit"));
     await waitFor(() => expect(keyUpdateCallMock).toHaveBeenCalled());
     return keyUpdateCallMock.mock.calls[0][1];
@@ -769,5 +772,25 @@ describe("KeyInfoView handleKeyUpdate max_budget_alert_emails", () => {
     });
 
     expect(sentPayload.metadata).toEqual({ max_budget_alert_emails: { "90": ["dl@example.com"] } });
+  });
+
+  it("keeps an API-written map the rows cannot show when the rows were not edited", async () => {
+    const storedAlertEmails = {
+      "50": ["a@example.com"],
+      "75": null,
+      "80": ["b@example.com", null],
+      "150": ["c@example.com"],
+    };
+    const sentPayload = await submit(
+      {
+        key_alias: "renamed",
+        metadata: JSON.stringify({ cost_center: "ops" }),
+        max_budget_alert_emails: [{ threshold: 50, emails: "a@example.com" }],
+      },
+      ["key_alias"],
+      { ...baseKeyData, metadata: { cost_center: "ops", max_budget_alert_emails: storedAlertEmails } },
+    );
+
+    expect(sentPayload.metadata).toEqual({ cost_center: "ops", max_budget_alert_emails: storedAlertEmails });
   });
 });

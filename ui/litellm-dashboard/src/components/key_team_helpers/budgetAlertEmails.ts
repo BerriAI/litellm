@@ -73,6 +73,14 @@ export const budgetAlertEmailsMetadata = (
   return Object.keys(emails).length > 0 ? { [metadataKey]: emails } : {};
 };
 
+export const storedBudgetAlertEmailsMetadata = (
+  metadata: unknown,
+  metadataKey: BudgetAlertEmailsMetadataKey,
+): Readonly<Partial<Record<BudgetAlertEmailsMetadataKey, unknown>>> => {
+  if (typeof metadata !== "object" || metadata === null || !(metadataKey in metadata)) return {};
+  return { [metadataKey]: (metadata as Record<string, unknown>)[metadataKey] };
+};
+
 export const budgetAlertRowsSchema = (message: (issue: BudgetAlertRowIssue) => string) =>
   z.array(z.object({ threshold: z.number().nullable(), emails: z.string() })).superRefine((rows, ctx) => {
     rows.forEach((row, index) => {
