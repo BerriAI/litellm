@@ -17185,8 +17185,7 @@ async def test_paged_gateway_listing_asks_the_upstream_each_time_when_told_to_sk
 ) -> None:
     from mcp.types import PaginatedRequestParams
 
-    from litellm.proxy.mcp_server import catalog, operations
-    from litellm.proxy.mcp_server.contracts import OperationContext
+    from litellm.proxy.mcp_server import operations
 
     manager: Final = MCPServerManager(discovery_clock=_DiscoveryClock())
     server: Final = _server_with_tools_list_ttl(300)
@@ -17194,18 +17193,16 @@ async def test_paged_gateway_listing_asks_the_upstream_each_time_when_told_to_sk
     manager.config_mcp_servers = dict(manager.registry)
     monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
     monkeypatch.setattr("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", manager)
-    context: Final = OperationContext(
-        _caller=UserAPIKeyAuth(api_key="hashed-admin", user_role=LitellmUserRoles.PROXY_ADMIN)
-    )
+    admin: Final = UserAPIKeyAuth(api_key="hashed-admin", user_role=LitellmUserRoles.PROXY_ADMIN)
     upstream: Final = _DiscoveryUpstream()
 
     async def upstream_lists_after_two_listings(*, use_tool_list_cache: bool) -> int:
         for _ in range(2):
-            await catalog.aggregate_gateway_tools(
-                context,
-                PaginatedRequestParams(),
-                [server],
-                {},
+            await operations._get_tools_from_mcp_servers(
+                admin,
+                None,
+                [server.server_id],
+                params=PaginatedRequestParams(),
                 enforce_rate_limits=False,
                 use_tool_list_cache=use_tool_list_cache,
             )
