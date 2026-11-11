@@ -719,14 +719,15 @@ async def _converse_sent_and_counted(
     model: str = "us.anthropic.claude-haiku-5-5",
     response_format: dict[str, JsonValue] | None = None,
     counted_model: str | None = None,
+    continue_settings: dict[str, JsonValue] | None = None,
 ) -> tuple[tuple[tuple[JsonValue, str], ...], tuple[tuple[JsonValue, str], ...]]:
-    credentials: Final = DEPLOYMENT["litellm_params"]
+    credentials: Final = {**DEPLOYMENT["litellm_params"], **(continue_settings or {})}
     deployment_model: Final = f"bedrock/{model}"
     chat_params: Final = {"response_format": response_format} if response_format else {}
     inference: Final = _Bedrock(runtime=(200, _CONVERSE_REPLY), mantle=(200, _CONVERSE_REPLY))
     await litellm.acompletion(
         model=deployment_model,
-        messages=messages,
+        messages=copy.deepcopy(messages),
         max_tokens=8,
         client=AsyncHTTPHandler(transport=httpx.MockTransport(inference)),
         **({"tools": tools} if tools else {}),
@@ -955,6 +956,95 @@ async def test_claude_converse_count_decides_the_response_format_tool_by_the_dep
     )
 
     assert counted == converse_sent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("modify_params", (False, True), ids=("modify_params_off", "modify_params"))
+@pytest.mark.parametrize(
+    "continue_content", ("Go on.", [{"type": "text", "text": "Go on."}]), ids=("string_content", "list_content")
+)
+@pytest.mark.parametrize(
+    "messages, expected_sent",
+    (
+        ([_QUESTION, _ANSWER], (("user", "What is 2+2?"), ("assistant", "Four."), ("user", "Go on."))),
+        ([_ANSWER, _QUESTION], (("user", "Go on."), ("assistant", "Four."), ("user", "What is 2+2?"))),
+        (
+            [_QUESTION, _ANSWER, {"role": "user", "content": ""}],
+            (("user", "What is 2+2?"), ("assistant", "Four."), ("user", "Go on.")),
+        ),
+    ),
+    ids=("ends_on_an_assistant_turn", "starts_on_an_assistant_turn", "ends_on_a_blank_user_turn"),
+)
+async def test_claude_converse_count_adds_the_continue_message_the_deployment_sets(
+    messages: list[dict[str, JsonValue]],
+    expected_sent: tuple[tuple[str, str], ...],
+    continue_content: JsonValue,
+    modify_params: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
+
+    converse_sent, counted = await _converse_sent_and_counted(
+        messages, [], continue_settings={"user_continue_message": {"role": "user", "content": continue_content}}
+    )
+
+    assert converse_sent == expected_sent
+    assert counted == converse_sent
+
+
+@pytest.mark.asyncio
+async def test_claude_converse_count_follows_inference_for_an_empty_continue_message() -> None:
+    converse_sent, counted = await _converse_sent_and_counted(
+        [_QUESTION, _ANSWER, {"role": "user", "content": ""}], [], continue_settings={"user_continue_message": {}}
+    )
+
+    assert counted == converse_sent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("block", ({"type": "text"}, {"type": "text", "text": None}), ids=("no_text", "null_text"))
+async def test_claude_converse_count_answers_400_for_a_malformed_user_text_block(
+    block: dict[str, JsonValue], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "modify_params", True)
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 27}), mantle=(200, {"input_tokens": 27}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="us.anthropic.claude-haiku-5-5",
+        messages=[_QUESTION, _ANSWER, {"role": "user", "content": [block]}],
+        contents=None,
+        deployment={
+            "litellm_params": {**DEPLOYMENT["litellm_params"], "model": "bedrock/us.anthropic.claude-haiku-5-5"}
+        },
+        request_model="us.anthropic.claude-haiku-5-5",
+        messages_format="openai",
+    )
+
+    assert result is not None
+    assert (result.error, result.status_code) == (True, 400)
+    assert not bedrock.requests
+
+
+@pytest.mark.asyncio
+async def test_claude_converse_count_keeps_string_user_content_when_it_lifts_a_system_message() -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 27}), mantle=(200, {"input_tokens": 27}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="bedrock_mantle/us.anthropic.claude-haiku-5-5",
+        messages=[{"role": "system", "content": "Be brief."}, _QUESTION],
+        contents=None,
+        deployment={
+            "litellm_params": {**DEPLOYMENT["litellm_params"], "model": "bedrock/us.anthropic.claude-haiku-5-5"}
+        },
+        request_model="us.anthropic.claude-haiku-5-5",
+        messages_format="openai",
+    )
+
+    assert result is not None
+    assert result.error is False
+    counted: Final = _JSON_BODY.validate_json(bedrock.requests[0].content)
+    assert counted["messages"] == [_QUESTION]
+    assert _texts(counted["system"]) == ("Be brief.",)
 
 
 _IMAGE_PART: Final = {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}}

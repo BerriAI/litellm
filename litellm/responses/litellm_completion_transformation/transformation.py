@@ -1683,7 +1683,7 @@ class LiteLLMCompletionResponsesConfig:
             stored_turns=stored_turns,
             empty_user_turn_text=(
                 None
-                if request_input is None
+                if request_input is None or not route_fills_empty_user_turns()
                 else empty_user_turn_replay_text(request_kwargs.get("user_continue_message"))
             ),
         )

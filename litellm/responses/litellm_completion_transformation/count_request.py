@@ -147,6 +147,7 @@ async def _with_previous_turns(
     policy: DropPolicy,
     session_lookup: Callable[[str], Awaitable[ChatCompletionSession]] | None,
     base_model: str | None,
+    user_continue_message: object,
 ) -> Mapping[str, object]:
     previous_response_id: Final = responses_request.get("previous_response_id")
     if not isinstance(previous_response_id, str) or not previous_response_id:
@@ -157,7 +158,11 @@ async def _with_previous_turns(
         litellm_completion_request={**chat_body, "model": model, "custom_llm_provider": custom_llm_provider},
         instructions=instructions if isinstance(instructions, str) else None,
         session_lookup=session_lookup,
-        request_kwargs={"drop_params": policy.drop_params, "base_model": base_model},
+        request_kwargs={
+            "drop_params": policy.drop_params,
+            "base_model": base_model,
+            "user_continue_message": user_continue_message,
+        },
         previous_response_client_ids=previous_response_client_ids(previous_response_id, responses_request),
         input_replaces_history=holds_compaction_summary(responses_request.get("input")),
         request_input=_request_input(responses_request),
@@ -185,6 +190,7 @@ async def chat_count_request(
     policy: DropPolicy,
     session_lookup: Callable[[str], Awaitable[ChatCompletionSession]] | None = None,
     base_model: str | None = None,
+    user_continue_message: object = None,
 ) -> ChatCountRequest | ChatCountBridgeError | None:
     """The chat request Responses inference sends a provider with no native Responses API, or None
     when inference sends this provider the Responses body itself."""
@@ -213,6 +219,7 @@ async def chat_count_request(
             policy,
             session_lookup,
             base_model,
+            user_continue_message,
         )
         tools: Final = (
             () if "tools" in policy.additional_drop_params else tuple(map(_unmarked, _mappings(chat_body.get("tools"))))

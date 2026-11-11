@@ -92,6 +92,21 @@ def _deployment_model_info(deployment: Mapping[str, object] | None) -> Mapping[s
     return _MODEL_INFO.validate_python(model_info) if isinstance(model_info, dict) else None
 
 
+def _converse_messages_as_sent(
+    converse_config: "litellm.AmazonConverseConfig",
+    messages: Sequence[Mapping[str, object]],
+    tools: Sequence[Mapping[str, object]] | None,
+    chat_params: Mapping[str, JsonValue],
+    model: str,
+    model_info: Mapping[str, object] | None,
+    litellm_params: Mapping[str, object],
+) -> tuple[Mapping[str, object], ...] | ChatCountTranslationError:
+    try:
+        return converse_config.chat_messages_as_sent(messages, tools, chat_params, model, model_info, litellm_params)
+    except (AttributeError, KeyError, TypeError, ValueError) as e:
+        return ChatCountTranslationError(message=f"Invalid request for token counting: {e}")
+
+
 def _runtime_rejected_claude_model(outcome: CountTokensOutcome, resolved_model: str) -> bool:
     return (
         isinstance(outcome, CountTokensFailure)
@@ -234,7 +249,8 @@ class BedrockTokenCounter(BaseTokenCounter):
         counted_input: Final = (
             messages
             if converse_config is None
-            else converse_config.chat_messages_as_sent(
+            else _converse_messages_as_sent(
+                converse_config,
                 messages,
                 tools,
                 chat_params,
@@ -243,6 +259,8 @@ class BedrockTokenCounter(BaseTokenCounter):
                 litellm_params,
             )
         )
+        if isinstance(counted_input, ChatCountTranslationError):
+            return counted_input.response(request_model, model_to_use, primary_tokenizer)
         translated: Final = (
             await anthropic_count_fields(
                 counted_model,
@@ -252,7 +270,7 @@ class BedrockTokenCounter(BaseTokenCounter):
                 messages_format,
                 chat_config if isinstance(chat_config, AnthropicConfig) else AnthropicConfig(),
                 chat_params,
-                translates_system_messages=converse_config is not None,
+                lifts_system_messages=converse_config is not None,
             )
             if is_mantle_claude_model(resolved_model)
             else None

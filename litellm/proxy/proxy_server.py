@@ -16270,6 +16270,9 @@ async def _count_request_tokens(
             routed_request,
             _count_drop_policy(routed_deployment, routed_request),
             base_model=_inference_base_model(deployment_view, routed_request),
+            user_continue_message=_inference_params(deployment_view.get("litellm_params", {}), routed_request).get(
+                "user_continue_message"
+            ),
         )
     )
     if isinstance(chat_count, ChatCountBridgeError):

@@ -310,6 +310,18 @@ def _translated_chat_request(
     )
 
 
+def _fields_with_system_lifted(
+    messages: Sequence[Mapping[str, object]],
+    system: object,
+    tools: Sequence[Mapping[str, object]] | None,
+) -> AnthropicCountFields:
+    request: Final = _ANTHROPIC_CHAT_REQUEST.validate_python(
+        {"messages": messages, "system": system, **({"tools": tools} if tools else {})}
+    )
+    conversation, lifted = _lift_leading_system(request["messages"], request.get("system"))
+    return AnthropicCountFields(messages=conversation, system=lifted, tools=request.get("tools"), options={})
+
+
 def anthropic_fields_for_chat_tool_use(
     model: str,
     messages: Sequence[Mapping[str, object]],
@@ -317,17 +329,18 @@ def anthropic_fields_for_chat_tool_use(
     tools: Sequence[Mapping[str, object]] | None,
     translator: _ChatRequestTranslator,
     chat_params: Mapping[str, object] = MappingProxyType({}),
-    translates_system_messages: bool = False,
+    lifts_system_messages: bool = False,
 ) -> AnthropicCountFields | ChatCountTranslationError | None:
     counted_tools: Final = tools or ()
+    lifts_system: Final = lifts_system_messages and any(map(_is_system_role, messages))
     if (
         not chat_params
         and not any(map(_needs_tool_translation, counted_tools))
         and not any(map(_needs_chat_translation, messages))
-        and not (translates_system_messages and any(map(_is_system_role, messages)))
         and not _counts_blank_text_as_chat_sends_it(messages)
+        and not (lifts_system and all(map(_is_system_role, messages)))
     ):
-        return None
+        return _fields_with_system_lifted(messages, system, tools) if lifts_system else None
     untranslatable: Final = _untranslatable_input(messages, counted_tools)
     if untranslatable is not None:
         return untranslatable
@@ -357,12 +370,12 @@ async def anthropic_count_fields(
     messages_format: TokenCountMessagesFormat,
     translator: _ChatRequestTranslator,
     chat_params: Mapping[str, object] = MappingProxyType({}),
-    translates_system_messages: bool = False,
+    lifts_system_messages: bool = False,
 ) -> AnthropicCountFields | ChatCountTranslationError | None:
     if messages_format != "openai":
         return None
     return await asyncify(anthropic_fields_for_chat_tool_use)(
-        model, messages, system, tools, translator, chat_params, translates_system_messages
+        model, messages, system, tools, translator, chat_params, lifts_system_messages
     )
 
 

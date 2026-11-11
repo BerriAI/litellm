@@ -405,3 +405,75 @@ async def test_converse_count_request_replays_a_stored_empty_user_turn_for_a_str
         list_input_turns: Final = await counted_turns([{"role": "user", "content": "Double it."}])
 
     assert string_input_turns == list_input_turns == ["user", "assistant", "user", "assistant", "user"]
+
+
+@pytest.mark.asyncio
+async def test_converse_count_request_replays_each_stored_blank_turn_a_continue_message_answers() -> None:
+    first_id: Final = _response_id("chatcmpl-turn-one")
+    follow_up_id: Final = _response_id("chatcmpl-turn-two")
+    stored: Final = _StoredTurns(
+        (
+            _stored_converse_turn(first_id, "What is 2+2?", "Four."),
+            _stored_converse_turn(
+                follow_up_id, [{"role": "user", "content": ""}, {"role": "user", "content": "  "}], "Eight."
+            ),
+        )
+    )
+
+    with patch(  # test-quality-ok: no DI seam for the stored-turn read; test_handler.py stubs this same boundary
+        "litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=stored)
+    ):
+        request: Final = await chat_count_request(
+            model="us.anthropic.claude-opus-5-5",
+            custom_llm_provider="bedrock",
+            api_base=None,
+            responses_request={
+                "model": "us.anthropic.claude-opus-5-5",
+                "previous_response_id": follow_up_id,
+                "input": "Double it.",
+            },
+            policy=DropPolicy(drop_params=False, additional_drop_params=frozenset()),
+            user_continue_message={"role": "user", "content": "Go on."},
+        )
+
+    assert isinstance(request, ChatCountRequest)
+    assert [message.get("role") for message in request.messages] == [
+        "user",
+        "assistant",
+        "user",
+        "user",
+        "assistant",
+        "user",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_count_request_keeps_a_stored_blank_turn_as_sent_on_a_route_that_takes_blank_turns() -> None:
+    first_id: Final = _response_id("chatcmpl-turn-one")
+    follow_up_id: Final = _response_id("chatcmpl-turn-two")
+    stored: Final = _StoredTurns(
+        (
+            _stored_converse_turn(first_id, "What is 2+2?", "Four."),
+            _stored_converse_turn(follow_up_id, [{"role": "user", "content": "   "}], "Eight."),
+        )
+    )
+
+    with patch(  # test-quality-ok: no DI seam for the stored-turn read; test_handler.py stubs this same boundary
+        "litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=stored)
+    ):
+        request: Final = await chat_count_request(
+            model="gemini-3.5-flash",
+            custom_llm_provider="gemini",
+            api_base=None,
+            responses_request={
+                "model": "gemini-3.5-flash",
+                "previous_response_id": follow_up_id,
+                "input": "Double it.",
+            },
+            policy=DropPolicy(drop_params=False, additional_drop_params=frozenset()),
+        )
+
+    assert isinstance(request, ChatCountRequest)
+    blank_turn: Final = request.messages[2]
+    assert blank_turn.get("role") == "user"
+    assert "   " in str(blank_turn.get("content"))

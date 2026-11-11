@@ -193,16 +193,12 @@ class _ToolCallInContent(TypedDict):
 _TOOL_CALL_IN_CONTENT: Final = TypeAdapter(_ToolCallInContent)
 CLAUDE_ON_BEDROCK_INVOKE_REMEDY: Final = " This model runs tool search on Bedrock through `bedrock/invoke/<model>`."
 _DEPLOYMENT_PARAMS: Final = TypeAdapter(Mapping[str, object])
-_USER_CONTINUE_MESSAGE: Final[TypeAdapter[ChatCompletionUserMessage | None]] = TypeAdapter(
-    ChatCompletionUserMessage | None
-)
 
 
 def _deployment_user_continue_message(litellm_params: Mapping[str, object]) -> ChatCompletionUserMessage | None:
-    try:
-        return _USER_CONTINUE_MESSAGE.validate_python(litellm_params.get("user_continue_message"))
-    except ValidationError:
-        return None
+    return cast(  # cast-ok: inference spreads this same deployment value into the continue message
+        ChatCompletionUserMessage | None, as_str_mapping(litellm_params.get("user_continue_message"))
+    )
 
 
 def _is_nonempty_text_part(part: object) -> bool:
@@ -460,9 +456,10 @@ class AmazonConverseConfig(BaseConfig):
             or self._response_format_adds_tools(chat_params, model, model_info)
             else self._orphaned_tool_blocks_as_text(system_placed, guardrail_active=False)
         )
+        user_continue_message: Final = _deployment_user_continue_message(litellm_params)
         return user_turns_as_converse_sends_them(
-            assistant_turns_as_converse_sends_them(tool_blocks_placed),
-            _deployment_user_continue_message(litellm_params),
+            assistant_turns_as_converse_sends_them(tool_blocks_placed, user_continue_message),
+            user_continue_message,
             bedrock_converse_rejects_assistant_prefill(model, self._deployment_base_model(litellm_params)),
         )
 
