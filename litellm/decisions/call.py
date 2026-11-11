@@ -665,7 +665,7 @@ def _bounded_remote_images(
     state: tuple[int, tuple[str, ...]] = (remaining, ())  # rebind-ok: sequential budget without recursion
     for url in urls:
         available, images = state
-        image: str = convert_url_to_base64(url, timeout=timeout, max_bytes=available)
+        image = convert_url_to_base64(url, timeout=timeout, max_bytes=available)
         state = (available - _decoded_image_bytes(image), (*images, image))
     return state[1]
 
@@ -676,7 +676,7 @@ async def _async_bounded_remote_images(
     state: tuple[int, tuple[str, ...]] = (remaining, ())  # rebind-ok: sequential budget without recursion
     for url in urls:
         available, images = state
-        image: str = await async_convert_url_to_base64(url, timeout=timeout, max_bytes=available)
+        image = await async_convert_url_to_base64(url, timeout=timeout, max_bytes=available)
         state = (available - _decoded_image_bytes(image), (*images, image))
     return state[1]
 
