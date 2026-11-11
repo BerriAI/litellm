@@ -39,21 +39,16 @@ test.describe("AI Hub (internal admin view)", () => {
     });
   });
 
-  test("AI Hub tab list renders Model Hub, Agent Hub, MCP Hub and Skill Hub", async ({ page }) => {
+  test("AI Hub tab list renders Model Hub, Agent Hub, MCP Hub and Skills Hub", async ({ page }) => {
     await navigateToPage(page, Page.ModelHubTable);
 
-    // The tab strip lives in the main view; check each tab is present and clickable.
-    // (The "Claude Code Plugin Marketplace" tab from the manual-QA checklist was
-    // renamed to "Skill Hub" — verify the current label here so the test stays
-    // in sync with the UI.)
-    //
     // Note: unlike the public /ui/model_hub_table view (test below), the admin
     // ModelHubTable renders all four tabs unconditionally — there are no `&&`
     // guards around <Tab>Agent Hub</Tab> or <Tab>MCP Hub</Tab> in the source
     // (ModelHubTable.tsx ~L436-439). Asserting all four here is intentional:
     // this pins the manual-QA contract that the AI Hub tab strip exposes
     // exactly these labels regardless of seeded agent/MCP data.
-    for (const tabName of ["Model Hub", "Agent Hub", "MCP Hub", "Skill Hub"]) {
+    for (const tabName of ["Model Hub", "Agent Hub", "MCP Hub", "Skills Hub"]) {
       const tab = page.getByRole("tab", { name: tabName });
       await expect(tab, `${tabName} tab should be present`).toBeVisible({ timeout: 5_000 });
       await tab.click();
@@ -75,7 +70,7 @@ test.describe("Public model hub (/ui/model_hub_table)", () => {
     await expect(page.getByRole("tab")).toHaveCount(2);
     await page.getByRole("tab", { name: "Skills Hub", exact: true }).click();
     await expect(
-      page.getByRole("textbox", { name: "Search skills", exact: true }),
+      page.getByRole("textbox", { name: "Search skills, tags, or people…", exact: true }),
     ).toBeVisible();
   });
 
@@ -105,7 +100,7 @@ test.describe("Public model hub (/ui/model_hub_table)", () => {
       await dismissFeedbackPopup(page);
       await page.getByRole("checkbox", { name: domain, exact: true }).check();
       await page
-        .getByRole("textbox", { name: "Search skills", exact: true })
+        .getByRole("textbox", { name: "Search skills, tags, or people…", exact: true })
         .fill(skillName);
       await page.getByRole("link").filter({ hasText: skillName }).click();
 

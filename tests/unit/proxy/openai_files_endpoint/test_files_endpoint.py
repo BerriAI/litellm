@@ -952,6 +952,45 @@ def test_batch_upload_for_a_provider_model_still_goes_to_the_provider(batch_uplo
     assert provider_upload.call_args.kwargs["custom_llm_provider"] == "gemini"
 
 
+def _upload_as_team_a(bucket: str | None):
+    import litellm.proxy.proxy_server as ps
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="sk-team-a", team_id="team-a", team_metadata={"allowed_s3_buckets": ["team-a-bucket"]}
+    )
+    return _upload_batch_file(
+        {"x-litellm-model": "gemini-2.0-flash"}, {} if bucket is None else {"s3_bucket_name": bucket}
+    )
+
+
+def test_batch_upload_from_a_team_with_an_allowlist_and_no_bucket_leaves_the_bucket_to_the_model(batch_upload_seams):
+    _, provider_upload, _ = batch_upload_seams
+
+    response = _upload_as_team_a(None)
+
+    assert response.status_code == 200, response.text
+    assert "s3_bucket_name" not in provider_upload.call_args.kwargs
+
+
+def test_batch_upload_sends_a_bucket_on_the_team_allowlist_to_the_provider_upload(batch_upload_seams):
+    _, provider_upload, _ = batch_upload_seams
+
+    response = _upload_as_team_a("team-a-bucket")
+
+    assert response.status_code == 200, response.text
+    assert provider_upload.call_args.kwargs["s3_bucket_name"] == "team-a-bucket"
+
+
+def test_batch_upload_rejects_a_bucket_off_the_team_allowlist_before_the_provider_upload(batch_upload_seams):
+    _, provider_upload, _ = batch_upload_seams
+
+    response = _upload_as_team_a("team-b-bucket")
+
+    assert response.status_code == 401, response.text
+    assert "s3_bucket_name is not allowed in request body" in response.text
+    provider_upload.assert_not_awaited()
+
+
 @pytest.mark.parametrize(
     "model, expected_drop_params",
     [("vertex-batch-drop", True), ("vertex-batch-keep", False)],

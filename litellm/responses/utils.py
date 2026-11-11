@@ -13,7 +13,7 @@ from typing_extensions import TypeIs  # noqa: TID251  # narrows untyped wire pay
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, iter_items
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, decoded_json_object, iter_items
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value, is_nested_path
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 from litellm.llms.base_llm.responses.transformation import (
@@ -91,8 +91,9 @@ def _is_object_dict(
 def _prompt_tokens_details_wrapper(details: object) -> PromptTokensDetailsWrapper:
     if _is_object_dict(details):
         input_details: Final = InputTokensDetails.model_validate(details)
+        input_fields: Final = decoded_json_object(input_details.model_dump(exclude={"cache_write_tokens_details"}))
         return PromptTokensDetailsWrapper(
-            **input_details.model_dump(exclude={"cache_write_tokens_details"}),
+            **input_fields,
             cache_creation_token_details=_cache_write_lifetimes(input_details.cache_write_tokens_details),
         )
     return PromptTokensDetailsWrapper(

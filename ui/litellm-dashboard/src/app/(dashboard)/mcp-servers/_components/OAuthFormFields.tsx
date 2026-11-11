@@ -22,6 +22,7 @@ import {
   tagsControl,
   textControl,
 } from "./mcpFieldRules";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 interface OAuthFlowStatus {
   startOAuthFlow: () => void;
@@ -373,7 +374,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             {(control) => (
               <Textarea
                 {...textControl(control)}
-                placeholder={'{\n  "organization": "my-org",\n  "team.id": "123"\n}'}
+                placeholder={codeSamples.mcpServers.oauthExtraParamsJson}
                 rows={4}
                 className="font-mono text-sm rounded-lg border-border focus:border-info focus:ring-ring"
               />

@@ -19,8 +19,10 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     configured_drop_params,
     get_credentials_for_model,
     get_team_provider_credentials,
+    get_team_provider_deployment,
     is_litellm_executed_batch,
     map_raw_file_ids_to_unified,
+    prepare_data_with_credentials,
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.utils import InternalUsageCache, handle_exception_on_proxy
@@ -771,6 +773,61 @@ def test_a_team_keeps_its_older_openai_deployment_when_a_newer_one_has_a_lower_i
     assert credentials["api_key"] == "older-key"
 
 
+@pytest.mark.parametrize("newer_first", [True, False])
+def test_the_team_provider_deployment_is_the_one_whose_credentials_the_team_resolves(newer_first: bool):
+    older: Final = _team_openai_deployment("deployment-z", "older-key", datetime(2026, 1, 1, tzinfo=timezone.utc))
+    newer: Final = _team_openai_deployment("deployment-a", "newer-key", datetime(2026, 6, 1, tzinfo=timezone.utc))
+    router: Final = Router(model_list=[newer, older] if newer_first else [older, newer])
+    team_member: Final = UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="team-a")
+
+    deployment: Final = get_team_provider_deployment(
+        llm_router=router, user_api_key_dict=team_member, custom_llm_provider="openai"
+    )
+
+    assert deployment is not None
+    assert (deployment.deployment_id, deployment.public_model_name) == ("deployment-z", "team-gpt-deployment-z")
+    assert dict(deployment.credentials) == get_team_provider_credentials(
+        llm_router=router,
+        user_api_key_dict=team_member,
+        custom_llm_provider="openai",
+        include_accessible_deployments=False,
+    )
+    assert deployment.credentials["api_key"] == "older-key"
+
+
+def test_the_team_provider_deployment_carries_the_team_public_model_name():
+    deployment: Final = get_team_provider_deployment(
+        llm_router=_team_openai_router("openai/*", "openai/*"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="team-a"),
+        custom_llm_provider="openai",
+    )
+
+    assert deployment is not None
+    assert (deployment.deployment_id, deployment.public_model_name) == ("team-a-openai", "openai/*")
+
+
+def test_a_key_with_only_an_accessible_non_team_deployment_has_no_team_provider_deployment():
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "openai/gpt-4o-mini",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "openai-deployment-key"},
+            }
+        ]
+    )
+    caller: Final = UserAPIKeyAuth(api_key="test-key", user_id="test-user", models=["openai/*"])
+
+    accessible_credentials: Final = get_team_provider_credentials(
+        llm_router=router, user_api_key_dict=caller, custom_llm_provider="openai", include_accessible_deployments=True
+    )
+
+    assert accessible_credentials is not None
+    assert accessible_credentials["api_key"] == "openai-deployment-key"
+    assert (
+        get_team_provider_deployment(llm_router=router, user_api_key_dict=caller, custom_llm_provider="openai") is None
+    )
+
+
 def test_a_team_keeps_its_first_config_file_openai_deployment_over_older_db_ones():
     db_deployment: Final = _team_openai_deployment("deployment-a", "db-key", datetime(2020, 1, 1, tzinfo=timezone.utc))
     config_deployments: Final = tuple(
@@ -915,3 +972,19 @@ def test_an_upload_with_a_null_drop_params_takes_its_deployments_drop_params(mod
     )
 
     assert configured_drop_params(llm_router, model_id, {"drop_params": None}) == {"drop_params": expected}
+
+
+@pytest.mark.parametrize("field", ["s3_bucket_name", "s3_output_bucket_name"])
+def test_create_paths_keep_a_request_bucket_and_reads_keep_the_deployment_bucket(field: str) -> None:
+    deployment: Final = {"custom_llm_provider": "bedrock", "api_key": "sk-deployment", field: "model-bucket"}
+    create_with_bucket: Final[dict[str, object]] = {field: "team-a-bucket"}
+    create_without_bucket: Final[dict[str, object]] = {}
+    read_with_bucket: Final[dict[str, object]] = {field: "team-a-bucket"}
+
+    prepare_data_with_credentials(data=create_with_bucket, credentials=dict(deployment), keep_request_buckets=True)
+    prepare_data_with_credentials(data=create_without_bucket, credentials=dict(deployment), keep_request_buckets=True)
+    prepare_data_with_credentials(data=read_with_bucket, credentials=dict(deployment))
+
+    assert create_with_bucket == {field: "team-a-bucket", "api_key": "sk-deployment"}
+    assert create_without_bucket == {field: "model-bucket", "api_key": "sk-deployment"}
+    assert read_with_bucket == {field: "model-bucket", "api_key": "sk-deployment"}

@@ -12,13 +12,14 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Final, cast
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.anthropic_beta_headers_manager import aload_beta_headers_config
 from litellm.constants import PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.reasoning_effort_capability import (
@@ -29,6 +30,7 @@ from litellm.litellm_core_utils.reasoning_effort_capability import (
     resolve_deployment_reasoning_effort,
 )
 from litellm.llms.anthropic.common_utils import (
+    AnthropicError,
     AnthropicModelInfo,
     strip_provider_specific_fields_from_anthropic_messages,
     tools_marked_for_a_tool_config_point,
@@ -58,7 +60,14 @@ from ..safeguards import (
     with_safeguard_results,
 )
 from .interceptors import get_messages_interceptors
-from .utils import AnthropicMessagesRequestUtils, mock_response, prepare_native_messages
+from .utils import (
+    AnthropicMessagesRequestUtils,
+    continues_message_thread,
+    message_thread_not_found_body,
+    message_thread_unsupported_body,
+    mock_response,
+    prepare_native_messages,
+)
 
 __all__ = ("anthropic_messages", "anthropic_messages_handler")
 
@@ -67,6 +76,15 @@ __all__ = ("anthropic_messages", "anthropic_messages_handler")
 _RESPONSES_API_PROVIDERS: Final = frozenset({"openai"})
 _SAFEGUARD_KWARGS: Final = TypeAdapter(Mapping[str, object])
 _SAFEGUARD_MESSAGES: Final = TypeAdapter(Sequence[Mapping[str, object]])
+_DROP_PATHS: Final = TypeAdapter(list[object])
+
+
+def additional_drop_paths(kwargs: Mapping[str, object]) -> tuple[str, ...]:
+    try:
+        configured: Final = _DROP_PATHS.validate_python(kwargs.get("additional_drop_params"))
+    except ValidationError:
+        return ()
+    return tuple(path for path in configured if isinstance(path, str))
 
 
 def _bridges_to_responses_api(model: str, custom_llm_provider: str, deployment_model_info: object) -> bool:
@@ -760,6 +778,32 @@ def anthropic_messages_handler(
     anthropic_messages_provider_config: Final = _native_messages_config(
         model, custom_llm_provider, kwargs.get("model_info"), api_base
     )
+    thread: Final[object] = kwargs.get("thread")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # **kwargs of the handler is untyped
+    if thread is not None and (
+        anthropic_messages_provider_config is None or not anthropic_messages_provider_config.supports_message_threads()
+    ):
+        if continues_message_thread(thread):
+            raise AnthropicError(
+                status_code=404,
+                message=message_thread_not_found_body(
+                    f"message threads are not supported for provider {custom_llm_provider}, "
+                    "so this thread cannot be continued. Send the full conversation to start over"
+                ),
+            )
+        if not drops_unsupported_params(litellm_params.drop_params):
+            raise AnthropicError(
+                status_code=400,
+                message=message_thread_unsupported_body(
+                    f"message threads are not supported for provider {custom_llm_provider}. "
+                    "Send the request without thread, or set drop_params to serve it without a server-side thread"
+                ),
+            )
+        verbose_logger.warning(
+            "Dropping thread for provider %s: message threads are not supported there, "
+            "so the request is served without a server-side thread",
+            custom_llm_provider,
+        )
+        kwargs.pop("thread")  # pyright: ignore[reportUnknownMemberType]  # **kwargs of the handler is untyped
     if anthropic_messages_provider_config is None:
         # Route to Responses API for OpenAI / Azure, chat/completions for everything else.
         if kwargs.get("compaction") is None and _should_route_to_responses_api(
@@ -837,6 +881,7 @@ def anthropic_messages_handler(
             model=model,
             drop_params=litellm_params.get("drop_params") is True,
             custom_llm_provider=custom_llm_provider,
+            additional_drop_params=additional_drop_paths(request_kwargs),
         )
     )
     resolved_api_base: Final = (

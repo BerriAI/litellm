@@ -89,6 +89,7 @@ class SilentExperimentFlag(TypedDict, total=False):
 class FallbackSkipReason(str, enum.Enum):
     NOT_AUTHORIZED = "not_authorized"
     OVER_BUDGET = "over_budget"
+    RATE_LIMITED = "rate_limited"
 
 
 @dataclass(frozen=True, slots=True)
@@ -352,6 +353,10 @@ class ModelInfo(MirroredPricingParams):
     internal_router_model: bool | None = None
 
     max_embedding_batch_size: Annotated[int, Field(gt=0)] | None = None
+
+    # deployments that set the same value share one provider encryption boundary, so encrypted reasoning
+    # minted on one can be replayed to another (e.g. regional endpoints of one OpenAI organization)
+    encrypted_content_boundary: Annotated[str, Field(min_length=1)] | None = None
 
     def __init__(self, id: str | int | None = None, **params) -> None:
         if id is None:
@@ -659,6 +664,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     tag_regex: list[str] | None = None
 
     # auto-router params
+    switchyard_router_config: Mapping[str, object] | None = None
     auto_router_config_path: str | None = None
     auto_router_config: str | None = None
     auto_router_default_model: str | None = None
@@ -1347,6 +1353,19 @@ class FallbackBudgetCheck(Protocol):
     async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], ctx: "RouterContext") -> bool: ...
 
 
+class FallbackRateLimitCheck(Protocol):
+    """
+    Decides whether the caller behind `request_kwargs` still has per-model rate limit capacity on fallback `model`.
+
+    The limiter admits a request once, against the *requested* model group, so a provider failure would hand
+    the caller a fallback group whose per-model limits were never checked. The router runs this before every
+    cross-model-group fallback attempt, skips rejected targets, and an implementation reserves capacity when
+    it admits so concurrent failovers cannot all pass.
+    """
+
+    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], ctx: "RouterContext") -> bool: ...
+
+
 class AutoRouterCapabilityLimit(Protocol):
     """
     Resolves how many complexity routers may claim each licensed capability right now; None means unlimited.
@@ -1461,6 +1480,7 @@ class PreRoutingStrategy(Protocol):
         messages: list[dict[str, Any]] | None = None,
         input: "str | list[Any] | None" = None,
         specific_deployment: bool | None = False,
+        call_type: str | None = None,
     ) -> "PreRoutingHookResponse | None": ...
 
 

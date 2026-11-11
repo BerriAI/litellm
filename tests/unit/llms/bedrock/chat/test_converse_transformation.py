@@ -12218,6 +12218,21 @@ def test_converse_claude_request_over_the_cache_control_cap_drops_the_oldest_hin
     assert messages == messages_before
 
 
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        ("us.anthropic.claude-sonnet-5", {"type": "disabled"}),
+        ("us.anthropic.claude-haiku-4-5", None),
+        ("us.anthropic.claude-sonnet-5-5", None),
+    ],
+)
+def test_none_disables_only_optional_default_thinking(model: str, expected: dict[str, str] | None) -> None:
+    params: Final[dict[str, object]] = {}
+    AmazonConverseConfig()._handle_reasoning_effort_parameter(model, "none", params)
+    assert params.get("thinking") == expected
+    assert "output_config" not in params
+
+
 def test_converse_claude_tool_message_with_several_marked_blocks_counts_as_one_cache_point_against_the_cap(
     monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
 ) -> None:

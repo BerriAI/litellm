@@ -44,8 +44,8 @@ def latest_alias(request: NativeCall) -> bool:
 
 
 def caller_client(request: NativeCall) -> bool:
-    """Python sends through the caller's HTTP client or shared session."""
-    return present(request, "client") or present(request, "shared_session")
+    """Python sends through the caller's HTTP client; a shared session only reuses connections, which native pools."""
+    return present(request, "client")
 
 
 def extra_body(request: NativeCall) -> bool:

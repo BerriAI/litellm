@@ -2930,6 +2930,88 @@ class TestBedrockFileContentTransformation:
         assert response.content == b'{"recordId": "x"}'
 
 
+class TestBedrockFileContentFromTheStoredBucket:
+    TEAM_OUTPUT_URI: Final = "s3://team-a-bucket/litellm-batch-outputs/job-1/input.jsonl.out"
+    TEAM_OUTPUT_URL: Final = "https://s3.us-west-2.amazonaws.com/team-a-bucket/litellm-batch-outputs/job-1/input.jsonl.out"
+    CREDENTIALS: Final = {
+        "aws_access_key_id": "AKIAEXAMPLE",
+        "aws_secret_access_key": "secret",
+        "aws_region_name": "us-west-2",
+    }
+
+    def test_file_in_another_bucket_is_refused_without_the_stored_bucket(self) -> None:
+        with pytest.raises(Exception, match="does not match the configured storage bucket"):
+            litellm.file_content(
+                file_id=self.TEAM_OUTPUT_URI,
+                custom_llm_provider="bedrock",
+                s3_bucket_name="model-bucket",
+                **self.CREDENTIALS,
+            )
+
+    def test_file_in_the_stored_bucket_is_read_from_that_bucket(self) -> None:
+        import httpx
+        import respx
+
+        with respx.mock:
+            route: Final = respx.get(self.TEAM_OUTPUT_URL).mock(return_value=httpx.Response(200, content=b"{}"))
+            response: Final = litellm.file_content(
+                file_id=self.TEAM_OUTPUT_URI,
+                custom_llm_provider="bedrock",
+                s3_bucket_name="model-bucket",
+                stored_s3_bucket_name="team-a-bucket",
+                **self.CREDENTIALS,
+            )
+
+        assert route.call_count == 1
+        assert response.content == b"{}"
+
+    @pytest.mark.parametrize(
+        "stored_file_id",
+        [
+            "s3://team-a-bucket/tenant/litellm-batch-outputs/job-1/input.jsonl.out",
+            "s3://team-a-bucket/tenant/litellm-bedrock-files-nova-1.jsonl",
+            "s3://team-a-bucket/tenant/deeper/litellm-bedrock-files/nova-1.jsonl",
+        ],
+    )
+    def test_file_written_under_a_prefixed_request_bucket_is_read_back_from_it(self, stored_file_id: str) -> None:
+        import httpx
+        import respx
+
+        from litellm.litellm_core_utils.cloud_storage_security import stored_s3_bucket_kwargs
+
+        url: Final = f"https://s3.us-west-2.amazonaws.com/{stored_file_id.removeprefix('s3://')}"
+        with respx.mock:
+            route: Final = respx.get(url).mock(return_value=httpx.Response(200, content=b"{}"))
+            litellm.file_content(
+                file_id=stored_file_id,
+                custom_llm_provider="bedrock",
+                s3_bucket_name="model-bucket",
+                **stored_s3_bucket_kwargs(stored_file_id),
+                **self.CREDENTIALS,
+            )
+
+        assert route.call_count == 1
+
+    def test_file_under_the_model_bucket_prefix_keeps_its_url_when_a_stored_bucket_is_passed(self) -> None:
+        import httpx
+        import respx
+
+        prefixed_url: Final = (
+            "https://s3.us-west-2.amazonaws.com/model-bucket/tenant/litellm-batch-outputs/job-1/input.jsonl.out"
+        )
+        with respx.mock:
+            route: Final = respx.get(prefixed_url).mock(return_value=httpx.Response(200, content=b"{}"))
+            litellm.file_content(
+                file_id="s3://model-bucket/tenant/litellm-batch-outputs/job-1/input.jsonl.out",
+                custom_llm_provider="bedrock",
+                s3_bucket_name="model-bucket/tenant",
+                stored_s3_bucket_name="model-bucket",
+                **self.CREDENTIALS,
+            )
+
+        assert route.call_count == 1
+
+
 class TestBedrockFilesS3SignatureEncoding:
     """
     S3 rebuilds the canonical request from the wire path with single percent-encoding,

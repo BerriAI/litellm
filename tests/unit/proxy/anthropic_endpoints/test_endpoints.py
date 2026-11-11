@@ -2,6 +2,7 @@
 Test for anthropic_endpoints/endpoints.py, focusing on handling dictionary objects in streaming responses
 """
 
+import asyncio
 import datetime
 import json
 import logging
@@ -13,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import respx
 from fastapi import Request, Response
 from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
@@ -84,10 +86,15 @@ _BLOCK_CALL_ID: Final = "messages-block"
 _BLOCK_TEXT: Final = "blocked by guardrail"
 
 
-class _BlockEveryRequest(CustomGuardrail):
+class _BlockEveryRequestOnceReleased(CustomGuardrail):
+    def __init__(self, released: asyncio.Event) -> None:
+        super().__init__(guardrail_name="deny-list", event_hook=GuardrailEventHooks.pre_call, default_on=True)
+        self.released: Final = released
+
     async def async_pre_call_hook(
         self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict[str, object], call_type: str
     ) -> None:
+        await self.released.wait()
         self.raise_passthrough_exception(violation_message=_BLOCK_TEXT, request_data=data)
 
 
@@ -116,21 +123,29 @@ def _messages_request(body: Mapping[str, object]) -> Request:
 
 
 async def _blocked_messages_reply(
-    body: Mapping[str, object], fastapi_response: Response, rails: tuple[CustomGuardrail, ...]
+    body: Mapping[str, object],
+    fastapi_response: Response,
+    rails: tuple[CustomGuardrail, ...],
+    keepalive_interval: float | None = None,
 ) -> tuple[object, str]:
     import litellm
     import litellm.proxy.anthropic_endpoints.endpoints as ep
     import litellm.proxy.proxy_server as proxy_server
     from litellm.proxy.utils import ProxyLogging
 
-    blocker: Final = _BlockEveryRequest(
-        guardrail_name="deny-list", event_hook=GuardrailEventHooks.pre_call, default_on=True
-    )
+    released: Final = asyncio.Event()
+    if keepalive_interval is None:
+        released.set()
     with (
         patch.object(
             proxy_server, "proxy_logging_obj", new=ProxyLogging(user_api_key_cache=DualCache())
         ),  # test-quality-ok: module global imported at call time; no injection seam
-        patch.object(litellm, "callbacks", new=[blocker, *rails]),  # test-quality-ok: guardrails register through this global
+        patch.object(
+            litellm, "callbacks", new=[_BlockEveryRequestOnceReleased(released), *rails]
+        ),  # test-quality-ok: guardrails register through this global
+        patch.object(
+            litellm, "sse_keepalive_ping_interval_seconds", new=keepalive_interval
+        ),  # test-quality-ok: the operator's keepalive interval is read from this global
     ):
         response = await ep.anthropic_response(
             fastapi_response=fastapi_response,
@@ -139,10 +154,32 @@ async def _blocked_messages_reply(
         )
         if not isinstance(response, StreamingResponse):
             return response, ""
-        streamed: Final = b"".join(
-            [chunk if isinstance(chunk, bytes) else chunk.encode() async for chunk in response.body_iterator]
-        ).decode()
+
+        async def chunks() -> AsyncGenerator[bytes, None]:
+            async for chunk in response.body_iterator:
+                released.set()
+                yield chunk if isinstance(chunk, bytes) else str(chunk).encode()
+
+        streamed: Final = b"".join([chunk async for chunk in chunks()]).decode()
         return response, streamed
+
+
+def _anthropic_events(streamed: str) -> tuple[tuple[str, Mapping[str, object]], ...]:
+    frames: Final = tuple(frame for frame in streamed.split("\n\n") if frame.strip() and frame != ": ping")
+    return tuple(
+        (frame.split("\n")[0].removeprefix("event: "), json.loads(frame.split("\n")[1].removeprefix("data: ")))
+        for frame in frames
+    )
+
+
+_BLOCK_EVENTS: Final = (
+    "message_start",
+    "content_block_start",
+    "content_block_delta",
+    "content_block_stop",
+    "message_delta",
+    "message_stop",
+)
 
 
 class TestBlockedResponseUsage:
@@ -219,23 +256,24 @@ class TestBlockedResponseUsage:
             {"model": "claude-haiku-5-5", "stream": True}, Response(), rails
         )
 
-        frames: Final = tuple(frame for frame in streamed.split("\n\n") if frame.strip())
-        events: Final = tuple(
-            (frame.split("\n")[0].removeprefix("event: "), json.loads(frame.split("\n")[1].removeprefix("data: ")))
-            for frame in frames
-        )
+        events: Final = _anthropic_events(streamed)
         assert isinstance(response, StreamingResponse)
         assert response.media_type == "text/event-stream"
         assert response.headers["x-litellm-call-id"] == _BLOCK_CALL_ID
-        assert [name for name, _ in events] == [
-            "message_start",
-            "content_block_start",
-            "content_block_delta",
-            "content_block_stop",
-            "message_delta",
-            "message_stop",
-        ]
+        assert [name for name, _ in events] == list(_BLOCK_EVENTS)
         assert all(payload["type"] == name for name, payload in events)
+        assert events[2][1]["delta"] == {"type": "text_delta", "text": _BLOCK_TEXT}
+        assert events[4][1]["delta"]["stop_reason"] == "end_turn"
+
+    @pytest.mark.asyncio
+    async def test_a_streaming_block_after_a_keepalive_ping_answers_the_block_events(self) -> None:
+        _, streamed = await _blocked_messages_reply(
+            {"model": "claude-haiku-5-5", "stream": True}, Response(), (), keepalive_interval=0.05
+        )
+
+        events: Final = _anthropic_events(streamed)
+        assert streamed.startswith(": ping\n\n")
+        assert [name for name, _ in events] == list(_BLOCK_EVENTS)
         assert events[2][1]["delta"] == {"type": "text_delta", "text": _BLOCK_TEXT}
         assert events[4][1]["delta"]["stop_reason"] == "end_turn"
 
@@ -1220,6 +1258,49 @@ def test_count_tokens_rejected_before_counting_logs_the_400_it_answers(
             "status_code": 400,
         },
     )
+
+
+def test_count_tokens_on_bedrock_answers_400_for_a_message_without_content_without_calling_bedrock(
+    monkeypatch: pytest.MonkeyPatch, httpx_transport: None, respx_mock: respx.MockRouter
+) -> None:
+    from fastapi import FastAPI
+
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.anthropic_endpoints.endpoints import router
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "count-bedrock-claude",
+                    "litellm_params": {
+                        "model": "bedrock/us.anthropic.claude-zeta-9",
+                        "aws_region_name": "us-east-1",
+                        "aws_access_key_id": "AKIATESTACCESSKEY",
+                        "aws_secret_access_key": "test-secret",
+                    },
+                    "model_info": {"id": "count-bedrock-claude-deployment", "token_count_framing": 3},
+                }
+            ]
+        ),
+    )
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth()
+
+    response: Final = TestClient(app).post(
+        "/v1/messages/count_tokens", json={"model": "count-bedrock-claude", "messages": [{"role": "user"}]}
+    )
+
+    assert response.status_code == 400, response.text
+    assert response.json()["error"]["type"] == "invalid_request_error"
+    assert response.json()["error"]["message"] == "Message 0 must have a 'content' field"
+    assert len(respx_mock.calls) == 0
 
 
 class TestEventLoggingBatchEndpoint:

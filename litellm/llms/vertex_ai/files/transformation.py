@@ -1309,7 +1309,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
 
     def _map_openai_to_vertex_params(
         self,
-        openai_request_body: dict[str, Any],
+        openai_request_body: dict[str, object],
         deployment_drop_params: object = None,
     ) -> dict[str, object]:
         """

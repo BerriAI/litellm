@@ -49,7 +49,7 @@ from mcp.types import (
 )
 from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl, ConfigDict, Field, JsonValue, SecretStr, TypeAdapter
-from typing_extensions import ReadOnly, TypedDict, assert_never
+from typing_extensions import ReadOnly, TypedDict, Unpack, assert_never
 
 from litellm._logging import verbose_logger
 from litellm.constants import (
@@ -562,6 +562,7 @@ async def _dispatch_virtual_mcp_tool(
             is_error=True,
         )
 
+    assert user_api_key_auth is not None  # guaranteed by the flag check above
     args: Final = arguments or {}
     if name == MCP_TOOL_SEARCH_TOOL_NAME:
         return await handle_mcp_tool_search(
@@ -576,7 +577,6 @@ async def _dispatch_virtual_mcp_tool(
             raw_headers=raw_headers,
         )
 
-    assert user_api_key_auth is not None  # guaranteed by the flag check above
     if name == AGENT_SEARCH_TOOL_NAME:
         return await handle_agent_search(
             query=str(args.get("query", "")),
@@ -1080,7 +1080,7 @@ def _prepare_mcp_server_headers(
         )
 
         for header in server.extra_headers:
-            if not isinstance(header, str) or header.lower() == "x-litellm-api-key":
+            if not isinstance(header, str):
                 continue
             if header.lower() == "authorization" and (strip_caller_authorization or withhold_forwarded_authorization):
                 continue
@@ -2926,6 +2926,10 @@ async def resolve_scoped_mcp_server(
     return _single_scoped_server(mcp_servers, allowed_mcp_servers)
 
 
+class _CallMcpToolOptions(TypedDict, total=False, extra_items=object):
+    litellm_logging_obj: ReadOnly[LiteLLMLoggingObj | None]
+
+
 @client
 @catalog_operation(lambda: global_mcp_server_manager)
 async def call_mcp_tool(
@@ -2943,7 +2947,7 @@ async def call_mcp_tool(
     request_state: str | None = None,
     incoming_bearer_token: SecretStr | None | EllipsisType = ...,
     guardrail_auth: UserAPIKeyAuth | None = None,
-    **kwargs: Any,
+    **kwargs: Unpack[_CallMcpToolOptions],
 ) -> CallToolResult | InputRequiredResult:
     """
     Call a specific tool with the provided arguments (handles prefixed tool names).

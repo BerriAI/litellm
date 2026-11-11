@@ -3235,3 +3235,18 @@ def test_databricks_claude_cache_control_cap_keeps_room_for_a_top_level_cache_co
 
     assert "cache_control" not in json.dumps(body["messages"][0])
     assert json.dumps(body["messages"]).count('"cache_control"') == 3
+
+
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        ("databricks-claude-sonnet-5", {"type": "disabled"}),
+        ("databricks-claude-haiku-4-5", None),
+        ("databricks-claude-sonnet-5-5", None),
+    ],
+)
+def test_none_disables_only_optional_default_thinking(model: str, expected: dict[str, str] | None) -> None:
+    params: Final = _map_reasoning_effort(model, "none")
+    assert params.get("thinking") == expected
+    assert "output_config" not in params
+    assert "reasoning_effort" not in params

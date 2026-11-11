@@ -54,7 +54,9 @@ Documentation = "https://docs.litellm.ai"
 # sub-packages and the opentelemetry trio move in lockstep, and grpcio is
 # supply-chain-pinned to a vetted, aged release.
 [project.optional-dependencies]
+switchyard = ["nemo-switchyard==0.4.0a1"]
 proxy = [
+    "casbin==1.43.0",
     "gunicorn>=23.0.0,<24.0",
     "uvicorn>=0.33.0,<1.0",
     "granian>=2.7.4,<3.0; python_version < '3.15'",
@@ -72,6 +74,7 @@ proxy = [
     "hiredis>=3.0.0,<4.0; python_version < '3.15'",
     "hiredis>=3.5.0,<4.0; python_version >= '3.15'",
     "apscheduler>=3.11.2,<4.0",
+    "tzdata>=2024.1",
     "fastapi-sso>=0.19.0,<1.0",
     "PyJWT>=2.13.0,<3.0",
     "python-multipart>=0.0.27,<1.0",
@@ -268,12 +271,14 @@ proxy-dev = [
     "opentelemetry-instrumentation-fastapi==0.66b1",
     "azure-identity==1.25.2",
     "a2a-sdk==1.1.0",
+    "nemo-switchyard==0.4.0a1",
     "backports-zstd==1.8.0; python_version < '3.14'",
     "httptools>=0.7.1,<0.8",
     "semver>=3.0.4,<4",
 ]
 ci = [
     "psutil==7.2.2",
+    "tzdata==2026.2",
     # These are lazily imported at call sites; keep them out of core deps to
     # avoid bloating the base SDK install (google-generativeai pulls grpcio +
     # protobuf, Pillow is a compiled C extension).
@@ -343,6 +348,8 @@ include = [
     "litellm/proxy/public_endpoints/whats_new.json",
     "litellm/proxy/common_utils/codex_base_instructions.md",
     "litellm/proxy/common_utils/codex_bundled_models_0.166.0.json",
+    "litellm/proxy/common_utils/codex_bedrock_mantle_models_0.166.0.json",
+    "litellm/proxy/common_utils/codex_bedrock_runtime_models_0.166.0.json",
     { path = "model_prices_and_context_window.json", format = "sdist" },
 ]
 exclude = [
@@ -362,6 +369,7 @@ exclude = [
 concurrent-builds = 1
 cache-keys = [
     { file = "pyproject.toml" },
+    { env = "MATURIN_PEP517_ARGS" },
     { file = "rust-toolchain.toml" },
     { file = ".cargo/config.toml" },
     { file = "litellm-rust/Cargo.lock" },
