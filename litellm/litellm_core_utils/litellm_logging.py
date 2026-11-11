@@ -135,6 +135,7 @@ from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import
 )
 from litellm.litellm_core_utils.llm_cost_calc.zero_cost_diagnostic import (
     diagnose_zero_cost,
+    is_explicitly_free_usage,
     zero_cost_warning,
 )
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import LiteLLMResponseObjectHandler
@@ -906,6 +907,7 @@ class Logging(LiteLLMLoggingBaseClass):
         # Timing for results that cannot carry ``_hidden_params`` (plain-dict /v1/messages
         # responses and the bridge stream wrappers); see ``update_response_metadata``.
         self.response_timing_metrics: Mapping[str, float] = {}
+        self.first_chunk_overhead_ms: float | None = None
 
         # Passthrough endpoint guardrails config for field targeting
         self.passthrough_guardrails_config: dict[str, object] | None = None
@@ -982,6 +984,11 @@ class Logging(LiteLLMLoggingBaseClass):
     def set_response_timing_metrics(self, timing_metrics: Mapping[str, float]) -> None:
         """Keep ``_response_ms`` / ``litellm_overhead_time_ms`` for a result that has no ``_hidden_params``."""
         self.response_timing_metrics = dict(timing_metrics)
+
+    def set_first_chunk_overhead(self, seconds: float) -> None:
+        """The proxy's own work on the first chunk of a stream, the delay every later chunk inherits."""
+        if self.first_chunk_overhead_ms is None:
+            self.first_chunk_overhead_ms = seconds * 1000
 
     def add_dynamic_callback(self, callback: CustomLogger) -> None:
         self.dynamic_input_callbacks = self._with_dynamic_callback(self.dynamic_input_callbacks, callback)
@@ -2410,6 +2417,33 @@ class Logging(LiteLLMLoggingBaseClass):
             custom_llm_provider=custom_llm_provider,
             usage=usage,
         )
+
+    def is_usage_explicitly_free(self, result: object) -> bool:
+        usage: Final = get_usage_object(completion_response=result)
+        if usage is None or self.model_call_details.get("response_cost_failure_debug_information") is not None:
+            return False
+        custom_pricing: Final = self.custom_pricing_for(result)
+        if custom_pricing and self.custom_model_info is not None:
+            return is_explicitly_free_usage(usage, self.custom_model_info)
+        if custom_pricing and self.custom_cost_per_token is not None:
+            return is_explicitly_free_usage(usage, self.custom_cost_per_token)
+        custom_llm_provider: Final = self.model_call_details.get("custom_llm_provider")
+        pricing: Final = pricing_entry_for_cost_calc(
+            model=self.model,
+            completion_response=result,
+            custom_llm_provider=self.get_router_pricing_provider() or custom_llm_provider,
+            custom_pricing=custom_pricing,
+            base_model=get_base_model_from_metadata(model_call_details=self.model_call_details),
+            router_model_id=self.get_router_model_id(),
+            region_name=_resolve_mantle_region_for_cost(
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=self.model_call_details.get("litellm_params"),
+            ),
+            litellm_logging_obj=self,
+        )
+        if pricing is None:
+            return False
+        return is_explicitly_free_usage(usage, pricing[1])
 
     def spilled_over_ptu_for(self, result: object) -> bool:
         result_hidden_params: Final = getattr(result, HIDDEN_PARAMS_ATTR, None) or MappingProxyType({})
@@ -7984,8 +8018,15 @@ def get_standard_logging_object_payload(
         if clean_hidden_params["litellm_overhead_time_ms"] is None and status == "success":
             # /v1/messages dict results and the bridge stream wrappers keep it on the logging object;
             # failure payloads stay None like every response type that carries its own _hidden_params
-            timing_metrics: Final = getattr(logging_obj, "response_timing_metrics", None) or {}
+            timing_metrics: Final[Mapping[str, float]] = getattr(logging_obj, "response_timing_metrics", None) or {}
             clean_hidden_params["litellm_overhead_time_ms"] = timing_metrics.get("litellm_overhead_time_ms")
+        # the overhead above was stamped when the stream object came back, before any chunk was
+        # read; the proxy's work on the first chunk (hook, cost injection, serialization) is the
+        # delay the client sees on every chunk, so only that one is added, never a sum over chunks
+        first_chunk_overhead_ms: Final = getattr(logging_obj, "first_chunk_overhead_ms", None)
+        stamped_overhead_ms: Final = clean_hidden_params["litellm_overhead_time_ms"]
+        if status == "success" and stamped_overhead_ms is not None and isinstance(first_chunk_overhead_ms, float):
+            clean_hidden_params["litellm_overhead_time_ms"] = round(stamped_overhead_ms + first_chunk_overhead_ms, 4)
 
         model_cost_information: Final = StandardLoggingPayloadSetup.get_model_cost_information(
             base_model=base_model,

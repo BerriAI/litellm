@@ -6,6 +6,7 @@ from typing import Final, TypeAlias
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.model_cost_table import ModelCostVersion, model_cost_version
 
 
 class _Held:
@@ -21,7 +22,7 @@ class _Held:
         return isinstance(other, _Held) and other.value is self.value
 
 
-_Fingerprint: TypeAlias = tuple[str, str | None, _Held, int, int, tuple[_Held, ...]]
+_Fingerprint: TypeAlias = tuple[str, str | None, _Held, ModelCostVersion, int, tuple[_Held, ...]]
 
 
 def _resolved_provider(model: str, custom_llm_provider: str | None) -> tuple[str, str]:
@@ -33,12 +34,11 @@ def _resolved_provider(model: str, custom_llm_provider: str | None) -> tuple[str
 
 
 def _fingerprint(model: str, custom_llm_provider: str | None, resolved_model: str, provider: str) -> _Fingerprint:
-    """Changes whenever an answer could: ``register_model`` bumps the generation, and replacing
+    """Changes whenever an answer could: every write moves the cost map version, and replacing
     any entry the probes look up (``litellm.model_cost[key] = ...``) changes that entry's identity.
     The key holds the entries it names, so a cached answer's entries are never freed and their
     addresses never reused."""
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
-    from litellm.utils import get_model_cost_mutation_generation
 
     model_cost: Final = as_str_mapping(litellm.model_cost) or {}  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # the model map is an untyped dict of rows
     keys: Final = dict.fromkeys(
@@ -52,7 +52,7 @@ def _fingerprint(model: str, custom_llm_provider: str | None, resolved_model: st
         model,
         custom_llm_provider,
         _Held(model_cost),
-        get_model_cost_mutation_generation(),
+        model_cost_version(),
         len(model_cost),
         tuple(_Held(model_cost.get(key)) for key in keys),
     )

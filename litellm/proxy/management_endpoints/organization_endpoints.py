@@ -32,6 +32,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.models.budget import CUSTOMER_ONLY_BUDGET_FIELDS
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     can_user_call_model,
@@ -319,7 +320,9 @@ _verify_org_access: Final = verify_org_access
 
 
 _STR_OBJECT_DICT_ADAPTER: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
-_BUDGET_SETTABLE_FIELDS: Final = frozenset(LiteLLM_BudgetTable.model_fields.keys()) - {"budget_id"}
+_BUDGET_SETTABLE_FIELDS: Final = (
+    frozenset(LiteLLM_BudgetTable.model_fields.keys()) - {"budget_id"} - CUSTOMER_ONLY_BUDGET_FIELDS
+)
 _ORG_COLUMN_FIELDS: Final = frozenset({"organization_alias", "models"})
 _ORG_METADATA_FIELDS: Final = tuple(
     field for field in LiteLLM_ManagementEndpoint_MetadataFields if field not in _BUDGET_SETTABLE_FIELDS
@@ -497,7 +500,7 @@ async def new_organization(
 
         If none provided, create one based on provided values
         """
-        budget_params: Final = LiteLLM_BudgetTable.model_fields.keys()
+        budget_params: Final = LiteLLM_BudgetTable.model_fields.keys() - CUSTOMER_ONLY_BUDGET_FIELDS
 
         # Only include Budget Params when creating an entry in litellm_budgettable
         _json_data: Final = _STR_OBJECT_DICT_ADAPTER.validate_python(data.json(exclude_none=True))

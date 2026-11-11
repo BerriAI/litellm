@@ -5138,6 +5138,7 @@ proxy = [
     { name = "soundfile" },
     { name = "starlette" },
     { name = "tomlkit" },
+    { name = "tzdata" },
     { name = "uvicorn" },
     { name = "uvloop", marker = "sys_platform != 'win32'" },
     { name = "websockets" },
@@ -5230,6 +5231,7 @@ ci = [
     { name = "pytest-retry" },
     { name = "tenacity" },
     { name = "traceloop-sdk" },
+    { name = "tzdata" },
 ]
 dev = [
     { name = "basedpyright" },
@@ -5422,6 +5424,7 @@ requires-dist = [
     { name = "tomlkit", marker = "extra == 'cli'", specifier = ">=0.13.3,<1.0" },
     { name = "tomlkit", marker = "extra == 'proxy'", specifier = ">=0.13.3,<1.0" },
     { name = "typing-extensions", specifier = ">=4.13.0,<5.0" },
+    { name = "tzdata", marker = "extra == 'proxy'", specifier = ">=2024.1" },
     { name = "uvicorn", marker = "extra == 'proxy'", specifier = ">=0.33.0,<1.0" },
     { name = "uvloop", marker = "sys_platform != 'win32' and extra == 'proxy'", specifier = ">=0.22.1,<1.0" },
     { name = "websockets", marker = "extra == 'proxy'", specifier = ">=15.0.1,<16.0" },
@@ -5468,6 +5471,7 @@ ci = [
     { name = "pytest-retry", specifier = "==1.7.0" },
     { name = "tenacity", specifier = "==8.5.0" },
     { name = "traceloop-sdk", specifier = "==0.34.0" },
+    { name = "tzdata", specifier = "==2026.2" },
 ]
 dev = [
     { name = "basedpyright", specifier = "==1.39.7" },

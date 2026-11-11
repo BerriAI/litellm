@@ -9,6 +9,7 @@ mod execution;
 mod http;
 mod logger;
 mod marshal;
+mod model_cost;
 mod model_registry;
 mod preflight;
 mod python_settings;
@@ -35,6 +36,12 @@ mod _native {
     use crate::errors::{RustBridgeDeclined, RustUpstreamError};
     #[pymodule_export]
     use crate::logger::NativeDiagnosticProcessor;
+    #[pymodule_export]
+    use crate::model_cost::{
+        NativeCostMapSource, NativeFetchFailed, NativeFetchPolicy, NativeFetched, NativeInstalled,
+        NativeModelCostMap, NativeModelCostMapState, NativeProvenance, NativeRegistered,
+        NativeRejected, NativeTableSwapped,
+    };
     #[pymodule_export]
     use crate::model_registry::bundled_model_cost_map;
     #[pymodule_export]
@@ -166,6 +173,17 @@ mod tests {
                 "NativeDatabase",
                 "trace_encode_error",
                 "bundled_model_cost_map",
+                "NativeModelCostMap",
+                "NativeModelCostMapState",
+                "NativeInstalled",
+                "NativeRejected",
+                "NativeRegistered",
+                "NativeTableSwapped",
+                "NativeProvenance",
+                "NativeCostMapSource",
+                "NativeFetchPolicy",
+                "NativeFetched",
+                "NativeFetchFailed",
                 "TokenCounter",
                 "Tokenizer",
                 "RouterCoreHandle",

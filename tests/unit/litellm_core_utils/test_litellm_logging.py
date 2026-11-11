@@ -79,6 +79,64 @@ from typing import List, Optional
 from litellm.types.utils import LiteLLMCommonStrings
 
 
+@pytest.mark.parametrize("metadata_key", ("metadata", "litellm_metadata"))
+def test_free_usage_uses_deployment_metadata_prices(metadata_key: str) -> None:
+    obj: Final = Logging(
+        model="metadata-free-deployment",
+        messages=[],
+        stream=True,
+        call_type="completion",
+        start_time=1.0,
+        litellm_call_id="metadata-free",
+        function_id="test",
+    )
+    obj.litellm_params = {metadata_key: {"model_info": {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}}}
+    response: Final = ModelResponse(
+        model="metadata-free-deployment", usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+    )
+
+    assert obj.is_usage_explicitly_free(response) is True
+
+
+@pytest.mark.parametrize("pricing_source", ("model_info", "token_rates"))
+@pytest.mark.parametrize("rate", (0.0, 0.001))
+@pytest.mark.parametrize("calculation_failed", (False, True))
+def test_per_call_free_prices_override_catalog_unless_pricing_failed(
+    monkeypatch: pytest.MonkeyPatch, pricing_source: str, rate: float, calculation_failed: bool
+) -> None:
+    model: Final = "per-call-free-price-test"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 0.01, "output_cost_per_token": 0.02},
+    )
+    obj: Final = Logging(
+        model=model,
+        messages=[],
+        stream=True,
+        call_type="completion",
+        start_time=1.0,
+        litellm_call_id="per-call-free",
+        function_id="test",
+    )
+    obj.litellm_params = {"input_cost_per_token": rate, "output_cost_per_token": rate}
+    if pricing_source == "model_info":
+        obj.set_per_call_pricing(
+            {
+                **litellm.get_model_info(model=model, custom_llm_provider="openai"),
+                "input_cost_per_token": rate,
+                "output_cost_per_token": rate,
+            }
+        )
+    else:
+        obj.custom_cost_per_token = {"input_cost_per_token": rate, "output_cost_per_token": rate}
+    if calculation_failed:
+        obj.model_call_details["response_cost_failure_debug_information"] = {"error": "pricing failed"}
+    response: Final = ModelResponse(model=model, usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
+
+    assert obj.is_usage_explicitly_free(response) is (rate == 0.0 and not calculation_failed)
+
+
 @pytest.fixture
 def logging_obj():
     return LitellmLogging(
@@ -10128,6 +10186,45 @@ def test_get_standard_logging_object_payload_reads_overhead_from_logging_obj_for
 
     assert payload is not None
     assert payload["hidden_params"]["litellm_overhead_time_ms"] == 100.0
+
+
+@pytest.mark.parametrize(
+    ("stamped_overhead_ms", "first_chunk_overhead_ms", "expected_overhead_ms"),
+    (
+        (100.0, 25.5, 125.5),
+        (None, 25.5, None),
+    ),
+)
+def test_get_standard_logging_object_payload_adds_first_chunk_work_to_overhead(
+    logging_obj, stamped_overhead_ms, first_chunk_overhead_ms, expected_overhead_ms
+):
+    """The overhead stamped when the stream object came back misses the hook and cost injection on
+    the first chunk, the delay every chunk the client sees inherits, so that one chunk's work is
+    added on top. With no stamped overhead the first chunk work alone is not reported."""
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+
+    logging_obj.set_response_timing_metrics(
+        {"_response_ms": 1000.0}
+        if stamped_overhead_ms is None
+        else {"_response_ms": 1000.0, "litellm_overhead_time_ms": stamped_overhead_ms}
+    )
+    logging_obj.first_chunk_overhead_ms = first_chunk_overhead_ms
+    now = datetime.datetime.now()
+    payload = get_standard_logging_object_payload(
+        kwargs={"litellm_call_id": "call-1", "model": "gpt-4o", "messages": []},
+        init_response_obj={"id": "msg_1", "type": "message", "role": "assistant", "content": []},
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["hidden_params"]["litellm_overhead_time_ms"] == expected_overhead_ms
 
 
 def test_get_standard_logging_object_payload_survives_logging_obj_without_timing_metrics(logging_obj):

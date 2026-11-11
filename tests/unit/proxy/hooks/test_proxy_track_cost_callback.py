@@ -13,12 +13,14 @@ import pytest
 
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.litellm_core_utils.batch_utils import POLLED_BATCH_COST_IS_FINAL_KWARG, POLLED_BATCH_ID_KWARG
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
+from litellm.litellm_core_utils.redact_messages import perform_redaction
 from litellm.proxy._types import ProxyException, SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.collector import SpendEventConsumer
 from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
@@ -35,6 +37,7 @@ from litellm.proxy.hooks.proxy_track_cost_callback import (
     run_spend_event,
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
+from litellm.proxy.pass_through_endpoints.pass_through_endpoints import InitPassThroughEndpointHelpers
 from litellm.proxy.spend_tracking.spend_event import SpendEventDecodeError, build_spend_event, decode_spend_event
 from litellm.proxy.spend_tracking.spend_event_producer import SpendEventProducer, UnixAddress
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
@@ -46,6 +49,10 @@ from litellm.proxy.utils import (
 )
 from litellm.types.proxy.carried_budget_state import CommittedBudgetSpend, EntitySpendCounterKeys
 from litellm.types.router import Deployment, LiteLLM_Params
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    SETTLES_BACKGROUND_RESPONSE_KWARG,
+    BackgroundResponseSettlement,
+)
 from litellm.types.utils import CallTypes, LiteLLMBatch, ModelResponse, PromptTokensDetailsWrapper, Usage
 from litellm.types.videos.main import VideoObject
 
@@ -905,6 +912,74 @@ async def test_async_post_call_failure_hook_non_llm_route():
 
         # Assert that update_database was NOT called for non-LLM routes
         mock_update_database.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route", "call_type", "written"),
+    [
+        ("/azure-search", CallTypes.pass_through.value, True),
+        ("/unregistered-search", CallTypes.acompletion.value, False),
+        ("/key/generate", CallTypes.pass_through.value, False),
+        ("/team/new", CallTypes.pass_through.value, False),
+        ("/unregistered-search", CallTypes.pass_through.value, False),
+        ("/azure-search/", CallTypes.pass_through.value, True),
+        ("/configured-search/indexes/docs", CallTypes.pass_through.value, True),
+        (None, CallTypes.acompletion.value, True),
+    ],
+)
+async def test_async_post_call_failure_hook_tracks_config_defined_pass_through_route(
+    route: str | None, call_type: str, written: bool
+) -> None:
+    api_base: Final = "http://upstream.example/indexes/x/docs/search"
+    request_data: Final = {
+        "model": "azure-search",
+        "call_type": call_type,
+        "litellm_params": {"api_base": api_base, "metadata": {}},
+    }
+    user_api_key_dict: Final = UserAPIKeyAuth(
+        api_key="test_api_key",
+        request_route=route,
+    )
+
+    spend_writer: Final = create_autospec(DBSpendUpdateWriter, instance=True)
+    with patch.dict(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes", clear=True
+    ):
+        InitPassThroughEndpointHelpers.add_exact_path_route(
+            app=FastAPI(),
+            path="/azure-search",
+            target=api_base,
+            custom_headers={},
+            forward_headers=False,
+            merge_query_params=False,
+            dependencies=[],
+            cost_per_request=None,
+            endpoint_id="configured-exact",
+        )
+        InitPassThroughEndpointHelpers.add_subpath_route(
+            app=FastAPI(),
+            path="/configured-search",
+            target=api_base,
+            custom_headers={},
+            forward_headers=False,
+            merge_query_params=False,
+            dependencies=[],
+            cost_per_request=None,
+            endpoint_id="configured-subpath",
+        )
+        await ProxyDBLogger(spend_writer=lambda: spend_writer).async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=Exception("Provider error"),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        assert spend_writer.update_database.await_count == (1 if written else 0)
+        if not written:
+            return
+        call_args: Final = spend_writer.update_database.call_args
+        assert call_args.kwargs["kwargs"]["litellm_params"]["api_base"] == api_base
+        assert call_args.kwargs["kwargs"]["litellm_params"]["metadata"]["status"] == "failure"
 
 
 @pytest.mark.asyncio
@@ -3623,17 +3698,41 @@ def _completed_batch() -> LiteLLMBatch:
     )
 
 
+def _redacted_completed_batch() -> object:
+    return perform_redaction({}, _completed_batch())
+
+
 def _completed_video() -> VideoObject:
     return VideoObject(id="video_abc", object="video", status="completed")
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("call_type", "polled_job"),
-    [(CallTypes.aretrieve_batch.value, _completed_batch), ("avideo_status", _completed_video)],
+    ("job_kwargs", "polled_job"),
+    [
+        ({"call_type": CallTypes.aretrieve_batch.value}, _completed_batch),
+        (
+            {
+                "call_type": CallTypes.aretrieve_batch.value,
+                POLLED_BATCH_ID_KWARG: "batch_abc",
+                POLLED_BATCH_COST_IS_FINAL_KWARG: True,
+            },
+            _redacted_completed_batch,
+        ),
+        ({"call_type": "avideo_status"}, _completed_video),
+        (
+            {
+                "call_type": "pass_through_endpoint",
+                SETTLES_BACKGROUND_RESPONSE_KWARG: BackgroundResponseSettlement.SETTLES,
+            },
+            _offload_response,
+        ),
+    ],
+    ids=["batch_retrieve", "redacted_batch_retrieve", "video_status_poll", "background_response_settling_read"],
 )
-async def test_async_log_success_event_keeps_job_polls_in_process(call_type, polled_job):
-    """The spend event leaves out the polled video's status and id, which decide whether the poll charges the job."""
+async def test_async_log_success_event_keeps_job_polls_in_process(job_kwargs, polled_job):
+    """The spend event leaves out the polled video's status and id and a background response's settlement flag,
+    which decide whether the poll charges the job and which spend row it writes."""
     producer = SpendEventProducer(
         address=UnixAddress(path="/nonexistent/spend.sock"),
         on_unavailable="drop",
@@ -3642,7 +3741,7 @@ async def test_async_log_success_event_keeps_job_polls_in_process(call_type, pol
         fallback=_no_fallback,
     )
     logger = ProxyDBLogger(producer)
-    kwargs = {**_offload_kwargs(), "call_type": call_type}
+    kwargs = {**_offload_kwargs(), **job_kwargs}
     completed_job = polled_job()
 
     with (

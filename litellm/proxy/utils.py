@@ -65,6 +65,7 @@ from litellm.constants import (
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     MAX_TEAM_LIST_LIMIT,
+    MESSAGE_THREAD_MAX_TRACKED_OWNERS,
     PROXY_REJECTED_BEFORE_ROUTING_KEY,
     REDACTED_BY_LITELLM,
     REDIS_SPEND_LOGS_BUFFER_DEQUEUE_COUNT,
@@ -72,6 +73,7 @@ from litellm.constants import (
     SPEND_LOG_READ_STATEMENT_TIMEOUT_SECONDS,
     SPEND_LOG_WRITE_BATCH_MAX_BYTES,
     SPEND_LOG_WRITE_BATCH_MAX_ROWS,
+    TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS,
     VLLM_CHOICE_FIELDS,
 )
 from litellm.cost_calculator import BaseTokenUsageProcessor
@@ -149,6 +151,7 @@ from litellm.caching.dual_cache import LimitedSizeOrderedDict
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.exceptions import (
     GuardrailRaisedException,
+    MissingMessageRoleError,
     RejectedRequestError,
     SensitiveDataRouteException,
 )
@@ -285,6 +288,7 @@ from litellm.proxy.policy_engine.pipeline_executor import (
 )
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
+from litellm.proxy.spend_tracking.session_spend_total import SessionSpendTotals
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.spend_log_insert import RejectedSpendLogRow
@@ -668,6 +672,8 @@ class _BudgetAlertEmailer(Protocol):
 
 
 def _is_client_error_exception(exc: Exception) -> bool:
+    if isinstance(exc, MissingMessageRoleError):
+        return True
     if isinstance(exc, HTTPException):
         return exc.status_code < 500
     if isinstance(exc, ProxyException):
@@ -1962,6 +1968,9 @@ class ProxyLogging:
         self.file_usage_cache: Final = InternalUsageCache(
             dual_cache=DualCache(in_memory_cache=InMemoryCache(max_size_in_memory=FILE_USAGE_MAX_TRACKED_COUNTERS))
         )
+        self.message_thread_owner_cache: Final = InternalUsageCache(
+            dual_cache=DualCache(in_memory_cache=InMemoryCache(max_size_in_memory=MESSAGE_THREAD_MAX_TRACKED_OWNERS))
+        )
         self.max_parallel_request_limiter = PROXY_MaxParallelRequestsHandler(self.internal_usage_cache)
         self.cache_control_check = PROXY_CacheControlCheck()
         self.alerting: list[str] | None = None
@@ -1983,7 +1992,8 @@ class ProxyLogging:
                 )
         self.premium_user = premium_user
         self.service_logging_obj = ServiceLogging()
-        self.db_spend_update_writer = DBSpendUpdateWriter()
+        self.session_spend_totals: Final = SessionSpendTotals(lambda: self.internal_usage_cache.dual_cache.redis_cache)
+        self.db_spend_update_writer = DBSpendUpdateWriter(session_spend_totals=self.session_spend_totals)
         self.proxy_hook_mapping: dict[str, CustomLogger] = {}
 
         # Guard flags to prevent duplicate background tasks
@@ -2120,6 +2130,7 @@ class ProxyLogging:
         if redis_cache is not None:
             self.internal_usage_cache.dual_cache.redis_cache = redis_cache
             self.file_usage_cache.dual_cache.redis_cache = redis_cache
+            self.message_thread_owner_cache.dual_cache.redis_cache = redis_cache
             self.db_spend_update_writer.redis_update_buffer.redis_cache = redis_cache
             self.db_spend_update_writer.pod_lock_manager.redis_cache = redis_cache
 
@@ -2139,6 +2150,7 @@ class ProxyLogging:
                 continue
             available_args: Mapping[str, object] = {
                 "internal_usage_cache": self.internal_usage_cache,
+                "message_thread_owner_cache": self.message_thread_owner_cache,
                 "prisma_client": prisma_client,
             }
             passed_in_args = {name: value for name, value in available_args.items() if name in expected_args}
@@ -5353,6 +5365,7 @@ _deprecated_key_cache: Final[LimitedSizeOrderedDict] = LimitedSizeOrderedDict(ma
 _DEPRECATED_KEY_CACHE_TTL_SECONDS: Final = 60
 _PRISMA_DEFAULT_TX_TIMEOUT: Final = timedelta(seconds=5)
 _PRISMA_DEFAULT_TX_MAX_WAIT: Final = timedelta(seconds=2)
+_TEAM_DELETE_TX_BUDGET: Final = timedelta(seconds=TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS)
 _SPEND_LOG_READ_STATEMENT_TIMEOUT: Final = timedelta(seconds=SPEND_LOG_READ_STATEMENT_TIMEOUT_SECONDS)
 _STATEMENT_TIMEOUT_TRANSACTION_GRACE: Final = timedelta(seconds=5)
 
@@ -5367,16 +5380,19 @@ async def query_raw_within_statement_timeout(
     sql: str,
     *params: object,
     what: str = "Spend logs",
+    hint: str = "Pick a shorter date range",
     timeout: timedelta = _SPEND_LOG_READ_STATEMENT_TIMEOUT,
 ) -> Sequence[Mapping[str, object]]:
     """One raw read on the read target that Postgres cancels at ``timeout``.
 
     Prisma's HTTP client gives up on a statement after 30s anyway, so without
     this the Admin UI's error is the same but Postgres keeps running the scan.
-    A cancelled read surfaces as a 503 asking for a narrower date range.
+    A cancelled read surfaces as a 503 carrying ``hint``.
     """
     try:
-        async with prisma_client.read_db.tx(timeout=timeout + _STATEMENT_TIMEOUT_TRANSACTION_GRACE) as transaction:
+        async with prisma_client.read_db.tx(
+            max_wait=timeout, timeout=timeout + _STATEMENT_TIMEOUT_TRANSACTION_GRACE
+        ) as transaction:
             await transaction.execute_raw(f"SET LOCAL statement_timeout = {int(timeout / timedelta(milliseconds=1))}")
             return await transaction.query_raw(sql, *params)
     except Exception as e:
@@ -5384,7 +5400,7 @@ async def query_raw_within_statement_timeout(
             raise
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"error": f"{what} took longer than {int(timeout.total_seconds())}s. Pick a shorter date range"},
+            detail={"error": f"{what} took longer than {int(timeout.total_seconds())}s. {hint}"},
         ) from e
 
 
@@ -6972,7 +6988,7 @@ class PrismaClient:
                 return {"deleted_teams": team_id_list}
             elif table_name == "key" and team_id_list is not None and isinstance(team_id_list, list):
                 # admin only endpoint -> `/team/delete`
-                async with self.tx() as transaction:
+                async with self.tx(max_wait=_TEAM_DELETE_TX_BUDGET, timeout=_TEAM_DELETE_TX_BUDGET) as transaction:
                     _ = await transaction.query_raw(_LOCK_KEYS_BY_TEAM_SQL, team_id_list)
                     _ = await transaction.litellm_verificationtoken.delete_many(where={"team_id": {"in": team_id_list}})
         except Exception as e:
