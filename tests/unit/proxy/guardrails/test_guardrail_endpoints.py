@@ -2142,7 +2142,7 @@ async def test_create_guardrail_audit_row_records_the_caller_and_no_provider_sec
             "before_value": None,
         }
     ], rows
-    assert _audit_snapshot(rows[0], "updated_values") == STORED_GUARDRAIL_SNAPSHOT
+    assert _audit_snapshot(rows[0], "updated_values") == {**STORED_GUARDRAIL_SNAPSHOT, "status": "active"}
     _assert_no_planted_secret(rows[0])
 
 
@@ -2237,14 +2237,18 @@ async def test_rejected_guardrail_update_writes_no_audit_row(
     assert await _written_audit_rows(audit_prisma) == (), "a rolled-back update must not be audited"
 
 
-def _team_guardrail_row(status: str):
+def _team_guardrail_row(status: str, params_stored_as_json_string: bool = False):
     from prisma.models import LiteLLM_GuardrailsTable
 
     now: Final = datetime(2026, 11, 11, 12, 0, 0)
     return LiteLLM_GuardrailsTable(
         guardrail_id="team-gr",
         guardrail_name="team-guard",
-        litellm_params=json.dumps(encrypt_guardrail_litellm_params(dict(STORED_PARAMS))),
+        litellm_params=json.dumps(
+            json.dumps(encrypt_guardrail_litellm_params(dict(STORED_PARAMS)))
+            if params_stored_as_json_string
+            else encrypt_guardrail_litellm_params(dict(STORED_PARAMS))
+        ),
         guardrail_info=json.dumps({"description": "team"}),
         status=status,
         team_id="team-1",
@@ -2288,18 +2292,26 @@ async def test_register_guardrail_audit_row_records_the_pending_submission_witho
 @pytest.mark.parametrize(
     "review, new_status", [(approve_guardrail_submission, "active"), (reject_guardrail_submission, "rejected")]
 )
+@pytest.mark.parametrize("params_stored_as_json_string", [False, True], ids=["json_object", "json_string"])
 async def test_guardrail_submission_review_audit_row_shows_the_status_change(
-    review: Callable[[str, UserAPIKeyAuth], Awaitable[object]],
+    review: Callable[[str, UserAPIKeyAuth], Awaitable[Mapping[str, object]]],
     new_status: str,
+    params_stored_as_json_string: bool,
     mocker: MockerFixture,
     audit_prisma: Mock,
     mock_in_memory_handler: Mock,
 ):
-    audit_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=_team_guardrail_row("pending_review"))
-    audit_prisma.db.litellm_guardrailstable.update = AsyncMock(return_value=_team_guardrail_row(new_status))
+    audit_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(
+        return_value=_team_guardrail_row("pending_review", params_stored_as_json_string)
+    )
+    audit_prisma.db.litellm_guardrailstable.update = AsyncMock(
+        return_value=_team_guardrail_row(new_status, params_stored_as_json_string)
+    )
     mocker.patch("litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER", mock_in_memory_handler)
 
-    await review("team-gr", AUDIT_ADMIN)
+    response: Final = await review("team-gr", AUDIT_ADMIN)
+
+    assert response["status"] == new_status, response
 
     rows: Final = await _written_audit_rows(audit_prisma)
     assert [(r["action"], r["object_id"]) for r in rows] == [("updated", "team-gr")], rows

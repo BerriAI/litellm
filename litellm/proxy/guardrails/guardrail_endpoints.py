@@ -117,12 +117,22 @@ def _reject_encrypted_litellm_params(litellm_params: object) -> None:
 _AUDIT_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 _AUDITED_GUARDRAIL_FIELDS: Final = ("guardrail_id", "guardrail_name", "guardrail_info", "status", "team_id")
 _AUDITED_LITELLM_PARAMS: Final = ("guardrail", "mode", "default_on")
+_NEW_GUARDRAIL_STATUS: Final = "active"
 
 
 def _as_audit_mapping(value: object) -> Mapping[str, object]:
-    return _AUDIT_JSON_OBJECT.validate_python(
-        value.model_dump(exclude_none=True) if isinstance(value, BaseModel) else value or {}
+    """Rows can hold JSON columns as strings, and an audit snapshot must never fail a change that is already saved."""
+    candidate: Final = (
+        value.model_dump(exclude_none=True)
+        if isinstance(value, BaseModel)
+        else _parse_json_field(value)
+        if isinstance(value, str)
+        else value
     )
+    try:
+        return _AUDIT_JSON_OBJECT.validate_python(candidate or {})
+    except ValidationError:
+        return {}
 
 
 def _litellm_params_of(guardrail: object) -> Mapping[str, object]:
@@ -553,7 +563,7 @@ async def create_guardrail(
             guardrail_id=str(guardrail_id),
             action="created",
             user_api_key_dict=user_api_key_dict,
-            after=result,
+            after={**result, "status": _NEW_GUARDRAIL_STATUS},
         )
         return result
     except HTTPException:
