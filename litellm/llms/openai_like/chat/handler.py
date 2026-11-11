@@ -64,7 +64,7 @@ async def make_call(
         completion_stream = streaming_decoder.aiter_bytes(response.aiter_bytes(chunk_size=1024))
     elif fake_stream:
         model_response: Final = _fake_streamed_model_response(response.json())
-        completion_stream = MockResponseIterator(model_response=model_response)
+        completion_stream = MockResponseIterator(model_response=model_response, preserve_logprobs=True)
     else:
         completion_stream = ModelResponseIterator(
             streaming_response=aiter_sse_lines(response.aiter_text()), sync_stream=False
@@ -104,7 +104,7 @@ def make_sync_call(
         completion_stream = streaming_decoder.iter_bytes(response.iter_bytes(chunk_size=1024))
     elif fake_stream:
         model_response: Final = _fake_streamed_model_response(response.json())
-        completion_stream = MockResponseIterator(model_response=model_response)
+        completion_stream = MockResponseIterator(model_response=model_response, preserve_logprobs=True)
     else:
         completion_stream = ModelResponseIterator(
             streaming_response=iter_sse_lines(response.iter_text()), sync_stream=True
