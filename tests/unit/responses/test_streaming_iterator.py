@@ -861,6 +861,61 @@ def _responses_api_response_with_usage() -> ResponsesAPIResponse:
     )
 
 
+@pytest.mark.parametrize(
+    ("rates", "expected_cost"),
+    [
+        ({"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}, 0.0),
+        ({"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}, 140e-6),
+        ({"input_cost_per_token": 0.0}, None),
+        ({}, None),
+        (
+            {
+                "input_cost_per_token": 0.01,
+                "output_cost_per_token": 0.02,
+                "tiered_pricing": [
+                    {"range": [0, 128000], "input_cost_per_token": 0.0, "output_cost_per_token": 0.0}
+                ],
+            },
+            0.0,
+        ),
+        (
+            {
+                "tiered_pricing": [
+                    {"range": [0, 128000], "input_cost_per_token": 0.0, "output_cost_per_token": 0.0}
+                ]
+            },
+            0.0,
+        ),
+    ],
+)
+def test_responses_stream_usage_distinguishes_free_from_unpriced_calls(
+    monkeypatch: pytest.MonkeyPatch, rates: dict[str, object], expected_cost: float | None
+) -> None:
+    from litellm.responses.streaming_iterator import stamp_responses_usage_cost
+
+    model: Final = "responses-zero-cost-regression"
+    monkeypatch.setitem(litellm.model_cost, model, {"litellm_provider": "openai", "mode": "chat", **rates})
+    response: Final = _responses_api_response_with_usage().model_copy(update={"model": model})
+    logging_obj: Final = LiteLLMLoggingObj(
+        model=model,
+        messages=[],
+        stream=True,
+        call_type="responses",
+        start_time=1.0,
+        litellm_call_id="free-response",
+        function_id="test",
+    )
+    logging_obj.optional_params = {}
+    logging_obj.litellm_params = {}
+    logging_obj.model_call_details["custom_llm_provider"] = "openai"
+
+    stamp_responses_usage_cost(response, logging_obj)
+
+    assert getattr(response.usage, "cost", None) == (
+        pytest.approx(expected_cost) if expected_cost is not None else None
+    )
+
+
 def test_stamp_responses_usage_cost_stamps_computed_cost():
     from litellm.responses.streaming_iterator import stamp_responses_usage_cost
 

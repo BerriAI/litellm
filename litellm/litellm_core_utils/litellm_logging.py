@@ -135,6 +135,7 @@ from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import
 )
 from litellm.litellm_core_utils.llm_cost_calc.zero_cost_diagnostic import (
     diagnose_zero_cost,
+    is_explicitly_free_usage,
     zero_cost_warning,
 )
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import LiteLLMResponseObjectHandler
@@ -2416,6 +2417,33 @@ class Logging(LiteLLMLoggingBaseClass):
             custom_llm_provider=custom_llm_provider,
             usage=usage,
         )
+
+    def is_usage_explicitly_free(self, result: object) -> bool:
+        usage: Final = get_usage_object(completion_response=result)
+        if usage is None or self.model_call_details.get("response_cost_failure_debug_information") is not None:
+            return False
+        custom_pricing: Final = self.custom_pricing_for(result)
+        if custom_pricing and self.custom_model_info is not None:
+            return is_explicitly_free_usage(usage, self.custom_model_info)
+        if custom_pricing and self.custom_cost_per_token is not None:
+            return is_explicitly_free_usage(usage, self.custom_cost_per_token)
+        custom_llm_provider: Final = self.model_call_details.get("custom_llm_provider")
+        pricing: Final = pricing_entry_for_cost_calc(
+            model=self.model,
+            completion_response=result,
+            custom_llm_provider=self.get_router_pricing_provider() or custom_llm_provider,
+            custom_pricing=custom_pricing,
+            base_model=get_base_model_from_metadata(model_call_details=self.model_call_details),
+            router_model_id=self.get_router_model_id(),
+            region_name=_resolve_mantle_region_for_cost(
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=self.model_call_details.get("litellm_params"),
+            ),
+            litellm_logging_obj=self,
+        )
+        if pricing is None:
+            return False
+        return is_explicitly_free_usage(usage, pricing[1])
 
     def spilled_over_ptu_for(self, result: object) -> bool:
         result_hidden_params: Final = getattr(result, HIDDEN_PARAMS_ATTR, None) or MappingProxyType({})
