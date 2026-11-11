@@ -5601,6 +5601,146 @@ def test_record_partial_usage_for_failure_keeps_cache_values_recovered_from_chun
     assert stashed.prompt_tokens_details.cached_tokens == 7
 
 
+class _AsyncChunksDropping:
+    """An async chunk source that yields the given chunks and then drops the connection."""
+
+    def __init__(self, chunks: Sequence[ModelResponseStream], error: Exception) -> None:
+        self._chunks = chunks
+        self._error = error
+
+    def __aiter__(self) -> "_AsyncChunksDropping":
+        return self
+
+    async def __anext__(self) -> ModelResponseStream:
+        if self._chunks:
+            return self._chunks.pop(0)
+        raise self._error
+
+
+def _agentic_history(turns: int = 12) -> list:
+    """A tool-call/tool-result conversation big enough that counting it takes real time."""
+    history: list = [{"role": "system", "content": "You are a careful coding agent. " * 60}]
+    for i in range(turns):
+        history.append(
+            {
+                "role": "user",
+                "content": f"step {i}: read the next file and tell me what it does. " * 40,
+            }
+        )
+        history.append({"role": "assistant", "content": f"reading file {i}. " * 40})
+    return history
+
+
+def _midstream_failure_wrapper(messages: list) -> tuple[CustomStreamWrapper, Logging]:
+    logging_obj = Logging(
+        model="gpt-4o-mini",
+        messages=messages,
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="partial-usage-offload",
+        function_id="1245",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "openai"
+    wrapper = CustomStreamWrapper(
+        completion_stream=_AsyncChunksDropping(
+            chunks=[
+                ModelResponseStream(
+                    id="chatcmpl-offload-1",
+                    created=1742056047,
+                    model="gpt-4o-mini",
+                    object="chat.completion.chunk",
+                    choices=[
+                        StreamingChoices(finish_reason=None, index=0, delta=Delta(content="The", role="assistant"))
+                    ],
+                    usage=None,  # providers that only report usage in the final chunk
+                )
+            ],
+            # a stream_timeout on a stalled provider: no finish_reason, no usage chunk
+            error=httpx.ReadTimeout("timed out"),
+        ),
+        model="gpt-4o-mini",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+    return wrapper, logging_obj
+
+
+@pytest.mark.asyncio
+async def test_async_stream_failure_counts_prompt_tokens_off_the_event_loop():
+    """A failed async stream used to assemble its partial usage inline, so with no
+    reported prompt tokens the prompt got counted on the loop thread. It has to be
+    offloaded to a worker thread, and the stashed numbers have to stay the same."""
+    messages = _agentic_history()
+    wrapper, logging_obj = _midstream_failure_wrapper(messages)
+
+    counting_threads: list[threading.Thread] = []
+    real_counter = litellm.token_counter
+
+    def _record_thread(*args, **kwargs):
+        counting_threads.append(threading.current_thread())
+        return real_counter(*args, **kwargs)
+
+    loop_thread = threading.current_thread()
+    with patch(
+        "litellm.litellm_core_utils.streaming_chunk_builder_utils.token_counter",
+        side_effect=_record_thread,
+    ):
+        with pytest.raises(MidStreamFallbackError):
+            async for _ in wrapper:
+                pass
+
+    assert counting_threads, "the failure path should have counted the prompt"
+    assert all(t is not loop_thread for t in counting_threads), "prompt counting ran on the event loop"
+
+    stashed = logging_obj.model_call_details["combined_usage_object"]
+    assert stashed.prompt_tokens == real_counter(model="gpt-4o-mini", messages=messages)
+    assert stashed.completion_tokens == 1
+    assert isinstance(logging_obj.model_call_details["response_cost"], float)
+
+
+@pytest.mark.asyncio
+async def test_async_stream_failure_stashes_usage_before_raising():
+    """The router reads the stashed usage right after the raise, so the async
+    offload must still finish the write before the exception escapes."""
+    wrapper, logging_obj = _midstream_failure_wrapper(_agentic_history(turns=1))
+    seen: list = []
+
+    real_raise = CustomStreamWrapper._handle_stream_fallback_error
+
+    def _seen_at_raise(self, e):  # noqa: ANN001  # signature pinned by the wrapper
+        seen.append(logging_obj.model_call_details.get("combined_usage_object"))
+        return real_raise(self, e)
+
+    with patch.object(CustomStreamWrapper, "_handle_stream_fallback_error", _seen_at_raise):
+        with pytest.raises(MidStreamFallbackError):
+            async for _ in wrapper:
+                pass
+
+    assert len(seen) == 1
+    assert seen[0] is not None and seen[0].prompt_tokens > 0, "usage was not stashed before the raise"
+    assert logging_obj.model_call_details["combined_usage_object"] is seen[0]
+    await wrapper.wait_for_failure_logging(timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_async_stream_failure_accounting_when_the_consumer_leaves_mid_offload():
+    """A consumer that stops reading closes the stream, which cancels the task if the
+    offload is still running. The accounting must not double-stash or leave the failure
+    log undispatched either way: either the whole record lands, or nothing does."""
+    wrapper, logging_obj = _midstream_failure_wrapper(_agentic_history())
+
+    with pytest.raises(MidStreamFallbackError):
+        async for _ in wrapper:
+            pass
+    await wrapper.aclose()
+
+    stashed = logging_obj.model_call_details.get("combined_usage_object")
+    assert stashed is not None and stashed.prompt_tokens > 0
+    assert wrapper.has_dispatched_failure_logging
+    await wrapper.wait_for_failure_logging(timeout=5)
+
+
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_stream_chunk_builder_raise_at_end_of_stream_still_recovers_usage(
