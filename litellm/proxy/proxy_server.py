@@ -946,6 +946,7 @@ from litellm.proxy.middleware.gzip_middleware import GZipBufferedResponseMiddlew
 from litellm.proxy.middleware.in_flight_requests_middleware import (
     InFlightRequestsMiddleware,
 )
+from litellm.proxy.middleware.llm_provider_headers_middleware import LLMProviderHeadersMiddleware
 from litellm.proxy.middleware.per_request_root_path_middleware import (
     PerRequestRootPathMiddleware,
     get_server_root_paths,
@@ -3052,6 +3053,7 @@ app.add_middleware(RedisRequestBatchMiddleware)
 app.add_middleware(LensInternalMiddleware)
 app.add_middleware(InFlightRequestsMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(LLMProviderHeadersMiddleware, include=lambda: litellm.include_llm_provider_headers is not False)
 app.add_middleware(GZipBufferedResponseMiddleware)
 
 
