@@ -7,7 +7,10 @@ export type LanguageStore = { readonly read: () => string | null; readonly write
 export const DEFAULT_LANGUAGE = "en";
 export const LANGUAGE_STORAGE_KEY = "litellm_language";
 
-export const LOCALES: Locales = new Map();
+// 中文词库按官方语言入口懒加载，不改变默认语言或偏好存储。
+export const LOCALES: Locales = new Map([
+  ["zh-CN", () => import("./locales/zh-CN.json").then((module) => module.default)],
+]);
 
 export const browserLanguageStore: LanguageStore = {
   read: () => getLocalStorageItem(LANGUAGE_STORAGE_KEY),
