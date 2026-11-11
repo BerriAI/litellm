@@ -111,6 +111,8 @@ class OpenAICountTokensHandler(OpenAICountTokensConfig):
                 status_code=e.response.status_code,
                 message=e.response.text,
             )
+        except litellm.Timeout as e:
+            raise OpenAIError(status_code=e.status_code, message=str(e)) from e
         except (httpx.RequestError, json.JSONDecodeError, ValueError) as e:
             verbose_logger.error("Error in CountTokens handler: %s", e)
             raise OpenAIError(
