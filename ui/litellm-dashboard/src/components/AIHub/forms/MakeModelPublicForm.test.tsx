@@ -203,26 +203,58 @@ describe("MakeModelPublicForm", () => {
     expect(checkboxes[2]).not.toBeChecked();
   });
 
-  it("should show error when no models selected", async () => {
-    render(<MakeModelPublicForm {...mockProps} />);
+  it("should disable Next when no models are selected and none are currently public", async () => {
+    const privateOnlyProps = {
+      ...mockProps,
+      modelHubData: mockProps.modelHubData.map((m) => ({
+        ...m,
+        is_public_model_group: false,
+      })),
+    };
+    render(<MakeModelPublicForm {...privateOnlyProps} />);
 
-    // Deselect all models first
-    const checkboxes = screen.getAllByRole("checkbox");
-    await act(async () => {
-      fireEvent.click(checkboxes[0]); // Click select all to select all
-    });
-    await act(async () => {
-      fireEvent.click(checkboxes[0]); // Click select all again to deselect all
-    });
-
-    // Try to go to next step
     const nextButton = screen.getByRole("button", { name: "Next" });
+    expect(nextButton).toBeDisabled();
+
     await act(async () => {
       fireEvent.click(nextButton);
     });
 
-    // Should stay on same step
     expect(screen.getByText("Select Models to Make Public")).toBeInTheDocument();
+  });
+
+  it("should allow removing the last public model by submitting an empty selection", async () => {
+    mockMakeModelGroupPublic.mockResolvedValueOnce({});
+
+    render(<MakeModelPublicForm {...mockProps} />);
+
+    const checkboxes = screen.getAllByRole("checkbox");
+    // Uncheck the preselected public model (gpt-3.5-turbo)
+    await act(async () => {
+      fireEvent.click(checkboxes[2]);
+    });
+
+    const nextButton = screen.getByRole("button", { name: "Next" });
+    expect(nextButton).toBeEnabled();
+
+    await act(async () => {
+      fireEvent.click(nextButton);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Confirm Making Models Public")).toBeInTheDocument();
+    });
+
+    const submitButton = screen.getByRole("button", { name: "Make Public" });
+    await act(async () => {
+      fireEvent.click(submitButton);
+    });
+
+    await waitFor(() => {
+      expect(mockMakeModelGroupPublic).toHaveBeenCalledWith("test-token", []);
+      expect(mockProps.onSuccess).toHaveBeenCalled();
+      expect(mockProps.onClose).toHaveBeenCalled();
+    });
   });
 
   it("should display empty state when no models are available", () => {
