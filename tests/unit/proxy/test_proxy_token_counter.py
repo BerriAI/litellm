@@ -5938,9 +5938,10 @@ async def test_responses_count_on_deepseek_maps_reasoning_effort_the_way_deepsee
         ({"thinking": {"type": "disabled"}}, {}, {"thinking": {"type": "disabled"}}),
         ({"reasoning_effort": "none"}, {}, {"thinking": {"type": "disabled"}}),
         ({"thinking": {"type": "disabled"}}, {"additional_drop_params": ["thinking"]}, {}),
+        ({"thinking": {"type": "disabled"}}, {"thinking": {"type": "enabled"}}, {"thinking": {"type": "enabled"}}),
     ),
 )
-async def test_responses_count_on_deepseek_counts_the_thinking_the_deployment_sets_unless_the_request_drops_it(
+async def test_responses_count_on_deepseek_counts_the_thinking_inference_sends_from_the_request_or_deployment(
     monkeypatch: pytest.MonkeyPatch,
     deployment_options: Mapping[str, JsonValue],
     responses_options: Mapping[str, JsonValue],

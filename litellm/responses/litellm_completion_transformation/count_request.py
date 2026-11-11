@@ -12,7 +12,7 @@ from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     update_responses_tools_with_model_file_ids,
 )
 from litellm.litellm_core_utils.tool_fields import DropPolicy
-from litellm.llms.base_llm.files.batch_records import responses_batch_body_to_chat_body
+from litellm.llms.base_llm.files.batch_records import responses_batch_body_to_chat_body, responses_request_keys
 from litellm.responses.additional_tools import with_additional_tools_hoisted
 from litellm.responses.file_search.emulated_handler import replace_file_search_tools
 from litellm.responses.litellm_completion_transformation.compaction_items import holds_compaction_summary
@@ -176,6 +176,10 @@ def counted_chat_params(
     )
 
 
+def _fields_outside_responses_api(responses_request: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in responses_request.items() if key not in responses_request_keys()}
+
+
 async def chat_count_request(
     model: str,
     custom_llm_provider: str | None,
@@ -218,7 +222,9 @@ async def chat_count_request(
         return ChatCountRequest(
             messages=tuple(map(_unmarked, _mappings(chat_body.get("messages")))),
             tools=tools or None,
-            params=counted_chat_params(chat_body, deployment_params, tools, policy),
+            params=counted_chat_params(
+                {**_fields_outside_responses_api(responses_request), **chat_body}, deployment_params, tools, policy
+            ),
         )
     except BadRequestError as e:
         return ChatCountBridgeError(message=str(e.message))
