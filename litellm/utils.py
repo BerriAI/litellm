@@ -107,6 +107,13 @@ from litellm.litellm_core_utils.get_model_cost_map import (
     fetch_registration_document,
     model_cost_inputs,
 )
+from litellm.litellm_core_utils.model_cost_table import (
+    AliasedCostEntry,
+    Landing,
+    VersionCached,
+    changed_in_place,
+    model_cost_version,
+)
 from litellm.litellm_core_utils.model_param_helper import peek_reasoning_summary_aliases
 from litellm.litellm_core_utils.model_retirement import is_hidden_as_retired
 from litellm.litellm_core_utils.offline_mode import is_offline_mode
@@ -121,13 +128,6 @@ from litellm.rust_bridge import tokenizer as tokenizer_dispatch
 from litellm.rust_bridge._native import NativeModelCostMap, NativeRegistered
 from litellm.rust_bridge.catalog import decision
 from litellm.rust_bridge.configuration import Decision
-from litellm.rust_bridge.host.model_cost import (
-    AliasedCostEntry,
-    Landing,
-    VersionCached,
-    changed_in_place,
-    model_cost_version,
-)
 
 _CachingHandlerResponse = None
 _LLMCachingHandler = None

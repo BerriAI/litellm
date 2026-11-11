@@ -36,7 +36,7 @@ from litellm.types.utils import (
     StreamingChoices,
 )
 from litellm.utils import ModelResponseIterator
-from litellm.rust_bridge.host.model_cost import publish
+from litellm.litellm_core_utils.model_cost_table import publish
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 

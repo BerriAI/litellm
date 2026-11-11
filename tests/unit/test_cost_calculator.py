@@ -39,7 +39,7 @@ from litellm.types.rerank import RerankResponse
 from litellm.types.utils import CacheCreationTokenDetails, CallTypes, Choices, CompletionTokensDetailsWrapper, EmbeddingResponse, ImageObject, ImageResponse, ImageUsage, ImageUsageInputTokensDetails, LiteLLMRealtimeStreamLoggingObject, Message, ModelInfo, ModelResponse, PromptTokensDetails, PromptTokensDetailsWrapper, Usage
 from litellm.types.videos.main import VideoObject
 from litellm.utils import cached_get_model_info_helper, supports_prompt_caching
-from litellm.rust_bridge.host.model_cost import publish
+from litellm.litellm_core_utils.model_cost_table import publish
 import os
 import threading
 from unittest.mock import MagicMock, patch
@@ -2501,6 +2501,36 @@ def test_vertex_gemini_flash_image_generation_regional_costs_uplift_over_global(
     global_cost: Final = image_cost("global")
     assert global_cost > 0
     assert image_cost("us-central1") == pytest.approx(global_cost * 1.10, rel=1e-9)
+
+
+@pytest.mark.parametrize("requested_tier", ["flex", "priority"])
+def test_vertex_gemini_image_generation_bills_only_the_tier_vertex_served(
+    _local_model_cost_map: None, requested_tier: str
+) -> None:
+    """Image requests never send service_tier upstream, so a request tier must not change the bill
+    when Vertex reports no trafficType, while a served ON_DEMAND_PRIORITY still bills priority rates."""
+    usage: Final = ImageUsage(
+        input_tokens=1000,
+        input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=1000),
+        output_tokens=1120,
+        total_tokens=2120,
+    )
+
+    def image_cost(traffic_type: str | None, service_tier: str | None) -> float:
+        response: Final = ImageResponse(data=[ImageObject(b64_json="img")], usage=usage)
+        response.hidden_params["provider_specific_fields"] = {"traffic_type": traffic_type} if traffic_type else {}
+        return completion_cost(
+            completion_response=response,
+            model="vertex_ai/gemini-3.1-flash-image",
+            call_type="image_generation",
+            optional_params={"service_tier": service_tier} if service_tier else {},
+        )
+
+    standard_cost: Final = image_cost(None, None)
+    assert standard_cost > 0
+    assert image_cost(None, requested_tier) == standard_cost
+    assert image_cost("ON_DEMAND", requested_tier) == standard_cost
+    assert image_cost("ON_DEMAND_PRIORITY", requested_tier) > standard_cost
 
 
 def test_vertex_uplift_composes_with_above_128k_pricing(monkeypatch):
