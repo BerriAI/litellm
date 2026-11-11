@@ -1389,6 +1389,15 @@ _URL_SELECTED_MODEL_ROUTES: Final = (
 )
 
 
+@pytest.fixture
+def no_inference_model_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "user_model", None)
+
+
+@pytest.mark.usefixtures("no_inference_model_override")
 @pytest.mark.parametrize("route, url_model", _URL_SELECTED_MODEL_ROUTES)
 @pytest.mark.parametrize(
     "request_data",
@@ -1404,6 +1413,62 @@ def test_get_model_from_request_checks_the_url_model_on_routes_served_from_the_u
     assert get_model_from_request(request_data=request_data, route=route) == url_model
 
 
+@pytest.mark.usefixtures("no_inference_model_override")
+@pytest.mark.parametrize(
+    "route, path_params",
+    [
+        ("/v1beta/models/premium-model:generateContent", {"model_name": "cheap-model"}),
+        ("/models/premium-model:streamGenerateContent", {"model_name": "cheap-model"}),
+        ("/openai/deployments/premium-model/images/generations", {"model": "cheap-model"}),
+        ("/openai/deployments/premium-model/images/edits", {"model": "cheap-model"}),
+    ],
+)
+def test_get_model_from_request_follows_the_handlers_path_param_over_route_and_body(
+    route: str, path_params: dict[str, str]
+):
+    request: Final = Request(scope={"type": "http", "path": route, "path_params": path_params, "headers": []})
+    body: Final = {"model": "body-model"}
+
+    assert get_model_from_request(request_data=body, route=route, request=request) == "cheap-model"
+    assert get_model_from_request(request_data=body, route=route, path_params=path_params) == "cheap-model"
+    assert get_model_from_request(request_data=body, route=route, path_params={"other": "x"}) == "premium-model"
+
+
+@pytest.mark.parametrize(
+    "route, settings, cli_model, expected",
+    [
+        ("/v1beta/models/url-model:generateContent", {"completion_model": "configured"}, None, "configured"),
+        ("/models/url-model:streamGenerateContent", {}, "cli", "cli"),
+        ("/v1beta/models/url-model:generateContent", {"image_generation_model": "configured"}, None, "url-model"),
+        ("/openai/deployments/url-model/images/generations", {}, "cli", "cli"),
+        ("/openai/deployments/url-model/images/generations", {"completion_model": "configured"}, None, "url-model"),
+        (
+            "/openai/deployments/url-model/images/generations",
+            {"image_generation_model": "configured"},
+            None,
+            "url-model",
+        ),
+        ("/openai/deployments/url-model/images/edits", {"completion_model": "configured"}, "cli", "configured"),
+        ("/openai/deployments/url-model/images/edits", {}, "cli", "cli"),
+        ("/openai/deployments/url-model/images/edits", {"image_generation_model": "configured"}, None, "url-model"),
+    ],
+)
+def test_get_model_from_request_applies_the_handlers_server_model_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+    route: str,
+    settings: dict[str, str],
+    cli_model: str | None,
+    expected: str,
+):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", settings)
+    monkeypatch.setattr(proxy_server, "user_model", cli_model)
+
+    assert get_model_from_request(request_data={"model": "body-model"}, route=route) == expected
+
+
+@pytest.mark.usefixtures("no_inference_model_override")
 @pytest.mark.parametrize("route", ["/v1/images/generations", "/images/edits", "/v1/chat/completions"])
 def test_get_model_from_request_keeps_the_body_model_where_the_url_names_none(route: str):
     assert get_model_from_request(request_data={"model": "cheap-model"}, route=route) == "cheap-model"
