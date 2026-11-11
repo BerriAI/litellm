@@ -95,7 +95,9 @@ from litellm.litellm_core_utils.core_helpers import (
     bind_budget_reservation_to_callbacks,
     has_attributes,
     iter_items,
+    json_contains,
     normalize_drop_params,
+    require_attributes,
     unbind_budget_reservation_from_callbacks,
 )
 from litellm.litellm_core_utils.fallback_generalizations import (
@@ -534,6 +536,7 @@ from .exceptions import (
     ContentPolicyViolationError,
     ContextWindowExceededError,
     MalformedRequestFieldError,
+    MissingMessageRoleError,
     ModelNotMappedError,
     NotFoundError,
     OpenAIError,
@@ -580,6 +583,7 @@ additional_details: Final[dict[str, str] | None] = {}
 local_cache: Final[dict[str, str] | None] = {}
 last_fetched_at: Final = None
 last_fetched_at_keys: Final = None
+_OPAQUE_VALUE: Final = TypeAdapter(object)
 ######## Model Response #########################
 
 # All liteLLM Model responses will be in this format, Follows the OpenAI Format
@@ -764,14 +768,20 @@ def _is_same_registered_custom_logger(existing: object, callback_class: CustomLo
     )
 
 
-def get_request_guardrails(kwargs: dict[str, Any]) -> list[str]:
+class _SupportsGet(Protocol):
+    def get(self, key: str, /) -> object: ...
+
+
+def _metadata_field(metadata: object, key: str) -> object:
+    return require_attributes(metadata, _SupportsGet, "get").get(key) if metadata else None
+
+
+def get_request_guardrails(kwargs: Mapping[str, object]) -> object:
     """
     Get the request guardrails from the kwargs
     """
-    metadata: Final = kwargs.get("metadata") or {}
-    requester_metadata: Final = metadata.get("requester_metadata") or {}
-    applied_guardrails: Final = requester_metadata.get("guardrails") or []
-    return applied_guardrails
+    requester_metadata: Final = _metadata_field(kwargs.get("metadata"), "requester_metadata")
+    return _metadata_field(requester_metadata, "guardrails") or []
 
 
 def get_applied_guardrails(kwargs: dict[str, object]) -> list[str]:
@@ -786,7 +796,7 @@ def get_applied_guardrails(kwargs: dict[str, object]) -> list[str]:
     for callback in litellm.callbacks:
         if callback is not None and isinstance(callback, CustomGuardrail):
             if callback.guardrail_name is not None:
-                if callback.default_on is True or callback.guardrail_name in request_guardrails:
+                if callback.default_on is True or json_contains(request_guardrails, callback.guardrail_name):
                     applied_guardrails.append(callback.guardrail_name)
 
     return applied_guardrails
@@ -1430,7 +1440,7 @@ def function_setup(
                 level="info",
             )
         if "logger_fn" in kwargs:
-            user_logger_fn = kwargs["logger_fn"]
+            user_logger_fn = _OPAQUE_VALUE.validate_python(kwargs["logger_fn"])
         # INIT LOGGER - for user-specified integrations
         model: Final = args[0] if len(args) > 0 else kwargs.get("model", None)
         call_type: Final = original_function
@@ -1514,9 +1524,9 @@ def function_setup(
         elif call_type == CallTypes.embedding.value or call_type == CallTypes.aembedding.value:
             messages = args[1] if len(args) > 1 else kwargs.get("input", None)
         elif call_type == CallTypes.image_generation.value or call_type == CallTypes.aimage_generation.value:
-            messages = args[0] if len(args) > 0 else kwargs["prompt"]
+            messages = _OPAQUE_VALUE.validate_python(args[0] if len(args) > 0 else kwargs["prompt"])
         elif call_type == CallTypes.moderation.value or call_type == CallTypes.amoderation.value:
-            messages = args[1] if len(args) > 1 else kwargs["input"]
+            messages = _OPAQUE_VALUE.validate_python(args[1] if len(args) > 1 else kwargs["input"])
         elif call_type == CallTypes.atext_completion.value or call_type == CallTypes.text_completion.value:
             messages = args[0] if len(args) > 0 else kwargs.get("prompt")
         elif call_type == CallTypes.rerank.value or call_type == CallTypes.arerank.value:
@@ -1543,10 +1553,10 @@ def function_setup(
                 kwargs["metadata"] = {"file_checksum": file_checksum}
             messages = file_checksum
         elif call_type == CallTypes.aspeech.value or call_type == CallTypes.speech.value:
-            messages = kwargs.get("input", "speech")
+            messages = _OPAQUE_VALUE.validate_python(kwargs.get("input", "speech"))
         elif call_type == CallTypes.aresponses.value or call_type == CallTypes.responses.value:
             # Handle both 'input' (standard Responses API) and 'messages' (Cursor chat format)
-            messages = (
+            messages = _OPAQUE_VALUE.validate_python(
                 args[0] if len(args) > 0 else kwargs.get("input") or kwargs.get("messages", "default-message-value")
             )
         elif (
@@ -1726,9 +1736,9 @@ def _schedule_async_success_logging(
 
 async def _client_async_logging_helper(
     logging_obj: LiteLLMLoggingObject,
-    result,
-    start_time,
-    end_time,
+    result: object,
+    start_time: datetime.datetime,
+    end_time: datetime.datetime,
     is_completion_with_fallbacks: bool,
 ):
     if (
@@ -1747,7 +1757,7 @@ async def _client_async_logging_helper(
         )
 
 
-def _get_wrapper_num_retries(kwargs: dict[str, Any], exception: Exception) -> tuple[int | None, dict[str, Any]]:
+def _get_wrapper_num_retries(kwargs: dict[str, object], exception: Exception) -> tuple[object, dict[str, object]]:
     """
     Get the number of retries from the kwargs and the retry policy.
     Used for the wrapper functions.
@@ -1770,6 +1780,17 @@ def _get_wrapper_num_retries(kwargs: dict[str, Any], exception: Exception) -> tu
             num_retries = retry_policy_num_retries
 
     return num_retries, kwargs
+
+
+@runtime_checkable
+class _ModelFallbackLookup(Protocol):
+    def __getitem__(self, model: str | None, /) -> object: ...
+
+
+def _context_window_fallback_model(fallbacks: object, model: str | None) -> object:
+    if isinstance(fallbacks, _ModelFallbackLookup):
+        return fallbacks[model]
+    raise TypeError(f"'{type(fallbacks).__name__}' object is not subscriptable")
 
 
 def _get_wrapper_timeout(kwargs: dict[str, object]) -> object:
@@ -2660,7 +2681,7 @@ def client(original_function):
             retry_call_type: Final = _get_call_type_from_public_name(original_function.__name__)
             num_retries, kwargs = _get_wrapper_num_retries(kwargs=kwargs, exception=e)
             if retry_call_type == CallTypes.acompletion.value:
-                context_window_fallback_dict: Final = kwargs.get("context_window_fallback_dict", {})
+                context_window_fallback_dict: Final = kwargs.get("context_window_fallback_dict")
 
                 is_acompletion_litellm_router_call: Final = _is_litellm_router_call(kwargs)
 
@@ -2688,13 +2709,13 @@ def client(original_function):
                 elif (
                     isinstance(e, litellm.exceptions.ContextWindowExceededError)
                     and context_window_fallback_dict
-                    and model in context_window_fallback_dict
+                    and json_contains(context_window_fallback_dict, model)
                     and not is_acompletion_litellm_router_call
                 ):
                     if len(args) > 0:
-                        args[0] = context_window_fallback_dict[model]
+                        args[0] = _context_window_fallback_model(context_window_fallback_dict, model)
                     else:
-                        kwargs["model"] = context_window_fallback_dict[model]
+                        kwargs["model"] = _context_window_fallback_model(context_window_fallback_dict, model)
                     result = await original_function(*args, **kwargs)
                     return result
             elif retry_call_type == CallTypes.aresponses.value:
@@ -4468,7 +4489,7 @@ def get_optional_params_transcription(
     passed_params.pop("custom_llm_provider")
     passed_params.pop("drop_params")
     normalized_drop_params: Final = normalize_drop_params(drop_params)
-    special_params: Final[Mapping[str, object]] = passed_params.pop("kwargs")
+    special_params: Final = as_str_mapping(_OPAQUE_VALUE.validate_python(passed_params.pop("kwargs"))) or {}
     from litellm.litellm_core_utils.audio_utils.transcription_streaming import (
         transcription_stream_flag,
         transcription_stream_unset,
@@ -4493,9 +4514,10 @@ def get_optional_params_transcription(
             message="`stream` must be a boolean. To drop it from the call, set `litellm.drop_params = True`.",
         )
 
+    passed_entries: Final[Mapping[str, object]] = MappingProxyType(passed_params)
     non_default_params: Final = {
         k: v
-        for k, v in passed_params.items()
+        for k, v in passed_entries.items()
         if k in default_params and v != default_params[k] and not (k == "stream" and (stream_unset or malformed_stream))
     }
     optional_params = {}
@@ -4734,7 +4756,7 @@ def get_optional_params_embeddings(
     # retrieve all parameters passed to the function
     passed_params: Final = locals()
     passed_params.pop("custom_llm_provider", None)
-    special_params: Final = passed_params.pop("kwargs")
+    special_params: Final = as_str_mapping(_OPAQUE_VALUE.validate_python(passed_params.pop("kwargs"))) or {}
 
     passed_params.pop("drop_params", None)
     drop_params = normalize_drop_params(drop_params)
@@ -5195,7 +5217,7 @@ class PreProcessNonDefaultParams:
     @staticmethod
     def base_pre_process_non_default_params(
         passed_params: dict,
-        special_params: dict,
+        special_params: Mapping[str, object],
         custom_llm_provider: str,
         additional_drop_params: list[str] | None,
         default_param_values: dict,
@@ -5240,7 +5262,7 @@ class PreProcessNonDefaultParams:
     @staticmethod
     def embedding_pre_process_non_default_params(
         passed_params: dict,
-        special_params: dict,
+        special_params: Mapping[str, object],
         custom_llm_provider: str,
         additional_drop_params: list[str] | None,
         model: str,
@@ -5261,7 +5283,7 @@ class PreProcessNonDefaultParams:
 
 def pre_process_non_default_params(
     passed_params: dict,
-    special_params: dict,
+    special_params: Mapping[str, object],
     custom_llm_provider: str,
     additional_drop_params: list[str] | None,
     model: str,
@@ -6561,13 +6583,10 @@ def get_model_region(litellm_params: LiteLLM_Params, mode: str | None) -> str | 
     return None
 
 
-def get_first_chars_messages(kwargs: dict) -> str:
-    try:
-        _messages = kwargs.get("messages")
-        _messages = str(_messages)[:100]
-        return _messages
-    except Exception:
-        return ""
+def get_first_chars_messages(kwargs: object) -> str:
+    request: Final = as_str_mapping(kwargs)
+    messages: Final = None if request is None else request.get("messages")
+    return "" if messages is None else str(messages)[:100]
 
 
 def count_characters(text: str) -> int:
@@ -7584,7 +7603,8 @@ def get_model_info_helper(
                 token_count_tokenizer=_model_info.get("token_count_tokenizer", None),
                 vertex_ai_audio_api=_model_info.get("vertex_ai_audio_api", None),
             )
-            for cost_key, cost_value in _model_info.items():
+            cost_entries: Final[Mapping[str, object]] = MappingProxyType(_model_info)
+            for cost_key, cost_value in cost_entries.items():
                 if cost_key not in returned_model_info and _ABOVE_THRESHOLD_COST_KEY.search(cost_key) is not None:
                     returned_model_info[cost_key] = cost_value
             return returned_model_info
@@ -7804,7 +7824,7 @@ def function_to_dict(input_function) -> dict:
                         # may represent a set of acceptable values
                         # translating as enum for function calling
                         try:
-                            param_enum = str(list(literal_eval(param_type)))
+                            param_enum = str(list(iter_items(_OPAQUE_VALUE.validate_python(literal_eval(param_type)))))
                             param_type = "string"
                         except Exception:
                             pass
@@ -9227,6 +9247,7 @@ class ModelResponseIterator:
         if convert_to_delta is True:
             _stream_response: Final = ModelResponseStream()
             _stream_response.choices[0].delta.content = model_response.choices[0].message.content
+            _stream_response.choices[0].finish_reason = model_response.choices[0].finish_reason
             self.model_response: ModelResponse | ModelResponseStream = _stream_response
         else:
             self.model_response = model_response
@@ -9496,16 +9517,22 @@ def convert_list_message_to_dict(
     return [dict(cleanup_none_field_in_message(message=_as_message_value(message))) for message in messages]
 
 
-def validate_and_fix_openai_messages(messages: list):
+_ASSISTANT_ONLY_MESSAGE_KEYS: Final = frozenset(
+    {"tool_calls", "function_call", "reasoning_content", "reasoning_items", "thinking_blocks", "refusal", "audio"}
+)
+
+
+def validate_and_fix_openai_messages(
+    messages: list, model: str = "", request_kwargs: Mapping[str, object] | None = None
+):
     """
     Ensures all messages are valid OpenAI chat completion messages.
 
-    Handles missing role for assistant messages.
+    Only an assistant turn carries the keys in _ASSISTANT_ONLY_MESSAGE_KEYS, so one sent without a role but with
+    any of them, even set to null, gets "assistant" (issue #8661).
     """
     new_messages: Final = []
     for message in messages:
-        if not message.get("role"):
-            message["role"] = "assistant"
         if message.get("tool_calls"):
             message["tool_calls"] = jsonify_tools(tools=message["tool_calls"])
 
@@ -9516,8 +9543,10 @@ def validate_and_fix_openai_messages(messages: list):
             ),
         )
         cleaned_message = cleanup_none_field_in_message(message=convert_msg_to_dict)
+        if not cleaned_message.get("role") and not _ASSISTANT_ONLY_MESSAGE_KEYS.isdisjoint(convert_msg_to_dict):
+            cleaned_message["role"] = "assistant"
         new_messages.append(cleaned_message)
-    return validate_chat_completion_user_messages(messages=new_messages)
+    return validate_chat_completion_user_messages(messages=new_messages, model=model, request_kwargs=request_kwargs)
 
 
 def validate_and_fix_openai_tools(tools: list | None) -> list[dict] | None:
@@ -9570,21 +9599,36 @@ def cleanup_none_field_in_message(message: AllMessageValues):
     return {k: v for k, v in new_message.items() if v is not None}
 
 
-def validate_chat_completion_user_messages(messages: list[AllMessageValues]):
+def validate_chat_completion_user_messages(
+    messages: list[AllMessageValues], model: str = "", request_kwargs: Mapping[str, object] | None = None
+):
     """
-    Ensures all user messages are valid OpenAI chat completion messages.
+    Ensures every message has a role and all user messages are valid OpenAI chat completion messages.
 
     Args:
         messages: List of message dictionaries
+        model: Model named on the error raised for a message without a role
+        request_kwargs: The request's provider settings, read to name the provider on that error
         message_content_type: Type to validate content against
 
     Returns:
         List[dict]: The validated messages
 
     Raises:
+        MissingMessageRoleError: If a message has no role
         ValueError: If any message is invalid
     """
     for idx, m in enumerate(messages):
+        if "role" not in m or not m["role"]:
+            raise MissingMessageRoleError(
+                message=f"Missing required parameter: 'messages[{idx}].role'.",
+                model=model,
+                llm_provider=_deployment_provider({**(request_kwargs or {}), "model": model}),
+                body={
+                    "type": "invalid_request_error",
+                    "param": f"messages[{idx}].role",
+                },
+            )
         try:
             if m["role"] == "user":
                 user_content = m.get("content")
@@ -9597,10 +9641,6 @@ def validate_chat_completion_user_messages(messages: list[AllMessageValues]):
                                 if item.get("type") not in ValidUserMessageContentTypes:
                                     raise Exception(f"invalid content type={item.get('type')}")
         except Exception as e:
-            if isinstance(e, KeyError):
-                raise Exception(
-                    f"Invalid message at index {idx}. Please ensure all messages are valid OpenAI chat completion messages."
-                )
             if "invalid content type" in str(e):
                 raise Exception(
                     f"Invalid user message at index {idx}. Please ensure all user messages are valid OpenAI chat completion messages."
@@ -10753,7 +10793,7 @@ class ProviderConfigManager:
     @staticmethod
     def get_provider_passthrough_config(
         model: str,
-        provider: LlmProviders,
+        provider: LlmProviders | str,
     ) -> BasePassthroughConfig | None:
         if LlmProviders.BEDROCK == provider:
             from litellm.llms.bedrock.passthrough.transformation import (

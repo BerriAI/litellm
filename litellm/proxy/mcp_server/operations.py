@@ -2080,7 +2080,7 @@ async def _list_tools_before_first_call(
 
 async def execute_mcp_tool(
     name: str,
-    arguments: dict[str, object],
+    arguments: Mapping[str, object],
     allowed_mcp_servers: list[MCPServer],
     start_time: datetime,
     user_api_key_auth: UserAPIKeyAuth | None = None,

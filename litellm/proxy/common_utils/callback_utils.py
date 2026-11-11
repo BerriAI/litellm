@@ -93,6 +93,10 @@ class _CallbackNotDispatchable:
 _CallbackLoadError: TypeAlias = _CallbackResolvedToClass | _CallbackNotDispatchable
 
 
+class _PresidioOptions(TypedDict, total=False, extra_items=object):
+    pass
+
+
 def _classify_loaded_callback(entry: str, loaded: object) -> CustomLogger | Callable[..., object] | _CallbackLoadError:
     """
     Decide whether what a ``litellm_settings.callbacks`` dotted path resolved to can be dispatched.
@@ -193,15 +197,15 @@ def initialize_callbacks_on_proxy(
                 if presidio_logging_only is not None:
                     presidio_logging_only = bool(presidio_logging_only)  # validate boolean given
 
-                _presidio_params = {}
+                _presidio_params: Mapping[str, object] = {}
                 if "presidio" in callback_specific_params and isinstance(callback_specific_params["presidio"], dict):
                     _presidio_params = callback_specific_params["presidio"]
 
-                params: dict[str, Any] = {
+                params: Mapping[str, object] = {
                     "logging_only": presidio_logging_only,
                     **_presidio_params,
                 }
-                pii_masking_object = OPTIONAL_PresidioPIIMasking(**params)
+                pii_masking_object = OPTIONAL_PresidioPIIMasking(**_PresidioOptions(**params))
                 imported_list.append(pii_masking_object)
             elif isinstance(callback, str) and callback == "llamaguard_moderations":
                 try:

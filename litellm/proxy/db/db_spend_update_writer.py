@@ -18,7 +18,7 @@ from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from functools import reduce
-from types import MappingProxyType
+from types import MappingProxyType, TracebackType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast, overload
 from urllib.parse import quote, unquote
 
@@ -249,21 +249,43 @@ class SpendUpsertTable(Protocol):
 
 
 class _SpendBatch(Protocol):
-    litellm_usertable: BatchTable
-    litellm_endusertable: SpendUpsertTable
-    litellm_dailymodelusage: SpendUpsertTable
+    @property
+    def litellm_usertable(self) -> BatchTable: ...
+
+    @property
+    def litellm_endusertable(self) -> SpendUpsertTable: ...
+
+    @property
+    def litellm_dailymodelusage(self) -> SpendUpsertTable: ...
 
     def execute_raw(self, query: LiteralString, *args: object) -> None: ...
 
-    litellm_verificationtoken: BatchTable
-    litellm_teamtable: BatchTable
-    litellm_teammembership: BatchTable
-    litellm_organizationtable: BatchTable
-    litellm_organizationmembership: BatchTable
-    litellm_projecttable: BatchTable
-    litellm_tagtable: BatchTable
-    litellm_agentstable: BatchTable
-    litellm_modelaccessgroupbudgettable: BatchTable
+    @property
+    def litellm_verificationtoken(self) -> BatchTable: ...
+
+    @property
+    def litellm_teamtable(self) -> BatchTable: ...
+
+    @property
+    def litellm_teammembership(self) -> BatchTable: ...
+
+    @property
+    def litellm_organizationtable(self) -> BatchTable: ...
+
+    @property
+    def litellm_organizationmembership(self) -> BatchTable: ...
+
+    @property
+    def litellm_projecttable(self) -> BatchTable: ...
+
+    @property
+    def litellm_tagtable(self) -> BatchTable: ...
+
+    @property
+    def litellm_agentstable(self) -> BatchTable: ...
+
+    @property
+    def litellm_modelaccessgroupbudgettable(self) -> BatchTable: ...
 
 
 _EntitySpendTable: TypeAlias = Literal[
@@ -288,7 +310,13 @@ def _entity_spend_table(batcher: _SpendBatch, table_accessor: _EntitySpendTable)
 class SpendBatchManager(Protocol):
     async def __aenter__(self) -> _SpendBatch: ...
 
-    async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> bool | None: ...
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+        /,
+    ) -> bool | None: ...
 
 
 class _SpendTransaction(Protocol):
@@ -300,7 +328,13 @@ class _SpendTransaction(Protocol):
 class _SpendTransactionManager(Protocol):
     async def __aenter__(self) -> _SpendTransaction: ...
 
-    async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> bool | None: ...
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+        /,
+    ) -> bool | None: ...
 
 
 _DailySpendTransactionT = TypeVar("_DailySpendTransactionT", bound=BaseDailySpendTransaction)

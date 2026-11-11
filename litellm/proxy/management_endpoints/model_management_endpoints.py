@@ -295,7 +295,9 @@ class _TxModelTables(Protocol):
 
 @runtime_checkable
 class _TransactionFactory(Protocol):
-    def __call__(self, *, timeout: datetime.timedelta = ...) -> AbstractAsyncContextManager[_TxModelTables]: ...
+    def __call__(
+        self, *, timeout: datetime.timedelta = ..., max_wait: datetime.timedelta = ...
+    ) -> AbstractAsyncContextManager[_TxModelTables]: ...
 
 
 class _ModelTransactionClient(LiteLLMBaseModel):
@@ -549,6 +551,21 @@ def _effective_complexity_router_config(
     return resolve_complexity_router_config_write(
         config_adapter.validate_python(incoming), config_adapter.validate_python(existing)
     ).effective
+
+
+def _encrypted_litellm_params(
+    dumped: Mapping[str, object],
+    incoming_params: GenericLiteLLMParams | None,
+    existing_params: GenericLiteLLMParams | None,
+) -> Mapping[str, object]:
+    return {
+        name: (
+            _effective_complexity_router_config(incoming_params, existing_params)
+            if name == "complexity_router_config"
+            else encrypt_value_helper(value)
+        )
+        for name, value in dumped.items()
+    }
 
 
 def _dump_without_none(model: BaseModel) -> Mapping[str, object]:
@@ -1509,14 +1526,11 @@ def update_db_model(
     # update litellm params
     if updated_patch.litellm_params:
         # Encrypt any sensitive values
-        encrypted_params: Final = {
-            k: (
-                _effective_complexity_router_config(updated_patch.litellm_params, db_model.litellm_params)
-                if k == "complexity_router_config"
-                else encrypt_value_helper(v)
-            )
-            for k, v in updated_patch.litellm_params.model_dump(exclude_none=True, exclude_unset=True).items()
-        }
+        encrypted_params: Final = _encrypted_litellm_params(
+            updated_patch.litellm_params.model_dump(exclude_none=True, exclude_unset=True),
+            updated_patch.litellm_params,
+            db_model.litellm_params,
+        )
 
         merged_litellm_params.update(encrypted_params)
 
@@ -2449,7 +2463,8 @@ async def delete_team_models(
     """
     deleted_model_ids: Final[list[str]] = []
     transaction_client: Final = _ModelTransactionClient.model_validate(prisma_client.db)
-    async with transaction_client.tx(timeout=datetime.timedelta(seconds=TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS)) as tx:
+    tx_budget: Final = datetime.timedelta(seconds=TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS)
+    async with transaction_client.tx(max_wait=tx_budget, timeout=tx_budget) as tx:
         for team_id in team_ids:
             rows = await _get_team_deployments(team_id, prisma_client, table=tx.litellm_proxymodeltable)
             model_ids = [row.model_id for row in rows]
@@ -3468,14 +3483,9 @@ async def update_model(
 
             ### ENCRYPT PARAMS ###
             encrypted_params: Final = MappingProxyType(
-                {
-                    k: (
-                        _effective_complexity_router_config(model_params.litellm_params, deployment.litellm_params)
-                        if k == "complexity_router_config"
-                        else encrypt_value_helper(value=v)
-                    )
-                    for k, v in _new_litellm_params_dict.items()
-                }
+                _encrypted_litellm_params(
+                    _new_litellm_params_dict, model_params.litellm_params, deployment.litellm_params
+                )
             )
 
             ### MERGE WITH EXISTING DATA ###

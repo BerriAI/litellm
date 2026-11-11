@@ -11608,6 +11608,69 @@ async def test_a_broken_hook_does_not_replace_the_real_error_with_its_own_bug():
     assert "audit backend" not in collected[-2].decode()
 
 
+async def _block_once_released(release: asyncio.Event) -> Response:
+    await release.wait()
+    raise ModifyResponseException(
+        message="blocked by policy", model="gpt-4o", request_data={"stream": True}, guardrail_name="g"
+    )
+
+
+async def _drain_releasing(response: StreamingResponse, release: asyncio.Event) -> tuple[bytes, ...]:
+    async def chunks() -> AsyncGenerator[bytes, None]:
+        async for chunk in response.body_iterator:
+            release.set()
+            yield chunk if isinstance(chunk, bytes) else str(chunk).encode()
+
+    return tuple([chunk async for chunk in chunks()])
+
+
+@pytest.mark.asyncio
+async def test_a_late_passthrough_block_streams_the_routes_block_response_instead_of_an_error_frame():
+    block_frames: Final = ('data: {"choices": [{"delta": {"content": "blocked by policy"}}]}\n\n', "data: [DONE]\n\n")
+    release: Final = asyncio.Event()
+    stream_block: Final = AsyncMock(side_effect=lambda _block: _sse_response(block_frames))
+    record_failure: Final = AsyncMock(return_value=None)
+
+    response: Final = await open_sse_before_first_byte(
+        _block_once_released(release),
+        ping_interval_seconds=0.05,
+        on_late_failure=record_failure,
+        on_passthrough_block=stream_block,
+    )
+    collected: Final = await _drain_releasing(response, release)
+
+    assert collected[0] == TTFT_PING
+    assert [chunk for chunk in collected if chunk != TTFT_PING] == [frame.encode() for frame in block_frames]
+    assert [call.args[0].message for call in stream_block.await_args_list] == ["blocked by policy"]
+    record_failure.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_late_passthrough_block_on_a_route_without_a_block_stream_still_ends_the_stream():
+    release: Final = asyncio.Event()
+    response: Final = await open_sse_before_first_byte(_block_once_released(release), ping_interval_seconds=0.05)
+    collected: Final = await _drain_releasing(response, release)
+
+    assert collected[0] == TTFT_PING
+    assert "error" in json.loads(collected[-2].decode().removeprefix("data: ").strip())
+    assert collected[-1] == b"data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_a_late_passthrough_block_whose_block_stream_fails_still_ends_the_stream():
+    release: Final = asyncio.Event()
+    broken_block_stream: Final = AsyncMock(side_effect=RuntimeError("block stream unavailable"))
+
+    response: Final = await open_sse_before_first_byte(
+        _block_once_released(release), ping_interval_seconds=0.05, on_passthrough_block=broken_block_stream
+    )
+    collected: Final = await _drain_releasing(response, release)
+
+    assert collected[0] == TTFT_PING
+    assert "error" in json.loads(collected[-2].decode().removeprefix("data: ").strip())
+    assert collected[-1] == b"data: [DONE]\n\n"
+
+
 @pytest.mark.parametrize(
     "exc,expect_traceback",
     [

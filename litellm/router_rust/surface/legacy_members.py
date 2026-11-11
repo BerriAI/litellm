@@ -289,8 +289,8 @@ class RustLegacyMembers(RustRegistryMembers, RustOptionalChecks):
         validate_routing_strategy(routing_strategy)  # pyright: ignore[reportArgumentType]  # the strategy as given
         # `_reset_custom_routing_strategy`.
         self._custom_strategy = None
-        _ = self.__dict__.pop("get_available_deployment", None)
-        _ = self.__dict__.pop("_core_async_get_available_deployment", None)
+        self.__dict__.pop("get_available_deployment", None)
+        self.__dict__.pop("_core_async_get_available_deployment", None)
         self._sel.init_default(routing_strategy, routing_strategy_args, configured=False)
 
     def set_optional_pre_call_checks(self, optional_pre_call_checks: Iterable[object] | None) -> None:
@@ -301,7 +301,7 @@ class RustLegacyMembers(RustRegistryMembers, RustOptionalChecks):
         """``initialize_assistants_endpoint`` binds the endpoints; this core answers them from
         ``__getattr__``, so what is left to do is to drop an assigned replacement."""
         for name in _ASSISTANTS_ENDPOINTS:
-            _ = self.__dict__.pop(name, None)
+            self.__dict__.pop(name, None)
 
     def initialize_router_endpoints(self) -> None:
         """``initialize_router_endpoints``, as ``initialize_assistants_endpoint`` above."""
@@ -310,7 +310,7 @@ class RustLegacyMembers(RustRegistryMembers, RustOptionalChecks):
         )
 
         for name in (*_ROUTER_ENDPOINTS, *_generated_endpoints):
-            _ = self.__dict__.pop(name, None)
+            self.__dict__.pop(name, None)
 
     # -- pre-routing strategies --------------------------------------------------------------------
 
