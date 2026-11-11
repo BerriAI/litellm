@@ -266,6 +266,36 @@ def test_map_openai_service_tier_standard_only_maps_to_default():
     assert result["serviceTier"] == {"type": "default"}
 
 
+@pytest.mark.parametrize(
+    ("value", "bedrock_tier"),
+    [("standard", "default"), ("Standard_Only", "default"), ("Priority", "priority"), ("FLEX", "flex")],
+)
+def test_map_openai_service_tier_maps_standard_and_any_case_to_the_bedrock_tier(value: str, bedrock_tier: str):
+    config: Final = AmazonConverseConfig()
+
+    result: Final = config.map_openai_params(
+        non_default_params={"service_tier": value},
+        optional_params={},
+        model="anthropic.claude-3-sonnet-20240229-v1:0",
+        drop_params=False,
+    )
+
+    assert result["serviceTier"] == {"type": bedrock_tier}
+
+
+def test_map_openai_service_tier_auto_in_any_case_sends_no_tier():
+    config: Final = AmazonConverseConfig()
+
+    result: Final = config.map_openai_params(
+        non_default_params={"service_tier": "AUTO"},
+        optional_params={},
+        model="anthropic.claude-3-sonnet-20240229-v1:0",
+        drop_params=False,
+    )
+
+    assert "serviceTier" not in result
+
+
 @pytest.mark.parametrize("value", ["ultrafast", "fast", "scale", "", {"type": "priority"}, ["fast"], 1])
 def test_map_openai_service_tier_unmapped_value_answers_400(value: object):
     config: Final = AmazonConverseConfig()

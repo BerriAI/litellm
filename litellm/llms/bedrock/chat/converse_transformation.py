@@ -203,7 +203,7 @@ def _tools_the_model_accepts(
 _OUTPUT_CONFIG_BLOCK: Final = TypeAdapter(OutputConfigBlock)
 _DEEPSEEK_THINKING_REASON: Final = "DeepSeek on Bedrock reasons natively and takes no thinking field."
 BEDROCK_SERVICE_TIERS: Final = ("default", "flex", "priority", "reserved")
-_BEDROCK_SERVICE_TIER_ALIASES: Final = types.MappingProxyType({"standard_only": "default"})
+_BEDROCK_SERVICE_TIER_ALIASES: Final = types.MappingProxyType({"standard": "default", "standard_only": "default"})
 _DEEPSEEK_R1_EFFORT_REASON: Final = "DeepSeek R1 on Bedrock always reasons and rejects reasoning_effort."
 
 
@@ -1316,9 +1316,10 @@ class AmazonConverseConfig(BaseConfig):
             optional_params["context_management"] = mapped
 
     def _map_service_tier_param(self, value: object, optional_params: dict, model: str, drop_params: bool) -> None:
-        if value is None or value == "auto":
+        tier: Final = value.lower() if isinstance(value, str) else None
+        if value is None or tier == "auto":
             return
-        bedrock_tier: Final = _BEDROCK_SERVICE_TIER_ALIASES.get(value, value) if isinstance(value, str) else None
+        bedrock_tier: Final = None if tier is None else _BEDROCK_SERVICE_TIER_ALIASES.get(tier, tier)
         if bedrock_tier in BEDROCK_SERVICE_TIERS:
             optional_params["serviceTier"] = {"type": bedrock_tier}
             return
