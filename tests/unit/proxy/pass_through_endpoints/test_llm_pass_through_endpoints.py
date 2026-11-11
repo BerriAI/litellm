@@ -7337,17 +7337,49 @@ def test_anthropic_passthrough_attaches_no_deployment_pricing_without_one_priced
 
 
 @pytest.mark.asyncio
-async def test_anthropic_proxy_route_hands_the_deployment_pricing_to_the_passthrough_request(monkeypatch):
-    from litellm.types.passthrough_endpoints.pass_through_endpoints import (
-        LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
-    )
-
-    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server.llm_router", litellm.Router(model_list=[_anthropic_deployment("haiku-dep")])
-    )
+async def test_anthropic_proxy_route_bills_the_deployment_custom_price(monkeypatch):
+    for name in (
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_API_BASE",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_FEDERATION_RULE_ID",
+        "ANTHROPIC_ORGANIZATION_ID",
+        "ANTHROPIC_IDENTITY_TOKEN_FILE",
+        "ANTHROPIC_IDENTITY_TOKEN",
+        "SERVER_ROOT_PATH",
+    ):
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
-    body: Final = b'{"model":"claude-haiku-5-5","messages":[{"role":"user","content":"hi"}]}'
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    deployment_pricing: Final = MappingProxyType({"input_cost_per_token": 1e-03, "output_cost_per_token": 2e-03})
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        litellm.Router(model_list=[_anthropic_deployment("haiku-dep", model_info_pricing=deployment_pricing)]),
+    )
+    request_body: Final = {
+        "model": "claude-haiku-5-5",
+        "max_tokens": 20,
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    upstream_response: Final = httpx.Response(
+        200,
+        json={
+            "id": "msg_haiku",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-5-5",
+            "content": [{"type": "text", "text": "pong"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 18, "output_tokens": 4},
+        },
+        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+    )
+    httpx_client: Final = MagicMock()
+    httpx_client.build_request = MagicMock(return_value=MagicMock())
+    httpx_client.send = AsyncMock(return_value=upstream_response)
+    client_wrapper: Final = MagicMock()
+    client_wrapper.client = httpx_client
+    body: Final = json.dumps(request_body).encode()
 
     async def receive() -> dict[str, object]:
         return {"type": "http.request", "body": body, "more_body": False}
@@ -7355,35 +7387,43 @@ async def test_anthropic_proxy_route_hands_the_deployment_pricing_to_the_passthr
     request: Final = Request(
         {
             "type": "http",
+            "http_version": "1.1",
             "method": "POST",
+            "scheme": "https",
             "path": "/anthropic/v1/messages",
+            "raw_path": b"/anthropic/v1/messages",
+            "root_path": "",
             "query_string": b"",
             "headers": [(b"content-type", b"application/json")],
+            "client": ("127.0.0.1", 51234),
+            "server": ("proxy.local", 4000),
             "state": {},
         },
         receive,
     )
-    seen: Final = []
 
-    async def relay(request: Request, *_: object) -> dict[str, bool]:
-        seen.append(getattr(request.state, LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY, None))
-        return {"ok": True}
-
-    with patch(
-        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
-        return_value=relay,
+    with (
+        patch(  # test-quality-ok: the upstream http client is the boundary, it answers with a real Anthropic body
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client",
+            return_value=client_wrapper,
+        ),
+        patch(  # test-quality-ok: the relay calls these hooks, and they need a db this test has no use for
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as mock_logging_obj,
     ):
-        await anthropic_proxy_route(
+        mock_logging_obj.pre_call_hook = AsyncMock(return_value=request_body)
+        mock_logging_obj.post_call_success_hook = AsyncMock()
+        mock_logging_obj.post_call_failure_hook = AsyncMock()
+        mock_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+        response: Final = await anthropic_proxy_route(
             endpoint="v1/messages",
             request=request,
             fastapi_response=MagicMock(spec=Response),
             user_api_key_dict=UserAPIKeyAuth(api_key="sk-caller-virtual-key"),
         )
 
-    (model_info,) = seen
-    assert model_info is not None
-    assert model_info["id"] == "haiku-dep"
-    assert {key: model_info[key] for key in _HAIKU_PRICING} == _HAIKU_PRICING
+    assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(18 * 1e-03 + 4 * 2e-03)
 
 
 class TestAnthropicProxyRouteCallerAuthHeaders:
