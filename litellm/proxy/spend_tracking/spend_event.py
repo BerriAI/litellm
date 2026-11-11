@@ -212,10 +212,11 @@ class SpendEventDecodeError:
 
 
 def is_offloadable_success(response_obj: object, kwargs: ObjectMapping) -> bool:
-    """Batch responses and interaction polls branch on the concrete response class, a batch retrieve whose logged
-    response message redaction replaced on the polled batch id the event leaves out, a video status poll on the
-    status and video id the event leaves out, and a background response's settling read on the settlement flag it
-    leaves out, so they stay in-process."""
+    """A success stays in-process when its cost logic reads something the spend event leaves out.
+
+    Batches and interaction polls need the concrete response class. A batch retrieve needs the polled batch id,
+    which message redaction can hide. A video status poll needs the status and the video id. A background
+    response's settling read needs the settlement flag."""
     call_type: Final = kwargs.get("call_type")
     return (
         not isinstance(response_obj, _NOT_OFFLOADED_RESPONSE_TYPES)
