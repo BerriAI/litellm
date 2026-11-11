@@ -8,6 +8,7 @@ import functools
 import gc
 import json
 import threading
+import warnings
 import weakref
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from datetime import datetime
@@ -31,6 +32,7 @@ from litellm.responses.streaming_iterator import (
     SyncResponsesAPIStreamingIterator,
     _MAX_CHUNKS_READ_AFTER_TERMINAL_EVENT,
     _MAX_CONCURRENT_SYNC_UPSTREAM_RELEASES,
+    _UPSTREAM_RELEASE_GRACE_SECONDS,
     _UPSTREAM_RELEASE_TIMEOUT_SECONDS,
     _estimate_usage_from_text,
     _start_upstream_release_sync,
@@ -385,6 +387,46 @@ async def test_upstream_is_closed_after_the_stream_ends_at_completed_event(trail
 
     assert seen[-1] == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
     await asyncio.wait_for(closed.wait(), timeout=5)
+
+
+async def _upstream_ending_shortly_after(chunks: tuple[bytes, ...]) -> AsyncIterator[bytes]:
+    for chunk in chunks:
+        yield chunk
+    await asyncio.sleep(_UPSTREAM_RELEASE_GRACE_SECONDS / 10)
+
+
+_COMPLETED_SHARING_ITS_CHUNK_WITH_A_LATER_EVENT: Final = (
+    *_COMPLETE_STREAM_EVENTS[:-1],
+    _COMPLETE_STREAM_EVENTS[-1] + _sse_event({"type": "response.output_text.delta", "delta": "late"}),
+)
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    (tuple(_COMPLETE_STREAM_EVENTS), _COMPLETED_SHARING_ITS_CHUNK_WITH_A_LATER_EVENT),
+    ids=("one_event_per_chunk", "completed_shares_its_chunk"),
+)
+def test_stream_read_to_the_end_leaves_nothing_running_on_a_loop_the_caller_then_closes(chunks: tuple[bytes, ...]):
+    loop: Final = asyncio.new_event_loop()
+    loop_error_handler: Final = Mock()
+    loop.set_exception_handler(loop_error_handler)
+
+    async def read_to_the_end() -> tuple[list[str], bool]:
+        iterator, closed = _async_stream_over(_upstream_ending_shortly_after(chunks))
+        return await _event_types(iterator), closed.is_set()
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        try:
+            seen, upstream_closed_by_the_end = loop.run_until_complete(read_to_the_end())
+        finally:
+            loop.close()
+        gc.collect()
+
+    assert seen[-1] == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    assert upstream_closed_by_the_end
+    loop_error_handler.assert_not_called()
+    assert not [warning for warning in caught if issubclass(warning.category, RuntimeWarning)]
 
 
 def test_sync_stream_ends_at_completed_event_while_upstream_holds_the_socket_open():

@@ -9,6 +9,7 @@ import time
 import traceback
 import uuid
 from collections.abc import (
+    AsyncGenerator,
     AsyncIterable,
     AsyncIterator,
     Awaitable,
@@ -38,7 +39,7 @@ from typing import (
 )
 
 import httpx
-from openai._streaming import SSEDecoder
+from openai._streaming import ServerSentEvent, SSEDecoder
 from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import TypeIs
 
@@ -243,6 +244,7 @@ async def drain_logging_tasks(timeout: float = 5.0) -> None:
 
 _MAX_CHUNKS_READ_AFTER_TERMINAL_EVENT: Final = 8
 _UPSTREAM_RELEASE_TIMEOUT_SECONDS: Final = 1.0
+_UPSTREAM_RELEASE_GRACE_SECONDS: Final = 0.25
 _UPSTREAM_RELEASE_TASKS: Final[set[asyncio.Task[object]]] = set()  # mutable-ok: strong refs to upstream release tasks
 _MAX_CONCURRENT_SYNC_UPSTREAM_RELEASES: Final = 8
 _SYNC_UPSTREAM_RELEASE_SLOTS: Final = threading.BoundedSemaphore(_MAX_CONCURRENT_SYNC_UPSTREAM_RELEASES)
@@ -257,8 +259,18 @@ async def _drain_after_terminal_event(upstream_bytes: AsyncIterator[bytes]) -> N
     verbose_logger.debug("Upstream Responses stream kept sending after its terminal event, closing it")
 
 
+async def _finish_decoding_after_upstream_end(
+    upstream_bytes: AsyncIterator[bytes], events: AsyncIterator[ServerSentEvent]
+) -> None:
+    if isinstance(upstream_bytes, AsyncGenerator):
+        with contextlib.suppress(httpx.HTTPError, httpx.StreamError):
+            await upstream_bytes.aclose()
+        async for _ in events:
+            pass
+
+
 async def _release_upstream_after_terminal_event(
-    upstream_bytes: AsyncIterator[bytes], response: httpx.Response
+    upstream_bytes: AsyncIterator[bytes], events: AsyncIterator[ServerSentEvent], response: httpx.Response
 ) -> None:
     try:
         await asyncio.wait_for(_drain_after_terminal_event(upstream_bytes), timeout=_UPSTREAM_RELEASE_TIMEOUT_SECONDS)
@@ -267,8 +279,11 @@ async def _release_upstream_after_terminal_event(
     except (httpx.HTTPError, httpx.StreamError) as e:
         verbose_logger.debug("Upstream Responses stream failed after its terminal event: %s", e)
     finally:
-        with contextlib.suppress(httpx.HTTPError, httpx.StreamError):
-            await response.aclose()
+        try:
+            await _finish_decoding_after_upstream_end(upstream_bytes, events)
+        finally:
+            with contextlib.suppress(httpx.HTTPError, httpx.StreamError):
+                await response.aclose()
 
 
 def _close_upstream_now(response: httpx.Response) -> None:
@@ -291,9 +306,11 @@ def _release_upstream_after_terminal_event_sync(upstream_bytes: Iterator[bytes],
         _close_upstream_now(response)
 
 
-def _spawn_upstream_release(upstream_bytes: AsyncIterator[bytes], response: httpx.Response) -> asyncio.Task[None]:
+def _spawn_upstream_release(
+    upstream_bytes: AsyncIterator[bytes], events: AsyncIterator[ServerSentEvent], response: httpx.Response
+) -> asyncio.Task[None]:
     task: Final = asyncio.get_running_loop().create_task(
-        _release_upstream_after_terminal_event(upstream_bytes, response)
+        _release_upstream_after_terminal_event(upstream_bytes, events, response)
     )
     _UPSTREAM_RELEASE_TASKS.add(task)
     task.add_done_callback(_UPSTREAM_RELEASE_TASKS.discard)
@@ -1335,8 +1352,13 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         try:
             return await self._next_event()
         except Exception:
+            await self._wait_briefly_for_upstream_release()
             await self._await_pending_logging()
             raise
+
+    async def _wait_briefly_for_upstream_release(self) -> None:
+        if self._upstream_release is not None:
+            await asyncio.wait((self._upstream_release,), timeout=_UPSTREAM_RELEASE_GRACE_SECONDS)
 
     async def aclose(self) -> None:
         release: Final = self._upstream_release
@@ -1365,7 +1387,9 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                 self._check_max_streaming_duration()
                 result = self._process_chunk(sse.data)
                 if self.completed_response is not None:
-                    self._upstream_release = _spawn_upstream_release(self._upstream_bytes, self.response)
+                    self._upstream_release = _spawn_upstream_release(
+                        self._upstream_bytes, self.stream_iterator, self.response
+                    )
 
                 if self.finished:
                     self._raise_if_ended_without_terminal_event()
