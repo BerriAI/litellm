@@ -5435,9 +5435,6 @@ def completion(
         raise ValueError("model param not passed in.")
     # validate messages
     messages = validate_and_fix_openai_messages(messages=messages)
-    client_messages: Final = cast(  # cast-ok: completion types messages as a bare List
-        Sequence[AllMessageValues], messages
-    )
     tools = validate_and_fix_openai_tools(tools=tools)
     # validate tool_choice
     requested_tool_choice: Final = cast(  # cast-ok: widening an untyped dict to object is always sound
@@ -5457,6 +5454,9 @@ def completion(
 
     ######### unpacking kwargs #####################
     args: Final = _locals_snapshot(locals())
+    client_messages: Final = cast(  # cast-ok: completion types messages as a bare List
+        Sequence[AllMessageValues], messages
+    )
 
     # Set by the responses->completion fallback so completion() does not bridge
     # back to the Responses API: that round-trip mutually recurses forever for a
