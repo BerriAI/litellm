@@ -271,6 +271,37 @@ def test_url_and_key_auth_do_not_use_model_rpc_or_bearer_token(base: str) -> Non
     ) == {"x-goog-api-key": "test-key", "Content-Type": "application/json", "X-Trace": "trace"}
 
 
+@pytest.mark.parametrize("key_env", ("GEMINI_API_KEY", "GOOGLE_API_KEY"))
+@pytest.mark.parametrize("api_key", (None, ""))
+def test_custom_base_requires_its_own_key(monkeypatch: pytest.MonkeyPatch, key_env: str, api_key: str | None) -> None:
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.setenv(key_env, "shared-google-key")
+    with pytest.raises(ValueError, match="explicit api_key"):
+        GeminiDecisionsConfig().resolve_connection("https://gateway.example", api_key)
+
+
+@pytest.mark.parametrize("key_env", ("GEMINI_API_KEY", "GOOGLE_API_KEY"))
+def test_default_base_uses_environment_key_and_custom_base_uses_explicit_key(
+    monkeypatch: pytest.MonkeyPatch, key_env: str
+) -> None:
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_BASE", raising=False)
+    monkeypatch.setenv(key_env, "shared-google-key")
+    config: Final = GeminiDecisionsConfig()
+    assert config.resolve_connection(None, None) == (
+        "https://generativelanguage.googleapis.com",
+        "shared-google-key",
+    )
+    assert config.resolve_connection("https://gateway.example", "gateway-key") == (
+        "https://gateway.example",
+        "gateway-key",
+    )
+    monkeypatch.setenv("GEMINI_API_BASE", "https://configured-gateway.example")
+    assert config.resolve_connection(None, None) == ("https://configured-gateway.example", "shared-google-key")
+
+
 def test_box_questions_are_rejected_by_transformation_and_public_sdk() -> None:
     request: Final = systemone_request_to_ir(
         DecisionsRequestBody.model_validate(

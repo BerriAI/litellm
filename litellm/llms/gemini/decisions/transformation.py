@@ -146,6 +146,14 @@ class GeminiDecisionsConfig(BaseDecisionsConfig):
     def get_complete_url(self, api_base: str, model: str) -> str:
         return f"{api_base.rstrip('/').removesuffix('/v1beta')}/v1beta/decisions"
 
+    def resolve_connection(self, api_base: str | None, api_key: str | None) -> tuple[str | None, str | None]:
+        if api_base and not api_key:
+            raise ValueError(
+                "When overriding api_base for Gemini Decisions, supply an explicit api_key "
+                "to prevent sending the shared Google key to a custom host"
+            )
+        return super().resolve_connection(api_base, api_key)
+
     def validate_environment(
         self,
         headers: Mapping[str, str],

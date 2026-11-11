@@ -222,6 +222,35 @@ def gemini_httpx_transport(monkeypatch: pytest.MonkeyPatch) -> None:
     litellm.in_memory_llm_clients_cache.flush_cache()
 
 
+@pytest.mark.usefixtures("gemini_httpx_transport")
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", (False, True))
+@pytest.mark.parametrize("base_parameter", ("api_base", "base_url"))
+async def test_gemini_custom_base_cannot_receive_environment_key(
+    sync: bool, base_parameter: str, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "shared-google-key")
+    destination: Final = respx_mock.post("https://gateway.example/v1beta/decisions")
+    options: Final = {base_parameter: "https://gateway.example"}
+    if sync:
+        with pytest.raises(litellm.BadRequestError, match="explicit api_key"):
+            litellm.systemone(
+                model="gemini/gemini-decision-1",
+                state="Inspect",
+                questions={"ok": {"type": "noul", "instructions": "Is it damaged?"}},
+                **options,
+            )
+    else:
+        with pytest.raises(litellm.BadRequestError, match="explicit api_key"):
+            await litellm.adecisions(
+                model="gemini/gemini-decision-1",
+                input="Inspect",
+                questions=[{"name": "ok", "type": "predicate", "instructions": "Is it damaged?"}],
+                **options,
+            )
+    assert destination.call_count == 0
+
+
 async def _call_gemini(sync: bool, images: Sequence[str]) -> None:
     if sync:
         litellm.systemone(
