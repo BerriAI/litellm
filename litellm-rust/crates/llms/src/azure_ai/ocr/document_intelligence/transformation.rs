@@ -44,9 +44,10 @@ const LOCALE_PARAM: &str = "locale";
 const QUERY_FIELDS_PARAM: &str = "queryFields";
 const OUTPUT_PARAM: &str = "output";
 const EXTRA_BODY_PARAM: &str = "extra_body";
-const CODE_POINT_STRING_INDEX: &str = "unicodeCodePoint";
 const STRING_INDEX_TYPE_FIELD: &str = "stringIndexType";
 const MARKDOWN_MODEL_ID: &str = "prebuilt-layout";
+const UNRETURNABLE_OUTPUT_REASON: &str =
+    "LiteLLM does not return the analyze result id that Azure serves figures and PDFs from";
 
 #[derive(
     Clone,
@@ -67,6 +68,27 @@ pub enum OutputContentFormat {
     Markdown,
 }
 
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    strum::EnumString,
+    strum::IntoStaticStr,
+    strum::Display,
+    strum::VariantArray,
+    serde_with::SerializeDisplay,
+)]
+#[strum(ascii_case_insensitive)]
+pub enum StringIndexType {
+    #[strum(serialize = "textElements")]
+    TextElements,
+    #[strum(serialize = "unicodeCodePoint")]
+    UnicodeCodePoint,
+    #[strum(serialize = "utf16CodeUnit")]
+    Utf16CodeUnit,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct DocumentIntelligenceParams {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -79,13 +101,11 @@ pub struct DocumentIntelligenceParams {
     )]
     pub output_content_format: Option<OutputContentFormat>,
     #[serde(rename = "stringIndexType", skip_serializing_if = "Option::is_none")]
-    pub string_index_type: Option<&'static str>,
+    pub string_index_type: Option<StringIndexType>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub locale: Option<String>,
     #[serde(rename = "queryFields", skip_serializing_if = "Option::is_none")]
     pub query_fields: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -187,6 +207,10 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
             "features",
             OUTPUT_CONTENT_FORMAT_PARAM,
             OUTPUT_CONTENT_FORMAT_ALIAS,
+            LOCALE_PARAM,
+            QUERY_FIELDS_PARAM,
+            STRING_INDEX_TYPE_FIELD,
+            OUTPUT_PARAM,
             "req_format",
             DROP_PARAMS_PARAM,
         ]
@@ -229,6 +253,7 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
         non_default_params: &CallArguments,
         model: &str,
     ) -> Result<DocumentIntelligenceParams, Error> {
+        reject_unreturnable_output(non_default_params)?;
         let output_content_format = resolve_query_option(
             non_default_params,
             OUTPUT_CONTENT_FORMAT_PARAM,
@@ -255,10 +280,18 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
                 normalize_features_param(non_default_params.get(FEATURES_PARAM))?,
             )?,
             output_content_format,
-            string_index_type: slices_markdown_pages.then_some(CODE_POINT_STRING_INDEX),
-            locale: extra_body_query_list(non_default_params, LOCALE_PARAM)?,
-            query_fields: extra_body_query_list(non_default_params, QUERY_FIELDS_PARAM)?,
-            output: extra_body_query_list(non_default_params, OUTPUT_PARAM)?,
+            string_index_type: query_option(
+                non_default_params,
+                STRING_INDEX_TYPE_FIELD,
+                parse_string_index_type,
+            )?
+            .or(slices_markdown_pages.then_some(StringIndexType::UnicodeCodePoint)),
+            locale: query_option(non_default_params, LOCALE_PARAM, normalize_locale)?,
+            query_fields: query_option(
+                non_default_params,
+                QUERY_FIELDS_PARAM,
+                normalize_query_list,
+            )?,
         })
     }
 
@@ -352,7 +385,7 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, strum::VariantArray)]
 enum PageNumbering {
     ZeroBasedIndex,
     Azure,
@@ -473,26 +506,84 @@ fn resolve_query_option<T>(
     }
 }
 
-fn extra_body_query_list(
+fn query_option<T>(
     arguments: &CallArguments,
-    name: &'static str,
-) -> Result<Option<String>, Error> {
+    name: &str,
+    parse: impl Fn(Option<&Value>, &str) -> Result<Option<T>, Error>,
+) -> Result<Option<T>, Error> {
+    let top_level_value = parse(arguments.get(name).filter(|value| !is_unset(value)), name)?;
     resolve_query_option(
         arguments,
         name,
-        |value| normalize_query_list(value, name),
-        None,
+        |value| parse(value, &format!("{EXTRA_BODY_PARAM}.{name}")),
+        top_level_value,
     )
 }
 
-fn normalize_query_list(
-    value: Option<&Value>,
-    name: &'static str,
-) -> Result<Option<String>, Error> {
-    let invalid = || Error::RequestField {
-        path: format!("{EXTRA_BODY_PARAM}.{name}"),
+fn invalid_field(path: &str) -> Error {
+    Error::RequestField {
+        path: path.to_owned(),
         cause: None,
-    };
+    }
+}
+
+fn reject_unreturnable_output(arguments: &CallArguments) -> Result<(), Error> {
+    let extra_body_output = arguments
+        .get(EXTRA_BODY_PARAM)
+        .and_then(|extra_body| extra_body.get(OUTPUT_PARAM));
+    let requested = [
+        (OUTPUT_PARAM.to_owned(), arguments.get(OUTPUT_PARAM)),
+        (
+            format!("{EXTRA_BODY_PARAM}.{OUTPUT_PARAM}"),
+            extra_body_output,
+        ),
+    ]
+    .into_iter()
+    .find(|(_, value)| value.is_some_and(|value| !is_unset(value)));
+    match requested {
+        Some(_) if drops_unsupported_params(arguments) => Ok(()),
+        Some((param, _)) => Err(Error::UnsupportedParam {
+            param,
+            reason: UNRETURNABLE_OUTPUT_REASON,
+        }),
+        None => Ok(()),
+    }
+}
+
+fn parse_string_index_type(
+    value: Option<&Value>,
+    path: &str,
+) -> Result<Option<StringIndexType>, Error> {
+    value
+        .map(|value| {
+            value
+                .as_str()
+                .and_then(|name| name.trim().parse().ok())
+                .ok_or_else(|| invalid_field(path))
+        })
+        .transpose()
+}
+
+fn normalize_locale(value: Option<&Value>, path: &str) -> Result<Option<String>, Error> {
+    value
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::trim)
+                .filter(|locale| {
+                    !locale.is_empty()
+                        && locale
+                            .chars()
+                            .all(|character| character.is_ascii_alphanumeric() || character == '-')
+                })
+                .map(str::to_owned)
+                .ok_or_else(|| invalid_field(path))
+        })
+        .transpose()
+}
+
+fn normalize_query_list(value: Option<&Value>, path: &str) -> Result<Option<String>, Error> {
+    let invalid = || invalid_field(path);
     let tokens = match value {
         None => return Ok(None),
         Some(Value::Array(items)) => items
@@ -583,7 +674,8 @@ fn transform_completed_response(
         .as_deref()
         .filter(|_| {
             result.content_format.as_deref() == Some(<&str>::from(OutputContentFormat::Markdown))
-                && result.string_index_type.as_deref() == Some(CODE_POINT_STRING_INDEX)
+                && result.string_index_type.as_deref()
+                    == Some(<&str>::from(StringIndexType::UnicodeCodePoint))
                 && result.pages.iter().all(|page| page.spans.is_some())
         })
         .map(|content| {
@@ -611,7 +703,7 @@ fn transform_completed_response(
         }),
         extra_fields: result
             .string_index_type
-            .filter(|unit| unit == CODE_POINT_STRING_INDEX)
+            .filter(|unit| unit == <&str>::from(StringIndexType::UnicodeCodePoint))
             .map(|unit| Map::from_iter([(STRING_INDEX_TYPE_FIELD.to_owned(), Value::String(unit))]))
             .unwrap_or_default(),
         ..LiteLLMOcrResponse::new(model, pages)
@@ -869,13 +961,12 @@ impl AzureDocumentIntelligenceOcrConfig {
                         .chain(
                             params
                                 .string_index_type
-                                .map(|index_type| ("stringIndexType", index_type)),
+                                .map(|index_type| (STRING_INDEX_TYPE_FIELD, index_type.into())),
                         )
                         .chain(
                             [
                                 (LOCALE_PARAM, params.locale.as_deref()),
                                 (QUERY_FIELDS_PARAM, params.query_fields.as_deref()),
-                                (OUTPUT_PARAM, params.output.as_deref()),
                             ]
                             .into_iter()
                             .filter_map(|(name, value)| value.map(|value| (name, value))),
@@ -1193,7 +1284,10 @@ mod tests {
         let mapped = map(options).unwrap();
 
         assert_eq!(mapped.output_content_format, format);
-        assert_eq!(mapped.string_index_type, string_index_type);
+        assert_eq!(
+            mapped.string_index_type.map(<&str>::from),
+            string_index_type
+        );
     }
 
     #[rstest]
@@ -1212,7 +1306,10 @@ mod tests {
             mapped.output_content_format,
             Some(OutputContentFormat::Markdown)
         );
-        assert_eq!(mapped.string_index_type, string_index_type);
+        assert_eq!(
+            mapped.string_index_type.map(<&str>::from),
+            string_index_type
+        );
     }
 
     #[rstest]
@@ -1276,7 +1373,13 @@ mod tests {
     #[case::bad_locale(json!({"locale": 5}), extra_body_field_error("locale"))]
     #[case::bad_query_fields(json!({"queryFields": ["Total", 7]}), extra_body_field_error("queryFields"))]
     #[case::blank_query_field(json!({"queryFields": "Total,,Vendor"}), extra_body_field_error("queryFields"))]
-    #[case::bad_output(json!({"output": {"pdf": true}}), extra_body_field_error("output"))]
+    #[case::locale_list(json!({"locale": ["en-US", "fr-FR"]}), extra_body_field_error("locale"))]
+    #[case::locale_comma(json!({"locale": "en-US,fr-FR"}), extra_body_field_error("locale"))]
+    #[case::bad_string_index_type(
+        json!({"stringIndexType": "bytes"}),
+        extra_body_field_error("stringIndexType")
+    )]
+    #[case::output(json!({"output": "figures"}), unsupported_output_error("extra_body.output"))]
     fn invalid_extra_body_query_option_is_a_request_error(
         #[case] extra_body: Value,
         #[case] expected: Error,
@@ -1294,7 +1397,9 @@ mod tests {
     #[case::bad_format(json!({"outputContentFormat": "html"}))]
     #[case::bad_locale(json!({"locale": 5}))]
     #[case::bad_query_fields(json!({"queryFields": "Total,,Vendor"}))]
-    #[case::bad_output(json!({"output": {"pdf": true}}))]
+    #[case::locale_list(json!({"locale": ["en-US", "fr-FR"]}))]
+    #[case::bad_string_index_type(json!({"stringIndexType": 7}))]
+    #[case::output(json!({"output": "figures"}))]
     fn drop_params_drops_an_invalid_extra_body_query_option(#[case] extra_body: Value) {
         let mapped = map(json!({"drop_params": true, "extra_body": extra_body})).unwrap();
 
@@ -1347,9 +1452,13 @@ mod tests {
     }
 
     fn extra_body_field_error(name: &str) -> Error {
-        Error::RequestField {
-            path: format!("extra_body.{name}"),
-            cause: None,
+        invalid_field(&format!("extra_body.{name}"))
+    }
+
+    fn unsupported_output_error(param: &str) -> Error {
+        Error::UnsupportedParam {
+            param: param.into(),
+            reason: UNRETURNABLE_OUTPUT_REASON,
         }
     }
 
@@ -1363,6 +1472,18 @@ mod tests {
         json!({"outputContentFormat": "html", "extra_body": {"outputContentFormat": "markdown"}}),
         Error::OutputContentFormat
     )]
+    #[case::bad_locale(
+        json!({"locale": ["en-US"], "extra_body": {"locale": "fr-FR"}}),
+        invalid_field("locale")
+    )]
+    #[case::bad_query_fields(
+        json!({"queryFields": 7, "extra_body": {"queryFields": "Total"}}),
+        invalid_field("queryFields")
+    )]
+    #[case::bad_string_index_type(
+        json!({"stringIndexType": "bytes", "extra_body": {"stringIndexType": "textElements"}}),
+        invalid_field("stringIndexType")
+    )]
     fn invalid_top_level_option_is_a_request_error_when_extra_body_sets_it(
         #[case] options: Value,
         #[case] expected: Error,
@@ -1375,21 +1496,55 @@ mod tests {
 
     #[rstest]
     #[case::strings(
-        json!({"locale": " en-US ", "queryFields": "Total, Vendor", "output": "figures"}),
-        json!({"locale": "en-US", "queryFields": "Total,Vendor", "output": "figures"})
+        json!({"extra_body": {"locale": " en-US ", "queryFields": "Total, Vendor", "stringIndexType": "utf16codeunit"}}),
+        json!({"locale": "en-US", "queryFields": "Total,Vendor", "stringIndexType": "utf16CodeUnit"})
     )]
     #[case::lists(
-        json!({"locale": "fr", "queryFields": ["Total", "Vendor"], "output": ["pdf", "figures"]}),
-        json!({"locale": "fr", "queryFields": "Total,Vendor", "output": "pdf,figures"})
+        json!({"extra_body": {"locale": "fr", "queryFields": ["Total", "Vendor"]}}),
+        json!({"locale": "fr", "queryFields": "Total,Vendor"})
     )]
-    #[case::empty_lists(json!({"queryFields": [], "output": []}), json!({}))]
-    fn other_extra_body_query_options_are_mapped(
-        #[case] extra_body: Value,
-        #[case] expected: Value,
-    ) {
-        let mapped = map(json!({"extra_body": extra_body})).unwrap();
+    #[case::empty_lists(json!({"extra_body": {"queryFields": []}}), json!({}))]
+    #[case::top_level(
+        json!({"locale": "en-US", "queryFields": ["Total"], "stringIndexType": "textElements"}),
+        json!({"locale": "en-US", "queryFields": "Total", "stringIndexType": "textElements"})
+    )]
+    #[case::extra_body_over_the_top_level(
+        json!({"locale": "en-US", "queryFields": "Total", "extra_body": {"locale": "fr-FR", "queryFields": "Vendor"}}),
+        json!({"locale": "fr-FR", "queryFields": "Vendor"})
+    )]
+    #[case::caller_index_type_over_the_markdown_default(
+        json!({"outputContentFormat": "markdown", "extra_body": {"stringIndexType": "textElements"}}),
+        json!({"outputContentFormat": "markdown", "stringIndexType": "textElements"})
+    )]
+    fn other_azure_query_options_are_mapped(#[case] options: Value, #[case] expected: Value) {
+        let mapped = map(options).unwrap();
 
         assert_eq!(serde_json::to_value(mapped).unwrap(), expected);
+    }
+
+    #[rstest]
+    #[case::top_level(json!({"output": "figures"}), "output")]
+    #[case::extra_body(json!({"extra_body": {"output": ["pdf"]}}), "extra_body.output")]
+    fn output_is_rejected_because_its_files_cannot_be_returned(
+        #[case] options: Value,
+        #[case] param: &str,
+    ) {
+        let error = map(options).unwrap_err();
+
+        assert_eq!(
+            format!("{error:?}"),
+            format!("{:?}", unsupported_output_error(param))
+        );
+        assert_eq!(error.http_status_code(), Some(400));
+    }
+
+    #[rstest]
+    #[case::top_level(json!({"output": "figures", "drop_params": true}))]
+    #[case::extra_body(json!({"extra_body": {"output": "pdf"}, "drop_params": true}))]
+    fn drop_params_drops_output(#[case] options: Value) {
+        let mapped = map(options).unwrap();
+
+        assert_eq!(serde_json::to_value(mapped).unwrap(), json!({}));
     }
 
     fn markdown_pages(analyze_result: Value) -> Vec<String> {

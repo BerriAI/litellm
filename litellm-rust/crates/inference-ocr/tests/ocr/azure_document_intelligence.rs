@@ -335,38 +335,58 @@ async fn azure_query_params_in_extra_body_reach_the_analyze_query(
     );
 }
 
+#[rstest]
+#[case::extra_body(json!({"extra_body": {
+    "features": ["queryFields"],
+    "queryFields": ["Total", "Vendor"],
+    "locale": "en-US",
+    "stringIndexType": "utf16CodeUnit"
+}}))]
+#[case::top_level(json!({
+    "features": ["queryFields"],
+    "queryFields": "Total,Vendor",
+    "locale": "en-US",
+    "stringIndexType": "UTF16CODEUNIT"
+}))]
 #[tokio::test]
-async fn other_azure_query_options_in_extra_body_reach_the_analyze_query() {
+async fn other_azure_query_options_reach_the_analyze_query(#[case] options: Value) {
     let upstream = upstream([json_response(json!({
         "status": "succeeded",
         "analyzeResult": {"pages": [{"pageNumber": 1, "lines": [{"content": "hello"}]}]}
     }))])
     .await;
 
-    perform(ocr_request(
-        LAYOUT_MODEL,
-        &upstream.uri(),
-        json!({"extra_body": {
-            "features": ["queryFields"],
-            "queryFields": ["Total", "Vendor"],
-            "locale": "en-US",
-            "output": "figures"
-        }}),
-    ))
-    .await
-    .unwrap();
+    perform(ocr_request(LAYOUT_MODEL, &upstream.uri(), options))
+        .await
+        .unwrap();
 
     let sent = only_request(&upstream).await;
     assert_eq!(
-        ["features", "queryFields", "locale", "output"].map(|name| sent.query(name)),
+        ["features", "queryFields", "locale", "stringIndexType"].map(|name| sent.query(name)),
         [
             Some("queryFields"),
             Some("Total,Vendor"),
             Some("en-US"),
-            Some("figures")
+            Some("utf16CodeUnit")
         ]
         .map(|value| value.map(String::from))
     );
+}
+
+#[rstest]
+#[case::top_level(json!({"output": "figures"}), "output")]
+#[case::extra_body(json!({"extra_body": {"output": "pdf"}}), "extra_body.output")]
+#[tokio::test]
+async fn output_is_rejected_before_sending(#[case] options: Value, #[case] param: &str) {
+    let upstream = upstream([json_response(json!({}))]).await;
+
+    let error = perform(ocr_request(LAYOUT_MODEL, &upstream.uri(), options))
+        .await
+        .unwrap_err();
+
+    assert!(received(&upstream).await.is_empty());
+    assert!(matches!(&error, Error::UnsupportedParam { param: rejected, .. } if rejected == param));
+    assert_eq!(error.http_status_code(), Some(400));
 }
 
 #[tokio::test]
