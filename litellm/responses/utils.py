@@ -13,7 +13,13 @@ from typing_extensions import TypeIs  # noqa: TID251  # narrows untyped wire pay
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, decoded_json_object, iter_items
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    as_str_mapping,
+    attribute_or_none,
+    decoded_json_object,
+    iter_items,
+)
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value, is_nested_path
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 from litellm.llms.base_llm.responses.transformation import (
@@ -694,42 +700,28 @@ class ResponsesAPIRequestUtils:
         else:
             output = getattr(response, "output", None)
 
-        if not isinstance(output, list):
+        items: Final = as_object_list(output)
+        if items is None:
             return response
 
-        for item in output:
-            if isinstance(item, dict):
-                encrypted_content = item.get("encrypted_content")
-                encoded_id = ResponsesAPIRequestUtils.affinity_item_id(
-                    item.get("type"), item.get("id"), encrypted_content, model_id
-                )
-
-                if encrypted_content and isinstance(encrypted_content, str):
-                    # Always wrap encrypted_content with model_id for redundancy
-                    item["encrypted_content"] = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
-                        encrypted_content, model_id
+        for item in items:
+            if _is_object_dict(item):
+                item.update(
+                    ResponsesAPIRequestUtils._affinity_item_updates(
+                        item.get("type"), item.get("id"), item.get("encrypted_content"), model_id
                     )
-                if encoded_id is not None:
-                    item["id"] = encoded_id
-            else:
-                encrypted_content = getattr(item, "encrypted_content", None)
-                encoded_id = ResponsesAPIRequestUtils.affinity_item_id(
-                    attribute_or_none(item, "type"), attribute_or_none(item, "id"), encrypted_content, model_id
                 )
-
-                if encrypted_content and isinstance(encrypted_content, str):
-                    # Always wrap encrypted_content with model_id for redundancy
-                    try:
-                        item.encrypted_content = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
-                            encrypted_content, model_id
-                        )
-                    except AttributeError:
-                        pass
-                if encoded_id is not None:
-                    try:
-                        item.id = encoded_id
-                    except AttributeError:
-                        pass
+                continue
+            for key, value in ResponsesAPIRequestUtils._affinity_item_updates(
+                attribute_or_none(item, "type"),
+                attribute_or_none(item, "id"),
+                attribute_or_none(item, "encrypted_content"),
+                model_id,
+            ).items():
+                try:
+                    setattr(item, key, value)
+                except AttributeError:
+                    pass
 
         return response
 
