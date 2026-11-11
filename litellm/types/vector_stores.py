@@ -362,7 +362,7 @@ class VectorStoreToolParams:
                 "filters": self.filters,
                 "max_num_results": self.max_num_results,
                 "ranking_options": self.ranking_options,
-                "rewrite_query": self.rewrite_query,
+                "rewrite_query": self.rewrite_query or None,
             }.items()
             if v is not None
         }
