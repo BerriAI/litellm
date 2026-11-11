@@ -746,6 +746,27 @@ def test_model_the_runtime_counts_never_reaches_mantle(counting_proxy: OwnedProx
         assert mantle.drain() == ()
 
 
+def test_deployment_with_an_empty_api_base_counts_on_its_runtime_endpoint(
+    counting_proxy: OwnedProxy, mantle_port: int
+) -> None:
+    gateway: Final = counting_proxy.gateway
+    with (
+        wire_server(_runtime) as runtime,
+        wire_server(_mantle(), port=mantle_port) as mantle,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = scenario.model(
+            model_info=None,
+            api_key=None,
+            **_litellm_params(_SONNET, ""),
+            aws_bedrock_runtime_endpoint=runtime.url,
+        )
+        response: Final = _count(gateway, _bare(model))
+        assert _payload(response) == {"input_tokens": _RUNTIME_COUNT, **_count_model_source(_SONNET)}, response.text
+        assert _runtime_count_targets(runtime) == (f"/model/{_SONNET}/count-tokens",)
+        assert mantle.drain() == ()
+
+
 def test_non_claude_model_the_runtime_cannot_count_surfaces_the_error_without_mantle(
     counting_proxy: OwnedProxy, mantle_port: int
 ) -> None:
