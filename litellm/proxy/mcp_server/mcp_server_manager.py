@@ -6607,6 +6607,7 @@ class MCPServerManager:
         allow_input_required: bool = False,
         input_responses: InputResponses | None = None,
         request_state: str | None = None,
+        client_meta: Mapping[str, object] | None = None,
     ) -> CallToolResult | InputRequiredResult:
         """
         Call a regular MCP tool using the MCP client.
@@ -6738,11 +6739,17 @@ class MCPServerManager:
         )
         persistent_session: Final = await self._upstream_session_for(client, mcp_server, raw_headers)
 
+        should_forward_meta: Final = bool(
+            getattr(mcp_server, "forward_client_meta", False)
+            or (mcp_server.mcp_info or {}).get("forward_client_meta")
+        )
+        forwarded_meta: Final = dict(client_meta) if should_forward_meta and client_meta else None
         call_tool_params: Final = MCPCallToolRequestParams(
             name=original_tool_name,
             arguments=arguments,
             input_responses=input_responses,
             request_state=request_state,
+            **({"_meta": forwarded_meta} if forwarded_meta else {}),
         )
 
         if _obo_retry_applies(mcp_server, subject_token):
@@ -7081,6 +7088,7 @@ class MCPServerManager:
         catalog_auth_header: str | None | EllipsisType = ...,
         listed_tool: MCPTool | None | EllipsisType = ...,
         incoming_bearer_token: SecretStr | None | EllipsisType = ...,
+        client_meta: Mapping[str, object] | None = None,
     ) -> CallToolResult | InputRequiredResult:
         """
         Call a tool with the given name and arguments
@@ -7243,6 +7251,7 @@ class MCPServerManager:
                 allow_input_required=wire_compat is WireCompat.MODERN,
                 input_responses=input_responses,
                 request_state=request_state,
+                client_meta=client_meta,
             )
 
         return await self._gather_openapi_tool_tasks(tasks, proxy_logging_obj)

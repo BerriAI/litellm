@@ -1206,17 +1206,33 @@ class MCPClient:
                 if not any(tool.name == call_tool_request_params.name for tool in tools):
                     raise MCPError(code=-32603, message="Tool schema is unavailable from the bounded upstream catalog")
 
+            raw_meta: Final = getattr(call_tool_request_params, "meta", None)
+            forwarded_meta: Final = (
+                dict(raw_meta)
+                if isinstance(raw_meta, Mapping)
+                else raw_meta.model_dump(exclude_none=True)
+                if hasattr(raw_meta, "model_dump")
+                else None
+            )
+
             async def request(
                 responses: InputResponses | None, state: str | None
             ) -> MCPCallToolResult | InputRequiredResult:
-                return await session.call_tool(
-                    name=call_tool_request_params.name,
-                    arguments=call_tool_request_params.arguments,
-                    input_responses=responses,
-                    request_state=state,
-                    progress_callback=on_progress,
-                    allow_input_required=True,
-                )
+                call_kwargs: dict[str, object] = {
+                    "name": call_tool_request_params.name,
+                    "arguments": call_tool_request_params.arguments,
+                    "input_responses": responses,
+                    "request_state": state,
+                    "progress_callback": on_progress,
+                    "allow_input_required": True,
+                }
+                sig_params: Final = inspect.signature(session.call_tool).parameters
+                if forwarded_meta and (
+                    "meta" in sig_params
+                    or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig_params.values())
+                ):
+                    call_kwargs["meta"] = forwarded_meta
+                return await session.call_tool(**call_kwargs)  # type: ignore[arg-type]
 
             return await self._request_with_interaction(
                 session,

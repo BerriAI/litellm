@@ -206,6 +206,7 @@ class MCPServer(LiteLLMBaseModel):
     access_groups: list[str] | None = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
+    forward_client_meta: bool = False
     # Deprecated opt-in to upstream-delegated authentication for ``oauth2``
     # servers. A bare ``Authorization`` that is not a LiteLLM credential is the
     # upstream token and is forwarded; see

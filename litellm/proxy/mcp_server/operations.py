@@ -2096,6 +2096,7 @@ async def execute_mcp_tool(
     input_responses: InputResponses | None = None,
     request_state: str | None = None,
     incoming_bearer_token: SecretStr | None | EllipsisType = ...,
+    client_meta: Mapping[str, object] | None = None,
     **kwargs: object,  # kwargs-ok: preserves the existing REST and decorated logging call contract
 ) -> CallToolResult | InputRequiredResult:
     context: Final = prepare_context(
@@ -2119,6 +2120,7 @@ async def execute_mcp_tool(
         logging_data=types.MappingProxyType(kwargs),
         input_responses=input_responses,
         request_state=request_state,
+        client_meta=client_meta,
     )
     return await GatewayOperations().execute(operation, context)
 
@@ -2460,6 +2462,7 @@ async def _execute_mcp_tool(
             input_responses=input_responses,
             request_state=request_state,
             incoming_bearer_token=incoming_bearer_token,
+            client_meta=kwargs.get("client_meta"),
         )
 
     # Fall back to local tool registry with original name (legacy support)
@@ -2947,6 +2950,7 @@ async def call_mcp_tool(
     request_state: str | None = None,
     incoming_bearer_token: SecretStr | None | EllipsisType = ...,
     guardrail_auth: UserAPIKeyAuth | None = None,
+    client_meta: Mapping[str, object] | None = None,
     **kwargs: Unpack[_CallMcpToolOptions],
 ) -> CallToolResult | InputRequiredResult:
     """
@@ -3011,6 +3015,7 @@ async def call_mcp_tool(
             incoming_bearer_token=incoming_bearer_token,
             requested_server_id=scoped_server.server_id if scoped_server is not None else None,
             guardrail_auth=guardrail_auth,
+            client_meta=client_meta,
             **kwargs,
         )
     except Exception as e:
@@ -3207,6 +3212,7 @@ async def _handle_managed_mcp_tool(
     *,
     catalog_auth_header: str | None,
     incoming_bearer_token: SecretStr | None | EllipsisType = ...,
+    client_meta: Mapping[str, object] | None = None,
 ) -> CallToolResult | InputRequiredResult:
     """Handle tool execution for managed server tools. ``catalog_auth_header`` is the header the client
     supplied, which keys the caller's catalog slot; ``mcp_auth_header`` may already be the resolved
@@ -3234,6 +3240,7 @@ async def _handle_managed_mcp_tool(
         input_responses=input_responses,
         request_state=request_state,
         incoming_bearer_token=incoming_bearer_token,
+        client_meta=client_meta,
     )
     verbose_logger.debug("CALL TOOL RESULT: %s", call_tool_result)
     return call_tool_result
@@ -3466,6 +3473,23 @@ async def _execute_mcp_server_tool_call(
         else:
             data = body_data
 
+        raw_meta: Final = getattr(params, "meta", None)
+        extracted_meta: dict[str, object] | None = None
+        if isinstance(raw_meta, Mapping):
+            extracted_meta = {
+                str(k): v
+                for k, v in raw_meta.items()
+                if k not in ("progressToken", "progress_token")
+            }
+        elif hasattr(raw_meta, "model_dump"):
+            dumped = raw_meta.model_dump(exclude_none=True)
+            if isinstance(dumped, Mapping):
+                extracted_meta = {
+                    str(k): v
+                    for k, v in dumped.items()
+                    if k not in ("progressToken", "progress_token")
+                }
+
         response: Final = await call_mcp_tool(
             user_api_key_auth=user_api_key_auth,
             mcp_auth_header=mcp_auth_header,
@@ -3480,6 +3504,7 @@ async def _execute_mcp_server_tool_call(
             request_state=params.request_state,
             incoming_bearer_token=context.incoming_bearer_token,
             guardrail_auth=guardrail_auth,
+            client_meta=extracted_meta if extracted_meta else None,
             **data,  # for logging
         )
     except MCPMissingUserEnvVarsError as e:
@@ -3939,6 +3964,7 @@ class GatewayOperations:
                     input_responses=operation.input_responses,
                     request_state=operation.request_state,
                     incoming_bearer_token=context.incoming_bearer_token,
+                    client_meta=operation.client_meta,
                     **operation.logging_data,
                 )
             case ListToolsRequest(params=params):
