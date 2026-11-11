@@ -368,6 +368,7 @@ exclude = [
 concurrent-builds = 1
 cache-keys = [
     { file = "pyproject.toml" },
+    { env = "MATURIN_PEP517_ARGS" },
     { file = "rust-toolchain.toml" },
     { file = ".cargo/config.toml" },
     { file = "litellm-rust/Cargo.lock" },

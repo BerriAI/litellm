@@ -75,6 +75,21 @@ describe("NotificationsBellView", () => {
     expect(announcement("LiteLLM v1.103.0 is available")).toHaveTextContent("1 new feature, 1 fix, and 1 other update");
   });
 
+  it("leaves the counts out when the release notes yielded none", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <NotificationsBellView
+        currentVersion="1.102.0"
+        latestRelease={{ ...RELEASE, new_features: 0, bug_fixes: 0, other_updates: 0 }}
+      />,
+    );
+    await user.click(bell(2));
+    const upgrade = announcement("LiteLLM v1.103.0 is available");
+    expect(upgrade).toHaveTextContent("Your current version is v1.102.0");
+    expect(upgrade).not.toHaveTextContent("0 new features");
+    expect(upgrade).not.toHaveTextContent("other update");
+  });
+
   it.each([
     ["the running version is unknown", undefined, RELEASE],
     ["the latest release is unavailable", "1.102.0", null],
