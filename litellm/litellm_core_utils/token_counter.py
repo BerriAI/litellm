@@ -726,7 +726,7 @@ def _tool_choice_tokens(
     model: str, tool_section: ChatTemplateToolSection | None, deepseek_tokenizer: bool
 ) -> ToolChoiceTokens | None:
     if tool_section is not None:
-        return chat_template_tool_choice_tokens(model)
+        return chat_template_tool_choice_tokens(model, tool_section)
     if deepseek_tokenizer:
         return None
     return OPENAI_TOOL_CHOICE_TOKENS

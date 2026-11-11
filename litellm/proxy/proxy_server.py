@@ -109,7 +109,11 @@ from litellm.litellm_core_utils.litellm_logging import (
     initialize_sentry,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER, LoggingWorker
-from litellm.litellm_core_utils.prompt_templates.chat_template_tools import chat_template_tool_section
+from litellm.litellm_core_utils.prompt_templates.chat_template_tools import (
+    ChatTemplateToolSection,
+    chat_template_tool_choice_tokens,
+    chat_template_tool_section,
+)
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.litellm_core_utils.routing_groups import parse_routing_groups
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -15707,15 +15711,41 @@ def _deployment_api_base(
 def _deployment_provider(
     deployment: _TokenCountDeployment, request_model: str, responses_request: Mapping[str, object] | None
 ) -> str | None:
+    resolved: Final = _deployment_llm_provider(deployment, request_model, responses_request)
+    return None if resolved is None else resolved[1]
+
+
+def _deployment_served_model(
+    deployment: _TokenCountDeployment, request_model: str, responses_request: Mapping[str, object] | None
+) -> str | None:
+    resolved: Final = _deployment_llm_provider(deployment, request_model, responses_request)
+    return None if resolved is None else f"{resolved[1]}/{resolved[0]}"
+
+
+def _deployment_llm_provider(
+    deployment: _TokenCountDeployment, request_model: str, responses_request: Mapping[str, object] | None
+) -> tuple[str, str] | None:
     params: Final = deployment.get("litellm_params", {})
     try:
-        return litellm.get_llm_provider(
+        model, provider, _, _ = litellm.get_llm_provider(
             model=_non_empty_str(params.get("model")) or request_model,
             custom_llm_provider=_non_empty_str(params.get("custom_llm_provider")),
             api_base=_deployment_api_base(deployment, responses_request),
-        )[1]
+        )
     except litellm.BadRequestError:
         return None
+    return model, provider
+
+
+def _xai_tool_choice_off_xai(
+    template_model: str, tool_section: ChatTemplateToolSection | None, served_model: str | None
+) -> bool:
+    return (
+        tool_section is not None
+        and served_model is not None
+        and chat_template_tool_choice_tokens(template_model, tool_section) is not None
+        and chat_template_tool_choice_tokens(served_model, tool_section) is None
+    )
 
 
 def _serves_native_responses(
@@ -16052,14 +16082,18 @@ async def _count_request_tokens(
     sent_tools: Final = cast(  # cast-ok: raw OpenAI or Anthropic tool dicts, both of which token_counter formats
         list[ChatCompletionToolParam] | None, tools if counted_messages is not None else None
     )
-    counted_tool_choice: Final = (
-        request.tool_choice
-        if counted_messages is not None and isinstance(request.tool_choice, (str, Mapping))
-        else None
-    )
     openai_model: Final = deployment_openai_model(deployment_view)
     template_model: Final = openai_model or _deployment_base_model(deployment_view) or model_to_use
     tool_section: Final = chat_template_tool_section(template_model)
+    counted_tool_choice: Final = (
+        request.tool_choice
+        if counted_messages is not None
+        and isinstance(request.tool_choice, (str, Mapping))
+        and not _xai_tool_choice_off_xai(
+            template_model, tool_section, _deployment_served_model(deployment_view, request.model, responses_request)
+        )
+        else None
+    )
     counted_tools: Final = (
         cast(list[ChatCompletionToolParam], list(_with_strict_by_default(sent_tools)))  # cast-ok: strict added
         if sent_tools is not None

@@ -5467,42 +5467,52 @@ async def test_count_routes_without_a_count_api_count_the_tool_choice_like_token
     assert route_added == sdk_added > 0
 
 
+_AZURE_GROK_PARAMS: Final = {"api_base": "https://example.services.ai.azure.com", "api_key": "sk-test"}
+
+
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment", "served_by_xai"),
+    [
+        ({"litellm_params": {"model": "xai/grok-4-1-fast-reasoning", "api_key": "sk-test"}}, True),
+        ({"litellm_params": {"model": "openrouter/x-ai/grok-4.3", "api_key": "sk-test"}}, True),
+        (
+            {
+                "litellm_params": {"model": "azure_ai/grok-4-1", **_AZURE_GROK_PARAMS},
+                "model_info": {"base_model": "azure_ai/grok-4-1-fast-reasoning"},
+            },
+            False,
+        ),
+        ({"litellm_params": {"model": "azure_ai/grok-4-1-fast-reasoning", **_AZURE_GROK_PARAMS}}, False),
+        ({"litellm_params": {"model": "grok-4.3", "custom_llm_provider": "azure_ai", **_AZURE_GROK_PARAMS}}, False),
+        (
+            {
+                "litellm_params": {
+                    "model": "vertex_ai/xai/grok-4.3",
+                    "vertex_project": "test-project",
+                    "vertex_location": "global",
+                }
+            },
+            False,
+        ),
+    ],
+)
 async def test_utils_token_counter_counts_xai_tool_choice_costs_only_on_grok_that_xai_serves(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, deployment: dict[str, dict[str, str]], served_by_xai: bool
 ) -> None:
     monkeypatch.setattr(
-        litellm.proxy.proxy_server,
-        "llm_router",
-        Router(
-            model_list=[
-                {
-                    "model_name": "azure-grok",
-                    "litellm_params": {
-                        "model": "azure_ai/grok-4-1",
-                        "api_base": "https://example.services.ai.azure.com",
-                        "api_key": "sk-test",
-                    },
-                    "model_info": {"base_model": "azure_ai/grok-4-1-fast-reasoning"},
-                },
-                {
-                    "model_name": "xai-grok",
-                    "litellm_params": {"model": "xai/grok-4-1-fast-reasoning", "api_key": "sk-test"},
-                },
-            ]
-        ),
+        litellm.proxy.proxy_server, "llm_router", Router(model_list=[{"model_name": "grok", **deployment}])
     )
     monkeypatch.setattr(litellm.proxy.proxy_server, "proxy_config", litellm.proxy.proxy_server.ProxyConfig())
     named: Final = {"tool_choice": {"type": "function", "function": {"name": "get_weather"}}}
     question: Final = [{"role": "user", "content": _TOOL_CHOICE_QUESTION}]
     sdk_added: Final = litellm.token_counter(
-        model="xai/grok-4-1-fast-reasoning", messages=question, tools=[_CHAT_WEATHER_TOOL], **named
-    ) - litellm.token_counter(model="xai/grok-4-1-fast-reasoning", messages=question, tools=[_CHAT_WEATHER_TOOL])
+        model="xai/grok-4.3", messages=question, tools=[_CHAT_WEATHER_TOOL], **named
+    ) - litellm.token_counter(model="xai/grok-4.3", messages=question, tools=[_CHAT_WEATHER_TOOL])
 
-    azure_added: Final = await _utils_route_count(named, "azure-grok") - await _utils_route_count({}, "azure-grok")
-    xai_added: Final = await _utils_route_count(named, "xai-grok") - await _utils_route_count({}, "xai-grok")
+    route_added: Final = await _utils_route_count(named, "grok") - await _utils_route_count({}, "grok")
 
-    assert (azure_added, xai_added) == (0, sdk_added)
+    assert route_added == (sdk_added if served_by_xai else 0)
     assert sdk_added > 0
 
 

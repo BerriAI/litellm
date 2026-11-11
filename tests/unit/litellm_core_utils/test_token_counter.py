@@ -752,7 +752,7 @@ def test_token_counter_counts_each_grok_tool_choice_the_way_xai_bills_it(
 
 # Azure AI Foundry grok-4-1 billed 351 prompt tokens for the weather tool with no tool_choice, 163 with "none" and
 # 352 with "required" or the named tool on 2026-11-10, so xAI's costs would count it 10 to 21 over
-@pytest.mark.parametrize("model", ["azure_ai/grok-4-1-fast-reasoning", "azure_ai/grok-4.3"])
+@pytest.mark.parametrize("model", ["azure_ai/grok-4-1-fast-reasoning", "azure_ai/grok-4.3", "vertex_ai/xai/grok-4.3"])
 @pytest.mark.parametrize("tool_choice", ["none", "required", {"type": "function", "function": {"name": "get_weather"}}])
 def test_token_counter_tool_choice_adds_nothing_for_grok_served_off_xai(model: str, tool_choice: object):
     tools: Final = [_openai_tool(_WEATHER_FUNCTION)]
