@@ -34,3 +34,28 @@ def test_a_completed_task_chunk_yields_its_text_and_stops():
     assert chunk["text"] == "7"
     assert chunk["is_finished"] is True
     assert chunk["finish_reason"] == "stop"
+
+
+def test_stream_that_ends_while_task_is_still_working_raises():
+    iterator = _iterator(
+        [
+            '{"jsonrpc":"2.0","id":"1","result":{"kind":"task","status":{"state":"working"},'
+            '"artifacts":[{"parts":[{"kind":"text","text":"partial"}]}]}}'
+        ]
+    )
+
+    chunk = next(iterator)
+    assert chunk["text"] == "partial"
+    assert chunk["is_finished"] is False
+
+    with pytest.raises(A2AError, match="ended before task completed"):
+        next(iterator)
+
+
+def test_failed_task_state_raises_during_stream():
+    iterator = _iterator(
+        ['{"jsonrpc":"2.0","id":"1","result":{"kind":"task","status":{"state":"failed"}}}']
+    )
+
+    with pytest.raises(A2AError, match="ended with state: failed"):
+        next(iterator)

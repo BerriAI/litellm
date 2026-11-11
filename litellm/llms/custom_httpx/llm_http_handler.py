@@ -861,19 +861,35 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             signed_json_body=signed_json_body,
         )
-        initial_response: Final = provider_config.transform_response(
-            model=model,
-            raw_response=response,
-            model_response=model_response,
-            logging_obj=logging_obj,
-            api_key=api_key,
-            request_data=data,
-            messages=messages,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-            encoding=encoding,
-            json_mode=json_mode,
-        )
+        if provider_config.uses_async_transform_response:
+            initial_response: Final = await provider_config.async_transform_response(
+                model=model,
+                raw_response=response,
+                model_response=model_response,
+                logging_obj=logging_obj,
+                api_key=api_key,
+                request_data=data,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                encoding=encoding,
+                json_mode=json_mode,
+                async_http_client=async_httpx_client,
+            )
+        else:
+            initial_response = provider_config.transform_response(
+                model=model,
+                raw_response=response,
+                model_response=model_response,
+                logging_obj=logging_obj,
+                api_key=api_key,
+                request_data=data,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                encoding=encoding,
+                json_mode=json_mode,
+            )
 
         # Call agentic chat completion hooks
         final_response: Final = await self._call_agentic_chat_completion_hooks(

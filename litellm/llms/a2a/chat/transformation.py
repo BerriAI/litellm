@@ -16,16 +16,24 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
 from ..common_utils import (
+    A2A_TASK_FAILURE_STATES,
+    A2A_TASK_INTERRUPTED_STATES,
+    A2A_TASK_RECOVERABLE_STATES,
+    A2A_TASK_STATE_COMPLETED,
     A2AError,
     a2a_hop_uses_entra,
+    a2a_task_state,
+    async_poll_a2a_task_completion,
     convert_messages_to_prompt,
     extract_text_from_a2a_response,
+    poll_a2a_task_completion,
 )
 from .streaming_iterator import A2AModelResponseIterator
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 
 _REGISTRY_PARAMS_KEPT_OUT_OF_OPTIONAL_PARAMS: Final = (
@@ -68,6 +76,207 @@ class A2AConfig(BaseConfig):
 
     Handles transformation between OpenAI and A2A JSON-RPC 2.0 formats.
     """
+
+    @property
+    def uses_async_transform_response(self) -> bool:
+        return True
+
+    @staticmethod
+    def _parse_a2a_raw_response(raw_response: httpx.Response) -> dict[str, object]:
+        try:
+            response_json = raw_response.json()
+        except Exception as e:
+            raise A2AError(
+                status_code=raw_response.status_code,
+                message=f"Failed to parse A2A response: {e}",
+                headers=dict(raw_response.headers),
+            )
+        if not isinstance(response_json, dict):
+            return response_json  # type: ignore[return-value]
+        if "error" in response_json:
+            error: Final = _JSON_OBJECT.validate_python(response_json["error"])
+            raise A2AError(
+                status_code=raw_response.status_code,
+                message=f"A2A error: {error.get('message', 'Unknown error')}",
+                headers=dict(raw_response.headers),
+            )
+        return response_json
+
+    @classmethod
+    def _validated_after_task_lifecycle(
+        cls,
+        *,
+        response_json: dict[str, object],
+        raw_response: httpx.Response,
+        request_data: dict,
+        litellm_params: dict,
+        polled: Mapping[str, object] | None,
+    ) -> Mapping[str, object]:
+        if polled is not None:
+            response_json = dict(polled)
+        validated: Final = _JSON_OBJECT.validate_python(response_json)
+        result: Final = validated.get("result")
+        if isinstance(result, dict):
+            state: Final[str | None] = a2a_task_state(result)
+            if state in A2A_TASK_FAILURE_STATES:
+                raise A2AError(
+                    status_code=raw_response.status_code,
+                    message=f"A2A task ended with state: {state}",
+                    headers=dict(raw_response.headers),
+                )
+            if state in A2A_TASK_INTERRUPTED_STATES:
+                raise A2AError(
+                    status_code=raw_response.status_code,
+                    message=f"A2A task requires further action (state: {state})",
+                    headers=dict(raw_response.headers),
+                )
+            if polled is None and state in A2A_TASK_RECOVERABLE_STATES:
+                task_id: Final = result.get("id")
+                api_base: Final = litellm_params.get("api_base")
+                if not (isinstance(task_id, str) and isinstance(api_base, str)):
+                    raise A2AError(
+                        status_code=raw_response.status_code,
+                        message=f"A2A task is not complete (state: {state})",
+                        headers=dict(raw_response.headers),
+                    )
+                poll_headers: Final = litellm_params.get("headers")
+                timeout: Final = float(litellm_params.get("timeout") or litellm_params.get("request_timeout") or 60)
+                request_id: Final = str(validated.get("id") or request_data.get("id") or uuid.uuid4())
+                polled_result: Final = poll_a2a_task_completion(
+                    api_base=api_base,
+                    task_id=task_id,
+                    request_id=request_id,
+                    headers=(
+                        {str(k): str(v) for k, v in poll_headers.items()}
+                        if isinstance(poll_headers, Mapping)
+                        else None
+                    ),
+                    timeout=timeout,
+                )
+                return cls._validated_after_task_lifecycle(
+                    response_json=dict(polled_result),
+                    raw_response=raw_response,
+                    request_data=request_data,
+                    litellm_params=litellm_params,
+                    polled=polled_result,
+                )
+            if state is not None and state != A2A_TASK_STATE_COMPLETED:
+                raise A2AError(
+                    status_code=raw_response.status_code,
+                    message=f"A2A task is not complete (state: {state})",
+                    headers=dict(raw_response.headers),
+                )
+        return validated
+
+    @classmethod
+    async def _validated_after_task_lifecycle_async(
+        cls,
+        *,
+        response_json: dict[str, object],
+        raw_response: httpx.Response,
+        request_data: dict,
+        litellm_params: dict,
+        polled: Mapping[str, object] | None,
+        async_http_client: "AsyncHTTPHandler | None",
+    ) -> Mapping[str, object]:
+        if polled is not None:
+            response_json = dict(polled)
+        validated: Final = _JSON_OBJECT.validate_python(response_json)
+        result: Final = validated.get("result")
+        if isinstance(result, dict):
+            state: Final[str | None] = a2a_task_state(result)
+            if state in A2A_TASK_FAILURE_STATES:
+                raise A2AError(
+                    status_code=raw_response.status_code,
+                    message=f"A2A task ended with state: {state}",
+                    headers=dict(raw_response.headers),
+                )
+            if state in A2A_TASK_INTERRUPTED_STATES:
+                raise A2AError(
+                    status_code=raw_response.status_code,
+                    message=f"A2A task requires further action (state: {state})",
+                    headers=dict(raw_response.headers),
+                )
+            if polled is None and state in A2A_TASK_RECOVERABLE_STATES:
+                task_id: Final = result.get("id")
+                api_base: Final = litellm_params.get("api_base")
+                if not (isinstance(task_id, str) and isinstance(api_base, str)):
+                    raise A2AError(
+                        status_code=raw_response.status_code,
+                        message=f"A2A task is not complete (state: {state})",
+                        headers=dict(raw_response.headers),
+                    )
+                poll_headers: Final = litellm_params.get("headers")
+                timeout: Final = float(litellm_params.get("timeout") or litellm_params.get("request_timeout") or 60)
+                request_id: Final = str(validated.get("id") or request_data.get("id") or uuid.uuid4())
+                polled_result: Final = await async_poll_a2a_task_completion(
+                    api_base=api_base,
+                    task_id=task_id,
+                    request_id=request_id,
+                    headers=(
+                        {str(k): str(v) for k, v in poll_headers.items()}
+                        if isinstance(poll_headers, Mapping)
+                        else None
+                    ),
+                    timeout=timeout,
+                    client=async_http_client,
+                )
+                return await cls._validated_after_task_lifecycle_async(
+                    response_json=dict(polled_result),
+                    raw_response=raw_response,
+                    request_data=request_data,
+                    litellm_params=litellm_params,
+                    polled=polled_result,
+                    async_http_client=async_http_client,
+                )
+            if state is not None and state != A2A_TASK_STATE_COMPLETED:
+                raise A2AError(
+                    status_code=raw_response.status_code,
+                    message=f"A2A task is not complete (state: {state})",
+                    headers=dict(raw_response.headers),
+                )
+        return validated
+
+    @staticmethod
+    def _fill_model_response(
+        *,
+        model: str,
+        validated: Mapping[str, object],
+        response_json: Mapping[str, object],
+        model_response: ModelResponse,
+        messages: list[AllMessageValues],
+    ) -> ModelResponse:
+        text: Final = extract_text_from_a2a_response(validated)
+        model_response.choices = [
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(
+                    content=text,
+                    role="assistant",
+                ),
+            )
+        ]
+        model_response.model = model
+        response_id: Final = validated.get("id", response_json.get("id", str(uuid.uuid4())))
+        model_response.id = str(response_id)
+        try:
+            from litellm.utils import token_counter
+
+            prompt_tokens: Final = token_counter(model="gpt-3.5-turbo", messages=messages)
+            completion_tokens: Final = token_counter(model="gpt-3.5-turbo", text=text, count_response_tokens=True)
+            setattr(
+                model_response,
+                "usage",
+                Usage(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=prompt_tokens + completion_tokens,
+                ),
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        return model_response
 
     @staticmethod
     def resolve_agent_config_from_registry(
@@ -316,65 +525,53 @@ class A2AConfig(BaseConfig):
         Returns:
             Populated ModelResponse object
         """
-        try:
-            response_json: Final = raw_response.json()
-        except Exception as e:
-            raise A2AError(
-                status_code=raw_response.status_code,
-                message=f"Failed to parse A2A response: {e}",
-                headers=dict(raw_response.headers),
-            )
+        response_json: Final = self._parse_a2a_raw_response(raw_response)
+        validated: Final = self._validated_after_task_lifecycle(
+            response_json=response_json,
+            raw_response=raw_response,
+            request_data=request_data,
+            litellm_params=litellm_params,
+            polled=None,
+        )
+        return self._fill_model_response(
+            model=model,
+            validated=validated,
+            response_json=response_json if validated is response_json else validated,
+            model_response=model_response,
+            messages=messages,
+        )
 
-        # Check for JSON-RPC error
-        if "error" in response_json:
-            error: Final = _JSON_OBJECT.validate_python(response_json["error"])
-            raise A2AError(
-                status_code=raw_response.status_code,
-                message=f"A2A error: {error.get('message', 'Unknown error')}",
-                headers=dict(raw_response.headers),
-            )
-
-        # Extract text from A2A response
-        text: Final = extract_text_from_a2a_response(_JSON_OBJECT.validate_python(response_json))
-
-        # Populate model response
-        model_response.choices = [
-            Choices(
-                finish_reason="stop",
-                index=0,
-                message=Message(
-                    content=text,
-                    role="assistant",
-                ),
-            )
-        ]
-
-        # Set model
-        model_response.model = model
-
-        # Set ID from response
-        model_response.id = response_json.get("id", str(uuid.uuid4()))
-
-        # A2A agents don't return token usage; estimate it so per-token pricing
-        # produces real cost and callers don't receive usage of 0/0/0.
-        try:
-            from litellm.utils import token_counter
-
-            prompt_tokens: Final = token_counter(model="gpt-3.5-turbo", messages=messages)
-            completion_tokens: Final = token_counter(model="gpt-3.5-turbo", text=text, count_response_tokens=True)
-            setattr(
-                model_response,
-                "usage",
-                Usage(
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    total_tokens=prompt_tokens + completion_tokens,
-                ),
-            )
-        except Exception:  # noqa: BLE001 - best-effort estimate; a tokenizer hiccup must not break the response
-            pass
-
-        return model_response
+    async def async_transform_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: "LiteLLMLoggingObj",
+        request_data: dict,
+        messages: list[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: "Tokenizer | None",
+        api_key: str | None = None,
+        json_mode: bool | None = None,
+        async_http_client: object | None = None,
+    ) -> ModelResponse:
+        response_json: Final = self._parse_a2a_raw_response(raw_response)
+        validated: Final = await self._validated_after_task_lifecycle_async(
+            response_json=response_json,
+            raw_response=raw_response,
+            request_data=request_data,
+            litellm_params=litellm_params,
+            polled=None,
+            async_http_client=async_http_client,  # type: ignore[arg-type]
+        )
+        return self._fill_model_response(
+            model=model,
+            validated=validated,
+            response_json=response_json if validated is response_json else validated,
+            model_response=model_response,
+            messages=messages,
+        )
 
     def get_model_response_iterator(
         self,

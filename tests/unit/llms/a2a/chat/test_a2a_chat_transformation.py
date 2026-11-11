@@ -127,7 +127,11 @@ def test_resolve_agent_config_from_registry_returns_the_explicit_headers_object_
     assert optional_params == {"stream": True}
 
 
-def _transform(payload: object, headers: dict[str, str] | None = None) -> ModelResponse:
+def _transform(
+    payload: object,
+    headers: dict[str, str] | None = None,
+    litellm_params: dict | None = None,
+) -> ModelResponse:
     return A2AConfig().transform_response(
         model="a2a/test-agent",
         raw_response=httpx.Response(200, json=payload, headers=headers),
@@ -136,7 +140,7 @@ def _transform(payload: object, headers: dict[str, str] | None = None) -> ModelR
         request_data={},
         messages=[{"role": "user", "content": "hi there agent"}],
         optional_params={},
-        litellm_params={},
+        litellm_params=litellm_params or {},
         encoding=None,
     )
 
@@ -146,9 +150,11 @@ def _transform(payload: object, headers: dict[str, str] | None = None) -> ModelR
     [
         ({"kind": "message", "parts": [{"kind": "text", "text": "direct"}]}, "direct"),
         ({"message": {"parts": [{"kind": "text", "text": "nested"}]}}, "nested"),
-        ({"kind": "task", "status": {"message": {"parts": [{"kind": "text", "text": "status"}]}}}, "status"),
+        (
+            {"kind": "task", "status": {"state": "completed", "message": {"parts": [{"kind": "text", "text": "status"}]}}},
+            "status",
+        ),
         ({"kind": "task", "artifacts": [{"parts": [{"kind": "text", "text": "artifact"}]}]}, "artifact"),
-        ({"kind": "task", "status": {"state": "submitted"}}, ""),
         (None, ""),
         ("plain text", ""),
         ([{"kind": "text", "text": "not a result object"}], ""),
@@ -226,3 +232,134 @@ def test_transform_response_reports_an_undecodable_body_as_an_agent_error():
 
     assert exc_info.value.status_code == 502
     assert exc_info.value.message.startswith("Failed to parse A2A response: ")
+
+
+def test_transform_response_rejects_submitted_task_without_recovery():
+    with pytest.raises(A2AError, match="not complete \\(state: submitted\\)"):
+        _transform(
+            {
+                "jsonrpc": "2.0",
+                "id": "resp-1",
+                "result": {"kind": "task", "status": {"state": "submitted"}},
+            }
+        )
+
+
+def test_transform_response_rejects_a_working_task_without_polling_context():
+    payload = {
+        "jsonrpc": "2.0",
+        "id": "req1",
+        "result": {
+            "kind": "task",
+            "id": "t1",
+            "status": {
+                "state": "working",
+                "message": {
+                    "parts": [{"kind": "text", "text": "Still working, fetch the result with tasks/get"}]
+                },
+            },
+        },
+    }
+
+    with pytest.raises(A2AError, match="not complete \\(state: working\\)"):
+        _transform(payload)
+
+
+@pytest.mark.asyncio
+async def test_async_transform_response_polls_tasks_get_until_completed(mocker):
+    agent_url = "http://agent.example"
+    mock_poll = mocker.patch(
+        "litellm.llms.a2a.chat.transformation.async_poll_a2a_task_completion",
+        new=mocker.AsyncMock(
+            return_value={
+                "jsonrpc": "2.0",
+                "id": "poll-0",
+                "result": {
+                    "kind": "task",
+                    "id": "t1",
+                    "status": {"state": "completed"},
+                    "artifacts": [{"parts": [{"kind": "text", "text": "async final"}]}],
+                },
+            }
+        ),
+    )
+
+    response = await A2AConfig().async_transform_response(
+        model="a2a/test-agent",
+        raw_response=httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": "req1",
+                "result": {
+                    "kind": "task",
+                    "id": "t1",
+                    "status": {"state": "working"},
+                },
+            },
+        ),
+        model_response=ModelResponse(),
+        logging_obj=None,
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={"api_base": agent_url, "timeout": 5},
+        encoding=None,
+        async_http_client=mocker.Mock(),
+    )
+
+    mock_poll.assert_awaited_once()
+    assert response.choices[0].message.content == "async final"
+
+
+def test_a2a_config_uses_async_transform_response():
+    assert A2AConfig().uses_async_transform_response is True
+
+
+def test_transform_response_polls_tasks_get_until_completed(respx_mock):
+    agent_url = "http://agent.example"
+    respx_mock.post(agent_url).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": "poll-0",
+                "result": {
+                    "kind": "task",
+                    "id": "t1",
+                    "status": {"state": "completed"},
+                    "artifacts": [{"parts": [{"kind": "text", "text": "final answer"}]}],
+                },
+            },
+        )
+    )
+
+    response = _transform(
+        {
+            "jsonrpc": "2.0",
+            "id": "req1",
+            "result": {
+                "kind": "task",
+                "id": "t1",
+                "status": {
+                    "state": "working",
+                    "message": {"parts": [{"kind": "text", "text": "hold on"}]},
+                },
+            },
+        },
+        litellm_params={"api_base": agent_url, "timeout": 5},
+    )
+
+    assert response.choices[0].message.content == "final answer"
+    assert response.choices[0].finish_reason == "stop"
+
+
+def test_transform_response_surfaces_failed_task_state():
+    with pytest.raises(A2AError, match="ended with state: failed"):
+        _transform(
+            {
+                "jsonrpc": "2.0",
+                "id": "req1",
+                "result": {"kind": "task", "id": "t1", "status": {"state": "failed"}},
+            }
+        )
