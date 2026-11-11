@@ -72,15 +72,17 @@ def test_the_detailed_debug_flag_sets_debug_level_whatever_litellm_log_says(gate
 
 
 def test_no_docs_removes_the_swagger_page_from_the_root_path(gateway: Gateway, tmp_path: Path) -> None:
-    """`NO_DOCS=True`. `GET /` must no longer serve the Swagger UI page: the response is not a 200 HTML
-    document containing `swagger-ui`. The API itself keeps working (`/health/liveliness` is 200).
-    UNVERIFIED: the exact status of `GET /` with docs off (expected 404 unless a root redirect is set)."""
+    """`NO_DOCS=True`. `GET /` must no longer serve the Swagger UI page. With the docs off the root path
+    falls through to the proxy's own `home` route (litellm/proxy/proxy_server.py `@router.get("/")`), which
+    answers 200 with the JSON string "LiteLLM: RUNNING". The API itself keeps working (`/health/liveliness`
+    is 200)."""
     with booted(
         gateway, tmp_path, _EMPTY, environment={"NO_DOCS": "True"}, remove_environment=("DOCS_URL", "ROOT_REDIRECT_URL")
     ) as owned:
         root: Final = owned.gateway.client.get("/")
         alive: Final = owned.gateway.client.get("/health/liveliness")
-    assert root.status_code == 404, root.text
+    assert root.status_code == 200, root.text
+    assert root.json() == "LiteLLM: RUNNING"
     assert "swagger-ui" not in root.text
     assert alive.status_code == 200
 

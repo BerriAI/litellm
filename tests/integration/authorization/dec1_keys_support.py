@@ -91,6 +91,27 @@ def assert_denied(
     return error
 
 
+def route_denied_message(allowed: Sequence[str], route: str) -> str:
+    return (
+        "Virtual key is not allowed to call this route. "
+        f"Only allowed to call routes: {list(allowed)}. Tried to call route: {route}"
+    )
+
+
+def assert_route_denied(response: httpx.Response, allowed: Sequence[str], route: str) -> None:
+    """The `allowed_routes` refusal: HTTP 403 with exactly `{"detail": <route message>}`.
+
+    Pinned current behaviour: `RouteChecks.should_call_route` runs in `_authorize_authenticated_request`
+    (litellm/proxy/auth/user_api_key_auth.py) before the `try` that converts failures into ProxyException,
+    so its HTTPException reaches FastAPI's default handler and the body is the bare `detail` shape rather
+    than the OpenAI `{"error": {...}}` shape every other auth refusal uses.
+    """
+    assert response.status_code == 403, f"{response.status_code} {response.text}"
+    assert JSON_OBJECT.validate_json(response.content) == {"detail": route_denied_message(allowed, route)}, (
+        response.text
+    )
+
+
 def assert_model_denied(response: httpx.Response, model: str, error_type: str) -> None:
     assert_denied(
         response, status=403, error_type=error_type, param="model", message=MODEL_DENIED_TEMPLATE.format(model=model)

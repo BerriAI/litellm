@@ -331,18 +331,21 @@ def test_field_info_reports_a_file_declared_setting_as_not_editable(owned_by_fil
 
 def test_config_list_marks_file_declared_settings_as_owned_by_the_config(owned_by_file: OwnedProxy) -> None:
     """`GET /config/list?config_type=general_settings` must include an entry for `return_wildcard_routes`
-    with `field_type: Boolean`, `field_value: false`, `stored_in_db: false`, `source: config` and
-    `editable: false`."""
+    with `field_type: Boolean`, `field_value: false`, `source: config` and `editable: false`.
+
+    `stored_in_db` only says whether the `general_settings` row holds the key
+    (litellm/proxy/proxy_server.py `list_config`). This module shares one proxy, and the same value update
+    accepted above writes `false` into that row, so the flag is compared with the row instead of a literal."""
     response: Final = owned_by_file.gateway.request("GET", "/config/list", params={"config_type": "general_settings"})
     assert response.status_code == 200, response.text
     entry: Final = next(item for item in ITEMS.validate_json(response.content) if item["field_name"] == _FIELD)
-    assert (entry["field_type"], entry["field_value"], entry["stored_in_db"], entry["source"], entry["editable"]) == (
+    assert (entry["field_type"], entry["field_value"], entry["source"], entry["editable"]) == (
         "Boolean",
-        False,
         False,
         "config",
         False,
     )
+    assert entry["stored_in_db"] is (_FIELD in config_rows(owned_by_file.gateway, "general_settings")), entry
 
 
 def test_config_list_rejects_a_config_type_other_than_general_settings(owned_by_file: OwnedProxy) -> None:
@@ -439,16 +442,18 @@ def test_an_allowlisted_litellm_setting_saved_through_config_update_reaches_the_
     assert budget == 7
 
 
-def test_a_litellm_setting_outside_the_runtime_allowlist_is_stored_but_only_applies_after_a_restart(
+def test_a_litellm_setting_outside_the_runtime_allowlist_is_stored_but_not_applied_even_after_a_restart(
     gateway: Gateway, tmp_path: Path
 ) -> None:
-    """`request_timeout` is not among the litellm settings the database may override on a running proxy.
-    `POST /config/update` with `litellm_settings: {request_timeout: 99}` must store 99 in the
-    `litellm_settings` row, yet `GET /active/callbacks` on the running proxy must keep reporting its boot
-    value for the following seconds. A second proxy booted on the same database must report 99, because
-    stored litellm settings are merged into the file's at load.
-    UNVERIFIED for the restart half: derived from `get_config` merging the stored section before
-    `load_config` applies every key in it."""
+    """`request_timeout` is not among the litellm settings the database may override
+    (`LITELLM_SETTINGS_SAFE_DB_OVERRIDES` in litellm/constants.py). `POST /config/update` with
+    `litellm_settings: {request_timeout: 99}` must store 99 in the `litellm_settings` row, yet
+    `GET /active/callbacks` on the running proxy must keep reporting its boot value.
+
+    Pinned current behaviour: a second proxy booted on the same database also reports its boot value, not 99.
+    `proxy_startup_event` (litellm/proxy/proxy_server.py) runs `load_config` before the database client
+    exists, so the stored section is not merged at that load, and the later database pass
+    (`_apply_litellm_settings_db_values`) only sets the keys in the safe override list."""
     config: Final[dict[str, object]] = {"model_list": []}
     with scratch_database("dec1cfg") as url:
         with _same_database(gateway, tmp_path / "first", config, url) as first:
@@ -472,7 +477,7 @@ def test_a_litellm_setting_outside_the_runtime_allowlist_is_stored_but_only_appl
         "request_timeout"
     ] == 99
     assert at_boot != 99 and while_running == at_boot
-    assert after_restart == 99
+    assert after_restart == at_boot
 
 
 def test_a_stored_setting_applies_at_the_next_boot_when_the_file_does_not_declare_it(

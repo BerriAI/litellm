@@ -30,6 +30,7 @@ from tests.integration.authorization.dec1_keys_support import (
     UNKNOWN_KEY_MESSAGE,
     assert_denied,
     assert_model_denied,
+    assert_route_denied,
     assert_served,
     chat,
     marker,
@@ -88,8 +89,10 @@ def test_restricting_the_routes_of_a_warmed_key_is_enforced_on_both_proxies(gate
     """A key without route restrictions is warmed on both proxies, then `/key/update` sets
     `allowed_routes: ["/v1/embeddings"]`.
 
-    Chat completions must answer 403 `auth_error` with the "Virtual key is not allowed to call this route"
-    message on the writer within 5 seconds and on the peer within 10 seconds.
+    Chat completions must answer 403 with the "Virtual key is not allowed to call this route" message on the
+    writer within 5 seconds and on the peer within 10 seconds.
+
+    Pinned current behaviour: the route refusal body is the bare `detail` shape (see `assert_route_denied`).
     """
     with gateway.scenario() as scenario:
         model: Final = scenario.model()
@@ -97,8 +100,7 @@ def test_restricting_the_routes_of_a_warmed_key_is_enforced_on_both_proxies(gate
         _warm(key, model, gateway, peer)
         gateway.post("/key/update", {"key": key, "allowed_routes": ["/v1/embeddings"]})
         for proxy, seconds in ((gateway, _WRITER_SECONDS), (peer, _PEER_SECONDS)):
-            error = assert_denied(_settled(proxy, key, model, 403, seconds), status=403, error_type="auth_error")
-            assert string_value(error["message"]).startswith("Virtual key is not allowed to call this route."), error
+            assert_route_denied(_settled(proxy, key, model, 403, seconds), ["/v1/embeddings"], "/v1/chat/completions")
 
 
 def test_shortening_the_expiry_of_a_warmed_key_expires_it_on_both_proxies(gateway: Gateway, peer: Gateway) -> None:

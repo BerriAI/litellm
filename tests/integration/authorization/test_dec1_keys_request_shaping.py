@@ -280,9 +280,10 @@ def test_enforced_params_on_one_key_do_not_apply_to_another_key(gateway: Gateway
 def test_a_cache_control_outside_the_keys_allow_list_is_a_403(gateway: Gateway) -> None:
     """A key is created with `allowed_cache_controls: ["no-cache"]` and sends `cache: {"no-store": true}`.
 
-    The proxy must answer 403 with code "403" and the message "Not allowed to set no-store as a cache
-    control. Contact admin to change permissions.", and the upstream must not be called. UNVERIFIED:
-    `error.type` is expected to be `auth_error` (an `HTTPException` 403 raised from a pre call hook).
+    The proxy must answer 403 with code "403", type `permission_error` and the message "Not allowed to set
+    no-store as a cache control. Contact admin to change permissions.", and the upstream must not be called.
+    The pre call hook raises a bare `HTTPException(403)`, and the route maps a 403 without its own type to
+    `permission_error` (litellm/proxy/common_utils/openai_error_payload.py `_OPENAI_ERROR_TYPE_BY_STATUS`).
     """
     with gateway.scenario() as scenario:
         model: Final = scenario.model()
@@ -292,7 +293,7 @@ def test_a_cache_control_outside_the_keys_allow_list_is_a_403(gateway: Gateway) 
         assert_denied(
             refused,
             status=403,
-            error_type="auth_error",
+            error_type="permission_error",
             message="Not allowed to set no-store as a cache control. Contact admin to change permissions.",
         )
         assert upstream_requests(gateway, text) == []
@@ -352,22 +353,21 @@ def test_the_keys_limits_are_echoed_in_response_headers(gateway: Gateway) -> Non
         assert float(response.headers["x-litellm-key-spend"]) >= 0.0
 
 
-def test_a_key_without_limits_echoes_none_for_each_limit_header(gateway: Gateway) -> None:
+def test_a_key_without_limits_omits_each_limit_header(gateway: Gateway) -> None:
     """A key created without limits serves a chat completion.
 
-    The three limit headers must be present with the literal value `None`. Clients already parse this
-    spelling, so a rewrite that omits the headers or writes `null` changes behaviour.
+    The three limit headers must be absent. `get_custom_headers` renders each limit with `str()` and then drops
+    every header whose value is `""`, `None` or `"None"` (litellm/proxy/common_request_processing.py
+    `exclude_values`), so an unset limit is never sent. The spend header is still present.
     """
     with gateway.scenario() as scenario:
         model: Final = scenario.model()
         key: Final = scenario.key()
         response: Final = chat(gateway, key, model)
         assert_served(response)
-        assert (
-            response.headers["x-litellm-key-tpm-limit"],
-            response.headers["x-litellm-key-rpm-limit"],
-            response.headers["x-litellm-key-max-budget"],
-        ) == ("None", "None", "None"), dict(response.headers)
+        absent: Final = ("x-litellm-key-tpm-limit", "x-litellm-key-rpm-limit", "x-litellm-key-max-budget")
+        assert [name for name in absent if name in response.headers] == [], dict(response.headers)
+        assert float(response.headers["x-litellm-key-spend"]) >= 0.0
 
 
 def test_guardrails_given_at_key_creation_are_stored_in_key_metadata(gateway: Gateway) -> None:

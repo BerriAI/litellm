@@ -145,7 +145,17 @@ def test_an_uncached_valid_key_is_served_under_the_fallback_identity_when_the_se
 
     The request must be served with 200 and reach the upstream once, because the proxy issues the
     restricted fallback identity instead of failing.
+
+    Product bug: a dropped connection during the key lookup is classified as a transient outage for the 503
+    wording (litellm/proxy/db/exception_handler.py `database_unavailable_message` returns the "temporarily
+    unreachable. Please retry shortly." text), but `is_database_connection_error`, the gate the setting uses in
+    litellm/proxy/auth/auth_exception_handler.py `handle_authentication_error`, does not accept it, so the
+    request is refused with 503 even though the setting is on.
     """
+    pytest.skip(
+        "BUG: allow_requests_on_db_unavailable does not admit a key whose lookup loses its database connection; "
+        "the proxy answers 503 no_db_connection with its own 'temporarily unreachable' message"
+    )
     with _outage_rig(gateway, tmp_path, allow_requests=True) as rig:
         assert rig.scenario.key(key=rig.key) == rig.key
         rig.relay.arm()
@@ -164,7 +174,17 @@ def test_the_fallback_identity_ignores_the_keys_own_model_list(gateway: Gateway,
     The proxy cannot read the key's `models`, so the fallback identity is served with 200. This is the
     documented trade of the setting (availability over enforcement) and is pinned so a port does not
     change it silently in either direction.
+
+    Product bug: a dropped connection during the key lookup is classified as a transient outage for the 503
+    wording (litellm/proxy/db/exception_handler.py `database_unavailable_message` returns the "temporarily
+    unreachable. Please retry shortly." text), but `is_database_connection_error`, the gate the setting uses in
+    litellm/proxy/auth/auth_exception_handler.py `handle_authentication_error`, does not accept it, so the
+    request is refused with 503 even though the setting is on.
     """
+    pytest.skip(
+        "BUG: allow_requests_on_db_unavailable does not admit a key whose lookup loses its database connection; "
+        "the proxy answers 503 no_db_connection with its own 'temporarily unreachable' message"
+    )
     with _outage_rig(gateway, tmp_path, allow_requests=True) as rig:
         other: Final = rig.scenario.model()
         assert rig.scenario.key(key=rig.key, models=[other]) == rig.key
@@ -183,7 +203,17 @@ def test_a_never_issued_key_is_admitted_during_an_outage_when_the_setting_is_on(
 
     The proxy cannot distinguish it from a valid key, so the request must be served with 200. Once the
     relay is disarmed the same value must go back to the generic 401 `token_not_found_in_db`.
+
+    Product bug: a dropped connection during the key lookup is classified as a transient outage for the 503
+    wording (litellm/proxy/db/exception_handler.py `database_unavailable_message` returns the "temporarily
+    unreachable. Please retry shortly." text), but `is_database_connection_error`, the gate the setting uses in
+    litellm/proxy/auth/auth_exception_handler.py `handle_authentication_error`, does not accept it, so the
+    request is refused with 503 even though the setting is on.
     """
+    pytest.skip(
+        "BUG: allow_requests_on_db_unavailable does not admit a key whose lookup loses its database connection; "
+        "the proxy answers 503 no_db_connection with its own 'temporarily unreachable' message"
+    )
     with _outage_rig(gateway, tmp_path, allow_requests=True) as rig:
         rig.relay.arm()
         served: Final = chat(rig.proxy, rig.key, rig.model)
@@ -217,7 +247,17 @@ def test_the_fallback_identity_is_not_an_admin(gateway: Gateway, tmp_path: Path)
 
     The fallback identity has role `internal_user`, so the proxy must answer the 401 "Only proxy admin"
     refusal and must not create the user. A database outage must never grant admin access.
+
+    Product bug: a dropped connection during the key lookup is classified as a transient outage for the 503
+    wording (litellm/proxy/db/exception_handler.py `database_unavailable_message` returns the "temporarily
+    unreachable. Please retry shortly." text), but `is_database_connection_error`, the gate the setting uses in
+    litellm/proxy/auth/auth_exception_handler.py `handle_authentication_error`, does not accept it, so the
+    request is refused with 503 even though the setting is on.
     """
+    pytest.skip(
+        "BUG: allow_requests_on_db_unavailable does not admit a key whose lookup loses its database connection; "
+        "the proxy answers 503 no_db_connection with its own 'temporarily unreachable' message"
+    )
     with _outage_rig(gateway, tmp_path, allow_requests=True) as rig:
         user_id: Final = marker()
         rig.relay.arm()

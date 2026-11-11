@@ -38,13 +38,15 @@ def test_the_environment_master_key_is_the_admin_key_when_the_file_sets_none(gat
 
 def test_a_bearer_token_that_is_not_the_master_key_is_rejected_with_401(gateway: Gateway, tmp_path: Path) -> None:
     """A caller presents an `sk-` token that is neither the master key nor a stored virtual key. The proxy
-    must answer 401 with an OpenAI-shaped error whose `type` is `auth_error` and `code` is `401`."""
+    must answer 401 with an OpenAI-shaped error whose `type` is `token_not_found_in_db`, `param` is `key`,
+    `code` is `401` and message is the generic "Authentication Error, Invalid API key provided."
+    (litellm/proxy/auth/auth_checks.py raises `ProxyErrorTypes.token_not_found_in_db` for an unknown key)."""
     with booted(gateway, tmp_path, {"model_list": []}) as owned:
         response: Final = owned.gateway.request("GET", "/v1/models", key="sk-dec1-not-a-real-key")
     assert response.status_code == 401, response.text
     error: Final = object_value(JSON_OBJECT.validate_json(response.content)["error"])
-    assert error["type"] == "auth_error"
-    assert str(error["code"]) == "401"
+    assert (error["type"], error["param"], str(error["code"])) == ("token_not_found_in_db", "key", "401"), error
+    assert error["message"] == "Authentication Error, Invalid API key provided.", error
 
 
 def test_a_master_key_in_the_file_wins_over_the_environment_variable(gateway: Gateway, tmp_path: Path) -> None:

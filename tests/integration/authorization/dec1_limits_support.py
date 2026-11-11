@@ -26,7 +26,7 @@ from pydantic import JsonValue
 from redis import Redis
 
 from tests.integration._support.client import JSON_OBJECT, Gateway, object_value, string_value
-from tests.integration._support.process import owned_proxy
+from tests.integration._support.process import OwnedState, owned_proxy
 from tests.integration._support.wire import Reply, Request, Wire
 
 WINDOW_SECONDS: Final = 60
@@ -279,12 +279,25 @@ def limit_message(scope: str, value: str, kind: str, limit: int, remaining: int 
     )
 
 
-def assert_limited(response: httpx.Response, scope: str, value: str, kind: str, limit: int, remaining: int = 0) -> None:
-    """The response is the v3 limiter's OpenAI-shaped 429 for exactly this scope, limit kind and limit."""
+def assert_limited(
+    response: httpx.Response,
+    scope: str,
+    value: str,
+    kind: str,
+    limit: int,
+    remaining: int = 0,
+    *,
+    message_prefix: str = "",
+) -> None:
+    """The response is the v3 limiter's OpenAI-shaped 429 for exactly this scope, limit kind and limit.
+
+    ``message_prefix`` is text an endpoint puts in front of the limiter's message (see the text completions
+    test, which pins the ``litellm.RateLimitError: `` prefix that route adds).
+    """
     assert response.status_code == 429, f"{response.status_code} {response.text}"
     error: Final = error_of(response)
     message: Final = string_value(error["message"])
-    prefix: Final = limit_message(scope, value, kind, limit, remaining)
+    prefix: Final = message_prefix + limit_message(scope, value, kind, limit, remaining)
     assert message.startswith(prefix), message
     assert RESET_AT.match(message.removeprefix(prefix)), message
     assert {name: error[name] for name in ("type", "param", "code")} == {
@@ -361,8 +374,16 @@ def limits_proxy(
     general_settings: Mapping[str, JsonValue] | None = None,
     router_settings: Mapping[str, JsonValue] | None = None,
     without_redis: bool = False,
+    shared: bool = False,
 ) -> Iterator[Gateway]:
-    """A proxy of our own on the shared database, started with the given settings and environment."""
+    """A proxy of our own, started with the given settings and environment.
+
+    By default ``owned_proxy`` boots it on a private scratch database and a private Redis, so it sees nothing
+    the shared gateway created and its counters never reach ``shared_redis()``. ``shared=True`` boots it on the
+    shared gateway's database and Redis instead (``OwnedState.SHARED_WITH_WORKER``), for tests that create
+    state through the shared gateway or read the candidate's counters from ``shared_redis()``. With
+    ``without_redis`` the Redis variables are removed either way.
+    """
     config: Final = limits_config(
         directory,
         litellm_settings=litellm_settings,
@@ -376,5 +397,6 @@ def limits_proxy(
         dict(environment or {}),
         config=config,
         remove_environment=REDIS_ENVIRONMENT if without_redis else (),
+        state=OwnedState.SHARED_WITH_WORKER if shared else None,
     ) as candidate:
         yield candidate

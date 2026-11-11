@@ -218,11 +218,13 @@ def test_a_proxy_without_redis_still_reserves_tokens_and_holds_slots(gateway: Ga
 
 def test_counters_of_a_proxy_without_redis_are_invisible_to_other_instances(gateway: Gateway, tmp_path: Path) -> None:
     """A key with rpm_limit=1 is exhausted on a proxy that has no Redis. The same key must still get its one
-    request served by the Redis-backed shared proxy: in-memory counters stay on the instance that made them."""
+    request served by the Redis-backed shared proxy: in-memory counters stay on the instance that made them. The
+    isolated proxy runs on the shared database (``shared=True``) so it serves the model and key the shared
+    gateway created; only its Redis is removed."""
     with wire_server(provider()) as wire, gateway.scenario() as shared_scenario:
         model: Final = shared_scenario.model(api_base=f"{wire.url}/v1")
         key: Final = shared_scenario.key(models=[model], rpm_limit=1)
-        with limits_proxy(gateway, tmp_path, without_redis=True) as isolated:
+        with limits_proxy(gateway, tmp_path, without_redis=True, shared=True) as isolated:
             _warm(isolated, model)
             assert statuses([chat(isolated, model, key), chat(isolated, model, key)]) == [200, 429]
         served: Final = chat(gateway, model, key)

@@ -9,7 +9,7 @@ support runbooks key off the status code and `error.type` they get today.
 3. Key exists (401 `token_not_found_in_db`).
 4. Key blocked (401 `auth_error`).
 5. Key expired (401 `expired_key`).
-6. Key `allowed_routes` (403 `auth_error`).
+6. Key `allowed_routes` (403, body `{"detail": ...}`; pinned current behaviour, see `assert_route_denied`).
 7. Key `models` list, including client side fallbacks (403 `key_model_access_denied`).
 8. Team blocked (401 `auth_error`, message "Team=<id> is blocked").
 9. Team `models` list, then the member's `allowed_models` (403 `team_model_access_denied`).
@@ -32,6 +32,7 @@ from tests.integration.authorization.dec1_keys_support import (
     UNKNOWN_KEY_MESSAGE,
     assert_denied,
     assert_model_denied,
+    assert_route_denied,
     assert_served,
     chat,
     digest,
@@ -42,13 +43,6 @@ from tests.integration.authorization.dec1_keys_support import (
 
 def _team_blocked_message(team: str) -> str:
     return f"Authentication Error, Team={team} is blocked. Update via `/team/unblock` if you're an admin."
-
-
-def _route_denied_message(allowed: list[str], route: str) -> str:
-    return (
-        "Virtual key is not allowed to call this route. "
-        f"Only allowed to call routes: {allowed}. Tried to call route: {route}"
-    )
 
 
 def _wait_blocked(gateway: Gateway, key: str, model: str) -> None:
@@ -151,6 +145,8 @@ def test_the_team_block_is_reported_before_a_team_model_denial(gateway: Gateway)
 
     The team blocked check runs before the team's model list, so the answer must be the 401 team blocked
     message and not 403 `team_model_access_denied`.
+
+    Pinned current behaviour: the route refusal body is the bare `detail` shape (see `assert_route_denied`).
     """
     with gateway.scenario() as scenario:
         allowed: Final = scenario.model()
@@ -159,7 +155,7 @@ def test_the_team_block_is_reported_before_a_team_model_denial(gateway: Gateway)
         key: Final = scenario.key(team_id=team)
         gateway.post("/team/block", {"team_id": team})
         _wait_blocked(gateway, key, allowed)
-        assert_denied(
+        assert_route_denied(
             chat(gateway, key, other), status=401, error_type="auth_error", message=_team_blocked_message(team)
         )
 
@@ -184,19 +180,14 @@ def test_a_members_personal_key_keeps_working_while_their_team_is_blocked(gatewa
 def test_a_route_denial_is_reported_before_a_model_denial(gateway: Gateway) -> None:
     """A key limited to the embeddings route and to model A sends a chat completion for model B.
 
-    `allowed_routes` is checked first, so the answer must be 403 `auth_error` with the "Virtual key is not
-    allowed to call this route" message, not `key_model_access_denied`.
+    `allowed_routes` is checked first, so the answer must be 403 with the "Virtual key is not allowed to call
+    this route" message, not `key_model_access_denied`.
     """
     with gateway.scenario() as scenario:
         allowed: Final = scenario.model()
         other: Final = scenario.model()
         key: Final = scenario.key(models=[allowed], allowed_routes=["/v1/embeddings"])
-        assert_denied(
-            chat(gateway, key, other),
-            status=403,
-            error_type="auth_error",
-            message=_route_denied_message(["/v1/embeddings"], "/v1/chat/completions"),
-        )
+        assert_denied(chat(gateway, key, other), ["/v1/embeddings"], "/v1/chat/completions")
 
 
 def test_a_blocked_key_is_reported_before_its_route_restriction(gateway: Gateway) -> None:
@@ -217,6 +208,8 @@ def test_a_route_denial_is_reported_before_the_team_block(gateway: Gateway) -> N
 
     `allowed_routes` is checked before the team is loaded for authorization, so the answer must be the 403
     route message and not the 401 team blocked message.
+
+    Pinned current behaviour: the route refusal body is the bare `detail` shape (see `assert_route_denied`).
     """
     with gateway.scenario() as scenario:
         model: Final = scenario.model()
@@ -225,12 +218,7 @@ def test_a_route_denial_is_reported_before_the_team_block(gateway: Gateway) -> N
         key: Final = scenario.key(team_id=team, allowed_routes=["/v1/embeddings"])
         gateway.post("/team/block", {"team_id": team})
         _wait_blocked(gateway, probe, model)
-        assert_denied(
-            chat(gateway, key, model),
-            status=403,
-            error_type="auth_error",
-            message=_route_denied_message(["/v1/embeddings"], "/v1/chat/completions"),
-        )
+        assert_route_denied(chat(gateway, key, model), ["/v1/embeddings"], "/v1/chat/completions")
 
 
 def test_an_unknown_key_is_a_401_whatever_else_is_wrong_with_the_request(gateway: Gateway) -> None:

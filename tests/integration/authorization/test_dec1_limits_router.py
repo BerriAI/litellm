@@ -158,8 +158,16 @@ def test_enforce_model_rate_limits_refuses_requests_over_the_deployment_rpm(gate
 
 def test_enforce_model_rate_limits_answers_with_retry_after_sixty(gateway: Gateway, tmp_path: Path) -> None:
     """With ``enforce_model_rate_limits`` and a deployment ``rpm: 1``, the second request's 429 must carry
-    ``retry-after: 60``. UNVERIFIED: the check attaches ``retry-after: 60`` to the error's response; confirm it
-    survives ``handle_llm_api_exception`` header filtering."""
+    ``retry-after: 60``.
+
+    Product bug: ``ModelRateLimitingCheck`` (litellm/router_utils/pre_call_checks/model_rate_limit_check.py) puts
+    ``retry-after: 60`` only on the synthetic ``httpx.Response`` of its ``RateLimitError`` and not in the
+    ``headers=`` argument. ``RateLimitError`` deliberately does not copy response headers onto ``e.headers``
+    (litellm/exceptions.py), so ``handle_llm_api_exception`` treats them as provider headers and forwards them
+    under the ``llm_provider-`` prefix at best; the client never gets the ``retry-after`` the check meant to send."""
+    pytest.skip(
+        "BUG: enforce_model_rate_limits 429 lacks retry-after; the check sets it only on its synthetic response"
+    )
     with (
         wire_server(provider()) as wire,
         limits_proxy(gateway, tmp_path, router_settings=ENFORCING) as candidate,

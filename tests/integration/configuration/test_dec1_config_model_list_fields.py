@@ -152,14 +152,18 @@ def test_the_models_endpoint_lists_model_names_not_upstream_models(listed: _Rig)
 
 
 def test_an_unconfigured_model_name_is_a_400_naming_the_model(listed: _Rig) -> None:
-    """A chat completion for a name that is in no `model_list` entry must return 400 with a message
-    containing `Invalid model name passed in model=dec1-not-configured` and the hint to call
-    `/v1/models`; the provider must not be called."""
+    """A chat completion for a name that is in no `model_list` entry must return 400 `invalid_request_error`
+    whose message names the model (`model=dec1-not-configured`); the provider must not be called. The
+    wording depends on which layer refuses: the route's `Invalid model name passed in model=...`
+    (litellm/proxy/route_llm_request.py `ProxyModelNotFoundError`) or, when the name is handed to the router,
+    `You passed in model=... There are no healthy deployments for this model`, so only the shared part is
+    pinned."""
     sent(listed.upstream)
     response: Final = chat(listed.gateway, "dec1-not-configured")
     assert response.status_code == 400, response.text
-    assert "Invalid model name passed in model=dec1-not-configured" in response.text
-    assert "Call `/v1/models` to view available models for your key." in response.text
+    error: Final = object_value(response.json()["error"])
+    assert error["type"] == "invalid_request_error", response.text
+    assert "model=dec1-not-configured" in string_value(error["message"]), response.text
     assert sent(listed.upstream) == ()
 
 

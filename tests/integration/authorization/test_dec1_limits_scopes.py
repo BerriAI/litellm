@@ -330,12 +330,15 @@ def test_an_end_user_limit_applies_to_the_master_key_too(gateway: Gateway) -> No
 def test_the_default_end_user_budget_limits_customers_that_were_never_created(gateway: Gateway, tmp_path: Path) -> None:
     """A proxy is started with ``litellm_settings.max_end_user_budget_id`` pointing at a budget with rpm_limit=1.
     A request with a ``user`` value the proxy has never seen is served once and then refused for ``end_user:
-    <that value>``, while a second unseen ``user`` value still gets its own first request served."""
+    <that value>``, while a second unseen ``user`` value still gets its own first request served. The candidate
+    runs on the shared database (``shared=True``) because the budget row is created through the shared gateway."""
     with gateway.scenario() as setup:
         default_budget: Final = setup.budget(rpm_limit=1)
         with (
             wire_server(provider()) as wire,
-            limits_proxy(gateway, tmp_path, litellm_settings={"max_end_user_budget_id": default_budget}) as candidate,
+            limits_proxy(
+                gateway, tmp_path, litellm_settings={"max_end_user_budget_id": default_budget}, shared=True
+            ) as candidate,
             candidate.scenario() as scenario,
         ):
             model: Final = scenario.model(api_base=f"{wire.url}/v1")

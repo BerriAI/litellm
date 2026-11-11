@@ -313,10 +313,13 @@ def test_token_rate_limit_type_chooses_which_tokens_are_charged(
 ) -> None:
     """A proxy is started with ``general_settings.token_rate_limit_type`` set to input, output or total, and the
     provider bills 11 prompt and 7 completion tokens. The key's token window must settle at 11, 7 or 18
-    respectively. Operators rely on this to mirror providers that only meter one side."""
+    respectively. Operators rely on this to mirror providers that only meter one side. The candidate runs on the
+    shared Redis (``shared=True``) because the window is read back through ``shared_redis()``."""
     with (
         wire_server(provider()) as wire,
-        limits_proxy(gateway, tmp_path, general_settings={"token_rate_limit_type": accounting}) as candidate,
+        limits_proxy(
+            gateway, tmp_path, general_settings={"token_rate_limit_type": accounting}, shared=True
+        ) as candidate,
         candidate.scenario() as scenario,
     ):
         model: Final = scenario.model(api_base=f"{wire.url}/v1")
@@ -328,10 +331,13 @@ def test_token_rate_limit_type_chooses_which_tokens_are_charged(
 
 def test_an_unknown_token_rate_limit_type_falls_back_to_total(gateway: Gateway, tmp_path: Path) -> None:
     """A proxy is started with ``general_settings.token_rate_limit_type: sideways``. It must boot, serve the
-    request, and charge the full 18 total tokens, treating the unknown value as ``total``."""
+    request, and charge the full 18 total tokens, treating the unknown value as ``total``. The candidate runs on
+    the shared Redis (``shared=True``) because the window is read back through ``shared_redis()``."""
     with (
         wire_server(provider()) as wire,
-        limits_proxy(gateway, tmp_path, general_settings={"token_rate_limit_type": "sideways"}) as candidate,
+        limits_proxy(
+            gateway, tmp_path, general_settings={"token_rate_limit_type": "sideways"}, shared=True
+        ) as candidate,
         candidate.scenario() as scenario,
     ):
         model: Final = scenario.model(api_base=f"{wire.url}/v1")

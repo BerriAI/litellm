@@ -305,20 +305,21 @@ def test_without_enable_drain_endpoint_the_drain_route_is_a_404(strict: _Rig) ->
 
 def test_store_prompts_in_spend_logs_writes_the_prompt_text_to_the_spend_row(opened: _Rig) -> None:
     """`store_prompts_in_spend_logs: true`. After a chat completion, the `LiteLLM_SpendLogs` row for that
-    request must hold the prompt text in its `messages` column (it is an empty object by default).
-    UNVERIFIED: the exact JSON shape of the stored `messages` value, so the test only looks for the
-    prompt text inside it."""
+    request must hold the prompt text in its `proxy_server_request` column, the stored request body. The
+    `messages` column stays `{}` for chat: it is only filled for realtime calls
+    (litellm/proxy/spend_tracking/spend_tracking_utils.py `_get_messages_for_spend_logs_payload`). The exact
+    JSON shape of the stored body is not pinned, so the test only looks for the prompt text inside it."""
     marker: Final = f"dec1 stored prompt {uuid.uuid4().hex}"
     body: Final = opened.gateway.chat(_MODEL, text=marker)
     rows: Final = eventually(
         lambda: opened.gateway.rows(
-            'SELECT messages::text AS messages FROM "LiteLLM_SpendLogs" WHERE request_id = %s',
+            'SELECT proxy_server_request::text AS stored FROM "LiteLLM_SpendLogs" WHERE request_id = %s',
             (string_value(body["id"]),),
         ),
         lambda found: len(found) == 1,
         seconds=70,
     )
-    assert marker in string_value(rows[0]["messages"])
+    assert marker in string_value(rows[0]["stored"])
 
 
 def test_enforce_user_param_rejects_an_llm_call_without_a_user(strict: _Rig) -> None:

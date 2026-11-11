@@ -70,9 +70,10 @@ def test_config_yaml_endpoint_answers_hello_world_for_a_valid_config_body(plain:
 
 
 def test_config_yaml_endpoint_validates_the_body_against_the_config_schema(plain: OwnedProxy) -> None:
-    """`GET /config/yaml` with a body whose `model_list` is a string instead of a list must return 422:
-    the body is parsed as the typed config model before the stub answers."""
-    response: Final = plain.gateway.request("GET", "/config/yaml", {"model_list": "not-a-list"})
+    """`GET /config/yaml` with a body whose `litellm_settings` is a string instead of a mapping must return
+    422: the body is parsed as the typed config model before the stub answers. (`model_list` cannot be used
+    for this: auth refuses any body that carries it, see the next test.)"""
+    response: Final = plain.gateway.request("GET", "/config/yaml", {"litellm_settings": "not-a-mapping"})
     assert response.status_code == 422, response.text
 
 
@@ -82,12 +83,25 @@ def test_config_yaml_endpoint_without_a_body_is_a_422(plain: OwnedProxy) -> None
     assert response.status_code == 422, response.text
 
 
-def test_config_yaml_endpoint_does_not_change_the_served_models(plain: OwnedProxy) -> None:
+def test_config_yaml_endpoint_refuses_a_model_list_body_and_does_not_change_the_served_models(
+    plain: OwnedProxy,
+) -> None:
     """Sending a config with a different `model_list` to `GET /config/yaml` must leave `GET /v1/models`
-    exactly as it was: the endpoint never applies what it is sent."""
+    exactly as it was.
+
+    Pinned current behaviour: the request never reaches the stub. `is_request_body_safe`
+    (litellm/proxy/auth/auth_utils.py) rejects any request body that carries `model_list`, on every route, so
+    the answer is 401 `auth_error` with "Authentication Error, Rejected Request: model_list is not allowed in
+    the request body."."""
     before: Final = served_model_names(plain.gateway)
     body: Final = {"model_list": [{"model_name": "dec1-smuggled", "litellm_params": {"model": "openai/x"}}]}
-    assert plain.gateway.request("GET", "/config/yaml", body).status_code == 200
+    response: Final = plain.gateway.request("GET", "/config/yaml", body)
+    assert response.status_code == 401, response.text
+    error: Final = object_value(response.json()["error"])
+    assert (error["type"], error["message"]) == (
+        "auth_error",
+        "Authentication Error, Rejected Request: model_list is not allowed in the request body.",
+    ), response.text
     assert served_model_names(plain.gateway) == before
 
 
@@ -218,6 +232,20 @@ def test_editing_the_config_file_while_the_proxy_runs_changes_nothing_until_rest
         assert "dec1-after-edit" in served_model_names(restarted.gateway)
 
 
+def _served_config(owned: OwnedProxy) -> Path:
+    """The config file the proxy process was started with (a harness copy under worker isolation)."""
+    arguments: Final = [str(argument) for argument in owned.process.args]
+    return Path(arguments[arguments.index("--config") + 1])
+
+
+def _edit_general_settings(path: Path, settings: object) -> None:
+    loaded: Final = object_value(yaml.safe_load(path.read_text()))
+    general: Final = object_value(loaded.get("general_settings") or {})
+    path.write_text(
+        yaml.safe_dump({**loaded, "general_settings": {**general, **object_value(settings)}}, sort_keys=False)
+    )
+
+
 def test_reading_config_callbacks_re_reads_the_settings_sections_of_the_config_file(
     gateway: Gateway, tmp_path: Path
 ) -> None:
@@ -226,9 +254,9 @@ def test_reading_config_callbacks_re_reads_the_settings_sections_of_the_config_f
     proxy runs. Plain requests keep the boot value, but after one `GET /get/config/callbacks` (which loads
     the file again to build its answer) `GET /v1/models` starts listing the wildcard model name: that GET
     re-applies the file's settings sections to the running proxy. The model list itself is not reloaded.
-    UNVERIFIED end to end: derived from `get_config` calling `_load_yaml_settings_stores` and
-    `_apply_resolved_runtime_settings` on every call. Under worker isolation the harness boots a copy of
-    the file, the edit is invisible to the proxy, and this test cannot observe the effect."""
+    Derived from `get_config` calling `_load_yaml_settings_stores` and `_apply_resolved_runtime_settings` on
+    every call. Under worker isolation the harness boots a copy of the file, so the edit is made to the file
+    named by the proxy's own `--config` argument, which is the one it re-reads."""
     models: Final = [deployment("dec1-wild-reread/*", "http://127.0.0.1:9/v1", model="openai/*")]
     path: Final = write_config(
         tmp_path,
@@ -244,7 +272,7 @@ def test_reading_config_callbacks_re_reads_the_settings_sections_of_the_config_f
         "router_settings": {"num_retries": 0},
     }
     with booted(gateway, tmp_path, path) as owned:
-        path.write_text(yaml.safe_dump(edited, sort_keys=False))
+        _edit_general_settings(_served_config(owned), edited["general_settings"])
         before_read: Final = served_model_names(owned.gateway)
         assert owned.gateway.request("GET", "/get/config/callbacks").status_code == 200
         after_read: Final = served_model_names(owned.gateway)

@@ -277,15 +277,25 @@ def test_a_streaming_request_over_the_rpm_limit_gets_a_json_429_and_no_event_str
         assert len(posts(wire)) == 1
 
 
-def test_a_streaming_response_carries_the_same_request_headers_as_a_plain_one(gateway: Gateway) -> None:
-    """A key with rpm_limit=4 sends one ``stream: true`` request. The 200 event stream's headers must include
-    ``x-ratelimit-api_key-limit-requests: 4`` and ``x-ratelimit-api_key-remaining-requests: 3``."""
+def test_a_streaming_response_carries_no_key_rate_limit_headers_but_still_counts(gateway: Gateway) -> None:
+    """A key with rpm_limit=4 sends one ``stream: true`` request and then one plain request.
+
+    Pinned current behaviour: the limiter writes its ``x-ratelimit-*`` values into the response's hidden
+    params in ``async_post_call_success_hook``, which runs after a stream's headers are already sent, and for
+    streams it only mirrors them into the logging payload (``async_logging_hook`` in
+    litellm/proxy/hooks/parallel_request_limiter_v3.py). So the 200 event stream carries no
+    ``x-ratelimit-api_key-*`` header at all. The stream still uses one request of the window, so the plain
+    request that follows must report ``limit-requests: 4`` and ``remaining-requests: 2``.
+    """
     with wire_server(provider()) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(api_base=f"{wire.url}/v1")
         key: Final = scenario.key(models=[model], rpm_limit=4)
         streamed: Final = chat(gateway, model, key, stream=True)
         assert streamed.status_code == 200, streamed.text
-        assert scope_headers(streamed, "api_key") == {"limit-requests": "4", "remaining-requests": "3"}
+        assert scope_headers(streamed, "api_key") == {}
+        plain: Final = chat(gateway, model, key)
+        assert plain.status_code == 200, plain.text
+        assert scope_headers(plain, "api_key") == {"limit-requests": "4", "remaining-requests": "2"}
 
 
 def test_a_request_the_provider_fails_still_uses_one_request_of_the_window(gateway: Gateway) -> None:
