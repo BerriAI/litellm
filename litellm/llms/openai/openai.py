@@ -72,6 +72,7 @@ from .common_utils import (
     is_openai_backed_api_base,
     is_output_token_limit_error,
     model_dump_provider_response,
+    openai_sdk_key_params,
     upstream_error_response,
 )
 from .workload_identity import (
@@ -472,7 +473,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     )
                     if workload_identity_config is not None
                     else AsyncOpenAI(
-                        api_key=openai_static_api_key(api_key),
+                        **openai_sdk_key_params(openai_static_api_key(api_key)),
                         base_url=api_base,
                         http_client=async_http_client,
                         timeout=timeout,
@@ -494,7 +495,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     )
                     if workload_identity_config is not None
                     else OpenAI(
-                        api_key=openai_static_api_key(api_key),
+                        **openai_sdk_key_params(openai_static_api_key(api_key)),
                         base_url=api_base,
                         http_client=sync_http_client,
                         timeout=timeout,

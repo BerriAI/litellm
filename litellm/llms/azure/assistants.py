@@ -20,7 +20,7 @@ from ...types.llms.openai import (
     SyncCursorPage,
     Thread,
 )
-from .common_utils import BaseAzureLLM
+from .common_utils import BaseAzureLLM, with_one_azure_sdk_credential
 
 
 class _RunThreadStreamData(TypedDict):
@@ -57,7 +57,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
                 api_version=api_version,
                 is_async=False,
             )
-            azure_openai_client = AzureOpenAI(**azure_client_params)
+            azure_openai_client = AzureOpenAI(**with_one_azure_sdk_credential(azure_client_params))
         else:
             azure_openai_client = client
 
@@ -84,7 +84,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
                 is_async=True,
             )
 
-            azure_openai_client = AsyncAzureOpenAI(**azure_client_params)
+            azure_openai_client = AsyncAzureOpenAI(**with_one_azure_sdk_credential(azure_client_params))
             # azure_openai_client = AsyncAzureOpenAI(**data)
         else:
             azure_openai_client = client

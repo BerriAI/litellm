@@ -1075,6 +1075,48 @@ def test_streamed_tool_search_turn_replays_with_its_reasoning_item():
     assert request["input"][5]["namespace"] == "get_weather"
 
 
+def test_typed_tool_search_output_keeps_the_wire_name_of_async_for_the_replay() -> None:
+    tool_search_output: Final = {
+        "type": "tool_search_output",
+        "id": "tso_1",
+        "execution": "server",
+        "status": "completed",
+        "tools": [{"type": "function", "name": "get_weather", "parameters": {}, "strict": True, "async": True}],
+    }
+    answer: Final = ResponsesAPIResponse(id="resp_1", created_at=1, output=[tool_search_output])
+
+    message: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(answer.output)[0].message
+
+    assert message.provider_specific_fields == {"tool_search_items": [tool_search_output]}
+
+
+def test_streamed_tool_search_output_replays_only_the_tool_fields_upstream_sent() -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+    from litellm.types.llms.openai import ResponseCompletedEvent, ResponsesAPIStreamEvents
+
+    tool_search_output: Final = {
+        "type": "tool_search_output",
+        "id": "tso_1",
+        "execution": "server",
+        "status": "completed",
+        "tools": [
+            {"type": "function", "name": "get_weather", "parameters": {}, "strict": None, "defer_loading": True},
+            {"type": "namespace", "name": "crm", "description": "CRM", "tools": [{"type": "function", "name": "find"}]},
+        ],
+    }
+    completed: Final = ResponseCompletedEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response=ResponsesAPIResponse(id="resp_1", created_at=1, status="completed", output=[tool_search_output]),
+    )
+    iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+
+    chunk: Final = iterator._handle_string_chunk(completed)
+
+    assert chunk.choices[0].delta.provider_specific_fields == {"tool_search_items": [tool_search_output]}
+
+
 @pytest.mark.parametrize(
     "answer_item",
     [

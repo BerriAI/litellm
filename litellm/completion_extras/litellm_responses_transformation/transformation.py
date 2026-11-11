@@ -367,7 +367,7 @@ def _json_field(value: object, key: str) -> object:
 
 
 def _tool_search_replay_item(item: object) -> Mapping[str, object] | None:
-    raw: Final[object] = item.model_dump(exclude_unset=True) if isinstance(item, BaseModel) else item
+    raw: Final[object] = item.model_dump(exclude_unset=True, by_alias=True) if isinstance(item, BaseModel) else item
     if not isinstance(raw, dict):
         return None
     fields: Final = cast(dict[str, object], raw)  # cast-ok: provider JSON item, keys forwarded verbatim
@@ -2142,7 +2142,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         from pydantic import BaseModel
 
         if isinstance(str_line, BaseModel):
-            return self.chunk_parser(str_line.model_dump())
+            return self.chunk_parser(str_line.model_dump(exclude_unset=True))
 
         if not str_line or str_line.startswith("event:"):
             # ignore.

@@ -263,9 +263,9 @@ def test_arize_otel_v2_a5_responses_sync_sdk(gateway: Gateway, tmp_path: Path) -
             extra_body={"metadata": {"trace_marker": marker}, "cache": {"no-cache": True}},
         )
         assert response.id.startswith("resp_"), response
-        assert _normalize_responses_caller_body(response.model_dump(mode="json", exclude_unset=True)) == (
-            _responses_caller_response(_responses_response(marker), rig.model)
-        ), response
+        assert _normalize_responses_caller_body(
+            response.model_dump(mode="json", exclude_unset=True, by_alias=True)
+        ) == (_responses_caller_response(_responses_response(marker), rig.model)), response
         assert (response.status, response.model) == ("completed", rig.model), response
         assert (
             response.output[0].type,
@@ -809,9 +809,9 @@ def _cache_call(
                 extra_body={"metadata": {"trace_marker": marker}, "cache": {"no-cache": False}},
             )
             response: Final = raw.parse()
-            assert _normalize_responses_caller_body(response.model_dump(mode="json", exclude_unset=True)) == (
-                _responses_caller_response(_responses_response(marker), rig.model)
-            ), response
+            assert _normalize_responses_caller_body(
+                response.model_dump(mode="json", exclude_unset=True, by_alias=True)
+            ) == (_responses_caller_response(_responses_response(marker), rig.model)), response
             call: Final = response.output[0]
             assert call.type == "function_call", response
             return (call.call_id, call.name, call.arguments), response.id, raw.headers

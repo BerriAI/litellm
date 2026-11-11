@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.audio_utils.transcription_streaming import (
     litellm_exception_mapper,
     wrap_transcription_stream,
 )
+from litellm.llms.custom_httpx.transport_errors import TransportErrorKind, chained_transport_error_kind
 from litellm.types.utils import TranscriptionResponse
 
 _STARTED_AT: Final = datetime.datetime(2026, 10, 28, 12, 0, 0)  # noqa: DTZ001  # callback timestamps use the legacy naive contract
@@ -177,9 +178,11 @@ async def test_a_stream_the_upstream_drops_mid_transcript_raises_a_litellm_error
         model="openai/gpt-transcribe", file=("sample.wav", b"audio"), stream=True, client=upstream
     )
 
-    with pytest.raises(litellm.APIConnectionError, match="peer closed connection"):
+    with pytest.raises(litellm.APIConnectionError) as raised:
         async for _ in stream:
             pass
+
+    assert chained_transport_error_kind(raised.value) is TransportErrorKind.DROPPED_CONNECTION
 
 
 class _FailureHookCounter(CustomLogger):

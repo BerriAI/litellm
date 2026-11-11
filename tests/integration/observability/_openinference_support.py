@@ -8,6 +8,7 @@ from contextlib import AbstractContextManager, ExitStack, contextmanager, nullco
 from dataclasses import dataclass, replace
 from itertools import chain
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -353,6 +354,9 @@ def _normalize_chat_caller_stream(events: Sequence[JsonValue]) -> tuple[dict[str
     return tuple({**_json_object_value(event), "created": 1} for event in events)
 
 
+_FUNCTION_CALL_NULL_FIELDS: Final = MappingProxyType({"async": None, "caller": None, "namespace": None})
+
+
 def _responses_caller_body(body: dict[str, JsonValue], model: str) -> dict[str, JsonValue]:
     usage: Final = _json_object_value(body["usage"])
     output: Final = JSON_MESSAGES.validate_python(body["output"])
@@ -376,7 +380,9 @@ def _responses_caller_body(body: dict[str, JsonValue], model: str) -> dict[str, 
         "truncation": None,
         "user": None,
         "store": None,
-        "output": [{**item, **({"namespace": None} if item.get("type") == "function_call" else {})} for item in output],
+        "output": [
+            {**item, **(_FUNCTION_CALL_NULL_FIELDS if item.get("type") == "function_call" else {})} for item in output
+        ],
         "usage": {
             "input_tokens_details": None,
             "output_tokens_details": None,

@@ -56,22 +56,7 @@ CHAT_COMPLETION_BODY: Final = {
 }
 
 
-@pytest.fixture(autouse=True)
-def mock_sdk_token_exchange_transport(monkeypatch: pytest.MonkeyPatch) -> None:
-    native_client_factory: Final = getattr(sys.modules.get("openai.auth._workload"), "DefaultHttpx2Client", None)
-    if native_client_factory is not None:
-        import httpx2
-
-        def handle_exchange(request: httpx2.Request) -> httpx2.Response:
-            response: Final = respx.mock.handler(
-                httpx.Request(request.method, str(request.url), headers=dict(request.headers), content=request.content)
-            )
-            return httpx2.Response(response.status_code, headers=dict(response.headers), content=response.content)
-
-        monkeypatch.setattr(
-            "openai.auth._workload.DefaultHttpx2Client",
-            partial(native_client_factory, transport=httpx2.MockTransport(handle_exchange), trust_env=False),
-        )
+pytestmark = pytest.mark.usefixtures("openai_token_exchange_via_httpx")
 
 
 @pytest.fixture

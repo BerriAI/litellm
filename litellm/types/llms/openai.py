@@ -65,6 +65,7 @@ from openai.types.responses.response_create_params import (
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
 from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch
 from pydantic import (
+    BaseModel,
     ConfigDict,
     Discriminator,
     Field,
@@ -1438,13 +1439,20 @@ class InputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     audio_tokens: int | None = None
     cached_tokens: int = 0
     cached_tokens_details: CachedTokensDetails | None = None
-    cache_write_tokens: int | None = Field(default=None, exclude_if=_is_none)
+    cache_write_tokens: int | None = None
     cache_write_tokens_details: CacheWriteTokensDetails | None = Field(default=None, exclude_if=_is_none)
     image_tokens: int | None = None
     text_tokens: int | None = None
     video_tokens: int | None = None
 
     model_config = {"extra": "allow"}
+
+    @model_serializer(mode="wrap")
+    def _report_unreported_cache_writes_as_zero(  # noqa: ANN202  # annotating it replaces the model's serialization schema
+        self, handler: SerializerFunctionWrapHandler
+    ):
+        serialized: Final[Mapping[str, object]] = handler(self)
+        return {**serialized, "cache_write_tokens": self.cache_write_tokens or 0}
 
 
 class ResponseAPIUsage(BaseLiteLLMOpenAIResponseObject):
@@ -1564,6 +1572,24 @@ def replayable_responses_item(
     }
 
 
+def _with_wire_names(value: object, info: FieldSerializationInfo) -> object:
+    items: Final = _as_json_array(value)
+    if items is None:
+        return value
+    return [
+        item.model_dump(
+            mode=info.mode,
+            by_alias=True,
+            exclude_unset=info.exclude_unset,
+            exclude_defaults=info.exclude_defaults,
+            exclude_none=info.exclude_none,
+        )
+        if isinstance(item, BaseModel)
+        else item
+        for item in items
+    ]
+
+
 def replayable_responses_input(value: object, *, drops_set_created_by: bool = False) -> object:
     items: Final = _as_json_array(value)
     if items is None:
@@ -1650,15 +1676,22 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     @field_serializer("output", mode="wrap")
     @classmethod
     def _serialize_output_as_replayable(
-        cls, value: builtins.object, handler: SerializerFunctionWrapHandler, _info: FieldSerializationInfo
+        cls, value: builtins.object, handler: SerializerFunctionWrapHandler, info: FieldSerializationInfo
     ):
         """
         Drop the nulls the SDK types default in but providers never send: created_by on every output item
         (OpenAI rejects it when `output` is replayed as `input`), and status/content/encrypted_content on
         reasoning items (the OpenAI C# SDK crashes on status=null, issue #16824).
         """
-        serialized: Final[object] = handler(value)
+        serialized: Final[object] = handler(_with_wire_names(value, info))
         return replayable_responses_input(serialized)
+
+    @field_serializer("tools", mode="wrap")
+    @classmethod
+    def _serialize_tools_with_wire_names(  # noqa: ANN206  # annotating it replaces the model's serialization schema
+        cls, value: builtins.object, handler: SerializerFunctionWrapHandler, info: FieldSerializationInfo
+    ):
+        return handler(_with_wire_names(value, info))
 
     @property
     def output_text(self) -> str:

@@ -26493,7 +26493,7 @@ export interface components {
             /** Queries */
             queries?: string[] | null;
             /** Query */
-            query: string;
+            query?: string | null;
             /** Sources */
             sources?: components["schemas"]["ActionSearchSource"][] | null;
             /**
@@ -26581,6 +26581,25 @@ export interface components {
             callback_vars: {
                 [key: string]: string;
             };
+        };
+        /** AdditionalTools */
+        AdditionalTools: {
+            /** Id */
+            id: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "unknown" | "user" | "assistant" | "system" | "critic" | "discriminator" | "developer" | "tool";
+            /** Tools */
+            tools: (components["schemas"]["FunctionTool"] | components["schemas"]["FileSearchTool"] | components["schemas"]["ComputerTool"] | components["schemas"]["ComputerUsePreviewTool"] | components["schemas"]["WebSearchTool"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ProgrammaticToolCalling"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellTool"] | components["schemas"]["CustomTool"] | components["schemas"]["NamespaceTool"] | components["schemas"]["ToolSearchTool"] | components["schemas"]["WebSearchPreviewTool"] | components["schemas"]["ApplyPatchTool"])[];
+            /**
+             * Type
+             * @constant
+             */
+            type: "additional_tools";
+        } & {
+            [key: string]: unknown;
         };
         /** AdminIgnore */
         AdminIgnore: {
@@ -27236,6 +27255,8 @@ export interface components {
         ApplyPatchCall: {
             /** Call Id */
             call_id: string;
+            /** Caller */
+            caller?: components["schemas"]["ApplyPatchCallCallerDirect"] | components["schemas"]["ApplyPatchCallCallerProgram"] | null;
             /** Id */
             id?: string | null;
             /** Operation */
@@ -27250,6 +27271,24 @@ export interface components {
              * @constant
              */
             type: "apply_patch_call";
+        };
+        /** ApplyPatchCallCallerDirect */
+        ApplyPatchCallCallerDirect: {
+            /**
+             * Type
+             * @constant
+             */
+            type: "direct";
+        };
+        /** ApplyPatchCallCallerProgram */
+        ApplyPatchCallCallerProgram: {
+            /** Caller Id */
+            caller_id: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "program";
         };
         /**
          * ApplyPatchCallOperationCreateFile
@@ -27301,6 +27340,8 @@ export interface components {
         ApplyPatchCallOutput: {
             /** Call Id */
             call_id: string;
+            /** Caller */
+            caller?: components["schemas"]["ApplyPatchCallOutputCallerDirect"] | components["schemas"]["ApplyPatchCallOutputCallerProgram"] | null;
             /** Id */
             id?: string | null;
             /** Output */
@@ -27316,11 +27357,31 @@ export interface components {
              */
             type: "apply_patch_call_output";
         };
+        /** ApplyPatchCallOutputCallerDirect */
+        ApplyPatchCallOutputCallerDirect: {
+            /**
+             * Type
+             * @constant
+             */
+            type: "direct";
+        };
+        /** ApplyPatchCallOutputCallerProgram */
+        ApplyPatchCallOutputCallerProgram: {
+            /** Caller Id */
+            caller_id: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "program";
+        };
         /**
          * ApplyPatchTool
          * @description Allows the assistant to create, delete, or update files using unified diffs.
          */
         ApplyPatchTool: {
+            /** Allowed Callers */
+            allowed_callers?: ("direct" | "programmatic")[] | null;
             /**
              * Type
              * @constant
@@ -27334,6 +27395,8 @@ export interface components {
          * @description Allows the assistant to create, delete, or update files using unified diffs.
          */
         ApplyPatchToolParam: {
+            /** Allowed Callers */
+            allowed_callers?: ("direct" | "programmatic")[] | null;
             /**
              * Type
              * @constant
@@ -29618,6 +29681,28 @@ export interface components {
             /** Success And Failure */
             success_and_failure: string[];
         };
+        /** CallerDirect */
+        CallerDirect: {
+            /**
+             * Type
+             * @constant
+             */
+            type: "direct";
+        } & {
+            [key: string]: unknown;
+        };
+        /** CallerProgram */
+        CallerProgram: {
+            /** Caller Id */
+            caller_id: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "program";
+        } & {
+            [key: string]: unknown;
+        };
         /**
          * CancelEvalResponse
          * @description Response from cancelling an evaluation
@@ -30549,6 +30634,8 @@ export interface components {
          * @description A tool that runs Python code to help generate a response to a prompt.
          */
         CodeInterpreter: {
+            /** Allowed Callers */
+            allowed_callers?: ("direct" | "programmatic")[] | null;
             /** Container */
             container: string | components["schemas"]["CodeInterpreterContainerCodeInterpreterToolAuto"];
             /**
@@ -30579,6 +30666,17 @@ export interface components {
             type: "auto";
         } & {
             [key: string]: unknown;
+        };
+        /**
+         * CompactionTrigger
+         * @description Compacts the current context. Must be the final input item.
+         */
+        CompactionTrigger: {
+            /**
+             * Type
+             * @constant
+             */
+            type: "compaction_trigger";
         };
         /**
          * ComparisonFilter
@@ -30753,7 +30851,7 @@ export interface components {
          * ComputerTool
          * @description A tool that controls a virtual computer.
          *
-         *     Learn more about the [computer tool](https://platform.openai.com/docs/guides/tools-computer-use).
+         *     Learn more about the [computer tool](https://developers.openai.com/api/docs/guides/tools-computer-use).
          */
         ComputerTool: {
             /**
@@ -30768,7 +30866,7 @@ export interface components {
          * ComputerUsePreviewTool
          * @description A tool that controls a virtual computer.
          *
-         *     Learn more about the [computer tool](https://platform.openai.com/docs/guides/tools-computer-use).
+         *     Learn more about the [computer tool](https://developers.openai.com/api/docs/guides/tools-computer-use).
          */
         ComputerUsePreviewTool: {
             /** Display Height */
@@ -30792,7 +30890,7 @@ export interface components {
          * ComputerUsePreviewToolParam
          * @description A tool that controls a virtual computer.
          *
-         *     Learn more about the [computer tool](https://platform.openai.com/docs/guides/tools-computer-use).
+         *     Learn more about the [computer tool](https://developers.openai.com/api/docs/guides/tools-computer-use).
          */
         ComputerUsePreviewToolParam: {
             /** Display Height */
@@ -32365,9 +32463,13 @@ export interface components {
          * CustomTool
          * @description A custom tool that processes input using a specified format.
          *
-         *     Learn more about   [custom tools](https://platform.openai.com/docs/guides/function-calling#custom-tools)
+         *     Learn more about   [custom tools](https://developers.openai.com/api/docs/guides/function-calling#custom-tools)
          */
         CustomTool: {
+            /** Allowed Callers */
+            allowed_callers?: ("direct" | "programmatic")[] | null;
+            /** Async */
+            async?: boolean | null;
             /** Defer Loading */
             defer_loading?: boolean | null;
             /** Description */
@@ -32415,9 +32517,13 @@ export interface components {
          * CustomToolParam
          * @description A custom tool that processes input using a specified format.
          *
-         *     Learn more about   [custom tools](https://platform.openai.com/docs/guides/function-calling#custom-tools)
+         *     Learn more about   [custom tools](https://developers.openai.com/api/docs/guides/function-calling#custom-tools)
          */
         CustomToolParam: {
+            /** Allowed Callers */
+            allowed_callers?: ("direct" | "programmatic")[] | null;
+            /** Async */
+            async?: boolean;
             /** Defer Loading */
             defer_loading?: boolean;
             /** Description */
@@ -33717,7 +33823,7 @@ export interface components {
          * FileSearchTool
          * @description A tool that searches for relevant content from uploaded files.
          *
-         *     Learn more about the [file search tool](https://platform.openai.com/docs/guides/tools-file-search).
+         *     Learn more about the [file search tool](https://developers.openai.com/api/docs/guides/tools-file-search).
          */
         FileSearchTool: {
             /** Filters */
@@ -33739,7 +33845,7 @@ export interface components {
          * FileSearchToolParam
          * @description A tool that searches for relevant content from uploaded files.
          *
-         *     Learn more about the [file search tool](https://platform.openai.com/docs/guides/tools-file-search).
+         *     Learn more about the [file search tool](https://developers.openai.com/api/docs/guides/tools-file-search).
          */
         FileSearchToolParam: {
             /** Filters */
@@ -33780,9 +33886,15 @@ export interface components {
          */
         FunctionCallOutput: {
             /** Call Id */
-            call_id: string;
+            call_id?: string | null;
+            /** Caller */
+            caller?: components["schemas"]["FunctionCallOutputCallerDirect"] | components["schemas"]["FunctionCallOutputCallerProgram"] | null;
             /** Id */
             id?: string | null;
+            /** Name */
+            name?: string | null;
+            /** Namespace */
+            namespace?: string | null;
             /** Output */
             output: string | (components["schemas"]["ResponseInputTextContentParam"] | components["schemas"]["ResponseInputImageContentParam"] | components["schemas"]["ResponseInputFileContentParam"])[];
             /** Status */
@@ -33793,11 +33905,31 @@ export interface components {
              */
             type: "function_call_output";
         };
+        /** FunctionCallOutputCallerDirect */
+        FunctionCallOutputCallerDirect: {
+            /**
+             * Type
+             * @constant
+             */
+            type: "direct";
+        };
+        /** FunctionCallOutputCallerProgram */
+        FunctionCallOutputCallerProgram: {
+            /** Caller Id */
+            caller_id: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "program";
+        };
         /**
          * FunctionShellTool
          * @description A tool that allows the model to execute shell commands.
          */
         FunctionShellTool: {
+            /** Allowed Callers */
+            allowed_callers?: ("direct" | "programmatic")[] | null;
             /** Environment */
             environment?: components["schemas"]["ContainerAuto"] | components["schemas"]["LocalEnvironment"] | components["schemas"]["ContainerReference"] | null;
             /**
@@ -33813,6 +33945,8 @@ export interface components {
          * @description A tool that allows the model to execute shell commands.
          */
         FunctionShellToolParam: {
+            /** Allowed Callers */
+            allowed_callers?: ("direct" | "programmatic")[] | null;
             /** Environment */
             environment?: components["schemas"]["ContainerAutoParam"] | components["schemas"]["LocalEnvironmentParam"] | components["schemas"]["ContainerReferenceParam"] | null;
             /**
@@ -33825,15 +33959,23 @@ export interface components {
          * FunctionTool
          * @description Defines a function in your own code the model can choose to call.
          *
-         *     Learn more about [function calling](https://platform.openai.com/docs/guides/function-calling).
+         *     Learn more about [function calling](https://developers.openai.com/api/docs/guides/function-calling).
          */
         FunctionTool: {
+            /** Allowed Callers */
+            allowed_callers?: ("direct" | "programmatic")[] | null;
+            /** Async */
+            async?: boolean | null;
             /** Defer Loading */
             defer_loading?: boolean | null;
             /** Description */
             description?: string | null;
             /** Name */
             name: string;
+            /** Output Schema */
+            output_schema?: {
+                [key: string]: unknown;
+            } | null;
             /** Parameters */
             parameters?: {
                 [key: string]: unknown;
@@ -33852,15 +33994,23 @@ export interface components {
          * FunctionToolParam
          * @description Defines a function in your own code the model can choose to call.
          *
-         *     Learn more about [function calling](https://platform.openai.com/docs/guides/function-calling).
+         *     Learn more about [function calling](https://developers.openai.com/api/docs/guides/function-calling).
          */
         FunctionToolParam: {
+            /** Allowed Callers */
+            allowed_callers?: ("direct" | "programmatic")[] | null;
+            /** Async */
+            async?: boolean;
             /** Defer Loading */
             defer_loading?: boolean;
             /** Description */
             description?: string | null;
             /** Name */
             name: string;
+            /** Output Schema */
+            output_schema?: {
+                [key: string]: unknown;
+            } | null;
             /** Parameters */
             parameters: {
                 [key: string]: unknown;
@@ -34606,6 +34756,20 @@ export interface components {
              */
             type: "http";
         };
+        /** HTTPError */
+        HTTPError: {
+            /** Code */
+            code: number;
+            /** Message */
+            message: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "http_error";
+        } & {
+            [key: string]: unknown;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -34711,7 +34875,7 @@ export interface components {
             input_fidelity?: ("high" | "low") | null;
             input_image_mask?: components["schemas"]["ImageGenerationInputImageMask"] | null;
             /** Model */
-            model?: string | ("gpt-image-1" | "gpt-image-1-mini" | "gpt-image-1.5") | null;
+            model?: string | ("gpt-image-1" | "gpt-image-1-mini" | "gpt-image-2" | "gpt-image-2-2026-04-21" | "gpt-image-2.5-sunburst" | "gpt-image-2.5-sunburst-2026-09-08" | "gpt-image-2.5-flare" | "gpt-image-2.5-flare-2026-09-08" | "gpt-image-1.5" | "chatgpt-image-latest") | null;
             /** Moderation */
             moderation?: ("auto" | "low") | null;
             /** Output Compression */
@@ -34721,9 +34885,9 @@ export interface components {
             /** Partial Images */
             partial_images?: number | null;
             /** Quality */
-            quality?: ("low" | "medium" | "high" | "auto") | null;
+            quality?: ("low" | "medium" | "high" | "xhigh" | "max" | "auto") | null;
             /** Size */
-            size?: ("1024x1024" | "1024x1536" | "1536x1024" | "auto") | null;
+            size?: string | ("1024x1024" | "1024x1536" | "1536x1024" | "auto") | null;
             /**
              * Type
              * @constant
@@ -34737,10 +34901,23 @@ export interface components {
          * @description An image generation request made by the model.
          */
         ImageGenerationCall: {
+            /** Action */
+            action?: ("generate" | "edit" | "auto") | null;
+            /** Background */
+            background?: ("transparent" | "opaque" | "auto") | null;
+            error?: components["schemas"]["ImageGenerationCallError"] | null;
             /** Id */
             id: string;
+            /** Output Format */
+            output_format?: ("png" | "webp" | "jpeg") | null;
+            /** Quality */
+            quality?: ("low" | "medium" | "high" | "xhigh" | "max" | "auto") | null;
             /** Result */
             result?: string | null;
+            /** Revised Prompt */
+            revised_prompt?: string | null;
+            /** Size */
+            size?: string | ("1024x1024" | "1024x1536" | "1536x1024") | null;
             /**
              * Status
              * @enum {string}
@@ -34751,6 +34928,38 @@ export interface components {
              * @constant
              */
             type: "image_generation_call";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ImageGenerationCallError
+         * @description Details of a moderation failure, when available.
+         */
+        ImageGenerationCallError: {
+            /** Code */
+            code?: string | null;
+            /** Message */
+            message: string;
+            moderation_details?: components["schemas"]["ImageGenerationCallErrorModerationDetails"] | null;
+            /** Param */
+            param?: string | null;
+            /** Type */
+            type: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ImageGenerationCallErrorModerationDetails
+         * @description Public details for a `moderation_blocked` error, when available.
+         */
+        ImageGenerationCallErrorModerationDetails: {
+            /** Categories */
+            categories: string[];
+            /**
+             * Moderation Stage
+             * @enum {string}
+             */
+            moderation_stage: "input" | "output" | "unknown";
         } & {
             [key: string]: unknown;
         };
@@ -34826,7 +35035,7 @@ export interface components {
          */
         IncompleteDetails: {
             /** Reason */
-            reason?: ("max_output_tokens" | "content_filter") | null;
+            reason?: ("max_output_tokens" | "max_messages" | "content_filter" | "steered") | null;
         } & {
             [key: string]: unknown;
         };
@@ -37003,7 +37212,7 @@ export interface components {
                 [key: string]: unknown;
             }[] | null;
             /** Timeout */
-            timeout?: number | string | null;
+            timeout?: number | string | components["schemas"]["Timeout"] | null;
             /** Timeout By Service Tier */
             timeout_by_service_tier?: {
                 [key: string]: number;
@@ -39420,9 +39629,11 @@ export interface components {
         /**
          * Mcp
          * @description Give the model access to additional tools via remote Model Context Protocol
-         *     (MCP) servers. [Learn more about MCP](https://platform.openai.com/docs/guides/tools-remote-mcp).
+         *     (MCP) servers. [Learn more about MCP](https://developers.openai.com/api/docs/guides/tools-connectors-mcp).
          */
         Mcp: {
+            /** Allowed Callers */
+            allowed_callers?: ("direct" | "programmatic")[] | null;
             /** Allowed Tools */
             allowed_tools?: string[] | components["schemas"]["McpAllowedToolsMcpToolFilter"] | null;
             /** Authorization */
@@ -39443,6 +39654,8 @@ export interface components {
             server_label: string;
             /** Server Url */
             server_url?: string | null;
+            /** Tunnel Id */
+            tunnel_id?: string | null;
             /**
              * Type
              * @constant
@@ -39515,7 +39728,7 @@ export interface components {
             /** Arguments */
             arguments: string;
             /** Error */
-            error?: string | null;
+            error?: components["schemas"]["McpProtocolError"] | components["schemas"]["McpToolExecutionError"] | components["schemas"]["HTTPError"] | null;
             /** Id */
             id: string;
             /** Name */
@@ -39571,6 +39784,20 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** McpProtocolError */
+        McpProtocolError: {
+            /** Code */
+            code: number;
+            /** Message */
+            message: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "mcp_protocol_error";
+        } & {
+            [key: string]: unknown;
+        };
         /**
          * McpRequireApprovalMcpToolApprovalFilter
          * @description Specify which of the MCP server's tools require approval.
@@ -39606,6 +39833,18 @@ export interface components {
             read_only?: boolean | null;
             /** Tool Names */
             tool_names?: string[] | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** McpToolExecutionError */
+        McpToolExecutionError: {
+            /** Content */
+            content: unknown;
+            /**
+             * Type
+             * @constant
+             */
+            type: "mcp_tool_execution_error";
         } & {
             [key: string]: unknown;
         };
@@ -43114,12 +43353,76 @@ export interface components {
                 number
             ];
         };
+        /** Program */
+        Program: {
+            /** Call Id */
+            call_id: string;
+            /** Code */
+            code: string;
+            /** Fingerprint */
+            fingerprint: string;
+            /** Id */
+            id: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "program";
+        } & {
+            [key: string]: unknown;
+        };
+        /** ProgramOutput */
+        ProgramOutput: {
+            /** Call Id */
+            call_id: string;
+            /** Id */
+            id: string;
+            /** Result */
+            result: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "completed" | "incomplete";
+            /**
+             * Type
+             * @constant
+             */
+            type: "program_output";
+        } & {
+            [key: string]: unknown;
+        };
+        /** ProgrammaticToolCalling */
+        ProgrammaticToolCalling: {
+            /**
+             * Type
+             * @constant
+             */
+            type: "programmatic_tool_calling";
+        } & {
+            [key: string]: unknown;
+        };
         /** Prompt */
         Prompt: {
             litellm_params: components["schemas"]["PromptLiteLLMParams"];
             /** Prompt Id */
             prompt_id: string;
             prompt_info?: components["schemas"]["PromptInfo"] | null;
+        };
+        /**
+         * PromptCacheBreakpoint
+         * @description Marks the exact end of a reusable prompt prefix.
+         *
+         *     The breakpoint inherits its TTL from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a token block.
+         */
+        PromptCacheBreakpoint: {
+            /**
+             * Mode
+             * @constant
+             */
+            mode: "explicit";
+        } & {
+            [key: string]: unknown;
         };
         /** PromptCacheOptions */
         PromptCacheOptions: {
@@ -43608,18 +43911,13 @@ export interface components {
         };
         /**
          * Reasoning
-         * @description **gpt-5 and o-series models only**
-         *
-         *     Configuration options for
-         *     [reasoning models](https://platform.openai.com/docs/guides/reasoning).
+         * @description The reasoning configuration applied by this update.
          */
         Reasoning: {
             /** Effort */
-            effort?: ("none" | "minimal" | "low" | "medium" | "high" | "xhigh") | null;
-            /** Generate Summary */
-            generate_summary?: ("auto" | "concise" | "detailed") | null;
-            /** Summary */
-            summary?: ("auto" | "concise" | "detailed") | null;
+            effort?: ("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max") | null;
+        } & {
+            [key: string]: unknown;
         };
         /** RegenerateKeyRequest */
         RegenerateKeyRequest: {
@@ -44483,6 +44781,8 @@ export interface components {
         ResponseApplyPatchToolCall: {
             /** Call Id */
             call_id: string;
+            /** Caller */
+            caller?: components["schemas"]["CallerDirect"] | components["schemas"]["CallerProgram"] | null;
             /** Created By */
             created_by?: string | null;
             /** Id */
@@ -44509,6 +44809,8 @@ export interface components {
         ResponseApplyPatchToolCallOutput: {
             /** Call Id */
             call_id: string;
+            /** Caller */
+            caller?: components["schemas"]["CallerDirect"] | components["schemas"]["CallerProgram"] | null;
             /** Created By */
             created_by?: string | null;
             /** Id */
@@ -44580,7 +44882,7 @@ export interface components {
         };
         /**
          * ResponseCompactionItem
-         * @description A compaction item generated by the [`v1/responses/compact` API](https://platform.openai.com/docs/api-reference/responses/compact).
+         * @description A compaction item generated by the [`v1/responses/compact` API](https://developers.openai.com/api/reference/resources/responses/methods/compact).
          */
         ResponseCompactionItem: {
             /** Created By */
@@ -44599,7 +44901,7 @@ export interface components {
         };
         /**
          * ResponseCompactionItemParamParam
-         * @description A compaction item generated by the [`v1/responses/compact` API](https://platform.openai.com/docs/api-reference/responses/compact).
+         * @description A compaction item generated by the [`v1/responses/compact` API](https://developers.openai.com/api/reference/resources/responses/methods/compact).
          */
         ResponseCompactionItemParamParam: {
             /** Encrypted Content */
@@ -44617,7 +44919,7 @@ export interface components {
          * @description A tool call to a computer use tool.
          *
          *     See the
-         *     [computer use guide](https://platform.openai.com/docs/guides/tools-computer-use) for more information.
+         *     [computer use guide](https://developers.openai.com/api/docs/guides/tools-computer-use) for more information.
          */
         ResponseComputerToolCall: {
             /** Action */
@@ -44704,7 +45006,7 @@ export interface components {
          * @description A tool call to a computer use tool.
          *
          *     See the
-         *     [computer use guide](https://platform.openai.com/docs/guides/tools-computer-use) for more information.
+         *     [computer use guide](https://developers.openai.com/api/docs/guides/tools-computer-use) for more information.
          */
         ResponseComputerToolCallParam: {
             /** Action */
@@ -44729,6 +45031,41 @@ export interface components {
             type: "computer_call";
         };
         /**
+         * ResponseConfigurationUpdateItem
+         * @description A configuration update that applies to subsequent responses until it is
+         *     replaced by another configuration update.
+         */
+        ResponseConfigurationUpdateItem: {
+            /** Id */
+            id: string;
+            reasoning?: components["schemas"]["Reasoning"] | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "configuration_update";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ResponseConfigurationUpdateItemParamParam
+         * @description An update to the conversation's response configuration.
+         *
+         *     The configuration
+         *     remains in effect for subsequent responses until it is replaced by another
+         *     configuration update.
+         */
+        ResponseConfigurationUpdateItemParamParam: {
+            /** Id */
+            id?: string | null;
+            reasoning?: components["schemas"]["openai__types__responses__response_configuration_update_item_param_param__Reasoning"];
+            /**
+             * Type
+             * @constant
+             */
+            type: "configuration_update";
+        };
+        /**
          * ResponseContainerReference
          * @description Represents a container created with /v1/containers.
          */
@@ -44748,8 +45085,12 @@ export interface components {
          * @description A call to a custom tool created by the model.
          */
         ResponseCustomToolCall: {
+            /** Async */
+            async?: boolean | null;
             /** Call Id */
             call_id: string;
+            /** Caller */
+            caller?: components["schemas"]["CallerDirect"] | components["schemas"]["CallerProgram"] | null;
             /** Id */
             id?: string | null;
             /** Input */
@@ -44771,8 +45112,12 @@ export interface components {
          * @description A call to a custom tool created by the model.
          */
         ResponseCustomToolCallItem: {
+            /** Async */
+            async?: boolean | null;
             /** Call Id */
             call_id: string;
+            /** Caller */
+            caller?: components["schemas"]["CallerDirect"] | components["schemas"]["CallerProgram"] | null;
             /** Created By */
             created_by?: string | null;
             /** Id */
@@ -44803,6 +45148,8 @@ export interface components {
         ResponseCustomToolCallOutputItem: {
             /** Call Id */
             call_id: string;
+            /** Caller */
+            caller?: components["schemas"]["CallerDirect"] | components["schemas"]["CallerProgram"] | null;
             /** Created By */
             created_by?: string | null;
             /** Id */
@@ -44829,6 +45176,8 @@ export interface components {
         ResponseCustomToolCallOutputParam: {
             /** Call Id */
             call_id: string;
+            /** Caller */
+            caller?: components["schemas"]["CallerDirect"] | components["schemas"]["CallerProgram"] | null;
             /** Id */
             id?: string;
             /** Output */
@@ -44844,8 +45193,12 @@ export interface components {
          * @description A call to a custom tool created by the model.
          */
         ResponseCustomToolCallParam: {
+            /** Async */
+            async?: boolean;
             /** Call Id */
             call_id: string;
+            /** Caller */
+            caller?: components["schemas"]["CallerDirect"] | components["schemas"]["CallerProgram"] | null;
             /** Id */
             id?: string;
             /** Input */
@@ -44865,7 +45218,7 @@ export interface components {
          * @description The results of a file search tool call.
          *
          *     See the
-         *     [file search guide](https://platform.openai.com/docs/guides/tools-file-search) for more information.
+         *     [file search guide](https://developers.openai.com/api/docs/guides/tools-file-search) for more information.
          */
         ResponseFileSearchToolCall: {
             /** Id */
@@ -44892,7 +45245,7 @@ export interface components {
          * @description The results of a file search tool call.
          *
          *     See the
-         *     [file search guide](https://platform.openai.com/docs/guides/tools-file-search) for more information.
+         *     [file search guide](https://developers.openai.com/api/docs/guides/tools-file-search) for more information.
          */
         ResponseFileSearchToolCallParam: {
             /** Id */
@@ -44948,7 +45301,7 @@ export interface components {
          * @description JSON Schema response format.
          *
          *     Used to generate structured JSON responses.
-         *     Learn more about [Structured Outputs](https://platform.openai.com/docs/guides/structured-outputs).
+         *     Learn more about [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs).
          */
         ResponseFormatTextJSONSchemaConfigParam: {
             /** Description */
@@ -44989,6 +45342,8 @@ export interface components {
             action: components["schemas"]["Action"];
             /** Call Id */
             call_id: string;
+            /** Caller */
+            caller?: components["schemas"]["CallerDirect"] | components["schemas"]["CallerProgram"] | null;
             /** Created By */
             created_by?: string | null;
             /** Environment */
@@ -45015,6 +45370,8 @@ export interface components {
         ResponseFunctionShellToolCallOutput: {
             /** Call Id */
             call_id: string;
+            /** Caller */
+            caller?: components["schemas"]["CallerDirect"] | components["schemas"]["CallerProgram"] | null;
             /** Created By */
             created_by?: string | null;
             /** Id */
@@ -45041,13 +45398,17 @@ export interface components {
          * @description A tool call to run a function.
          *
          *     See the
-         *     [function calling guide](https://platform.openai.com/docs/guides/function-calling) for more information.
+         *     [function calling guide](https://developers.openai.com/api/docs/guides/function-calling) for more information.
          */
         ResponseFunctionToolCall: {
             /** Arguments */
             arguments: string;
+            /** Async */
+            async?: boolean | null;
             /** Call Id */
             call_id: string;
+            /** Caller */
+            caller?: components["schemas"]["CallerDirect"] | components["schemas"]["CallerProgram"] | null;
             /** Id */
             id?: string | null;
             /** Name */
@@ -45069,13 +45430,17 @@ export interface components {
          * @description A tool call to run a function.
          *
          *     See the
-         *     [function calling guide](https://platform.openai.com/docs/guides/function-calling) for more information.
+         *     [function calling guide](https://developers.openai.com/api/docs/guides/function-calling) for more information.
          */
         ResponseFunctionToolCallItem: {
             /** Arguments */
             arguments: string;
+            /** Async */
+            async?: boolean | null;
             /** Call Id */
             call_id: string;
+            /** Caller */
+            caller?: components["schemas"]["CallerDirect"] | components["schemas"]["CallerProgram"] | null;
             /** Created By */
             created_by?: string | null;
             /** Id */
@@ -45100,11 +45465,17 @@ export interface components {
         /** ResponseFunctionToolCallOutputItem */
         ResponseFunctionToolCallOutputItem: {
             /** Call Id */
-            call_id: string;
+            call_id?: string | null;
+            /** Caller */
+            caller?: components["schemas"]["CallerDirect"] | components["schemas"]["CallerProgram"] | null;
             /** Created By */
             created_by?: string | null;
             /** Id */
             id: string;
+            /** Name */
+            name?: string | null;
+            /** Namespace */
+            namespace?: string | null;
             /** Output */
             output: string | (components["schemas"]["ResponseInputText"] | components["schemas"]["ResponseInputImage"] | components["schemas"]["ResponseInputFile"])[];
             /**
@@ -45125,13 +45496,17 @@ export interface components {
          * @description A tool call to run a function.
          *
          *     See the
-         *     [function calling guide](https://platform.openai.com/docs/guides/function-calling) for more information.
+         *     [function calling guide](https://developers.openai.com/api/docs/guides/function-calling) for more information.
          */
         ResponseFunctionToolCallParam: {
             /** Arguments */
             arguments: string;
+            /** Async */
+            async?: boolean;
             /** Call Id */
             call_id: string;
+            /** Caller */
+            caller?: components["schemas"]["CallerDirect"] | components["schemas"]["CallerProgram"] | null;
             /** Id */
             id?: string;
             /** Name */
@@ -45154,7 +45529,7 @@ export interface components {
          * @description The results of a web search tool call.
          *
          *     See the
-         *     [web search guide](https://platform.openai.com/docs/guides/tools-web-search) for more information.
+         *     [web search guide](https://developers.openai.com/api/docs/guides/tools-web-search) for more information.
          */
         ResponseFunctionWebSearch: {
             /** Action */
@@ -45165,7 +45540,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "in_progress" | "searching" | "completed" | "failed";
+            status: "in_progress" | "searching" | "completed" | "failed" | "incomplete";
             /**
              * Type
              * @constant
@@ -45179,7 +45554,7 @@ export interface components {
          * @description The results of a web search tool call.
          *
          *     See the
-         *     [web search guide](https://platform.openai.com/docs/guides/tools-web-search) for more information.
+         *     [web search guide](https://developers.openai.com/api/docs/guides/tools-web-search) for more information.
          */
         ResponseFunctionWebSearchParam: {
             /** Action */
@@ -45190,7 +45565,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "in_progress" | "searching" | "completed" | "failed";
+            status: "in_progress" | "searching" | "completed" | "incomplete" | "failed";
             /**
              * Type
              * @constant
@@ -45203,7 +45578,7 @@ export interface components {
          */
         ResponseInputFile: {
             /** Detail */
-            detail?: ("high" | "low") | null;
+            detail?: ("auto" | "low" | "high") | null;
             /** File Data */
             file_data?: string | null;
             /** File Id */
@@ -45212,6 +45587,7 @@ export interface components {
             file_url?: string | null;
             /** Filename */
             filename?: string | null;
+            prompt_cache_breakpoint?: components["schemas"]["PromptCacheBreakpoint"] | null;
             /**
              * Type
              * @constant
@@ -45229,7 +45605,7 @@ export interface components {
              * Detail
              * @enum {string}
              */
-            detail?: "low" | "high";
+            detail?: "auto" | "low" | "high";
             /** File Data */
             file_data?: string | null;
             /** File Id */
@@ -45238,6 +45614,7 @@ export interface components {
             file_url?: string | null;
             /** Filename */
             filename?: string | null;
+            prompt_cache_breakpoint?: components["schemas"]["PromptCacheBreakpoint"] | null;
             /**
              * Type
              * @constant
@@ -45253,7 +45630,7 @@ export interface components {
              * Detail
              * @enum {string}
              */
-            detail?: "low" | "high";
+            detail?: "auto" | "low" | "high";
             /** File Data */
             file_data?: string;
             /** File Id */
@@ -45262,6 +45639,7 @@ export interface components {
             file_url?: string;
             /** Filename */
             filename?: string;
+            prompt_cache_breakpoint?: components["schemas"]["PromptCacheBreakpoint"];
             /**
              * Type
              * @constant
@@ -45272,7 +45650,7 @@ export interface components {
          * ResponseInputImage
          * @description An image input to the model.
          *
-         *     Learn about [image inputs](https://platform.openai.com/docs/guides/vision).
+         *     Learn about [image inputs](https://developers.openai.com/api/docs/guides/images-vision).
          */
         ResponseInputImage: {
             /**
@@ -45284,6 +45662,7 @@ export interface components {
             file_id?: string | null;
             /** Image Url */
             image_url?: string | null;
+            prompt_cache_breakpoint?: components["schemas"]["PromptCacheBreakpoint"] | null;
             /**
              * Type
              * @constant
@@ -45296,7 +45675,7 @@ export interface components {
          * ResponseInputImageContentParam
          * @description An image input to the model.
          *
-         *     Learn about [image inputs](https://platform.openai.com/docs/guides/vision)
+         *     Learn about [image inputs](https://developers.openai.com/api/docs/guides/images-vision)
          */
         ResponseInputImageContentParam: {
             /** Detail */
@@ -45305,6 +45684,7 @@ export interface components {
             file_id?: string | null;
             /** Image Url */
             image_url?: string | null;
+            prompt_cache_breakpoint?: components["schemas"]["PromptCacheBreakpoint"] | null;
             /**
              * Type
              * @constant
@@ -45315,7 +45695,7 @@ export interface components {
          * ResponseInputImageParam
          * @description An image input to the model.
          *
-         *     Learn about [image inputs](https://platform.openai.com/docs/guides/vision).
+         *     Learn about [image inputs](https://developers.openai.com/api/docs/guides/images-vision).
          */
         ResponseInputImageParam: {
             /**
@@ -45327,6 +45707,7 @@ export interface components {
             file_id?: string | null;
             /** Image Url */
             image_url?: string | null;
+            prompt_cache_breakpoint?: components["schemas"]["PromptCacheBreakpoint"];
             /**
              * Type
              * @constant
@@ -45359,6 +45740,7 @@ export interface components {
          * @description A text input to the model.
          */
         ResponseInputText: {
+            prompt_cache_breakpoint?: components["schemas"]["PromptCacheBreakpoint"] | null;
             /** Text */
             text: string;
             /**
@@ -45374,6 +45756,7 @@ export interface components {
          * @description A text input to the model.
          */
         ResponseInputTextContentParam: {
+            prompt_cache_breakpoint?: components["schemas"]["PromptCacheBreakpoint"] | null;
             /** Text */
             text: string;
             /**
@@ -45387,6 +45770,7 @@ export interface components {
          * @description A text input to the model.
          */
         ResponseInputTextParam: {
+            prompt_cache_breakpoint?: components["schemas"]["PromptCacheBreakpoint"];
             /** Text */
             text: string;
             /**
@@ -45401,7 +45785,7 @@ export interface components {
          */
         ResponseItemList: {
             /** Data */
-            data: (components["schemas"]["ResponseInputMessageItem"] | components["schemas"]["ResponseOutputMessage"] | components["schemas"]["ResponseFileSearchToolCall"] | components["schemas"]["ResponseComputerToolCall"] | components["schemas"]["ResponseComputerToolCallOutputItem"] | components["schemas"]["ResponseFunctionWebSearch"] | components["schemas"]["ResponseFunctionToolCallItem"] | components["schemas"]["ResponseFunctionToolCallOutputItem"] | components["schemas"]["ResponseToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItem"] | components["schemas"]["ResponseReasoningItem"] | components["schemas"]["ResponseCompactionItem"] | components["schemas"]["ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCall"] | components["schemas"]["LocalShellCall"] | components["schemas"]["LocalShellCallOutput"] | components["schemas"]["ResponseFunctionShellToolCall"] | components["schemas"]["ResponseFunctionShellToolCallOutput"] | components["schemas"]["ResponseApplyPatchToolCall"] | components["schemas"]["ResponseApplyPatchToolCallOutput"] | components["schemas"]["McpListTools"] | components["schemas"]["McpApprovalRequest"] | components["schemas"]["McpApprovalResponse"] | components["schemas"]["McpCall"] | components["schemas"]["ResponseCustomToolCallItem"] | components["schemas"]["ResponseCustomToolCallOutputItem"])[];
+            data: (components["schemas"]["ResponseInputMessageItem"] | components["schemas"]["ResponseOutputMessage"] | components["schemas"]["ResponseFileSearchToolCall"] | components["schemas"]["ResponseComputerToolCall"] | components["schemas"]["ResponseComputerToolCallOutputItem"] | components["schemas"]["ResponseFunctionWebSearch"] | components["schemas"]["ResponseFunctionToolCallItem"] | components["schemas"]["ResponseFunctionToolCallOutputItem"] | components["schemas"]["ResponseToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItem"] | components["schemas"]["AdditionalTools"] | components["schemas"]["ResponseConfigurationUpdateItem"] | components["schemas"]["ResponseReasoningItem"] | components["schemas"]["Program"] | components["schemas"]["ProgramOutput"] | components["schemas"]["ResponseCompactionItem"] | components["schemas"]["ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCall"] | components["schemas"]["LocalShellCall"] | components["schemas"]["LocalShellCallOutput"] | components["schemas"]["ResponseFunctionShellToolCall"] | components["schemas"]["ResponseFunctionShellToolCallOutput"] | components["schemas"]["ResponseApplyPatchToolCall"] | components["schemas"]["ResponseApplyPatchToolCallOutput"] | components["schemas"]["McpListTools"] | components["schemas"]["McpApprovalRequest"] | components["schemas"]["McpApprovalResponse"] | components["schemas"]["McpCall"] | components["schemas"]["ResponseCustomToolCallItem"] | components["schemas"]["ResponseCustomToolCallOutputItem"])[];
             /** First Id */
             first_id: string;
             /** Has More */
@@ -45558,7 +45942,7 @@ export interface components {
          * @description A description of the chain of thought used by a reasoning model while generating
          *     a response. Be sure to include these items in your `input` to the Responses API
          *     for subsequent turns of a conversation if you are manually
-         *     [managing context](https://platform.openai.com/docs/guides/conversation-state).
+         *     [managing context](https://developers.openai.com/api/docs/guides/conversation-state).
          */
         ResponseReasoningItem: {
             /** Content */
@@ -45584,7 +45968,7 @@ export interface components {
          * @description A description of the chain of thought used by a reasoning model while generating
          *     a response. Be sure to include these items in your `input` to the Responses API
          *     for subsequent turns of a conversation if you are manually
-         *     [managing context](https://platform.openai.com/docs/guides/conversation-state).
+         *     [managing context](https://developers.openai.com/api/docs/guides/conversation-state).
          */
         ResponseReasoningItemParam: {
             /** Content */
@@ -45612,8 +45996,8 @@ export interface components {
          *
          *     Can be plain
          *     text or structured JSON data. Learn more:
-         *     - [Text inputs and outputs](https://platform.openai.com/docs/guides/text)
-         *     - [Structured Outputs](https://platform.openai.com/docs/guides/structured-outputs)
+         *     - [Text inputs and outputs](https://developers.openai.com/api/docs/guides/text)
+         *     - [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
          */
         ResponseTextConfigParam: {
             /** Format */
@@ -45670,7 +46054,7 @@ export interface components {
              */
             status: "in_progress" | "completed" | "incomplete";
             /** Tools */
-            tools: (components["schemas"]["FunctionTool"] | components["schemas"]["FileSearchTool"] | components["schemas"]["ComputerTool"] | components["schemas"]["ComputerUsePreviewTool"] | components["schemas"]["WebSearchTool"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellTool"] | components["schemas"]["CustomTool"] | components["schemas"]["NamespaceTool"] | components["schemas"]["ToolSearchTool"] | components["schemas"]["WebSearchPreviewTool"] | components["schemas"]["ApplyPatchTool"])[];
+            tools: (components["schemas"]["FunctionTool"] | components["schemas"]["FileSearchTool"] | components["schemas"]["ComputerTool"] | components["schemas"]["ComputerUsePreviewTool"] | components["schemas"]["WebSearchTool"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ProgrammaticToolCalling"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellTool"] | components["schemas"]["CustomTool"] | components["schemas"]["NamespaceTool"] | components["schemas"]["ToolSearchTool"] | components["schemas"]["WebSearchPreviewTool"] | components["schemas"]["ApplyPatchTool"])[];
             /**
              * Type
              * @constant
@@ -45693,7 +46077,7 @@ export interface components {
             /** Status */
             status?: ("in_progress" | "completed" | "incomplete") | null;
             /** Tools */
-            tools: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"])[];
+            tools: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["ToolMcp"] | components["schemas"]["ToolCodeInterpreter"] | components["schemas"]["ToolProgrammaticToolCalling"] | components["schemas"]["ToolImageGeneration"] | components["schemas"]["ToolLocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["ToolSearchOutputNamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"])[];
             /**
              * Type
              * @constant
@@ -45717,7 +46101,7 @@ export interface components {
             /** Include */
             include?: ("file_search_call.results" | "web_search_call.results" | "web_search_call.action.sources" | "message.input_image.image_url" | "computer_call_output.output.image_url" | "code_interpreter_call.outputs" | "reasoning.encrypted_content" | "message.output_text.logprobs")[] | null;
             /** Input */
-            input: string | (components["schemas"]["EasyInputMessageParam"] | components["schemas"]["ResponsesAPIRequestParams_Message"] | components["schemas"]["ResponseOutputMessageParam"] | components["schemas"]["ResponseFileSearchToolCallParam"] | components["schemas"]["ResponseComputerToolCallParam"] | components["schemas"]["ComputerCallOutput"] | components["schemas"]["ResponseFunctionWebSearchParam"] | components["schemas"]["ResponseFunctionToolCallParam"] | components["schemas"]["FunctionCallOutput"] | components["schemas"]["ToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItemParamParam"] | components["schemas"]["ResponseReasoningItemParam"] | components["schemas"]["ResponseCompactionItemParamParam"] | components["schemas"]["ResponsesAPIRequestParams_ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCallParam"] | components["schemas"]["LocalShellCall"] | components["schemas"]["LocalShellCallOutput"] | components["schemas"]["ShellCall"] | components["schemas"]["ShellCallOutput"] | components["schemas"]["ApplyPatchCall"] | components["schemas"]["ApplyPatchCallOutput"] | components["schemas"]["McpListTools"] | components["schemas"]["McpApprovalRequest"] | components["schemas"]["ResponsesAPIRequestParams_McpApprovalResponse"] | components["schemas"]["McpCall"] | components["schemas"]["ResponseCustomToolCallOutputParam"] | components["schemas"]["ResponseCustomToolCallParam"] | components["schemas"]["ItemReference"])[];
+            input: string | (components["schemas"]["EasyInputMessageParam"] | components["schemas"]["ResponsesAPIRequestParams_Message"] | components["schemas"]["ResponseOutputMessageParam"] | components["schemas"]["ResponseFileSearchToolCallParam"] | components["schemas"]["ResponseComputerToolCallParam"] | components["schemas"]["ComputerCallOutput"] | components["schemas"]["ResponseFunctionWebSearchParam"] | components["schemas"]["ResponseFunctionToolCallParam"] | components["schemas"]["FunctionCallOutput"] | components["schemas"]["ToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItemParamParam"] | components["schemas"]["ResponsesAPIRequestParams_AdditionalTools"] | components["schemas"]["ResponseConfigurationUpdateItemParamParam"] | components["schemas"]["ResponseReasoningItemParam"] | components["schemas"]["ResponseCompactionItemParamParam"] | components["schemas"]["ResponsesAPIRequestParams_ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCallParam"] | components["schemas"]["LocalShellCall"] | components["schemas"]["LocalShellCallOutput"] | components["schemas"]["ShellCall"] | components["schemas"]["ShellCallOutput"] | components["schemas"]["ApplyPatchCall"] | components["schemas"]["ApplyPatchCallOutput"] | components["schemas"]["McpListTools"] | components["schemas"]["McpApprovalRequest"] | components["schemas"]["ResponsesAPIRequestParams_McpApprovalResponse"] | components["schemas"]["McpCall"] | components["schemas"]["ResponseCustomToolCallOutputParam"] | components["schemas"]["ResponseCustomToolCallParam"] | components["schemas"]["CompactionTrigger"] | components["schemas"]["ItemReference"] | components["schemas"]["Program"] | components["schemas"]["ProgramOutput"])[];
             /** Instructions */
             instructions?: string | null;
             /** Max Output Tokens */
@@ -45743,7 +46127,7 @@ export interface components {
             prompt_cache_options?: components["schemas"]["PromptCacheOptions"] | null;
             /** Prompt Cache Retention */
             prompt_cache_retention?: string | null;
-            reasoning?: components["schemas"]["Reasoning"] | null;
+            reasoning?: components["schemas"]["openai__types__shared_params__reasoning__Reasoning"] | null;
             /** Safety Identifier */
             safety_identifier?: string | null;
             /** Service Tier */
@@ -45757,9 +46141,9 @@ export interface components {
             temperature?: number | null;
             text?: components["schemas"]["ResponseTextConfigParam"] | null;
             /** Tool Choice */
-            tool_choice?: ("none" | "auto" | "required") | components["schemas"]["ToolChoiceAllowedParam"] | components["schemas"]["ToolChoiceTypesParam"] | components["schemas"]["ToolChoiceFunctionParam"] | components["schemas"]["ToolChoiceMcpParam"] | components["schemas"]["ToolChoiceCustomParam"] | components["schemas"]["ToolChoiceApplyPatchParam"] | components["schemas"]["ToolChoiceShellParam"] | null;
+            tool_choice?: ("none" | "auto" | "required") | components["schemas"]["ToolChoiceAllowedParam"] | components["schemas"]["ToolChoiceTypesParam"] | components["schemas"]["ToolChoiceFunctionParam"] | components["schemas"]["ToolChoiceMcpParam"] | components["schemas"]["ToolChoiceCustomParam"] | components["schemas"]["ToolChoiceSpecificProgrammaticToolCallingParam"] | components["schemas"]["ToolChoiceApplyPatchParam"] | components["schemas"]["ToolChoiceShellParam"] | null;
             /** Tools */
-            tools?: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"] | components["schemas"]["litellm__types__llms__openai__ComputerToolParam"] | components["schemas"]["ShellToolParam"] | components["schemas"]["OpenAIToolSearchToolParam"])[] | null;
+            tools?: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ProgrammaticToolCalling"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"] | components["schemas"]["litellm__types__llms__openai__ComputerToolParam"] | components["schemas"]["ShellToolParam"] | components["schemas"]["OpenAIToolSearchToolParam"])[] | null;
             /** Top Logprobs */
             top_logprobs?: number | null;
             /** Top P */
@@ -45786,6 +46170,23 @@ export interface components {
             /** Y */
             y: number;
         };
+        /** AdditionalTools */
+        ResponsesAPIRequestParams_AdditionalTools: {
+            /** Id */
+            id?: string | null;
+            /**
+             * Role
+             * @constant
+             */
+            role: "developer";
+            /** Tools */
+            tools: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ProgrammaticToolCalling"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"])[];
+            /**
+             * Type
+             * @constant
+             */
+            type: "additional_tools";
+        };
         /**
          * DoubleClick
          * @description A double click action.
@@ -45808,10 +46209,23 @@ export interface components {
          * @description An image generation request made by the model.
          */
         ResponsesAPIRequestParams_ImageGenerationCall: {
+            /** Action */
+            action?: ("generate" | "edit" | "auto") | null;
+            /** Background */
+            background?: ("transparent" | "opaque" | "auto") | null;
+            error?: components["schemas"]["ResponsesAPIRequestParams_ImageGenerationCallError"];
             /** Id */
             id: string;
+            /** Output Format */
+            output_format?: ("png" | "webp" | "jpeg") | null;
+            /** Quality */
+            quality?: ("low" | "medium" | "high" | "xhigh" | "max" | "auto") | null;
             /** Result */
             result: string | null;
+            /** Revised Prompt */
+            revised_prompt?: string | null;
+            /** Size */
+            size?: string | ("1024x1024" | "1024x1536" | "1536x1024") | null;
             /**
              * Status
              * @enum {string}
@@ -45822,6 +46236,21 @@ export interface components {
              * @constant
              */
             type: "image_generation_call";
+        };
+        /**
+         * ImageGenerationCallError
+         * @description Details of a moderation failure, when available.
+         */
+        ResponsesAPIRequestParams_ImageGenerationCallError: {
+            /** Code */
+            code: string | null;
+            /** Message */
+            message: string;
+            moderation_details?: components["schemas"]["ImageGenerationCallErrorModerationDetails"];
+            /** Param */
+            param: string | null;
+            /** Type */
+            type: string;
         };
         /**
          * McpApprovalResponse
@@ -45891,7 +46320,7 @@ export interface components {
             /** Object */
             object?: string | null;
             /** Output */
-            output: (components["schemas"]["ResponseOutputMessage"] | components["schemas"]["ResponseFileSearchToolCall"] | components["schemas"]["ResponseFunctionToolCall"] | components["schemas"]["ResponseFunctionToolCallOutputItem"] | components["schemas"]["ResponseFunctionWebSearch"] | components["schemas"]["ResponseComputerToolCall"] | components["schemas"]["ResponseComputerToolCallOutputItem"] | components["schemas"]["ResponseReasoningItem"] | components["schemas"]["ResponseToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItem"] | components["schemas"]["ResponseCompactionItem"] | components["schemas"]["ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCall"] | components["schemas"]["LocalShellCall"] | components["schemas"]["LocalShellCallOutput"] | components["schemas"]["ResponseFunctionShellToolCall"] | components["schemas"]["ResponseFunctionShellToolCallOutput"] | components["schemas"]["ResponseApplyPatchToolCall"] | components["schemas"]["ResponseApplyPatchToolCallOutput"] | components["schemas"]["McpCall"] | components["schemas"]["McpListTools"] | components["schemas"]["McpApprovalRequest"] | components["schemas"]["McpApprovalResponse"] | components["schemas"]["ResponseCustomToolCall"] | components["schemas"]["ResponseCustomToolCallOutputItem"] | {
+            output: (components["schemas"]["ResponseOutputMessage"] | components["schemas"]["ResponseFileSearchToolCall"] | components["schemas"]["ResponseFunctionToolCall"] | components["schemas"]["ResponseFunctionToolCallOutputItem"] | components["schemas"]["ResponseFunctionWebSearch"] | components["schemas"]["ResponseComputerToolCall"] | components["schemas"]["ResponseComputerToolCallOutputItem"] | components["schemas"]["ResponseReasoningItem"] | components["schemas"]["Program"] | components["schemas"]["ProgramOutput"] | components["schemas"]["ResponseToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItem"] | components["schemas"]["AdditionalTools"] | components["schemas"]["ResponseCompactionItem"] | components["schemas"]["ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCall"] | components["schemas"]["LocalShellCall"] | components["schemas"]["LocalShellCallOutput"] | components["schemas"]["ResponseFunctionShellToolCall"] | components["schemas"]["ResponseFunctionShellToolCallOutput"] | components["schemas"]["ResponseApplyPatchToolCall"] | components["schemas"]["ResponseApplyPatchToolCallOutput"] | components["schemas"]["McpCall"] | components["schemas"]["McpListTools"] | components["schemas"]["McpApprovalRequest"] | components["schemas"]["McpApprovalResponse"] | components["schemas"]["ResponseCustomToolCall"] | components["schemas"]["ResponseCustomToolCallOutputItem"] | {
                 [key: string]: unknown;
             })[] | (components["schemas"]["GenericResponseOutputItem"] | components["schemas"]["OutputCodeInterpreterCall"] | components["schemas"]["OutputFunctionToolCall"] | components["schemas"]["OutputImageGenerationCall"] | components["schemas"]["ResponseFunctionToolCall"] | components["schemas"]["ResponseFunctionWebSearch"] | components["schemas"]["CustomToolCallOutputItem"] | components["schemas"]["OutputToolSearchCall"] | components["schemas"]["OutputToolSearchOutput"] | components["schemas"]["ResponseCompactionItem"])[];
             /** Parallel Tool Calls */
@@ -45913,9 +46342,9 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             /** Tool Choice */
-            tool_choice?: ("none" | "auto" | "required") | components["schemas"]["ToolChoiceAllowedParam"] | components["schemas"]["ToolChoiceTypesParam"] | components["schemas"]["ToolChoiceFunctionParam"] | components["schemas"]["ToolChoiceMcpParam"] | components["schemas"]["ToolChoiceCustomParam"] | components["schemas"]["ToolChoiceApplyPatchParam"] | components["schemas"]["ToolChoiceShellParam"] | null;
+            tool_choice?: ("none" | "auto" | "required") | components["schemas"]["ToolChoiceAllowedParam"] | components["schemas"]["ToolChoiceTypesParam"] | components["schemas"]["ToolChoiceFunctionParam"] | components["schemas"]["ToolChoiceMcpParam"] | components["schemas"]["ToolChoiceCustomParam"] | components["schemas"]["ToolChoiceSpecificProgrammaticToolCallingParam"] | components["schemas"]["ToolChoiceApplyPatchParam"] | components["schemas"]["ToolChoiceShellParam"] | null;
             /** Tools */
-            tools?: (components["schemas"]["FunctionTool"] | components["schemas"]["FileSearchTool"] | components["schemas"]["ComputerTool"] | components["schemas"]["ComputerUsePreviewTool"] | components["schemas"]["WebSearchTool"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellTool"] | components["schemas"]["CustomTool"] | components["schemas"]["NamespaceTool"] | components["schemas"]["ToolSearchTool"] | components["schemas"]["WebSearchPreviewTool"] | components["schemas"]["ApplyPatchTool"])[] | components["schemas"]["ResponseFunctionToolCall"][] | {
+            tools?: (components["schemas"]["FunctionTool"] | components["schemas"]["FileSearchTool"] | components["schemas"]["ComputerTool"] | components["schemas"]["ComputerUsePreviewTool"] | components["schemas"]["WebSearchTool"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ProgrammaticToolCalling"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellTool"] | components["schemas"]["CustomTool"] | components["schemas"]["NamespaceTool"] | components["schemas"]["ToolSearchTool"] | components["schemas"]["WebSearchPreviewTool"] | components["schemas"]["ApplyPatchTool"])[] | components["schemas"]["ResponseFunctionToolCall"][] | {
                 [key: string]: unknown;
             }[] | null;
             /** Top P */
@@ -47075,6 +47504,8 @@ export interface components {
             action: components["schemas"]["ShellCallAction"];
             /** Call Id */
             call_id: string;
+            /** Caller */
+            caller?: components["schemas"]["ShellCallCallerDirect"] | components["schemas"]["ShellCallCallerProgram"] | null;
             /** Environment */
             environment?: components["schemas"]["LocalEnvironmentParam"] | components["schemas"]["ContainerReferenceParam"] | null;
             /** Id */
@@ -47099,6 +47530,24 @@ export interface components {
             /** Timeout Ms */
             timeout_ms?: number | null;
         };
+        /** ShellCallCallerDirect */
+        ShellCallCallerDirect: {
+            /**
+             * Type
+             * @constant
+             */
+            type: "direct";
+        };
+        /** ShellCallCallerProgram */
+        ShellCallCallerProgram: {
+            /** Caller Id */
+            caller_id: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "program";
+        };
         /**
          * ShellCallOutput
          * @description The streamed output items emitted by a shell tool call.
@@ -47106,6 +47555,8 @@ export interface components {
         ShellCallOutput: {
             /** Call Id */
             call_id: string;
+            /** Caller */
+            caller?: components["schemas"]["ShellCallOutputCallerDirect"] | components["schemas"]["ShellCallOutputCallerProgram"] | null;
             /** Id */
             id?: string | null;
             /** Max Output Length */
@@ -47119,6 +47570,24 @@ export interface components {
              * @constant
              */
             type: "shell_call_output";
+        };
+        /** ShellCallOutputCallerDirect */
+        ShellCallOutputCallerDirect: {
+            /**
+             * Type
+             * @constant
+             */
+            type: "direct";
+        };
+        /** ShellCallOutputCallerProgram */
+        ShellCallOutputCallerProgram: {
+            /** Caller Id */
+            caller_id: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "program";
         };
         /**
          * ShellToolParam
@@ -49143,6 +49612,29 @@ export interface components {
             tier: number;
         };
         /**
+         * Timeout
+         * @description Timeout configuration.
+         *
+         *     **Usage**:
+         *
+         *     Timeout(None)               # No timeouts.
+         *     Timeout(5.0)                # 5s timeout on all operations.
+         *     Timeout(None, connect=5.0)  # 5s timeout on connect, no other timeouts.
+         *     Timeout(5.0, connect=10.0)  # 10s timeout on connect. 5s timeout elsewhere.
+         *     Timeout(5.0, pool=None)     # No timeout on acquiring connection from pool.
+         *                                 # 5s timeout elsewhere.
+         */
+        Timeout: {
+            /** Connect */
+            connect: number | null;
+            /** Pool */
+            pool: number | null;
+            /** Read */
+            read: number | null;
+            /** Write */
+            write: number | null;
+        };
+        /**
          * TokenCountDetailsResponse
          * @description Response structure for token count details with modality breakdown.
          *
@@ -49305,10 +49797,20 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** ToolChoiceSpecificProgrammaticToolCallingParam */
+        ToolChoiceSpecificProgrammaticToolCallingParam: {
+            /**
+             * Type
+             * @constant
+             */
+            type: "programmatic_tool_calling";
+        } & {
+            [key: string]: unknown;
+        };
         /**
          * ToolChoiceTypesParam
          * @description Indicates that the model should use a built-in tool to generate a response.
-         *     [Learn more about built-in tools](https://platform.openai.com/docs/guides/tools).
+         *     [Learn more about built-in tools](https://developers.openai.com/api/docs/guides/tools).
          */
         ToolChoiceTypesParam: {
             /**
@@ -49318,6 +49820,40 @@ export interface components {
             type: "file_search" | "web_search_preview" | "computer" | "computer_use_preview" | "computer_use" | "web_search_preview_2025_03_11" | "image_generation" | "code_interpreter";
         } & {
             [key: string]: unknown;
+        };
+        /**
+         * ToolCodeInterpreter
+         * @description A tool that runs Python code to help generate a response to a prompt.
+         */
+        ToolCodeInterpreter: {
+            /** Allowed Callers */
+            allowed_callers?: ("direct" | "programmatic")[] | null;
+            /** Container */
+            container: string | components["schemas"]["ToolCodeInterpreterContainerCodeInterpreterToolAuto"];
+            /**
+             * Type
+             * @constant
+             */
+            type: "code_interpreter";
+        };
+        /**
+         * ToolCodeInterpreterContainerCodeInterpreterToolAuto
+         * @description Configuration for a code interpreter container.
+         *
+         *     Optionally specify the IDs of the files to run the code on.
+         */
+        ToolCodeInterpreterContainerCodeInterpreterToolAuto: {
+            /** File Ids */
+            file_ids?: string[];
+            /** Memory Limit */
+            memory_limit?: ("1g" | "4g" | "16g" | "64g") | null;
+            /** Network Policy */
+            network_policy?: components["schemas"]["ContainerNetworkPolicyDisabledParam"] | components["schemas"]["ContainerNetworkPolicyAllowlistParam"];
+            /**
+             * Type
+             * @constant
+             */
+            type: "auto";
         };
         /** ToolDetailResponse */
         ToolDetailResponse: {
@@ -49336,12 +49872,20 @@ export interface components {
         };
         /** ToolFunction */
         ToolFunction: {
+            /** Allowed Callers */
+            allowed_callers?: ("direct" | "programmatic")[] | null;
+            /** Async */
+            async?: boolean | null;
             /** Defer Loading */
             defer_loading?: boolean | null;
             /** Description */
             description?: string | null;
             /** Name */
             name: string;
+            /** Output Schema */
+            output_schema?: {
+                [key: string]: unknown;
+            } | null;
             /** Parameters */
             parameters?: unknown | null;
             /** Strict */
@@ -49354,12 +49898,164 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /**
+         * ToolImageGeneration
+         * @description A tool that generates images using the GPT image models.
+         */
+        ToolImageGeneration: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action?: "generate" | "edit" | "auto";
+            /**
+             * Background
+             * @enum {string}
+             */
+            background?: "transparent" | "opaque" | "auto";
+            /** Input Fidelity */
+            input_fidelity?: ("high" | "low") | null;
+            input_image_mask?: components["schemas"]["ToolImageGenerationInputImageMask"];
+            /** Model */
+            model?: string | ("gpt-image-1" | "gpt-image-1-mini" | "gpt-image-2" | "gpt-image-2-2026-04-21" | "gpt-image-2.5-sunburst" | "gpt-image-2.5-sunburst-2026-09-08" | "gpt-image-2.5-flare" | "gpt-image-2.5-flare-2026-09-08" | "gpt-image-1.5" | "chatgpt-image-latest");
+            /**
+             * Moderation
+             * @enum {string}
+             */
+            moderation?: "auto" | "low";
+            /** Output Compression */
+            output_compression?: number;
+            /**
+             * Output Format
+             * @enum {string}
+             */
+            output_format?: "png" | "webp" | "jpeg";
+            /** Partial Images */
+            partial_images?: number;
+            /**
+             * Quality
+             * @enum {string}
+             */
+            quality?: "low" | "medium" | "high" | "xhigh" | "max" | "auto";
+            /** Size */
+            size?: string | ("1024x1024" | "1024x1536" | "1536x1024" | "auto");
+            /**
+             * Type
+             * @constant
+             */
+            type: "image_generation";
+        };
+        /**
+         * ToolImageGenerationInputImageMask
+         * @description Optional mask for inpainting.
+         *
+         *     Contains `image_url`
+         *     (string, optional) and `file_id` (string, optional).
+         */
+        ToolImageGenerationInputImageMask: {
+            /** File Id */
+            file_id?: string;
+            /** Image Url */
+            image_url?: string;
+        };
         /** ToolListResponse */
         ToolListResponse: {
             /** Tools */
             tools: components["schemas"]["LiteLLM_ToolTableRow"][];
             /** Total */
             total: number;
+        };
+        /**
+         * ToolLocalShell
+         * @description A tool that allows the model to execute shell commands in a local environment.
+         */
+        ToolLocalShell: {
+            /**
+             * Type
+             * @constant
+             */
+            type: "local_shell";
+        };
+        /**
+         * ToolMcp
+         * @description Give the model access to additional tools via remote Model Context Protocol
+         *     (MCP) servers. [Learn more about MCP](https://developers.openai.com/api/docs/guides/tools-connectors-mcp).
+         */
+        ToolMcp: {
+            /** Allowed Callers */
+            allowed_callers?: ("direct" | "programmatic")[] | null;
+            /** Allowed Tools */
+            allowed_tools?: string[] | components["schemas"]["ToolMcpAllowedToolsMcpToolFilter"] | null;
+            /** Authorization */
+            authorization?: string;
+            /**
+             * Connector Id
+             * @enum {string}
+             */
+            connector_id?: "connector_dropbox" | "connector_gmail" | "connector_googlecalendar" | "connector_googledrive" | "connector_microsoftteams" | "connector_outlookcalendar" | "connector_outlookemail" | "connector_sharepoint";
+            /** Defer Loading */
+            defer_loading?: boolean;
+            /** Headers */
+            headers?: {
+                [key: string]: string;
+            } | null;
+            /** Require Approval */
+            require_approval?: components["schemas"]["ToolMcpRequireApprovalMcpToolApprovalFilter"] | ("always" | "never") | null;
+            /** Server Description */
+            server_description?: string;
+            /** Server Label */
+            server_label: string;
+            /** Server Url */
+            server_url?: string;
+            /** Tunnel Id */
+            tunnel_id?: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "mcp";
+        };
+        /**
+         * ToolMcpAllowedToolsMcpToolFilter
+         * @description A filter object to specify which tools are allowed.
+         */
+        ToolMcpAllowedToolsMcpToolFilter: {
+            /** Read Only */
+            read_only?: boolean;
+            /** Tool Names */
+            tool_names?: string[];
+        };
+        /**
+         * ToolMcpRequireApprovalMcpToolApprovalFilter
+         * @description Specify which of the MCP server's tools require approval.
+         *
+         *     Can be
+         *     `always`, `never`, or a filter object associated with tools
+         *     that require approval.
+         */
+        ToolMcpRequireApprovalMcpToolApprovalFilter: {
+            always?: components["schemas"]["ToolMcpRequireApprovalMcpToolApprovalFilterAlways"];
+            never?: components["schemas"]["ToolMcpRequireApprovalMcpToolApprovalFilterNever"];
+        };
+        /**
+         * ToolMcpRequireApprovalMcpToolApprovalFilterAlways
+         * @description A filter object to specify which tools are allowed.
+         */
+        ToolMcpRequireApprovalMcpToolApprovalFilterAlways: {
+            /** Read Only */
+            read_only?: boolean;
+            /** Tool Names */
+            tool_names?: string[];
+        };
+        /**
+         * ToolMcpRequireApprovalMcpToolApprovalFilterNever
+         * @description A filter object to specify which tools are allowed.
+         */
+        ToolMcpRequireApprovalMcpToolApprovalFilterNever: {
+            /** Read Only */
+            read_only?: boolean;
+            /** Tool Names */
+            tool_names?: string[];
         };
         /**
          * ToolPermissionRule
@@ -49464,6 +50160,14 @@ export interface components {
             /** Updated */
             updated: boolean;
         };
+        /** ToolProgrammaticToolCalling */
+        ToolProgrammaticToolCalling: {
+            /**
+             * Type
+             * @constant
+             */
+            type: "programmatic_tool_calling";
+        };
         /** ToolSearchCall */
         ToolSearchCall: {
             /** Arguments */
@@ -49484,6 +50188,23 @@ export interface components {
              * @constant
              */
             type: "tool_search_call";
+        };
+        /**
+         * ToolSearchOutputNamespaceToolParam
+         * @description Groups function/custom tools under a shared namespace.
+         */
+        ToolSearchOutputNamespaceToolParam: {
+            /** Description */
+            description: string;
+            /** Name */
+            name: string;
+            /** Tools */
+            tools: (components["schemas"]["ToolFunction"] | components["schemas"]["CustomToolParam"])[];
+            /**
+             * Type
+             * @constant
+             */
+            type: "namespace";
         };
         /**
          * ToolSearchTool
@@ -52244,7 +52965,7 @@ export interface components {
          * WebSearchPreviewTool
          * @description This tool searches the web for relevant results to use in a response.
          *
-         *     Learn more about the [web search tool](https://platform.openai.com/docs/guides/tools-web-search).
+         *     Learn more about the [web search tool](https://developers.openai.com/api/docs/guides/tools-web-search).
          */
         WebSearchPreviewTool: {
             /** Search Content Types */
@@ -52264,7 +52985,7 @@ export interface components {
          * WebSearchPreviewToolParam
          * @description This tool searches the web for relevant results to use in a response.
          *
-         *     Learn more about the [web search tool](https://platform.openai.com/docs/guides/tools-web-search).
+         *     Learn more about the [web search tool](https://developers.openai.com/api/docs/guides/tools-web-search).
          */
         WebSearchPreviewToolParam: {
             /** Search Content Types */
@@ -52286,9 +53007,11 @@ export interface components {
          * @description Search the Internet for sources related to the prompt.
          *
          *     Learn more about the
-         *     [web search tool](https://platform.openai.com/docs/guides/tools-web-search).
+         *     [web search tool](https://developers.openai.com/api/docs/guides/tools-web-search).
          */
         WebSearchTool: {
+            /** External Web Access */
+            external_web_access?: boolean | null;
             filters?: components["schemas"]["Filters"] | null;
             /** Search Context Size */
             search_context_size?: ("low" | "medium" | "high") | null;
@@ -52306,9 +53029,11 @@ export interface components {
          * @description Search the Internet for sources related to the prompt.
          *
          *     Learn more about the
-         *     [web search tool](https://platform.openai.com/docs/guides/tools-web-search).
+         *     [web search tool](https://developers.openai.com/api/docs/guides/tools-web-search).
          */
         WebSearchToolParam: {
+            /** External Web Access */
+            external_web_access?: boolean;
             filters?: components["schemas"]["Filters"] | null;
             /**
              * Search Context Size
@@ -52543,7 +53268,7 @@ export interface components {
          * ComputerToolParam
          * @description A tool that controls a virtual computer.
          *
-         *     Learn more about the [computer tool](https://platform.openai.com/docs/guides/tools-computer-use).
+         *     Learn more about the [computer tool](https://developers.openai.com/api/docs/guides/tools-computer-use).
          */
         openai__types__responses__computer_tool_param__ComputerToolParam: {
             /**
@@ -52553,8 +53278,18 @@ export interface components {
             type: "computer";
         };
         /**
+         * Reasoning
+         * @description Updates to reasoning configuration. Only effort is supported.
+         */
+        openai__types__responses__response_configuration_update_item_param_param__Reasoning: {
+            /** Effort */
+            effort?: ("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max") | null;
+        };
+        /**
          * UserLocation
-         * @description The user's location.
+         * @description The approximate location of the user.
+         *
+         *     If omitted or null, defaults to the United States. To avoid this fallback, pass `{"type": "approximate"}` without location fields. To localize results, provide the relevant location fields.
          */
         openai__types__responses__web_search_preview_tool__UserLocation: {
             /** City */
@@ -52575,7 +53310,9 @@ export interface components {
         };
         /**
          * UserLocation
-         * @description The user's location.
+         * @description The approximate location of the user.
+         *
+         *     If omitted or null, defaults to the United States. To avoid this fallback, pass `{"type": "approximate"}` without location fields. To localize results, provide the relevant location fields.
          */
         openai__types__responses__web_search_preview_tool_param__UserLocation: {
             /** City */
@@ -52595,6 +53332,10 @@ export interface components {
         /**
          * UserLocation
          * @description The approximate location of the user.
+         *
+         *     If omitted or null, defaults to the
+         *     United States. To avoid this fallback, pass `{"type": "approximate"}` without
+         *     location fields. To localize results, provide the relevant location fields.
          */
         openai__types__responses__web_search_tool__UserLocation: {
             /** City */
@@ -52613,6 +53354,10 @@ export interface components {
         /**
          * UserLocation
          * @description The approximate location of the user.
+         *
+         *     If omitted or null, defaults to the
+         *     United States. To avoid this fallback, pass `{"type": "approximate"}` without
+         *     location fields. To localize results, provide the relevant location fields.
          */
         openai__types__responses__web_search_tool_param__UserLocation: {
             /** City */
@@ -52628,6 +53373,23 @@ export interface components {
              * @constant
              */
             type?: "approximate";
+        };
+        /**
+         * Reasoning
+         * @description Configuration options for
+         *     [reasoning models](https://developers.openai.com/api/docs/guides/reasoning).
+         */
+        openai__types__shared_params__reasoning__Reasoning: {
+            /** Context */
+            context?: ("auto" | "current_turn" | "all_turns") | null;
+            /** Effort */
+            effort?: ("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max") | null;
+            /** Generate Summary */
+            generate_summary?: ("auto" | "concise" | "detailed") | null;
+            /** Mode */
+            mode?: string | ("standard" | "pro");
+            /** Summary */
+            summary?: ("auto" | "concise" | "detailed") | null;
         };
         /** updateDeployment */
         updateDeployment: {
@@ -53201,7 +53963,7 @@ export interface components {
                 [key: string]: unknown;
             }[] | null;
             /** Timeout */
-            timeout?: number | string | null;
+            timeout?: number | string | components["schemas"]["Timeout"] | null;
             /** Timeout By Service Tier */
             timeout_by_service_tier?: {
                 [key: string]: number;
@@ -69593,7 +70355,7 @@ export interface operations {
                     /** Include */
                     include?: ("file_search_call.results" | "web_search_call.results" | "web_search_call.action.sources" | "message.input_image.image_url" | "computer_call_output.output.image_url" | "code_interpreter_call.outputs" | "reasoning.encrypted_content" | "message.output_text.logprobs")[] | null;
                     /** Input */
-                    input: string | (components["schemas"]["EasyInputMessageParam"] | components["schemas"]["ResponsesAPIRequestParams_Message"] | components["schemas"]["ResponseOutputMessageParam"] | components["schemas"]["ResponseFileSearchToolCallParam"] | components["schemas"]["ResponseComputerToolCallParam"] | components["schemas"]["ComputerCallOutput"] | components["schemas"]["ResponseFunctionWebSearchParam"] | components["schemas"]["ResponseFunctionToolCallParam"] | components["schemas"]["FunctionCallOutput"] | components["schemas"]["ToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItemParamParam"] | components["schemas"]["ResponseReasoningItemParam"] | components["schemas"]["ResponseCompactionItemParamParam"] | components["schemas"]["ResponsesAPIRequestParams_ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCallParam"] | components["schemas"]["LocalShellCall"] | components["schemas"]["LocalShellCallOutput"] | components["schemas"]["ShellCall"] | components["schemas"]["ShellCallOutput"] | components["schemas"]["ApplyPatchCall"] | components["schemas"]["ApplyPatchCallOutput"] | components["schemas"]["McpListTools"] | components["schemas"]["McpApprovalRequest"] | components["schemas"]["ResponsesAPIRequestParams_McpApprovalResponse"] | components["schemas"]["McpCall"] | components["schemas"]["ResponseCustomToolCallOutputParam"] | components["schemas"]["ResponseCustomToolCallParam"] | components["schemas"]["ItemReference"])[];
+                    input: string | (components["schemas"]["EasyInputMessageParam"] | components["schemas"]["ResponsesAPIRequestParams_Message"] | components["schemas"]["ResponseOutputMessageParam"] | components["schemas"]["ResponseFileSearchToolCallParam"] | components["schemas"]["ResponseComputerToolCallParam"] | components["schemas"]["ComputerCallOutput"] | components["schemas"]["ResponseFunctionWebSearchParam"] | components["schemas"]["ResponseFunctionToolCallParam"] | components["schemas"]["FunctionCallOutput"] | components["schemas"]["ToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItemParamParam"] | components["schemas"]["ResponsesAPIRequestParams_AdditionalTools"] | components["schemas"]["ResponseConfigurationUpdateItemParamParam"] | components["schemas"]["ResponseReasoningItemParam"] | components["schemas"]["ResponseCompactionItemParamParam"] | components["schemas"]["ResponsesAPIRequestParams_ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCallParam"] | components["schemas"]["LocalShellCall"] | components["schemas"]["LocalShellCallOutput"] | components["schemas"]["ShellCall"] | components["schemas"]["ShellCallOutput"] | components["schemas"]["ApplyPatchCall"] | components["schemas"]["ApplyPatchCallOutput"] | components["schemas"]["McpListTools"] | components["schemas"]["McpApprovalRequest"] | components["schemas"]["ResponsesAPIRequestParams_McpApprovalResponse"] | components["schemas"]["McpCall"] | components["schemas"]["ResponseCustomToolCallOutputParam"] | components["schemas"]["ResponseCustomToolCallParam"] | components["schemas"]["CompactionTrigger"] | components["schemas"]["ItemReference"] | components["schemas"]["Program"] | components["schemas"]["ProgramOutput"])[];
                     /** Instructions */
                     instructions?: string | null;
                     /** Max Output Tokens */
@@ -69619,7 +70381,7 @@ export interface operations {
                     prompt_cache_options?: components["schemas"]["PromptCacheOptions"] | null;
                     /** Prompt Cache Retention */
                     prompt_cache_retention?: string | null;
-                    reasoning?: components["schemas"]["Reasoning"] | null;
+                    reasoning?: components["schemas"]["openai__types__shared_params__reasoning__Reasoning"] | null;
                     /** Safety Identifier */
                     safety_identifier?: string | null;
                     /** Service Tier */
@@ -69633,9 +70395,9 @@ export interface operations {
                     temperature?: number | null;
                     text?: components["schemas"]["ResponseTextConfigParam"] | null;
                     /** Tool Choice */
-                    tool_choice?: ("none" | "auto" | "required") | components["schemas"]["ToolChoiceAllowedParam"] | components["schemas"]["ToolChoiceTypesParam"] | components["schemas"]["ToolChoiceFunctionParam"] | components["schemas"]["ToolChoiceMcpParam"] | components["schemas"]["ToolChoiceCustomParam"] | components["schemas"]["ToolChoiceApplyPatchParam"] | components["schemas"]["ToolChoiceShellParam"] | null;
+                    tool_choice?: ("none" | "auto" | "required") | components["schemas"]["ToolChoiceAllowedParam"] | components["schemas"]["ToolChoiceTypesParam"] | components["schemas"]["ToolChoiceFunctionParam"] | components["schemas"]["ToolChoiceMcpParam"] | components["schemas"]["ToolChoiceCustomParam"] | components["schemas"]["ToolChoiceSpecificProgrammaticToolCallingParam"] | components["schemas"]["ToolChoiceApplyPatchParam"] | components["schemas"]["ToolChoiceShellParam"] | null;
                     /** Tools */
-                    tools?: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"] | components["schemas"]["litellm__types__llms__openai__ComputerToolParam"] | components["schemas"]["ShellToolParam"] | components["schemas"]["OpenAIToolSearchToolParam"])[] | null;
+                    tools?: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ProgrammaticToolCalling"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"] | components["schemas"]["litellm__types__llms__openai__ComputerToolParam"] | components["schemas"]["ShellToolParam"] | components["schemas"]["OpenAIToolSearchToolParam"])[] | null;
                     /** Top Logprobs */
                     top_logprobs?: number | null;
                     /** Top P */
@@ -73475,7 +74237,7 @@ export interface operations {
                     /** Include */
                     include?: ("file_search_call.results" | "web_search_call.results" | "web_search_call.action.sources" | "message.input_image.image_url" | "computer_call_output.output.image_url" | "code_interpreter_call.outputs" | "reasoning.encrypted_content" | "message.output_text.logprobs")[] | null;
                     /** Input */
-                    input: string | (components["schemas"]["EasyInputMessageParam"] | components["schemas"]["ResponsesAPIRequestParams_Message"] | components["schemas"]["ResponseOutputMessageParam"] | components["schemas"]["ResponseFileSearchToolCallParam"] | components["schemas"]["ResponseComputerToolCallParam"] | components["schemas"]["ComputerCallOutput"] | components["schemas"]["ResponseFunctionWebSearchParam"] | components["schemas"]["ResponseFunctionToolCallParam"] | components["schemas"]["FunctionCallOutput"] | components["schemas"]["ToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItemParamParam"] | components["schemas"]["ResponseReasoningItemParam"] | components["schemas"]["ResponseCompactionItemParamParam"] | components["schemas"]["ResponsesAPIRequestParams_ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCallParam"] | components["schemas"]["LocalShellCall"] | components["schemas"]["LocalShellCallOutput"] | components["schemas"]["ShellCall"] | components["schemas"]["ShellCallOutput"] | components["schemas"]["ApplyPatchCall"] | components["schemas"]["ApplyPatchCallOutput"] | components["schemas"]["McpListTools"] | components["schemas"]["McpApprovalRequest"] | components["schemas"]["ResponsesAPIRequestParams_McpApprovalResponse"] | components["schemas"]["McpCall"] | components["schemas"]["ResponseCustomToolCallOutputParam"] | components["schemas"]["ResponseCustomToolCallParam"] | components["schemas"]["ItemReference"])[];
+                    input: string | (components["schemas"]["EasyInputMessageParam"] | components["schemas"]["ResponsesAPIRequestParams_Message"] | components["schemas"]["ResponseOutputMessageParam"] | components["schemas"]["ResponseFileSearchToolCallParam"] | components["schemas"]["ResponseComputerToolCallParam"] | components["schemas"]["ComputerCallOutput"] | components["schemas"]["ResponseFunctionWebSearchParam"] | components["schemas"]["ResponseFunctionToolCallParam"] | components["schemas"]["FunctionCallOutput"] | components["schemas"]["ToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItemParamParam"] | components["schemas"]["ResponsesAPIRequestParams_AdditionalTools"] | components["schemas"]["ResponseConfigurationUpdateItemParamParam"] | components["schemas"]["ResponseReasoningItemParam"] | components["schemas"]["ResponseCompactionItemParamParam"] | components["schemas"]["ResponsesAPIRequestParams_ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCallParam"] | components["schemas"]["LocalShellCall"] | components["schemas"]["LocalShellCallOutput"] | components["schemas"]["ShellCall"] | components["schemas"]["ShellCallOutput"] | components["schemas"]["ApplyPatchCall"] | components["schemas"]["ApplyPatchCallOutput"] | components["schemas"]["McpListTools"] | components["schemas"]["McpApprovalRequest"] | components["schemas"]["ResponsesAPIRequestParams_McpApprovalResponse"] | components["schemas"]["McpCall"] | components["schemas"]["ResponseCustomToolCallOutputParam"] | components["schemas"]["ResponseCustomToolCallParam"] | components["schemas"]["CompactionTrigger"] | components["schemas"]["ItemReference"] | components["schemas"]["Program"] | components["schemas"]["ProgramOutput"])[];
                     /** Instructions */
                     instructions?: string | null;
                     /** Max Output Tokens */
@@ -73501,7 +74263,7 @@ export interface operations {
                     prompt_cache_options?: components["schemas"]["PromptCacheOptions"] | null;
                     /** Prompt Cache Retention */
                     prompt_cache_retention?: string | null;
-                    reasoning?: components["schemas"]["Reasoning"] | null;
+                    reasoning?: components["schemas"]["openai__types__shared_params__reasoning__Reasoning"] | null;
                     /** Safety Identifier */
                     safety_identifier?: string | null;
                     /** Service Tier */
@@ -73515,9 +74277,9 @@ export interface operations {
                     temperature?: number | null;
                     text?: components["schemas"]["ResponseTextConfigParam"] | null;
                     /** Tool Choice */
-                    tool_choice?: ("none" | "auto" | "required") | components["schemas"]["ToolChoiceAllowedParam"] | components["schemas"]["ToolChoiceTypesParam"] | components["schemas"]["ToolChoiceFunctionParam"] | components["schemas"]["ToolChoiceMcpParam"] | components["schemas"]["ToolChoiceCustomParam"] | components["schemas"]["ToolChoiceApplyPatchParam"] | components["schemas"]["ToolChoiceShellParam"] | null;
+                    tool_choice?: ("none" | "auto" | "required") | components["schemas"]["ToolChoiceAllowedParam"] | components["schemas"]["ToolChoiceTypesParam"] | components["schemas"]["ToolChoiceFunctionParam"] | components["schemas"]["ToolChoiceMcpParam"] | components["schemas"]["ToolChoiceCustomParam"] | components["schemas"]["ToolChoiceSpecificProgrammaticToolCallingParam"] | components["schemas"]["ToolChoiceApplyPatchParam"] | components["schemas"]["ToolChoiceShellParam"] | null;
                     /** Tools */
-                    tools?: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"] | components["schemas"]["litellm__types__llms__openai__ComputerToolParam"] | components["schemas"]["ShellToolParam"] | components["schemas"]["OpenAIToolSearchToolParam"])[] | null;
+                    tools?: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ProgrammaticToolCalling"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"] | components["schemas"]["litellm__types__llms__openai__ComputerToolParam"] | components["schemas"]["ShellToolParam"] | components["schemas"]["OpenAIToolSearchToolParam"])[] | null;
                     /** Top Logprobs */
                     top_logprobs?: number | null;
                     /** Top P */
@@ -85427,7 +86189,7 @@ export interface operations {
                     /** Include */
                     include?: ("file_search_call.results" | "web_search_call.results" | "web_search_call.action.sources" | "message.input_image.image_url" | "computer_call_output.output.image_url" | "code_interpreter_call.outputs" | "reasoning.encrypted_content" | "message.output_text.logprobs")[] | null;
                     /** Input */
-                    input: string | (components["schemas"]["EasyInputMessageParam"] | components["schemas"]["ResponsesAPIRequestParams_Message"] | components["schemas"]["ResponseOutputMessageParam"] | components["schemas"]["ResponseFileSearchToolCallParam"] | components["schemas"]["ResponseComputerToolCallParam"] | components["schemas"]["ComputerCallOutput"] | components["schemas"]["ResponseFunctionWebSearchParam"] | components["schemas"]["ResponseFunctionToolCallParam"] | components["schemas"]["FunctionCallOutput"] | components["schemas"]["ToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItemParamParam"] | components["schemas"]["ResponseReasoningItemParam"] | components["schemas"]["ResponseCompactionItemParamParam"] | components["schemas"]["ResponsesAPIRequestParams_ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCallParam"] | components["schemas"]["LocalShellCall"] | components["schemas"]["LocalShellCallOutput"] | components["schemas"]["ShellCall"] | components["schemas"]["ShellCallOutput"] | components["schemas"]["ApplyPatchCall"] | components["schemas"]["ApplyPatchCallOutput"] | components["schemas"]["McpListTools"] | components["schemas"]["McpApprovalRequest"] | components["schemas"]["ResponsesAPIRequestParams_McpApprovalResponse"] | components["schemas"]["McpCall"] | components["schemas"]["ResponseCustomToolCallOutputParam"] | components["schemas"]["ResponseCustomToolCallParam"] | components["schemas"]["ItemReference"])[];
+                    input: string | (components["schemas"]["EasyInputMessageParam"] | components["schemas"]["ResponsesAPIRequestParams_Message"] | components["schemas"]["ResponseOutputMessageParam"] | components["schemas"]["ResponseFileSearchToolCallParam"] | components["schemas"]["ResponseComputerToolCallParam"] | components["schemas"]["ComputerCallOutput"] | components["schemas"]["ResponseFunctionWebSearchParam"] | components["schemas"]["ResponseFunctionToolCallParam"] | components["schemas"]["FunctionCallOutput"] | components["schemas"]["ToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItemParamParam"] | components["schemas"]["ResponsesAPIRequestParams_AdditionalTools"] | components["schemas"]["ResponseConfigurationUpdateItemParamParam"] | components["schemas"]["ResponseReasoningItemParam"] | components["schemas"]["ResponseCompactionItemParamParam"] | components["schemas"]["ResponsesAPIRequestParams_ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCallParam"] | components["schemas"]["LocalShellCall"] | components["schemas"]["LocalShellCallOutput"] | components["schemas"]["ShellCall"] | components["schemas"]["ShellCallOutput"] | components["schemas"]["ApplyPatchCall"] | components["schemas"]["ApplyPatchCallOutput"] | components["schemas"]["McpListTools"] | components["schemas"]["McpApprovalRequest"] | components["schemas"]["ResponsesAPIRequestParams_McpApprovalResponse"] | components["schemas"]["McpCall"] | components["schemas"]["ResponseCustomToolCallOutputParam"] | components["schemas"]["ResponseCustomToolCallParam"] | components["schemas"]["CompactionTrigger"] | components["schemas"]["ItemReference"] | components["schemas"]["Program"] | components["schemas"]["ProgramOutput"])[];
                     /** Instructions */
                     instructions?: string | null;
                     /** Max Output Tokens */
@@ -85453,7 +86215,7 @@ export interface operations {
                     prompt_cache_options?: components["schemas"]["PromptCacheOptions"] | null;
                     /** Prompt Cache Retention */
                     prompt_cache_retention?: string | null;
-                    reasoning?: components["schemas"]["Reasoning"] | null;
+                    reasoning?: components["schemas"]["openai__types__shared_params__reasoning__Reasoning"] | null;
                     /** Safety Identifier */
                     safety_identifier?: string | null;
                     /** Service Tier */
@@ -85467,9 +86229,9 @@ export interface operations {
                     temperature?: number | null;
                     text?: components["schemas"]["ResponseTextConfigParam"] | null;
                     /** Tool Choice */
-                    tool_choice?: ("none" | "auto" | "required") | components["schemas"]["ToolChoiceAllowedParam"] | components["schemas"]["ToolChoiceTypesParam"] | components["schemas"]["ToolChoiceFunctionParam"] | components["schemas"]["ToolChoiceMcpParam"] | components["schemas"]["ToolChoiceCustomParam"] | components["schemas"]["ToolChoiceApplyPatchParam"] | components["schemas"]["ToolChoiceShellParam"] | null;
+                    tool_choice?: ("none" | "auto" | "required") | components["schemas"]["ToolChoiceAllowedParam"] | components["schemas"]["ToolChoiceTypesParam"] | components["schemas"]["ToolChoiceFunctionParam"] | components["schemas"]["ToolChoiceMcpParam"] | components["schemas"]["ToolChoiceCustomParam"] | components["schemas"]["ToolChoiceSpecificProgrammaticToolCallingParam"] | components["schemas"]["ToolChoiceApplyPatchParam"] | components["schemas"]["ToolChoiceShellParam"] | null;
                     /** Tools */
-                    tools?: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"] | components["schemas"]["litellm__types__llms__openai__ComputerToolParam"] | components["schemas"]["ShellToolParam"] | components["schemas"]["OpenAIToolSearchToolParam"])[] | null;
+                    tools?: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ProgrammaticToolCalling"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"] | components["schemas"]["litellm__types__llms__openai__ComputerToolParam"] | components["schemas"]["ShellToolParam"] | components["schemas"]["OpenAIToolSearchToolParam"])[] | null;
                     /** Top Logprobs */
                     top_logprobs?: number | null;
                     /** Top P */
