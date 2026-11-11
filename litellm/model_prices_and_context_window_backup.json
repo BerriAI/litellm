@@ -25319,6 +25319,20 @@
         "litellm_provider": "perplexity",
         "mode": "search"
     },
+    "saidwire/saidwire-en": {
+        "input_cost_per_second": 6.9444e-05,
+        "litellm_provider": "saidwire",
+        "metadata": {
+            "calculation": "$0.25/3600 seconds = $0.000069444 per second",
+            "original_pricing_per_hour": 0.25
+        },
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://saidwire.com/pricing",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ]
+    },
     "sail/moonshotai/Kimi-K3": {
         "max_input_tokens": 1048576,
         "max_output_tokens": 1048576,

@@ -3241,6 +3241,32 @@
         "generateContent": false
       }
     },
+    "saidwire": {
+      "display_name": "Saidwire (`saidwire`)",
+      "url": "https://docs.litellm.ai/docs/providers/saidwire",
+      "endpoints": {
+        "chat_completions": false,
+        "responses": false,
+        "text_completion": false,
+        "embeddings": false,
+        "image_generations": false,
+        "image_edits": false,
+        "audio_transcriptions": true,
+        "audio_speech": false,
+        "rerank": false,
+        "ocr": false,
+        "search": false,
+        "moderations": false,
+        "realtime": false,
+        "video_generations": false,
+        "batches": false,
+        "messages": false,
+        "interactions": false,
+        "systemone": false,
+        "a2a": false,
+        "generateContent": false
+      }
+    },
     "sail": {
       "display_name": "Sail (`sail`)",
       "url": "https://docs.litellm.ai/docs/providers/sail",
