@@ -51,6 +51,13 @@ describe("budgetAlertRowsFromMetadata", () => {
     ]);
   });
 
+  it("still loads a zero-padded team member threshold as a row, since the team form has no Metadata box fallback", () => {
+    const metadata = { team_member_max_budget_alert_emails: { "080": ["finance@example.com"] } };
+    expect(budgetAlertRowsFromMetadata(metadata, TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY)).toEqual([
+      { threshold: 80, emails: "finance@example.com" },
+    ]);
+  });
+
   it("keeps API-stored comma-separated string recipients, which the backend also accepts", () => {
     const metadata = {
       max_budget_alert_emails: { "80": "finance@example.com, cto@example.com", "90": ["ops@example.com"] },

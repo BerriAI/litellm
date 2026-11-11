@@ -52,10 +52,18 @@ const storedBudgetAlertConfig = (
     : {};
 };
 
-const budgetAlertRowFromEntry = ([key, emails]: readonly [string, unknown]): BudgetAlertRow | null => {
+const ROW_THRESHOLD_KEY_PATTERN: Readonly<Record<BudgetAlertEmailsMetadataKey, RegExp>> = {
+  [KEY_MAX_BUDGET_ALERT_EMAILS_KEY]: /^[1-9]\d*$/,
+  [TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY]: /^\d+$/,
+};
+
+const budgetAlertRowFromEntry = (
+  [key, emails]: readonly [string, unknown],
+  metadataKey: BudgetAlertEmailsMetadataKey,
+): BudgetAlertRow | null => {
   const threshold = Number(key);
   const recipients = storedRecipients(emails);
-  return /^[1-9]\d*$/.test(key) && isValidThreshold(threshold) && recipients !== null
+  return ROW_THRESHOLD_KEY_PATTERN[metadataKey].test(key) && isValidThreshold(threshold) && recipients !== null
     ? { threshold, emails: recipients.join(", ") }
     : null;
 };
@@ -66,7 +74,7 @@ export const budgetAlertRowsFromMetadata = (
 ): readonly BudgetAlertRow[] =>
   Object.entries(storedBudgetAlertConfig(metadata, metadataKey))
     .flatMap((entry) => {
-      const row = budgetAlertRowFromEntry(entry);
+      const row = budgetAlertRowFromEntry(entry, metadataKey);
       return row === null ? [] : [row];
     })
     .sort((a, b) => (a.threshold ?? 0) - (b.threshold ?? 0));
@@ -78,7 +86,7 @@ const storedBudgetAlertEntries = (
 ): Readonly<Record<string, unknown>> =>
   Object.fromEntries(
     Object.entries(storedBudgetAlertConfig(metadata, metadataKey)).filter(
-      (entry) => (budgetAlertRowFromEntry(entry) !== null) === rowsCanShow,
+      (entry) => (budgetAlertRowFromEntry(entry, metadataKey) !== null) === rowsCanShow,
     ),
   );
 
