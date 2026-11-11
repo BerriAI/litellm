@@ -4,6 +4,7 @@ import {
   subscriptionAccountDeleteCall,
   subscriptionAccountUpdateCall,
 } from "@/components/networking";
+import i18n from "@/i18n/i18n";
 import { toast } from "@/lib/toast";
 import type {
   SubscriptionAccountUpdateRequest,
@@ -62,7 +63,7 @@ export function useSubscriptionFeeActions({ accessToken, refetch }: Options): Re
       if (request === null) return;
       try {
         await request;
-        toast.success("Monthly fee saved");
+        toast.success(i18n.t("usage.subscriptionCost.toasts.feeSaved"));
         setFeeModalAccount(null);
         await refetch();
       } catch (error) {
@@ -77,7 +78,7 @@ export function useSubscriptionFeeActions({ accessToken, refetch }: Options): Re
       if (!accessToken || account.fee === null) return;
       try {
         await subscriptionAccountDeleteCall(accessToken, account.fee.subscription_account_id);
-        toast.success("Monthly fee removed");
+        toast.success(i18n.t("usage.subscriptionCost.toasts.feeRemoved"));
         await refetch();
       } catch (error) {
         toast.fromError(error);

@@ -96,7 +96,10 @@ mod tests {
     }
 
     #[rstest]
-    #[case::azure_ai(BetaProvider::AzureAi, "fast-mode-2026-02-01,example-beta-2099-01-01")]
+    #[case::azure_ai(
+        BetaProvider::AzureAi,
+        "advisor-tool-2026-03-01,example-beta-2099-01-01"
+    )]
     #[case::anthropic(BetaProvider::Anthropic, "bash_20241022")]
     #[case::vertex_ai(BetaProvider::VertexAi, " , ")]
     fn filter_removes_header_when_nothing_survives(

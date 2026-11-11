@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import Final
 
 import pytest
-from integration._support.client import Gateway, eventually
+from integration._support.client import Gateway, eventually, object_value
 from integration._support.database import read_rows, scratch_database
 from integration._support.process import owned_proxy_process
 from integration._support.wire import Wire, wire_server
@@ -24,6 +24,7 @@ from pydantic import JsonValue
 
 _MODEL: Final = "affinity-claude"
 _FOLLOW_UPS: Final = 24
+_PINS_ROUTE: Final = "/memory-usage-in-mem-cache-items"
 _LONG_SYSTEM: Final = "Answer from the tool results below. " + "lorem ipsum " * 1500
 
 
@@ -91,3 +92,68 @@ def test_router_affinity_is_lost_when_auto_caching_stands_down_for_tool_call_mar
     assert [status for status, _, _ in follow_ups] == [200] * _FOLLOW_UPS, [text for _, _, text in follow_ups]
     assert {first_marker, *follow_up_markers} == served["left"] | served["right"]
     assert all(served[side] & set(follow_up_markers) for side in served), served
+
+
+def _responses_first_turn(marker: str) -> list[JsonValue]:
+    return [
+        {"role": "user", "content": "What is the weather in London?"},
+        {"type": "function_call", "call_id": "call_london", "name": "lookup_weather", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "call_london", "output": "sunny"},
+        {"role": "user", "content": final_text(marker)},
+    ]
+
+
+def _responses_body(session: str, request_input: list[JsonValue]) -> dict[str, JsonValue]:
+    return {
+        "model": _MODEL,
+        "instructions": f"{_LONG_SYSTEM} session {session}",
+        "tools": [{"type": "function", "name": "lookup_weather", "parameters": {"type": "object", "properties": {}}}],
+        "input": request_input,
+    }
+
+
+def _pins(gateway: Gateway) -> dict[str, JsonValue]:
+    return object_value(object_value(gateway.request("GET", _PINS_ROUTE).json())["prompt_caching_pin_cache"])
+
+
+@pytest.mark.timeout(240)
+def test_responses_thread_holds_its_deployment_when_the_bridge_logs_chat_messages(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    session: Final = new_marker()
+    first_marker: Final = new_marker()
+    follow_up_markers: Final = tuple(new_marker() for _ in range(_FOLLOW_UPS))
+    first_turn: Final = _responses_first_turn(first_marker)
+    with scratch_database() as database_url, wire_server(anthropic_peer) as left, wire_server(anthropic_peer) as right:
+        config: Final = owned_config(
+            tmp_path,
+            [
+                {**anthropic_deployment(_MODEL, left.url), "model_info": {"id": f"responses-left-{session}"}},
+                {**anthropic_deployment(_MODEL, right.url), "model_info": {"id": f"responses-right-{session}"}},
+            ],
+            router_settings={"optional_pre_call_checks": ["prompt_caching"]},
+        )
+        with (
+            owned_proxy_process(
+                gateway,
+                tmp_path,
+                {"DATABASE_URL": database_url},
+                config=config,
+                remove_environment=("DATABASE_URL_READ_REPLICA",),
+                workers=1,
+            ) as owned,
+            owned.gateway.scenario() as scenario,
+        ):
+            key: Final = scenario.key(metadata={"enable_prompt_caching": True})
+            first: Final = owned.gateway.request("POST", "/v1/responses", _responses_body(session, first_turn), key=key)
+            assert first.status_code == 200, first.text
+            eventually(lambda: _pins(owned.gateway), bool, seconds=30)
+            follow_ups: Final = tuple(
+                owned.gateway.request(
+                    "POST", "/v1/responses", _responses_body(session, _follow_up(first_turn, marker)), key=key
+                )
+                for marker in follow_up_markers
+            )
+        served: Final = {"left": _served(left), "right": _served(right)}
+    assert [response.status_code for response in follow_ups] == [200] * _FOLLOW_UPS, follow_ups[0].text
+    assert {first_marker, *follow_up_markers} in tuple(served.values()), served

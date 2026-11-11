@@ -43,7 +43,6 @@ class FileContentStreamingHandler:
                 data=resolved_streaming_data,
                 credentials=credentials,
                 file_id=original_file_id,
-                include_internal_credentials=True,
             )
             resolved_streaming_data.pop("model", None)
             resolved_streaming_provider: Final = cast(str, credentials["custom_llm_provider"])

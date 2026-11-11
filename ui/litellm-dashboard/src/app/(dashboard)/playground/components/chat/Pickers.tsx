@@ -2,6 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 import { Plus } from "lucide-react";
+import { Trans, useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import {
   Combobox,
@@ -68,7 +69,10 @@ function CustomItem({ value }: { value: string }) {
     <ComboboxItem value={value} className="font-mono text-xs">
       <Plus />
       <span className="min-w-0 truncate">
-        <span className="font-sans">Use</span> {value}
+        <Trans
+          i18nKey="playground.chat.pickers.useCustom"
+          components={{ sans: <span className="font-sans" />, value: <>{value}</> }}
+        />
       </span>
     </ComboboxItem>
   );
@@ -102,6 +106,7 @@ export function ChecklistMenu({
   emptyText: string;
   defaultOpen?: boolean;
 }) {
+  const { t } = useTranslation();
   const index = optionIndex(groups);
   const items = toItems(groups);
   return (
@@ -120,10 +125,13 @@ export function ChecklistMenu({
         <CountBadge count={value.length} />
       </ComboboxTrigger>
       <ComboboxContent side="top" className="w-72">
-        <ComboboxInput showTrigger={false} placeholder={`Search ${label.toLowerCase()}`} />
+        <ComboboxInput
+          showTrigger={false}
+          placeholder={t("playground.chat.pickers.searchChecklist", { label: label.toLowerCase() })}
+        />
         <ComboboxEmpty>
           {isLoading ? <Spinner className="size-3.5" /> : items.length === 0 && emptyText}
-          {!isLoading && items.length > 0 && "Nothing matches"}
+          {!isLoading && items.length > 0 && t("playground.chat.pickers.nothingMatches")}
         </ComboboxEmpty>
         <GroupedOptions index={index} />
       </ComboboxContent>
@@ -152,12 +160,16 @@ export function TargetPicker({
   allowCustom?: boolean;
   defaultOpen?: boolean;
 }) {
+  const { t } = useTranslation();
   const [query, setQuery] = useState("");
   const index = optionIndex(groups);
   const custom = query.trim();
   const offerCustom = allowCustom && custom !== "" && !isListed(index, custom);
-  const items = [...toItems(groups), ...(offerCustom ? [{ value: "Custom name", items: [custom] }] : [])];
-  const unsetText = isLoading ? `Loading ${label.toLowerCase()}s` : placeholder;
+  const items = [
+    ...toItems(groups),
+    ...(offerCustom ? [{ value: t("playground.chat.pickers.customName"), items: [custom] }] : []),
+  ];
+  const unsetText = isLoading ? t("playground.chat.pickers.loading", { label: label.toLowerCase() }) : placeholder;
   return (
     <Combobox
       items={items}
@@ -182,9 +194,14 @@ export function TargetPicker({
         </span>
       </ComboboxTrigger>
       <ComboboxContent side="top" className="w-80">
-        <ComboboxInput showTrigger={false} placeholder={`Search ${label.toLowerCase()}s`} />
+        <ComboboxInput
+          showTrigger={false}
+          placeholder={t("playground.chat.pickers.searchTargets", { label: label.toLowerCase() })}
+        />
         <ComboboxEmpty>
-          {items.length === 0 && !custom ? emptyText : `No matching ${label.toLowerCase()}`}
+          {items.length === 0 && !custom
+            ? emptyText
+            : t("playground.chat.pickers.noMatching", { label: label.toLowerCase() })}
         </ComboboxEmpty>
         <GroupedOptions index={index} mono />
       </ComboboxContent>

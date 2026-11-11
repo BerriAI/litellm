@@ -19,6 +19,7 @@ from litellm.proxy.db.prisma_query_span import UNKNOWN_PRISMA_QUERY, parse_prism
 _REPO: Final = Path(__file__).resolve().parents[4]
 _SOURCE_ROOTS: Final = ("litellm", "enterprise", "litellm-proxy-extras")
 _RAW_METHODS: Final = frozenset({"query_first", "query_raw", "execute_raw"})
+_CROSS_MODULE_FORWARDERS: Final = frozenset({"query_raw_within_statement_timeout"})
 _MODEL_METHODS: Final = frozenset(
     {
         "find_unique",
@@ -297,7 +298,7 @@ def _parameter_site(
     """A statement that arrives as a parameter: a ``query_raw`` forwarder adds no round trip of its
     own, any other helper is named by what its callers in the module hand it."""
     function: Final = next(p for p in parents if isinstance(p, (ast.AsyncFunctionDef, ast.FunctionDef)))
-    if function.name in _RAW_METHODS:
+    if function.name in _RAW_METHODS or function.name in _CROSS_MODULE_FORWARDERS:
         return _PrismaCallSite(location, method, "forwarder", f"(callers of {function.name})")
     callers: Final = tuple(
         node

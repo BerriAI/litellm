@@ -440,6 +440,19 @@ class RouteChecks:
                 )
 
     @staticmethod
+    def is_allowed_on_proxy(route: str) -> bool:
+        from litellm.proxy.proxy_server import general_settings, premium_user
+
+        if "allowed_routes" not in general_settings:
+            return True
+        if premium_user is not True:
+            verbose_proxy_logger.error(
+                "Trying to set allowed_routes. This is an Enterprise feature. %s",
+                CommonProxyErrors.not_premium_user.value,
+            )
+        return route in general_settings["allowed_routes"]
+
+    @staticmethod
     def is_unbilled_route(route: str) -> bool:
         resource, _, action = route.rsplit("/", 1)[-1].partition(":")
         return route in _UNBILLED_ROUTES or resource in _TOKEN_COUNTING_SEGMENTS or action == _TOKEN_COUNTING_ACTION

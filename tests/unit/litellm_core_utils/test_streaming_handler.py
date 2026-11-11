@@ -10,6 +10,7 @@ import threading
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from itertools import chain
 from pathlib import Path
 from types import CodeType, FrameType, MappingProxyType, TracebackType
 from typing import AsyncIterator, Callable, Final, Iterator, Literal, NoReturn, Optional, cast
@@ -27,6 +28,10 @@ from litellm.exceptions import MidStreamFallbackError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+    convert_to_streaming_response,
+    convert_to_streaming_response_async,
+)
 from litellm.litellm_core_utils.streaming_handler import (
     CustomStreamWrapper,
     _ProviderChunkEarlyReturn,
@@ -34,6 +39,7 @@ from litellm.litellm_core_utils.streaming_handler import (
 )
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator as AnthropicModelResponseIterator
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
 from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     ModelResponseIterator as GeminiModelResponseIterator,
@@ -267,6 +273,37 @@ def test_is_chunk_non_empty(initialized_custom_stream_wrapper: CustomStreamWrapp
         completion_obj=MagicMock(),
         model_response=ModelResponseStream(**chunk),
         response_obj=MagicMock(),
+    )
+
+
+def test_is_chunk_non_empty_keeps_thinking_blocks_without_other_content(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """Encrypted reasoning arrives as thinking_blocks and nothing else, so that delta has to be yielded."""
+    chunk: Final = ModelResponseStream(
+        id="chunk-thinking",
+        object="chat.completion.chunk",
+        created=1,
+        model="chatgpt/gpt-6.1-sol",
+        choices=[
+            StreamingChoices(
+                index=0,
+                finish_reason=None,
+                delta=Delta(
+                    thinking_blocks=[
+                        {"type": "redacted_thinking", "data": "litellm_encrypted_reasoning:gAAAA"}
+                    ]
+                ),
+            )
+        ],
+    )
+    assert (
+        initialized_custom_stream_wrapper.is_chunk_non_empty(
+            completion_obj={},
+            model_response=chunk,
+            response_obj={},
+        )
+        is True
     )
 
 
@@ -3517,6 +3554,34 @@ def test_is_chunk_non_empty_with_valid_tool_calls(
     )
 
 
+@pytest.mark.parametrize(
+    ("tool_calls", "non_empty"),
+    [([{"id": "call_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}], True), ([], False)],
+)
+def test_is_chunk_non_empty_reads_tool_calls_from_the_completion_obj(
+    initialized_custom_stream_wrapper: CustomStreamWrapper, tool_calls: list[dict[str, object]], non_empty: bool
+):
+    assert (
+        initialized_custom_stream_wrapper.is_chunk_non_empty(
+            completion_obj={"tool_calls": tool_calls},
+            model_response=ModelResponseStream(),
+            response_obj={},
+        )
+        is non_empty
+    )
+
+
+def test_is_chunk_non_empty_rejects_completion_obj_tool_calls_without_a_length(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    with pytest.raises(TypeError, match="object of type 'generator' has no len"):
+        initialized_custom_stream_wrapper.is_chunk_non_empty(
+            completion_obj={"tool_calls": (tool_call for tool_call in ())},
+            model_response=ModelResponseStream(),
+            response_obj={},
+        )
+
+
 def _make_chunk(content: Optional[str]) -> ModelResponseStream:
     return ModelResponseStream(
         id="test",
@@ -4647,6 +4712,25 @@ def test_dispatch_triton_stream(
     assert isinstance(result, _ProviderChunkParsed)
     assert completion_obj["content"] == "triton text"
     assert initialized_custom_stream_wrapper.received_finish_reason == "stop"
+
+
+@pytest.mark.parametrize(
+    "chunk",
+    [
+        'data: {"text_output": "triton text", "is_finished": true, "stop_reason": "stop", "generated_token_count": 2}',
+        b'data: {"text_output": "triton text", "is_finished": true, "stop_reason": "stop", "generated_token_count": 2}',
+    ],
+)
+def test_handle_triton_stream_parses_sse_text_output_lines(
+    initialized_custom_stream_wrapper: CustomStreamWrapper, chunk: str | bytes
+):
+    assert initialized_custom_stream_wrapper.handle_triton_stream(chunk) == {
+        "text": "triton text",
+        "is_finished": True,
+        "finish_reason": "stop",
+        "prompt_tokens": 0,
+        "completion_tokens": 2,
+    }
 
 
 def test_dispatch_text_completion_openai_with_usage(
@@ -6971,6 +7055,327 @@ def test_chunk_creator_keeps_upstream_index_on_single_choice_chunk(logging_obj: 
     assert result.choices[0].delta.content == "hello"
 
 
+_TOKEN_IDS: Final = TypeAdapter(list[int] | None)
+_CHOICE_INDEX: Final = TypeAdapter(int)
+_DELTA: Final = TypeAdapter(Mapping[str, object])
+
+
+def _joined_token_ids(choices: Sequence[Mapping[str, object]]) -> tuple[int, ...]:
+    return tuple(chain.from_iterable(_TOKEN_IDS.validate_python(choice.get("token_ids")) or () for choice in choices))
+
+
+def _hosted_vllm_stream(
+    logging_obj: Logging, upstream_choices: Sequence[Mapping[str, object]]
+) -> CustomStreamWrapper:
+    sse_lines: Final = (
+        *(
+            "data: " + json.dumps({"id": "chatcmpl-1", "object": "chat.completion.chunk", "model": "m", "choices": [c]})
+            for c in upstream_choices
+        ),
+        "data: [DONE]",
+    )
+    completion_stream: Final = HostedVLLMChatConfig().get_model_response_iterator(
+        streaming_response=iter(sse_lines), sync_stream=True, json_mode=False
+    )
+    return CustomStreamWrapper(
+        completion_stream=completion_stream, model="m", custom_llm_provider="hosted_vllm", logging_obj=logging_obj
+    )
+
+
+def _hosted_vllm_stream_choices(
+    logging_obj: Logging, upstream_choices: Sequence[Mapping[str, object]]
+) -> tuple[dict[str, object], ...]:
+    return tuple(chunk.choices[0].model_dump() for chunk in _hosted_vllm_stream(logging_obj, upstream_choices))
+
+
+@pytest.mark.parametrize("stop_reason", [",5", 151645])
+@pytest.mark.parametrize("final_content", [",3", ""], ids=["content-then-finish", "finish-only"])
+def test_hosted_vllm_stream_keeps_stop_reason_and_every_token_id(
+    logging_obj: Logging, final_content: str, stop_reason: str | int
+) -> None:
+    emitted: Final = _hosted_vllm_stream_choices(
+        logging_obj,
+        (
+            {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+            {"index": 0, "delta": {"content": ""}, "finish_reason": None, "token_ids": [16]},
+            {"index": 0, "delta": {"content": "1,2"}, "finish_reason": None, "token_ids": [11, 17]},
+            {
+                "index": 0,
+                "delta": {"content": final_content},
+                "finish_reason": "stop",
+                "stop_reason": stop_reason,
+                "token_ids": [20],
+            },
+        ),
+    )
+
+    assert [choice.get("stop_reason") for choice in emitted if choice["finish_reason"] is not None] == [stop_reason]
+    assert [
+        (_DELTA.validate_python(choice["delta"]).get("content"), choice["stop_reason"])
+        for choice in emitted
+        if choice["finish_reason"] is None and choice.get("stop_reason") is not None
+    ] == ([(final_content, stop_reason)] if final_content else [])
+    assert _joined_token_ids(emitted) == (16, 11, 17, 20)
+
+
+def test_hosted_vllm_stream_sends_empty_content_on_token_id_only_chunks(logging_obj: Logging) -> None:
+    emitted: Final = _hosted_vllm_stream_choices(
+        logging_obj,
+        (
+            {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+            {"index": 0, "delta": {"content": ""}, "finish_reason": None, "token_ids": [11]},
+            {"index": 0, "delta": {"content": ""}, "finish_reason": None, "token_ids": [220]},
+            {"index": 0, "delta": {"content": "1"}, "finish_reason": None, "token_ids": [16]},
+        ),
+    )
+
+    assert [
+        (_DELTA.validate_python(choice["delta"]).get("content"), choice.get("token_ids"))
+        for choice in emitted
+        if choice.get("token_ids")
+    ] == [("", [11]), ("", [220]), ("1", [16])]
+
+
+def test_hosted_vllm_stream_keeps_held_back_token_ids_on_their_own_choice(logging_obj: Logging) -> None:
+    emitted: Final = _hosted_vllm_stream_choices(
+        logging_obj,
+        (
+            {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+            {"index": 1, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+            {"index": 1, "delta": {"content": ""}, "finish_reason": None, "token_ids": [16]},
+            {"index": 0, "delta": {"content": "1"}, "finish_reason": None, "token_ids": [17]},
+            {"index": 1, "delta": {"content": "2"}, "finish_reason": None, "token_ids": [18]},
+        ),
+    )
+
+    assert [(choice["index"], choice.get("token_ids")) for choice in emitted if choice.get("token_ids")] == [
+        (1, [16]),
+        (0, [17]),
+        (1, [18]),
+    ]
+
+
+def _rejects_a_two(text: str) -> bool:
+    return "2" not in text
+
+
+def _choices_sent_before_rule_failure(stream: CustomStreamWrapper) -> Iterator[dict[str, object]]:
+    try:
+        yield from (chunk.choices[0].model_dump() for chunk in stream)
+    except MidStreamFallbackError:
+        return
+
+
+def test_hosted_vllm_stream_sends_no_token_ids_ahead_of_a_failing_post_call_rule(
+    logging_obj: Logging, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "post_call_rules", [_rejects_a_two])
+    stream: Final = _hosted_vllm_stream(
+        logging_obj,
+        (
+            {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+            {"index": 0, "delta": {"content": ""}, "finish_reason": None, "token_ids": [16]},
+            {"index": 0, "delta": {"content": "1"}, "finish_reason": None, "token_ids": [11, 17]},
+            {"index": 0, "delta": {"content": ",2"}, "finish_reason": "stop", "stop_reason": None, "token_ids": [20]},
+        ),
+    )
+
+    assert [
+        (_DELTA.validate_python(choice["delta"]).get("content"), choice.get("token_ids"))
+        for choice in _choices_sent_before_rule_failure(stream)
+    ] == [("", None), ("1", None)]
+
+
+def _held_back_stop_string_stream(token_ids: Mapping[str, None]) -> tuple[Mapping[str, object], ...]:
+    return (
+        {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+        {"index": 0, "delta": {"content": ""}, "finish_reason": None, **token_ids},
+        {"index": 0, "delta": {"content": "1,2"}, "finish_reason": None, **token_ids},
+        {"index": 0, "delta": {"content": ""}, "finish_reason": "stop", "stop_reason": ",3", **token_ids},
+    )
+
+
+def test_hosted_vllm_stream_with_null_token_ids_emits_the_same_chunks_as_without_them(logging_obj: Logging) -> None:
+    with_null_ids: Final = _hosted_vllm_stream_choices(logging_obj, _held_back_stop_string_stream({"token_ids": None}))
+    without_ids: Final = _hosted_vllm_stream_choices(logging_obj, _held_back_stop_string_stream({}))
+
+    assert [(c["delta"], c["finish_reason"]) for c in with_null_ids] == [
+        (c["delta"], c["finish_reason"]) for c in without_ids
+    ]
+
+
+_TWO_CHOICE_STOP_REASONS: Final[Mapping[int, str | int]] = MappingProxyType({0: ", 3", 1: 151645})
+_TWO_CHOICE_TOKEN_IDS: Final[Mapping[int, tuple[int, int]]] = MappingProxyType({0: (16, 17), 1: (26, 27)})
+
+
+def _two_choice_stream(first_finished: int, finish_contents: tuple[str, str]) -> tuple[Mapping[str, object], ...]:
+    return (
+        *({"index": index, "delta": {"role": "assistant", "content": ""}, "finish_reason": None} for index in (0, 1)),
+        *(
+            {"index": index, "delta": {"content": "1"}, "finish_reason": None, "token_ids": [ids[0]]}
+            for index, ids in _TWO_CHOICE_TOKEN_IDS.items()
+        ),
+        *(
+            {
+                "index": index,
+                "delta": {"content": content},
+                "finish_reason": "stop",
+                "stop_reason": _TWO_CHOICE_STOP_REASONS[index],
+                "token_ids": [_TWO_CHOICE_TOKEN_IDS[index][1]],
+            }
+            for index, content in zip((first_finished, 1 - first_finished), finish_contents)
+        ),
+    )
+
+
+def _carries_another_choices_fields(choice: Mapping[str, object]) -> bool:
+    own_index: Final = _CHOICE_INDEX.validate_python(choice["index"])
+    token_ids: Final = _TOKEN_IDS.validate_python(choice.get("token_ids")) or ()
+    return not set(token_ids) <= set(_TWO_CHOICE_TOKEN_IDS[own_index]) or choice.get("stop_reason") not in (
+        None,
+        _TWO_CHOICE_STOP_REASONS[own_index],
+    )
+
+
+@pytest.mark.parametrize("first_finished", [0, 1])
+@pytest.mark.parametrize(
+    "finish_contents",
+    [("", ""), ("2", ""), ("2", "2")],
+    ids=["both-finish-only", "content-then-finish-only", "both-content-then-finish"],
+)
+def test_hosted_vllm_stream_with_two_choices_keeps_ids_and_stop_reason_on_their_own_choice(
+    logging_obj: Logging, first_finished: int, finish_contents: tuple[str, str]
+) -> None:
+    emitted: Final = _hosted_vllm_stream_choices(logging_obj, _two_choice_stream(first_finished, finish_contents))
+
+    assert [
+        (choice["index"], choice.get("token_ids"), choice.get("stop_reason"))
+        for choice in emitted
+        if _carries_another_choices_fields(choice)
+    ] == []
+
+
+@pytest.mark.parametrize("first_finished", [0, 1])
+@pytest.mark.parametrize(
+    "finish_contents", [("2", ""), ("2", "2")], ids=["content-then-finish-only", "both-content-then-finish"]
+)
+def test_hosted_vllm_stream_with_two_choices_keeps_each_stop_reason_on_its_final_content_chunk(
+    logging_obj: Logging, first_finished: int, finish_contents: tuple[str, str]
+) -> None:
+    emitted: Final = _hosted_vllm_stream_choices(logging_obj, _two_choice_stream(first_finished, finish_contents))
+    content_chunk_stop_reasons: Final = frozenset(
+        (choice["index"], choice["stop_reason"])
+        for choice in emitted
+        if _DELTA.validate_python(choice["delta"]).get("content") and choice.get("stop_reason") is not None
+    )
+    finished_with_content: Final = frozenset(
+        (index, _TWO_CHOICE_STOP_REASONS[index])
+        for index, content in zip((first_finished, 1 - first_finished), finish_contents)
+        if content
+    )
+
+    assert content_chunk_stop_reasons == finished_with_content
+
+
+@pytest.mark.parametrize("first_finished", [0, 1])
+@pytest.mark.parametrize(
+    "finish_contents",
+    [("", ""), ("2", ""), ("", "2"), ("2", "2")],
+    ids=["both-finish-only", "content-then-finish-only", "finish-only-then-content", "both-content-then-finish"],
+)
+def test_hosted_vllm_stream_with_two_choices_delivers_every_token_id_and_stop_reason_of_each_choice(
+    logging_obj: Logging, first_finished: int, finish_contents: tuple[str, str]
+) -> None:
+    emitted: Final = _hosted_vllm_stream_choices(logging_obj, _two_choice_stream(first_finished, finish_contents))
+
+    assert {
+        index: _joined_token_ids([choice for choice in emitted if choice["index"] == index])
+        for index in _TWO_CHOICE_TOKEN_IDS
+    } == _TWO_CHOICE_TOKEN_IDS
+    assert frozenset(
+        (choice["index"], choice["stop_reason"]) for choice in emitted if choice.get("stop_reason") is not None
+    ) == frozenset(_TWO_CHOICE_STOP_REASONS.items())
+
+
+def test_hosted_vllm_stream_with_two_choices_finishes_the_first_choice_before_the_other_choice_streams_on(
+    logging_obj: Logging,
+) -> None:
+    emitted: Final = _hosted_vllm_stream_choices(
+        logging_obj,
+        (
+            *({"index": index, "delta": {"role": "assistant", "content": ""}, "finish_reason": None} for index in (0, 1)),
+            {"index": 0, "delta": {"content": "1"}, "finish_reason": "stop", "stop_reason": ",2", "token_ids": [16]},
+            {"index": 1, "delta": {"content": ""}, "finish_reason": None, "token_ids": [26]},
+            {"index": 1, "delta": {"content": ""}, "finish_reason": None, "token_ids": [11]},
+            {"index": 1, "delta": {"content": "1,"}, "finish_reason": None, "token_ids": [27]},
+            {"index": 1, "delta": {"content": "3"}, "finish_reason": "stop", "stop_reason": 151645, "token_ids": [28]},
+        ),
+    )
+    first_choice_finish: Final = next(
+        position for position, choice in enumerate(emitted) if choice["index"] == 0 and choice["finish_reason"]
+    )
+
+    assert emitted[first_choice_finish]["stop_reason"] == ",2"
+    assert _joined_token_ids([choice for choice in emitted[first_choice_finish:] if choice["index"] == 1]) == (
+        26,
+        11,
+        27,
+        28,
+    )
+
+
+_CACHED_VLLM_TOKEN_IDS: Final = (16, 11, 220, 17, 11, 220, 18, 11, 220, 19)
+
+
+def _cached_vllm_completion() -> dict[str, object]:
+    return {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "Qwen/Qwen3-0.6B",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "1, 2, 3, 4"},
+                "finish_reason": "stop",
+                "stop_reason": ", 5",
+                "token_ids": list(_CACHED_VLLM_TOKEN_IDS),
+            }
+        ],
+    }
+
+
+async def _replayed_cache_hit_choices(logging_obj: Logging, replay: str) -> tuple[dict[str, object], ...]:
+    if replay == "async":
+        async_wrapper: Final = CustomStreamWrapper(
+            completion_stream=convert_to_streaming_response_async(_cached_vllm_completion()),
+            model="m",
+            custom_llm_provider="cached_response",
+            logging_obj=logging_obj,
+        )
+        return tuple([chunk.choices[0].model_dump() async for chunk in async_wrapper if chunk.choices])
+    sync_wrapper: Final = CustomStreamWrapper(
+        completion_stream=convert_to_streaming_response(_cached_vllm_completion()),
+        model="m",
+        custom_llm_provider="cached_response",
+        logging_obj=logging_obj,
+    )
+    return tuple(chunk.choices[0].model_dump() for chunk in sync_wrapper if chunk.choices)
+
+
+@pytest.mark.parametrize("replay", ["sync", "async"])
+@pytest.mark.asyncio
+async def test_a_streamed_cache_hit_keeps_the_vllm_stop_reason_and_every_token_id(
+    logging_obj: Logging, replay: str
+) -> None:
+    emitted: Final = await _replayed_cache_hit_choices(logging_obj, replay)
+
+    assert [
+        (choice["finish_reason"], choice["stop_reason"]) for choice in emitted if choice.get("stop_reason") is not None
+    ] == [("stop", ", 5")]
+    assert _joined_token_ids(emitted) == _CACHED_VLLM_TOKEN_IDS
+
+
 def _later_chunk_outputs(
     custom_llm_provider: str, later_chunks: Sequence[ChatCompletionChunk], logging_obj: Logging
 ) -> tuple[ModelResponseStream, ...]:
@@ -7020,6 +7425,121 @@ def test_azure_chunk_creator_streams_choice_content_filter_results_on_later_chun
 
     assert [_wire_dump(output)["choices"][0]["content_filter_results"] for output in outputs] == [filter_results]
     assert ["content_filter_results" in output.choices[0].model_fields_set for output in outputs] == [True]
+
+
+def _parsed_openai_like_chunk(
+    chunk_id: str, delta: Mapping[str, object], finish_reason: str | None = None, **choice_extras: object
+) -> ModelResponseStream:
+    parser: Final = OpenAIChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
+    return parser.chunk_parser(
+        {
+            "id": chunk_id,
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "served-model",
+            "choices": [{"index": 0, "delta": dict(delta), "finish_reason": finish_reason, **choice_extras}],
+        }
+    )
+
+
+def _parsed_stream_wrapper(custom_llm_provider: str, logging_obj: Logging) -> CustomStreamWrapper:
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(()),
+        model="served-model",
+        custom_llm_provider=custom_llm_provider,
+        logging_obj=logging_obj,
+    )
+    wrapper.chunk_creator(chunk=_parsed_openai_like_chunk("chunk-0", {"role": "assistant", "content": ""}))
+    return wrapper
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["hosted_vllm", "deepseek", "groq"])
+def test_parsed_openai_like_chunk_creator_builds_one_delta_and_choice_and_no_dump_per_later_chunk(
+    logging_obj: Logging, custom_llm_provider: str
+) -> None:
+    wrapper: Final = _parsed_stream_wrapper(custom_llm_provider, logging_obj)
+    later_chunks: Final = (
+        _parsed_openai_like_chunk("chunk-1", {"content": "hello"}, stop_reason=None),
+        _parsed_openai_like_chunk("chunk-2", {"reasoning": "thought"}, stop_reason=None),
+        _parsed_openai_like_chunk("chunk-3", {"content": " world", "reasoning_content": None}, logprobs=None),
+    )
+    delta_init: Final = Delta.__init__.__code__
+    streaming_choices_init: Final = StreamingChoices.__init__.__code__
+    model_dump: Final = BaseModel.model_dump.__code__
+
+    outputs, calls = _chunk_creator_calls(
+        wrapper, later_chunks, frozenset({delta_init, streaming_choices_init, model_dump})
+    )
+
+    assert sum(call.code is delta_init for call in calls) == len(later_chunks)
+    assert sum(call.code is streaming_choices_init for call in calls) == len(later_chunks)
+    assert sum(call.code is model_dump for call in calls) == 0
+    assert [_wire_dump(output)["choices"] for output in outputs if output is not None] == [
+        [{"index": 0, "delta": {"content": "hello"}}],
+        [{"index": 0, "delta": {"reasoning_content": "thought"}}],
+        [{"index": 0, "delta": {"content": " world"}}],
+    ]
+
+
+def test_parsed_openai_like_chunk_creator_keeps_choice_extras_ahead_of_choice_keys(logging_obj: Logging) -> None:
+    wrapper: Final = _parsed_stream_wrapper("hosted_vllm", logging_obj)
+    later_chunks: Final = (
+        _parsed_openai_like_chunk("chunk-1", {"content": "hi"}, stop_reason=None, token_ids=[7, 8]),
+        _parsed_openai_like_chunk("chunk-2", {"content": "!"}, stop_reason=None, matched_stop=2),
+    )
+
+    outputs: Final = tuple(wrapper.chunk_creator(chunk=chunk) for chunk in later_chunks)
+
+    choice_dumps: Final = [output.choices[0].model_dump() for output in outputs if output is not None]
+    assert [list(choice_dump) for choice_dump in choice_dumps] == [
+        ["stop_reason", "token_ids", "finish_reason", "index", "delta", "logprobs"],
+        ["stop_reason", "matched_stop", "finish_reason", "index", "delta", "logprobs"],
+    ]
+    assert [choice_dump["token_ids"] for choice_dump in choice_dumps[:1]] == [[7, 8]]
+    assert [choice_dump["matched_stop"] for choice_dump in choice_dumps[1:]] == [2]
+    assert [choice_dump["delta"]["content"] for choice_dump in choice_dumps] == ["hi", "!"]
+
+
+def test_parsed_openai_like_stream_still_emits_tool_calls_and_finish_after_reused_chunks(
+    logging_obj: Logging,
+) -> None:
+    wrapper: Final = _parsed_stream_wrapper("deepseek", logging_obj)
+    later_chunks: Final = (
+        _parsed_openai_like_chunk("chunk-1", {"content": "checking"}),
+        _parsed_openai_like_chunk(
+            "chunk-2",
+            {
+                "tool_calls": [
+                    {"index": 0, "id": "call_1", "type": "function", "function": {"name": "f", "arguments": ""}}
+                ]
+            },
+        ),
+        _parsed_openai_like_chunk("chunk-3", {"tool_calls": [{"index": 0, "function": {"arguments": "{}"}}]}),
+        _parsed_openai_like_chunk("chunk-4", {}, finish_reason="tool_calls"),
+    )
+
+    outputs: Final = tuple(wrapper.chunk_creator(chunk=chunk) for chunk in later_chunks)
+
+    assert [_wire_dump(output)["choices"] for output in outputs if output is not None] == [
+        [{"index": 0, "delta": {"content": "checking"}}],
+        [
+            {
+                "index": 0,
+                "delta": {
+                    "tool_calls": [
+                        {"id": "call_1", "function": {"arguments": "", "name": "f"}, "type": "function", "index": 0}
+                    ]
+                },
+            }
+        ],
+        [
+            {
+                "index": 0,
+                "delta": {"tool_calls": [{"function": {"arguments": "{}"}, "type": "function", "index": 0}]},
+            }
+        ],
+        [{"finish_reason": "tool_calls", "index": 0, "delta": {}}],
+    ]
 
 
 @pytest.mark.parametrize(

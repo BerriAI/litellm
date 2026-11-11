@@ -25,6 +25,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import UPSTREAM_USAGE_COST, billed_usage_cost
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.responses.streaming_iterator import (
     CachedResponsesAPIStreamingIterator,
     MockResponsesAPIStreamingIterator,
@@ -415,6 +416,20 @@ async def test_complete_stream_still_ends_normally(trailer):
     assert logging_obj.async_failure_handler.await_count == 0
 
 
+@pytest.mark.asyncio
+async def test_event_without_a_type_reaches_the_caller_instead_of_ending_the_stream():
+    iterator: Final = _make_iterator(
+        sse_events=[_CREATED_EVENT, _sse_event({"note": "hook output without a type"})],
+        logging_obj=_failure_tracking_logging_obj(),
+        config=OpenAIResponsesAPIConfig(),
+    )
+
+    await iterator.__anext__()
+    untyped: Final = await iterator.__anext__()
+
+    assert untyped.model_extra == {"note": "hook output without a type"}
+
+
 @pytest.mark.parametrize("trailing_error", _TRAILING_ERRORS, ids=type)
 def test_sync_transport_error_before_any_output_raises_fallback_error(trailing_error):
     logging_obj: Final = _failure_tracking_logging_obj()
@@ -730,8 +745,10 @@ def test_run_post_success_hooks_does_not_report_generation_time_as_overhead():
     """LIT-5466: the provider call is timed to first byte, so at stream completion the total minus
     that duration is token generation, not LiteLLM overhead."""
     logging_obj = _logging_obj_stub()
+    logging_obj.stream = True
     logging_obj.model_call_details = {"litellm_params": {}, "llm_api_duration_ms": 200.0}
     logging_obj.caching_details = None
+    logging_obj.response_timing_metrics = {"_response_ms": 300.0, "litellm_overhead_time_ms": 100.0}
 
     class _CompletedEvent:
         def __init__(self) -> None:
@@ -745,6 +762,9 @@ def test_run_post_success_hooks_does_not_report_generation_time_as_overhead():
 
     assert iterator.completed_response._hidden_params["_response_ms"] == 10000.0
     assert "litellm_overhead_time_ms" not in iterator.completed_response._hidden_params
+    logging_obj.set_response_timing_metrics.assert_called_once_with(
+        {"_response_ms": 10000.0, "litellm_overhead_time_ms": 100.0}
+    )
 
 
 def _mock_config_with_completed_response(response: ResponsesAPIResponse) -> Mock:
@@ -2723,14 +2743,17 @@ async def test_shutdown_drain_waits_for_a_pending_logging_task():
 
 @pytest.mark.asyncio
 async def test_shutdown_drain_gives_up_on_a_stuck_logging_task_at_its_timeout():
-    stuck: Final = streaming_module.spawn_logging_task(
-        asyncio.get_running_loop(), asyncio.Event().wait(), task_name="stuck"
-    )
+    loop: Final = asyncio.get_running_loop()
+    with patch.object(loop, "time", return_value=0.0):
+        stuck: Final = streaming_module.spawn_logging_task(loop, asyncio.Event().wait(), task_name="stuck")
 
-    await asyncio.wait_for(streaming_module.drain_logging_tasks(timeout=0.05), timeout=1)
-
-    assert not stuck.done()
-    stuck.cancel()
+        try:
+            await streaming_module.drain_logging_tasks(timeout=0)
+            assert not stuck.done()
+        finally:
+            stuck.cancel()
+            with suppress(asyncio.CancelledError):
+                await stuck
 
 
 async def _drain_held_until_released(release: asyncio.Event) -> bool:
@@ -2867,3 +2890,54 @@ async def test_websocket_turns_logging_survives_garbage_collection(terminal_even
     await _run_websocket_turn(logger, terminal_event)
 
     assert await _logging_tasks_left_after_garbage_collection(logger) == 1
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        [
+            {
+                "type": "message",
+                "id": "msg_seq",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "hello world", "annotations": []}],
+            }
+        ],
+        [
+            {
+                "type": "reasoning",
+                "id": "rs_seq",
+                "summary": [{"type": "summary_text", "text": "thinking about it"}],
+            },
+            {
+                "type": "function_call",
+                "id": "fc_seq",
+                "call_id": "call_seq",
+                "name": "lookup",
+                "arguments": '{"id":1}',
+            },
+        ],
+    ],
+    ids=["message", "reasoning_and_tool"],
+)
+def test_synthetic_stream_serializes_every_event_position_from_zero(output: list[dict[str, object]]):
+    transformed: Final = ResponsesAPIResponse.model_validate(
+        {
+            "id": "resp_seq",
+            "created_at": 1741476542,
+            "status": "completed",
+            "model": "claude-sonnet-5-5",
+            "object": "response",
+            "output": output,
+        }
+    )
+
+    events: Final = streaming_module.build_synthetic_response_events(
+        transformed=transformed,
+        logging_obj=None,
+        chunk_size=5,
+    )
+
+    payloads: Final = tuple(json.loads(event.model_dump_json()) for event in events)
+    assert [payload.get("sequence_number") for payload in payloads] == list(range(len(payloads)))

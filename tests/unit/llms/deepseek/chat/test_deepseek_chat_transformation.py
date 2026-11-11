@@ -955,6 +955,51 @@ def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str):
     )
 
 
+_HOSTED_MCP_TOOL: Final = {
+    "type": "mcp",
+    "server_label": "deepwiki",
+    "server_url": "https://mcp.deepwiki.com/mcp",
+    "require_approval": "never",
+}
+
+
+def test_a_hosted_mcp_tool_answers_400_on_deepseek_without_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.utils.UnsupportedParamsError) as raised:
+        DeepSeekChatConfig().map_openai_params(
+            {"tools": [_function_tool("shell"), _HOSTED_MCP_TOOL]}, {}, "deepseek-v4-flash", False
+        )
+    assert raised.value.status_code == 400
+    assert "deepseek-v4-flash on deepseek " in str(raised.value)
+    assert "`deepwiki`" in str(raised.value)
+
+
+def test_deepseek_drops_a_hosted_mcp_tool_under_drop_params_and_keeps_the_function_tool(monkeypatch, caplog):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with caplog.at_level("WARNING"):
+        result: Final = DeepSeekChatConfig().map_openai_params(
+            {"tools": [_HOSTED_MCP_TOOL, _function_tool("shell")], "tool_choice": "auto"}, {}, "deepseek-v4-flash", True
+        )
+    assert result["tools"] == [_function_tool("shell")]
+    assert result["tool_choice"] == "auto"
+    assert any(
+        "`deepwiki`" in record.getMessage() and " on deepseek (" in record.getMessage() for record in caplog.records
+    )
+
+
+def test_deepseek_sends_no_tools_when_drop_params_drops_every_hosted_mcp_tool(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    result: Final = DeepSeekChatConfig().map_openai_params(
+        {"tools": [_HOSTED_MCP_TOOL], "tool_choice": "required", "parallel_tool_calls": True},
+        {},
+        "deepseek-v4-flash",
+        True,
+    )
+    assert "tools" not in result
+    assert "tool_choice" not in result
+    assert "parallel_tool_calls" not in result
+
+
 def _budget_warnings(caplog: pytest.LogCaptureFixture) -> tuple[str, ...]:
     return tuple(
         r.getMessage()
