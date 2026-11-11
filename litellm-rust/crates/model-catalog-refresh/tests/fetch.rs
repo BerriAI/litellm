@@ -723,6 +723,53 @@ async fn a_gcs_token_that_never_arrives_fails_within_the_attempt_timeout() {
     assert!(upstream.heads().is_empty());
 }
 
+struct SlowToken(Duration);
+
+impl GcpTokenSource for SlowToken {
+    fn project_id(&self) -> GcpAuthFuture<'_, String> {
+        Box::pin(async { Ok("model-cost-project".into()) })
+    }
+
+    fn token(&self) -> GcpAuthFuture<'_, SecretValue> {
+        Box::pin(async move {
+            tokio::time::sleep(self.0).await;
+            Ok(SecretValue::new(GCS_TOKEN))
+        })
+    }
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_gcs_attempt_spends_one_timeout_across_the_token_and_the_request() {
+    let upstream = Upstream::serve(vec![Answer::Stall]);
+    let once = RetryPolicy {
+        max_attempts: 1,
+        timeout: Duration::from_secs(2),
+        ..POLICY
+    };
+    let started = std::time::Instant::now();
+    let failed = fetch(
+        &Client::for_test(),
+        &S3Access::Environment { region: None },
+        &GcsAccess::Config {
+            endpoint: format!("{}/", upstream.base),
+            token_source: Arc::new(SlowToken(once.timeout / 2)),
+        },
+        "gs://prices/cost.json",
+        once,
+        Start::Fresh,
+    )
+    .await
+    .unwrap_err();
+    assert!(failed.retryable, "{}", failed.reason);
+    assert!(
+        started.elapsed() < once.timeout + once.timeout / 4,
+        "the attempt took {:?}, over its {:?} timeout",
+        started.elapsed(),
+        once.timeout
+    );
+}
+
 const DECLARED_OVERSIZED: &str =
     "HTTP/1.1 200 OK\r\nContent-Length: 104857601\r\nConnection: close\r\n\r\n";
 

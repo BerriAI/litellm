@@ -156,6 +156,7 @@ pub(crate) async fn gcs(
     object: &GcsUri,
     timeout: Duration,
 ) -> Result<Fetched, Rejected> {
+    let started = tokio::time::Instant::now();
     let (endpoint, token) = match gcs {
         GcsAccess::Environment => {
             match emulator_endpoint(std::env::var("STORAGE_EMULATOR_HOST").ok()) {
@@ -193,7 +194,7 @@ pub(crate) async fn gcs(
         client,
         url,
         token.as_ref().map(|token| token.expose()),
-        timeout,
+        timeout.saturating_sub(started.elapsed()),
     )
     .await
 }
