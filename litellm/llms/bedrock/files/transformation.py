@@ -477,7 +477,7 @@ def _uploaded_object_size(litellm_params: Mapping[str, object], response_headers
 def _check_batch_record_service_tier(value: object, model: str, drop_params: bool) -> None:
     import litellm
 
-    if value is None or value == "auto":
+    if value is None or (isinstance(value, str) and value.lower() == "auto"):
         return
     if not (litellm.drop_params or drop_params):
         raise UnsupportedParamsError(
@@ -1028,6 +1028,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                         for k, v in optional_params.items()
                         if not is_litellm_owned_kwarg(k) or k in _LITELLM_PARAMS_THE_MAPPER_TAKES
                     }
+                    | ({"drop_params": True} if drop_params else {})
                 ),
             )
             return config.transform_request(

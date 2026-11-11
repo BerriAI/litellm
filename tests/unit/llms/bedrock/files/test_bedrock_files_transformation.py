@@ -115,7 +115,7 @@ class TestBedrockFilesTransformation:
             "body": {"model": model, **prompt, **body_params},
         }
 
-    @pytest.mark.parametrize("tier", [None, "auto"])
+    @pytest.mark.parametrize("tier", [None, "auto", "AUTO"])
     def test_nova_row_with_null_or_auto_service_tier_sends_no_tier(self, tier: str | None):
         result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
             [self._nova_row(body_params={"service_tier": tier})]
@@ -174,6 +174,48 @@ class TestBedrockFilesTransformation:
         uploaded_row: Final = json.loads(request["data"])
         assert uploaded_row["modelInput"]["messages"]
         assert "serviceTier" not in uploaded_row["modelInput"]
+
+    @pytest.mark.parametrize("drop_params", [False, True])
+    def test_deployment_drop_params_decides_whether_a_claude_row_tier_fails_or_drops(self, drop_params: bool):
+        claude_model: Final = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+        row: Final = {
+            "custom_id": "claude-tier-1",
+            "method": "POST",
+            "url": "/v1/chat/completions",
+            "body": {
+                "model": claude_model,
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 10,
+                "service_tier": "ultrafast",
+            },
+        }
+
+        def upload() -> Mapping[str, object]:
+            request: Final = BedrockFilesConfig().transform_create_file_request(
+                model=claude_model,
+                create_file_data={
+                    "file": ("batch.jsonl", json.dumps(row).encode(), "application/jsonl"),
+                    "purpose": "batch",
+                },
+                optional_params={
+                    "aws_access_key_id": "test-key-id",
+                    "aws_secret_access_key": "test-secret",
+                    "aws_region_name": "us-west-2",
+                },
+                litellm_params={"s3_bucket_name": "litellm-batch-bucket", "drop_params": drop_params},
+            )
+            assert isinstance(request, dict)
+            return json.loads(request["data"])
+
+        if not drop_params:
+            with pytest.raises(litellm.UnsupportedParamsError, match="service_tier"):
+                upload()
+            return
+
+        model_input: Final = upload()["modelInput"]
+        assert model_input["messages"]
+        assert "service_tier" not in json.dumps(model_input)
+        assert "serviceTier" not in model_input
 
     @pytest.mark.parametrize("url", ["/v1/chat/completions", "/v1/responses"])
     def test_passthrough_row_keeps_row_level_drop_params_out_of_the_model_input(self, url: str):
