@@ -71,6 +71,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
 from litellm.proxy.common_utils.callback_config_validation import (
     credential_reference_rejection,
     logging_metadata_config_error,
+    string_keyed,
 )
 from litellm.proxy.common_utils.callback_utils import (
     decrypt_callback_vars,
@@ -940,7 +941,7 @@ def raise_on_invalid_key_logging_config(metadata: Mapping[str, object] | None) -
     Without this the same New Relic config the team endpoint rejects would be
     accepted here and then silently ignored or misrouted at request time.
     """
-    error: Final = logging_metadata_config_error(metadata)
+    error: Final = logging_metadata_config_error(string_keyed(decrypted_callback_metadata(metadata)))
     if error is not None:
         raise HTTPException(status_code=400, detail={"error": error})
 
