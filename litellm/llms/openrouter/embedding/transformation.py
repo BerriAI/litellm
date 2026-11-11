@@ -8,6 +8,7 @@ Docs: https://openrouter.ai/docs
 """
 
 import math
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -138,7 +139,8 @@ class OpenrouterEmbeddingConfig(BaseEmbeddingConfig):
             model_response_object=model_response,
             response_type="embedding",
         )
-        response_cost: Final[object] = (response_json.get("usage") or {}).get("cost")
+        usage: Final[Mapping[str, object]] = response_json.get("usage") or {}
+        response_cost: Final = usage.get("cost")
         if (
             isinstance(response_cost, int | float)
             and not isinstance(response_cost, bool)
