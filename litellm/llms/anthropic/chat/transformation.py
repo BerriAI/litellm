@@ -700,7 +700,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if own_max_tokens is not None:
             return own_max_tokens
         unversioned_model, version_separator, _ = model.partition("@")
-        unversioned_max_tokens: Final = _own_max_output_tokens(unversioned_model) if version_separator else None
+        unversioned_max_tokens: Final = mapped_max_output_tokens(unversioned_model) if version_separator else None
         if unversioned_max_tokens is not None:
             return unversioned_max_tokens
         host_max_tokens: Final = (
