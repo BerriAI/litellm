@@ -5,6 +5,7 @@ import { Switch } from "@/components/ui/switch";
 import type { ParseKeys } from "i18next";
 import { Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 export interface RequestTagMapping {
   header: "baggage";
@@ -111,7 +112,7 @@ export function RequestTagMappingsEditor({ value, onChange, disabled = false }: 
               {t("routerSettings.requestTagMappings.baggageKey")}
               <Input
                 aria-label={t("routerSettings.requestTagMappings.baggageKeyAriaLabel", { number: index + 1 })}
-                placeholder="entrypoint"
+                placeholder={codeSamples.routerSettings.baggageKey}
                 value={rule.key}
                 onChange={(event) => update(index, { key: event.target.value })}
               />
@@ -145,13 +146,16 @@ export function RequestTagMappingsEditor({ value, onChange, disabled = false }: 
                   {t("routerSettings.requestTagMappings.tagPrefix")}
                   <Input
                     aria-label={t("routerSettings.requestTagMappings.tagPrefixAriaLabel", { number: index + 1 })}
-                    placeholder="usecase:"
+                    placeholder={codeSamples.routerSettings.tagPrefix}
                     value={rule.tag_prefix ?? ""}
                     onChange={(event) => update(index, { tag_prefix: event.target.value })}
                   />
                 </label>
                 <p className="text-xs text-muted-foreground">
-                  {rule.key}=x → {rule.tag_prefix}x
+                  {rule.key}
+                  {codeSamples.routerSettings.anyValuePreviewSeparator}
+                  {rule.tag_prefix}
+                  {codeSamples.routerSettings.anyValuePreviewValue}
                 </p>
               </>
             )}

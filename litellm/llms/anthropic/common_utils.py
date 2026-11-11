@@ -6,7 +6,7 @@ import copy
 import json
 import os
 import re
-from collections.abc import Container, Mapping, MutableMapping, Sequence
+from collections.abc import Callable, Container, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import chain
@@ -29,16 +29,19 @@ from litellm.constants import (
 )
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, lax_bool
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    get_file_ids_from_messages,
-    is_encrypted_reasoning_block,
-    native_redacted_thinking_data,
-)
 from litellm.litellm_core_utils.prompt_templates.factory import THOUGHT_SIGNATURE_SEPARATOR
+from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
+    get_file_ids_from_messages,
+)
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
+    anthropic_tool_search_result,
     find_anthropic_server_tool_result,
     message_field,
     parts_of,
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    is_encrypted_reasoning_block,
+    native_redacted_thinking_data,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import DroppedThinkingBudget, non_numeric_thinking_budget_error
 from litellm.litellm_core_utils.url_utils import join_api_base
@@ -62,16 +65,34 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
     ANTHROPIC_TOOL_SEARCH_TOOL_TYPES,
     LEGACY_THINKING_DISPLAY_UPDATES_PROVIDERS,
+    AllAnthropicPassThroughMessageValues,
     AllAnthropicToolsValues,
     AnthropicMcpServerTool,
     AnthropicMessagesToolChoice,
     AnthropicThinkingParam,
+    AnthropicToolSearchToolResultBlock,
 )
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionAssistantToolCall,
+    ChatCompletionToolCallFunctionChunk,
+)
 from litellm.types.proxy.auth.special_headers import SpecialHeaders
 from litellm.types.proxy.model_listing import ModelInfoResponse
-from litellm.types.utils import LlmProviders
+from litellm.types.responses.main import (
+    ResponseFunctionWebSearch,
+    web_search_call_tool_id,
+    with_hosted_web_tool_arguments,
+)
+from litellm.types.utils import (
+    ChatCompletionMessageCustomToolCall,
+    ChatCompletionMessageToolCall,
+    Delta,
+    LlmProviders,
+    Message,
+    chat_completion_tool_call_from_dict,
+)
 
 _MessageT = TypeVar("_MessageT")
 
@@ -124,6 +145,11 @@ _DOTTED_VERSION_RE: Final = re.compile(r"(\d)\.(\d)")
 _CLAUDE_CODE_BILLING_HEADER_PREFIX: Final = "x-anthropic-billing-header:"
 OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
 OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
+_SERVER_TOOL_CALLS_ADAPTER: Final = TypeAdapter(tuple[ChatCompletionAssistantToolCall, ...])
+_SERVER_TOOL_CALL_ADAPTER: Final = TypeAdapter(ChatCompletionAssistantToolCall)
+_SERVER_CALL_FIELD_KEYS: Final = ("server_tool_calls", "web_search_calls")
+_WEB_SEARCH_CALL_ADAPTER: Final = TypeAdapter(ResponseFunctionWebSearch)
+_TOOL_CALL_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _DECODED_JSON: Final = TypeAdapter(object)
 _JSON_VALUE: Final = TypeAdapter(JsonValue)
 
@@ -1142,6 +1168,34 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return AnthropicModelInfo._supports_model_capability(model, "thinking_always_on", custom_llm_provider)
 
     @staticmethod
+    def thinks_by_default(model: str, custom_llm_provider: str) -> bool:
+        return AnthropicModelInfo._is_always_on_thinking_model(
+            model, custom_llm_provider
+        ) or AnthropicModelInfo._supports_model_capability(model, "thinking_on_by_default", custom_llm_provider)
+
+    @staticmethod
+    def will_think(model: str, custom_llm_provider: str, request_params: Mapping[str, object]) -> bool:
+        if AnthropicModelInfo._is_always_on_thinking_model(model, custom_llm_provider):
+            return True
+        match request_params:
+            case {"thinking": True | {"type": "enabled" | "adaptive"}}:
+                return True
+            case {"reasoning_effort": effort} if effort is not None and effort != "none":
+                return True
+            case {"thinking": {"type": "disabled"}} | {"reasoning_effort": "none"}:
+                return False
+            case _:
+                return AnthropicModelInfo.thinks_by_default(model, custom_llm_provider)
+
+    @staticmethod
+    def response_format_tool_can_be_forced(
+        model: str, custom_llm_provider: str, request_params: Mapping[str, object]
+    ) -> bool:
+        return not AnthropicModelInfo.forced_tool_use_unsupported(model) and not AnthropicModelInfo.will_think(
+            model, custom_llm_provider, request_params
+        )
+
+    @staticmethod
     def _supports_legacy_thinking(model: str, custom_llm_provider: str) -> bool:
         """Whether ``model`` is an adaptive-thinking model that still accepts legacy
         ``thinking.type=enabled`` with ``budget_tokens`` (the Claude 4.6 family).
@@ -1867,6 +1921,113 @@ def strip_advisor_blocks_from_messages(messages: list[_MessageT], replace_with_t
     return messages
 
 
+def _assistant_blocks(message: AllAnthropicPassThroughMessageValues) -> tuple[object, ...]:
+    return parts_of(message["content"]) if message["role"] == "assistant" else ()
+
+
+def _results_with_unloaded_tools(
+    messages: Sequence[AllAnthropicPassThroughMessageValues], tool_names: frozenset[str]
+) -> tuple[AnthropicToolSearchToolResultBlock, ...]:
+    blocks: Final = chain.from_iterable(map(_assistant_blocks, messages))
+    results: Final = (result for result in map(anthropic_tool_search_result, blocks) if result is not None)
+    return tuple(result for result in results if not tool_names.issuperset(result.tool_names))
+
+
+def _is_stale_tool_search_block(block: object, stale_ids: frozenset[str]) -> bool:
+    match message_field(block, "type"):
+        case "server_tool_use":
+            return message_field(block, "id") in stale_ids
+        case "tool_search_tool_result":
+            return message_field(block, "tool_use_id") in stale_ids
+        case _:
+            return False
+
+
+def _with_loaded_tool_references_only(block: object, tool_names: frozenset[str]) -> object:
+    result: Final = anthropic_tool_search_result(block)
+    fields: Final = as_str_mapping(block)
+    if result is None or fields is None or tool_names.issuperset(result.tool_names):
+        return block
+    content: Final = as_str_mapping(fields.get("content")) or MappingProxyType({})
+    references: Final = parts_of(content.get("tool_references"))
+    loaded: Final = [reference for reference in references if message_field(reference, "tool_name") in tool_names]
+    return {**fields, "content": {**content, "tool_references": loaded}}
+
+
+def _with_loaded_tool_searches_only(
+    message: AllAnthropicPassThroughMessageValues, stale_ids: frozenset[str], tool_names: frozenset[str]
+) -> AllAnthropicPassThroughMessageValues | None:
+    if message["role"] != "assistant":
+        return message
+    content: Final = message["content"]
+    if isinstance(content, str):
+        return message
+    blocks: Final = list(content)
+    kept: Final = [
+        _with_loaded_tool_references_only(block, tool_names)
+        for block in blocks
+        if not _is_stale_tool_search_block(block, stale_ids)
+    ]
+    if kept == blocks:
+        return message
+    return {**message, "content": kept} if kept else None
+
+
+def _tool_reference_renamed(reference: object, name_map: Mapping[str, str]) -> object:
+    fields: Final = as_str_mapping(reference)
+    name: Final = fields.get("tool_name") if fields is not None else None
+    if fields is None or not isinstance(name, str) or name not in name_map:
+        return reference
+    return {**fields, "tool_name": name_map[name]}
+
+
+def tool_search_content_renamed(content: object, name_map: Mapping[str, str]) -> object:
+    fields: Final = as_str_mapping(content)
+    if fields is None or "tool_references" not in fields:
+        return content
+    references: Final = parts_of(fields["tool_references"])
+    return {**fields, "tool_references": [_tool_reference_renamed(reference, name_map) for reference in references]}
+
+
+def tool_search_result_renamed(block: object, name_map: Mapping[str, str]) -> object:
+    fields: Final = as_str_mapping(block)
+    if fields is None or fields.get("type") != "tool_search_tool_result":
+        return block
+    return {**fields, "content": tool_search_content_renamed(fields.get("content"), name_map)}
+
+
+def replays_tool_search(messages: object) -> bool:
+    contents: Final = (message_field(message, "content") for message in parts_of(messages))
+    blocks: Final = chain.from_iterable(map(parts_of, contents))
+    return any(anthropic_tool_search_result(block) is not None for block in blocks)
+
+
+def without_stale_tool_search_results(
+    messages: Sequence[AllAnthropicPassThroughMessageValues], tools: Sequence[object]
+) -> tuple[AllAnthropicPassThroughMessageValues, ...]:
+    """
+    Leave out the tools a replayed tool search found that are no longer in ``tools``,
+    and the whole search, its ``server_tool_use`` and its ``tool_search_tool_result``,
+    when none of them are left. Anthropic rejects such a history with "Tool reference
+    '<name>' not found in available tools", for example after a follow-up turn removes
+    a tool or sends none.
+    """
+    tool_names: Final = frozenset(name for tool in tools if isinstance(name := message_field(tool, "name"), str))
+    unloaded: Final = _results_with_unloaded_tools(messages, tool_names)
+    if not unloaded:
+        return tuple(messages)
+    litellm.verbose_logger.debug(
+        "Leaving out the tools a replayed tool search found that this request no longer sends: %s",
+        sorted(frozenset(chain.from_iterable(result.tool_names for result in unloaded)) - tool_names),
+    )
+    stale_ids: Final = frozenset(result.tool_use_id for result in unloaded if tool_names.isdisjoint(result.tool_names))
+    return tuple(
+        kept
+        for message in messages
+        if (kept := _with_loaded_tool_searches_only(message, stale_ids, tool_names)) is not None
+    )
+
+
 def is_anthropic_invalid_thinking_block_error(error_text: str) -> bool:
     """
     Detect Anthropic 400 errors caused by invalid thinking blocks in replayed
@@ -2056,7 +2217,7 @@ def _strip_empty_content_blocks_from_message(message: object) -> object:
 
 def strip_empty_content_blocks_from_anthropic_messages(
     messages: Sequence[object],
-) -> list[Any]:
+) -> Sequence[object]:
     """
     Return a new message list with empty or whitespace-only ``{"type": "text"}``
     content blocks and empty *unsigned* ``{"type": "thinking"}`` blocks removed.
@@ -2169,7 +2330,7 @@ def _sanitize_tool_use_id_content_block(block: object) -> object:
     return block
 
 
-def sanitize_tool_use_ids_in_anthropic_messages(messages: Sequence[object]) -> list[Any]:
+def sanitize_tool_use_ids_in_anthropic_messages(messages: Sequence[object]) -> Sequence[object]:
     """
     Return a new message list with ``tool_use`` / ``server_tool_use`` ``id`` and
     ``tool_result`` ``tool_use_id`` values rewritten to satisfy Anthropic's
@@ -2258,6 +2419,261 @@ def _replayed_server_tool_use(block: object) -> _ReplayedServerToolUse | None:
         return _SERVER_TOOL_USE_ADAPTER.validate_python(block)
     except ValidationError:
         return None
+
+
+def anthropic_server_tool_call_params(message: object) -> tuple[ChatCompletionAssistantToolCall, ...]:
+    fields: Final = validated_object_mapping(message_field(message, "provider_specific_fields"))
+    try:
+        return _SERVER_TOOL_CALLS_ADAPTER.validate_python(fields.get("server_tool_calls", ()) if fields else ())
+    except ValidationError:
+        return ()
+
+
+def anthropic_server_tool_calls(message: object) -> tuple[ChatCompletionMessageToolCall, ...]:
+    return tuple(_message_tool_call_from_params(call) for call in anthropic_server_tool_call_params(message))
+
+
+def tool_calls_with_server_tool_calls(
+    message: object,
+) -> tuple[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall, ...]:
+    client_tool_calls: Final = tuple(
+        call
+        for tool_call in parts_of(message_field(message, "tool_calls"))
+        if (call := _client_message_tool_call(tool_call)) is not None
+    )
+    return (*anthropic_server_tool_calls(message), *client_tool_calls)
+
+
+def anthropic_server_call_fields(holder: object) -> Mapping[str, object]:
+    fields: Final = validated_object_mapping(message_field(holder, "provider_specific_fields")) or {}
+    return MappingProxyType({key: fields[key] for key in _SERVER_CALL_FIELD_KEYS if fields.get(key)})
+
+
+def message_dict_with_server_tool_calls(message: object) -> object:
+    mapping: Final = validated_object_mapping(message)
+    server_tool_calls: Final = anthropic_server_tool_call_params(message)
+    if mapping is None or not server_tool_calls:
+        return message
+    return {**mapping, "tool_calls": [*server_tool_calls, *parts_of(mapping.get("tool_calls"))]}
+
+
+def _server_tool_call_param(tool_call: object) -> ChatCompletionAssistantToolCall | None:
+    try:
+        call: Final = _SERVER_TOOL_CALL_ADAPTER.validate_python(tool_call)
+    except ValidationError:
+        return None
+    return call if _server_tool_call_id(call).startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX) else None
+
+
+def message_dict_with_server_tool_calls_split_out(message: object) -> object:
+    mapping: Final = validated_object_mapping(message)
+    tool_calls: Final = parts_of(mapping.get("tool_calls")) if mapping is not None else ()
+    server_tool_calls: Final = tuple(
+        call for tool_call in tool_calls if (call := _server_tool_call_param(tool_call)) is not None
+    )
+    if mapping is None or not server_tool_calls:
+        return message
+    fields: Final = validated_object_mapping(mapping.get("provider_specific_fields")) or {}
+    changed: Final = changed_server_tool_call_arguments(anthropic_server_tool_call_params(message), server_tool_calls)
+    client_tool_calls: Final = [tool_call for tool_call in tool_calls if _server_tool_call_param(tool_call) is None]
+    return {
+        **mapping,
+        "tool_calls": client_tool_calls or None,
+        "provider_specific_fields": {
+            **fields,
+            "server_tool_calls": list(server_tool_calls),
+            **(
+                {
+                    "web_search_calls": _rewritten_web_search_calls(
+                        fields["web_search_calls"], changed, _with_hosted_web_call_arguments
+                    )
+                }
+                if changed and fields.get("web_search_calls") is not None
+                else {}
+            ),
+        },
+    }
+
+
+def with_server_tool_call_arguments(
+    call: ChatCompletionAssistantToolCall, arguments: str
+) -> ChatCompletionAssistantToolCall:
+    return ChatCompletionAssistantToolCall(
+        id=call["id"],
+        type=call["type"],
+        function=ChatCompletionToolCallFunctionChunk(name=call["function"].get("name"), arguments=arguments),
+    )
+
+
+def write_anthropic_server_tool_calls(
+    holder: Message | Delta, rewritten: tuple[ChatCompletionAssistantToolCall, ...]
+) -> None:
+    original: Final = anthropic_server_tool_call_params(holder)
+    if rewritten == original:
+        return
+    holder.provider_specific_fields = {  # rebind-ok: a guardrail rewrite must land on the message it scanned
+        **(holder.provider_specific_fields or {}),
+        "server_tool_calls": list(rewritten),
+    }
+    write_anthropic_hosted_web_call_arguments(holder, changed_server_tool_call_arguments(original, rewritten))
+
+
+def write_request_server_tool_calls(message: object, rewritten: tuple[ChatCompletionAssistantToolCall, ...]) -> None:
+    original: Final = anthropic_server_tool_call_params(message)
+    if rewritten == original:
+        return
+    write_request_hosted_web_call_arguments(message, changed_server_tool_call_arguments(original, rewritten))
+    fields: Final = validated_object_mapping(message_field(message, "provider_specific_fields")) or {}
+    if not isinstance(message, dict):
+        return
+    message["provider_specific_fields"] = {  # rebind-ok: a guardrail rewrite must land on the request it scanned
+        **fields,
+        "server_tool_calls": list(rewritten),
+    }
+
+
+def write_request_hosted_web_call_arguments(message: object, arguments_by_tool_id: Mapping[str, str]) -> None:
+    fields: Final = validated_object_mapping(message_field(message, "provider_specific_fields"))
+    if not arguments_by_tool_id or not isinstance(message, dict) or fields is None:
+        return
+    if fields.get("web_search_calls") is None:
+        return
+    message["provider_specific_fields"] = {  # rebind-ok: a rewritten call's hosted copy must not keep its old input
+        **fields,
+        "web_search_calls": _rewritten_web_search_calls(
+            fields["web_search_calls"], arguments_by_tool_id, _jsonable_hosted_web_call
+        ),
+    }
+
+
+def _server_tool_call_id(call: ChatCompletionAssistantToolCall) -> str:
+    return call["id"] or ""
+
+
+def _server_tool_call_arguments(call: ChatCompletionAssistantToolCall) -> str:
+    return call["function"].get("arguments") or ""
+
+
+def changed_server_tool_call_arguments(
+    original: Sequence[ChatCompletionAssistantToolCall], rewritten: Sequence[ChatCompletionAssistantToolCall]
+) -> Mapping[str, str]:
+    original_arguments: Final = MappingProxyType(
+        {_server_tool_call_id(call): _server_tool_call_arguments(call) for call in original}
+    )
+    return MappingProxyType(
+        {
+            _server_tool_call_id(call): _server_tool_call_arguments(call)
+            for call in rewritten
+            if _server_tool_call_arguments(call) != original_arguments.get(_server_tool_call_id(call))
+        }
+    )
+
+
+def write_anthropic_hosted_web_call_arguments(holder: Message | Delta, arguments_by_tool_id: Mapping[str, str]) -> None:
+    fields: Final = holder.provider_specific_fields
+    if not arguments_by_tool_id or not fields or fields.get("web_search_calls") is None:
+        return
+    holder.provider_specific_fields = {  # rebind-ok: the hosted copy of a rewritten call must not keep its old input
+        **fields,
+        "web_search_calls": _rewritten_web_search_calls(
+            fields["web_search_calls"], arguments_by_tool_id, _with_hosted_web_call_arguments
+        ),
+    }
+
+
+def _rewritten_web_search_calls(
+    calls: object,
+    arguments_by_tool_id: Mapping[str, str],
+    rewrite: Callable[[object, Mapping[str, str]], object],
+) -> object:
+    mapping: Final = validated_object_mapping(calls)
+    if mapping is not None:
+        return {key: rewrite(call, arguments_by_tool_id) for key, call in mapping.items()}
+    if not isinstance(calls, list):
+        return calls
+    return [rewrite(call, arguments_by_tool_id) for call in parts_of(calls)]
+
+
+def _jsonable_hosted_web_call(item: object, arguments_by_tool_id: Mapping[str, str]) -> object:
+    call: Final = _with_hosted_web_call_arguments(item, arguments_by_tool_id)
+    if not isinstance(call, ResponseFunctionWebSearch):
+        return call
+    return _WEB_SEARCH_CALL_ADAPTER.dump_python(call, mode="json", exclude_none=True)
+
+
+def _with_hosted_web_call_arguments(item: object, arguments_by_tool_id: Mapping[str, str]) -> object:
+    try:
+        call: Final = _WEB_SEARCH_CALL_ADAPTER.validate_python(item)
+    except ValidationError:
+        return item
+    arguments: Final = arguments_by_tool_id.get(web_search_call_tool_id(call.id) or "")
+    if arguments is None:
+        return item
+    return call.model_copy(update={"action": with_hosted_web_tool_arguments(call.action, arguments)})
+
+
+def without_anthropic_server_tool_calls(holder: Message, tool_ids: frozenset[str]) -> None:
+    fields: Final = holder.provider_specific_fields or {}
+    holder.provider_specific_fields = {  # rebind-ok: a denied call must leave every copy of the message it was on
+        **fields,
+        "server_tool_calls": [
+            call for call in anthropic_server_tool_call_params(holder) if _server_tool_call_id(call) not in tool_ids
+        ],
+        **(
+            {"web_search_calls": _web_search_calls_without(fields["web_search_calls"], tool_ids)}
+            if fields.get("web_search_calls") is not None
+            else {}
+        ),
+    }
+
+
+def _web_search_calls_without(calls: object, tool_ids: frozenset[str]) -> object:
+    mapping: Final = validated_object_mapping(calls)
+    if mapping is not None:
+        return {key: call for key, call in mapping.items() if _hosted_web_call_tool_id(call) not in tool_ids}
+    items: Final = validated_object_list(calls)
+    if items is None:
+        return calls
+    return [call for call in items if _hosted_web_call_tool_id(call) not in tool_ids]
+
+
+def _hosted_web_call_tool_id(item: object) -> str | None:
+    try:
+        return web_search_call_tool_id(_WEB_SEARCH_CALL_ADAPTER.validate_python(item).id)
+    except ValidationError:
+        return None
+
+
+def write_anthropic_server_tool_call_arguments(holder: Message | Delta, index: int, arguments: str) -> None:
+    write_anthropic_server_tool_calls(
+        holder,
+        tuple(
+            with_server_tool_call_arguments(call, arguments) if call_index == index else call
+            for call_index, call in enumerate(anthropic_server_tool_call_params(holder))
+        ),
+    )
+
+
+def _message_tool_call_from_params(call: ChatCompletionAssistantToolCall) -> ChatCompletionMessageToolCall:
+    return ChatCompletionMessageToolCall(id=call["id"], type=call["type"], function=dict(call["function"]))
+
+
+def _client_message_tool_call(
+    tool_call: object,
+) -> ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall | None:
+    match tool_call:
+        case ChatCompletionMessageToolCall() | ChatCompletionMessageCustomToolCall():
+            return tool_call
+        case _:
+            try:
+                fields: Final = _TOOL_CALL_FIELDS_ADAPTER.validate_python(tool_call)
+                return chat_completion_tool_call_from_dict(
+                    MappingProxyType({key: value for key, value in fields.items() if key != "custom"})
+                    if fields.get("type") == "function"
+                    else fields
+                )
+            except (TypeError, ValidationError):
+                return None
 
 
 def tool_call_is_rebuilt_as_server_tool_use(

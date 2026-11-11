@@ -9,7 +9,7 @@ import { Tag } from "@/components/tag_management/types";
 import TagTable from "./TagTable";
 import { toast } from "@/lib/toast";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
-import CreateTagModal from "./components/CreateTagModal";
+import CreateTagModal, { CreateTagFormValues } from "./components/CreateTagModal";
 
 interface ModelInfo {
   model_name: string;
@@ -20,6 +20,9 @@ interface ModelInfo {
     id: string;
   };
 }
+
+const numericPayload = (value: string | undefined): number | undefined =>
+  value === undefined || value === "" ? undefined : Number(value);
 
 interface TagProps {
   accessToken: string | null;
@@ -62,17 +65,16 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
     setLastRefreshed(currentDate.toLocaleString());
   };
 
-  const handleCreate = async (formValues: any) => {
+  const handleCreate = async (formValues: CreateTagFormValues) => {
     if (!accessToken) return;
     try {
       await tagCreateCall(accessToken, {
         name: formValues.tag_name,
         description: formValues.description,
         models: formValues.allowed_llms,
-        max_budget: formValues.max_budget,
-        soft_budget: formValues.soft_budget,
-        tpm_limit: formValues.tpm_limit,
-        rpm_limit: formValues.rpm_limit,
+        max_budget: numericPayload(formValues.max_budget),
+        tpm_limit: numericPayload(formValues.tpm_limit),
+        rpm_limit: numericPayload(formValues.rpm_limit),
         budget_duration: formValues.budget_duration,
       });
       toast.success(t("tagManagement.page.toasts.created"));

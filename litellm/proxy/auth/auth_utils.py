@@ -2,15 +2,16 @@ import importlib.util
 import os
 import re
 import sys
-from collections.abc import Collection, Iterator, Mapping
-from functools import lru_cache
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from dataclasses import dataclass
+from functools import cache, lru_cache
 from itertools import accumulate, chain, repeat
 from logging import Logger
 from types import MappingProxyType
-from typing import Any, Final, Protocol
+from typing import Any, Final, Literal, Protocol, TypeAlias
 
 from fastapi import HTTPException, Request, status
-from pydantic import PositiveInt, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, PositiveInt, TypeAdapter, ValidationError
 
 import litellm
 from litellm import Router, constants, provider_list
@@ -22,7 +23,9 @@ from litellm.constants import (
     MINIMUM_CUSTOM_KEY_LENGTH,
     STANDARD_CUSTOMER_ID_HEADERS,
 )
+from litellm.litellm_core_utils.cloud_storage_security import REQUEST_S3_BUCKET_PARAMS, STORED_S3_BUCKET_PARAM
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor, reject_api_key_secret_reference
+from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import (
     SSRFError,
@@ -41,11 +44,13 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 from litellm.types.router import (
     CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS,
     Deployment,
+    DeploymentTypedDict,
+    LiteLLMParamsTypedDict,
     reject_server_owned_wif_fields,
     server_owned_wif_fields_present,
 )
 from litellm.types.router import reject_server_owned_wif_params as _reject_server_owned_wif_params
-from litellm.types.utils import CustomPricingLiteLLMParams, oauth_token_exchange_litellm_params
+from litellm.types.utils import CustomPricingLiteLLMParams, LlmProviders, oauth_token_exchange_litellm_params
 from litellm.types.videos.main import DecodedVideoId
 
 
@@ -211,35 +216,74 @@ def _is_param_allowed(
     return False
 
 
+def deployment_clientside_auth_params(litellm_params: LiteLLMParamsTypedDict) -> CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS:
+    if "configurable_clientside_auth_params" not in litellm_params:
+        return None
+    return litellm_params["configurable_clientside_auth_params"]
+
+
+_DEPLOYMENT_LIST: Final = TypeAdapter(tuple[DeploymentTypedDict, ...], config=ConfigDict(arbitrary_types_allowed=True))
+
+
+def _model_group_deployments(
+    model: str, llm_router: Router, team_id: str | None = None
+) -> Sequence[DeploymentTypedDict]:
+    registry: Final = llm_router.registry()
+    provider_group: Final = model.split("/", 1)[0]
+    if team_id is not None and registry.routing_group(model) is None:
+        team_deployments: Final = registry.deployments(
+            model, source="all", team_id=team_id
+        ) or _DEPLOYMENT_LIST.validate_python(registry.deployments(model, source="wildcard", team_id=team_id))
+        if team_deployments:
+            return team_deployments
+    return (
+        registry.deployments(model, source="routed_group", team_id=team_id)
+        or (registry.deployments(provider_group, team_id=team_id) if provider_group in provider_list else None)
+        or ()
+    )
+
+
+_VERTEX_TARGET_READING_PROVIDERS: Final[frozenset[str]] = frozenset(
+    (LlmProviders.VERTEX_AI.value, LlmProviders.VERTEX_AI_BETA.value, LlmProviders.GEMINI.value, LlmProviders.GDC.value)
+)
+
+
+def _deployment_provider(litellm_params: LiteLLMParamsTypedDict) -> str | None:
+    match litellm_params:
+        case {"custom_llm_provider": str(declared)} if declared:
+            return declared
+        case {"model": str(model)}:
+            return inferred_provider(model)
+        case _:
+            return None
+
+
+def _model_group_reads_vertex_target(model: str, llm_router: Router | None, team_id: str | None = None) -> bool:
+    if llm_router is None:
+        return True
+    deployments: Final = _model_group_deployments(model, llm_router, team_id)
+    providers: Final = frozenset(_deployment_provider(deployment["litellm_params"]) for deployment in deployments)
+    return not deployments or None in providers or bool(providers & _VERTEX_TARGET_READING_PROVIDERS)
+
+
 def _allow_model_level_clientside_configurable_parameters(
-    model: str, param: str, request_body_value: object, llm_router: Router | None
+    model: str, param: str, request_body_value: object, llm_router: Router | None, team_id: str | None = None
 ) -> bool:
     """
-    Check if model is allowed to use configurable client-side params
-    - get matching model
-    - check if 'clientside_configurable_parameters' is set for model
-    -
+    The router, not the caller, picks which deployment serves the request, so an
+    opt-in counts only when every deployment of the model group, already alias
+    resolved, carries it
     """
     if llm_router is None:
         return False
-    # check if model is set
-    registry: Final = llm_router.registry()
-    model_info = registry.group(model)
-    if model_info is None:
-        # check if wildcard model is set
-        if model.split("/", 1)[0] in provider_list:
-            model_info = registry.group(model.split("/", 1)[0])
-
-    if model_info is None:
-        return False
-
-    if model_info is None or model_info.configurable_clientside_auth_params is None:
-        return False
-
-    return _is_param_allowed(
-        param=param,
-        request_body_value=request_body_value,
-        configurable_clientside_auth_params=model_info.configurable_clientside_auth_params,
+    deployments: Final = _model_group_deployments(model, llm_router, team_id)
+    return bool(deployments) and all(
+        _is_param_allowed(
+            param=param,
+            request_body_value=request_body_value,
+            configurable_clientside_auth_params=deployment_clientside_auth_params(deployment["litellm_params"]),
+        )
+        for deployment in deployments
     )
 
 
@@ -316,6 +360,20 @@ def route_manages_deployments(route: str | None) -> bool:
 
 def route_manages_mcp_servers(route: str | None) -> bool:
     return route is not None and _MCP_SERVER_MANAGEMENT_ROUTE.fullmatch(route) is not None
+
+
+VERTEX_TARGET_PARAMS: Final[frozenset[str]] = frozenset(
+    ("vertex_project", "vertex_location", "vertex_ai_project", "vertex_ai_location")
+)
+_ROUTES_THAT_NAME_THEIR_VERTEX_TARGET: Final[frozenset[str]] = frozenset(
+    ("/vertex_ai/live", "/rag/ingest", "/v1/rag/ingest")
+)
+
+
+def _without_route_named_vertex_target(request_body: Mapping[str, object], route: str | None) -> Mapping[str, object]:
+    if route not in _ROUTES_THAT_NAME_THEIR_VERTEX_TARGET:
+        return request_body
+    return MappingProxyType({key: value for key, value in request_body.items() if key not in VERTEX_TARGET_PARAMS})
 
 
 _NESTED_CONFIG_KEYS: Final[tuple[str, ...]] = ("litellm_embedding_config", "extra_body")
@@ -410,6 +468,10 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     "aws_external_id",
     "aws_session_tags",
     "vertex_credentials",
+    "vertex_location",
+    "vertex_project",
+    "vertex_ai_location",
+    "vertex_ai_project",
     # Azure managed-identity / federated-auth token. The Azure provider
     # transformer reads ``azure_ad_token`` (top-level or via
     # ``extra_body``) and resolves it through ``get_secret`` before
@@ -442,6 +504,10 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     # S3; ``sagemaker_base_url`` redirects all SageMaker traffic;
     # ``deployment_url`` redirects SAP deployments.
     "s3_endpoint_url",
+    "s3_bucket_name",
+    "s3_output_bucket_name",
+    STORED_S3_BUCKET_PARAM,
+    "allow_legacy_cloud_file_ids",
     "sagemaker_base_url",
     "deployment_url",
     # NVIDIA Riva fields consumed by the audio-transcription handler
@@ -478,20 +544,175 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     *sorted(CustomPricingLiteLLMParams.model_fields.keys()),
 )
 
+_BANNED_METADATA_PARAMS: Final[tuple[str, ...]] = tuple(
+    param for param in _BANNED_REQUEST_BODY_PARAMS if param not in VERTEX_TARGET_PARAMS
+)
+
+
+def _routed_opt_in_hop(
+    frontier_and_reached: tuple[frozenset[str], frozenset[str]], router_and_team: tuple[Router, str | None]
+) -> tuple[frozenset[str], frozenset[str]]:
+    frontier, reached = frontier_and_reached
+    llm_router, team_id = router_and_team
+    deployments: Final = chain.from_iterable(_model_group_deployments(model, llm_router, team_id) for model in frontier)
+    routed_groups: Final = frozenset(deployment["model_name"] for deployment in deployments) - reached
+    fallbacks: Final = frozenset[str]().union(
+        *(router_fallback_model_names(name, llm_router, _EVERY_FALLBACK_TYPE) for name in routed_groups)
+    )
+    registry: Final = llm_router.registry()
+    next_hop: Final = (
+        routed_groups | frozenset(registry.resolve(name, kind="alias") or name for name in fallbacks)
+    ) - reached
+    return next_hop, reached | next_hop
+
+
+def _opt_in_model_groups(
+    model: str, also_requested_models: tuple[str, ...], llm_router: Router | None, team_id: str | None = None
+) -> frozenset[str]:
+    requested: Final = frozenset((model, *also_requested_models))
+    if llm_router is None:
+        return requested
+    registry: Final = llm_router.registry()
+    routed: Final = frozenset(registry.resolve(name, kind="alias") or name for name in requested)
+    fallbacks: Final = frozenset[str]().union(
+        *(router_fallback_model_names(name, llm_router, _EVERY_FALLBACK_TYPE) for name in requested | routed)
+    )
+    groups: Final = routed | frozenset(registry.resolve(name, kind="alias") or name for name in fallbacks)
+    hops: Final = accumulate(repeat((llm_router, team_id)), _routed_opt_in_hop, initial=(groups, groups))
+    _, reached = next(hop for hop in hops if not hop[0])
+    return reached
+
+
+_MAX_OPT_IN_FALLBACK_MODELS: Final = 100
+
+
+@dataclass(frozen=True, slots=True)
+class _OptInGroups:
+    every: tuple[str, ...]
+    vertex_target: tuple[str, ...]
+    team_id: str | None = None
+
+
+_OptInKey = tuple[str | tuple[str, str | None], ...]
+
+
+def _opt_in_key(litellm_params: LiteLLMParamsTypedDict) -> _OptInKey:
+    return tuple(
+        item if isinstance(item, str) else ("api_base", item.get("api_base"))
+        for item in deployment_clientside_auth_params(litellm_params) or ()
+    )
+
+
+def _same_answer_key(
+    model_group: str, llm_router: Router, team_id: str | None
+) -> frozenset[tuple[str | None, _OptInKey]] | str:
+    deployments: Final = _model_group_deployments(model_group, llm_router, team_id)
+    key: Final = frozenset(
+        (_deployment_provider(deployment["litellm_params"]), _opt_in_key(deployment["litellm_params"]))
+        for deployment in deployments
+    )
+    return key or model_group
+
+
+def _distinct_opt_in_groups(
+    model_groups: frozenset[str], llm_router: Router | None, team_id: str | None
+) -> tuple[str, ...]:
+    if llm_router is None:
+        return tuple(sorted(model_groups))
+    return tuple(
+        {
+            _same_answer_key(model_group, llm_router, team_id): model_group for model_group in sorted(model_groups)
+        }.values()
+    )
+
+
+def _resolve_opt_in_groups(
+    model: str, also_requested_models: tuple[str, ...], llm_router: Router | None, team_id: str | None = None
+) -> _OptInGroups:
+    if len(frozenset(also_requested_models)) > _MAX_OPT_IN_FALLBACK_MODELS:
+        raise ValueError(
+            f"Rejected Request: the request names more than {_MAX_OPT_IN_FALLBACK_MODELS} fallback models, "
+            "too many to check against configurable_clientside_auth_params."
+        )
+    every: Final = _distinct_opt_in_groups(
+        _opt_in_model_groups(model, also_requested_models, llm_router, team_id), llm_router, team_id
+    )
+    return _OptInGroups(
+        every=every,
+        vertex_target=tuple(group for group in every if _model_group_reads_vertex_target(group, llm_router, team_id)),
+        team_id=team_id,
+    )
+
+
+_ClientSideAllowlistSetting: TypeAlias = Literal[
+    "allowed_client_side_s3_buckets", "allowed_client_side_s3_endpoint_urls"
+]
+
+_PROXY_ALLOWLIST_SETTING_BY_PARAM: Final[Mapping[str, _ClientSideAllowlistSetting]] = MappingProxyType(
+    {
+        "s3_bucket_name": "allowed_client_side_s3_buckets",
+        "s3_output_bucket_name": "allowed_client_side_s3_buckets",
+        "s3_endpoint_url": "allowed_client_side_s3_endpoint_urls",
+    }
+)
+
+TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY: Final = "allowed_s3_buckets"
+_BUCKET_NAMES: Final = TypeAdapter(tuple[str, ...])
+
+
+class _ClientSideStorageAllowlist(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    allowed_client_side_s3_buckets: tuple[str, ...] | None = None
+    allowed_client_side_s3_endpoint_urls: tuple[str, ...] | None = None
+
+    def admits(self, setting: _ClientSideAllowlistSetting, value: object) -> bool:
+        match setting:
+            case "allowed_client_side_s3_buckets":
+                return value in (self.allowed_client_side_s3_buckets or ())
+            case "allowed_client_side_s3_endpoint_urls":
+                return value in (self.allowed_client_side_s3_endpoint_urls or ())
+
+
+def _banned_param_error(param: str) -> ValueError:
+    setting: Final = _PROXY_ALLOWLIST_SETTING_BY_PARAM.get(param)
+    team_hint: Final = (
+        f" or in the team's `metadata.{TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY}`"
+        if param in REQUEST_S3_BUCKET_PARAMS
+        else ""
+    )
+    allowlist_hint: Final = (
+        ""
+        if setting is None
+        else f" To allow specific values only, list them in `general_settings.{setting}`{team_hint}."
+    )
+    return ValueError(
+        f"Rejected Request: {param} is not allowed in request body. "
+        "Clientside passthrough requires explicit admin opt-in via "
+        "either `general_settings.allow_client_side_credentials = true` "
+        "(proxy-wide) or `configurable_clientside_auth_params` on the "
+        "deployment in your proxy config.yaml. "
+        f"Relevant Issue: https://huntr.com/bounties/4001e1a2-7b7a-4776-a3ae-e6692ec3d997{allowlist_hint}",
+    )
+
 
 def _check_banned_params(
     body: Mapping[str, object],
-    general_settings: dict,
+    general_settings: Mapping[str, object],
     llm_router: Router | None,
-    model: str,
     *,
     manages_deployments: bool = False,
     mcp_server_fields_allowed: bool = False,
+    banned_params: tuple[str, ...] = _BANNED_REQUEST_BODY_PARAMS,
+    opt_in_groups: Callable[[], _OptInGroups],
+    defer_model_checks: bool = False,
+    defer_s3_buckets: bool = False,
 ) -> None:
     """Raise ``ValueError`` if ``body`` carries a banned param without admin opt-in.
 
     Shared between the root-level check and the nested-config check so a
-    new banned param only needs to be added in one place.
+    new banned param only needs to be added in one place. ``defer_s3_buckets`` lets
+    bucket params through for handlers that check them against the caller team's allowlist.
     """
     wif_body: Final[Mapping[str, object]] = (
         MappingProxyType({key: value for key, value in body.items() if key not in oauth_token_exchange_litellm_params})
@@ -501,7 +722,7 @@ def _check_banned_params(
     reject_server_owned_wif_params(wif_body)
     if not manages_deployments:
         reject_federated_credential_reference(body)
-    for param in _BANNED_REQUEST_BODY_PARAMS:
+    for param in banned_params:
         if param not in body:
             continue
         if general_settings.get("allow_client_side_credentials") is True:
@@ -509,13 +730,25 @@ def _check_banned_params(
             # entirely so the rest of the loop doesn't waste work.
             return
         if (
+            setting := _PROXY_ALLOWLIST_SETTING_BY_PARAM.get(param)
+        ) is not None and _ClientSideStorageAllowlist.model_validate(general_settings).admits(setting, body[param]):
+            continue
+        if defer_s3_buckets and param in REQUEST_S3_BUCKET_PARAMS:
+            continue
+        if defer_model_checks:
+            continue
+        if all(
             _allow_model_level_clientside_configurable_parameters(
-                model=model,
+                model=model_group,
                 param=param,
                 request_body_value=body[param],
                 llm_router=llm_router,
+                team_id=opt_in_groups().team_id,
             )
             is True
+            for model_group in (
+                opt_in_groups().vertex_target if param in VERTEX_TARGET_PARAMS else opt_in_groups().every
+            )
         ):
             # Per-param opt-in: only THIS param is permitted by the
             # deployment's ``configurable_clientside_auth_params``. Skip
@@ -523,14 +756,7 @@ def _check_banned_params(
             # ``api_base`` with an unallowed ``langfuse_host`` is still
             # rejected for the second field.
             continue
-        raise ValueError(
-            f"Rejected Request: {param} is not allowed in request body. "
-            "Clientside passthrough requires explicit admin opt-in via "
-            "either `general_settings.allow_client_side_credentials = true` "
-            "(proxy-wide) or `configurable_clientside_auth_params` on the "
-            "deployment in your proxy config.yaml. "
-            "Relevant Issue: https://huntr.com/bounties/4001e1a2-7b7a-4776-a3ae-e6692ec3d997",
-        )
+        raise _banned_param_error(param)
 
 
 _FALLBACK_FIELDS: Final[tuple[str, ...]] = (
@@ -606,27 +832,39 @@ def fallback_target_model_name(target: object) -> str | None:
     return None
 
 
-def _direct_fallback_model_names(model: str, llm_router: Router) -> frozenset[str]:
+_EVERY_FALLBACK_TYPE: Final[tuple[str, ...]] = ("general", "context_window", "content_policy")
+
+
+def _direct_fallback_model_names(model: str, llm_router: Router, fallback_types: tuple[str, ...]) -> frozenset[str]:
     from litellm.proxy.auth.model_checks import get_all_fallbacks
 
-    return frozenset(
-        name for target in get_all_fallbacks(model, llm_router) if (name := fallback_target_model_name(target))
+    targets: Final = chain.from_iterable(
+        get_all_fallbacks(model, llm_router, fallback_type) for fallback_type in fallback_types
     )
+    return frozenset(name for target in targets if (name := fallback_target_model_name(target)))
 
 
 def _fallback_hop(
-    frontier_and_reached: tuple[frozenset[str], frozenset[str]], llm_router: Router
+    frontier_and_reached: tuple[frozenset[str], frozenset[str]], router_and_types: tuple[Router, tuple[str, ...]]
 ) -> tuple[frozenset[str], frozenset[str]]:
     frontier, reached = frontier_and_reached
+    llm_router, fallback_types = router_and_types
     next_hop: Final = (
-        frozenset(chain.from_iterable(_direct_fallback_model_names(model, llm_router) for model in frontier)) - reached
+        frozenset(
+            chain.from_iterable(_direct_fallback_model_names(model, llm_router, fallback_types) for model in frontier)
+        )
+        - reached
     )
     return next_hop, reached | next_hop
 
 
-def router_fallback_model_names(model: str, llm_router: Router) -> frozenset[str]:
+def router_fallback_model_names(
+    model: str, llm_router: Router, fallback_types: tuple[str, ...] = ("general",)
+) -> frozenset[str]:
     """The groups a failure on `model` can reach through the router's fallbacks, chained and generic (`*`) ones."""
-    hops: Final = accumulate(repeat(llm_router), _fallback_hop, initial=(frozenset({model}), frozenset({model})))
+    hops: Final = accumulate(
+        repeat((llm_router, fallback_types)), _fallback_hop, initial=(frozenset({model}), frozenset({model}))
+    )
     _, reached = next(hop for hop in hops if not hop[0])
     return reached - {model}
 
@@ -656,12 +894,15 @@ def _reject_url_valued_fallback_target(value: str) -> None:
 
 
 def is_request_body_safe(
-    request_body: dict,
-    general_settings: dict,
+    request_body: Mapping[str, object],
+    general_settings: Mapping[str, object],
     llm_router: Router | None,
     model: str,
     *,
     route: str | None = None,
+    team_id: str | None = None,
+    defer_model_checks: bool = False,
+    defer_s3_buckets: bool = False,
 ) -> bool:
     """
     Check if the request body is safe.
@@ -691,33 +932,72 @@ def is_request_body_safe(
     if "model_list" in request_body:
         raise ValueError("Rejected Request: model_list is not allowed in the request body.")
     manages_deployments: Final = route_manages_deployments(route)
+    root_body: Final = _without_route_named_vertex_target(request_body, route)
+    route_model: Final = _model_from_route_path(route) if route is not None else None
+    also_requested_models: Final = (
+        *request_fallback_model_names(root_body),
+        *((route_model,) if route_model else ()),
+    )
+    opt_in_groups: Final = cache(
+        lambda: _resolve_opt_in_groups(model or route_model or "", also_requested_models, llm_router, team_id)
+    )
     _check_banned_params(
-        request_body,
+        root_body,
         general_settings,
         llm_router,
-        model,
         manages_deployments=manages_deployments,
         mcp_server_fields_allowed=route_manages_mcp_servers(route),
+        opt_in_groups=opt_in_groups,
+        defer_model_checks=defer_model_checks,
+        defer_s3_buckets=defer_s3_buckets,
     )
     for nested_key in _NESTED_CONFIG_KEYS:
         nested = _coerce_metadata_to_dict(request_body.get(nested_key))
         if nested is not None:
-            _check_banned_params(nested, general_settings, llm_router, model, manages_deployments=manages_deployments)
+            _check_banned_params(
+                nested,
+                general_settings,
+                llm_router,
+                manages_deployments=manages_deployments,
+                opt_in_groups=opt_in_groups,
+                defer_model_checks=defer_model_checks,
+                defer_s3_buckets=defer_s3_buckets,
+            )
     for metadata_key in _NESTED_METADATA_KEYS:
         metadata = _coerce_metadata_to_dict(request_body.get(metadata_key))
         if metadata is not None:
-            _check_banned_params(metadata, general_settings, llm_router, model, manages_deployments=manages_deployments)
-        if any(isinstance(key, str) and key.startswith(f"{metadata_key}[") for key in request_body):
+            _check_banned_params(
+                metadata,
+                general_settings,
+                llm_router,
+                manages_deployments=manages_deployments,
+                banned_params=_BANNED_METADATA_PARAMS,
+                opt_in_groups=opt_in_groups,
+                defer_model_checks=defer_model_checks,
+                defer_s3_buckets=defer_s3_buckets,
+            )
+        if any(key.startswith(f"{metadata_key}[") for key in request_body):
             _check_banned_params(
                 extract_nested_form_metadata(form_data=request_body, prefix=f"{metadata_key}["),
                 general_settings,
                 llm_router,
-                model,
                 manages_deployments=manages_deployments,
+                banned_params=_BANNED_METADATA_PARAMS,
+                opt_in_groups=opt_in_groups,
+                defer_model_checks=defer_model_checks,
+                defer_s3_buckets=defer_s3_buckets,
             )
     for target in iter_request_fallback_targets(request_body):
         if isinstance(target, dict):
-            _check_banned_params(target, general_settings, llm_router, model, manages_deployments=manages_deployments)
+            _check_banned_params(
+                target,
+                general_settings,
+                llm_router,
+                manages_deployments=manages_deployments,
+                opt_in_groups=opt_in_groups,
+                defer_model_checks=defer_model_checks,
+                defer_s3_buckets=defer_s3_buckets,
+            )
             target_model = target.get("model")
             if isinstance(target_model, str):
                 _reject_url_valued_fallback_target(target_model)
@@ -731,9 +1011,16 @@ def is_request_body_safe(
         litellm_params_metadata: Final = _coerce_metadata_to_dict(litellm_params.get("metadata"))
         if litellm_params_metadata is not None:
             _check_banned_params(
-                litellm_params_metadata, general_settings, llm_router, model, manages_deployments=manages_deployments
+                litellm_params_metadata,
+                general_settings,
+                llm_router,
+                manages_deployments=manages_deployments,
+                banned_params=_BANNED_METADATA_PARAMS,
+                opt_in_groups=opt_in_groups,
+                defer_model_checks=defer_model_checks,
+                defer_s3_buckets=defer_s3_buckets,
             )
-    for user_config_params in _user_config_litellm_params(request_body):  # pyright: ignore[reportUnknownArgumentType]  # request_body is an untyped dict
+    for user_config_params in _user_config_litellm_params(request_body):
         reject_api_key_secret_reference(user_config_params)
     return True
 
@@ -804,10 +1091,57 @@ def _coerce_metadata_to_dict(value: object) -> dict[str, object] | None:
     return None
 
 
+def _team_s3_buckets(team_metadata: Mapping[str, object] | None) -> tuple[str, ...]:
+    if team_metadata is None:
+        return ()
+    try:
+        return _BUCKET_NAMES.validate_python(team_metadata.get(TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY) or ())
+    except ValidationError:
+        return ()
+
+
+_TEAM_S3_BUCKET_ROUTE_TEMPLATES: Final = frozenset(
+    {"/v1/files", "/files", "/{provider}/v1/files", "/v1/batches", "/batches", "/{provider}/v1/batches"}
+)
+
+
+def checks_team_s3_buckets_in_handler(request: Request) -> bool:
+    """File upload and batch create check request buckets against the caller team's allowlist themselves."""
+    return get_request_route_template(request) in _TEAM_S3_BUCKET_ROUTE_TEMPLATES and request.method == "POST"
+
+
+def enforce_team_s3_bucket_allowlist(
+    request_body: Mapping[str, object],
+    general_settings: Mapping[str, object],
+    llm_router: Router | None,
+    team_metadata: Mapping[str, object] | None,
+    *,
+    team_id: str | None = None,
+) -> None:
+    """Re-run the request body check that auth relaxed for bucket params, now admitting the caller team's buckets."""
+    proxy_buckets: Final = _ClientSideStorageAllowlist.model_validate(general_settings).allowed_client_side_s3_buckets
+    model: Final = request_body.get("model")
+    try:
+        is_request_body_safe(
+            request_body=dict(request_body),
+            general_settings={
+                **general_settings,
+                "allowed_client_side_s3_buckets": (*(proxy_buckets or ()), *_team_s3_buckets(team_metadata)),
+            },
+            llm_router=llm_router,
+            model=model if isinstance(model, str) else "",
+            team_id=team_id,
+        )
+    except ValueError as rejection:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Authentication Error, {rejection}")
+
+
 async def pre_db_read_auth_checks(
     request: Request,
     request_data: dict,
     route: str,
+    *,
+    defer_team_checks: bool = False,
 ):
     """
     1. Checks if request size is under max_request_size_mb (if set)
@@ -821,18 +1155,24 @@ async def pre_db_read_auth_checks(
     Raises:
     - HTTPException if request fails initial auth checks
     """
-    from litellm.proxy.proxy_server import general_settings, llm_router, premium_user
+    from litellm.proxy.proxy_server import general_settings, llm_router
 
     # Check 1. request size
     await check_if_request_size_is_safe(request=request)
 
     # Check 2. Request body is safe
+    defer_model_checks: Final = (
+        defer_team_checks and llm_router is not None and bool(llm_router.registry().index("team_model"))
+    )
+    request.state.deferred_model_body_check = defer_model_checks  # rebind-ok: hand state to auth
     is_request_body_safe(
         request_body=request_data,
         general_settings=general_settings,
         llm_router=llm_router,
-        model=request_data.get("model", ""),  # [TODO] use model passed in url as well (azure openai routes)
+        model=request_data.get("model") or _model_from_route_path(route) or "",
         route=route,
+        defer_model_checks=defer_model_checks,
+        defer_s3_buckets=checks_team_s3_buckets_in_handler(request),
     )
 
     # Check 3. Check if IP address is allowed
@@ -849,19 +1189,12 @@ async def pre_db_read_auth_checks(
         )
 
     # Check 4. Check if request route is an allowed route on the proxy
-    if "allowed_routes" in general_settings:
-        _allowed_routes: Final = general_settings["allowed_routes"]
-        if premium_user is not True:
-            verbose_proxy_logger.error(
-                "Trying to set allowed_routes. This is an Enterprise feature. %s",
-                CommonProxyErrors.not_premium_user.value,
-            )
-        if route not in _allowed_routes:
-            verbose_proxy_logger.error("Route %s not in allowed_routes=%s", route, _allowed_routes)
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access forbidden: Route {route} not allowed",
-            )
+    if not RouteChecks.is_allowed_on_proxy(route):
+        verbose_proxy_logger.error("Route %s not in allowed_routes=%s", route, general_settings["allowed_routes"])
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Access forbidden: Route {route} not allowed",
+        )
 
 
 def route_in_additonal_public_routes(current_route: str):
@@ -1487,6 +1820,9 @@ class BatchLimitRequest(Protocol):
     def model_fields_set(self) -> Collection[str]: ...
 
 
+_ADMIN_ONLY_METADATA_KEYS: Final = (*ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS, TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY)
+
+
 def enforce_batch_limits_are_admin_only(
     data: BatchLimitRequest,
     existing_metadata: Mapping[str, object] | None,
@@ -1497,7 +1833,8 @@ def enforce_batch_limits_are_admin_only(
 
     Every key in ``ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS`` caps what the holder
     may do with batches, so a holder-writable copy would let a caller lift their
-    own quota. Gated on the resulting value rather than on presence, so a form
+    own quota, and the S3 bucket list grants access to buckets with the proxy's
+    own credentials. Gated on the resulting value rather than on presence, so a form
     resending the stored value stays a no-op.
     """
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
@@ -1507,16 +1844,60 @@ def enforce_batch_limits_are_admin_only(
         (data.metadata or EMPTY_MAPPING) if "metadata" in data.model_fields_set else stored
     )
     changed: Final = next(
-        (key for key in ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS if requested.get(key) != stored.get(key)),
+        (key for key in _ADMIN_ONLY_METADATA_KEYS if requested.get(key) != stored.get(key)),
         None,
     )
     if changed is None:
         return
+    reason: Final = (
+        "It lets the holder read and write those buckets with the proxy's AWS credentials."
+        if changed == TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY
+        else "It limits what the holder can do with batches, so the holder cannot raise it."
+    )
+    raise HTTPException(
+        status_code=403,
+        detail={"error": f"Only proxy admins can set {changed} on a {entity}. {reason}"},
+    )
+
+
+VECTOR_STORE_INDEX_GRANTS_METADATA_KEY: Final = "allowed_vector_store_indexes"
+
+
+def _stored_vector_store_index_grants(existing_metadata: Mapping[str, object] | None) -> object:
+    if existing_metadata is None:
+        return None
+    return existing_metadata.get(VECTOR_STORE_INDEX_GRANTS_METADATA_KEY) or None
+
+
+def _requested_vector_store_index_grants(
+    data: BatchLimitRequest,
+    top_level_grants: Sequence[AllowedVectorStoreIndexItem] | None,
+    stored_grants: object,
+) -> object:
+    if top_level_grants is not None:
+        return [grant.model_dump() for grant in top_level_grants] or None
+    if "metadata" in data.model_fields_set:
+        return (data.metadata or EMPTY_MAPPING).get(VECTOR_STORE_INDEX_GRANTS_METADATA_KEY) or None
+    return stored_grants
+
+
+def enforce_vector_store_index_grants_are_admin_only(
+    data: BatchLimitRequest,
+    top_level_grants: Sequence[AllowedVectorStoreIndexItem] | None,
+    existing_metadata: Mapping[str, object] | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    entity: Literal["key", "team"],
+) -> None:
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    stored_grants: Final = _stored_vector_store_index_grants(existing_metadata)
+    if _requested_vector_store_index_grants(data, top_level_grants, stored_grants) == stored_grants:
+        return
     raise HTTPException(
         status_code=403,
         detail={
-            "error": f"Only proxy admins can set {changed} on a {entity}. "
-            "It limits what the holder can do with batches, so the holder cannot raise it."
+            "error": f"Only proxy admins can set {VECTOR_STORE_INDEX_GRANTS_METADATA_KEY} on a {entity}. "
+            "It grants read and write access to vector store indexes, so the holder cannot widen it."
         },
     )
 
@@ -2089,7 +2470,7 @@ def _extract_models_from_managed_resource_id(
                 decoded_video: Final = decode_video_id_with_provider(resource_id)
                 _append_model_candidates(
                     candidates=candidates,
-                    value=_video_access_group(decoded_video, llm_router) or decoded_video.get("model_id"),
+                    value=video_access_group(decoded_video, llm_router) or decoded_video.get("model_id"),
                 )
             else:
                 model_id = decode_character_id_with_provider(resource_id).get("model_id")
@@ -2103,7 +2484,9 @@ def _extract_models_from_managed_resource_id(
     return _dedupe_model_candidates(candidates)
 
 
-def _video_access_group(decoded_video: DecodedVideoId, llm_router: Router | None) -> str | None:
+def video_access_group(
+    decoded_video: DecodedVideoId, llm_router: Router | None, *, resolved_model: str | None = None
+) -> str | None:
     """
     The group a key must be allowed to call to use a video: the creating deployment's group, or, while router
     fallbacks skip model access checks, the group whose router fallback created it.
@@ -2111,7 +2494,9 @@ def _video_access_group(decoded_video: DecodedVideoId, llm_router: Router | None
     from litellm.proxy.auth.fallback_model_access import router_fallback_access_check
     from litellm.proxy.video_endpoints.utils import video_model_group
 
-    creating_group: Final = video_model_group(decoded_video, llm_router)
+    creating_group: Final = (
+        resolved_model if resolved_model is not None else video_model_group(decoded_video, llm_router)
+    )
     requested_model: Final = decoded_video.get("requested_model")
     if llm_router is None or creating_group is None or requested_model is None:
         return creating_group
@@ -2314,37 +2699,8 @@ def get_model_from_request(
         team_id=team_id,
     )
     model = _format_model_candidates(candidates)
-
-    # If no explicit model was found, try to extract from route
     if model is None:
-        # Parse model from route that follows the pattern /openai/deployments/{model}/*
-        match: Final = re.match(r"/openai/deployments/([^/]+)", route)
-        if match:
-            model = match.group(1)
-
-    # If still not found, extract model from Google generateContent-style routes.
-    # These routes put the model in the path and allow "/" inside the model id.
-    # Examples:
-    # - /v1beta/models/gemini-2.0-flash:generateContent
-    # - /v1beta/models/bedrock/claude-sonnet-3.7:generateContent
-    # - /models/custom/ns/model:streamGenerateContent
-    if model is None and not route.lower().startswith("/vertex"):
-        google_match = re.search(r"/(?:v1beta|beta)/models/([^:]+):", route)
-        if google_match:
-            model = google_match.group(1)
-
-    if model is None and not route.lower().startswith("/vertex"):
-        google_match = re.search(r"^/models/([^:]+):", route)
-        if google_match:
-            model = google_match.group(1)
-
-    # If still not found, extract from Vertex AI passthrough route
-    # Pattern: /vertex_ai/.../models/{model_id}:*
-    # Example: /vertex_ai/v1/.../models/gemini-1.5-pro:generateContent
-    if model is None and route.lower().startswith("/vertex"):
-        vertex_match: Final = re.search(r"/models/([^:]+)", route)
-        if vertex_match:
-            model = vertex_match.group(1)
+        model = _model_from_route_path(route)
 
     if route.lower().startswith("/bedrock"):
         bedrock_model: Final = _model_from_bedrock_route(route)
@@ -2361,6 +2717,23 @@ def get_model_from_request(
         return model if nvidia_nim_model is None else nvidia_nim_model
 
     return model
+
+
+def _model_from_route_path(route: str) -> str | None:
+    """
+    Google generateContent-style routes allow "/" inside the model id, e.g.
+    /v1beta/models/bedrock/claude-sonnet-3.7:generateContent
+    """
+    azure_deployment: Final = re.match(r"/openai/deployments/([^/]+)", route)
+    if azure_deployment:
+        return azure_deployment.group(1)
+    if route.lower().startswith("/vertex"):
+        vertex_model: Final = re.search(r"/models/([^:]+)", route)
+        return vertex_model.group(1) if vertex_model else None
+    google_model: Final = re.search(r"/(?:v1beta|beta)/models/([^:]+):", route) or re.search(
+        r"^/models/([^:]+):", route
+    )
+    return google_model.group(1) if google_model else None
 
 
 def _router_model_from_azure_route(route: str, llm_router: Router | None) -> str | None:

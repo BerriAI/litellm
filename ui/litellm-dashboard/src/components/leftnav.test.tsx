@@ -620,6 +620,14 @@ describe("Sidebar (leftnav)", () => {
     expect(screen.queryByRole("link", { name: /Projects/ })).not.toBeInTheDocument();
   });
 
+  it.each([false, true])("links internal users to Skills with read-only=%s", (isViewOnly) => {
+    mockUseAuthorized.mockReturnValue({ ...teamMemberAuthorization, isViewOnly });
+
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    expect(screen.getByRole("link", { name: "Skills Hub" })).toHaveAttribute("href", "/ui/skills");
+  });
+
   it.each([
     { allowlist: ["teams"], visible: false },
     { allowlist: ["teams", "projects"], visible: true },
@@ -693,6 +701,7 @@ describe("Sidebar (leftnav)", () => {
     expectHref("Playground", "/ui/playground");
     expectHref("Models + Endpoints", "/ui/models-and-endpoints");
     expectHref("Usage", "/ui/usage");
+    expectHref("Alerts", "/ui/alerts");
     expectHref("API Reference", "/ui/api-reference");
   });
 

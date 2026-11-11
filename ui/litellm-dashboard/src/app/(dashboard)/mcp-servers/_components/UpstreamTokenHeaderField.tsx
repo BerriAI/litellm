@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 
 import { MountedFormField } from "@/components/common_components/MountedFormField";
 import { textControl } from "./mcpFieldRules";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 const UpstreamTokenHeaderField: React.FC = () => {
   const { t } = useTranslation();
@@ -24,7 +25,7 @@ const UpstreamTokenHeaderField: React.FC = () => {
       {(control) => (
         <Input
           {...textControl(control)}
-          placeholder="Authorization"
+          placeholder={codeSamples.mcpServers.upstreamTokenHeader}
           className="rounded-lg border-border focus:border-info focus:ring-ring"
         />
       )}

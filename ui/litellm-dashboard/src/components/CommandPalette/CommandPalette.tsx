@@ -5,6 +5,7 @@ import { Command as CommandPrimitive } from "cmdk";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { FileText, KeyRound, LoaderCircle, Search } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
+import { useTranslation } from "react-i18next";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { Badge } from "@/components/ui/badge";
@@ -20,6 +21,7 @@ import {
 } from "@/components/ui/command";
 import { InputGroupAddon } from "@/components/ui/input-group";
 import { useTerminology } from "@/contexts/TerminologyContext";
+import i18n from "@/i18n/i18n";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { keyDetailHref } from "@/utils/entityLinks";
 import { routeSegmentForPathname, uiHref } from "@/utils/uiHref";
@@ -32,7 +34,7 @@ type PaletteEntry = {
   title: string;
   subtitle?: ReactNode;
   icon: ReactNode;
-  typeLabel: "Key" | "Page" | "Action";
+  typeLabel: "shell.commandPalette.types.key" | "shell.commandPalette.types.page" | "shell.commandPalette.types.action";
 } & (
   | { kind: "key"; key: KeyResponse }
   | { kind: "filter" }
@@ -46,9 +48,9 @@ interface PaletteGroup {
 }
 
 const emptyMessageFor = (scope: PaletteScope, query: string, hasKeyError: boolean): string => {
-  if (hasKeyError) return "Unable to search keys";
-  if (scope === "keys" && !query) return "No recent keys";
-  return `No results for “${query}”`;
+  if (hasKeyError) return i18n.t("shell.commandPalette.empty.keyError");
+  if (scope === "keys" && !query) return i18n.t("shell.commandPalette.empty.noRecentKeys");
+  return i18n.t("shell.commandPalette.empty.noResults", { query });
 };
 
 // TODO(https://github.com/dip/cmdk/issues/413): remove once cmdk keeps aria-activedescendant on the selected row
@@ -75,12 +77,13 @@ function useActiveDescendantOnSelectedRow(inputRef: RefObject<HTMLInputElement |
 }
 
 export function CommandPalette({ open, setOpen }: { open: boolean; setOpen: (open: boolean) => void }) {
+  const { t } = useTranslation();
   return (
     <CommandDialog
       open={open}
       onOpenChange={setOpen}
-      title="Command palette"
-      description="Search for a page, an action or a virtual key"
+      title={t("shell.commandPalette.title")}
+      description={t("shell.commandPalette.description")}
     >
       <CommandPaletteContent setOpen={setOpen} />
     </CommandDialog>
@@ -88,6 +91,7 @@ export function CommandPalette({ open, setOpen }: { open: boolean; setOpen: (ope
 }
 
 function CommandPaletteContent({ setOpen }: { setOpen: (open: boolean) => void }) {
+  const { t } = useTranslation();
   const pathname = usePathname();
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -130,22 +134,28 @@ function CommandPaletteContent({ setOpen }: { setOpen: (open: boolean) => void }
       title: page.label,
       subtitle: page.section,
       icon: page.icon ?? <FileText />,
-      typeLabel: "Page",
+      typeLabel: "shell.commandPalette.types.page",
       page,
     }));
-    const pagesGroups = pages.length > 0 ? [{ heading: "Pages", entries: pages }] : [];
+    const pagesGroups = pages.length > 0 ? [{ heading: t("shell.commandPalette.groups.pages"), entries: pages }] : [];
 
     if (scope === "global") {
-      const showSearchKeysAction = !trimmedQuery || "search virtual keys".includes(trimmedQuery.toLowerCase());
+      const showSearchKeysAction =
+        !trimmedQuery || t("shell.commandPalette.searchKeys.title").toLowerCase().includes(trimmedQuery.toLowerCase());
       const searchKeysAction: PaletteEntry = {
         id: "action:search-keys",
         kind: "search-keys",
-        title: "Search virtual keys",
-        subtitle: "Find a key by alias or ID",
+        title: t("shell.commandPalette.searchKeys.title"),
+        subtitle: t("shell.commandPalette.searchKeys.subtitle"),
         icon: <KeyRound />,
-        typeLabel: "Action",
+        typeLabel: "shell.commandPalette.types.action",
       };
-      return [...(showSearchKeysAction ? [{ heading: "Actions", entries: [searchKeysAction] }] : []), ...pagesGroups];
+      return [
+        ...(showSearchKeysAction
+          ? [{ heading: t("shell.commandPalette.groups.actions"), entries: [searchKeysAction] }]
+          : []),
+        ...pagesGroups,
+      ];
     }
 
     const keyEntries: PaletteEntry[] = (isLoadingKeys ? [] : keyResults.data?.keys ?? []).map((key) => {
@@ -155,7 +165,7 @@ function CommandPaletteContent({ setOpen }: { setOpen: (open: boolean) => void }
       return {
         id: `key:${key.token}`,
         kind: "key",
-        title: key.key_alias || "Unnamed key",
+        title: key.key_alias || t("shell.commandPalette.unnamedKey"),
         subtitle: (
           <>
             <span className="font-mono">{key.key_name}</span>
@@ -163,25 +173,38 @@ function CommandPaletteContent({ setOpen }: { setOpen: (open: boolean) => void }
           </>
         ),
         icon: <KeyRound />,
-        typeLabel: "Key",
+        typeLabel: "shell.commandPalette.types.key",
         key,
       };
     });
     const keysGroups =
-      keyEntries.length > 0 ? [{ heading: trimmedQuery ? "Keys" : "Recent keys", entries: keyEntries }] : [];
+      keyEntries.length > 0
+        ? [
+            {
+              heading: trimmedQuery
+                ? t("shell.commandPalette.groups.keys")
+                : t("shell.commandPalette.groups.recentKeys"),
+              entries: keyEntries,
+            },
+          ]
+        : [];
 
     if (!trimmedQuery) return keysGroups;
 
     const filterAction: PaletteEntry = {
       id: "action:filter-keys",
       kind: "filter",
-      title: `Filter the keys table for “${trimmedQuery}”`,
-      subtitle: "Open Virtual Keys with this search applied",
+      title: t("shell.commandPalette.filterKeys.title", { query: trimmedQuery }),
+      subtitle: t("shell.commandPalette.filterKeys.subtitle"),
       icon: <Search />,
-      typeLabel: "Action",
+      typeLabel: "shell.commandPalette.types.action",
     };
-    return [...keysGroups, { heading: "Actions", entries: [filterAction] }, ...pagesGroups];
-  }, [hasKeyError, isLoadingKeys, keyResults.data?.keys, navMatches, scope, teamAliases, trimmedQuery]);
+    return [
+      ...keysGroups,
+      { heading: t("shell.commandPalette.groups.actions"), entries: [filterAction] },
+      ...pagesGroups,
+    ];
+  }, [hasKeyError, isLoadingKeys, keyResults.data?.keys, navMatches, scope, t, teamAliases, trimmedQuery]);
 
   const resultSet = [scope, query, isLoadingKeys].join("\n");
   const [highlight, setHighlight] = useState<{ value: string; resultSet: string } | null>(null);
@@ -216,7 +239,7 @@ function CommandPaletteContent({ setOpen }: { setOpen: (open: boolean) => void }
 
   return (
     <Command
-      label="Search"
+      label={t("shell.commandPalette.label")}
       shouldFilter={false}
       loop
       value={highlightedValue}
@@ -228,23 +251,28 @@ function CommandPaletteContent({ setOpen }: { setOpen: (open: boolean) => void }
           <InputGroupAddon>
             <Badge variant="secondary">
               <KeyRound />
-              Virtual Keys
+              {t("shell.commandPalette.virtualKeys")}
             </Badge>
           </InputGroupAddon>
         )}
         <CommandInput
           ref={inputRef}
-          placeholder={scope === "keys" ? "Search keys by alias or ID…" : "Search pages and actions…"}
+          placeholder={
+            scope === "keys" ? t("shell.commandPalette.placeholder.keys") : t("shell.commandPalette.placeholder.global")
+          }
           value={query}
           onValueChange={setQuery}
         />
       </div>
       <CommandList onMouseDown={(event) => event.preventDefault()}>
         {isLoadingKeys && !hasKeyError ? (
-          <CommandPrimitive.Loading label="Searching…" className="py-6 text-center text-sm text-muted-foreground">
+          <CommandPrimitive.Loading
+            label={t("shell.commandPalette.searching")}
+            className="py-6 text-center text-sm text-muted-foreground"
+          >
             <span className="inline-flex items-center gap-2">
               <LoaderCircle className="size-4 animate-spin" />
-              Searching…
+              {t("shell.commandPalette.searching")}
             </span>
           </CommandPrimitive.Loading>
         ) : (
@@ -259,7 +287,7 @@ function CommandPaletteContent({ setOpen }: { setOpen: (open: boolean) => void }
                   <span className="max-w-full shrink-0 truncate">{entry.title}</span>
                   {entry.subtitle && <span className="truncate text-xs text-muted-foreground">{entry.subtitle}</span>}
                 </span>
-                <CommandShortcut>{entry.typeLabel}</CommandShortcut>
+                <CommandShortcut>{t(entry.typeLabel)}</CommandShortcut>
               </CommandItem>
             ))}
           </CommandGroup>
