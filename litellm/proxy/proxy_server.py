@@ -626,6 +626,7 @@ from litellm.proxy.common_utils.timezone_utils import (
     get_budget_reset_time,
 )
 from litellm.proxy.common_utils.token_count_log import (
+    answered_with_litellm_call_id,
     deployment_model_id,
     logged_token_count,
     rejected_token_count,
@@ -2595,6 +2596,9 @@ async def otel_unhandled_exception_handler(request: Request, exc: Exception):
         raise exc
     response: Final = await _unhandled_exception_response(request, exc)
     response.headers.update(trace_response_headers(getattr(request.state, "parent_otel_span", None)))
+    litellm_call_id: Final = attribute_of(request.state, "litellm_call_id")
+    if isinstance(litellm_call_id, str):
+        response.headers.setdefault(LITELLM_CALL_ID_HEADER, litellm_call_id)
     return response
 
 
@@ -5744,7 +5748,6 @@ def should_load_db_object(object_type: str | SupportedDBObjectType) -> bool:
 _CONFIG_PERSISTED_SECTIONS: Final = ("general_settings", "router_settings", "litellm_settings")
 _CONFIG_UNMANAGED_EXCLUSIONS: Final = frozenset(("environment_variables", "model_list"))
 _CONFIG_SECTION_VALUES: Final = TypeAdapter(Mapping[str, JsonValue])
-_CONFIG_SECTION_LOCK_SQL: Final = "SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtext($1))"
 
 
 class _ConfigParamWhere(TypedDict):
@@ -6297,7 +6300,7 @@ class ProxyConfig:
         prisma_client: PrismaClient,
     ) -> Mapping[str, JsonValue] | None:
         async with prisma_client.tx() as tx:
-            await tx.query_raw(_CONFIG_SECTION_LOCK_SQL, section_name)
+            await tx.query_raw(CONFIG_PARAM_LOCK_SQL, section_name)
             config_table: Final = cast("TableActions[_ConfigParamRow]", tx.litellm_config)
             config_where: Final[_ConfigParamWhere] = {"param_name": section_name}
             existing_row: Final[_ConfigParamRow | None] = await config_table.find_first(where=config_where)
@@ -15283,7 +15286,7 @@ from litellm.llms.anthropic.count_tokens.token_counter import AnthropicTokenCoun
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
-from litellm.repositories.config_repository import ConfigRepository
+from litellm.repositories.config_repository import CONFIG_PARAM_LOCK_SQL, ConfigRepository
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import (
     AccessGroupRepository,
@@ -16090,19 +16093,30 @@ def _system_message(system: object) -> ChatCompletionSystemMessage | None:
 )
 async def token_counter(
     request: TokenCountRequest,
+    http_request: Request,
+    fastapi_response: Response,
     call_endpoint: bool = False,
     litellm_call_id: Annotated[str | None, Header(alias=LITELLM_CALL_ID_HEADER)] = None,
 ):
     """
+    Returns:
+        TokenCountResponse
+
     Args:
         request: TokenCountRequest
         call_endpoint: bool - When set to "True" it will call the token counting endpoint - e.g Anthropic or Google AI Studio Token Counting APIs.
         litellm_call_id: the x-litellm-call-id header, logged with the count so it joins the inference call's logs
-
-    Returns:
-        TokenCountResponse
+        \f
+        http_request: carries the call id to the error handler when the count fails
+        fastapi_response: answers the x-litellm-call-id header the count's log line names
     """
-    return await count_request_tokens(request=request, call_endpoint=call_endpoint, litellm_call_id=litellm_call_id)
+    call_id: Final = resolve_litellm_call_id(litellm_call_id)
+    return await answered_with_litellm_call_id(
+        count_request_tokens(request=request, call_endpoint=call_endpoint, litellm_call_id=call_id),
+        call_id,
+        http_request,
+        fastapi_response,
+    )
 
 
 async def count_request_tokens(
