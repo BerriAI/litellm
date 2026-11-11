@@ -22,18 +22,18 @@ def fresh_host() -> Generator[None]:
 
 class Narrow(CustomLogger):
     def __init__(self, dropped: str, order: list[str]) -> None:  # mutable-ok: the shared call log
-        super().__init__()
+        super().__init__()  # pyright: ignore[reportUnknownMemberType]  # CustomLogger's untyped **kwargs
         self.dropped = dropped
         self.order = order
 
     async def async_filter_deployments(
         self,
         model: str,
-        healthy_deployments: list,
+        healthy_deployments: list[dict[str, dict[str, str]]],  # mutable-ok: the filter contract
         messages: object,
         request_kwargs: object = None,
         parent_otel_span: object = None,
-    ) -> list:
+    ) -> list[dict[str, dict[str, str]]]:  # mutable-ok: the filter contract
         self.order.append("legacy")
         return [d for d in healthy_deployments if d["model_info"]["id"] != self.dropped]
 
@@ -109,7 +109,7 @@ async def test_a_blocking_native_runs_before_the_legacy_filters_and_the_pick_sti
     host.lists["callbacks"].append(Narrow("b", order))
     core: Final = make_core(model_list=list(GROUP))
 
-    picked: Final = {(await core.select("g"))["model_info"]["id"] for _ in range(10)}  # pyright: ignore[reportIndexIssue]
+    picked: Final[set[object]] = {(await core.select("g"))["model_info"]["id"] for _ in range(10)}  # pyright: ignore[reportIndexIssue, reportUnknownVariableType]  # the picked deployment dict
 
     assert picked <= {"a", "c"}
     assert order[:2] == ["native", "legacy"]

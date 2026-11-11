@@ -983,7 +983,11 @@ async def log_success_fallback_event(original_model_group: str, kwargs: dict, or
     )
 
 
-async def _log_success_fallback_event(original_model_group: str, kwargs: dict, original_exception: Exception):
+async def _log_success_fallback_event(
+    original_model_group: str,
+    kwargs: dict[str, object],  # mutable-ok: the request kwargs the custom loggers receive
+    original_exception: Exception,
+) -> None:
     """
     Log a successful fallback event to all registered callbacks.
 
@@ -1017,7 +1021,11 @@ async def log_failure_fallback_event(original_model_group: str, kwargs: dict, or
     )
 
 
-async def _log_failure_fallback_event(original_model_group: str, kwargs: dict, original_exception: Exception):
+async def _log_failure_fallback_event(
+    original_model_group: str,
+    kwargs: dict[str, object],  # mutable-ok: the request kwargs the custom loggers receive
+    original_exception: Exception,
+) -> None:
     """
     Log a failed fallback event to all registered callbacks.
 
