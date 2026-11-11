@@ -23,7 +23,7 @@ from litellm.constants import (
     GITHUB_COPILOT_HOST_KEY,
     GITHUB_COPILOT_PER_USER_AUTH_TYPE,
 )
-from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor, env_ref_fields
 from litellm.litellm_core_utils.litellm_logging import get_masked_values, has_sensitive_keyword
 from litellm.llms.anthropic.wif import (
     ExportedJwks,
@@ -126,6 +126,28 @@ def _reject_non_admin_wif_fields(
         type=ProxyErrorTypes.auth_error.value,
         code=status.HTTP_403_FORBIDDEN,
         param=wif_fields[0],
+    )
+
+
+def _reject_non_admin_env_refs(
+    referencing_fields: tuple[str, ...],
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """An ``os.environ/<VAR>`` credential value resolves against the proxy's own environment when
+    the credential loads, and a read-back masks by field name, so a non-admin writing one under an
+    innocuous name could name any server variable and read its value back. Only proxy admins may
+    write one.
+    """
+    if not referencing_fields or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return
+    raise ProxyException(
+        message=(
+            f"Only proxy admins can point {referencing_fields[0]!r} at an os.environ/ reference, which "
+            "resolves against the proxy's own environment."
+        ),
+        type=ProxyErrorTypes.auth_error.value,
+        code=status.HTTP_403_FORBIDDEN,
+        param=referencing_fields[0],
     )
 
 
@@ -350,6 +372,7 @@ async def create_credential(
             credential_info,
         )
         _reject_non_admin_wif_fields(server_owned_wif_fields_written(normalized_values), user_api_key_dict)
+        _reject_non_admin_env_refs(env_ref_fields(normalized_values), user_api_key_dict)
         _reject_non_admin_wif_fields(
             await named_credential_wif_fields(credential.credential_name, prisma_client), user_api_key_dict
         )
@@ -1005,6 +1028,7 @@ async def update_credential(
             else credential.credential_values or {}
         )
         _reject_non_admin_wif_fields(_incoming_wif_fields(requested_values, credential), user_api_key_dict)
+        _reject_non_admin_env_refs(env_ref_fields(requested_values), user_api_key_dict)
         if prisma_client is None:
             raise HTTPException(
                 status_code=500,
