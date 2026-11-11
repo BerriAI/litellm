@@ -113,28 +113,65 @@ class TestBedrockFilesTransformation:
             "body": {"model": model, **prompt, **body_params},
         }
 
-    def test_nova_row_with_null_service_tier_sends_no_tier(self):
+    @pytest.mark.parametrize("tier", [None, "auto"])
+    def test_nova_row_with_null_or_auto_service_tier_sends_no_tier(self, tier: str | None):
         result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
-            [self._nova_row(body_params={"service_tier": None})]
+            [self._nova_row(body_params={"service_tier": tier})]
         )
 
         assert "serviceTier" not in result[0]["modelInput"]
 
+    @pytest.mark.parametrize("tier", ["ultrafast", "reserved", "priority", "standard_only"])
     @pytest.mark.parametrize("url", ["/v1/chat/completions", "/v1/responses"])
-    def test_nova_row_with_unmapped_service_tier_fails_the_row_like_real_time(self, url: str):
-        with pytest.raises(litellm.UnsupportedParamsError, match="ultrafast"):
+    def test_nova_row_with_a_service_tier_fails_the_row_without_drop_params(self, url: str, tier: str):
+        with pytest.raises(litellm.UnsupportedParamsError, match=f"service_tier='{tier}'"):
             BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
-                [self._nova_row(url, body_params={"service_tier": "ultrafast"})]
+                [self._nova_row(url, body_params={"service_tier": tier})]
             )
 
+    @pytest.mark.parametrize("tier", ["ultrafast", "reserved"])
     @pytest.mark.parametrize("url", ["/v1/chat/completions", "/v1/responses"])
-    def test_nova_row_level_drop_params_drops_the_unmapped_service_tier(self, url: str):
+    def test_nova_row_level_drop_params_drops_the_service_tier(self, url: str, tier: str):
         result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
-            [self._nova_row(url, body_params={"service_tier": "ultrafast", "drop_params": True})]
+            [self._nova_row(url, body_params={"service_tier": tier, "drop_params": True})]
         )
 
         assert "serviceTier" not in result[0]["modelInput"]
         assert "drop_params" not in json.dumps(result[0]["modelInput"])
+
+    def test_nova_row_service_tier_drops_under_global_drop_params(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(litellm, "drop_params", True)
+
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [self._nova_row(body_params={"service_tier": "reserved"})]
+        )
+
+        assert "serviceTier" not in result[0]["modelInput"]
+
+    @pytest.mark.parametrize("tier", ["ultrafast", "reserved"])
+    def test_deployment_drop_params_drops_the_service_tier_from_the_uploaded_nova_rows(self, tier: str):
+        request: Final = BedrockFilesConfig().transform_create_file_request(
+            model="us.amazon.nova-pro-v1:0",
+            create_file_data={
+                "file": (
+                    "batch.jsonl",
+                    json.dumps(self._nova_row(body_params={"service_tier": tier})).encode(),
+                    "application/jsonl",
+                ),
+                "purpose": "batch",
+            },
+            optional_params={
+                "aws_access_key_id": "test-key-id",
+                "aws_secret_access_key": "test-secret",
+                "aws_region_name": "us-west-2",
+            },
+            litellm_params={"s3_bucket_name": "litellm-batch-bucket", "drop_params": True},
+        )
+
+        assert isinstance(request, dict)
+        uploaded_row: Final = json.loads(request["data"])
+        assert uploaded_row["modelInput"]["messages"]
+        assert "serviceTier" not in uploaded_row["modelInput"]
 
     @pytest.mark.parametrize("url", ["/v1/chat/completions", "/v1/responses"])
     def test_passthrough_row_keeps_row_level_drop_params_out_of_the_model_input(self, url: str):
