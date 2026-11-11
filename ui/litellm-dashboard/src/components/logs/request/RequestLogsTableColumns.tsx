@@ -14,6 +14,7 @@ import { copyToClipboard, getSpendString } from "@/utils/dataUtils";
 import { getProviderLogoAndName } from "../../provider_info_helpers";
 import { getBatchIdFromRequestId, getBatchRequestCounts, isBatchCallType } from "../batchLogUtils";
 import type { LogEntry } from "../types";
+import { getResponseCacheStatus } from "../responseCache";
 import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "../constants";
 import { AgentBadge, AgentIcon, BatchBadge, LlmBadge, McpBadge, SparkleIcon, WrenchIcon } from "./TypeBadges";
 
@@ -169,6 +170,25 @@ export const getRequestLogsTableColumns = (
           label={isSuccess ? t("logs.request.columns.success") : t("logs.request.columns.failure")}
         />
       );
+    },
+  },
+  {
+    id: "cache_hit",
+    accessorKey: "cache_hit",
+    header: "Cache Hit",
+    size: 100,
+    enableSorting: false,
+    cell: ({ row }) => {
+      const log = row.original;
+      if ((log.session_total_count ?? 1) > 1) {
+        const hits = log.session_cache_hit_count;
+        return (
+          <span className="whitespace-nowrap">{hits == null ? "-" : `${hits} ${hits === 1 ? "hit" : "hits"}`}</span>
+        );
+      }
+      const status = getResponseCacheStatus(log);
+      if (status === "hit") return <StatusBadge tone="success" label="Yes" />;
+      return <span>{status === "miss" ? "No" : "-"}</span>;
     },
   },
   {
