@@ -65,10 +65,12 @@ def _guardrail(
     timeout: float | None = None,
     streaming_transform_mode: Literal["block_only", "incremental_diff"] | None = None,
     api_base: str | None = None,
+    api_version: str | None = None,
 ) -> NeuralTrustGuardrail:
     return NeuralTrustGuardrail(
         api_key=api_key,
         collector_key=collector_key,
+        api_version=api_version,
         guardrail_name=guardrail_name,
         event_hook=event_hook,
         default_on=default_on,
@@ -209,11 +211,11 @@ def _deltas(items: Sequence[object]) -> list[str]:
 
 class TestNeuralTrustGuardrail:
     def setup_method(self) -> None:
-        for key in ("TRUSTGUARD_API_KEY", "TRUSTGUARD_API_BASE", "TRUSTGUARD_COLLECTOR_KEY"):
+        for key in ("TRUSTGUARD_API_KEY", "TRUSTGUARD_API_BASE", "TRUSTGUARD_COLLECTOR_KEY", "TRUSTGUARD_API_VERSION"):
             os.environ.pop(key, None)
 
     def teardown_method(self) -> None:
-        for key in ("TRUSTGUARD_API_KEY", "TRUSTGUARD_API_BASE", "TRUSTGUARD_COLLECTOR_KEY"):
+        for key in ("TRUSTGUARD_API_KEY", "TRUSTGUARD_API_BASE", "TRUSTGUARD_COLLECTOR_KEY", "TRUSTGUARD_API_VERSION"):
             os.environ.pop(key, None)
 
     def test_missing_api_key_raises(self) -> None:
@@ -375,6 +377,75 @@ class TestNeuralTrustGuardrail:
             )
         assert result == inputs
         assert "collector_key" not in mock_post.call_args.kwargs["json"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("api_version", "env", "path"),
+        [
+            (None, None, "/v1/evaluate"),
+            ("v2", None, "/v2/evaluate"),
+            (None, "v2", "/v2/evaluate"),
+            ("v1", "v2", "/v1/evaluate"),
+        ],
+    )
+    async def test_api_version_selects_the_evaluate_path(
+        self, api_version: str | None, env: str | None, path: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        if env is not None:
+            monkeypatch.setenv("TRUSTGUARD_API_VERSION", env)
+        guardrail = _guardrail(api_version=api_version)
+
+        async def trustguard(url: str, **_: object) -> Response:
+            served = url == f"https://trustguard.neuraltrust.ai{path}"
+            return _response({"status": "allow"} if served else {"detail": "not found"}, 200 if served else 404)
+
+        with patch.object(guardrail.async_handler, "post", AsyncMock(side_effect=trustguard)):
+            result = await guardrail.apply_guardrail(
+                inputs={"texts": ["hello"]}, request_data={}, input_type="request", logging_obj=_logging()
+            )
+        assert result == {"texts": ["hello"]}
+
+    @pytest.mark.parametrize("api_version", ["v3", "V2", "/v2"])
+    def test_rejects_an_unknown_api_version(self, api_version: str) -> None:
+        with pytest.raises(ValueError, match="api_version must be v1 or v2"):
+            _guardrail(api_version=api_version)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("consumer", "user"),
+        [("dev@example.com", {"email": "dev@example.com"}), ("billing-app", {"id": "billing-app"})],
+    )
+    async def test_v2_sends_the_integration_key_and_the_consumer_as_user(
+        self, consumer: str, user: dict[str, str]
+    ) -> None:
+        guardrail = _guardrail(api_version="v2")
+        mock_post = AsyncMock(return_value=_response({"status": "allow"}))
+        with patch.object(guardrail.async_handler, "post", mock_post):
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["hello"]},
+                request_data={"metadata": {"user_api_key_alias": consumer}, "litellm_session_id": "sess-1"},
+                input_type="request",
+                logging_obj=_logging(),
+            )
+        body = mock_post.call_args.kwargs["json"]
+        assert body["integration_key"] == "tgcol_test"
+        assert body["attributes"]["user"] == user
+        assert body["attributes"]["model"] == {"name": "gpt-4o-mini"}
+        assert body["session_id"] == "sess-1"
+        assert "collector_key" not in body
+        assert "consumer_id" not in body
+
+    @pytest.mark.asyncio
+    async def test_v2_omits_the_integration_key_and_user_when_unset(self) -> None:
+        guardrail = _guardrail(api_version="v2", collector_key="")
+        mock_post = AsyncMock(return_value=_response({"status": "allow"}))
+        with patch.object(guardrail.async_handler, "post", mock_post):
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["hello"]}, request_data={}, input_type="request", logging_obj=_logging()
+            )
+        body = mock_post.call_args.kwargs["json"]
+        assert "integration_key" not in body
+        assert "user" not in body["attributes"]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("status", ["block", "ask"])
@@ -1292,6 +1363,7 @@ class TestNeuralTrustGuardrail:
             "api_key",
             "api_base",
             "collector_key",
+            "api_version",
             "unreachable_fallback",
             "timeout",
             "streaming_transform_mode",
@@ -1300,6 +1372,7 @@ class TestNeuralTrustGuardrail:
         assert fields["timeout"]["default_value"] == 5.0
         assert fields["unreachable_fallback"]["options"] == ["fail_closed", "fail_open"]
         assert fields["streaming_transform_mode"]["options"] == ["block_only", "incremental_diff"]
+        assert fields["api_version"]["options"] == ["v1", "v2"]
 
     def test_timeout_default_stays_local_to_neuraltrust(self) -> None:
         assert LitellmParams(guardrail="lakera_v2", mode="pre_call").timeout is None
@@ -1320,6 +1393,7 @@ class TestNeuralTrustGuardrail:
             api_key="tgk_from_params",
             api_base="https://trustguard.example.test/",
             collector_key="tgcol_from_params",
+            api_version="v2",
             unreachable_fallback="fail_open",
             timeout=2,
             streaming_transform_mode="incremental_diff",
@@ -1330,6 +1404,7 @@ class TestNeuralTrustGuardrail:
             assert hook.api_key == "tgk_from_params"
             assert hook.api_base == "https://trustguard.example.test"
             assert hook.collector_key == "tgcol_from_params"
+            assert hook.evaluate_path == "/v2/evaluate"
             assert hook.unreachable_fallback == "fail_open"
             assert hook.timeout == 2.0
             assert hook.streaming_transform_mode == "incremental_diff"

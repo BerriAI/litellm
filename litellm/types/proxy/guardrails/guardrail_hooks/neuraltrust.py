@@ -32,6 +32,14 @@ class NeuralTrustGuardrailConfigModel(GuardrailConfigModel[_Config]):
         ),
     )
 
+    api_version: Literal["v1", "v2"] | None = Field(
+        default=None,
+        description=(
+            "TrustGuard engine to call, /v1/evaluate or /v2/evaluate. Default v1. Env: TRUSTGUARD_API_VERSION. "
+            "On v2 the collector key is sent as integration_key and the consumer id as attributes.user."
+        ),
+    )
+
     unreachable_fallback: Literal["fail_closed", "fail_open"] = Field(
         default="fail_closed",
         description=(
