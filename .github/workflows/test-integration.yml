@@ -90,17 +90,17 @@ jobs:
 
       - name: Set up uv
         timeout-minutes: 3
-        uses: ./.github/actions/setup-uv-with-retries
+        uses: $/.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
 
       - name: Cache the Rust build
         timeout-minutes: 5
-        uses: ./.github/actions/cache-cargo-build
+        uses: $/.github/actions/cache-cargo-build
 
       - name: Cache Prisma binaries
         timeout-minutes: 5
-        uses: ./.github/actions/cache-prisma-binaries
+        uses: $/.github/actions/cache-prisma-binaries
 
       - name: Install dependencies
         timeout-minutes: 20
