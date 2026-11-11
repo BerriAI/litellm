@@ -27,7 +27,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, Securi
 from fastapi.responses import StreamingResponse
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 from starlette.websockets import WebSocketState
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
 from litellm import get_llm_provider
@@ -129,8 +129,10 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
 from litellm.proxy.common_utils.model_listing_utils import alias_map
 from litellm.proxy.common_utils.openai_error_payload import LITELLM_CALL_ID_HEADER
 from litellm.proxy.common_utils.registry_read_through import (
+    VectorStoreIndexLookup,
     get_vector_store_with_read_through,
     is_vector_store_index_with_read_through,
+    lookup_vector_store_index,
 )
 from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.proxy.common_utils.sse_keepalive import (
@@ -235,6 +237,25 @@ def is_passthrough_request_using_router_model(request_body: dict, llm_router: li
 
 class RelayRejection(TypedDict):
     error: ReadOnly[str]
+
+
+def _unroutable_search_index(index_name: str, lookup: VectorStoreIndexLookup) -> HTTPException | None:
+    match lookup:
+        case "managed":
+            return None
+        case "unmanaged":
+            not_loaded: Final[RelayRejection] = {
+                "error": f"Azure AI Search index '{index_name}' is not loaded on this proxy, "
+                "and AZURE_API_BASE is not set to relay it"
+            }
+            return HTTPException(status_code=404, detail=not_loaded)
+        case "unknown":
+            unreadable: Final[RelayRejection] = {
+                "error": f"Could not read Azure AI Search index '{index_name}' from the database. Retry the request"
+            }
+            return HTTPException(status_code=503, detail=unreadable)
+        case _:
+            assert_never(lookup)
 
 
 def _deployment_model_name(litellm_params: LiteLLMParamsTypedDict) -> str:
@@ -2688,9 +2709,10 @@ async def azure_proxy_route(
     )  # azure model is in the url - e.g. https://{endpoint}/openai/deployments/{deployment-id}/completions?api-version=2024-10-21
 
     search_index_name: Final = get_azure_ai_search_index_from_endpoint(endpoint)
-    is_managed_search_index: Final = search_index_name is not None and await is_vector_store_index_with_read_through(
-        search_index_name
+    search_index_lookup: Final = (
+        await lookup_vector_store_index(search_index_name) if search_index_name is not None else None
     )
+    is_managed_search_index: Final = search_index_lookup == "managed"
 
     if len(parts) > 1 and llm_router:
         for part in parts:
@@ -2775,12 +2797,13 @@ async def azure_proxy_route(
         return body_model_group_relay
 
     base_target_url = get_secret_str(secret_name="AZURE_API_BASE")
-    if base_target_url is None and search_index_name is not None and not is_managed_search_index:
-        unregistered_index: Final[RelayRejection] = {
-            "error": f"Azure AI Search index '{search_index_name}' is not registered on this proxy; "
-            "create it with POST /v1/indexes"
-        }
-        raise HTTPException(status_code=404, detail=unregistered_index)
+    unroutable_index: Final = (
+        _unroutable_search_index(search_index_name, search_index_lookup)
+        if base_target_url is None and search_index_name is not None and search_index_lookup is not None
+        else None
+    )
+    if unroutable_index is not None:
+        raise unroutable_index
     if base_target_url is None:
         raise Exception("Required 'AZURE_API_BASE' in environment to make pass-through calls to Azure.")
     # Add or update query parameters

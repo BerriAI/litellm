@@ -5922,13 +5922,13 @@ class TestAzureProxyRouteCrossIndexAuthorization:
 
 
 def _serve_proxy_with_vector_store_tables(
-    monkeypatch: pytest.MonkeyPatch, find_unique: AsyncMock, find_many: AsyncMock
+    monkeypatch: pytest.MonkeyPatch, index_rows: AsyncMock, store_rows: AsyncMock
 ) -> TestClient:
     from litellm.proxy import proxy_server
 
     prisma_client: Final = MagicMock()
-    prisma_client.db.litellm_managedvectorstoreindextable.find_unique = find_unique
-    prisma_client.db.litellm_managedvectorstorestable.find_many = find_many
+    prisma_client.db.litellm_managedvectorstoreindextable.find_many = index_rows
+    prisma_client.db.litellm_managedvectorstorestable.find_many = store_rows
     monkeypatch.delenv("AZURE_API_BASE", raising=False)
     monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
@@ -5957,8 +5957,8 @@ class TestManagedIndexCreatedOnAnotherReplica:
     def test_azure_ai_search_reaches_the_store_on_the_first_call(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from tests.unit.proxy.conftest import FakeVectorStoreIndexRow, FakeVectorStoreRow
 
-        find_unique: Final = AsyncMock(return_value=FakeVectorStoreIndexRow("kb-new", "store-made-on-a"))
-        find_many: Final = AsyncMock(
+        index_rows: Final = AsyncMock(return_value=[FakeVectorStoreIndexRow("kb-new", "store-made-on-a")])
+        store_rows: Final = AsyncMock(
             return_value=[
                 FakeVectorStoreRow(
                     "store-made-on-a",
@@ -5967,7 +5967,7 @@ class TestManagedIndexCreatedOnAnotherReplica:
                 )
             ]
         )
-        client: Final = _serve_proxy_with_vector_store_tables(monkeypatch, find_unique, find_many)
+        client: Final = _serve_proxy_with_vector_store_tables(monkeypatch, index_rows, store_rows)
 
         with respx.mock(assert_all_called=True) as upstream:
             search: Final = upstream.post("https://svc.search.windows.net/indexes/kb-new/docs/search").mock(
@@ -5978,8 +5978,8 @@ class TestManagedIndexCreatedOnAnotherReplica:
             )
 
         assert (response.status_code, response.json()) == (200, {"value": [{"id": "doc-1"}]})
-        find_unique.assert_awaited_once_with(where={"index_name": "kb-new"})
-        find_many.assert_awaited_once_with(where={"vector_store_name": "store-made-on-a"}, order={"created_at": "desc"})
+        index_rows.assert_awaited_once_with()
+        store_rows.assert_awaited_once_with(where={"vector_store_name": "store-made-on-a"}, order={"created_at": "desc"})
         assert search.calls.last.request.headers["api-key"] == "search-service-key"
         assert json.loads(search.calls.last.request.content) == {"search": "refund policy"}
 
@@ -5987,7 +5987,7 @@ class TestManagedIndexCreatedOnAnotherReplica:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         client: Final = _serve_proxy_with_vector_store_tables(
-            monkeypatch, AsyncMock(return_value=None), AsyncMock(return_value=[])
+            monkeypatch, AsyncMock(return_value=[]), AsyncMock(return_value=[])
         )
 
         with respx.mock(assert_all_mocked=True) as upstream:
@@ -5997,15 +5997,56 @@ class TestManagedIndexCreatedOnAnotherReplica:
             )
 
         assert response.status_code == 404
-        assert "'kb-never-created' is not registered" in response.text
+        assert response.json()["detail"]["error"] == (
+            "Azure AI Search index 'kb-never-created' is not loaded on this proxy, "
+            "and AZURE_API_BASE is not set to relay it"
+        )
         assert upstream.calls.call_count == 0
+
+    def test_azure_ai_search_without_azure_api_base_answers_503_when_the_index_table_read_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client: Final = _serve_proxy_with_vector_store_tables(
+            monkeypatch, AsyncMock(side_effect=RuntimeError("db down")), AsyncMock(return_value=[])
+        )
+
+        with respx.mock(assert_all_mocked=True) as upstream:
+            response: Final = client.post(
+                "/azure_ai/indexes/kb-new/docs/search?api-version=2024-07-01", json={"search": "refund policy"}
+            )
+
+        assert response.status_code == 503
+        assert response.json()["detail"]["error"] == (
+            "Could not read Azure AI Search index 'kb-new' from the database. Retry the request"
+        )
+        assert upstream.calls.call_count == 0
+
+    def test_azure_ai_search_on_a_relay_proxy_still_relays_when_the_index_table_read_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client: Final = _serve_proxy_with_vector_store_tables(
+            monkeypatch, AsyncMock(side_effect=RuntimeError("db down")), AsyncMock(return_value=[])
+        )
+        monkeypatch.setenv("AZURE_API_BASE", "https://relay.search.windows.net")
+        monkeypatch.setenv("AZURE_API_KEY", "relay-key")
+
+        with respx.mock(assert_all_called=True) as upstream:
+            relayed: Final = upstream.post(url__startswith="https://relay.search.windows.net/").mock(
+                return_value=httpx.Response(200, json={"value": [{"id": "doc-relay"}]})
+            )
+            response: Final = client.post(
+                "/azure_ai/indexes/kb-new/docs/search?api-version=2024-07-01", json={"search": "refund policy"}
+            )
+
+        assert (response.status_code, response.json()) == (200, {"value": [{"id": "doc-relay"}]})
+        assert relayed.calls.last.request.url.path.endswith("/indexes/kb-new/docs/search")
 
     def test_milvus_search_reaches_the_store_on_the_first_call(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from tests.unit.proxy.conftest import FakeVectorStoreIndexRow, FakeVectorStoreRow
 
         client: Final = _serve_proxy_with_vector_store_tables(
             monkeypatch,
-            AsyncMock(return_value=FakeVectorStoreIndexRow("collection-made-on-a", "milvus-store-made-on-a")),
+            AsyncMock(return_value=[FakeVectorStoreIndexRow("collection-made-on-a", "milvus-store-made-on-a")]),
             AsyncMock(
                 return_value=[
                     FakeVectorStoreRow(
@@ -6034,7 +6075,7 @@ class TestManagedIndexCreatedOnAnotherReplica:
 
         client: Final = _serve_proxy_with_vector_store_tables(
             monkeypatch,
-            AsyncMock(return_value=FakeVectorStoreIndexRow("docs-made-on-a", "opensearch-store-made-on-a")),
+            AsyncMock(return_value=[FakeVectorStoreIndexRow("docs-made-on-a", "opensearch-store-made-on-a")]),
             AsyncMock(
                 return_value=[
                     FakeVectorStoreRow(

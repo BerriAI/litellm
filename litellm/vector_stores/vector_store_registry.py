@@ -139,13 +139,11 @@ class VectorStoreIndexRegistry:
     _get_vector_store_indexes_from_db = get_vector_store_indexes_from_db
 
     @staticmethod
-    async def get_vector_store_index_from_db(
-        client: "WriterPinnedClient", index_name: str
-    ) -> LiteLLM_ManagedVectorStoreIndex | None:
-        row: Final = await ManagedVectorStoreIndexRepository(client).table.find_unique(where={"index_name": index_name})
-        if row is None:
-            return None
-        return LiteLLM_ManagedVectorStoreIndex.model_validate(_DB_ROW.validate_python(dict(row)))
+    async def get_vector_store_indexes_from_db_writer(
+        client: "WriterPinnedClient",
+    ) -> tuple[LiteLLM_ManagedVectorStoreIndex, ...]:
+        rows: Final = await ManagedVectorStoreIndexRepository(client).table.find_many()
+        return tuple(LiteLLM_ManagedVectorStoreIndex.model_validate(_DB_ROW.validate_python(dict(row))) for row in rows)
 
 
 class VectorStoreRegistry:

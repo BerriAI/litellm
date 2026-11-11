@@ -473,15 +473,14 @@ def fresh_agent_read_through(monkeypatch):
 def fresh_vector_store_read_throughs(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.proxy.common_utils import registry_read_through
 
-    index_read_through: Final = registry_read_through.RegistryReadThrough(
-        resync=registry_read_through._resync_vector_store_indexes,
-        is_loaded=registry_read_through._vector_store_index_is_loaded,
+    index_table_reload: Final = registry_read_through.ThrottledTableReload(
+        reload=registry_read_through._reload_vector_store_indexes
     )
     store_read_through: Final = registry_read_through.RegistryReadThrough(
         resync=registry_read_through._resync_vector_stores,
         is_loaded=registry_read_through._vector_store_is_loaded,
     )
-    monkeypatch.setattr(registry_read_through, "vector_store_index_registry_read_through", index_read_through)
+    monkeypatch.setattr(registry_read_through, "vector_store_index_table_reload", index_table_reload)
     monkeypatch.setattr(registry_read_through, "vector_store_registry_read_through", store_read_through)
     monkeypatch.setattr(litellm, "vector_store_index_registry", None)
     monkeypatch.setattr(litellm, "vector_store_registry", None)
