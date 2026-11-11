@@ -25,7 +25,6 @@ import {
   Bell,
   Blocks,
   Bot,
-  BookOpen,
   Building2,
   Boxes,
   ChevronRight,
@@ -433,13 +432,6 @@ const menuGroups: MenuGroup[] = [
         page: "model-hub-table",
         label: "shell.nav.items.aiHub",
         icon: <LayoutGrid {...ICON} />,
-      },
-      {
-        key: "learning-resources",
-        page: "learning-resources",
-        label: "shell.nav.items.learningResources",
-        icon: <BookOpen {...ICON} />,
-        external_url: "https://models.litellm.ai/cookbook",
       },
       {
         key: "caching",

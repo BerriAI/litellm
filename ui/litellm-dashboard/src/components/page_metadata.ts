@@ -36,7 +36,6 @@ export const pageDescriptions: Record<string, ParseKeys> = {
   budgets: "shell.pageDescriptions.budgets",
   api_ref: "shell.pageDescriptions.apiRef",
   "model-hub-table": "shell.pageDescriptions.modelHubTable",
-  "learning-resources": "shell.pageDescriptions.learningResources",
   caching: "shell.pageDescriptions.caching",
   "transform-request": "shell.pageDescriptions.transformRequest",
   "cost-tracking": "shell.pageDescriptions.costTracking",
