@@ -6,6 +6,7 @@ shape, the private-key-JWT vs client_secret authentication, the error-as-value m
 cache's hit/single-flight behavior. Each assertion fails under a real mutation of the feature.
 """
 
+import _hashlib
 import asyncio
 import gc
 import hmac
@@ -39,6 +40,9 @@ from litellm.proxy.mcp_server.outbound_credentials.types import (
 )
 
 _PATCH_TARGET = "litellm.proxy.mcp_server.outbound_credentials.token_endpoint.get_async_httpx_client"
+_needs_shared_openssl: Final = pytest.mark.skipif(
+    not hasattr(_hashlib, "__file__"), reason="this Python links OpenSSL statically, out of ctypes reach"
+)
 
 _ENDPOINT = "https://idp.example.com/oauth2/token"
 _CLIENT_ID = "litellm-client-id"
@@ -283,7 +287,11 @@ async def test_fetch_signs_an_hmac_key_under_112_bits_outside_fips_mode() -> Non
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "pem, signing_alg",
-    [(_PRIVATE_PEM, "RS256"), (_ED25519_PEM, "EdDSA"), (_P521_PEM, "ES521")],
+    [
+        pytest.param(_PRIVATE_PEM, "RS256", marks=_needs_shared_openssl),
+        (_ED25519_PEM, "EdDSA"),
+        (_P521_PEM, "ES521"),
+    ],
     ids=["rsa", "eddsa", "es521"],
 )
 async def test_fetch_signs_a_public_key_client_assertion_in_fips_mode(

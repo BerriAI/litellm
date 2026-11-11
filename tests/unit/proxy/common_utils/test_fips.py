@@ -10,6 +10,8 @@ import pytest
 from cryptography.exceptions import InternalError
 from cryptography.hazmat.bindings._rust import openssl as rust_openssl
 from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from jwt.utils import base64url_encode
 
 from litellm.proxy.auth.login_utils import encode_ui_session_jwt
 from litellm.proxy.common_utils.fips import (
@@ -19,6 +21,7 @@ from litellm.proxy.common_utils.fips import (
     fips_mode_active,
     openssl_enforces_fips,
 )
+from litellm.proxy.common_utils.fips_signature import sign_message, verify_message
 from litellm.types.proxy.ui_sso import ReturnedUITokenObject
 
 
@@ -34,6 +37,7 @@ def _fake_openssl(monkeypatch: pytest.MonkeyPatch, *, fips_flag: int, scrypt_ref
         monkeypatch.setattr(_hashlib, "scrypt", Mock(side_effect=ValueError("[digital envelope routines] unsupported")))
     else:
         monkeypatch.setattr(_hashlib, "scrypt", Mock(return_value=b"\0" * 16))
+    monkeypatch.setattr("litellm.proxy.common_utils.fips.openssl_signs_whole_messages", lambda: True)
 
 
 @pytest.mark.parametrize(
@@ -147,6 +151,16 @@ def test_fips_mode_active_follows_the_setting_the_gate_accepted(
     assert fips_mode_active() is active
 
 
+def test_fips_mode_refuses_a_python_whose_openssl_is_out_of_reach(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_openssl(monkeypatch, fips_flag=1, scrypt_refused=True)
+    monkeypatch.setattr(rust_openssl, "is_fips_enabled", lambda: True)
+    monkeypatch.setattr("litellm.proxy.common_utils.fips.openssl_signs_whole_messages", lambda: False)
+
+    with pytest.raises(FipsModeError, match="out of reach for message-level signatures"):
+        enforce_fips_mode({"fips_mode": True})
+    assert fips_mode_active() is False
+
+
 def test_fips_mode_stays_inactive_on_a_refused_boot(monkeypatch: pytest.MonkeyPatch) -> None:
     _fake_openssl(monkeypatch, fips_flag=0, scrypt_refused=False)
     with pytest.raises(FipsModeError):
@@ -227,3 +241,82 @@ def test_standard_mode_signs_the_ui_session_cookie_with_a_short_master_key() -> 
     token: Final = encode_ui_session_jwt(_UI_TOKEN, _SHORT_HMAC_KEY)
 
     assert jwt.decode(token, _SHORT_HMAC_KEY, algorithms=["HS256"])["user_id"] == "u"
+
+
+_needs_shared_openssl: Final = pytest.mark.skipif(
+    not hasattr(_hashlib, "__file__"), reason="this Python links OpenSSL statically, out of ctypes reach"
+)
+_RSA_KEY: Final = rsa.generate_private_key(65537, 2048)
+_RSA_ALGORITHMS: Final = [
+    ("RS256", "sha256", False),
+    ("RS384", "sha384", False),
+    ("RS512", "sha512", False),
+    ("PS256", "sha256", True),
+    ("PS384", "sha384", True),
+    ("PS512", "sha512", True),
+]
+
+
+@pytest.fixture
+def message_signatures(monkeypatch: pytest.MonkeyPatch) -> tuple[MagicMock, MagicMock]:
+    sign: Final = MagicMock(wraps=sign_message)
+    verify: Final = MagicMock(wraps=verify_message)
+    monkeypatch.setattr("litellm.proxy.common_utils.fips_jwt.sign_message", sign)
+    monkeypatch.setattr("litellm.proxy.common_utils.fips_jwt.verify_message", verify)
+    return sign, verify
+
+
+@_needs_shared_openssl
+@pytest.mark.parametrize("algorithm, digest_name, pss", _RSA_ALGORITHMS)
+def test_fips_mode_hands_openssl_the_whole_message_of_every_rsa_jwt(
+    fips_mode: None, message_signatures: tuple[MagicMock, MagicMock], algorithm: str, digest_name: str, pss: bool
+) -> None:
+    sign, verify = message_signatures
+    token: Final = jwt.encode({"sub": "u"}, _RSA_KEY, algorithm=algorithm)
+    stock_token: Final = jwt.PyJWT().encode({"sub": "u"}, _RSA_KEY, algorithm=algorithm)
+
+    assert jwt.PyJWT().decode(token, _RSA_KEY.public_key(), algorithms=[algorithm]) == {"sub": "u"}
+    assert jwt.decode(stock_token, _RSA_KEY.public_key(), algorithms=[algorithm]) == {"sub": "u"}
+    assert [(call.args[1:], call.kwargs) for call in sign.call_args_list] == [
+        ((token.rsplit(".", 1)[0].encode(), digest_name), {"pss": pss})
+    ]
+    assert [(call.args[1], call.args[3], call.kwargs) for call in verify.call_args_list] == [
+        (stock_token.rsplit(".", 1)[0].encode(), digest_name, {"pss": pss})
+    ]
+
+
+@_needs_shared_openssl
+@pytest.mark.parametrize("algorithm", ["RS256", "PS256"])
+def test_fips_mode_rejects_an_rsa_jwt_whose_payload_was_changed(fips_mode: None, algorithm: str) -> None:
+    header, _, signature = jwt.PyJWT().encode({"sub": "u"}, _RSA_KEY, algorithm=algorithm).split(".")
+    forged: Final = ".".join((header, base64url_encode(b'{"sub":"admin"}').decode(), signature))
+
+    with pytest.raises(jwt.InvalidSignatureError):
+        jwt.decode(forged, _RSA_KEY.public_key(), algorithms=[algorithm])
+
+
+@_needs_shared_openssl
+def test_fips_mode_rejects_a_ps256_salt_shorter_than_the_hash_as_standard_mode_does(fips_mode: None) -> None:
+    signing_input: Final = jwt.PyJWT().encode({"sub": "u"}, _RSA_KEY, algorithm="PS256").rsplit(".", 1)[0]
+    short_salt: Final = padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=20)
+    signature: Final = _RSA_KEY.sign(signing_input.encode(), short_salt, hashes.SHA256())
+    token: Final = f"{signing_input}.{base64url_encode(signature).decode()}"
+
+    with pytest.raises(jwt.InvalidSignatureError):
+        jwt.PyJWT().decode(token, _RSA_KEY.public_key(), algorithms=["PS256"])
+    with pytest.raises(jwt.InvalidSignatureError):
+        jwt.decode(token, _RSA_KEY.public_key(), algorithms=["PS256"])
+
+
+@pytest.mark.parametrize("algorithm", ["RS256", "PS256"])
+def test_turning_fips_mode_off_gives_jwt_its_own_rsa_back(
+    fips_mode: None, message_signatures: tuple[MagicMock, MagicMock], algorithm: str
+) -> None:
+    sign, verify = message_signatures
+    enforce_fips_mode({})
+
+    token: Final = jwt.encode({"sub": "u"}, _RSA_KEY, algorithm=algorithm)
+
+    assert jwt.decode(token, _RSA_KEY.public_key(), algorithms=[algorithm]) == {"sub": "u"}
+    sign.assert_not_called()
+    verify.assert_not_called()
