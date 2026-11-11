@@ -32,8 +32,6 @@ class Target(str, Enum):
 
 
 class Feature(str, Enum):
-    SAFEGUARDS_CLASSIFIER = "safeguards_classifier"
-    """A non-Claude model with dangerous_tool_use safeguards, which the proxy classifier answers."""
     MOCK_RESPONSE = "mock_response"
     """mock_response short-circuits before any provider call."""
     PROXY_MCP_TOOLS = "proxy_mcp_tools"
@@ -171,7 +169,6 @@ MESSAGES_PYTHON_FEATURES: Final = (
         Feature.AGENTIC_LOOP_HOOK,
     }
 ) | {
-    Feature.SAFEGUARDS_CLASSIFIER,
     Feature.WEBSEARCH_INTERCEPTION,
     Feature.MESSAGES_INTERCEPTOR,
 }

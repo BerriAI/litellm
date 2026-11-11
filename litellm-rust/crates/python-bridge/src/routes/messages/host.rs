@@ -1,6 +1,11 @@
 use crate::cache::{CacheCall, PythonCache, Selection};
 use litellm_host_python::{PythonHostCalls, PythonOwned};
 
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+
 use bytes::Bytes;
 use litellm_host::protocol::Reply;
 use litellm_host_python::{InvokeError, PythonBinding, effective_py_args, from_py, to_py};
@@ -21,6 +26,7 @@ use pyo3::{
 use serde_json::{Map, Value};
 
 use super::agentic::HookedRequest;
+use super::safeguards::{SafeguardsCall, SafeguardsHost};
 use super::transport::{HostedTransport, TransportCall, python_failure};
 use crate::{
     errors::{RequestMarker, route_failure},
@@ -99,6 +105,7 @@ impl litellm_host::protocol::Protocol for MessagesHosted {
 pub(super) enum MessagesHostCall {
     Cache(CacheCall),
     PreRequest(Reply<Result<MessagesCall, Error>>),
+    Safeguards(SafeguardsCall),
     Transport(TransportCall),
 }
 
@@ -129,6 +136,9 @@ pub(super) struct MessagesPythonHost {
     view: RequestView,
     cache: PythonCache,
     transport: HostedTransport,
+    safeguards: SafeguardsHost,
+    classifies: Arc<AtomicBool>,
+    awaiting_safeguards: bool,
     stream_cost_model: Option<String>,
     asynchronous: bool,
     pre_request: Option<Reply<Result<MessagesCall, Error>>>,
@@ -142,11 +152,15 @@ impl MessagesPythonHost {
         view: RequestView,
         asynchronous: bool,
         hooked_request: HookedRequest,
+        classifies: Arc<AtomicBool>,
     ) -> Self {
         Self {
             view,
             cache: PythonCache::new(asynchronous),
             transport: HostedTransport::default(),
+            safeguards: SafeguardsHost::default(),
+            classifies,
+            awaiting_safeguards: false,
             stream_cost_model: None,
             asynchronous,
             pre_request: None,
@@ -382,6 +396,14 @@ impl MessagesPythonHost {
             .resolve(py, arguments)
             .map_err(InvokeError::Python)?;
         self.hooked = true;
+        let effective = self
+            .view
+            .request(py)
+            .and_then(|request| effective_py_args(request, arguments))
+            .map_err(InvokeError::Python)?;
+        self.safeguards
+            .rebind(py, &effective)
+            .map_err(InvokeError::Python)?;
         *self
             .hooked_request
             .lock()
@@ -413,6 +435,16 @@ impl PythonBinding for MessagesPythonHost {
             .map_err(InvokeError::Python)?;
         let selection = crate::cache::configure(&mut self.cache, py, arguments, &function)
             .map_err(InvokeError::Python)?;
+        let effective = self
+            .view
+            .request(py)
+            .and_then(|request| effective_py_args(request, arguments))
+            .map_err(InvokeError::Python)?;
+        let classifies = self
+            .safeguards
+            .configure(py, &effective)
+            .map_err(InvokeError::Python)?;
+        self.classifies.store(classifies, Ordering::Release);
         self.requested_stream = arguments
             .get_item("stream")
             .map_err(InvokeError::Python)?
@@ -430,7 +462,8 @@ impl PythonBinding for MessagesPythonHost {
         py: Python<'_>,
         response: litellm_inference_messages::MessagesBody,
     ) -> PyResult<Py<PyAny>> {
-        public_response(py, ROUTE_HOST_MODULE, &response)
+        let public = public_response(py, ROUTE_HOST_MODULE, &response)?;
+        self.safeguards.published(py, public)
     }
 
     fn deliver_response(&mut self, py: Python<'_>, response: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -494,6 +527,7 @@ impl PythonHostCalls<MessagesHosted> for MessagesPythonHost {
         py: Python<'_>,
         op: MessagesHostCall,
     ) -> Result<Option<Py<PyAny>>, InvokeError<Error>> {
+        self.awaiting_safeguards = matches!(op, MessagesHostCall::Safeguards(_));
         match op {
             MessagesHostCall::Cache(op) => self.cache.begin(py, op),
             MessagesHostCall::Transport(op) => {
@@ -501,6 +535,7 @@ impl PythonHostCalls<MessagesHosted> for MessagesPythonHost {
                 self.transport.begin(py, op, request)
             }
             MessagesHostCall::PreRequest(reply) => self.begin_pre_request(py, reply).map(Some),
+            MessagesHostCall::Safeguards(op) => self.safeguards.begin(py, op).map(Some),
         }
         .map_err(InvokeError::Python)
     }
@@ -512,6 +547,13 @@ impl PythonHostCalls<MessagesHosted> for MessagesPythonHost {
     ) -> Result<Option<Py<PyAny>>, InvokeError<Error>> {
         if let Some(reply) = self.pre_request.take() {
             return self.resume_pre_request(py, reply, result).map(|()| None);
+        }
+        if std::mem::take(&mut self.awaiting_safeguards) {
+            return self
+                .safeguards
+                .resume(py, result)
+                .map(|()| None)
+                .map_err(InvokeError::Python);
         }
         if self.transport.pending() {
             return self
@@ -529,11 +571,13 @@ impl PythonOwned for MessagesPythonHost {
         self.cache.close();
         self.transport.close();
         self.pre_request = None;
+        self.safeguards.close();
     }
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
         self.view.traverse(visit)?;
         self.cache.traverse(visit)?;
-        self.transport.traverse(visit)
+        self.transport.traverse(visit)?;
+        self.safeguards.traverse(visit)
     }
 }
 

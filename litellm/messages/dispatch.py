@@ -146,10 +146,7 @@ _NATIVE_COMMON_FEATURES: Final = frozenset(
 )
 
 _FEATURES: Final[detectors.Detectors] = MappingProxyType(
-    {
-        **{feature: detect for feature, detect in detectors.COMMON.items() if feature not in _NATIVE_COMMON_FEATURES},
-        Feature.SAFEGUARDS_CLASSIFIER: route_detectors.safeguards_classifier,
-    }
+    {feature: detect for feature, detect in detectors.COMMON.items() if feature not in _NATIVE_COMMON_FEATURES}
 )
 
 _ASYNC_FEATURES: Final[detectors.Detectors] = MappingProxyType(

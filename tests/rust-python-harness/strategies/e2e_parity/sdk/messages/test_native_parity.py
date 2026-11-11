@@ -52,6 +52,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.messages import dispatch
+from litellm.proxy import proxy_server
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.hooks.message_thread_ownership import MessageThreadOwnership
@@ -73,8 +74,8 @@ OPUS_FAST: Final = "anthropic/claude-opus-5-5"
 API_KEY: Final = "sk-ant-parity-test"
 USER: Final[Mapping[str, JsonValue]] = MappingProxyType({"role": "user", "content": "What is the capital of France?"})
 
-_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _LOGGED: Final = TypeAdapter(dict[str, object])
+_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _TRANSPORT_HEADERS: Final = frozenset(
     {"accept", "accept-encoding", "connection", "content-length", "host", "user-agent"}
 )
@@ -347,12 +348,20 @@ class Case:
     private_keys: bool = False
     cache: Callable[[], Cache] | None = None
     callbacks: tuple[Callable[[], CustomLogger], ...] = ()
+    classifier: str | None = None
     gaps: Mapping[str, str | None] = field(default_factory=lambda: MappingProxyType({}))
     loggers: Callable[[], Sequence[CustomLogger]] | None = None
 
+    def aspects(self) -> tuple[str, ...]:
+        return (
+            *ASPECTS,
+            *(("cached",) if self.cache is not None else ()),
+            *(("hook_inputs",) if self.loggers else ()),
+            *(("classified",) if self.classifier is not None else ()),
+        )
+
     def params(self) -> Iterator[object]:
-        extra: Final = (*(("cached",) if self.cache is not None else ()), *(("hook_inputs",) if self.loggers else ()))
-        for aspect in (*ASPECTS, *extra):
+        for aspect in self.aspects():
             gap = {**KNOWN_GAPS.get(self.name, {}), **self.gaps}.get(aspect)
             marks = () if not gap else (pytest.mark.xfail(reason=gap, strict=True),)
             yield pytest.param(self, aspect, id=f"{self.name}-{aspect}", marks=marks)
@@ -1828,6 +1837,110 @@ AGENTIC_CASES: Final = (
     ),
 )
 
+CLASSIFIER_MODEL: Final = "openai/parity-classifier"
+CLASSIFIER_CALL_TYPE: Final = "acompletion"
+NON_CLAUDE: Final = "anthropic/parity-tool-model"
+DANGEROUS_TOOL_USE: Final[tuple[JsonValue, ...]] = (
+    {
+        "type": "dangerous_tool_use",
+        "classifier_context": {
+            "permission_mode": "auto",
+            "platform": "linux",
+            "trusted_directories": ["/repo"],
+            "git_state": {"cwd": "/repo", "branch": "main", "dirty": True},
+            "ignored": "not rendered",
+        },
+    },
+)
+FLAGGED: Final = json.dumps({"verdicts": {"toolu_01Parity": {"flagged": True, "explanation": "Sends the weather."}}})
+CLEARED: Final = json.dumps({"verdicts": {"toolu_01Parity": {"flagged": False}}})
+CUT_OFF_TOOL_STREAM: Final = (*TOOL_STREAM[:-2], *_message_end("max_tokens", 22))
+UPSTREAM_ANSWERED: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        **TOOL_USE_RESPONSE,
+        "safeguard_results": [{"type": "dangerous_tool_use", "status": {"type": "unsupported"}}],
+    }
+)
+
+
+def _safeguarded(**kwargs: object) -> Mapping[str, object]:
+    return _kw(safeguards=list(DANGEROUS_TOOL_USE), messages=list(TOOL_TURNS), tools=[dict(WEATHER_TOOL)], **kwargs)
+
+
+SAFEGUARDS_CASES: Final = (
+    Case(
+        "safeguards_classifier_flags_tool_use",
+        _safeguarded(litellm_metadata={"user_api_key_end_user_id": "end-user-1", "user_api_key": "hashed-key"}),
+        upstream=(_ok(TOOL_USE_RESPONSE),),
+        model=NON_CLAUDE,
+        classifier=FLAGGED,
+    ),
+    Case(
+        "safeguards_classifier_clears_tool_use",
+        _safeguarded(),
+        upstream=(_ok(TOOL_USE_RESPONSE),),
+        model=NON_CLAUDE,
+        classifier=CLEARED,
+    ),
+    Case(
+        "safeguards_classifier_unparsable_reply",
+        _safeguarded(),
+        upstream=(_ok(TOOL_USE_RESPONSE),),
+        model=NON_CLAUDE,
+        classifier="I cannot tell.",
+    ),
+    Case(
+        "safeguards_classifier_rejects_long_input",
+        _safeguarded(),
+        upstream=(_ok(TOOL_USE_RESPONSE),),
+        model=NON_CLAUDE,
+        classifier="litellm.ContextWindowExceededError",
+    ),
+    Case("safeguards_classifier_without_tool_use", _safeguarded(), model=NON_CLAUDE, classifier=FLAGGED),
+    Case(
+        "safeguards_classifier_upstream_answered",
+        _safeguarded(),
+        upstream=(_ok(UPSTREAM_ANSWERED),),
+        model=NON_CLAUDE,
+        classifier=FLAGGED,
+    ),
+    Case(
+        "safeguards_classifier_stream_tool_use",
+        _safeguarded(stream=True),
+        upstream=(_stream(TOOL_STREAM),),
+        model=NON_CLAUDE,
+        classifier=FLAGGED,
+    ),
+    Case(
+        "safeguards_classifier_stream_cut_off",
+        _safeguarded(stream=True),
+        upstream=(_stream(CUT_OFF_TOOL_STREAM),),
+        model=NON_CLAUDE,
+        classifier=FLAGGED,
+    ),
+    Case(
+        "safeguards_classifier_stream_text",
+        _safeguarded(stream=True),
+        upstream=(_stream(TEXT_STREAM),),
+        model=NON_CLAUDE,
+        classifier=FLAGGED,
+    ),
+    Case(
+        "safeguards_classifier_upstream_failure",
+        _safeguarded(),
+        upstream=(_failure(529, "overloaded_error", "Overloaded"),),
+        model=NON_CLAUDE,
+        classifier=FLAGGED,
+    ),
+    Case(
+        "safeguards_claude_model_is_not_classified",
+        _safeguarded(),
+        upstream=(_ok(TOOL_USE_RESPONSE),),
+        classifier=FLAGGED,
+    ),
+    Case("safeguards_classifier_sync", _safeguarded(), model=NON_CLAUDE, sync=True, classifier=FLAGGED),
+)
+
 CASES: Final = (
     *REQUEST_CASES,
     *AGENTIC_CASES,
@@ -1845,6 +1958,7 @@ CASES: Final = (
     *THREAD_CASES,
     *TRANSPORT_CASES,
     *PRE_REQUEST_HOOK_CASES,
+    *SAFEGUARDS_CASES,
 )
 
 
@@ -1858,6 +1972,7 @@ class Leg:
     callback_kwargs: Mapping[str, object]
     cached: tuple[str, ...] = ()
     hook_inputs: tuple[object, ...] = ()
+    classified: tuple[Mapping[str, object], ...] = ()
 
 
 @dataclass(slots=True)
@@ -1924,6 +2039,30 @@ def _settings(settings: Mapping[str, object]) -> Generator[None]:
     finally:
         for name, value in saved.items():
             setattr(litellm, name, value)
+
+
+@contextmanager
+def _classifier(reply: str | None, calls: list[Mapping[str, object]]) -> Generator[None]:
+    if reply is None:
+        yield
+        return
+    acompletion: Final = litellm.acompletion
+
+    async def classify(**kwargs: object) -> object:  # kwargs-ok: stands in for litellm.acompletion
+        calls.append(
+            {
+                "names": sorted(kwargs),
+                **{name: kwargs.get(name) for name in ("model", "messages", "max_tokens", "num_retries", "user")},
+                "litellm_metadata": _mapping(kwargs.get("litellm_metadata")),
+            }
+        )
+        return await acompletion(**kwargs, mock_response=reply)
+
+    with (
+        rebound(proxy_server, "general_settings", {"safeguards_classifier_model": CLASSIFIER_MODEL}),
+        rebound(litellm, "acompletion", classify),
+    ):
+        yield
 
 
 @contextmanager
@@ -2002,6 +2141,19 @@ def _stream_text(chunks: Iterable[object]) -> str:
     return b"".join(chunk if isinstance(chunk, bytes) else str(chunk).encode() for chunk in chunks).decode()
 
 
+def _scrubbed(value: object) -> object:
+    """Masks the random server tool ids inside a response, leaving every other value as it was."""
+    match value:
+        case str():
+            return _SERVER_TOOL_ID.sub("srvtoolu_<id>", value)
+        case dict():
+            return {name: _scrubbed(item) for name, item in cast(dict[object, object], value).items()}
+        case list():
+            return [_scrubbed(item) for item in cast(list[object], value)]
+        case _:
+            return value
+
+
 def _response(result: object, private_keys: bool) -> Mapping[str, object]:
     assert isinstance(result, dict), f"expected a dict response, got {type(result).__name__}"
     body: Final = {
@@ -2009,10 +2161,7 @@ def _response(result: object, private_keys: bool) -> Mapping[str, object]:
         for name, value in cast(dict[str, object], result).items()
         if private_keys or not name.startswith("_")
     }
-    return {
-        "kind": "response",
-        "body": _OBJECT.validate_json(_SERVER_TOOL_ID.sub("srvtoolu_<id>", json.dumps(body, default=str))),
-    }
+    return {"kind": "response", "body": _LOGGED.validate_python(_scrubbed(body))}
 
 
 def _hidden_params(result: object) -> Mapping[str, object]:
@@ -2089,7 +2238,11 @@ async def _terminal_events(recorder: RecordingLogger, since: int = 0) -> tuple[s
 def _logged(
     recorder: RecordingLogger, events: tuple[str, ...], since: int = 0
 ) -> tuple[Mapping[str, object], Mapping[str, object]]:
-    terminal: Final = [event for event in recorder.events[since:] if event.name in _TERMINAL_EVENTS]
+    terminal: Final = [
+        event
+        for event in recorder.events[since:]
+        if event.name in _TERMINAL_EVENTS and event.call_type != CLASSIFIER_CALL_TYPE
+    ]
     hooks: Final = tuple(sorted(set(recorder.names[since:])))
     if not terminal:
         return {"events": events, "hooks": hooks}, {}
@@ -2138,11 +2291,13 @@ async def _prime(case: Case, server: RecordingServer, recorder: RecordingLogger,
 
 
 async def _leg(case: Case, server: RecordingServer, probe: FallbackProbe | None) -> Leg:
+    classified: Final[list[Mapping[str, object]]] = []
     with (
         isolated_callback_registries(),
         _environment(case.env),
         _settings(case.settings),
         _cache(case.cache),
+        _classifier(case.classifier, classified),
     ):
         for spec in case.upstream:
             server.enqueue(replace(spec))
@@ -2177,6 +2332,7 @@ async def _leg(case: Case, server: RecordingServer, probe: FallbackProbe | None)
             callback_kwargs=callback_kwargs,
             cached=() if litellm.cache is None else tuple(sorted(litellm.cache.cache.cache_dict)),
             hook_inputs=tuple(getattr(logger, "seen", ()) for logger in loggers),
+            classified=tuple(classified),
         )
 
 
@@ -2227,15 +2383,23 @@ async def test_native_messages_match_python(
             assert native.cached == python.cached
         case "hook_inputs":
             assert native.hook_inputs == python.hook_inputs
+        case "classified":
+            assert native.classified == python.classified
         case _:
             assert native.callback_kwargs.get(aspect) == python.callback_kwargs.get(aspect)
 
 
 @pytest.mark.parametrize(
-    "case", [pytest.param(case, id=case.name) for case in (*SERVED_NATIVELY_CASES, *AGENTIC_CASES)]
+    "case",
+    [pytest.param(case, id=case.name) for case in (*SERVED_NATIVELY_CASES, *AGENTIC_CASES, *SAFEGUARDS_CASES)],
 )
 def test_catalog_serves_the_case_natively(case: Case, parity_server: RecordingServer) -> None:
-    with isolated_callback_registries(), _environment(case.env), _settings(case.settings):
+    with (
+        isolated_callback_registries(),
+        _environment(case.env),
+        _settings(case.settings),
+        _classifier(case.classifier, []),
+    ):
         litellm.callbacks.extend(() if case.loggers is None else case.loggers())
         binding: Final = dispatch._MESSAGES if case.sync else dispatch._AMESSAGES  # pyright: ignore[reportPrivateUsage]  # the public binding the entry routes by
         features: Final = dispatch._FEATURES if case.sync else dispatch._ASYNC_FEATURES  # pyright: ignore[reportPrivateUsage]  # the entry's own detectors

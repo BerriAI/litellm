@@ -257,50 +257,6 @@ CLASSIFIER_SETTINGS: Final = {"safeguards_classifier_model": "gpt-oss-120b"}
 
 
 @pytest.mark.parametrize(
-    ("model", "kwargs", "general_settings", "serves_python"),
-    (
-        ("deepseek/deepseek-v4-flash", {"safeguards": DANGEROUS_TOOL_USE}, CLASSIFIER_SETTINGS, True),
-        (
-            "deepseek-v4-flash",
-            {"safeguards": DANGEROUS_TOOL_USE, "custom_llm_provider": "deepseek"},
-            CLASSIFIER_SETTINGS,
-            True,
-        ),
-        ("deepseek/deepseek-v4-flash", {"safeguards": DANGEROUS_TOOL_USE}, {}, False),
-        ("deepseek/deepseek-v4-flash", {}, CLASSIFIER_SETTINGS, False),
-        ("deepseek/deepseek-v4-flash", {"safeguards": [{"type": "other"}]}, CLASSIFIER_SETTINGS, False),
-        ("anthropic/claude-sonnet-4-5", {"safeguards": DANGEROUS_TOOL_USE}, CLASSIFIER_SETTINGS, False),
-    ),
-)
-def test_proxy_classified_safeguards_reach_the_feature_rule(
-    monkeypatch: pytest.MonkeyPatch,
-    model: str,
-    kwargs: Mapping[str, object],
-    general_settings: Mapping[str, object],
-    serves_python: bool,
-) -> None:
-    monkeypatch.setattr(proxy_server, "general_settings", general_settings)
-    python_result: Final = response(model)
-    native_result: Final = response(model)
-
-    def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: fallback
-        return python_result
-
-    result: Final = _DISPATCH.run(
-        (16, MESSAGES, model),
-        kwargs,
-        python=python,
-        binding=messages_binding(lambda request: native_result),
-        native=lambda hook, request, call_args, call_kwargs: hook(request),
-        rules=(
-            RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, features=frozenset({Feature.SAFEGUARDS_CLASSIFIER})),
-            RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),
-        ),
-    )
-    assert result is (python_result if serves_python else native_result)
-
-
-@pytest.mark.parametrize(
     ("args", "kwargs"),
     (
         ((16, MESSAGES, "claude-sonnet-4-5"), {"model": "duplicate"}),
@@ -896,6 +852,23 @@ async def test_anthropic_runs_on_rust_without_the_opt_in(
     monkeypatch.setattr(litellm, "callbacks", [])
 
     result: Final = await _public(asynchronous, "anthropic/claude-sonnet-4-5", {})
+
+    assert isinstance(result, dict)
+    assert shipped_native == ["async" if asynchronous else "sync"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", (False, True), ids=("sync", "async"))
+@pytest.mark.parametrize(
+    "model", ("anthropic/parity-tool-model", "anthropic/claude-sonnet-4-5"), ids=("non-claude", "claude")
+)
+async def test_proxy_classified_safeguards_run_on_rust(
+    monkeypatch: pytest.MonkeyPatch, shipped_native: list[str], asynchronous: bool, model: str
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(proxy_server, "general_settings", CLASSIFIER_SETTINGS)
+
+    result: Final = await _public(asynchronous, model, {"safeguards": DANGEROUS_TOOL_USE})
 
     assert isinstance(result, dict)
     assert shipped_native == ["async" if asynchronous else "sync"]

@@ -164,6 +164,12 @@ pub(super) async fn execute(
     context
         .result_ready(execution_facts(provider, identity, &output, &source))
         .await?;
+    let output = match source {
+        ResultSource::Provider => {
+            super::safeguards::stamped(route.safeguards.as_ref(), output).await?
+        }
+        ResultSource::Cache { .. } => output,
+    };
     Ok(cache.finish(output, &source).await)
 }
 

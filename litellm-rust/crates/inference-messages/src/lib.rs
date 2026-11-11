@@ -3,6 +3,7 @@ mod constants;
 mod handler;
 mod pre_request;
 pub mod route;
+mod safeguards;
 mod transport;
 mod types;
 mod workload_identity;
@@ -20,6 +21,7 @@ use crate::common_utils::messages_provider;
 pub use common_utils::merge_messages_header_sources;
 pub use litellm_inference::Error;
 pub use pre_request::PreRequestHooks;
+pub use safeguards::Safeguards;
 pub use transport::{Delivered, Transport, TransportBody, TransportRequest, TransportResponse};
 pub use types::{
     MessagesBody, MessagesCall, MessagesCallResponse, MessagesSettings, MessagesShaping,
@@ -36,6 +38,7 @@ pub struct MessagesRoute {
     workload_identity: Option<Arc<dyn WorkloadIdentity>>,
     transport: Option<Arc<dyn Transport>>,
     pre_request_hooks: Option<Arc<dyn PreRequestHooks>>,
+    safeguards: Option<Arc<dyn Safeguards>>,
 }
 
 impl MessagesRoute {
@@ -52,6 +55,7 @@ impl MessagesRoute {
             workload_identity: None,
             transport: None,
             pre_request_hooks: None,
+            safeguards: None,
         }
     }
 
@@ -75,6 +79,14 @@ impl MessagesRoute {
     pub fn with_pre_request_hooks(self, hooks: Arc<dyn PreRequestHooks>) -> Self {
         Self {
             pre_request_hooks: Some(hooks),
+            ..self
+        }
+    }
+
+    #[must_use]
+    pub fn with_safeguards(self, safeguards: Arc<dyn Safeguards>) -> Self {
+        Self {
+            safeguards: Some(safeguards),
             ..self
         }
     }
