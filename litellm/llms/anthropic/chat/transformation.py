@@ -2717,7 +2717,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         data: Final = {
             "model": model,
             "messages": anthropic_messages,
-            **optional_params,
+            **{
+                key: value
+                for key, value in request_params.items()
+                if key not in ("vector_store_ids", "vector_store_id")
+            },
             **({} if marked_tools is None else {"tools": list(marked_tools)}),
         }
 
