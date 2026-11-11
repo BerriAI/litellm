@@ -26,14 +26,11 @@ from litellm._uuid import uuid
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import delete_cached_project_object
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.guardrails.guardrail_name_validation import validate_guardrail_names
 from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN, TeamAccess, is_team_admin, is_team_member
 from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management.users.service import org_admin_org_ids
-from litellm.proxy.management_endpoints.common_utils import (
-    _set_object_metadata_field,
-    raise_on_unknown_guardrails,
-    registered_guardrail_lookup,
-)
+from litellm.proxy.management_endpoints.common_utils import _set_object_metadata_field
 from litellm.proxy.management_endpoints.team_admin_field_permissions import team_admin_may_manage_projects
 from litellm.proxy.management_helpers.model_quota_policy import (
     ENFORCE_PROJECT_MODEL_QUOTA_SETTING,
@@ -608,10 +605,12 @@ async def new_project(
                     "error": f"Only admins or team admins can create projects. Your role is {user_api_key_dict.user_role}"
                 },
             )
-        await raise_on_unknown_guardrails(
+        await validate_guardrail_names(
             None,
             data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
-            find_registered=registered_guardrail_lookup(prisma_client),
+            None,
+            prisma_client,
+            license_first=False,
         )
 
         quota_policy: Final = _project_model_quota_policy(general_settings_view())
@@ -844,11 +843,12 @@ async def update_project(
                     status_code=403,
                     detail={"error": "Cannot reassign project to a team you are not an admin of"},
                 )
-        await raise_on_unknown_guardrails(
+        await validate_guardrail_names(
             None,
             data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
-            find_registered=registered_guardrail_lookup(prisma_client),
-            existing_metadata=existing_project.metadata if isinstance(existing_project.metadata, dict) else None,
+            existing_project.metadata if isinstance(existing_project.metadata, dict) else None,
+            prisma_client,
+            license_first=False,
         )
 
         # Validate project limits against team limits

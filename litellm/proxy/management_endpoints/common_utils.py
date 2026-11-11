@@ -1,7 +1,6 @@
 import json
 import math
-from collections.abc import Awaitable, Callable, Mapping, Sequence
-from itertools import chain
+from collections.abc import Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Optional, Union
 
@@ -272,86 +271,6 @@ def check_disable_global_guardrails_caller_permission(
 
 
 _check_disable_global_guardrails_caller_permission: Final = check_disable_global_guardrails_caller_permission
-
-_GUARDRAIL_ENTRIES: Final = TypeAdapter(list[str | dict[str, object]])
-
-
-def _guardrail_entry_names(entries: object) -> frozenset[str] | None:
-    try:
-        parsed: Final = _GUARDRAIL_ENTRIES.validate_python(entries)
-    except ValidationError:
-        return None
-    return frozenset(chain.from_iterable((entry,) if isinstance(entry, str) else entry.keys() for entry in parsed))
-
-
-def _malformed_guardrails_message(entries: object) -> str:
-    shown: Final = json.dumps(entries, default=str)
-    return (
-        f"Invalid guardrail detected - {shown if len(shown) <= 100 else shown[:100] + '...'}. "
-        + "Please provide a valid list of guardrail names."
-    )
-
-
-async def raise_on_unknown_guardrails(
-    guardrails: Sequence[str] | None,
-    metadata: Mapping[str, object] | None,
-    *,
-    find_registered: Callable[[frozenset[str]], Awaitable[frozenset[str]]],
-    existing_metadata: Mapping[str, object] | None = None,
-) -> None:
-    requested_entries: Final = (
-        guardrails if guardrails is not None else (metadata.get("guardrails") if metadata is not None else None)
-    )
-    if requested_entries is None:
-        return
-    stored_entries: Final = existing_metadata.get("guardrails") if existing_metadata is not None else None
-    requested: Final = _guardrail_entry_names(requested_entries)
-    if requested is None:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": _malformed_guardrails_message(requested_entries)},
-        )
-    new_names: Final = requested - (_guardrail_entry_names(stored_entries) or frozenset())
-    if not new_names:
-        return
-    unknown: Final = new_names - await find_registered(new_names)
-    if not unknown:
-        return
-    raise HTTPException(
-        status_code=400,
-        detail={
-            "error": f"Unknown guardrail(s): {', '.join(sorted(unknown))}. "
-            + "Create the guardrail first, or check the name against /v2/guardrails/list."
-        },
-    )
-
-
-def registered_guardrail_lookup(
-    prisma_client: "PrismaClient | None",
-) -> Callable[[frozenset[str]], Awaitable[frozenset[str]]]:
-    from litellm.proxy.guardrails.guardrail_registry import registered_guardrail_names
-
-    async def lookup(names: frozenset[str]) -> frozenset[str]:
-        return await registered_guardrail_names(names, prisma_client)
-
-    return lookup
-
-
-async def raise_on_unknown_licensed_guardrails(
-    guardrails: Sequence[str] | None,
-    metadata: Mapping[str, object] | None,
-    existing_metadata: Mapping[str, object] | None,
-    prisma_client: "PrismaClient | None",
-) -> None:
-    if guardrails:
-        # key and team writes license-gate top-level guardrails later on, keep that 403 ahead of a name 400
-        premium_user_check("guardrails")
-    await raise_on_unknown_guardrails(
-        guardrails,
-        metadata,
-        find_registered=registered_guardrail_lookup(prisma_client),
-        existing_metadata=existing_metadata,
-    )
 
 
 def check_require_trace_id_caller_permission(

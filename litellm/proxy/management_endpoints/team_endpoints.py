@@ -142,6 +142,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     team_membership_reservation_cache_key,
 )
 from litellm.proxy.db.db_span import db_span
+from litellm.proxy.guardrails.guardrail_name_validation import validate_guardrail_names
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import (
     RoutedModels,
@@ -171,7 +172,6 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     check_passthrough_routes_caller_permission,
     check_require_trace_id_caller_permission,
     member_budget_patch,
-    raise_on_unknown_licensed_guardrails,
     set_object_metadata_field,
     team_member_has_permission,
     update_metadata_fields,
@@ -1917,11 +1917,12 @@ async def new_team(
             user_api_key_dict,
             metadata_sent="metadata" in data.model_fields_set,
         )
-        await raise_on_unknown_licensed_guardrails(
+        await validate_guardrail_names(
             data.guardrails,
             data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
             None,
             prisma_client,
+            license_first=True,
         )
 
         if isinstance(data.metadata, dict):
@@ -2643,11 +2644,12 @@ async def update_team(
             metadata_sent="metadata" in data.model_fields_set,
             existing_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,  # pyright: ignore[reportUnknownArgumentType]  # existing_team_row.metadata is a bare dict
         )
-        await raise_on_unknown_licensed_guardrails(
+        await validate_guardrail_names(
             data.guardrails,
             data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
             _existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,  # pyright: ignore[reportUnknownArgumentType]  # existing_team_row.metadata is a bare dict
             prisma_client,
+            license_first=True,
         )
 
         if data.soft_budget is not None:

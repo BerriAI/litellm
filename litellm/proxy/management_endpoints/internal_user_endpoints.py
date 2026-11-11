@@ -58,6 +58,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     user_object_permission_id_cache_key,
 )
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from litellm.proxy.guardrails.guardrail_name_validation import validate_guardrail_names
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_usage
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
@@ -70,8 +71,6 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
 )
 from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
     _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
-    raise_on_unknown_guardrails,
-    registered_guardrail_lookup,
     require_caller_user_id_for_non_admin,
     user_api_key_has_admin_view,
     validate_budget_duration,
@@ -486,16 +485,6 @@ async def _fetch_user_team_ids(user_id: str, prisma_client: "PrismaClient") -> t
     return tuple(user_row.teams) if user_row is not None else ()
 
 
-async def _raise_on_unknown_new_user_key_guardrails(data: NewUserRequest, prisma_client: "PrismaClient | None") -> None:
-    if not data.auto_create_key:
-        return
-    await raise_on_unknown_guardrails(
-        data.guardrails,
-        data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
-        find_registered=registered_guardrail_lookup(prisma_client),
-    )
-
-
 @router.post(
     "/user/new",
     tags=["Internal User management"],
@@ -613,12 +602,18 @@ async def new_user(
             enforce_batch_limits_are_admin_only(data, None, user_api_key_dict, "key")
             enforce_vector_store_index_grants_are_admin_only(data, None, None, user_api_key_dict, "key")
             raise_on_logging_credential_change(data.metadata, None, user_api_key_dict)
+            await validate_guardrail_names(
+                data.guardrails,
+                data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+                None,
+                prisma_client,
+                license_first=False,
+            )
 
         check_permissions_caller_permission(
             data=data,
             user_api_key_dict=user_api_key_dict,
         )
-        await _raise_on_unknown_new_user_key_guardrails(data, prisma_client)
 
         data_json = data.json()
         data_json = _update_internal_new_user_params(data_json, data)

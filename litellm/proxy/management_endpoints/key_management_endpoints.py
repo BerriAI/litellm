@@ -86,6 +86,7 @@ from litellm.proxy.common_utils.openai_error_payload import openai_error_param, 
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, keeps_due_budget_reset
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache, is_user_key_cache_key
+from litellm.proxy.guardrails.guardrail_name_validation import validate_guardrail_names
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_usage
 from litellm.proxy.management.teams.authz import TEAM_ADMIN_ONLY, TEAM_OR_ORG_ADMIN, is_team_admin
@@ -100,7 +101,6 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     check_denied_passthrough_routes_caller_permission,
     check_disable_global_guardrails_caller_permission,
     check_passthrough_routes_caller_permission,
-    raise_on_unknown_licensed_guardrails,
     set_object_metadata_field,
     team_member_has_permission,
     user_api_key_has_admin_view,
@@ -1609,7 +1609,7 @@ async def _common_key_generation_helper(
         _requested_metadata,
         user_api_key_dict,
     )
-    await raise_on_unknown_licensed_guardrails(data.guardrails, _requested_metadata, None, prisma_client)
+    await validate_guardrail_names(data.guardrails, _requested_metadata, None, prisma_client, license_first=True)
 
     # APPLY ENTERPRISE KEY MANAGEMENT PARAMS
     try:
@@ -3398,11 +3398,12 @@ async def _process_single_key_update(
         user_api_key_dict,
         existing_metadata=existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
     )
-    await raise_on_unknown_licensed_guardrails(
+    await validate_guardrail_names(
         update_key_request.guardrails,
         update_key_request.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
         existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
         prisma_client,
+        license_first=True,
     )
 
     # Custom key update hook
@@ -3958,11 +3959,12 @@ async def _validate_update_key_data(
         user_api_key_dict,
         existing_metadata=existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
     )
-    await raise_on_unknown_licensed_guardrails(
+    await validate_guardrail_names(
         data.guardrails,
         data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
         existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
         checked_prisma_client,
+        license_first=True,
     )
 
     # Check team limits if key has a team_id (from request or existing key)
@@ -6548,21 +6550,6 @@ def _check_regenerate_guardrail_opt_out(
     )
 
 
-async def _check_regenerate_guardrail_names(
-    data: RegenerateKeyRequest | None,
-    existing_metadata: Mapping[str, object] | None,
-    prisma_client: PrismaClient | None,
-) -> None:
-    if data is None:
-        return
-    await raise_on_unknown_licensed_guardrails(
-        data.guardrails,
-        data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
-        existing_metadata,
-        prisma_client,
-    )
-
-
 @router.post(
     "/key/{key:path}/regenerate",
     tags=["key management"],
@@ -6774,10 +6761,12 @@ async def regenerate_key_fn(
             user_api_key_dict,
             existing_metadata=_key_in_db.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
         )
-        await _check_regenerate_guardrail_names(
-            data,
+        await validate_guardrail_names(
+            data.guardrails if data is not None else None,
+            data.metadata if data is not None else None,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
             _key_in_db.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
             prisma_client,
+            license_first=True,
         )
 
         if data is not None and (data.access_group_ids or data.object_permission is not None):
