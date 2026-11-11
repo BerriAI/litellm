@@ -146,5 +146,5 @@ Note: Don't add `/anthropic` to the base URL - LiteLLM handles the routing autom
 ## Learn More
 
 - [LiteLLM Docs](https://docs.litellm.ai/)
-- [Claude Agent SDK](https://github.com/anthropics/anthropic-agent-sdk)
+- [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python)
 - [LiteLLM Proxy Guide](https://docs.litellm.ai/docs/proxy/quick_start)
