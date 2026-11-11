@@ -72,8 +72,6 @@ proxy = [
     "hiredis>=3.0.0,<4.0; python_version < '3.15'",
     "hiredis>=3.5.0,<4.0; python_version >= '3.15'",
     "apscheduler>=3.11.2,<4.0",
-    # apscheduler resolves the local zone through tzlocal and zoneinfo; tzdata lets that work for
-    # TZ values the OS zone database lacks, such as Asia/Calcutta on Ubuntu 24.04+.
     "tzdata>=2024.1",
     "fastapi-sso>=0.19.0,<1.0",
     "PyJWT>=2.13.0,<3.0",
