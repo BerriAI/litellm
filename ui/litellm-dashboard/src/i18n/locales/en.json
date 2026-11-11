@@ -8709,6 +8709,7 @@
     "resourceActivity": {
       "title": "Activity",
       "ownUsage": "Showing your usage only.",
+      "teamScope": "Showing usage for the team keys you have permission to view.",
       "modelScope": "Usage for {{model}} across deployments of this model."
     },
     "credentialOptions": {

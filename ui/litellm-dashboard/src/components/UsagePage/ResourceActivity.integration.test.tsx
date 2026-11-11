@@ -183,6 +183,18 @@ describe("ResourceActivity", () => {
     );
   });
 
+  it("explains that team Activity is limited to the keys the viewer can access", async () => {
+    vi.mocked(useAuthorized).mockReturnValue({ ...auth, userRole: "Internal User" });
+    render(<ResourceActivity scope="team" id="team-1" />);
+
+    expect(await screen.findByText("$12.34")).toBeInTheDocument();
+    expect(screen.getByText("Showing usage for the team keys you have permission to view.")).toBeInTheDocument();
+    expect(networking.dailyActivityAggregatedCall).toHaveBeenCalledWith(
+      "team",
+      expect.objectContaining({ entityIds: ["team-1"] }),
+    );
+  });
+
   it("does not query another user's spend for a non-admin", () => {
     vi.mocked(useAuthorized).mockReturnValue({ ...auth, userRole: "Internal User" });
     render(<ResourceActivity scope="user" id="user-2" />);
