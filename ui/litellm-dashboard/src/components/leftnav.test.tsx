@@ -1,9 +1,18 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../tests/test-utils";
 import { TerminologyProvider } from "@/contexts/TerminologyContext";
-import Sidebar, { menuGroups, getBreadcrumb } from "./leftnav";
+import { SidebarProvider } from "@/components/ui/sidebar";
+import { MobileSidebarTrigger } from "@/components/shared/MobileSidebar";
+import LeftNav, { menuGroups, getBreadcrumb } from "./leftnav";
+
+const Sidebar = ({ collapsed = false, ...props }: ComponentProps<typeof LeftNav> & { collapsed?: boolean }) => (
+  <SidebarProvider defaultOpen={!collapsed}>
+    <LeftNav {...props} />
+  </SidebarProvider>
+);
 
 vi.mock("../utils/roles", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../utils/roles")>();
@@ -143,6 +152,7 @@ describe("Sidebar (leftnav)", () => {
   };
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     mockUseAuthorized.mockReset();
     mockUseOrganizations.mockReset();
     mockUseTeams.mockReset();
@@ -666,14 +676,30 @@ describe("Sidebar (leftnav)", () => {
   it("marks the nav item for the current route active", () => {
     navState.pathname = "/ui/logs";
     renderWithProviders(<Sidebar {...defaultProps} />);
-    expect(screen.getByRole("link", { name: "Logs" })).toHaveAttribute("data-active", "true");
+    expect(screen.getByRole("link", { name: "Logs" })).toHaveAttribute("data-active");
     expect(screen.getByRole("link", { name: "Virtual Keys" })).not.toHaveAttribute("data-active");
+  });
+
+  it("closes the mobile drawer after choosing a page, including the page already open", async () => {
+    vi.stubGlobal("innerWidth", 390);
+    navState.pathname = "/ui/api-keys";
+    renderWithProviders(
+      <SidebarProvider>
+        <MobileSidebarTrigger label="Open navigation" />
+        <LeftNav />
+      </SidebarProvider>,
+    );
+    for (const page of ["Virtual Keys", "Playground"]) {
+      fireEvent.click(await screen.findByRole("button", { name: "Open navigation" }));
+      fireEvent.click(within(await screen.findByRole("dialog")).getByRole("link", { name: page }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    }
   });
 
   it("marks Home active at the dashboard root", () => {
     navState.pathname = "/ui/";
     renderWithProviders(<Sidebar {...defaultProps} />);
-    expect(screen.getByRole("link", { name: "Home" })).toHaveAttribute("data-active", "true");
+    expect(screen.getByRole("link", { name: "Home" })).toHaveAttribute("data-active");
   });
 
   it("does not highlight Home when the Aria workspace is active", () => {
@@ -685,7 +711,7 @@ describe("Sidebar (leftnav)", () => {
   it("expands the parent group of the current nested route and marks the child active", () => {
     navState.pathname = "/ui/search-tools";
     renderWithProviders(<Sidebar {...defaultProps} />);
-    expect(screen.getByRole("link", { name: "Search Tools" })).toHaveAttribute("data-active", "true");
+    expect(screen.getByRole("link", { name: "Search Tools" })).toHaveAttribute("data-active");
     expect(screen.getByRole("button", { name: "Tools" })).toHaveAttribute("aria-expanded", "true");
   });
 
@@ -717,17 +743,23 @@ describe("Sidebar (leftnav)", () => {
     expect(hrefs.filter((href) => href.startsWith("/ui/")).length).toBeGreaterThan(30);
   });
 
-  it("hides labels but keeps items reachable (icon + link) when collapsed to the rail", () => {
+  it("exposes the sidebar as a complementary landmark", () => {
+    renderWithProviders(<Sidebar {...defaultProps} />);
+    expect(within(screen.getByRole("complementary")).getByRole("link", { name: "Virtual Keys" })).toBeInTheDocument();
+  });
+
+  it("expands the rail and opens the group when a group is chosen while collapsed", async () => {
+    renderWithProviders(<Sidebar {...defaultProps} collapsed />);
+    fireEvent.click(screen.getByRole("button", { name: "Tools" }));
+    expect(await screen.findByRole("link", { name: "Search Tools" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Collapse sidebar" })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("keeps items reachable by name and icon when collapsed to the rail", () => {
     const { container } = renderWithProviders(<Sidebar {...defaultProps} collapsed />);
-    expect(container.querySelector('[data-slot="sidebar"]')).toHaveAttribute("data-collapsed", "true");
-    // The item stays navigable in the icon-only rail: its link still renders with
-    // an icon (asserting the <a> + svg, not the text, so a removed icon would
-    // fail here), while the label is present but CSS-hidden.
-    const label = screen.getByText("Virtual Keys");
-    const link = label.closest("a");
-    expect(link).not.toBeNull();
-    expect(link!.querySelector("svg")).not.toBeNull();
-    expect(label).toHaveClass("group-data-[collapsed=true]/sidebar:hidden");
+    expect(container.querySelector('[data-slot="sidebar"]')).toHaveAttribute("data-collapsible", "icon");
+    const link = screen.getByRole("link", { name: "Virtual Keys" });
+    expect(link.querySelector("svg")).not.toBeNull();
   });
 
   it("shows Cost Optimization without a Beta badge and no feature-flag gate", () => {
@@ -741,12 +773,14 @@ describe("Sidebar (leftnav)", () => {
     expect(container.querySelector('a[href*="projects"]')).toBeNull();
   });
 
-  it("keeps a readable collapsed-rail tooltip for items whose label carries a badge", () => {
-    const { container } = renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI collapsed />);
-
-    expect(container.querySelector('a[href*="cost-optimization"]')).toHaveAttribute("title", "Cost Optimization");
-    expect(container.querySelector('a[href*="projects"]')).toHaveAttribute("title", "Projects");
-  });
+  it.each(["Cost Optimization", "Projects"])(
+    "keeps a readable collapsed-rail tooltip for %s, whose label can carry a badge",
+    async (name) => {
+      renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI collapsed />);
+      act(() => screen.getByRole("link", { name: new RegExp(`^${name}`) }).focus());
+      expect(await screen.findByText(name, { selector: '[data-slot="tooltip-content"]' })).toBeInTheDocument();
+    },
+  );
 });
 
 describe("getBreadcrumb", () => {

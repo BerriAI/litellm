@@ -8406,7 +8406,6 @@
       "configure": "Configure the plugin URL in settings"
     },
     "dashboardShell": {
-      "navigation": "Navigation",
       "openNavigation": "Open navigation"
     },
     "telemetryEnvNotice": {
@@ -8622,6 +8621,11 @@
     },
     "sheet": {
       "close": "Close"
+    },
+    "sidebar": {
+      "title": "Sidebar",
+      "description": "Displays the mobile sidebar.",
+      "toggle": "Toggle Sidebar"
     },
     "spinner": {
       "loading": "Loading"
@@ -9126,9 +9130,7 @@
       "settings": "Settings",
       "signOut": "Sign out",
       "chatNavigation": "Chat navigation",
-      "openChatNavigation": "Open chat navigation",
-      "sheetTitle": "LiteLLM Chat",
-      "sheetDescription": "Conversations and chat workspace navigation"
+      "openChatNavigation": "Open chat navigation"
     },
     "conversationList": {
       "yesterday": "Yesterday",

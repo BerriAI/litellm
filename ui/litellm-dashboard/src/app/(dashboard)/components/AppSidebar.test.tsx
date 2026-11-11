@@ -3,7 +3,7 @@ import { render, screen, within } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { expect, it, vi } from "vitest";
 import Sidebar from "@/components/leftnav";
-import SidebarProvider from "./SidebarProvider";
+import AppSidebar from "./AppSidebar";
 
 const { getSettings } = vi.hoisted(() => ({
   getSettings: vi.fn().mockResolvedValue({ values: { enable_projects_ui: true } }),
@@ -21,11 +21,11 @@ it("reuses loaded navigation settings immediately when the mobile sidebar mounts
   const shell = (mobileOpen: boolean) => (
     <QueryClientProvider client={client}>
       <section aria-label="Desktop navigation">
-        <SidebarProvider sidebarCollapsed={false} />
+        <AppSidebar />
       </section>
       {mobileOpen && (
         <section aria-label="Mobile navigation">
-          <SidebarProvider sidebarCollapsed={false} />
+          <AppSidebar />
         </section>
       )}
     </QueryClientProvider>

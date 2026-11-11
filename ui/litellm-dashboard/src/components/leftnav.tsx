@@ -8,6 +8,7 @@ import { useTerminology } from "@/contexts/TerminologyContext";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Sidebar,
+  SidebarContent,
   SidebarFooter,
   SidebarGroup,
   SidebarGroupLabel,
@@ -15,9 +16,18 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
   SidebarSeparator,
-  sidebarMenuButtonVariants,
-} from "@/components/shared/Sidebar";
+  useSidebar,
+} from "@/components/ui/sidebar";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import {
+  navMenuButtonClassName,
+  navMenuClassName,
+  navMenuSubButtonClassName,
+  navMenuSubClassName,
+} from "@/components/shared/sidebarStyles";
 import {
   Activity,
   Aperture,
@@ -89,8 +99,6 @@ import { routeSegmentForPathname, uiHref } from "@/utils/uiHref";
 const ICON = { strokeWidth: 1.75 } as const;
 
 interface SidebarProps {
-  collapsed?: boolean;
-  onToggleCollapsed?: () => void;
   enabledPagesInternalUsers?: string[] | null;
   enableProjectsUI?: boolean;
   disableAgentsForInternalUsers?: boolean;
@@ -613,8 +621,6 @@ export const getBreadcrumb = (pathname: string): { section: string | null; title
 };
 
 const Sidebar_: React.FC<SidebarProps> = ({
-  collapsed = false,
-  onToggleCollapsed,
   enabledPagesInternalUsers,
   enableProjectsUI,
   disableAgentsForInternalUsers,
@@ -630,6 +636,9 @@ const Sidebar_: React.FC<SidebarProps> = ({
   const isOrgAdmin = useIsOrgAdmin();
   const { data: teams } = useTeams();
   const logout = useLogout(accessToken);
+  const { state, isMobile, setOpen, setOpenMobile } = useSidebar();
+  const collapsed = state === "collapsed" && !isMobile;
+  const closeMobileSidebar = () => setOpenMobile(false);
 
   const currentRoute = routeForPathname(usePathname());
   const selectedKey = currentRoute === "aria" ? null : findMenuItemKey(currentRoute);
@@ -681,125 +690,126 @@ const Sidebar_: React.FC<SidebarProps> = ({
     userRole,
   ]);
 
-  const toggleGroup = (key: string) => {
+  const setGroupOpen = (key: string, open: boolean) => {
     if (collapsed) {
-      onToggleCollapsed?.();
+      setOpen(true);
       setOpenGroups((prev) => new Set(prev).add(key));
       return;
     }
     setOpenGroups((prev) => {
       const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
+      if (open) next.add(key);
+      else next.delete(key);
       return next;
     });
   };
 
-  const renderLeaf = (item: MenuItem, isChild: boolean) => {
-    const active = selectedKey === item.key;
-    const size = isChild ? "sub" : "default";
-    const label = <span className="flex-1 truncate group-data-[collapsed=true]/sidebar:hidden">{labelOf(item)}</span>;
+  const leafLink = (item: MenuItem) =>
+    item.external_url ? (
+      <a href={item.external_url} target="_blank" rel="noopener noreferrer" onClick={closeMobileSidebar} />
+    ) : (
+      <Link href={uiHref(routeOf(item))} onClick={closeMobileSidebar} />
+    );
 
-    if (item.external_url) {
+  const leafContent = (item: MenuItem) => (
+    <>
+      {item.icon}
+      <span className="flex-1 truncate">{labelOf(item)}</span>
+      {item.external_url && (
+        <ExternalLink className="size-3.5 shrink-0 opacity-70 group-data-[collapsible=icon]:hidden" />
+      )}
+    </>
+  );
+
+  const renderItem = (item: MenuItem) => {
+    const active = selectedKey === item.key;
+    const tooltip = term(labelText(item));
+    if (!item.children?.length) {
       return (
-        <a
-          key={item.key}
-          href={item.external_url}
-          target="_blank"
-          rel="noopener noreferrer"
-          title={collapsed ? term(labelText(item)) : undefined}
-          data-active={active || undefined}
-          className={cn(sidebarMenuButtonVariants({ isActive: active, size }))}
-        >
-          {item.icon}
-          {label}
-          <ExternalLink className="size-3.5 shrink-0 opacity-70 group-data-[collapsed=true]/sidebar:hidden" />
-        </a>
+        <SidebarMenuItem key={item.key}>
+          <SidebarMenuButton
+            isActive={active}
+            tooltip={tooltip}
+            className={navMenuButtonClassName}
+            render={leafLink(item)}
+          >
+            {leafContent(item)}
+          </SidebarMenuButton>
+        </SidebarMenuItem>
       );
     }
 
-    return (
-      <Link
-        key={item.key}
-        href={uiHref(routeOf(item))}
-        title={collapsed ? term(labelText(item)) : undefined}
-        data-active={active || undefined}
-        className={cn(sidebarMenuButtonVariants({ isActive: active, size }))}
-      >
-        {item.icon}
-        {label}
-      </Link>
-    );
-  };
-
-  const renderItem = (item: MenuItem) => {
-    const isGroup = !!item.children && item.children.length > 0;
-    if (!isGroup) {
-      return <SidebarMenuItem key={item.key}>{renderLeaf(item, false)}</SidebarMenuItem>;
-    }
-
-    const active = selectedKey === item.key;
     const open = openGroups.has(item.key);
     return (
-      <SidebarMenuItem key={item.key}>
-        <SidebarMenuButton
-          isActive={active}
-          aria-expanded={open}
-          onClick={() => toggleGroup(item.key)}
-          title={collapsed ? term(labelText(item)) : undefined}
+      <Collapsible
+        key={item.key}
+        open={open}
+        onOpenChange={(next) => setGroupOpen(item.key, next)}
+        render={<SidebarMenuItem />}
+      >
+        <CollapsibleTrigger
+          render={<SidebarMenuButton isActive={active} tooltip={tooltip} className={navMenuButtonClassName} />}
         >
           {item.icon}
-          <span className="flex-1 truncate group-data-[collapsed=true]/sidebar:hidden">{labelOf(item)}</span>
+          <span className="flex-1 truncate">{labelOf(item)}</span>
           <ChevronRight
             className={cn(
-              "size-4 shrink-0 transition-transform group-data-[collapsed=true]/sidebar:hidden",
+              "size-4 shrink-0 transition-transform group-data-[collapsible=icon]:hidden",
               open && "rotate-90",
             )}
           />
-        </SidebarMenuButton>
-        {open && (
-          <SidebarMenuSub>
-            {item.children!.map((child) => (
-              <SidebarMenuItem key={child.key}>{renderLeaf(child, true)}</SidebarMenuItem>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <SidebarMenuSub className={navMenuSubClassName}>
+            {item.children.map((child) => (
+              <SidebarMenuSubItem key={child.key}>
+                <SidebarMenuSubButton
+                  isActive={selectedKey === child.key}
+                  className={navMenuSubButtonClassName}
+                  render={leafLink(child)}
+                >
+                  {leafContent(child)}
+                </SidebarMenuSubButton>
+              </SidebarMenuSubItem>
             ))}
           </SidebarMenuSub>
-        )}
-      </SidebarMenuItem>
+        </CollapsibleContent>
+      </Collapsible>
     );
   };
 
   return (
-    <Sidebar collapsed={collapsed}>
-      <SidebarBrand
-        accessToken={accessToken}
-        homeLabel={t("shell.nav.homeLink")}
-        collapsed={collapsed}
-        onToggleCollapsed={onToggleCollapsed}
-      />
+    <Sidebar collapsible="icon" role="complementary" className="border-sidebar-border">
+      <SidebarBrand accessToken={accessToken} homeLabel={t("shell.nav.homeLink")} />
 
-      <div className="space-y-1 px-3 pt-3 pb-1">
-        <ViewSwitcher className="h-9 w-full max-w-none justify-start shadow-none group-data-[collapsed=true]/sidebar:size-9 group-data-[collapsed=true]/sidebar:justify-center group-data-[collapsed=true]/sidebar:p-0 [&_[data-slot=workspace-label]]:flex-1 [&_[data-slot=workspace-label]]:text-left group-data-[collapsed=true]/sidebar:[&_[data-slot=workspace-label]]:hidden" />
+      <SidebarGroup className="gap-1 px-3 pt-3 pb-1">
+        <ViewSwitcher
+          collapsed={collapsed}
+          className="h-9 w-full max-w-none justify-start shadow-none group-data-[collapsible=icon]:size-9 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0 [&_[data-slot=workspace-label]]:flex-1 [&_[data-slot=workspace-label]]:text-left group-data-[collapsible=icon]:[&_[data-slot=workspace-label]]:hidden"
+        />
         <AriaSidebarLink active={currentRoute === "aria"} />
-      </div>
-      <ScrollArea className="min-h-0 flex-1">
-        <nav className="flex flex-col gap-0.5 px-3 pb-3">
-          {visibleGroups.map((group, gi) => (
-            <SidebarGroup key={group.groupLabel}>
-              {gi > 0 && <SidebarSeparator className="hidden group-data-[collapsed=true]/sidebar:block" />}
-              <SidebarGroupLabel>{term(groupText(group.groupLabel))}</SidebarGroupLabel>
-              <SidebarMenu>{group.items.map((item) => renderItem(item))}</SidebarMenu>
-            </SidebarGroup>
-          ))}
-        </nav>
-      </ScrollArea>
+      </SidebarGroup>
+      <SidebarContent>
+        <ScrollArea className="min-h-0 flex-1">
+          <nav className="flex flex-col gap-0.5 px-3 pb-3">
+            {visibleGroups.map((group, gi) => (
+              <SidebarGroup key={group.groupLabel} className="gap-0.5 px-0 py-1">
+                {gi > 0 && (
+                  <SidebarSeparator className="my-2 hidden data-horizontal:w-auto group-data-[collapsible=icon]:block" />
+                )}
+                <SidebarGroupLabel className="block h-auto pt-3 pb-1.5 text-[11px] font-semibold tracking-wider text-muted-foreground uppercase group-data-[collapsible=icon]:hidden">
+                  {term(groupText(group.groupLabel))}
+                </SidebarGroupLabel>
+                <SidebarMenu className={navMenuClassName}>{group.items.map((item) => renderItem(item))}</SidebarMenu>
+              </SidebarGroup>
+            ))}
+          </nav>
+        </ScrollArea>
+      </SidebarContent>
 
-      <SidebarFooter>
+      <SidebarFooter className="flex-none gap-2.5 border-t border-sidebar-border p-3">
         {isAdminRole(userRole) && (
-          <SidebarUsageCard
-            accessToken={accessToken}
-            collapsed={collapsed}
-            onExpandRail={() => onToggleCollapsed?.()}
-          />
+          <SidebarUsageCard accessToken={accessToken} collapsed={collapsed} onExpandRail={() => setOpen(true)} />
         )}
         <SidebarAccountMenu onLogout={logout} collapsed={collapsed} />
       </SidebarFooter>

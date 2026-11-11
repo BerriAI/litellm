@@ -8,11 +8,10 @@ import ChatShell from "./ChatShell";
 
 const render = (ui: ReactElement) => renderWithProviders(<ThemeProvider>{ui}</ThemeProvider>);
 
-const { mockPush, mockUsePathname, mockUseChatShell, mockUseMediaQuery, mockLogout } = vi.hoisted(() => ({
+const { mockPush, mockUsePathname, mockUseChatShell, mockLogout } = vi.hoisted(() => ({
   mockPush: vi.fn(),
   mockLogout: vi.fn(),
   mockUsePathname: vi.fn(() => "/ui/chat"),
-  mockUseMediaQuery: vi.fn(() => true),
   mockUseChatShell: vi.fn(() => ({
     accessToken: "test-token",
     userEmail: "developer@example.com",
@@ -39,7 +38,6 @@ vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
   useUISettings: () => ({ data: { values: { enable_chat_ui: true } } }),
 }));
 vi.mock("@/app/(dashboard)/hooks/useLogout", () => ({ useLogout: () => mockLogout }));
-vi.mock("usehooks-ts", () => ({ useMediaQuery: mockUseMediaQuery }));
 
 describe("ChatShell", () => {
   beforeEach(() => {
@@ -53,7 +51,6 @@ describe("ChatShell", () => {
     vi.unstubAllGlobals();
     mockPush.mockClear();
     mockUsePathname.mockReturnValue("/ui/chat");
-    mockUseMediaQuery.mockReturnValue(true);
   });
 
   it("should render the chat workspace with a single New Chat action", () => {
@@ -147,7 +144,7 @@ describe("ChatShell", () => {
   });
 
   it("should open mobile navigation and close it after selecting Models", async () => {
-    mockUseMediaQuery.mockReturnValue(false);
+    vi.stubGlobal("innerWidth", 390);
     const user = userEvent.setup();
     render(
       <ChatShell>
@@ -157,7 +154,7 @@ describe("ChatShell", () => {
 
     expect(screen.queryByRole("navigation", { name: "Chat workspace" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Open chat navigation" }));
-    expect(await screen.findByRole("dialog", { name: "LiteLLM Chat" })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Models" }));
 
     expect(mockPush).toHaveBeenCalledWith("/ui/chat/models");
@@ -166,7 +163,7 @@ describe("ChatShell", () => {
   });
 
   it("should dismiss mobile navigation when the Chat home logo is selected", async () => {
-    mockUseMediaQuery.mockReturnValue(false);
+    vi.stubGlobal("innerWidth", 390);
     const user = userEvent.setup();
     render(
       <ChatShell>
@@ -185,7 +182,7 @@ describe("ChatShell", () => {
   });
 
   it("should close mobile navigation with Escape and restore trigger focus", async () => {
-    mockUseMediaQuery.mockReturnValue(false);
+    vi.stubGlobal("innerWidth", 390);
     const user = userEvent.setup();
     render(
       <ChatShell>
@@ -195,7 +192,7 @@ describe("ChatShell", () => {
 
     const trigger = screen.getByRole("button", { name: "Open chat navigation" });
     await user.click(trigger);
-    expect(await screen.findByRole("dialog", { name: "LiteLLM Chat" })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
     await user.keyboard("{Escape}");
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -217,7 +214,7 @@ describe("ChatShell", () => {
   });
 
   it("should focus conversation search when the mobile sidebar starts closed", async () => {
-    mockUseMediaQuery.mockReturnValue(false);
+    vi.stubGlobal("innerWidth", 390);
     const user = userEvent.setup();
     render(
       <ChatShell>

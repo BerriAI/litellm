@@ -17,7 +17,8 @@ import { useTranslation } from "react-i18next";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { uiHref } from "@/utils/uiHref";
-import { sidebarMenuButtonVariants } from "@/components/shared/Sidebar";
+import { SidebarMenu, SidebarMenuButton, SidebarMenuItem, useSidebar } from "@/components/ui/sidebar";
+import { navMenuButtonClassName } from "@/components/shared/sidebarStyles";
 import { RotateCcw } from "lucide-react";
 import { z } from "zod";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -130,22 +131,30 @@ export function LiteAdminFrame({ children }: { children: ReactNode }) {
 
 export function AriaSidebarLink({ active }: { active: boolean }) {
   const state = useContext(LiteAdminContext);
+  const { setOpenMobile } = useSidebar();
   if (!state) return null;
   return (
-    <Link
-      href={uiHref("aria")}
-      aria-current={active ? "page" : undefined}
-      aria-label={ARIA_AGENT_LABEL}
-      title={ARIA_AGENT_LABEL}
-      className={cn(
-        sidebarMenuButtonVariants({ isActive: active }),
-        "group-data-[collapsed=true]/sidebar:justify-center",
-      )}
-    >
-      <AriaAvatar size={18} />
-      <span className="flex-1 group-data-[collapsed=true]/sidebar:hidden">{ARIA_AGENT_LABEL}</span>
-      <Kbd className="bg-transparent text-[10px] group-data-[collapsed=true]/sidebar:hidden">⌘J</Kbd>
-    </Link>
+    <SidebarMenu>
+      <SidebarMenuItem>
+        <SidebarMenuButton
+          isActive={active}
+          tooltip={ARIA_AGENT_LABEL}
+          className={navMenuButtonClassName}
+          render={
+            <Link
+              href={uiHref("aria")}
+              aria-current={active ? "page" : undefined}
+              aria-label={ARIA_AGENT_LABEL}
+              onClick={() => setOpenMobile(false)}
+            />
+          }
+        >
+          <AriaAvatar size={18} />
+          <span className="flex-1 group-data-[collapsible=icon]:hidden">{ARIA_AGENT_LABEL}</span>
+          <Kbd className="bg-transparent text-[10px] group-data-[collapsible=icon]:hidden">⌘J</Kbd>
+        </SidebarMenuButton>
+      </SidebarMenuItem>
+    </SidebarMenu>
   );
 }
 

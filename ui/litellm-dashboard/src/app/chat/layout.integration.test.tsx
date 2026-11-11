@@ -41,6 +41,7 @@ let themeResponse: unknown = { values: {} };
 
 describe("Chat layout product navigation", () => {
   beforeEach(() => {
+    vi.stubGlobal("innerWidth", 390);
     themeResponse = { values: {} };
     route.pathname = "/ui/chat";
     localStorage.clear();
@@ -127,7 +128,7 @@ describe("Chat layout product navigation", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "Open chat navigation" }));
-    expect(await screen.findByRole("dialog", { name: "LiteLLM Chat" })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
     expect(screen.getByAltText("LiteLLM")).toHaveAttribute("src", `${getProxyBaseUrl()}/get_image`);
   });
 
