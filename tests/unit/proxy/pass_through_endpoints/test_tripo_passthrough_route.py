@@ -1,8 +1,85 @@
+import json
+from collections.abc import Mapping
 from types import SimpleNamespace
+from typing import Final
 
 import pytest
 
+from litellm.caching.caching import DualCache
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.utils import CallTypesLiteral
+
 from litellm.proxy.pass_through_endpoints import llm_passthrough_endpoints as endpoints
+
+
+class _RedactPrompt(CustomLogger):
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: Mapping[str, object],
+        call_type: CallTypesLiteral,
+    ) -> Mapping[str, object]:
+        return {**data, "prompt": "[REDACTED]"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prefix,domain", [("tripo", "openapi.tripo3d.ai"), ("cn.tripo", "openapi.tripo3d.com")])
+async def test_tripo_forwards_body_returned_by_pre_call_hook(
+    monkeypatch: pytest.MonkeyPatch, prefix: str, domain: str
+) -> None:
+    import httpx
+    from starlette.requests import Request
+    from starlette.types import Message
+
+    import litellm
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.proxy import proxy_server
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import resolve_pass_through_request_timeout
+    from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import PassthroughEndpointRouter
+    from litellm.types.llms.custom_http import httpxSpecialProvider
+
+    from litellm.proxy.utils import ProxyLogging
+
+    monkeypatch.setattr(litellm, "callbacks", [_RedactPrompt()])
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=UserApiKeyCache()))
+    router: Final = litellm.Router(model_list=[{
+        "model_name": "tripo-test",
+        "litellm_params": {
+            "model": "tripo/task", "custom_llm_provider": "tripo", "api_key": "test-key",
+            "api_base": f"https://{domain}/v3", "use_in_pass_through": True,
+        },
+    }])
+    original: Final = b'{"prompt":"secret"}'
+    sanitized: Final = {"prompt": "[REDACTED]"}
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": original, "more_body": False}
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        assert json.loads(request.content) == sanitized
+        return httpx.Response(200, json={"code": 1}, request=request)
+
+    handler: Final = get_async_httpx_client(
+        httpxSpecialProvider.PassThroughEndpoint,
+        params={"timeout": resolve_pass_through_request_timeout(None)},
+    )
+    cache_key: Final = next(key for key, value in litellm.in_memory_llm_clients_cache.cache_dict.items() if value is handler)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+        monkeypatch.setitem(litellm.in_memory_llm_clients_cache.cache_dict, cache_key, SimpleNamespace(client=client))
+        request: Final = Request({
+            "type": "http", "method": "POST", "path": f"/{prefix}/v3/generation/text-to-model",
+            "headers": [(b"content-type", b"application/json")], "query_string": b"",
+            "scheme": "http", "server": ("test", 80),
+        }, receive=receive)
+        response: Final = await endpoints.tripo_proxy_route(
+            endpoint="v3/generation/text-to-model", request=request,
+            user_api_key_dict=UserAPIKeyAuth(models=["tripo-test"]),
+            credentials_router=PassthroughEndpointRouter(llm_router_getter=lambda: router),
+        )
+        assert response.status_code == 200
 
 
 @pytest.mark.asyncio

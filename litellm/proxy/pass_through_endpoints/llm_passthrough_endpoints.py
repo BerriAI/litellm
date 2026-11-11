@@ -632,24 +632,19 @@ async def tripo_proxy_route(
     if not HttpPassThroughEndpointHelpers.is_multipart(request):
         if is_passthrough_request_streaming(await read_request_body(request)):
             raise HTTPException(status_code=400, detail="Streaming is not supported for Tripo requests")
-        setattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, await request.body())
-    try:
-        return await pass_through_request(
-            request=request,
-            target=str(target),
-            custom_headers={"Authorization": authorization, **content_headers},
-            user_api_key_dict=user_api_key_dict,
-            custom_llm_provider="tripo",
-            stream=False,
-            tripo_billing_model=credentials.model_id or credentials.model_name,
-            upstream_headers_filter=lambda headers: {
-                **{key: value for key, value in headers.items() if key.lower() != "authorization"},
-                "Authorization": authorization,
-            },
-        )
-    finally:
-        if hasattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY):
-            delattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY)
+    return await pass_through_request(
+        request=request,
+        target=str(target),
+        custom_headers={"Authorization": authorization, **content_headers},
+        user_api_key_dict=user_api_key_dict,
+        custom_llm_provider="tripo",
+        stream=False,
+        tripo_billing_model=credentials.model_id or credentials.model_name,
+        upstream_headers_filter=lambda headers: {
+            **{key: value for key, value in headers.items() if key.lower() != "authorization"},
+            "Authorization": authorization,
+        },
+    )
 
 
 @router.api_route(
