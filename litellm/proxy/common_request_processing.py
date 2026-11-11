@@ -1656,6 +1656,18 @@ async def _relay_late_response(produced: Response, framing: LateSseFraming) -> A
             await _aclose_late_response(produced)
 
 
+async def _late_block_or_failure(
+    exc: Exception,
+    on_passthrough_block: Callable[[ModifyResponseException], Awaitable[Response]] | None,
+) -> Response | Exception:
+    if not isinstance(exc, ModifyResponseException) or on_passthrough_block is None:
+        return exc
+    try:
+        return await on_passthrough_block(exc)
+    except Exception as block_failure:  # noqa: BLE001  # the client still needs a frame that ends the stream
+        return block_failure
+
+
 async def _sanitized_late_failure(
     exc: Exception,
     on_late_failure: "Callable[[Exception], Awaitable[HTTPException | None]] | None",
@@ -1727,18 +1739,19 @@ async def open_sse_before_first_byte(
             try:
                 produced: Final = produce_task.result()
             except Exception as exc:  # noqa: BLE001  # the status line is already sent; surface it as a frame
-                if isinstance(exc, ModifyResponseException) and on_passthrough_block is not None:
-                    async for chunk in _relay_late_response(await on_passthrough_block(exc), late_framing):
+                late: Final = await _late_block_or_failure(exc, on_passthrough_block)
+                if isinstance(late, Response):
+                    async for chunk in _relay_late_response(late, late_framing):
                         yield chunk
                     return
                 verbose_proxy_logger.exception(
-                    "request failed after its SSE keepalive had opened the response: %s", exc
+                    "request failed after its SSE keepalive had opened the response: %s", late
                 )
                 # The caller's own `except` never sees this, so its failure hook
                 # would never fire and the failure would go unaudited. The hook
                 # also gets to sanitize what reaches the client, by returning or
                 # raising a replacement, so its answer decides the frame.
-                for frame in late_framing.failure(await _sanitized_late_failure(exc, on_late_failure)):
+                for frame in late_framing.failure(await _sanitized_late_failure(late, on_late_failure)):
                     yield frame.encode()
                 return
             async for chunk in _relay_late_response(produced, late_framing):

@@ -14,16 +14,28 @@ Reading it from the outer body passed ``logging_obj=None`` to
 ``AttributeError: 'NoneType' object has no attribute 'model_call_details'``.
 """
 
+import asyncio
+import json
+from collections.abc import AsyncGenerator, Mapping
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import Request, Response
+from fastapi.responses import StreamingResponse
+from starlette.types import Message
 
+import litellm
+import litellm.proxy.proxy_server as proxy_server
+from litellm.caching.dual_cache import DualCache
 from litellm.exceptions import RejectedRequestError
-from litellm.integrations.custom_guardrail import ModifyResponseException
+from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.proxy_server import chat_completion
-
+from litellm.proxy.proxy_server import chat_completion, completion
+from litellm.proxy.utils import ProxyLogging
+from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.utils import ModelResponse, ModelResponseStream, TextCompletionResponse
 
 async def _run_streaming_block_and_get_wrapper(exception):
     """Drive chat_completion's streaming guardrail-passthrough handler for the
@@ -110,150 +122,179 @@ async def test_streaming_rejected_request_uses_request_data_logging_obj():
     assert mock_csw.call_args.kwargs["logging_obj"] is sentinel_logging_obj
 
 
-def _late_block_request_data():
-    from datetime import datetime
-
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-
-    return {
-        "model": "gpt-4o",
-        "stream": True,
-        "litellm_logging_obj": LiteLLMLoggingObj(
-            model="gpt-4o",
-            messages=[{"role": "user", "content": "test"}],
-            stream=True,
-            call_type="acompletion",
-            start_time=datetime.now(),
-            litellm_call_id="late-block-call-id",
-            function_id="late-block-function-id",
-        ),
-    }
+_BLOCK_TEXT: Final = "blocked by guardrail"
+_PING: Final = ": ping"
 
 
-async def _serialize_stream(response, **_kwargs):
-    async for chunk in response:
-        yield f"data: {chunk.model_dump_json()}\n\n"
-    yield "data: [DONE]\n\n"
+class _BlockEveryRequestOnceReleased(CustomGuardrail):
+    def __init__(self, released: asyncio.Event) -> None:
+        super().__init__(guardrail_name="deny-list", event_hook=GuardrailEventHooks.pre_call, default_on=True)
+        self.released: Final = released
+        self.failures: tuple[Exception, ...] = ()
+
+    async def async_pre_call_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict[str, object], call_type: str
+    ) -> None:
+        await self.released.wait()
+        self.raise_passthrough_exception(violation_message=_BLOCK_TEXT, request_data=data)
+
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict[str, object],
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: str | None = None,
+    ) -> None:
+        self.failures = (*self.failures, original_exception)
 
 
-async def _drive_streamed_block(endpoint, outer_body, keepalive_interval):
-    import asyncio
-    import json
+class _RejectEveryRequest(CustomLogger):
+    async def async_pre_call_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict[str, object], call_type: str
+    ) -> None:
+        raise RejectedRequestError(
+            message="rejected by the pre-call hook", model="gpt-4o", llm_provider="openai", request_data=data
+        )
 
-    import litellm
-    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
-    block = ModifyResponseException(
-        message="blocked by guardrail",
-        model="gpt-4o",
-        request_data=_late_block_request_data(),
-        guardrail_name="test-guardrail",
+def _post(path: str, body: Mapping[str, object]) -> Request:
+    async def receive() -> Message:
+        return {"type": "http.request", "body": json.dumps(body).encode(), "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": path,
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json")],
+        },
+        receive,
     )
 
-    async def slow_block(self, **_kwargs):
-        await asyncio.sleep(0.25)
-        raise block
 
-    with patch.object(litellm, "sse_keepalive_ping_interval_seconds", keepalive_interval), patch(
-        "litellm.proxy.proxy_server.read_request_body",
-        new_callable=AsyncMock,
-        return_value=outer_body,
-    ), patch.object(ProxyBaseLLMRequestProcessing, "_process_llm_request", slow_block), patch(
-        "litellm.proxy.proxy_server.proxy_logging_obj"
-    ) as mock_proxy_logging, patch(
-        "litellm.proxy.proxy_server.select_data_generator", side_effect=_serialize_stream
+async def _frames_releasing_the_block(response: StreamingResponse, released: asyncio.Event) -> tuple[str, ...]:
+    async def chunks() -> AsyncGenerator[str, None]:
+        async for chunk in response.body_iterator:
+            released.set()
+            yield chunk if isinstance(chunk, str) else bytes(chunk).decode()
+
+    streamed: Final = "".join([chunk async for chunk in chunks()])
+    return tuple(frame for frame in streamed.split("\n\n") if frame)
+
+
+async def _reply(
+    path: str,
+    body: Mapping[str, object],
+    rail: CustomLogger,
+    released: asyncio.Event,
+    keepalive_interval: float | None,
+) -> tuple[object, tuple[str, ...]]:
+    endpoint: Final = chat_completion if path == "/v1/chat/completions" else completion
+    with (
+        patch.object(
+            proxy_server, "proxy_logging_obj", new=ProxyLogging(user_api_key_cache=DualCache())
+        ),  # test-quality-ok: module global imported at call time; no injection seam
+        patch.object(litellm, "callbacks", new=[rail]),  # test-quality-ok: guardrails register through this global
+        patch.object(
+            litellm, "sse_keepalive_ping_interval_seconds", new=keepalive_interval
+        ),  # test-quality-ok: the operator's keepalive interval is read from this global
     ):
-        mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
-        response = await endpoint(
-            request=MagicMock(spec=Request, headers={}),
-            fastapi_response=MagicMock(spec=Response),
-            user_api_key_dict=UserAPIKeyAuth(),
+        response: Final = await endpoint(
+            request=_post(path, body), fastapi_response=Response(), user_api_key_dict=UserAPIKeyAuth()
         )
-        frames = [chunk if isinstance(chunk, str) else chunk.decode() async for chunk in response.body_iterator]
-
-    mock_proxy_logging.post_call_failure_hook.assert_awaited_once()
-    assert mock_proxy_logging.post_call_failure_hook.await_args.kwargs["original_exception"] is block
-    assert (frames[0] == ": ping\n\n") is (keepalive_interval is not None)
-    assert frames[-1] == "data: [DONE]\n\n"
-    return [json.loads(frame.removeprefix("data: ")) for frame in frames if frame.startswith("data: {")]
+        if not isinstance(response, StreamingResponse):
+            return response, ()
+        return response, await _frames_releasing_the_block(response, released)
 
 
-KEEPALIVE_INTERVALS = pytest.mark.parametrize(
+async def _blocked_reply(
+    path: str, body: Mapping[str, object], keepalive_interval: float | None
+) -> tuple[object, tuple[str, ...], _BlockEveryRequestOnceReleased]:
+    released: Final = asyncio.Event()
+    if keepalive_interval is None:
+        released.set()
+    blocker: Final = _BlockEveryRequestOnceReleased(released)
+    response, frames = await _reply(path, body, blocker, released, keepalive_interval)
+    return response, frames, blocker
+
+
+def _data_frames(frames: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(frame.removeprefix("data: ") for frame in frames if frame.startswith("data: {"))
+
+
+KEEPALIVE_INTERVALS: Final = pytest.mark.parametrize(
     "keepalive_interval", [0.05, None], ids=["blocked-after-a-keepalive-ping", "keepalive-off"]
 )
 
 
 @pytest.mark.asyncio
 @KEEPALIVE_INTERVALS
-async def test_a_blocked_chat_stream_gets_the_block_message_and_a_content_filter_finish(keepalive_interval):
-    chunks = await _drive_streamed_block(
-        chat_completion, {"model": "gpt-4o", "messages": [], "stream": True}, keepalive_interval
+async def test_a_blocked_chat_stream_gets_the_block_message_and_a_content_filter_finish(
+    keepalive_interval: float | None,
+) -> None:
+    _, frames, blocker = await _blocked_reply(
+        "/v1/chat/completions", {"model": "gpt-4o", "messages": [], "stream": True}, keepalive_interval
     )
 
-    assert not any("error" in chunk for chunk in chunks)
-    assert "".join(chunk["choices"][0]["delta"].get("content") or "" for chunk in chunks) == "blocked by guardrail"
-    assert chunks[-1]["choices"][0]["finish_reason"] == "content_filter"
+    chunks: Final = tuple(ModelResponseStream.model_validate_json(frame) for frame in _data_frames(frames))
+    assert (frames[0] == _PING) is (keepalive_interval is not None)
+    assert frames[-1] == "data: [DONE]"
+    assert not any('"error"' in frame for frame in frames)
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == _BLOCK_TEXT
+    assert chunks[-1].choices[0].finish_reason == "content_filter"
+    assert [type(failure) for failure in blocker.failures] == [ModifyResponseException]
 
 
 @pytest.mark.asyncio
 @KEEPALIVE_INTERVALS
-async def test_a_blocked_text_completion_stream_gets_the_block_message(keepalive_interval):
-    from litellm.proxy.proxy_server import completion
-
-    chunks = await _drive_streamed_block(
-        completion, {"model": "gpt-4o", "prompt": "hi", "stream": True}, keepalive_interval
+async def test_a_blocked_text_completion_stream_gets_the_block_message(keepalive_interval: float | None) -> None:
+    _, frames, blocker = await _blocked_reply(
+        "/v1/completions", {"model": "gpt-4o", "prompt": "hi", "stream": True}, keepalive_interval
     )
 
-    assert not any("error" in chunk for chunk in chunks)
-    assert "".join(chunk["choices"][0].get("text") or "" for chunk in chunks) == "blocked by guardrail"
-    assert chunks[-1]["choices"][0]["finish_reason"] == "content_filter"
-
-
-async def _drive_unstreamed_block(endpoint, outer_body):
-    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-
-    block = ModifyResponseException(
-        message="blocked by guardrail",
-        model="gpt-4o",
-        request_data={"model": "gpt-4o", "stream": False},
-        guardrail_name="test-guardrail",
-    )
-
-    async def blocking(self, **_kwargs):
-        raise block
-
-    with patch(
-        "litellm.proxy.proxy_server.read_request_body",
-        new_callable=AsyncMock,
-        return_value=outer_body,
-    ), patch.object(ProxyBaseLLMRequestProcessing, "_process_llm_request", blocking), patch(
-        "litellm.proxy.proxy_server.proxy_logging_obj"
-    ) as mock_proxy_logging:
-        mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
-        response = await endpoint(
-            request=MagicMock(spec=Request, headers={}),
-            fastapi_response=MagicMock(spec=Response),
-            user_api_key_dict=UserAPIKeyAuth(),
-        )
-
-    mock_proxy_logging.post_call_failure_hook.assert_awaited_once()
-    assert mock_proxy_logging.post_call_failure_hook.await_args.kwargs["original_exception"] is block
-    return response
+    chunks: Final = tuple(TextCompletionResponse.model_validate_json(frame) for frame in _data_frames(frames))
+    assert (frames[0] == _PING) is (keepalive_interval is not None)
+    assert frames[-1] == "data: [DONE]"
+    assert not any('"error"' in frame for frame in frames)
+    assert "".join(chunk.choices[0].text or "" for chunk in chunks) == _BLOCK_TEXT
+    assert chunks[-1].choices[0].finish_reason == "content_filter"
+    assert [type(failure) for failure in blocker.failures] == [ModifyResponseException]
 
 
 @pytest.mark.asyncio
-async def test_a_blocked_chat_request_without_streaming_gets_the_block_message_and_a_content_filter_finish():
-    response = await _drive_unstreamed_block(chat_completion, {"model": "gpt-4o", "messages": [], "stream": False})
+async def test_a_blocked_chat_request_without_streaming_gets_the_block_message_and_a_content_filter_finish() -> None:
+    response, _, blocker = await _blocked_reply(
+        "/v1/chat/completions", {"model": "gpt-4o", "messages": [], "stream": False}, None
+    )
 
-    assert response.choices[0].message.content == "blocked by guardrail"
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.content == _BLOCK_TEXT
     assert response.choices[0].finish_reason == "content_filter"
+    assert [type(failure) for failure in blocker.failures] == [ModifyResponseException]
 
 
 @pytest.mark.asyncio
-async def test_a_blocked_text_completion_without_streaming_gets_the_block_text_and_a_content_filter_finish():
-    from litellm.proxy.proxy_server import completion
+async def test_a_blocked_text_completion_without_streaming_gets_the_block_text_and_a_content_filter_finish() -> None:
+    response, _, blocker = await _blocked_reply(
+        "/v1/completions", {"model": "gpt-4o", "prompt": "hi", "stream": False}, None
+    )
 
-    response = await _drive_unstreamed_block(completion, {"model": "gpt-4o", "prompt": "hi", "stream": False})
-
-    assert response.choices[0].text == "blocked by guardrail"
+    assert isinstance(response, TextCompletionResponse)
+    assert response.choices[0].text == _BLOCK_TEXT
     assert response.choices[0].finish_reason == "content_filter"
+    assert [type(failure) for failure in blocker.failures] == [ModifyResponseException]
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_text_completion_stream_ends_with_a_stop_finish() -> None:
+    released: Final = asyncio.Event()
+    released.set()
+
+    _, frames = await _reply(
+        "/v1/completions", {"model": "gpt-4o", "prompt": "hi", "stream": True}, _RejectEveryRequest(), released, None
+    )
+
+    chunks: Final = tuple(TextCompletionResponse.model_validate_json(frame) for frame in _data_frames(frames))
+    assert frames[-1] == "data: [DONE]"
+    assert chunks[-1].choices[0].finish_reason == "stop"
