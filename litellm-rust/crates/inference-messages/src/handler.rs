@@ -400,7 +400,14 @@ async fn call_provider(
     } = request;
     let provider_name = provider.as_str();
     let config = provider.config();
+    let head = ResponseHead {
+        status: response.status().as_u16(),
+        headers: litellm_http::request::header_pairs(response.headers()),
+    };
     if stream {
+        context
+            .raw_response_received(RawResponse::new(String::new()).with_head(head))
+            .await?;
         let streamed =
             streaming_response(response, config.stream_decoder(), provider_name, timeout);
         return Ok(if whole_sse_frames {
@@ -409,10 +416,6 @@ async fn call_provider(
             streamed
         });
     }
-    let head = ResponseHead {
-        status: response.status().as_u16(),
-        headers: litellm_http::request::header_pairs(response.headers()),
-    };
     let status = head.status;
     let text = response.text().await.map_err(litellm_http::Error::from)?;
     log_response_body(&text);

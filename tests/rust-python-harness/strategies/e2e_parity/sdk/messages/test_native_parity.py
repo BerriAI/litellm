@@ -21,28 +21,38 @@ R request, S response, C callbacks, F covered by a fallback detector today)
 
 import asyncio
 import copy
+import datetime
 import json
 import os
 import re
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from types import MappingProxyType
 from typing import Final, cast
 
+import httpx
 import pytest
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
+from litellm.anthropic_interface.exceptions.exception_mapping_utils import AnthropicExceptionMapping
 from litellm.caching.caching import Cache, CacheMode
 from litellm.caching.caching_handler import (
     _PENDING_CACHE_WRITES,  # pyright: ignore[reportPrivateUsage]  # a primed entry must land before the measured call reads it
 )
+from litellm.caching.dual_cache import DualCache
 from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.messages import dispatch
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.hooks.message_thread_ownership import MessageThreadOwnership
+from litellm.proxy.utils import InternalUsageCache
+from litellm.router_utils.cooldown_handlers import is_message_thread_not_found
 from litellm.rust_bridge import catalog
 from litellm.rust_bridge.configuration import Rollout
+from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
 from tests.test_litellm_rust.support.isolation import isolated_callback_registries, rebound
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
@@ -311,6 +321,7 @@ CALLBACK_ASPECTS: Final = (
     "logged_api_key",
     "logged_call",
     "logged_request",
+    "logged_sent_request",
 )
 ASPECTS: Final = ("dispatch", "request", "outcome", "hidden_params", "logged", *CALLBACK_ASPECTS)
 
@@ -661,6 +672,7 @@ FAILURE_CASES: Final = (
             logged=S15_COMPLETE_DEADLINE,
             logged_metadata=S15_COMPLETE_DEADLINE,
             logged_response_headers=S15_COMPLETE_DEADLINE,
+            logged_sent_request=S15_COMPLETE_DEADLINE,
         ),
     ),
     Case("missing_max_tokens", _kw(max_tokens=None), upstream=()),
@@ -1161,6 +1173,105 @@ STRICT_TOOLS_RETRY_CASES: Final = (
     ),
 )
 
+THREADS_BETA: Final = "message-threads-2026-08-12"
+ADVISOR_TOOL: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"type": "advisor_20260301", "name": "advisor", "model": "claude-opus-4-8"}
+)
+THREAD_CREATE: Final[Mapping[str, JsonValue]] = MappingProxyType({"type": "create"})
+THREAD_CONTINUE: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"type": "continue", "previous_message_id": "msg_01ParityText"}
+)
+ADVISOR_TURNS: Final[tuple[JsonValue, ...]] = (
+    {"role": "user", "content": "Build a worker pool."},
+    {
+        "role": "assistant",
+        "content": [
+            {"type": "text", "text": "Let me consult the advisor."},
+            {"type": "server_tool_use", "id": "srvtoolu_01Parity", "name": "advisor", "input": {}},
+            {
+                "type": "advisor_tool_result",
+                "tool_use_id": "srvtoolu_01Parity",
+                "content": {"type": "advisor_result", "text": "Use channels."},
+            },
+            {"type": "text", "text": "Here is the implementation."},
+        ],
+    },
+    {"role": "user", "content": "Now add a timeout.", "output_config": {"effort": "low"}},
+    {"role": "system", "content": [{"type": "tool_addition", "tool": {"type": "tool_reference", "name": "ping"}}]},
+    {"role": "user", "content": "Go on."},
+)
+THREAD_NOT_FOUND: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        "type": "error",
+        "error": {
+            "type": "not_found_error",
+            "message": "No thread state was found for the requested `previous_message_id`.",
+            "details": {"error_code": "thread_not_found"},
+        },
+        "request_id": "req_01Parity",
+    }
+)
+
+
+def _thread_not_found() -> ResponseSpec:
+    return ResponseSpec(body=dict(THREAD_NOT_FOUND), status=404)
+
+
+THREAD_CASES: Final = (
+    Case("thread_create", _kw(thread=dict(THREAD_CREATE), system="Answer in one word.")),
+    Case("thread_create_with_advisor_tool", _kw(thread=dict(THREAD_CREATE), tools=[dict(ADVISOR_TOOL)])),
+    Case("thread_create_scans_history", _kw(thread=dict(THREAD_CREATE), messages=list(ADVISOR_TURNS))),
+    Case("thread_continue", _kw(thread=dict(THREAD_CONTINUE))),
+    Case(
+        "thread_continue_keeps_history_and_skips_its_betas",
+        _kw(thread=dict(THREAD_CONTINUE), messages=list(ADVISOR_TURNS)),
+    ),
+    Case(
+        "thread_continue_keeps_param_betas",
+        _kw(
+            thread=dict(THREAD_CONTINUE),
+            messages=list(ADVISOR_TURNS),
+            compaction={},
+            context_management={"edits": [{"type": "compact_20260112"}]},
+        ),
+    ),
+    Case("thread_continue_without_previous_message_id", _kw(thread={"type": "continue"}, messages=list(ADVISOR_TURNS))),
+    Case(
+        "thread_continue_with_a_malformed_previous_message_id",
+        _kw(thread={"type": "continue", "previous_message_id": 7}, messages=list(ADVISOR_TURNS)),
+    ),
+    Case("thread_of_unknown_shape", _kw(thread="opaque", messages=list(ADVISOR_TURNS))),
+    Case("thread_none_is_left_out", _kw(thread=None)),
+    Case(
+        "thread_beside_a_client_beta",
+        _kw(thread=dict(THREAD_CONTINUE), extra_headers={"anthropic-beta": f"advisor-tool-2026-03-01,{THREADS_BETA}"}),
+    ),
+    Case(
+        "thread_dropped_by_additional_drop_params", _kw(thread=dict(THREAD_CREATE), additional_drop_params=["thread"])
+    ),
+    Case("thread_create_stream", _kw(thread=dict(THREAD_CREATE), stream=True), upstream=(_stream(TEXT_STREAM),)),
+    Case(
+        "thread_continue_stream",
+        _kw(thread=dict(THREAD_CONTINUE), stream=True, messages=list(ADVISOR_TURNS)),
+        upstream=(_stream(TEXT_STREAM),),
+    ),
+    Case("thread_create_sync", _kw(thread=dict(THREAD_CREATE)), sync=True),
+    Case(
+        "thread_continue_sync_stream",
+        _kw(thread=dict(THREAD_CONTINUE), stream=True),
+        upstream=(_stream(TEXT_STREAM),),
+        sync=True,
+    ),
+    Case("thread_not_found", _kw(thread=dict(THREAD_CONTINUE)), upstream=(_thread_not_found(),)),
+    Case("thread_not_found_stream", _kw(thread=dict(THREAD_CONTINUE), stream=True), upstream=(_thread_not_found(),)),
+    Case("thread_not_found_sync", _kw(thread=dict(THREAD_CONTINUE)), upstream=(_thread_not_found(),), sync=True),
+    Case(
+        "thread_continue_retried_after_a_rejected_signature",
+        _replay(thread=dict(THREAD_CONTINUE)),
+        upstream=(_rejected(), _ok()),
+    ),
+)
+
 CASES: Final = (
     *REQUEST_CASES,
     *PROMPT_CACHING_CASES,
@@ -1174,6 +1285,7 @@ CASES: Final = (
     *STRICT_TOOLS_RETRY_CASES,
     *FALLBACK_CASES,
     *CACHE_CASES,
+    *THREAD_CASES,
 )
 
 
@@ -1301,8 +1413,28 @@ def _error(error: BaseException, phase: str, chunks: Iterable[object] = ()) -> M
         "llm_provider": getattr(error, "llm_provider", None),
         "model": getattr(error, "model", None),
         "message": _normalized(str(error)),
+        "details": AnthropicExceptionMapping.embedded_error_details(str(error)),
+        "keeps_the_deployment_warm": is_message_thread_not_found(error),
         "headers": {name: header_items.get(name) for name in ("retry-after", "request-id") if name in header_items},
         "partial": _stream_text(chunks),
+    }
+
+
+def _sent_request(response: object) -> Mapping[str, object] | None:
+    if not isinstance(response, httpx.Response):
+        return None
+    try:
+        sent: Final = response.request
+    except RuntimeError:
+        return {"status": response.status_code, "request": None}
+    return {
+        "status": response.status_code,
+        "request": {
+            "method": sent.method,
+            "path": sent.url.path,
+            "anthropic-beta": sent.headers.get("anthropic-beta"),
+            "body": json.loads(sent.content),
+        },
     }
 
 
@@ -1426,6 +1558,7 @@ def _logged(
             "tools": details.get("tools"),
             "complete_input_dict": _mapping(details.get("additional_args")).get("complete_input_dict"),
         },
+        "logged_sent_request": _sent_request(details.get("httpx_response")),
     }
     return logged, callback_kwargs
 
@@ -1568,3 +1701,70 @@ async def test_both_lanes_carry_one_cost_per_usage_through_the_proxy_relay(
     relayed: Final = _proxy_relayed(native_text, opted_in)
     assert relayed == _proxy_relayed(python_text, opted_in)
     assert all(frame.count('"cost"') <= 1 for frame in relayed.split("\n\n"))
+
+
+def _proxied(kwargs: Mapping[str, object]) -> dict[str, object]:
+    logging_obj, data = litellm.utils.function_setup(
+        original_function="anthropic_messages",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.datetime.now(),
+        is_async_call=True,
+        litellm_call_id=str(uuid.uuid4()),
+        **kwargs,
+    )
+    return {**data, "litellm_logging_obj": logging_obj}
+
+
+async def _through_the_ownership_hook(
+    hook: MessageThreadOwnership, owner: UserAPIKeyAuth, data: dict[str, object], native: bool
+) -> None:
+    acall: Final = _PUBLIC_AMESSAGES if native else _PYTHON_AMESSAGES
+    result: Final = await acall(**data)
+    if isinstance(result, dict):
+        await hook.async_post_call_success_hook(data, owner, cast(AnthropicMessagesResponse, result))
+        return
+    async for _ in hook.async_post_call_streaming_iterator_hook(owner, cast(AsyncIterator[object], result), data):
+        pass
+
+
+async def _thread_betas(server: RecordingServer, stream: bool, native: bool) -> tuple[str | None, str | None]:
+    hook: Final = MessageThreadOwnership(InternalUsageCache(dual_cache=DualCache()))
+    owner: Final = UserAPIKeyAuth(token="hashed-owner")
+    base: Final[dict[str, object]] = {
+        "model": SONNET,
+        "max_tokens": 64,
+        "messages": [dict(USER)],
+        "api_key": API_KEY,
+        "api_base": server.base_url,
+    }
+    server.enqueue(_stream(TEXT_STREAM) if stream else _ok())
+    server.enqueue(_ok())
+    sent: Final = len(server.requests)
+    with isolated_callback_registries(), _environment({}):
+        await _through_the_ownership_hook(
+            hook,
+            owner,
+            _proxied({**base, "thread": dict(THREAD_CREATE), "tools": [dict(ADVISOR_TOOL)], "stream": stream}),
+            native,
+        )
+        replied: Final = "msg_01ParityStream" if stream else str(TEXT_RESPONSE["id"])
+        continued: Final = _proxied({**base, "thread": {"type": "continue", "previous_message_id": replied}})
+        hooked: Final = await hook.async_pre_call_hook(owner, DualCache(), continued, "anthropic_messages")
+        await _through_the_ownership_hook(hook, owner, continued if hooked is None else hooked, native)
+        await drain_logging()
+    server.responses.clear()
+    create, resumed = server.requests[sent:]
+    return create.headers.get("anthropic-beta"), resumed.headers.get("anthropic-beta")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", (False, True), ids=("json", "streamed"))
+async def test_both_lanes_resend_a_thread_s_create_betas_through_the_ownership_hook(
+    stream: bool, parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    python: Final = await _thread_betas(parity_server, stream, native=False)
+    native: Final = await _thread_betas(parity_server, stream, native=True)
+
+    assert native_messages.calls == 0
+    assert native == python
+    assert python == ("advisor-tool-2026-03-01,message-threads-2026-08-12",) * 2

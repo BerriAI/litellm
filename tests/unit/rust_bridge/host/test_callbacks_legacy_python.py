@@ -303,13 +303,50 @@ def _messages_logger() -> Logging:
 def test_native_provider_response_is_recorded_for_logging_replay() -> None:
     logger: Final = _messages_logger()
 
-    legacy.record_response(logger, 200, (("request-id", "req_native"),), '{"id": "msg_native"}')
+    legacy.record_response(logger, 200, (("request-id", "req_native"),), '{"id": "msg_native"}', None)
 
     recorded: Final[object] = logger.model_call_details["httpx_response"]
     assert isinstance(recorded, httpx.Response)
     assert recorded.status_code == 200
     assert recorded.content == b'{"id": "msg_native"}'
     assert logger.model_call_details["response_headers"]["request-id"] == "req_native"
+
+
+_HTTPX_RESPONSE: Final = TypeAdapter(httpx.Response, config={"arbitrary_types_allowed": True})
+_SENT_HEADERS: Final = MappingProxyType({"x-api-key": "sk-ant", "anthropic-beta": "message-threads-2026-08-12"})
+
+
+def test_native_provider_response_carries_the_request_that_was_sent() -> None:
+    logger: Final = _messages_logger()
+    body: Final = {"model": "claude-sonnet-4-5", "thread": {"type": "create"}}
+
+    legacy.record_response(
+        logger, 200, (), '{"id": "msg_native"}', ("https://api.anthropic.com/v1/messages", _SENT_HEADERS, body)
+    )
+
+    recorded: Final = _HTTPX_RESPONSE.validate_python(logger.model_call_details["httpx_response"])
+    assert recorded.request.method == "POST"
+    assert str(recorded.request.url) == "https://api.anthropic.com/v1/messages"
+    assert recorded.request.headers["anthropic-beta"] == "message-threads-2026-08-12"
+    assert recorded.request.content == b'{"model": "claude-sonnet-4-5", "thread": {"type": "create"}}'
+    assert recorded.content == b'{"id": "msg_native"}'
+
+
+def test_native_stream_response_is_recorded_unread_like_the_python_stream() -> None:
+    logger: Final = _messages_logger()
+
+    legacy.record_response(
+        logger,
+        200,
+        (("request-id", "req_native"),),
+        "",
+        ("https://api.anthropic.com/v1/messages", _SENT_HEADERS, {"stream": True}),
+    )
+
+    recorded: Final = _HTTPX_RESPONSE.validate_python(logger.model_call_details["httpx_response"])
+    assert recorded.request.headers["anthropic-beta"] == "message-threads-2026-08-12"
+    with pytest.raises(httpx.ResponseNotRead):
+        _ = recorded.content
 
 
 def test_native_provider_exchange_window_is_recorded_like_the_timed_post() -> None:

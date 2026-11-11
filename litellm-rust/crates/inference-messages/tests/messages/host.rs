@@ -3,7 +3,7 @@ use litellm_host::lifecycle::ExecutionEvent;
 use std::sync::Mutex;
 
 use litellm_host::{
-    interceptors::{ExecutionFacts, RequestContext, ResultSource, WireRequest},
+    interceptors::{ExecutionFacts, RawResponse, RequestContext, ResultSource, WireRequest},
     lifecycle::CallEvent,
 };
 use litellm_inference_messages::{MessagesBody, MessagesCallResponse, route::Messages};
@@ -46,18 +46,22 @@ impl RecordingHost {
         Self::new(call, Box::new(Ok))
     }
 
-    fn raw_responses(&self) -> Vec<String> {
+    fn raw_heads(&self) -> Vec<RawResponse> {
         self.events
             .lock()
             .unwrap()
             .iter()
             .filter_map(|event| match event {
                 CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw }) => {
-                    Some(raw.body.clone())
+                    Some(raw.clone())
                 }
                 _ => None,
             })
             .collect()
+    }
+
+    fn raw_responses(&self) -> Vec<String> {
+        self.raw_heads().into_iter().map(|raw| raw.body).collect()
     }
 }
 
@@ -363,7 +367,7 @@ async fn response_mode_follows_the_intercepted_request(
         only_request(&upstream).await.json()["stream"],
         rewritten_stream
     );
-    assert_eq!(host.raw_responses().len(), usize::from(!expected_stream));
+    assert_eq!(host.raw_responses().len(), 1);
     assert_eq!(summaries[0]["stream"], expected_stream);
     assert_eq!(summaries[0]["outcome"], "success");
 }
@@ -405,14 +409,9 @@ async fn the_raw_upstream_text_is_emitted_once_for_a_message(call: MessagesCall)
 }
 
 #[rstest]
-#[case::upstream_error(ResponseTemplate::new(500).set_body_string("boom"))]
-#[case::stream(ResponseTemplate::new(200).set_body_raw("event: message_stop\ndata: {}\n\n", "text/event-stream"))]
 #[tokio::test]
-async fn no_raw_response_is_emitted_for_a_stream_or_a_failure(
-    call: MessagesCall,
-    #[case] response: ResponseTemplate,
-) {
-    let upstream = upstream([response]).await;
+async fn no_raw_response_is_emitted_for_a_failure(call: MessagesCall) {
+    let upstream = upstream([ResponseTemplate::new(500).set_body_string("boom")]).await;
     let host = RecordingHost::passthrough(authenticated(
         with_fields(call, json!({"stream": true})),
         upstream.uri(),
@@ -422,6 +421,32 @@ async fn no_raw_response_is_emitted_for_a_stream_or_a_failure(
 
     assert_eq!(received(&upstream).await.len(), 1);
     assert!(host.raw_responses().is_empty());
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_stream_emits_its_head_without_a_body_before_any_chunk(call: MessagesCall) {
+    let upstream = upstream([ResponseTemplate::new(200)
+        .insert_header("request-id", "req_stream")
+        .set_body_raw("event: message_stop\ndata: {}\n\n", "text/event-stream")])
+    .await;
+    let host = RecordingHost::passthrough(authenticated(
+        with_fields(call, json!({"stream": true})),
+        upstream.uri(),
+    ));
+
+    let _ = run_through(&host).await;
+
+    let [raw] = <[RawResponse; 1]>::try_from(host.raw_heads())
+        .unwrap_or_else(|raws| panic!("expected one raw response, got {}", raws.len()));
+    assert_eq!(raw.body, "");
+    let head = raw.head.expect("the stream's head is forwarded");
+    assert_eq!(head.status, 200);
+    assert!(
+        head.headers
+            .iter()
+            .any(|(name, value)| name == "request-id" && value == "req_stream")
+    );
 }
 
 /// Python logs `optional_params` after its requested-param gate, so a dropped param must

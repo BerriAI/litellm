@@ -292,7 +292,9 @@ pub(crate) fn transform_messages_request(
         .context_management
         .clone()
         .map(map_openai_context_management_to_anthropic);
-    let messages = if has_advisor_tool(request.params.tools.as_deref()) {
+    let messages = if has_advisor_tool(request.params.tools.as_deref())
+        || continues_message_thread(&request.params)
+    {
         request.messages
     } else {
         strip_advisor_blocks(request.messages)
@@ -353,22 +355,45 @@ fn mapped_host_betas(params: &MessagesOptionalParams) -> BetaSet {
         .collect()
 }
 
+fn continues_message_thread(params: &MessagesOptionalParams) -> bool {
+    let Some(Value::Object(thread)) = params.extra.get("thread") else {
+        return false;
+    };
+    thread.get("type").and_then(Value::as_str) == Some("continue")
+        && thread
+            .get("previous_message_id")
+            .is_none_or(Value::is_string)
+}
+
+fn is_threaded(params: &MessagesOptionalParams) -> bool {
+    params
+        .extra
+        .get("thread")
+        .is_some_and(|thread| !thread.is_null())
+}
+
 fn feature_betas(request: &MessagesRequest) -> BetaSet {
     let params = &request.params;
     let tools = params.tools.as_deref();
+    let scanned_messages: &[Message] = if continues_message_thread(params) {
+        &[]
+    } else {
+        &request.messages
+    };
     [
-        requires_native_compaction_beta(params.compaction.as_ref(), &request.messages)
+        requires_native_compaction_beta(params.compaction.as_ref(), scanned_messages)
             .then_some(AnthropicBeta::Compact20260904),
         uses_structured_output(params).then_some(AnthropicBeta::StructuredOutputs20251113),
         (params.speed == Some(Recognized::Known(Speed::Fast)))
             .then_some(AnthropicBeta::FastMode20260201),
-        messages_carry_output_config(&request.messages)
+        messages_carry_output_config(scanned_messages)
             .then_some(AnthropicBeta::PerTurnControl20260701),
+        is_threaded(params).then_some(AnthropicBeta::MessageThreads20260812),
         uses_thinking_display_updates(params)
             .then_some(AnthropicBeta::ThinkingDisplayUpdates20260818),
         uses_thinking_block_binding(params)
             .then_some(AnthropicBeta::ThinkingBindingControls20260801),
-        messages_carry_tool_changes(&request.messages)
+        messages_carry_tool_changes(scanned_messages)
             .then_some(AnthropicBeta::MidConversationToolChanges20260701),
         has_advisor_tool(tools).then_some(AnthropicBeta::AdvisorTool20260301),
         is_tool_search_used(tools).then_some(AnthropicBeta::AdvancedToolUse20251120),
@@ -964,6 +989,40 @@ mod tests {
     }
 
     #[rstest]
+    #[case::continue_turn(json!({"type": "continue", "previous_message_id": "msg_1"}), false)]
+    #[case::continue_without_a_previous_message_id(json!({"type": "continue"}), false)]
+    #[case::continue_with_extra_keys(json!({"type": "continue", "previous_message_id": "msg_1", "note": 1}), false)]
+    #[case::create_turn(json!({"type": "create"}), true)]
+    #[case::continue_with_a_null_previous_message_id(json!({"type": "continue", "previous_message_id": null}), true)]
+    #[case::continue_with_a_numeric_previous_message_id(json!({"type": "continue", "previous_message_id": 1}), true)]
+    #[case::not_an_object(json!("continue"), true)]
+    fn advisor_history_is_kept_on_a_thread_continue_turn(
+        #[case] thread: Value,
+        #[case] stripped: bool,
+        unmapped: MessagesModelCapabilities,
+    ) {
+        let messages = if stripped {
+            json!([
+                {"role": "user", "content": "Build a worker pool."},
+                {"role": "assistant", "content": [
+                    {"type": "text", "text": "Let me consult the advisor."},
+                    {"type": "text", "text": "Here is the implementation."}
+                ]}
+            ])
+        } else {
+            advisor_history()
+        };
+        assert_eq!(
+            transform(
+                json!({"messages": advisor_history(), "thread": thread.clone()}),
+                unmapped,
+                false
+            ),
+            Ok(body(json!({"messages": messages, "thread": thread})))
+        );
+    }
+
+    #[rstest]
     fn bridge_minted_reasoning_is_stripped_from_the_wire(unmapped: MessagesModelCapabilities) {
         let messages = json!([
             {"role": "user", "content": "Solve it."},
@@ -1326,6 +1385,55 @@ mod tests {
             {"role": "system", "content": [{"type": "tool_addition", "tool": {"type": "tool_definition"}}]},
         ]}),
         &[]
+    )]
+    #[case::thread_create(json!({"thread": {"type": "create"}}), &["message-threads-2026-08-12"])]
+    #[case::thread_continue(
+        json!({"thread": {"type": "continue", "previous_message_id": "msg_1"}}),
+        &["message-threads-2026-08-12"]
+    )]
+    #[case::thread_of_any_shape(json!({"thread": "opaque"}), &["message-threads-2026-08-12"])]
+    #[case::null_thread(json!({"thread": null}), &[])]
+    #[case::thread_create_still_scans_history(
+        json!({
+            "thread": {"type": "create"},
+            "messages": [
+                {"role": "assistant", "content": [{"type": "compaction", "content": "summary", "signature": "sig"}]},
+                {"role": "user", "content": "hi", "output_config": {"effort": "low"}},
+                {"role": "system", "content": [{"type": "tool_addition", "tool": {"type": "tool_reference", "name": "ping"}}]},
+            ],
+        }),
+        &[
+            "compact-2026-09-04",
+            "message-threads-2026-08-12",
+            "mid-conversation-tool-changes-2026-07-01",
+            "per-turn-control-2026-07-01",
+        ]
+    )]
+    #[case::thread_continue_skips_history(
+        json!({
+            "thread": {"type": "continue", "previous_message_id": "msg_1"},
+            "messages": [
+                {"role": "assistant", "content": [{"type": "compaction", "content": "summary", "signature": "sig"}]},
+                {"role": "user", "content": "hi", "output_config": {"effort": "low"}},
+                {"role": "system", "content": [{"type": "tool_addition", "tool": {"type": "tool_reference", "name": "ping"}}]},
+            ],
+        }),
+        &["message-threads-2026-08-12"]
+    )]
+    #[case::thread_continue_keeps_param_betas(
+        json!({
+            "thread": {"type": "continue", "previous_message_id": "msg_1"},
+            "compaction": {},
+            "speed": "fast",
+        }),
+        &["compact-2026-09-04", "fast-mode-2026-02-01", "message-threads-2026-08-12"]
+    )]
+    #[case::malformed_continue_scans_history(
+        json!({
+            "thread": {"type": "continue", "previous_message_id": 7},
+            "messages": [{"role": "user", "content": "hi", "output_config": {"effort": "low"}}],
+        }),
+        &["message-threads-2026-08-12", "per-turn-control-2026-07-01"]
     )]
     fn feature_betas_follow_the_request(#[case] fields: Value, #[case] expected: &[&str]) {
         assert_eq!(feature_betas(&request(fields)), betas(expected));

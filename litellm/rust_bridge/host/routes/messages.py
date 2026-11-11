@@ -84,6 +84,7 @@ _BODY_FIELDS: Final = frozenset(
         "reasoning_effort",
         "safeguards",
         "service_tier",
+        "thread",
     }
 )
 
