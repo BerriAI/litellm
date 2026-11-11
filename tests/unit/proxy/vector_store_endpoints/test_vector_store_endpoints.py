@@ -3158,6 +3158,19 @@ def test_a_stored_raw_retrieval_query_never_reaches_the_search_request(retrieval
     assert request_data == {"custom_llm_provider": "bedrock", "aws_region_name": "us-west-2"}
 
 
+@pytest.mark.parametrize("retrieval_query_param", ["retrievalQuery", "retrieval_query"])
+def test_a_raw_retrieval_query_in_a_stores_extra_body_never_reaches_the_search_request(retrieval_query_param: str):
+    request_data: Final = build_request_data_from_managed_vector_store(
+        {
+            "vector_store_id": "kb",
+            "custom_llm_provider": "bedrock",
+            "litellm_params": {"extra_body": {retrieval_query_param: {"text": "from the store"}, "kept": "value"}},
+        }
+    )
+
+    assert request_data == {"custom_llm_provider": "bedrock", "extra_body": {"kept": "value"}}
+
+
 class TestConfigOwnedVectorStores:
     """Stores declared under ``vector_store_registry`` in config.yaml are owned by the config file"""
 
