@@ -1702,8 +1702,9 @@ async def open_sse_before_first_byte(
     Committing the status line that early is the cost: a failure discovered after
     the first ping reaches the client as an SSE error frame under a 200 rather than
     as an HTTP error status, and LiteLLM's own `x-litellm-*` response headers are
-    not yet known. A passthrough guardrail block is not a failure: when the route
-    passes `on_passthrough_block`, the stream it builds for the block is relayed. Both are why this stays off until an operator sets an interval.
+    not yet known. Both are why this stays off until an operator sets an interval.
+    A passthrough guardrail block is not a failure: when the route passes
+    `on_passthrough_block`, the stream it builds for the block is relayed.
     """
     interval: Final = coerce_keepalive_interval(ping_interval_seconds)
     if interval is None:
