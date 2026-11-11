@@ -1151,6 +1151,32 @@ class TestScanOnlyToolResultsInitRefusal:
                 },
             )
 
+    def test_scan_tool_descriptions_as_text_is_rejected_on_guardrails_other_than_panw_and_presidio(self):
+        with pytest.raises(ValueError, match="scan_tool_descriptions_as_text is only supported"):
+            self._initialize(
+                "bedrock-tool-descriptions",
+                {
+                    "guardrail": "bedrock",
+                    "mode": "pre_call",
+                    "guardrailIdentifier": "gr-1",
+                    "guardrailVersion": "1",
+                    "scan_tool_descriptions_as_text": True,
+                },
+            )
+
+    def test_scan_tool_descriptions_as_text_is_accepted_on_panw(self):
+        result = self._initialize(
+            "panw-tool-descriptions",
+            {
+                "guardrail": "panw_prisma_airs",
+                "mode": "pre_call",
+                "api_key": "test-key",
+                "profile_name": "test-profile",
+                "scan_tool_descriptions_as_text": True,
+            },
+        )
+        assert result is not None
+
     def test_bedrock_without_latest_role_accepts_scan_only_tool_results(self):
         result = self._initialize(
             "bedrock-scan-only-ok",

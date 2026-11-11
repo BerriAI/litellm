@@ -1111,6 +1111,17 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         ),
     )
 
+    scan_tool_descriptions_as_text: bool | None = Field(
+        default=None,
+        description=(
+            "For text-only guardrails (panw_prisma_airs, presidio). Guardrails whose APIs accept the "
+            "request's tools[] already scan it natively. When True, a pre_call guardrail also scans "
+            "every description string in tools[] (tool and parameter descriptions) as text, blocking "
+            "or masking them like message text. Costs one extra guardrail call per tool that has a "
+            "description."
+        ),
+    )
+
     inspect_embeddings: bool | None = Field(
         default=None,
         description=(

@@ -16762,6 +16762,18 @@
               "description": "When True, this pre_call guardrail always evaluates the request as it was before any guardrail in this hook ran, regardless of its position in the guardrails list -- so the YAML order of guardrails can never change whether this one blocks. Use only for block-only guardrails: any data this guardrail returns is discarded, same contract as run_in_parallel, since an earlier guardrail's masking must not be undone by this one.",
               "title": "Scan Raw Request"
             },
+            "scan_tool_descriptions_as_text": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "For text-only guardrails (panw_prisma_airs, presidio). Guardrails whose APIs accept the request's tools[] already scan it natively. When True, a pre_call guardrail also scans every description string in tools[] (tool and parameter descriptions) as text, blocking or masking them like message text. Costs one extra guardrail call per tool that has a description.",
+              "title": "Scan Tool Descriptions As Text"
+            },
             "sensitive_data_route_to_model": {
               "anyOf": [
                 {
@@ -19811,6 +19823,18 @@
               ],
               "description": "When True, this pre_call guardrail always evaluates the request as it was before any guardrail in this hook ran, regardless of its position in the guardrails list -- so the YAML order of guardrails can never change whether this one blocks. Use only for block-only guardrails: any data this guardrail returns is discarded, same contract as run_in_parallel, since an earlier guardrail's masking must not be undone by this one.",
               "title": "Scan Raw Request"
+            },
+            "scan_tool_descriptions_as_text": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "For text-only guardrails (panw_prisma_airs, presidio). Guardrails whose APIs accept the request's tools[] already scan it natively. When True, a pre_call guardrail also scans every description string in tools[] (tool and parameter descriptions) as text, blocking or masking them like message text. Costs one extra guardrail call per tool that has a description.",
+              "title": "Scan Tool Descriptions As Text"
             },
             "send_user_api_key_alias": {
               "anyOf": [

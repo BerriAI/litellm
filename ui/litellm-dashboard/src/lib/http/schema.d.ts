@@ -28222,6 +28222,11 @@ export interface components {
              */
             scan_raw_request?: boolean | null;
             /**
+             * Scan Tool Descriptions As Text
+             * @description For text-only guardrails (panw_prisma_airs, presidio). Guardrails whose APIs accept the request's tools[] already scan it natively. When True, a pre_call guardrail also scans every description string in tools[] (tool and parameter descriptions) as text, blocking or masking them like message text. Costs one extra guardrail call per tool that has a description.
+             */
+            scan_tool_descriptions_as_text?: boolean | null;
+            /**
              * Sensitive Data Route To Model
              * @description Model to route requests to when sensitive data is detected and on_sensitive_data='route'. This is typically an on-premise model for data privacy. The routing decision persists for the entire session.
              */
@@ -38545,6 +38550,11 @@ export interface components {
              * @description When True, this pre_call guardrail always evaluates the request as it was before any guardrail in this hook ran, regardless of its position in the guardrails list -- so the YAML order of guardrails can never change whether this one blocks. Use only for block-only guardrails: any data this guardrail returns is discarded, same contract as run_in_parallel, since an earlier guardrail's masking must not be undone by this one.
              */
             scan_raw_request?: boolean | null;
+            /**
+             * Scan Tool Descriptions As Text
+             * @description For text-only guardrails (panw_prisma_airs, presidio). Guardrails whose APIs accept the request's tools[] already scan it natively. When True, a pre_call guardrail also scans every description string in tools[] (tool and parameter descriptions) as text, blocking or masking them like message text. Costs one extra guardrail call per tool that has a description.
+             */
+            scan_tool_descriptions_as_text?: boolean | null;
             /**
              * Send User Api Key Alias
              * @description Whether to send user_API_key_alias in headers

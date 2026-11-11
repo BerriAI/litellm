@@ -1837,6 +1837,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         inputs["texts"] = new_texts
         return inputs
 
+    def supports_scan_tool_descriptions_as_text(self) -> bool:
+        return True
+
     def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
         """
         Update the guardrails litellm params in memory

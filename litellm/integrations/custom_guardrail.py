@@ -397,6 +397,7 @@ class CustomGuardrail(CustomLogger):
     records_own_guardrail_information: ClassVar[bool] = False
     logging_only_scope: LoggingOnlyScope | None
     logging_only_continue_on_input_failure: bool
+    scan_tool_descriptions_as_text: bool | None = None
 
     stream_scope_default: GuardrailStreamScope = DEFAULT_GUARDRAIL_STREAM_SCOPE
     stream_scope_by_hook: tuple[tuple[str, GuardrailStreamScope], ...] = ()
@@ -1334,6 +1335,9 @@ class CustomGuardrail(CustomLogger):
         await output_translation.process_output_response(
             response=copy.deepcopy(response), guardrail_to_apply=self, request_data=scratch_request
         )
+
+    def supports_scan_tool_descriptions_as_text(self) -> bool:
+        return False
 
     def supports_scan_only_tool_results(self) -> bool:
         """Whether this guardrail can scan tool-result content.

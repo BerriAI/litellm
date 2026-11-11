@@ -662,8 +662,17 @@ def _configure_callback_scoping(
         "skip_system_message_in_guardrail",
         "skip_tool_message_in_guardrail",
         "scan_only_tool_results",
+        "scan_tool_descriptions_as_text",
     ):
         setattr(custom_guardrail_callback, scoping_param, getattr(litellm_params, scoping_param, None))
+    if (
+        litellm_params.scan_tool_descriptions_as_text is True
+        and not custom_guardrail_callback.supports_scan_tool_descriptions_as_text()
+    ):
+        raise ValueError(
+            f"Guardrail {guardrail_name}: scan_tool_descriptions_as_text is only supported by the "
+            "panw_prisma_airs and presidio guardrails. Remove it from this guardrail."
+        )
     scan_only_tool_results_enabled: Final = effective_scan_only_tool_results_for_guardrail(custom_guardrail_callback)
     if scan_only_tool_results_enabled and not custom_guardrail_callback.supports_scan_only_tool_results():
         raise ValueError(
