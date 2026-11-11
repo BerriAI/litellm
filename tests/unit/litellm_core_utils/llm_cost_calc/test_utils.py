@@ -1,4 +1,5 @@
 import asyncio
+import math
 import uuid
 from collections.abc import Mapping
 from types import MappingProxyType
@@ -483,3 +484,42 @@ async def test_router_prices_balanced_columns_by_the_same_rules_as_flex(
     assert balanced_cost == pytest.approx(flex_cost)
     if not overridden_columns:
         assert balanced_cost == pytest.approx(_cost_at(PARITY_ROW, "_balanced"))
+
+
+def _vertex_cost_with_cache_writes(model: str, prompt_tokens: int, cache_creation_tokens: int) -> float:
+    response: Final = ModelResponse(
+        model=model,
+        usage=Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=100,
+            total_tokens=prompt_tokens + 100,
+            cache_creation_input_tokens=cache_creation_tokens,
+        ),
+    )
+    return litellm.completion_cost(completion_response=response, model=model, custom_llm_provider="vertex_ai")
+
+
+@pytest.mark.parametrize(
+    "model",
+    (
+        "gemini-2.5-pro",
+        "gemini-3.1-pro-preview",
+        "gemini-3.1-pro-preview-customtools",
+        "vertex_ai/gemini-3-pro-preview",
+        "vertex_ai/gemini-3.1-pro-preview",
+        "vertex_ai/gemini-3.1-pro-preview-customtools",
+    ),
+)
+def test_vertex_gemini_pro_bills_cache_writes_above_200k_at_the_above_200k_input_rate(
+    local_model_cost_map: None, model: str
+) -> None:
+    rates: Final = litellm.get_model_info(model=model, custom_llm_provider="vertex_ai")
+    input_rate_above_200k: Final = rates.get("input_cost_per_token_above_200k_tokens")
+    output_rate_above_200k: Final = rates.get("output_cost_per_token_above_200k_tokens")
+    cache_creation_tokens: Final = 150_000
+    below: Final = _vertex_cost_with_cache_writes(model, 190_000, cache_creation_tokens)
+    above: Final = _vertex_cost_with_cache_writes(model, 210_000, cache_creation_tokens)
+
+    assert input_rate_above_200k is not None and output_rate_above_200k is not None
+    assert above > below
+    assert math.isclose(above, 210_000 * input_rate_above_200k + 100 * output_rate_above_200k)

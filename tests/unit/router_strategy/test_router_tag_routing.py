@@ -3023,7 +3023,7 @@ class _RewriteToTierStrategy:
         self.rewrite_to = rewrite_to
 
     async def async_pre_routing_hook(
-        self, model, request_kwargs, messages=None, input=None, specific_deployment=False
+        self, model, request_kwargs, messages=None, input=None, specific_deployment=False, call_type=None
     ):
         from litellm.types.router import PreRoutingHookResponse
 

@@ -149,7 +149,7 @@ def _build_litellm_metadata(kwargs: Mapping[str, object]) -> dict[str, object]:
 _GUARDRAIL_OPT_OUT_METADATA_KEYS: Final = ("user_api_key_metadata", "user_api_key_team_metadata")
 
 
-def _translation_litellm_metadata(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+def _session_litellm_metadata(kwargs: Mapping[str, object]) -> Mapping[str, object]:
     request_metadata: Final = _OBJECT_MAPPING.validate_python(kwargs.get("metadata") or {})
     guardrail_opt_outs: Final = {
         key: request_metadata[key] for key in _GUARDRAIL_OPT_OUT_METADATA_KEYS if key in request_metadata
@@ -218,7 +218,7 @@ def _translation_rejection_error(
 
 def _raise_if_http_translation_rejected(custom_llm_provider: str, model: str, kwargs: Mapping[str, object]) -> None:
     rejection: Final = _translation_rejection(
-        custom_llm_provider, _HTTP_TRANSLATION_PROVIDERS, _translation_litellm_metadata(kwargs)
+        custom_llm_provider, _HTTP_TRANSLATION_PROVIDERS, _session_litellm_metadata(kwargs)
     )
     if rejection is None:
         return
@@ -858,9 +858,7 @@ async def _arealtime(
     )
 
     session_litellm_metadata: Final = (
-        dict(_translation_litellm_metadata(kwargs))
-        if realtime_mode == "translation"
-        else _build_litellm_metadata(kwargs)
+        _build_litellm_metadata(kwargs) if live_session_start is not None else dict(_session_litellm_metadata(kwargs))
     )
     translation_rejection: Final = (
         _translation_rejection(_custom_llm_provider, _WEBSOCKET_TRANSLATION_PROVIDERS, session_litellm_metadata)
@@ -1014,6 +1012,8 @@ async def _arealtime(
             aws_external_id=aws_external_id,
             aws_session_tags=aws_session_tags,
             drop_params=drop_params,
+            user_api_key_dict=kwargs.get("user_api_key_dict"),
+            litellm_metadata=session_litellm_metadata,
         )
     elif _custom_llm_provider == "xai":
         api_base = (

@@ -7772,6 +7772,163 @@ class TestChildSessionTierPins:
             router.discard()
 
 
+class TestClaudeCodeTierPins:
+    SESSION: Final = "11111111-2222-3333-4444-555555555555"
+    AGENT_A: Final = "a7256c04dfd99c9b9"
+    AGENT_B: Final = "a71aeeb9c67f32cee"
+    TOOL_USE: Final[dict[str, object]] = {
+        "role": "assistant",
+        "content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {}}],
+    }
+    TOOL_RESULT: Final[dict[str, object]] = {
+        "type": "tool_result",
+        "tool_use_id": "t1",
+        "content": "def add(a, b): return a + b",
+    }
+    # Captured from Claude Code 2.1.316 on 2026-11-09, trimmed to the sentinel and a little context.
+    SUMMARY_ASK: Final = (
+        "Describe your most recent action in 3-5 words using present tense (-ing). "
+        "Name the file or function, not the branch. Do not use tools."
+    )
+    SUGGESTION_ASK: Final = (
+        "[SUGGESTION MODE: Suggest what the user might naturally type next into Claude Code.]\n\n"
+        "Reply with ONLY the suggestion, no quotes or explanation."
+    )
+
+    @staticmethod
+    def _router(route_housekeeping_to_cheapest_tier: bool = True) -> Router:
+        return Router(
+            model_list=[
+                {
+                    "model_name": "claude-code-router",
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "complexity_router_config": {
+                            "tiers": {"SIMPLE": "simple", "REASONING": "reasoning"},
+                            "classification_mode": "user_turn",
+                            "keyword_tier_rules": [{"keywords": ["reason carefully"], "tier": "REASONING"}],
+                            "route_housekeeping_to_cheapest_tier": route_housekeeping_to_cheapest_tier,
+                        },
+                    },
+                },
+                *[
+                    {
+                        "model_name": group,
+                        "litellm_params": {"model": "openai/test-model", "api_key": "test-only"},
+                        "model_info": {"id": group},
+                    }
+                    for group in ("simple", "reasoning")
+                ],
+            ],
+            num_retries=0,
+        )
+
+    @staticmethod
+    def _ask(prompt: str) -> list[dict[str, object]]:
+        return [{"role": "user", "content": prompt}]
+
+    @classmethod
+    def _continuation(cls) -> list[dict[str, object]]:
+        return [*cls._ask("Hello!"), cls.TOOL_USE, {"role": "user", "content": [cls.TOOL_RESULT]}]
+
+    @classmethod
+    def _side_request(cls, side_ask: str) -> list[dict[str, object]]:
+        return [
+            *cls._ask("Hello!"),
+            cls.TOOL_USE,
+            {"role": "user", "content": [cls.TOOL_RESULT, {"type": "text", "text": side_ask}]},
+        ]
+
+    async def _route(
+        self,
+        router: Router,
+        messages: list[dict[str, object]],
+        agent_id: str | None = None,
+        request_class: str | None = None,
+    ) -> tuple[str, str]:
+        from litellm.proxy.litellm_pre_call_utils import (
+            LiteLLMProxyRequestSetup,
+            metadata_variable_name_for_route,
+        )
+
+        headers: Final = {
+            "x-claude-code-session-id": self.SESSION,
+            **({"x-claude-code-agent-id": agent_id} if agent_id is not None else {}),
+            **({"x-claude-code-request-class": request_class} if request_class is not None else {}),
+        }
+        bucket: Final = metadata_variable_name_for_route("/v1/messages")
+        data: Final[dict[str, object]] = {
+            bucket: {"user_api_key_hash": "caller-a", "user_api_key_request_route": "/v1/messages"},
+            "proxy_server_request": {"headers": headers},
+        }
+        LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+            headers=headers, data=data, _metadata_variable_name=bucket
+        )
+        await router.async_get_available_deployment(model="claude-code-router", request_kwargs=data, messages=messages)
+        metadata: Final = data[bucket]
+        assert isinstance(metadata, dict)
+        assert metadata["session_id"] == self.SESSION
+        decision: Final = TypeAdapter(StandardLoggingRoutingDecision).validate_python(metadata["routing_decision"])
+        return str(decision.get("tier")), decision["cause"]
+
+    @pytest.mark.asyncio
+    async def test_parent_and_each_subagent_keep_their_own_pin(self) -> None:
+        router: Final = self._router()
+        try:
+            for messages, agent_id, expected in (
+                (self._ask("reason carefully"), None, ("REASONING", "literal_keyword_match")),
+                (self._ask("Hello!"), self.AGENT_A, ("SIMPLE", "heuristic_scorer")),
+                (self._continuation(), self.AGENT_A, ("SIMPLE", "user_turn_continuation")),
+                (self._continuation(), None, ("REASONING", "user_turn_continuation")),
+                (self._ask("reason carefully"), self.AGENT_B, ("REASONING", "literal_keyword_match")),
+                (self._continuation(), self.AGENT_A, ("SIMPLE", "user_turn_continuation")),
+                (self._continuation(), self.AGENT_B, ("REASONING", "user_turn_continuation")),
+            ):
+                assert await self._route(router, messages, agent_id) == expected
+        finally:
+            router.discard()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("hint_header", [True, False], ids=["request-class-hint", "sentinel-fallback"])
+    @pytest.mark.parametrize(
+        "agent_id,side_ask",
+        [(AGENT_A, SUMMARY_ASK), (None, SUGGESTION_ASK)],
+        ids=["subagent-summary", "main-prompt-suggestion"],
+    )
+    async def test_side_requests_route_cheapest_and_never_move_the_pin(
+        self, hint_header: bool, agent_id: str | None, side_ask: str
+    ) -> None:
+        own_class: Final = ("subagent" if agent_id is not None else "main") if hint_header else None
+        side_class: Final = "auxiliary" if hint_header else None
+        router: Final = self._router()
+        try:
+            for messages, request_class, expected in (
+                (self._ask("reason carefully"), own_class, ("REASONING", "literal_keyword_match")),
+                (self._side_request(side_ask), side_class, ("SIMPLE", "housekeeping")),
+                (self._continuation(), own_class, ("REASONING", "user_turn_continuation")),
+            ):
+                assert await self._route(router, messages, agent_id, request_class) == expected
+        finally:
+            router.discard()
+
+    @pytest.mark.asyncio
+    async def test_the_auxiliary_hint_routes_housekeeping_when_no_sentinel_matches(self) -> None:
+        router: Final = self._router()
+        try:
+            for messages, request_class, expected in (
+                (self._ask("reason carefully"), "subagent", ("REASONING", "literal_keyword_match")),
+                (
+                    self._side_request("Summarize what you just did in a few words."),
+                    "auxiliary",
+                    ("SIMPLE", "housekeeping"),
+                ),
+                (self._continuation(), "subagent", ("REASONING", "user_turn_continuation")),
+            ):
+                assert await self._route(router, messages, self.AGENT_A, request_class) == expected
+        finally:
+            router.discard()
+
+
 class TestClassificationMode:
     """Test classification_mode='user_turn': classify only requests whose newest turn is a new
     human ask; tool-loop continuation turns replay the session's held routing decision."""
@@ -8125,6 +8282,130 @@ class TestClassificationMode:
         assert enabled._uses_deployment_pin is True
         assert suppressed._uses_tier_pin is False
         assert suppressed._uses_deployment_pin is False
+
+
+class TestUserTurnClassifierFailureHoldsTheDefaultModel:
+    """In user_turn mode a classifier failure holds the default model for that ask, so the ask's
+    continuations never replay the previous ask's decision."""
+
+    HELLO: Final[dict[str, object]] = {"role": "user", "content": "Hello"}
+    HELLO_REPLY: Final[dict[str, object]] = {"role": "assistant", "content": "Hello! How can I help?"}
+    FIX: Final[dict[str, object]] = {"role": "user", "content": "Find and fix the concurrency bug in the queue worker."}
+    TOOL_CALL: Final[dict[str, object]] = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [{"id": "t1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}],
+    }
+    TOOL_RESULT: Final[dict[str, object]] = {"role": "tool", "tool_call_id": "t1", "content": "File contents returned."}
+
+    @staticmethod
+    def _router(
+        *classifier_replies: object, default_model: str = "gpt-4o", plan_mode_min_tier: str | None = None
+    ) -> tuple[ComplexityRouter, MagicMock]:
+        router_instance: Final = MagicMock()
+        router_instance.health.return_value.store = DualCache()
+        router_instance.acompletion = AsyncMock(side_effect=list(classifier_replies))
+        router: Final = ComplexityRouter(
+            model_name="test-router",
+            ctx=RoutingContext(router_instance),
+            complexity_router_config={
+                "tiers": {
+                    "SIMPLE": "gpt-4o-mini",
+                    "MEDIUM": "gpt-4o",
+                    "COMPLEX": "claude-sonnet-4-20250514",
+                    "REASONING": "o1-preview",
+                },
+                "classifier_type": "llm",
+                "classifier_llm_config": {
+                    "model": "haiku-classifier",
+                    "timeout_ms": 400,
+                    "circuit_breaker_enabled": False,
+                },
+                "classifier_fallback": "default_model",
+                "default_model": default_model,
+                "classification_mode": "user_turn",
+                **({"plan_mode_min_tier": plan_mode_min_tier} if plan_mode_min_tier is not None else {}),
+            },
+        )
+        return router, router_instance
+
+    @staticmethod
+    async def _route(
+        router: ComplexityRouter, messages: list[dict[str, object]] | None, **request: object
+    ) -> tuple[str, str]:
+        result: Final = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={"metadata": {"session_id": "fallback-holds-ask"}, **request},
+            messages=messages,
+            input=request.get("input"),
+        )
+        assert result is not None and result.routing_decision is not None
+        return result.model, result.routing_decision["cause"]
+
+    @pytest.mark.asyncio
+    async def test_a_failed_ask_keeps_the_default_model_for_its_continuations(self):
+        router, router_instance = self._router(
+            _llm_response('{"tier": "SIMPLE"}'), TimeoutError("classifier timed out"), _llm_response('{"tier": "SIMPLE"}')
+        )
+        fix_ask: Final = [self.HELLO, self.HELLO_REPLY, self.FIX]
+        fix_loop: Final = [*fix_ask, self.TOOL_CALL, self.TOOL_RESULT]
+        thanks: Final[dict[str, object]] = {"role": "user", "content": "Thanks"}
+
+        routed: Final = [
+            await self._route(router, turn)
+            for turn in (
+                [self.HELLO],
+                fix_ask,
+                fix_loop,
+                [*fix_loop, self.TOOL_CALL, self.TOOL_RESULT],
+                [*fix_loop, {"role": "assistant", "content": "Fixed it."}, thanks],
+            )
+        ]
+
+        assert routed == [
+            ("gpt-4o-mini", "llm_classifier"),
+            ("gpt-4o", "default_model_fallback"),
+            ("gpt-4o", "user_turn_continuation"),
+            ("gpt-4o", "user_turn_continuation"),
+            ("gpt-4o-mini", "llm_classifier"),
+        ]
+        assert router_instance.acompletion.await_count == 3
+
+    @pytest.mark.asyncio
+    async def test_a_server_side_history_continuation_keeps_the_default_model(self):
+        router, _ = self._router(_llm_response('{"tier": "SIMPLE"}'), TimeoutError("classifier timed out"))
+        tool_output: Final = [{"type": "function_call_output", "call_id": "t1", "output": "File contents returned."}]
+
+        assert await self._route(router, None, input="Hello") == ("gpt-4o-mini", "llm_classifier")
+        assert await self._route(router, None, input=self.FIX["content"], previous_response_id="resp_1") == (
+            "gpt-4o",
+            "default_model_fallback",
+        )
+        continued: Final = await self._route(router, None, input=tool_output, previous_response_id="resp_2")
+
+        assert continued == ("gpt-4o", "user_turn_continuation")
+
+    @pytest.mark.asyncio
+    async def test_a_plan_mode_continuation_still_gets_the_plan_floor_over_a_held_fallback(self):
+        router, _ = self._router(
+            _llm_response('{"tier": "SIMPLE"}'),
+            TimeoutError("classifier timed out"),
+            _llm_response('{"tier": "SIMPLE"}'),
+            default_model="untiered-default",
+            plan_mode_min_tier="COMPLEX",
+        )
+        fix_ask: Final = [self.HELLO, self.HELLO_REPLY, self.FIX]
+        plan_mode_body: Final = TestPlanModeTierFloor.PLAN_BODY
+
+        assert await self._route(router, [self.HELLO]) == ("gpt-4o-mini", "llm_classifier")
+        assert await self._route(router, fix_ask) == ("untiered-default", "default_model_fallback")
+        continued: Final = await self._route(
+            router,
+            [*fix_ask, self.TOOL_CALL, self.TOOL_RESULT],
+            proxy_server_request={"body": plan_mode_body},
+        )
+
+        assert continued == ("claude-sonnet-4-20250514", "plan_mode")
 
 
 class TestRoutingPlugins:
@@ -9969,6 +10250,12 @@ _CODEX_ENVELOPES: Final = (
     "<environments_instructions>LITELLM ESCALATE environment</environments_instructions>",
     "# AGENTS.md instructions for /repo with spaces/中文\n<INSTRUCTIONS>LITELLM ESCALATE instructions</INSTRUCTIONS>",
 )
+_OPENCODE_USER_AGENT: Final = "opencode/latest/2.0.29/cli"
+_OPENCODE_SUBAGENT_RESULTS: Final = (
+    "<task_result>\nLITELLM ESCALATE subagent found the race in cache.py</task_result>",
+    '<subagent sessionID="ses_7f3a9c1e" state="completed" description="Explore cache.py">\n'
+    "LITELLM ESCALATE subagent found the race in cache.py\n</subagent>",
+)
 
 
 class TestContextAwareClassifier:
@@ -10208,6 +10495,117 @@ class TestContextAwareClassifier:
         assert response.model == "task-model"
         completion.assert_awaited_once()
         assert completion.call_args.kwargs["messages"][1]["content"].strip() == f"Classify this message:\n{envelope}"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("subagent_result", _OPENCODE_SUBAGENT_RESULTS)
+    @pytest.mark.parametrize("user_agent", (_OPENCODE_USER_AGENT, "OpenCode/latest/2.0.29/cli"))
+    async def test_opencode_subagent_result_turn_keeps_held_tier_until_a_new_ask(
+        self, user_agent: str, subagent_result: str
+    ) -> None:
+        completion: Final = AsyncMock(
+            side_effect=[_llm_response('{"tier":"SIMPLE"}'), _llm_response('{"tier":"COMPLEX"}')]
+        )
+        router: Final = ComplexityRouter(
+            model_name="router",
+            ctx=RoutingContext(MagicMock(acompletion=completion, **{"health.return_value.store": DualCache()})),
+            complexity_router_config={
+                "tiers": {"SIMPLE": "simple-model", "COMPLEX": "task-model"},
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "classifier-model"},
+                "classification_mode": "user_turn",
+            },
+        )
+        metadata: Final = {"user_agent": user_agent, "session_id": "opencode-task-session"}
+        asked: Final = [{"role": "user", "content": "Find the race in cache.py"}]
+        task_returned: Final = [
+            *asked,
+            {"role": "assistant", "content": "Delegating to a subagent"},
+            {"role": "user", "content": subagent_result},
+        ]
+        new_ask: Final = [
+            *task_returned,
+            {"role": "assistant", "content": "Found it"},
+            {"role": "user", "content": "Now design cache invalidation"},
+            {"role": "user", "content": subagent_result},
+        ]
+        original: Final = deepcopy((asked, task_returned, new_ask))
+
+        results: Final = [
+            await router.async_pre_routing_hook(
+                model="router", request_kwargs={"metadata": metadata}, messages=messages
+            )
+            for messages in (asked, task_returned, new_ask)
+        ]
+
+        assert [(result.model, result.routing_decision["cause"]) for result in results] == [
+            ("simple-model", "llm_classifier"),
+            ("simple-model", "user_turn_continuation"),
+            ("task-model", "llm_classifier"),
+        ]
+        classified: Final = [call.kwargs["messages"][1]["content"] for call in completion.await_args_list]
+        assert [payload.rsplit("Classify this message:\n", 1)[1] for payload in classified] == [
+            "Find the race in cache.py",
+            "Now design cache invalidation",
+        ]
+        assert all("subagent found the race" not in payload for payload in classified)
+        assert tuple(result.messages for result in results) == original
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("subagent_result", _OPENCODE_SUBAGENT_RESULTS)
+    @pytest.mark.parametrize(
+        "request_kwargs,content,custom_markers,expected_ask",
+        (
+            ({"metadata": {"user_agent": _OPENCODE_USER_AGENT}}, "{result}\nAdd retries", False, "Add retries"),
+            ({"litellm_metadata": {"user_agent": _OPENCODE_USER_AGENT}}, "Add retries {result}", False, "Add retries"),
+            (
+                {"metadata": {"user_agent": _OPENCODE_USER_AGENT}},
+                "{unclosed}\nAdd retries",
+                False,
+                "{unclosed}\nAdd retries",
+            ),
+            ({"metadata": {"user_agent": _OPENCODE_USER_AGENT}}, "{result}", True, "{result}"),
+            ({}, "{result}", False, "{result}"),
+            ({"metadata": {"user_agent": "curl/8.7.1"}}, "{result}", False, "{result}"),
+            ({"metadata": {"user_agent": "codex-tui"}}, "{result}", False, "{result}"),
+            ({"metadata": {"user_agent": "opencode_go/1.0"}}, "{result}", False, "{result}"),
+            ({"metadata": {"user_agent": "opencodex/1.0"}}, "{result}", False, "{result}"),
+        ),
+    )
+    async def test_classifier_strips_only_complete_opencode_subagent_results(
+        self,
+        request_kwargs: dict[str, object],
+        content: str,
+        custom_markers: bool,
+        expected_ask: str,
+        subagent_result: str,
+    ) -> None:
+        unclosed: Final = subagent_result[: subagent_result.rindex("</")].rstrip()
+        message: Final = content.format(result=subagent_result, unclosed=unclosed)
+        completion: Final = AsyncMock(return_value=_llm_response('{"tier":"COMPLEX"}'))
+        router: Final = ComplexityRouter(
+            model_name="router",
+            ctx=RoutingContext(MagicMock(acompletion=completion)),
+            complexity_router_config={
+                "tiers": {"COMPLEX": "task-model"},
+                "default_model": "fallback-model",
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "classifier-model"},
+                "escalation_keywords": [],
+                **({"reminder_markers": [{"open": "<custom>", "close": "</custom>"}]} if custom_markers else {}),
+            },
+        )
+        messages: Final = [{"role": "user", "content": message}]
+
+        response: Final = await router.async_pre_routing_hook(
+            model="router", request_kwargs=request_kwargs, messages=messages
+        )
+
+        assert response is not None and response.model == "task-model"
+        assert response.messages == [{"role": "user", "content": message}]
+        completion.assert_awaited_once()
+        classified: Final = completion.call_args.kwargs["messages"][1]["content"]
+        expected: Final = expected_ask.format(result=subagent_result, unclosed=unclosed)
+        assert classified.strip() == f"Classify this message:\n{expected}"
 
     @pytest.mark.parametrize("envelope", _CODEX_ENVELOPES)
     def test_codex_envelopes_preserve_delegated_task_and_prior_context(self, envelope: str) -> None:

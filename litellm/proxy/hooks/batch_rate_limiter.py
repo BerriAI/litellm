@@ -39,6 +39,7 @@ from litellm.batches.batch_utils import (
 from litellm.constants import BATCH_TPD_DESCRIPTOR_SUFFIX, BATCH_TPD_WINDOW_SECONDS
 from litellm.exceptions import RateLimitErrorCategory
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.proxy._types import (
     ProxyErrorTypes,
     ProxyException,
@@ -100,6 +101,7 @@ else:
 
 
 _BATCH_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
 _WINDOW_START_ADAPTER: Final[TypeAdapter[int | float | str | None]] = TypeAdapter(int | float | str | None)
 
 
@@ -985,7 +987,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             for raw_line in iter_batch_input_lines(file_content_bytes):
                 request_count += 1
                 try:
-                    entry = json.loads(raw_line)
+                    entry = _DECODED_JSON.validate_python(json.loads(raw_line))
                 except Exception:
                     entry_total_tokens = estimate_batch_entry_tokens(raw_line)
                     entry_output_tokens = self.parallel_request_limiter.no_max_tokens_output_floor(
@@ -1008,7 +1010,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 output_tokens += entry_output_tokens
 
                 try:
-                    entry_total_tokens = count_entry_tokens(entry)
+                    entry_total_tokens = count_entry_tokens(decoded_json_object(entry))
                 except Exception:
                     entry_total_tokens = estimate_batch_entry_tokens(raw_line)
                 total_tokens += entry_total_tokens

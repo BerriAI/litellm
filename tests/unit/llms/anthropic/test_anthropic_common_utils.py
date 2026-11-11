@@ -28,7 +28,12 @@ import pytest
 import respx
 
 import litellm
-from litellm.llms.anthropic.common_utils import ToolsWithoutStrict, is_claude_tool_target, tools_without_strict
+from litellm.llms.anthropic.common_utils import (
+    ToolsWithoutStrict,
+    is_claude_tool_target,
+    tools_without_strict,
+    without_stale_tool_search_results,
+)
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
@@ -4707,6 +4712,79 @@ def test_requires_native_compaction_beta_is_false_without_a_signal(
 )
 def test_is_claude_tool_target(custom_llm_provider: str, model: str, expected: bool):
     assert is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model) is expected
+
+
+def test_dropping_a_stale_tool_search_keeps_every_other_turn_as_it_was_sent() -> None:
+    search_use: Final = {
+        "type": "server_tool_use",
+        "id": "srvtoolu_01Search",
+        "name": "tool_search_tool_regex",
+        "input": {"pattern": "weather"},
+    }
+    search_result: Final = {
+        "type": "tool_search_tool_result",
+        "tool_use_id": "srvtoolu_01Search",
+        "content": {
+            "type": "tool_search_tool_search_result",
+            "tool_references": [{"type": "tool_reference", "tool_name": "get_weather"}],
+        },
+    }
+    weather_call: Final = {
+        "type": "tool_use",
+        "id": "toolu_01Weather",
+        "name": "get_weather",
+        "input": {"city": "Paris"},
+    }
+    messages: Final = [
+        {"role": "user", "content": "What is the weather in Paris?"},
+        {"role": "assistant", "content": [search_use, search_result, weather_call]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01Weather", "content": "18C"}]},
+        {"role": "assistant", "content": "It is 18C in Paris."},
+        {"role": "user", "content": "Thanks"},
+        {"role": "assistant", "content": [{"type": "text", "text": "Anything else?"}]},
+        {"role": "user", "content": "And in Osaka?"},
+    ]
+
+    kept: Final = without_stale_tool_search_results(messages, [{"name": "get_local_time"}])
+
+    assert kept == (messages[0], {"role": "assistant", "content": [weather_call]}, *messages[2:])
+
+
+def test_a_replayed_tool_search_keeps_the_tools_it_found_that_the_follow_up_still_sends() -> None:
+    def reference(name: str) -> dict[str, str]:
+        return {"type": "tool_reference", "tool_name": name}
+
+    search_use: Final = {
+        "type": "server_tool_use",
+        "id": "srvtoolu_01Search",
+        "name": "tool_search_tool_regex",
+        "input": {"pattern": "weather|time"},
+    }
+
+    def search_result(*names: str) -> dict[str, object]:
+        return {
+            "type": "tool_search_tool_result",
+            "tool_use_id": "srvtoolu_01Search",
+            "content": {
+                "type": "tool_search_tool_search_result",
+                "tool_references": [reference(name) for name in names],
+            },
+        }
+
+    weather_call: Final = {"type": "tool_use", "id": "toolu_01Weather", "name": "get_weather", "input": {"city": "Paris"}}
+    messages: Final = [
+        {"role": "user", "content": "What is the weather and the time in Paris?"},
+        {"role": "assistant", "content": [search_use, search_result("get_weather", "get_local_time"), weather_call]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01Weather", "content": "18C"}]},
+    ]
+
+    kept: Final = without_stale_tool_search_results(messages, [{"name": "get_weather"}, {"name": "get_news"}])
+
+    assert kept == (
+        messages[0],
+        {"role": "assistant", "content": [search_use, search_result("get_weather"), weather_call]},
+        messages[2],
+    )
 
 
 @pytest.mark.parametrize(

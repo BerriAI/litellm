@@ -5,7 +5,11 @@ what ``add_deployment``, ``set_model_list``, upserts and deletes leave behind in
 and ``registry()`` views.
 """
 
+import threading
 import warnings
+from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from typing import Final
 
 import pytest
 
@@ -154,14 +158,13 @@ def test_an_upsert_that_empties_a_group_drops_the_group_name(make_core: MakeCore
     assert core.registry().deployments("emb") == []
 
 
-def test_a_failing_upsert_of_an_existing_deployment_raises_and_leaves_it_removed(make_core: MakeCore) -> None:
-    """Odd but current: without ignore_invalid_deployments the old deployment is popped and not restored."""
+def test_a_failing_upsert_of_an_existing_deployment_raises_and_keeps_it_serving(make_core: MakeCore) -> None:
     core = _core(make_core)
 
     with pytest.raises(litellm.BadRequestError):
         core.apply(ChangeSet(upsert=[typed("gpt", "a", model="notaprovider/x")]))
 
-    assert core.registry().names(kind="ids") == ["b", "e", "w", "t1"]
+    assert core.registry().names(kind="ids") == ["a", "b", "e", "w", "t1"]
 
 
 def test_a_failing_upsert_under_ignore_invalid_deployments_restores_the_previous_deployment(
@@ -175,7 +178,7 @@ def test_a_failing_upsert_under_ignore_invalid_deployments_restores_the_previous
     restored = core.registry().deployment("a")
     assert restored is not None
     assert restored.litellm_params.model == "openai/a"
-    assert core.registry().names(kind="ids") == ["b", "e", "w", "t1", "a"]
+    assert core.registry().names(kind="ids") == ["a", "b", "e", "w", "t1"]
 
 
 def test_the_deprecated_upsert_deployment_warns_and_returns_the_deployment(make_core: MakeCore) -> None:
@@ -514,3 +517,85 @@ async def test_the_deprecated_arefresh_model_info_warns(make_core: MakeCore) -> 
         await core.arefresh_model_info()  # pyright: ignore[reportAttributeAccessIssue]  # deprecated, still public
 
     assert any("arefresh_model_info is deprecated" in str(w.message) for w in caught)
+
+
+# -- reads racing writes ----------------------------------------------------------------------------
+
+_GROUPS: Final = 4
+
+
+def _two_per_group(make_core: MakeCore) -> RouterCore:
+    return make_core(model_list=[deployment(f"m{index % _GROUPS}", f"d{index}") for index in range(2 * _GROUPS)])
+
+
+def _group_ids(core: RouterCore) -> Mapping[int, Sequence[str]]:
+    return {group: ids(core.registry().deployments(f"m{group}", source="all")) for group in range(_GROUPS)}
+
+
+@pytest.mark.parametrize("upserted", [0, 3, _GROUPS + 1])
+def test_a_read_on_another_thread_waits_for_an_upsert_to_read_the_list_back(make_core: MakeCore, upserted: int) -> None:
+    """A lookup's positions are read against the mirror of the same registry version: a read that
+    starts once router-core holds a write waits until the mirror is read back, so it never reads
+    past the list nor, after a removal, the neighbouring group's entries."""
+    core: Final = _two_per_group(make_core)
+    hosted: Final = core._hosted  # pyright: ignore[reportAttributeAccessIssue]  # the registry under test
+    write: Final = hosted.build_runner
+    started: Final = threading.Event()
+    pool: Final = ThreadPoolExecutor(max_workers=1)
+    reads: Final[list[object]] = []  # mutable-ok: one per write
+
+    def read() -> Mapping[int, Sequence[str]]:
+        started.set()
+        return _group_ids(core)
+
+    def write_with_a_read_started(
+        entries: Sequence[object],
+        path: str,
+        resolve_secrets: bool,
+        install: str,
+        answer: Callable[[Mapping[str, object]], object],
+    ) -> None:
+        write(entries, path, resolve_secrets, install, answer)
+        started.clear()
+        reads.append(pool.submit(read))
+        assert started.wait(timeout=5)
+        # The reader runs while router-core holds the write and the mirror does not yet.
+        _ = threading.Event().wait(0.02)
+
+    hosted.build_runner = write_with_a_read_started
+    try:
+        _ = core.apply(ChangeSet(upsert=[typed(f"m{upserted % _GROUPS}", f"d{upserted}", timeout=11)]))
+    finally:
+        hosted.build_runner = write
+
+    assert reads
+    for future in reads:
+        seen = future.result(timeout=5)  # pyright: ignore[reportAttributeAccessIssue]  # a Future
+        for group in range(_GROUPS):
+            assert seen[group], (group, seen)
+            assert set(seen[group]) <= {f"d{group}", f"d{group + _GROUPS}"}, (group, seen)
+    pool.shutdown()
+    assert sorted(_group_ids(core)[upserted % _GROUPS]) == sorted(
+        [f"d{upserted % _GROUPS}", f"d{upserted % _GROUPS + _GROUPS}"]
+    )
+
+
+def test_appending_to_the_live_model_list_reads_the_entry_back(make_core: MakeCore) -> None:
+    core: Final = _two_per_group(make_core)
+    live: Final = core._hosted._core_model_list  # pyright: ignore[reportAttributeAccessIssue]  # the live list
+    live.append(deployment("m0", "d8"))
+    assert ids(live) == [*(f"d{index}" for index in range(2 * _GROUPS)), "d8"]
+
+
+def test_deleting_a_live_model_list_entry_reads_the_list_back(make_core: MakeCore) -> None:
+    core: Final = _two_per_group(make_core)
+    live: Final = core._hosted._core_model_list  # pyright: ignore[reportAttributeAccessIssue]  # the live list
+    del live[0]
+    assert ids(live) == [f"d{index}" for index in range(1, 2 * _GROUPS)]
+
+
+def test_ending_a_build_that_never_began_leaves_the_list(make_core: MakeCore) -> None:
+    core: Final = _two_per_group(make_core)
+    live: Final = core._hosted._core_model_list  # pyright: ignore[reportAttributeAccessIssue]  # the live list
+    live.end_build()
+    assert ids(live) == [f"d{index}" for index in range(2 * _GROUPS)]
