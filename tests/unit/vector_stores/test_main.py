@@ -175,7 +175,11 @@ def test_search_by_query_image_sends_a_bedrock_image_retrieval_query(query: str 
         ),
         (
             {"custom_llm_provider": "openai", "query_image": QUERY_IMAGE},
-            "openai vector stores do not support query_image",
+            "openai vector stores do not support query_image. To drop it",
+        ),
+        (
+            {"custom_llm_provider": "openai", "query": "red circle", "query_image": QUERY_IMAGE},
+            "openai vector stores do not support query_image. To drop it",
         ),
         (
             {"custom_llm_provider": "openai", "query": "", "query_image": QUERY_IMAGE, "drop_params": True},

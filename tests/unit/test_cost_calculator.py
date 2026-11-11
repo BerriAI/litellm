@@ -10270,10 +10270,14 @@ def test_bedrock_registered_cache_prices_preserve_dynamic_threshold_rates(
     assert entry[1][tier_field] == (tier_override if tier_override is not None else 0.007)
 
 
-def test_cost_failure_for_an_unpriced_response_does_not_echo_the_response() -> None:
+@pytest.mark.parametrize("message_logging_off", [True, False])
+def test_cost_failure_for_an_unpriced_response_echoes_the_response_only_with_message_logging_on(
+    message_logging_off: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", message_logging_off)
     image_data: Final = "c2VjcmV0LWltYWdlLWJ5dGVz"
 
     with pytest.raises(ValueError, match="Model is None") as exc_info:
         completion_cost(completion_response={"data": [{"content": [{"source": {"data": image_data}}]}]})
 
-    assert image_data not in str(exc_info.value)
+    assert (image_data in str(exc_info.value)) is not message_logging_off

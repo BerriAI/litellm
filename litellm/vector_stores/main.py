@@ -13,7 +13,7 @@ import httpx
 
 import litellm
 from litellm.constants import request_timeout
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.vector_store.transformation import (
@@ -464,6 +464,8 @@ def search(
             )
         )
 
+        sent_extra_body: Final = as_str_mapping(extra_body)
+
         # Pre Call logging
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
@@ -491,7 +493,9 @@ def search(
             logging_obj=litellm_logging_obj,
             embedding_executor=embedding_executor,
             extra_headers=extra_headers,
-            extra_body=extra_body,
+            extra_body=extra_body
+            if sent_extra_body is None
+            else {key: value for key, value in sent_extra_body.items() if key != "query_image"},
             timeout=timeout or request_timeout,
             _is_async=_is_async,
             client=kwargs.get("client"),
