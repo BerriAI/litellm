@@ -1,4 +1,6 @@
 import asyncio
+import datetime
+from collections.abc import AsyncIterator
 from typing import Final
 
 import pytest
@@ -6,7 +8,9 @@ import pytest
 import litellm
 from litellm.caching.caching import Cache
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
-from litellm.rust_bridge.host.cache import configured_cache, store_response
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.anthropic.messages.native.response_cache import AnthropicMessagesStreamCacheWriter
+from litellm.rust_bridge.host.cache import configured_cache, store_response, wrap_stream
 from litellm.types.caching import LiteLLMCacheType
 
 
@@ -51,3 +55,49 @@ async def test_store_response_drops_only_the_rust_marker_header_from_the_cached_
 async def test_store_response_keeps_an_entry_without_the_rust_marker_unchanged() -> None:
     response: Final = {"id": "msg_2", "_hidden_params": {"additional_headers": {"llm_provider-x": "1"}}}
     assert await _stored(response) == response
+
+
+async def _events() -> AsyncIterator[bytes]:
+    yield b"event: message_stop\ndata: {}\n\n"
+
+
+async def anthropic_messages() -> None:
+    return None
+
+
+def _logging() -> Logging:
+    return Logging(
+        model="claude-sonnet-4-5",
+        messages=[],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="messages",
+        function_id="messages",
+    )
+
+
+def test_wrap_stream_hands_the_stream_to_the_cache_writer_the_client_wrapper_uses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL, supported_call_types=["anthropic_messages"])
+    monkeypatch.setattr(litellm, "cache", cache)
+    stream: Final = _events()
+
+    wrapped: Final = wrap_stream(cache, anthropic_messages, stream, **_REQUEST, litellm_logging_obj=_logging())
+
+    assert isinstance(wrapped, AnthropicMessagesStreamCacheWriter)
+    assert wrapped.stream is stream
+
+
+def test_wrap_stream_leaves_a_stream_the_cache_would_not_store(monkeypatch: pytest.MonkeyPatch) -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL, supported_call_types=["anthropic_messages"])
+    monkeypatch.setattr(litellm, "cache", cache)
+    stream: Final = _events()
+
+    assert (
+        wrap_stream(
+            cache, anthropic_messages, stream, **_REQUEST, cache={"no-store": True}, litellm_logging_obj=_logging()
+        )
+        is stream
+    )

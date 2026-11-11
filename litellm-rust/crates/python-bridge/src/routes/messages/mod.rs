@@ -1,4 +1,5 @@
 mod agentic;
+mod answer;
 mod host;
 mod modify_params;
 mod pre_request;
@@ -68,6 +69,9 @@ fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyR
                         )),
                         false => route,
                     };
+                    let route = route.with_host_answer(std::sync::Arc::new(
+                        answer::PythonAnswer::new(services.clone()),
+                    ));
                     let (cache, options) = selection.attach(services);
                     let route = match cache {
                         Some(cache) => route.with_cache(cache),

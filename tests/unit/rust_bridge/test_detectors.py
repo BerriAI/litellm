@@ -18,7 +18,7 @@ from litellm.rust_bridge.chat_completions import detectors as chat_detectors
 from litellm.rust_bridge.messages import detectors as messages_detectors
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.rust_bridge.responses import detectors as responses_detectors
-from litellm.types.llms.anthropic import ANTHROPIC_ADVISOR_TOOL_TYPE, ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
 
 GATEWAY_TOOL: Final = {"type": "mcp", "server_label": "gateway", "server_url": "litellm_proxy"}
 REMOTE_TOOL: Final = {"type": "mcp", "server_label": "docs", "server_url": "https://mcp.example.com/sse"}
@@ -59,25 +59,6 @@ def call(**kwargs: object) -> NativeCall:
 )
 def test_floating_alias_requires_python(model: str, provider: str | None, expected: bool) -> None:
     assert detectors.latest_alias(call(model=model, custom_llm_provider=provider)) is expected
-
-
-@pytest.mark.parametrize(
-    ("model", "provider", "tools", "expected"),
-    (
-        ("deepseek/test-model", None, [{"type": ANTHROPIC_ADVISOR_TOOL_TYPE}], True),
-        ("anthropic/test-model", None, [{"type": ANTHROPIC_ADVISOR_TOOL_TYPE}], False),
-        ("test-model", "anthropic", [{"type": ANTHROPIC_ADVISOR_TOOL_TYPE}], False),
-        ("unresolved-model", None, [{"type": ANTHROPIC_ADVISOR_TOOL_TYPE}], True),
-        ("deepseek/test-model", None, [{"type": "function", "name": "f"}], False),
-        ("deepseek/test-model", None, ["not-a-tool"], False),
-        ("deepseek/test-model", None, [], False),
-        ("deepseek/test-model", None, None, False),
-    ),
-)
-def test_messages_interception_matches_tools_and_resolved_provider(
-    model: str, provider: str | None, tools: object, expected: bool
-) -> None:
-    assert messages_detectors.intercepted(call(model=model, custom_llm_provider=provider, tools=tools)) is expected
 
 
 def _wrap_nested_level(value: object, depth: int) -> object:

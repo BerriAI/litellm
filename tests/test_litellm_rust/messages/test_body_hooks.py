@@ -93,7 +93,6 @@ async def test_body_websearch_short_circuit_answers_without_the_provider(server:
 
 
 @pytest.mark.asyncio
-@BODY_HOOKS
 async def test_body_interceptor_replaces_the_provider_call(server: RecordingServer) -> None:
     class Replace(MessagesInterceptor):
         def can_handle(self, tools: list[dict[str, object]] | None, custom_llm_provider: str | None) -> bool:

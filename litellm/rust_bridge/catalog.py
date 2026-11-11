@@ -66,8 +66,6 @@ class Feature(str, Enum):
     """A provider affinity header that Python validates and populates from the session id."""
     WEBSEARCH_INTERCEPTION = "websearch_interception"
     """A WebSearchInterceptionLogger that may answer without calling the provider."""
-    MESSAGES_INTERCEPTOR = "messages_interceptor"
-    """A registered MessagesInterceptor that takes over the call."""
     AGENTIC_LOOP_HOOK = "agentic_loop_hook"
     """A logger overriding async_should_run_agentic_loop, which may run follow-up calls."""
     RESPONSE_CACHE = "response_cache"
@@ -170,7 +168,6 @@ MESSAGES_PYTHON_FEATURES: Final = (
     }
 ) | {
     Feature.WEBSEARCH_INTERCEPTION,
-    Feature.MESSAGES_INTERCEPTOR,
 }
 
 RESPONSES_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {

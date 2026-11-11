@@ -1,6 +1,7 @@
 mod common_utils;
 mod constants;
 mod handler;
+mod host_answer;
 mod pre_request;
 pub mod route;
 mod safeguards;
@@ -19,6 +20,7 @@ use std::sync::Arc;
 use crate::common_utils::messages_provider;
 
 pub use common_utils::merge_messages_header_sources;
+pub use host_answer::HostAnswer;
 pub use litellm_inference::Error;
 pub use pre_request::PreRequestHooks;
 pub use safeguards::Safeguards;
@@ -39,6 +41,7 @@ pub struct MessagesRoute {
     transport: Option<Arc<dyn Transport>>,
     pre_request_hooks: Option<Arc<dyn PreRequestHooks>>,
     safeguards: Option<Arc<dyn Safeguards>>,
+    host_answer: Option<Arc<dyn HostAnswer>>,
 }
 
 impl MessagesRoute {
@@ -56,6 +59,7 @@ impl MessagesRoute {
             transport: None,
             pre_request_hooks: None,
             safeguards: None,
+            host_answer: None,
         }
     }
 
@@ -87,6 +91,14 @@ impl MessagesRoute {
     pub fn with_safeguards(self, safeguards: Arc<dyn Safeguards>) -> Self {
         Self {
             safeguards: Some(safeguards),
+            ..self
+        }
+    }
+
+    #[must_use]
+    pub fn with_host_answer(self, host_answer: Arc<dyn HostAnswer>) -> Self {
+        Self {
+            host_answer: Some(host_answer),
             ..self
         }
     }
@@ -141,6 +153,21 @@ impl MessagesRoute {
                 && let Some(output) = handler::cached(self, config, &model, &context).await?
             {
                 return Ok(output);
+            }
+            if let Some(host_answer) = self
+                .host_answer
+                .as_deref()
+                .filter(|_| call.shaping.settings.intercepted)
+            {
+                return handler::answered(
+                    self,
+                    host_answer,
+                    config,
+                    model,
+                    requested_stream,
+                    &context,
+                )
+                .await;
             }
             if let Some(mock) = call.shaping.settings.mock_response {
                 return Ok(

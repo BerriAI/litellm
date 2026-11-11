@@ -51,7 +51,7 @@ from litellm.llms.anthropic.messages.native.handler import (
 from litellm.llms.anthropic.messages.native.handler import (
     _with_deployment_output_effort as _deployment_output_effort,  # pyright: ignore[reportPrivateUsage]  # the handler's own effort rounding
 )
-from litellm.llms.anthropic.messages.native.interceptors import get_messages_interceptors
+from litellm.llms.anthropic.messages.native.interceptors import MessagesInterceptor, get_messages_interceptors
 from litellm.llms.anthropic.messages.native.streaming_iterator import (
     _SSE_FRAME_END,  # pyright: ignore[reportPrivateUsage]  # the handler's own SSE framing
     _SSE_TERMINATOR_OVERLAP,  # pyright: ignore[reportPrivateUsage]  # the handler's own SSE framing
@@ -79,7 +79,6 @@ from litellm.llms.custom_httpx.llm_http_handler import (
     _merge_messages_header_sources as _merged_headers,  # pyright: ignore[reportPrivateUsage]  # the handler's own header merge
 )
 from litellm.rust_bridge import detectors, execution, failures
-from litellm.rust_bridge.catalog import Feature
 from litellm.rust_bridge.execution import AsyncStream
 from litellm.rust_bridge.host import cache, callbacks_legacy_python, http_transport
 from litellm.rust_bridge.messages.entrypoints import MessagesStreamHead
@@ -361,11 +360,6 @@ async def pre_request_hooks(request: Mapping[str, object]) -> Mapping[str, objec
     hooked.pop("litellm_params", None)
     kwargs.update(hooked)
     requested_provider: Final = handler.provider_after_pre_request_hooks(model, provider, {})
-    hooked_tools: Final = cast(  # cast-ok: the handler hands the hooked tools on unchecked
-        Sequence[Mapping[str, object]] | None, named["tools"]
-    )
-    if any(interceptor.can_handle(hooked_tools, hooked_provider) for interceptor in get_messages_interceptors()):
-        raise _unsupported(requested_provider, model, Feature.MESSAGES_INTERCEPTOR.value)
     functools.partial(
         _HANDLER,
         **{name: value for name, value in named.items() if name in _HANDLER_PARAMS - {"custom_llm_provider"}},
@@ -376,6 +370,60 @@ async def pre_request_hooks(request: Mapping[str, object]) -> Mapping[str, objec
     if hooked_provider != requested_provider:
         raise _unsupported(requested_provider, model, f"a pre-request hook routing the call to {hooked_provider}")
     return {**named, **kwargs}
+
+
+def _intercepted_provider(request: Mapping[str, object]) -> str | None:
+    return handler.provider_after_pre_request_hooks(
+        str(request["model"]), optional_str(request.get("custom_llm_provider")), {}
+    )
+
+
+def interceptor(request: Mapping[str, object]) -> MessagesInterceptor | None:
+    tools: Final = cast(_JsonBlocks | None, request.get("tools"))  # cast-ok: handed on unchecked, as the handler does
+    provider: Final = _intercepted_provider(request)
+    return next((owner for owner in get_messages_interceptors() if owner.can_handle(tools, provider)), None)
+
+
+def answer(owner: MessagesInterceptor, request: Mapping[str, object], stream: bool, hooked: bool) -> Awaitable[object]:
+    model: Final = str(request["model"])
+    tools: Final = cast(_JsonBlocks | None, request.get("tools"))  # cast-ok: handed on unchecked, as the handler does
+    kwargs: Final = {name: value for name, value in request.items() if name not in _ENTRY_PARAMS}
+    messages: _JsonBlocks = cast(_JsonBlocks, request["messages"])  # cast-ok: handed on unchecked, as the handler does
+    system: str | _JsonBlocks | None = cast(  # cast-ok: handed on unchecked, as the handler does
+        str | _JsonBlocks | None, request.get("system")
+    )
+    if not hooked:
+        messages, system = prepare_native_messages(
+            messages,
+            system,
+            kwargs,
+            model=model,
+            custom_llm_provider=optional_str(request.get("custom_llm_provider")),
+            tools=tools,
+            api_base=optional_str(request.get("api_base")),
+        )
+    handle: Final = cast(  # cast-ok: the interceptor answers with whatever the caller receives
+        Callable[..., Awaitable[object]], owner.handle
+    )
+    return handle(
+        model=model,
+        messages=messages,
+        tools=tools,
+        stream=stream or kwargs.get("_websearch_interception_converted_stream", False),
+        max_tokens=cast(int, request["max_tokens"]),  # cast-ok: admission requires an int max_tokens
+        custom_llm_provider=_intercepted_provider(request),
+        api_key=request.get("api_key"),
+        api_base=request.get("api_base"),
+        metadata=request.get("metadata"),
+        stop_sequences=request.get("stop_sequences"),
+        system=system,
+        temperature=request.get("temperature"),
+        thinking=request.get("thinking"),
+        tool_choice=request.get("tool_choice"),
+        top_k=request.get("top_k"),
+        top_p=request.get("top_p"),
+        **kwargs,
+    )
 
 
 def stream_hidden_params(headers: Sequence[tuple[str, str]]) -> Mapping[str, object]:

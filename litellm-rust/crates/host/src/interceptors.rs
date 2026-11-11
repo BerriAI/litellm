@@ -74,6 +74,7 @@ pub struct ProviderIdentity {
 pub enum ResultSource {
     Provider,
     Cache { key: String },
+    Host,
 }
 
 /// What the call cost, settled once by the route. A host records it; it never re-derives it.
@@ -91,6 +92,7 @@ impl Cost {
     pub fn settle(source: &ResultSource, reported: Option<serde_json::Number>) -> Self {
         match (source, reported) {
             (ResultSource::Cache { .. }, _) => Self::CacheHit,
+            (ResultSource::Host, _) => Self::Deferred,
             (ResultSource::Provider, Some(amount)) => Self::Reported { amount },
             (ResultSource::Provider, None) => Self::Deferred,
         }

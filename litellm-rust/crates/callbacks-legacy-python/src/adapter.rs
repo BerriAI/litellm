@@ -60,6 +60,7 @@ pub struct LegacyLogging {
     cache_key: Option<String>,
     /// When the provider request went out, until its window is recorded (Messages only).
     api_started: Option<f64>,
+    host_answered: bool,
 }
 
 fn retry_reason(reason: &RetryReason) -> Value {
@@ -100,6 +101,7 @@ impl LegacyLogging {
             internal: false,
             cache_key: None,
             api_started: None,
+            host_answered: false,
         }
     }
 
@@ -297,6 +299,7 @@ impl LegacyLogging {
         if self.operation != LoggingOperation::Messages
             || self.request.is_some()
             || self.cache_key.is_some()
+            || self.host_answered
         {
             return Ok(());
         }
@@ -670,6 +673,10 @@ impl LegacyLogging {
         self.cache_key = match &facts.source {
             ResultSource::Provider => None,
             ResultSource::Cache { key } => Some(key.clone()),
+            ResultSource::Host => {
+                self.host_answered = true;
+                return Ok(HookStep::Ready(()));
+            }
         };
         let logger = self.logger()?.object(py);
         if self.messages_cache_hit() {
@@ -1164,6 +1171,82 @@ logger.hooks = {'pre': lambda kwargs: kwargs}
                 c"
 [finalized] = [value for name, value in logger.calls if name == 'finalize']
 assert finalized is replacement
+",
+            );
+        });
+    }
+
+    #[rstest]
+    #[case::unary(false)]
+    #[case::stream(true)]
+    fn a_host_answer_keeps_the_logger_as_set_up_and_a_streamed_one_is_finalized_unstreamed(
+        #[case] stream: bool,
+    ) {
+        use litellm_host::interceptors::{Cost, ExecutionFacts, ProviderIdentity, ResultSource};
+
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(
+                py,
+                c"
+kwargs = {'logger': logger}
+response = object()
+logger.hooks = {'pre': lambda kwargs: kwargs}
+",
+            );
+            local(&locals, "kwargs").set_item("stream", stream).unwrap();
+            let (mut logging, step) = begin(py, &locals, true);
+            logging.operation = crate::LoggingOperation::Messages;
+            resume(
+                &mut logging,
+                step,
+                py,
+                Ok(local(&locals, "kwargs").unbind()),
+            )
+            .unwrap();
+            let facts = ExecutionFacts {
+                provider: ProviderIdentity {
+                    model: "claude-sonnet-4-5".into(),
+                    provider: "anthropic".into(),
+                },
+                cost: Cost::Deferred,
+                source: ResultSource::Host,
+            };
+            assert!(matches!(
+                logging.result_ready(py, &facts).unwrap(),
+                HookStep::Ready(())
+            ));
+            let response = local(&locals, "response").unbind();
+            let step = logging
+                .transform_response(py, response.clone_ref(py), TIMING)
+                .unwrap();
+            assert_eq!(awaits_deployment_hook(&step), !stream);
+            if !stream {
+                return;
+            }
+            let HookStep::Ready(returned) = step else {
+                panic!("a host-answered stream is returned as is");
+            };
+            assert!(returned.bind(py).is(response.bind(py)));
+            logging
+                .on_event(
+                    py,
+                    PythonCallEvent::Succeeded {
+                        timing: TIMING,
+                        response: &response,
+                    },
+                )
+                .unwrap();
+            run(
+                py,
+                &locals,
+                c"
+names = logger.names()
+assert ('finalize', response) in logger.calls, names
+assert 'update_logging' not in names, names
+assert not [name for name in names if 'success' in name], names
+assert logger.stream is True
+assert logger.model_call_details['stream'] is True
 ",
             );
         });

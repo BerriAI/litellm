@@ -153,7 +153,6 @@ _ASYNC_FEATURES: Final[detectors.Detectors] = MappingProxyType(
     {
         **_FEATURES,
         Feature.WEBSEARCH_INTERCEPTION: route_detectors.websearch_interception,
-        Feature.MESSAGES_INTERCEPTOR: route_detectors.intercepted,
     }
 )
 

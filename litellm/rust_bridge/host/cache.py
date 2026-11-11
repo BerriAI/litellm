@@ -76,6 +76,29 @@ async def store_stream(
     )
 
 
+def wrap_stream(
+    _cache: Cache,
+    original_function: Callable[..., object],
+    stream: object,
+    /,
+    **kwargs: object,  # kwargs-ok: the cache call's own arguments
+) -> object:
+    from litellm.caching.caching_handler import LLMCachingHandler
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj: Final = kwargs.get("litellm_logging_obj")
+    if not isinstance(logging_obj, Logging):
+        return stream
+    handler: Final = (
+        logging_obj.llm_caching_handler
+        if isinstance(logging_obj.llm_caching_handler, LLMCachingHandler)
+        else LLMCachingHandler(
+            original_function=original_function, request_kwargs=dict(kwargs), start_time=logging_obj.start_time
+        )
+    )
+    return handler.wrap_streaming_result_for_cache(result=stream, call_type=original_function.__name__)
+
+
 def remember_unclamped(logging_obj: object, max_tokens: object) -> None:
     from litellm.litellm_core_utils.litellm_logging import Logging
 

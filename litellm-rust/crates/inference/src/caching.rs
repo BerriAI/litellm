@@ -288,7 +288,7 @@ impl<P: StreamCachable> CallCache<P> {
         P::Response: Serialize,
     {
         let Some(session) = self.session.filter(|session| {
-            *source == ResultSource::Provider && session.request.controls.writes()
+            !matches!(source, ResultSource::Cache { .. }) && session.request.controls.writes()
         }) else {
             return output;
         };

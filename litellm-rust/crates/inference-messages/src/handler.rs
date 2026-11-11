@@ -29,8 +29,8 @@ use litellm_tracing::ByteChunk;
 use serde_json::{Map, Value};
 
 use super::{
-    Delivered, Error, MessagesBody, MessagesCall, MessagesCallResponse, MessagesRoute, Transport,
-    TransportBody, TransportRequest, TransportResponse, WorkloadIdentity,
+    Delivered, Error, HostAnswer, MessagesBody, MessagesCall, MessagesCallResponse, MessagesRoute,
+    Transport, TransportBody, TransportRequest, TransportResponse, WorkloadIdentity,
     common_utils::{MessagesProvider, merge_messages_header_sources, string_headers},
     constants::{MESSAGES_HTTP_ERROR_ATTEMPTS, MESSAGES_TIMEOUT_SECS},
     route::Messages,
@@ -113,6 +113,38 @@ pub(super) async fn mocked(
     .await
 }
 
+pub(super) async fn answered(
+    route: &MessagesRoute,
+    host_answer: &dyn HostAnswer,
+    provider: MessagesProvider,
+    model: String,
+    stream: bool,
+    context: &CallContext<'_, impl Interceptors<Error>>,
+) -> Result<MessagesCallResponse, Error> {
+    host_answer.answer(stream).await?;
+    let identity = ProviderIdentity {
+        model,
+        provider: provider.as_str().to_string(),
+    };
+    let cache = CallCache::<Messages>::new(
+        caller_keyed(route),
+        context.cache,
+        CacheRequest::from_wire(identity.clone(), None),
+    );
+    context
+        .result_ready(ExecutionFacts {
+            provider: identity,
+            source: ResultSource::Host,
+            cost: Cost::Deferred,
+        })
+        .await?;
+    let output = MessagesCallResponse::Complete(MessagesBody::Unchecked(Map::new()));
+    if stream {
+        return Ok(output);
+    }
+    Ok(cache.finish(output, &ResultSource::Host).await)
+}
+
 fn caller_keyed(route: &MessagesRoute) -> Option<&litellm_cache_response::ScopedCache> {
     route
         .cache
@@ -168,7 +200,7 @@ pub(super) async fn execute(
         ResultSource::Provider => {
             super::safeguards::stamped(route.safeguards.as_ref(), output).await?
         }
-        ResultSource::Cache { .. } => output,
+        ResultSource::Cache { .. } | ResultSource::Host => output,
     };
     Ok(cache.finish(output, &source).await)
 }

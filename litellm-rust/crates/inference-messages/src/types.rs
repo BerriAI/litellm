@@ -82,6 +82,8 @@ pub struct MessagesSettings {
     pub presanitized: bool,
     #[serde(default)]
     pub drops_unsupported_params: bool,
+    #[serde(default)]
+    pub intercepted: bool,
 }
 
 impl MessagesSettings {

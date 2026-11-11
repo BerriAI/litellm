@@ -49,6 +49,9 @@ from litellm.integrations.websearch_interception.handler import WebSearchInterce
 from litellm.litellm_core_utils import logging_utils
 from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.anthropic.messages.native import interceptors as messages_interceptors
+from litellm.llms.anthropic.messages.native.fake_stream_iterator import FakeAnthropicMessagesStreamIterator
+from litellm.llms.anthropic.messages.native.interceptors import MessagesInterceptor
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.messages import dispatch
@@ -349,6 +352,7 @@ class Case:
     cache: Callable[[], Cache] | None = None
     callbacks: tuple[Callable[[], CustomLogger], ...] = ()
     classifier: str | None = None
+    interceptor: Callable[[], MessagesInterceptor] | None = None
     gaps: Mapping[str, str | None] = field(default_factory=lambda: MappingProxyType({}))
     loggers: Callable[[], Sequence[CustomLogger]] | None = None
 
@@ -1941,6 +1945,152 @@ SAFEGUARDS_CASES: Final = (
     Case("safeguards_classifier_sync", _safeguarded(), model=NON_CLAUDE, sync=True, classifier=FLAGGED),
 )
 
+INTERCEPTED_TOOL: Final[Mapping[str, JsonValue]] = MappingProxyType({"type": "parity_intercept", "name": "intercept"})
+_ECHOED_KWARGS: Final = (
+    "model",
+    "messages",
+    "tools",
+    "stream",
+    "max_tokens",
+    "custom_llm_provider",
+    "api_key",
+    "metadata",
+    "system",
+    "temperature",
+    "tool_choice",
+)
+
+
+class _Intercepting(MessagesInterceptor):
+    def can_handle(self, tools: Sequence[Mapping[str, object]] | None, custom_llm_provider: str | None) -> bool:
+        return custom_llm_provider == "anthropic" and any(
+            tool.get("type") == INTERCEPTED_TOOL["type"] for tool in tools or ()
+        )
+
+
+class _Answering(_Intercepting):
+    async def handle(self, **kwargs: object) -> object:  # pyright: ignore[reportIncompatibleMethodOverride]  # kwargs-ok: the interceptor contract's keyword call
+        echoed: Final = {name: kwargs.get(name) for name in _ECHOED_KWARGS}
+        answer: Final = {
+            **TEXT_RESPONSE,
+            "id": "msg_01ParityIntercepted",
+            "content": [{"type": "text", "text": json.dumps(echoed, sort_keys=True, default=repr)}],
+            "extra_keys": sorted(name for name in kwargs if name not in _ECHOED_KWARGS),
+        }
+        if kwargs.get("stream"):
+            return FakeAnthropicMessagesStreamIterator(
+                cast(AnthropicMessagesResponse, answer)
+            )  # cast-ok: a synthetic Messages response
+        return answer
+
+
+class _Delegating(_Intercepting):
+    async def handle(self, **kwargs: object) -> object:  # pyright: ignore[reportIncompatibleMethodOverride]  # kwargs-ok: the interceptor contract's keyword call
+        from litellm.messages import anthropic_messages
+
+        tools: Final = cast(list[Mapping[str, object]], kwargs["tools"])  # cast-ok: the caller's tools
+        return await anthropic_messages(
+            model=kwargs["model"],
+            messages=kwargs["messages"],
+            max_tokens=kwargs["max_tokens"],
+            tools=[tool for tool in tools if tool.get("type") != INTERCEPTED_TOOL["type"]],
+            api_key=kwargs["api_key"],
+            api_base=kwargs["api_base"],
+            stream=kwargs["stream"],
+        )
+
+
+class _Refusing(_Intercepting):
+    async def handle(self, **kwargs: object) -> object:  # pyright: ignore[reportIncompatibleMethodOverride]  # kwargs-ok: the interceptor contract's keyword call
+        raise ValueError("the interceptor refused the call")
+
+
+def _intercepted(**kwargs: object) -> Mapping[str, object]:
+    return _kw(tools=[dict(INTERCEPTED_TOOL), dict(WEATHER_TOOL)], **kwargs)
+
+
+class _InterceptedToolHook(CustomLogger):
+    async def async_pre_request_hook(
+        self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+    ) -> dict[str, object] | None:
+        return {**kwargs, "tools": [dict(INTERCEPTED_TOOL), *cast(list[object], kwargs.get("tools") or [])]}
+
+
+class _UninterceptedToolHook(CustomLogger):
+    async def async_pre_request_hook(
+        self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+    ) -> dict[str, object] | None:
+        return {**kwargs, "tools": [dict(WEATHER_TOOL)]}
+
+
+INTERCEPTOR_CASES: Final = (
+    Case("interceptor_answers", _intercepted(), upstream=(), interceptor=_Answering),
+    Case(
+        "pre_request_hook_adds_a_tool_an_interceptor_owns",
+        _kw(tools=[dict(WEATHER_TOOL)]),
+        upstream=(),
+        callbacks=(_InterceptedToolHook,),
+        interceptor=_Answering,
+    ),
+    Case(
+        "pre_request_hook_adds_a_tool_an_interceptor_owns_stream",
+        _kw(tools=[dict(WEATHER_TOOL)], stream=True),
+        upstream=(),
+        callbacks=(_InterceptedToolHook,),
+        interceptor=_Answering,
+    ),
+    Case(
+        "pre_request_hook_unstreams_a_call_an_interceptor_owns",
+        _intercepted(stream=True),
+        upstream=(),
+        callbacks=(_UnstreamingHook,),
+        interceptor=_Answering,
+    ),
+    Case(
+        "pre_request_hook_removes_the_tool_an_interceptor_owns",
+        _intercepted(),
+        callbacks=(_UninterceptedToolHook,),
+        interceptor=_Answering,
+    ),
+    Case(
+        "interceptor_answers_with_system_and_metadata",
+        _intercepted(system="Be brief.", metadata={"user_id": "user-123"}, temperature=0.5),
+        upstream=(),
+        interceptor=_Answering,
+    ),
+    Case("interceptor_answers_stream", _intercepted(stream=True), upstream=(), interceptor=_Answering),
+    Case(
+        "interceptor_wins_over_mock_response",
+        _intercepted(mock_response="Hi from the mock"),
+        upstream=(),
+        interceptor=_Answering,
+    ),
+    Case(
+        "interceptor_answers_bare_model",
+        _intercepted(custom_llm_provider="anthropic"),
+        upstream=(),
+        model="claude-sonnet-4-5",
+        interceptor=_Answering,
+    ),
+    Case("interceptor_delegates_to_the_public_api", _intercepted(), interceptor=_Delegating),
+    Case(
+        "interceptor_delegates_a_stream",
+        _intercepted(stream=True),
+        upstream=(_stream(TEXT_STREAM),),
+        interceptor=_Delegating,
+    ),
+    Case("interceptor_raises", _intercepted(), upstream=(), interceptor=_Refusing),
+    Case("interceptor_answer_is_cached", _intercepted(), upstream=(), cache=Cache, interceptor=_Answering),
+    Case(
+        "interceptor_stream_answer_with_cache",
+        _intercepted(stream=True),
+        upstream=(),
+        cache=Cache,
+        interceptor=_Answering,
+    ),
+    Case("interceptor_ignores_other_calls", _kw(tools=[dict(WEATHER_TOOL)]), interceptor=_Answering),
+)
+
 CASES: Final = (
     *REQUEST_CASES,
     *AGENTIC_CASES,
@@ -1959,6 +2109,7 @@ CASES: Final = (
     *TRANSPORT_CASES,
     *PRE_REQUEST_HOOK_CASES,
     *SAFEGUARDS_CASES,
+    *INTERCEPTOR_CASES,
 )
 
 
@@ -2062,6 +2213,15 @@ def _classifier(reply: str | None, calls: list[Mapping[str, object]]) -> Generat
         rebound(proxy_server, "general_settings", {"safeguards_classifier_model": CLASSIFIER_MODEL}),
         rebound(litellm, "acompletion", classify),
     ):
+        yield
+
+
+@contextmanager
+def _interceptor(interceptor: Callable[[], MessagesInterceptor] | None) -> Generator[None]:
+    if interceptor is None:
+        yield
+        return
+    with rebound(messages_interceptors, "_interceptors", [interceptor(), *messages_interceptors._interceptors]):  # pyright: ignore[reportPrivateUsage]  # registers a test interceptor ahead of the shipped ones
         yield
 
 
@@ -2298,6 +2458,7 @@ async def _leg(case: Case, server: RecordingServer, probe: FallbackProbe | None)
         _settings(case.settings),
         _cache(case.cache),
         _classifier(case.classifier, classified),
+        _interceptor(case.interceptor),
     ):
         for spec in case.upstream:
             server.enqueue(replace(spec))
