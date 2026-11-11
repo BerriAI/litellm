@@ -54,6 +54,10 @@ pub enum Error {
         "invalid OCR outputContentFormat, expected text or markdown. To drop unsupported params, set `litellm.drop_params = True`."
     )]
     OutputContentFormat,
+    #[error(
+        "unsupported OCR param {param}: {reason}. To drop unsupported params, set `litellm.drop_params = True`."
+    )]
+    UnsupportedParam { param: String, reason: &'static str },
     #[error("OCR model cannot be a dot segment")]
     DotModel,
     #[error("OCR response exceeds the size limit of {limit} bytes")]
@@ -164,6 +168,7 @@ impl Error {
                 | Self::Pages(_)
                 | Self::Features
                 | Self::OutputContentFormat
+                | Self::UnsupportedParam { .. }
                 | Self::DotModel
                 | Self::InvalidRequest(_)
                 | Self::InvalidProvider(_)
