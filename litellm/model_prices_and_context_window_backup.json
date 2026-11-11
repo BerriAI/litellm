@@ -25232,6 +25232,16 @@
             }
         ]
     },
+    "keenable/search": {
+        "input_cost_per_query": 0.004,
+        "litellm_provider": "keenable",
+        "mode": "search",
+        "metadata": {
+            "notes": "Pay-as-you-go is $4 per 1,000 requests after 100K free/month (https://keenable.ai/pricing, retrieved 2026-11-02).",
+            "source": "https://keenable.ai/pricing",
+            "source_date": "2026-11-02"
+        }
+    },
     "firecrawl/search": {
         "litellm_provider": "firecrawl",
         "mode": "search",
