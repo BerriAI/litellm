@@ -4549,7 +4549,6 @@ export interface paths {
          *     - allowed_model_region: Optional[Union[Literal["eu"], Literal["us"]]] - Require all user requests to use models in this specific region.
          *     - default_model: Optional[str] - If no equivalent model in the allowed region, default all requests to this model.
          *     - models: Optional[list[str]] - Restrict this customer's access to the listed models.
-         *     - metadata: Optional[dict] = Metadata for customer, store information for customer. Example metadata = {"data_training_opt_out": True}
          *     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
          *     - tpm_limit: Optional[int] - [Not Implemented Yet] Specify tpm limit for a given customer (Tokens per minute)
          *     - rpm_limit: Optional[int] - [Not Implemented Yet] Specify rpm limit for a given customer (Requests per minute)
@@ -4580,7 +4579,7 @@ export interface paths {
          *     ```
          *     curl --location 'http://0.0.0.0:4000/customer/new'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"         --header 'Content-Type: application/json'         --data '{
          *             "user_id" : "ishaan-jaff-3",
-         *             "allowed_region": "eu",
+         *             "allowed_model_region": "eu",
          *             "budget_id": "free_tier",
          *             "models": ["gpt-4o-mini"],
          *             "default_model": "azure/gpt-3.5-turbo-eu"
@@ -5229,7 +5228,6 @@ export interface paths {
          *     - allowed_model_region: Optional[Union[Literal["eu"], Literal["us"]]] - Require all user requests to use models in this specific region.
          *     - default_model: Optional[str] - If no equivalent model in the allowed region, default all requests to this model.
          *     - models: Optional[list[str]] - Restrict this customer's access to the listed models.
-         *     - metadata: Optional[dict] = Metadata for customer, store information for customer. Example metadata = {"data_training_opt_out": True}
          *     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
          *     - tpm_limit: Optional[int] - [Not Implemented Yet] Specify tpm limit for a given customer (Tokens per minute)
          *     - rpm_limit: Optional[int] - [Not Implemented Yet] Specify rpm limit for a given customer (Requests per minute)
@@ -5260,7 +5258,7 @@ export interface paths {
          *     ```
          *     curl --location 'http://0.0.0.0:4000/customer/new'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"         --header 'Content-Type: application/json'         --data '{
          *             "user_id" : "ishaan-jaff-3",
-         *             "allowed_region": "eu",
+         *             "allowed_model_region": "eu",
          *             "budget_id": "free_tier",
          *             "models": ["gpt-4o-mini"],
          *             "default_model": "azure/gpt-3.5-turbo-eu"
@@ -6079,7 +6077,11 @@ export interface paths {
          * Latest Release Info
          * @description Newest stable release on the LiteLLM changelog, linked to its changelog page, with the PR count of its whole
          *     minor line (e.g. v1.105.0 + v1.105.1) from GitHub split into new features, bug fixes and other updates.
-         *     Returns null when the changelog or GitHub can't be reached so the dashboard upgrade banner simply doesn't render.
+         *     Never waits on the changelog or GitHub. It answers from the cache and, when the cache is empty or expired, responds
+         *     202 with null and fetches after the response is sent, so a later call returns the release. Responds 502 once that
+         *     fetch has failed because the changelog or GitHub couldn't be reached or answered with something unusable, so the dashboard
+         *     upgrade notice simply doesn't render. The three counts are all zero when the release notes list no change in a
+         *     format this proxy can count.
          *     Set LITELLM_DISABLE_LATEST_RELEASE_CHECK=true to return null without making any outbound request.
          */
         get: operations["latest_release_info_get_latest_release_info_get"];
@@ -27924,7 +27926,7 @@ export interface components {
             router_type: string;
             /**
              * Saved Spend
-             * @description Recorded historical savings plus newer estimates, net of classifier cost
+             * @description Recorded historical savings plus newer estimates, net of classifier cost. None until a turn is estimated. A turn that starts within the longest prompt-cache TTL its breakpoints use (5 minutes, or 1 hour with a 1h breakpoint) of the session's first observed turn, or of the last turn whose observation was incomplete, is not estimated, because the baseline's cache state is unknown then. Two kinds of turn are still estimated inside that window: turns that took the identical baseline path, and turns whose whole cached prefix the session had already written
              */
             saved_spend: number | null;
             /**
@@ -27949,6 +27951,11 @@ export interface components {
              * @description What the session's routed traffic actually cost, classifier calls included
              */
             spend: number;
+            /**
+             * Total Spend
+             * @description Spend billed to this key under the session id, routed or not, from a shared Redis counter whose one-hour expiry every billed request resets. None without a shared Redis or once the counter expired. A best-effort figure, not a lifetime total: a session idle past the expiry restarts from zero, and a failed Redis write, eviction or flush drops spend without notice
+             */
+            total_spend?: number | null;
             /**
              * Turns
              * @description Auto-routed turns the rollup has recorded for this session so far
@@ -36616,6 +36623,8 @@ export interface components {
             cache_read_input_audio_token_cost_priority?: number | null;
             /** Cache Read Input Image Token Cost */
             cache_read_input_image_token_cost?: number | null;
+            /** Cache Read Input Image Token Cost Batches */
+            cache_read_input_image_token_cost_batches?: number | null;
             /** Cache Read Input Token Cost */
             cache_read_input_token_cost?: number | null;
             /** Cache Read Input Token Cost Above 100K Tokens */
@@ -47698,6 +47707,12 @@ export interface components {
              */
             gateway_injected_caching_savings_spend: number;
             /**
+             * Guardrail Spend
+             * @description Guardrail spend in USD, already included in spend, so model spend is spend - guardrail_spend. Rows recorded before this field existed report 0 even when their spend includes guardrail cost
+             * @default 0
+             */
+            guardrail_spend: number;
+            /**
              * Prompt Caching Savings Spend
              * @default 0
              */
@@ -52806,6 +52821,8 @@ export interface components {
             cache_read_input_audio_token_cost_priority?: number | null;
             /** Cache Read Input Image Token Cost */
             cache_read_input_image_token_cost?: number | null;
+            /** Cache Read Input Image Token Cost Batches */
+            cache_read_input_image_token_cost_batches?: number | null;
             /** Cache Read Input Token Cost */
             cache_read_input_token_cost?: number | null;
             /** Cache Read Input Token Cost Above 100K Tokens */
@@ -63060,6 +63077,20 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["LatestReleaseInfo"] | null;
                 };
+            };
+            /** @description The release is being fetched in the background, so ask again shortly */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The changelog or GitHub could not be reached or answered with something unusable */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

@@ -40,6 +40,7 @@ from litellm.llms.base_llm.files.litellm_db_storage_backend import LITELLM_DB_ST
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints, FileListModelScope
 from litellm.llms.base_llm.managed_resources.isolation import build_list_page
 from litellm.proxy._types import *
+from litellm.proxy.auth.auth_utils import enforce_team_s3_bucket_allowlist
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.batches_endpoints.litellm_executed_batches import (
     litellm_executed_provider_of,
@@ -181,6 +182,7 @@ async def _litellm_executed_batch_input_model(
 
 _MAX_BATCH_FILE_SIZE_MB_ADAPTER: Final = TypeAdapter(int | None)
 _LISTED_FILES_ADAPTER: Final = TypeAdapter(list[OpenAIFileObject])
+_REQUEST_BODY_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 class UploadedFileInfo(TypedDict):
@@ -465,6 +467,7 @@ async def route_create_file(
         prepare_data_with_credentials(
             data=_create_file_request,
             credentials={**credentials, **deployment_drop_params(llm_router, model, _create_file_request)},
+            keep_request_buckets=True,
         )
 
         # Create the file with model credentials
@@ -528,6 +531,7 @@ async def route_create_file(
             llm_router=llm_router,
             user_api_key_dict=user_api_key_dict,
             custom_llm_provider=custom_llm_provider,
+            keep_request_buckets=True,
         )
         # get configs for custom_llm_provider
         llm_provider_config: Final = get_files_provider_config(custom_llm_provider=custom_llm_provider)
@@ -630,6 +634,13 @@ async def create_file(
 
         # Extract file creation parameters using utility function
         request_body: Final = await read_request_body(request=request) or {}
+        enforce_team_s3_bucket_allowlist(
+            request_body=_REQUEST_BODY_ADAPTER.validate_python(request_body),
+            general_settings=general_settings_view(),
+            llm_router=llm_router,
+            team_metadata=user_api_key_dict.team_metadata,
+            team_id=user_api_key_dict.team_id,
+        )
         file_params: Final = await extract_file_creation_params(
             request=request,
             request_body=request_body,
@@ -707,6 +718,8 @@ async def create_file(
         # Add litellm_metadata to data if provided (from form field)
         if extracted_litellm_metadata is not None:
             data["litellm_metadata"] = extracted_litellm_metadata
+        if isinstance(s3_bucket_name := form_data_raw.get("s3_bucket_name"), str) and s3_bucket_name:
+            data["s3_bucket_name"] = s3_bucket_name
 
         if expires_after_anchor is not None or expires_after_seconds_str is not None:
             if expires_after_anchor is None or expires_after_seconds_str is None:

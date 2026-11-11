@@ -31,7 +31,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk, ChatCompletionUserMessage
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Function,
@@ -102,6 +102,8 @@ class _FallbackSource(Protocol):
 class _RequestContextSource(Protocol):
     @overload
     def get(self, key: Literal["optional_params"], /) -> Mapping[str, object] | None: ...
+    @overload
+    def get(self, key: Literal["metadata", "litellm_metadata"], /) -> Mapping[str, object] | None: ...
     @overload
     def get(self, key: str, /) -> object | None: ...
     def __contains__(self, key: object, /) -> bool: ...
@@ -441,7 +443,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
     ) -> GenericGuardrailAPIInputs:
         """Send the (normalized) prompt to the before_prompt webhook and raise
         if the prompt is blocked."""
-        messages = inputs.get("structured_messages")
+        messages: Sequence[AllMessageValues] | None = inputs.get("structured_messages")
         if not messages:
             # For non-chat request types (e.g. /v1/completions), litellm
             # supplies the prompt as ``texts`` with no structured_messages.
@@ -450,11 +452,11 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             if texts:
                 joined: Final = "\n".join(t for t in texts if t)
                 if joined:
-                    messages = [{"role": "user", "content": joined}]
+                    messages = (ChatCompletionUserMessage(role="user", content=joined),)
         if not messages:
             return inputs
 
-        payload: Final = self._build_prompt_moderation_payload(inputs, request_data)
+        payload: Final = self._build_prompt_moderation_payload(inputs, messages, request_data)
         service_response: Final = await self._post_to_prompt_moderation_endpoint(payload)
         refusal: Final = self._extract_prompt_refusal(service_response)
         if refusal is None:
@@ -616,7 +618,8 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
     @staticmethod
     def _build_prompt_moderation_payload(
         inputs: GenericGuardrailAPIInputs,
-        request_data: Mapping[str, object],
+        messages: Sequence[AllMessageValues | None],
+        request_data: _RequestContextSource,
     ) -> Mapping[str, object]:
         """Build the bare OpenAI request the before_prompt webhook consumes.
 
@@ -637,10 +640,11 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         correlation_key: Final = request_data.get("correlation_key") or request_data.get("litellm_call_id")
         return {
             "model": inputs.get("model") or request_data.get("model") or "",
-            "messages": RubrikLogger._flatten_messages_for_moderation(inputs.get("structured_messages")),
+            "messages": RubrikLogger._flatten_messages_for_moderation(messages),
             **({"tools": tools} if tools is not None else _EMPTY_MAPPING),
             **({"user": user} if user else _EMPTY_MAPPING),
             **({"correlation_key": correlation_key} if correlation_key else _EMPTY_MAPPING),
+            **RubrikLogger._rac_agent_metadata(request_data),
         }
 
     @staticmethod
@@ -671,7 +675,8 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         else:
             tools = optional_params.get("tools")
 
-        # The response moderation service consumes only messages/model/tools.
+        # The response moderation service consumes only messages/model/tools
+        # (plus metadata.rac_agent_id when set).
         # Don't forward proxy_server_request -- in litellm >=1.83 its ``body``
         # snapshot carries a UserAPIKeyAuth instance that breaks json.dumps,
         # silently fail-opening the guardrail.
@@ -679,7 +684,30 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             "messages": call_details.get("messages"),
             "model": call_details.get("model"),
             "tools": tools,
+            **RubrikLogger._rac_agent_metadata(request_data),
         }
+
+    @staticmethod
+    def _rac_agent_metadata(request_data: _RequestContextSource) -> Mapping[str, object]:
+        """Forward ``rac_agent_id`` from the caller's key or team metadata.
+
+        The webhooks use it to choose which agent-scoped policies apply, so it
+        must come from configuration an admin controls, never from the request
+        body: a caller who could set it would select any agent's policies,
+        including one a policy exempts. ``_get_admin_metadata`` reads only the
+        ``user_api_key_metadata`` / ``user_api_key_team_metadata`` the proxy
+        writes from the authenticated key (key overrides team); the proxy strips
+        client-supplied ``user_api_key_*`` fields from both metadata dicts.
+        """
+        rac_agent_id: Final[object] = RubrikLogger._admin_rac_agent_id(request_data)
+        if not isinstance(rac_agent_id, str) or not rac_agent_id:
+            return _EMPTY_MAPPING
+        return {"metadata": {"rac_agent_id": rac_agent_id}}
+
+    @staticmethod
+    def _admin_rac_agent_id(request_data: _RequestContextSource) -> object:
+        """``rac_agent_id`` from the merged key/team admin metadata, untyped."""
+        return RubrikLogger._get_admin_metadata(request_data).get("rac_agent_id")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType, reportArgumentType]  # upstream helper takes and returns a bare dict; caller narrows to str
 
     @staticmethod
     def _sanitize_proxy_server_request(proxy_server_request: Mapping[str, object] | str | None) -> object:

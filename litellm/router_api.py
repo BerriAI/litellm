@@ -80,6 +80,7 @@ if TYPE_CHECKING:
         DeploymentTypedDict,
         FallbackAccessCheck,
         FallbackBudgetCheck,
+        FallbackRateLimitCheck,
         GuardrailTypedDict,
         ModelGroupInfo,
         PreRoutingHookResponse,
@@ -273,6 +274,7 @@ ROUTER_INIT_ARGS: Final[tuple[str, ...]] = (
     "enable_mid_stream_fallback_continuation",
     "fallback_access_check",
     "fallback_budget_check",
+    "fallback_rate_limit_check",
     "auto_router_capability_limit",
     "session_affinity_repin_on_failover",
 )
@@ -1204,6 +1206,7 @@ SETTING_FIELDS: Final[tuple[str, ...]] = (
     "provider_default_deployment_ids",
     "fallback_access_check",
     "fallback_budget_check",
+    "fallback_rate_limit_check",
     "kubernetes_pod_discovery",
     "search_tools",
     "guardrail_list",
@@ -1264,6 +1267,7 @@ class RouterSettings:
     provider_default_deployment_ids: list[str] = None  # pyright: ignore[reportAssignmentType]  # unset only when built directly (see above)  # mutable-ok: the router's live list
     fallback_access_check: "FallbackAccessCheck | None" = None
     fallback_budget_check: "FallbackBudgetCheck | None" = None
+    fallback_rate_limit_check: "FallbackRateLimitCheck | None" = None
     kubernetes_pod_discovery: "KubernetesPodDiscovery" = None  # pyright: ignore[reportAssignmentType]  # unset only when built directly (see above)
     search_tools: "list[SearchToolTypedDict]" = None  # pyright: ignore[reportAssignmentType]  # unset only when built directly (see above)  # mutable-ok: the router's live list
     guardrail_list: "list[GuardrailTypedDict]" = None  # pyright: ignore[reportAssignmentType]  # unset only when built directly (see above)  # mutable-ok: the router's live list
@@ -1307,6 +1311,9 @@ class RouterSettings:
     def guardrail(self, name: str) -> "GuardrailTypedDict":
         """The guardrail configured under this name (was ``get_available_guardrail``)."""
         return self._owner("_core_get_available_guardrail")._core_get_available_guardrail(name)
+
+    def timeout_for(self, litellm_params: Mapping[str, object]) -> object:
+        return self._owner("_core_deployment_call_timeout")._core_deployment_call_timeout(litellm_params)
 
 
 class RouterHealth:
@@ -1519,7 +1526,7 @@ def _takes_legacy_llm_router(check: object) -> bool:
 
 
 async def _run_fallback_check(
-    check: "FallbackAccessCheck | FallbackBudgetCheck",
+    check: "FallbackAccessCheck | FallbackBudgetCheck | FallbackRateLimitCheck",
     ctx: "RoutingContext",
     *,
     model: str,
@@ -1661,6 +1668,10 @@ class RoutingContext:
 
     async def fallback_budget_allowed(self, *, model: str, request_kwargs: Mapping[str, object]) -> bool:
         check: Final = self._router.settings().fallback_budget_check
+        return check is None or await _run_fallback_check(check, self, model=model, request_kwargs=request_kwargs)
+
+    async def fallback_rate_limit_allowed(self, *, model: str, request_kwargs: Mapping[str, object]) -> bool:
+        check: Final = self._router.settings().fallback_rate_limit_check
         return check is None or await _run_fallback_check(check, self, model=model, request_kwargs=request_kwargs)
 
     def pre_call_checks(

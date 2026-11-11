@@ -3,7 +3,7 @@ mod credentials;
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use litellm_circuit_breaker::Config as BreakerConfig;
-use litellm_core_utils::settings::ProcessEnvironment;
+use litellm_core_utils::settings::{Lookup, ProcessEnvironment};
 use litellm_host_python::PythonContext;
 use litellm_python_compat::number::{self, SecondsError};
 use litellm_redis_client::{RedisClient, RedisEvents};
@@ -92,7 +92,7 @@ fn shared_client(
 ) -> PyResult<Option<RedisClient>> {
     let environment: SharedEnvironment = Arc::new(ProcessEnvironment);
     let logger = crate::logger::capture(py);
-    let resolved = match logger.scope(|| resolve_spec(py, &spec))? {
+    let resolved = match logger.scope(|| resolve_spec(&spec)) {
         Ok(resolution) => {
             logger.scope(|| {
                 for ignored in &resolution.ignored {
@@ -174,39 +174,23 @@ impl NativeRedisClient {
 }
 
 /// The Redis server `spec` names, whatever its db, credentials or namespace, or none when the Rust client cannot reach it.
-pub(crate) fn resolved_endpoint(py: Python<'_>, spec: &RedisSpec) -> PyResult<Option<Endpoint>> {
-    Ok(resolve_spec(py, spec)?
+pub(crate) fn resolved_endpoint(spec: &RedisSpec) -> Option<Endpoint> {
+    resolve_spec(spec)
         .ok()
-        .and_then(|resolution| resolution.target.endpoint()))
+        .and_then(|resolution| resolution.target.endpoint())
 }
 
 // A live registry entry's client keeps its provider alive, so no live entry shares its address
-fn resolve_spec(
-    py: Python<'_>,
-    spec: &RedisSpec,
-) -> PyResult<Result<Resolution, litellm_redis_resolve::Error>> {
+fn resolve_spec(spec: &RedisSpec) -> Result<Resolution, litellm_redis_resolve::Error> {
     let handle = spec
         .credential_provider
         .as_ref()
         .map(|provider| ProviderHandle::new(provider.as_ptr() as usize as u64));
-    resolve(&spec.kwargs, handle, &py.import("os")?.getattr("environ")?)
-}
-
-/// What redis-py makes of the kwargs, with `REDIS_USERNAME` read from `environ` the way Python's Azure AD auth
-/// reads `os.environ`.
-fn resolve(
-    kwargs: &Kwargs,
-    provider: Option<ProviderHandle>,
-    environ: &Bound<'_, PyAny>,
-) -> PyResult<Result<Resolution, litellm_redis_resolve::Error>> {
-    let redis_username: Option<String> = environ
-        .call_method1("get", ("REDIS_USERNAME",))?
-        .extract()?;
-    Ok(litellm_redis_resolve::interpret(
-        kwargs,
-        provider,
-        redis_username.as_deref(),
-    ))
+    litellm_redis_resolve::interpret(
+        &spec.kwargs,
+        handle,
+        ProcessEnvironment.get("REDIS_USERNAME").as_deref(),
+    )
 }
 
 fn unresolved(
@@ -257,9 +241,6 @@ fn seconds_error(error: SecondsError) -> PyErr {
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::CStr;
-
-    use litellm_redis_types::Auth;
     use rstest::rstest;
     use serde_json::json;
 
@@ -268,30 +249,6 @@ mod tests {
     fn kwargs(fields: serde_json::Value) -> Kwargs {
         let fields: BTreeMap<String, serde_json::Value> = serde_json::from_value(fields).unwrap();
         litellm_redis_resolve::kwargs(fields)
-    }
-
-    #[rstest]
-    #[case::set(c"environ = {'REDIS_USERNAME': 'azure-user'}", Some("azure-user"))]
-    #[case::empty_is_unset(c"environ = {'REDIS_USERNAME': ''}", None)]
-    fn azure_auth_takes_its_username_from_the_environ_like_python(
-        #[case] source: &CStr,
-        #[case] expected: Option<&str>,
-    ) {
-        Python::initialize();
-        Python::attach(|py| {
-            let locals = PyDict::new(py);
-            py.run(source, Some(&locals), Some(&locals)).unwrap();
-            let environ = locals.get_item("environ").unwrap().unwrap();
-            let kwargs = kwargs(json!({"host": "redis", "azure_redis_ad_token": "true"}));
-
-            let resolved = resolve(&kwargs, None, &environ).unwrap().unwrap();
-
-            assert!(
-                matches!(&resolved.auth, Auth::AzureAd(azure) if azure.username.as_deref() == expected),
-                "{:?}",
-                resolved.auth
-            );
-        });
     }
 
     #[rstest]
