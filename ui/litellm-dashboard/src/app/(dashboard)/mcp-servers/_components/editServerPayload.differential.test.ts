@@ -421,7 +421,7 @@ it.each([AUTH_TYPE.OAUTH_DELEGATE, AUTH_TYPE.TRUE_PASSTHROUGH])(
   },
 );
 
-it.each([AUTH_TYPE.OAUTH_DELEGATE, AUTH_TYPE.TRUE_PASSTHROUGH])(
+it.each([AUTH_TYPE.OAUTH2, AUTH_TYPE.OAUTH_DELEGATE, AUTH_TYPE.TRUE_PASSTHROUGH])(
   "writes an explicit null when the admin removes every scope on a %s server",
   (authType) => {
     const values: EditServerFormValues = {
@@ -434,6 +434,47 @@ it.each([AUTH_TYPE.OAUTH_DELEGATE, AUTH_TYPE.TRUE_PASSTHROUGH])(
     expect(result.kind).toBe("ok");
     if (result.kind !== "ok") throw new Error("Expected valid MCP server payload");
     expect(result.payload.credentials).toEqual({ client_id: "org-app", scopes: null });
+  },
+);
+
+it.each([{ scopes: [] }, { scopes: [""] }, { scopes: ["", null, undefined] }])(
+  "clears an M2M server's saved scopes for $scopes",
+  ({ scopes }) => {
+    const values: EditServerFormValues = {
+      auth_type: AUTH_TYPE.OAUTH2,
+      oauth_flow_type: OAUTH_FLOW.M2M,
+      transport: "http",
+      credentials: { scopes },
+    };
+    const ui: EditServerUiState = {
+      ...baseUi,
+      mcpServer: {
+        ...baseUi.mcpServer,
+        auth_type: AUTH_TYPE.OAUTH2,
+        oauth2_flow: MCP_OAUTH2_FLOW_M2M,
+        credentials: { scopes: ["read", "write"] },
+      },
+    };
+    const result = buildEditServerPayload(values, ui);
+
+    expect(result).toMatchObject({ kind: "ok", payload: { credentials: { scopes: null } } });
+  },
+);
+
+it.each([undefined, {}, { client_secret: "rotated" }, { scopes: undefined }])(
+  "does not clear scopes when the M2M scope field is absent or unmounted (%j)",
+  (credentials) => {
+    const values: EditServerFormValues = {
+      auth_type: AUTH_TYPE.OAUTH2,
+      oauth_flow_type: OAUTH_FLOW.M2M,
+      transport: "http",
+      credentials,
+    };
+    const result = buildEditServerPayload(values, baseUi);
+
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") throw new Error("Expected valid MCP server payload");
+    expect(result.payload.credentials ?? {}).not.toHaveProperty("scopes");
   },
 );
 
