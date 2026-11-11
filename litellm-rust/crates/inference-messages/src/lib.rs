@@ -2,6 +2,7 @@ mod common_utils;
 mod constants;
 mod handler;
 pub mod route;
+mod transport;
 mod types;
 mod workload_identity;
 
@@ -17,6 +18,7 @@ use crate::common_utils::messages_provider;
 
 pub use common_utils::merge_messages_header_sources;
 pub use litellm_inference::Error;
+pub use transport::{Delivered, Transport, TransportBody, TransportRequest, TransportResponse};
 pub use types::{
     MessagesBody, MessagesCall, MessagesCallResponse, MessagesSettings, MessagesShaping,
     litellm_params, messages_body,
@@ -30,6 +32,7 @@ pub struct MessagesRoute {
     secrets: Arc<dyn SecretSource>,
     cache: Option<litellm_cache_response::ScopedCache>,
     workload_identity: Option<Arc<dyn WorkloadIdentity>>,
+    transport: Option<Arc<dyn Transport>>,
 }
 
 impl MessagesRoute {
@@ -44,6 +47,7 @@ impl MessagesRoute {
             secrets,
             cache: None,
             workload_identity: None,
+            transport: None,
         }
     }
 
@@ -51,6 +55,14 @@ impl MessagesRoute {
     pub fn with_workload_identity(self, workload_identity: Arc<dyn WorkloadIdentity>) -> Self {
         Self {
             workload_identity: Some(workload_identity),
+            ..self
+        }
+    }
+
+    #[must_use]
+    pub fn with_transport(self, transport: Arc<dyn Transport>) -> Self {
+        Self {
+            transport: Some(transport),
             ..self
         }
     }

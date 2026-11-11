@@ -342,6 +342,12 @@ def record_api_window(logger: Logging, start: float, end: float) -> None:
     )
 
 
+def times_provider_exchange(client: object) -> bool:
+    from litellm.rust_bridge.host import http_transport
+
+    return not http_transport.sends_through_python(client)
+
+
 def defers_async_logging(logger: LoggingSurface) -> bool:
     return bool(getattr(logger, "defer_async_logging", False))
 

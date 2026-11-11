@@ -55,6 +55,9 @@
     "start",
     "end"
   ],
+  "times_provider_exchange": [
+    "client"
+  ],
   "defers_async_logging": [
     "logger"
   ],

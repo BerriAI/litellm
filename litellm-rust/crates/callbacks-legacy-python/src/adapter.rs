@@ -180,6 +180,13 @@ impl LegacyLogging {
         Ok(context)
     }
 
+    fn times_provider_exchange(&self, py: Python<'_>) -> PyResult<bool> {
+        let client = self.call.lookup(py, "client")?;
+        Logging::TimesProviderExchange
+            .call(py, (client,))?
+            .extract()
+    }
+
     /// Python times the provider exchange inside the async `AsyncHTTPHandler.post`; its sync
     /// client is untimed.
     fn close_api_window(&mut self, py: Python<'_>, end: f64) -> PyResult<()> {
@@ -574,7 +581,10 @@ impl LegacyLogging {
             &headers,
             &wire.url,
         )?;
-        if self.operation == LoggingOperation::Messages && self.asynchronous {
+        if self.operation == LoggingOperation::Messages
+            && self.asynchronous
+            && self.times_provider_exchange(py)?
+        {
             self.api_started = Some(epoch_seconds());
         }
         let headers = headers

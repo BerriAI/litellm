@@ -1,4 +1,4 @@
-use crate::cache::{CacheCall, Cached, PythonCache, Selection};
+use crate::cache::{CacheCall, PythonCache, Selection};
 use litellm_host_python::{PythonHostCalls, PythonOwned};
 
 use bytes::Bytes;
@@ -19,6 +19,7 @@ use pyo3::{
 };
 use serde_json::{Map, Value};
 
+use super::transport::{HostedTransport, TransportCall, python_failure};
 use crate::{
     errors::{RequestMarker, route_failure},
     marshal::{
@@ -82,6 +83,34 @@ fn project_litellm_params<'a, 'py>(
     Ok(litellm_params(fields.into_iter().chain(folded).collect()))
 }
 
+pub(super) struct MessagesHosted;
+
+impl litellm_host::protocol::Protocol for MessagesHosted {
+    type Request = (MessagesCall, Selection, bool);
+    type Response = <Messages as litellm_host::protocol::Protocol>::Response;
+    type Error = Error;
+    type HostCall = MessagesHostCall;
+    type Chunk = Bytes;
+    type StreamHead = MessagesStreamHead;
+}
+
+pub(super) enum MessagesHostCall {
+    Cache(CacheCall),
+    Transport(TransportCall),
+}
+
+impl From<CacheCall> for MessagesHostCall {
+    fn from(call: CacheCall) -> Self {
+        Self::Cache(call)
+    }
+}
+
+impl From<TransportCall> for MessagesHostCall {
+    fn from(call: TransportCall) -> Self {
+        Self::Transport(call)
+    }
+}
+
 #[derive(serde::Deserialize)]
 struct HostSettings {
     #[serde(flatten)]
@@ -96,6 +125,7 @@ struct HostSettings {
 pub(super) struct MessagesPythonHost {
     view: RequestView,
     cache: PythonCache,
+    transport: HostedTransport,
     stream_cost_model: Option<String>,
     asynchronous: bool,
 }
@@ -105,6 +135,7 @@ impl MessagesPythonHost {
         Self {
             view,
             cache: PythonCache::new(asynchronous),
+            transport: HostedTransport::default(),
             stream_cost_model: None,
             asynchronous,
         }
@@ -265,6 +296,14 @@ impl MessagesPythonHost {
             .unwrap_or_else(|| "anthropic".into())
     }
 
+    fn map_transport_failure(&self, py: Python<'_>, error: PyErr) -> PyResult<PyErr> {
+        let mapped = py
+            .import(ROUTE_HOST_MODULE)?
+            .getattr("map_transport_failure")?
+            .call1((error.value(py), self.view.request(py)?, self.provider(py)))?;
+        Ok(PyErr::from_value(mapped))
+    }
+
     fn map_failure(&self, py: Python<'_>, error: PyErr) -> PyErr {
         if !error.is_instance_of::<PyException>(py) {
             return error;
@@ -286,14 +325,14 @@ impl MessagesPythonHost {
 }
 
 impl PythonBinding for MessagesPythonHost {
-    type Protocol = Cached<Messages>;
+    type Protocol = MessagesHosted;
     type Failure = PyErr;
 
     fn decode_request(
         &mut self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
-    ) -> Result<(MessagesCall, Selection), InvokeError<Error>> {
+    ) -> Result<(MessagesCall, Selection, bool), InvokeError<Error>> {
         self.view
             .resolve(py, arguments)
             .map_err(InvokeError::Python)?;
@@ -307,10 +346,15 @@ impl PythonBinding for MessagesPythonHost {
             .host_settings(py, arguments)
             .map_err(InvokeError::Python)?;
         self.stream_cost_model = settings.stream_cost_model.clone();
-        self.projection(py, arguments, settings)
+        let request = self
+            .projection(py, arguments, settings)
             .map_err(|error| InvokeError::Python(self.map_failure(py, error)))?
-            .map_err(InvokeError::Native)
-            .map(|request| (request, selection))
+            .map_err(InvokeError::Native)?;
+        let hosted = self
+            .transport
+            .select(py, self.view.request(py).map_err(InvokeError::Python)?)
+            .map_err(InvokeError::Python)?;
+        Ok((request, selection, hosted))
     }
 
     fn encode_response(
@@ -348,6 +392,13 @@ impl PythonBinding for MessagesPythonHost {
     }
 
     fn map_error(&self, py: Python<'_>, error: Error) -> PyResult<PyErr> {
+        if let Some((raised, raw)) = python_failure(py, &error) {
+            return if raw {
+                Ok(raised)
+            } else {
+                self.map_transport_failure(py, raised)
+            };
+        }
         route_failure(py, error, RequestMarker::Messages, |native| {
             Ok(self.map_failure(py, native))
         })
@@ -358,24 +409,28 @@ impl PythonBinding for MessagesPythonHost {
     }
 }
 
-impl PythonHostCalls<Cached<Messages>> for MessagesPythonHost {
+impl PythonHostCalls<MessagesHosted> for MessagesPythonHost {
     fn handle_host_call(
         &mut self,
         py: Python<'_>,
-        op: CacheCall,
+        op: MessagesHostCall,
     ) -> Result<(), InvokeError<Error>> {
-        self.cache
-            .begin(py, op)
-            .map(|_| ())
-            .map_err(InvokeError::Python)
+        self.begin_host_call(py, op).map(|_| ())
     }
 
     fn begin_host_call(
         &mut self,
         py: Python<'_>,
-        op: CacheCall,
+        op: MessagesHostCall,
     ) -> Result<Option<Py<PyAny>>, InvokeError<Error>> {
-        self.cache.begin(py, op).map_err(InvokeError::Python)
+        match op {
+            MessagesHostCall::Cache(op) => self.cache.begin(py, op),
+            MessagesHostCall::Transport(op) => {
+                let request = self.view.request(py).map_err(InvokeError::Python)?;
+                self.transport.begin(py, op, request)
+            }
+        }
+        .map_err(InvokeError::Python)
     }
 
     fn resume_host_call(
@@ -383,6 +438,12 @@ impl PythonHostCalls<Cached<Messages>> for MessagesPythonHost {
         py: Python<'_>,
         result: PyResult<Py<PyAny>>,
     ) -> Result<Option<Py<PyAny>>, InvokeError<Error>> {
+        if self.transport.pending() {
+            return self
+                .transport
+                .resume(py, result)
+                .map_err(InvokeError::Python);
+        }
         self.cache.resume(py, result).map_err(InvokeError::Python)
     }
 }
@@ -391,10 +452,12 @@ impl PythonOwned for MessagesPythonHost {
     fn close(&mut self, _: Python<'_>) {
         self.view.close();
         self.cache.close();
+        self.transport.close();
     }
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
         self.view.traverse(visit)?;
-        self.cache.traverse(visit)
+        self.cache.traverse(visit)?;
+        self.transport.traverse(visit)
     }
 }
 

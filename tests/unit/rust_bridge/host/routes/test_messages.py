@@ -1,12 +1,20 @@
+import json
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
+import httpx
 import pytest
 
 import litellm
+from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
 from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # its params dict is untyped
+)
+from litellm.rust_bridge.host import callbacks_legacy_python
 from litellm.rust_bridge.host.routes import messages as messages_host
 from litellm.rust_bridge.host.routes.messages import response
 
@@ -728,3 +736,195 @@ def test_workload_identity_fields_are_the_federation_litellm_params() -> None:
         "anthropic_organization_id",
         "anthropic_disable_workload_identity_federation",
     }
+
+
+class _Handler(AsyncHTTPHandler):
+    def __init__(self, answer: httpx.Response | Exception) -> None:
+        super().__init__()  # pyright: ignore[reportUnknownMemberType]  # the handler's untyped concurrent_limit
+        self.answer: Final = answer
+        self.posted: list[Mapping[str, object]] = []
+
+    async def post(self, url: str, **kwargs: object) -> httpx.Response:  # pyright: ignore[reportIncompatibleMethodOverride]  # kwargs-ok: records the post's keywords
+        self.posted.append({"url": url, **kwargs})
+        if isinstance(self.answer, Exception):
+            raise self.answer
+        return self.answer
+
+
+_URL: Final = "https://api.anthropic.com/v1/messages"
+_REQUEST: Final = httpx.Request("POST", _URL)
+
+
+@pytest.fixture
+def no_tls_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("SSL_SECURITY_LEVEL", "SSL_ECDH_CURVE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(litellm, "ssl_security_level", None)
+    monkeypatch.setattr(litellm, "ssl_ecdh_curve", None)
+
+
+@pytest.mark.usefixtures("no_tls_settings")
+@pytest.mark.parametrize(
+    "client", (None, object(), httpx.AsyncClient(), HTTPHandler()), ids=("none", "object", "httpx", "sync-handler")
+)
+def test_the_native_client_stands_in_for_any_client_python_ignores(client: object) -> None:
+    assert messages_host.transport_handler({"client": client}) is None
+
+
+@pytest.mark.usefixtures("no_tls_settings")
+def test_a_caller_async_handler_is_the_handler_python_posts_through() -> None:
+    client: Final = AsyncHTTPHandler()
+
+    assert messages_host.transport_handler({"client": client}) is client
+
+
+@pytest.mark.usefixtures("no_tls_settings")
+@pytest.mark.parametrize(
+    "setting", ({"ssl_security_level": "DEFAULT@SECLEVEL=1"}, {"ssl_ecdh_curve": "secp521r1"}), ids=("level", "curve")
+)
+def test_tls_the_native_client_cannot_apply_posts_through_pythons_anthropic_handler(
+    monkeypatch: pytest.MonkeyPatch, setting: Mapping[str, str]
+) -> None:
+    for name, value in setting.items():
+        monkeypatch.setattr(litellm, name, value)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+
+    handler: Final = messages_host.transport_handler({"client": object()})
+
+    assert handler is get_async_httpx_client(llm_provider=litellm.LlmProviders.ANTHROPIC)
+    assert callbacks_legacy_python.times_provider_exchange(object()) is False
+
+
+@pytest.mark.usefixtures("no_tls_settings")
+def test_only_a_native_post_is_timed_by_the_native_call() -> None:
+    assert callbacks_legacy_python.times_provider_exchange(None) is True
+    assert callbacks_legacy_python.times_provider_exchange(AsyncHTTPHandler()) is False
+
+
+@pytest.mark.asyncio
+async def test_transport_send_posts_what_the_python_handler_posts() -> None:
+    logger: Final = object()
+    timeout: Final = httpx.Timeout(30.0, connect=2.0)
+    handler: Final = _Handler(
+        httpx.Response(200, json={"id": "msg_1"}, headers={"request-id": "req_1"}, request=_REQUEST)
+    )
+
+    sent: Final = await messages_host.transport_send(
+        handler,
+        {"litellm_logging_obj": logger, "timeout": timeout},
+        _URL,
+        [("x-api-key", "sk-ant"), ("anthropic-version", "2023-06-01")],
+        {"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "héllo"}]},
+        False,
+    )
+
+    assert handler.posted == [
+        {
+            "url": _URL,
+            "headers": {"x-api-key": "sk-ant", "anthropic-version": "2023-06-01"},
+            "data": json.dumps({"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "héllo"}]}),
+            "stream": False,
+            "logging_obj": logger,
+            "timeout": timeout,
+        }
+    ]
+    assert (sent.status, sent.text, sent.chunks, sent.rejection) == (200, '{"id":"msg_1"}', None, None)
+    assert ("request-id", "req_1") in sent.headers
+
+
+@pytest.mark.asyncio
+async def test_transport_send_hands_signed_bytes_on_unchanged() -> None:
+    handler: Final = _Handler(httpx.Response(200, json={}, request=_REQUEST))
+
+    await messages_host.transport_send(handler, {}, _URL, [], b'{"signed":true}', False)
+
+    assert handler.posted[0]["data"] == b'{"signed":true}'
+    assert handler.posted[0]["timeout"] is None
+
+
+@pytest.mark.asyncio
+async def test_transport_send_leaves_a_stream_for_the_route_to_read() -> None:
+    handler: Final = _Handler(
+        httpx.Response(200, stream=httpx.ByteStream(b"event: message_stop\n\n"), request=_REQUEST)
+    )
+
+    sent: Final = await messages_host.transport_send(handler, {}, _URL, [], {}, True)
+
+    assert sent.chunks is not None
+    assert sent.text is None
+    assert [chunk async for chunk in sent.chunks] == [b"event: message_stop\n\n"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("checked", (True, False), ids=("handler-raised", "status-checked"))
+async def test_transport_send_reports_a_rejection_with_the_status_error(checked: bool) -> None:
+    rejected: Final = httpx.Response(429, text="slow down", headers={"retry-after": "7"}, request=_REQUEST)
+    error: Final = httpx.HTTPStatusError("rate limited", request=_REQUEST, response=rejected)
+    handler: Final = _Handler(error if checked else rejected)
+
+    sent: Final = await messages_host.transport_send(handler, {}, _URL, [], {}, False)
+
+    assert (sent.status, sent.text) == (429, "slow down")
+    assert ("retry-after", "7") in sent.headers
+    assert isinstance(sent.rejection, httpx.HTTPStatusError)
+    assert sent.rejection.response is rejected
+
+
+@pytest.mark.asyncio
+async def test_a_rejection_python_cannot_read_reaches_the_caller_as_raised() -> None:
+    unread: Final = httpx.Response(500, stream=httpx.ByteStream(b"unread"), request=_REQUEST)
+
+    with pytest.raises(messages_host.RawTransportFailure) as raised:
+        await messages_host.transport_send(_Handler(unread), {}, _URL, [], {}, True)
+
+    assert isinstance(raised.value.error, httpx.ResponseNotRead)
+    assert isinstance(raised.value.error.__context__, httpx.HTTPStatusError)
+
+
+@pytest.mark.asyncio
+async def test_a_handler_failure_is_raised_for_the_route_to_map() -> None:
+    failure: Final = httpx.ConnectError("refused")
+
+    with pytest.raises(httpx.ConnectError) as raised:
+        await messages_host.transport_send(_Handler(failure), {}, _URL, [], {}, False)
+
+    assert raised.value is failure
+
+
+@pytest.mark.parametrize(
+    ("error", "expected", "status"),
+    (
+        pytest.param(
+            litellm.Timeout(
+                message="Read timed out.", model="default-model-name", llm_provider="litellm-httpx-handler"
+            ),
+            litellm.Timeout,
+            408,
+            id="timeout",
+        ),
+        pytest.param(
+            httpx.ConnectError("All connection attempts failed"), litellm.InternalServerError, 500, id="connect"
+        ),
+        pytest.param(
+            httpx.HTTPStatusError(
+                "unavailable",
+                request=_REQUEST,
+                response=httpx.Response(503, text="Unavailable", request=_REQUEST),
+            ),
+            litellm.ServiceUnavailableError,
+            503,
+            id="status",
+        ),
+    ),
+)
+def test_a_handler_failure_maps_as_the_python_handler_maps_it(
+    error: Exception, expected: type[Exception], status: int
+) -> None:
+    mapped: Final = messages_host.map_transport_failure(
+        error, {"model": "anthropic/claude-sonnet-4-5", "api_base": None}, "anthropic"
+    )
+
+    assert isinstance(mapped, expected)
+    assert getattr(mapped, "status_code", None) == status
+    assert mapped.__context__ is not None
+    assert mapped.__context__.__context__ is error

@@ -4,9 +4,10 @@ import datetime
 import errno
 import inspect
 import ipaddress
+import json
 import os
 import socket
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from typing import Final, TypeAlias, cast  # noqa: TID251  # narrows native payloads to public TypedDicts
 
@@ -46,7 +47,11 @@ from litellm.llms.anthropic.messages.native.utils import prepare_native_messages
 from litellm.llms.anthropic.messages.utils import is_reasoning_auto_summary_enabled
 from litellm.llms.anthropic.wif import get_anthropic_wif_token
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # its params dict is untyped
+    get_ssl_configuration,
+)
 from litellm.llms.custom_httpx.llm_http_handler import (
     _merge_messages_header_sources as _merged_headers,  # pyright: ignore[reportPrivateUsage]  # the handler's own header merge
 )
@@ -646,3 +651,87 @@ def inject_stream_cost(frames: bytes, model: str, request: Mapping[str, object])
 def workload_identity_token(params: Mapping[str, object], api_base: str | None) -> str | None:
     litellm_params: Final = GenericLiteLLMParams(**params)
     return get_anthropic_wif_token(dict(litellm_params), api_base, "")
+
+
+class RawTransportFailure(Exception):
+    def __init__(self, error: Exception) -> None:
+        super().__init__(str(error))
+        self.error = error
+
+
+@dataclass(frozen=True, slots=True)
+class Sent:
+    status: int
+    headers: Sequence[tuple[str, str]]
+    text: str | None = None
+    chunks: AsyncIterator[bytes] | None = None
+    rejection: httpx.HTTPStatusError | None = None
+
+
+def transport_handler(request: Mapping[str, object]) -> AsyncHTTPHandler | None:
+    client: Final = request.get("client")
+    if isinstance(client, AsyncHTTPHandler):
+        return client
+    if not http_transport.sends_through_python(client):
+        return None
+    return get_async_httpx_client(llm_provider=litellm.LlmProviders.ANTHROPIC)
+
+
+async def transport_send(
+    handler: AsyncHTTPHandler,
+    request: Mapping[str, object],
+    url: str,
+    headers: Sequence[tuple[str, str]],
+    body: object,
+    stream: bool,
+) -> Sent:
+    try:
+        response: Final = await handler.post(  # pyright: ignore[reportUnknownMemberType]  # the handler's untyped dict params
+            url=url,
+            headers=dict(headers),
+            data=body if isinstance(body, bytes) else json.dumps(body),
+            stream=stream,
+            logging_obj=cast(  # cast-ok: the call's logger, handed on as Python's handler hands it
+                "LiteLLMLoggingObj | None", request.get("litellm_logging_obj")
+            ),
+            timeout=cast(  # cast-ok: the call's timeout as the handler resolved it for the post
+                "float | httpx.Timeout | None", request.get("timeout")
+            ),
+        )
+        response.raise_for_status()
+    except httpx.HTTPStatusError as rejection:
+        try:
+            text: Final = rejection.response.text
+        except Exception as unreadable:  # noqa: BLE001  # Python's retry check raises it from its except block, unmapped
+            raise RawTransportFailure(unreadable) from None
+        return Sent(rejection.response.status_code, rejection.response.headers.multi_items(), text, None, rejection)
+    if stream:
+        return Sent(response.status_code, response.headers.multi_items(), chunks=response.aiter_bytes())
+    return Sent(response.status_code, response.headers.multi_items(), text=response.text)
+
+
+def map_transport_failure(error: Exception, request: Mapping[str, object], request_provider: str) -> Exception:
+    api_base: Final = request.get("api_base")
+    config: Final = native_messages_config(
+        str(request["model"]).removeprefix(f"{request_provider}/"),
+        request_provider,
+        request.get("model_info"),
+        api_base if isinstance(api_base, str) else None,
+    )
+    try:
+        handler.base_llm_http_handler._handle_error(e=error, provider_config=config)  # pyright: ignore[reportPrivateUsage, reportArgumentType]  # the handler's own error mapping, which always raises
+    except Exception as provider_error:  # noqa: BLE001  # _handle_error raises the provider exception it builds
+        provider_error.__context__ = error
+        if not isinstance(provider_error, BaseLLMException):
+            return provider_error
+        try:
+            return _exception_type(
+                model=str(request["model"]),
+                custom_llm_provider=request_provider,
+                original_exception=provider_error,
+                extra_kwargs=dict(request),
+            )
+        except Exception as mapped:  # noqa: BLE001  # exception_type raises the mapped public error
+            mapped.__context__ = provider_error
+            return mapped
+    return error

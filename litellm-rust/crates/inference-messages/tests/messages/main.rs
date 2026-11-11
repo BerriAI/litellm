@@ -26,6 +26,7 @@ mod retry;
 mod secrets;
 mod stream;
 mod tencent;
+mod transport;
 
 const MODEL: &str = "claude-sonnet-4-5";
 
