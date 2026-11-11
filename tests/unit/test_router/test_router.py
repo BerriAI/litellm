@@ -101,7 +101,7 @@ from litellm.llms.base_llm.vector_store.transformation import (
     RouterVectorStoreEmbeddingExecutor,
 )
 from litellm.types.utils import CallTypes, CredentialItem, Usage
-from litellm.rust_bridge.host.model_cost import publish
+from litellm.litellm_core_utils.model_cost_table import publish
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 from tests.large_text import text

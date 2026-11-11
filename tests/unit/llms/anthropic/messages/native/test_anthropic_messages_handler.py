@@ -32,7 +32,7 @@ from litellm.types.utils import (
     StandardLoggingPayloadErrorInformation,
     StreamingChoices,
 )
-from litellm.rust_bridge.host.model_cost import publish
+from litellm.litellm_core_utils.model_cost_table import publish
 import unittest.mock
 
 
