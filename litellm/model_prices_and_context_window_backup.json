@@ -100780,5 +100780,21 @@
         "metadata": {"comment":"5 credits per 1,000 characters @ $0.01 per credit = $0.00005 per character; 1 credit minimum not modeled"},
         "mode": "audio_speech",
         "source": "https://docs.dev.runwayml.com/guides/pricing/"
+    },
+    "runwayml/kling_4": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"Promo rate through 2026-11-30 UTC: 12.56 credits per second (720p) and 18.8 (1080p) without input video @ $0.01 per credit = $0.1256 and $0.188 per second; list rate 15.7/23.5 credits per second applies from 2026-12-01 UTC (ruling runwayml-kling-4-promo-rate). The with-input-video rate (7.52/11.28 credits per output second plus the same per second of the greater of input and output duration) and rounding up to the next credit are not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1256,
+        "output_cost_per_second_1080p": 0.188,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
     }
 }
