@@ -1161,10 +1161,15 @@ class _SuccessUsageRecorder(CustomLogger):
         super().__init__()
         self.payload: Final[Future[Mapping[str, object]]] = Future()
 
-    async def async_log_success_event(
+    def log_success_event(
         self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
         self.payload.set_result(TypeAdapter(Mapping[str, object]).validate_python(kwargs["standard_logging_object"]))
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.log_success_event(kwargs, response_obj, start_time, end_time)
 
 
 def _openrouter_body(finish_reason: str, content: str, usage: Mapping[str, object]) -> Mapping[str, object]:
@@ -1243,4 +1248,39 @@ async def test_openrouter_recovered_failure_bills_the_failed_attempt(
     payload: Final = await asyncio.wrap_future(recorder.payload)
     assert payload["status"] == "success"
     assert payload["total_tokens"] == 25
+    assert payload["response_cost"] == pytest.approx(0.003)
+
+
+def _failed_then_recovered_bodies() -> Iterator[Mapping[str, object]]:
+    return iter(
+        (
+            _openrouter_body(
+                "error", "partial answer", {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15, "cost": 0.001}
+            ),
+            _openrouter_body(
+                "stop", "full answer", {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10, "cost": 0.002}
+            ),
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_openrouter_sdk_retry_bills_the_failed_attempt() -> None:
+    bodies: Final = _failed_then_recovered_bodies()
+    recorder: Final = _SuccessUsageRecorder()
+    with httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=next(bodies)))) as sync_client:
+        response: Final = litellm.completion(
+            model="openrouter/openai/gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key="sk-test",
+            num_retries=1,
+            callbacks=[recorder],
+            client=HTTPHandler(client=sync_client),
+        )
+
+    assert response.choices[0].message.content == "full answer"
+    payload: Final = await asyncio.wrap_future(recorder.payload)
+    assert payload["status"] == "success"
+    assert payload["prompt_tokens"] == 17
+    assert payload["completion_tokens"] == 8
     assert payload["response_cost"] == pytest.approx(0.003)
