@@ -157,22 +157,22 @@ def test_sync_completion_mirrors_to_the_silent_model_on_a_background_thread(
     assert "is_silent_experiment" not in _metadata(primary.kwargs)
 
 
-async def test_a_request_already_marked_silent_does_not_start_another_experiment(
+async def test_a_caller_sent_silent_experiment_flag_still_mirrors_to_the_silent_model(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
     core: Final = make_core(model_list=[deployment("g", "d1", silent_model="shadow"), deployment("shadow", "s1")])
     await core.acompletion(model="g", messages=MESSAGES, metadata={"is_silent_experiment": True})  # pyright: ignore[reportAttributeAccessIssue]
     await _settle()
-    assert host.deployments_called() == ["d1"]
+    assert sorted(host.deployments_called()) == ["d1", "s1"]
 
 
-def test_a_sync_request_already_marked_silent_does_not_start_another_experiment(
+def test_a_caller_sent_silent_experiment_flag_still_mirrors_to_the_silent_model_on_the_sync_path(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
     core: Final = make_core(model_list=[deployment("g", "d1", silent_model="shadow"), deployment("shadow", "s1")])
     core.completion(model="g", messages=MESSAGES, metadata={"is_silent_experiment": True})  # pyright: ignore[reportAttributeAccessIssue]
-    time.sleep(0.2)
-    assert host.deployments_called() == ["d1"]
+    _wait_for_calls(host, 2)
+    assert sorted(host.deployments_called()) == ["d1", "s1"]
 
 
 async def test_silent_experiment_marks_its_own_metadata_when_the_request_metadata_cannot_be_deep_copied(
