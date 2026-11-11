@@ -2389,19 +2389,21 @@ async def test_project_writes_reject_an_unregistered_guardrail(monkeypatch, oper
     monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma)
     admin = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key=MASTER_KEY, user_id="1234")
 
+    write: Final = (
+        new_project(
+            data=NewProjectRequest(team_id="team-1", guardrails=["typo"]),
+            http_request=Request(scope={"type": "http"}),
+            user_api_key_dict=admin,
+        )
+        if operation == "create"
+        else update_project(
+            data=UpdateProjectRequest(project_id="project-1", guardrails=["stale", "typo"]),
+            http_request=Request(scope={"type": "http"}),
+            user_api_key_dict=admin,
+        )
+    )
     with pytest.raises((HTTPException, ProxyException)) as exc:
-        if operation == "create":
-            await new_project(
-                data=NewProjectRequest(team_id="team-1", guardrails=["typo"]),
-                http_request=Request(scope={"type": "http"}),
-                user_api_key_dict=admin,
-            )
-        else:
-            await update_project(
-                data=UpdateProjectRequest(project_id="project-1", guardrails=["stale", "typo"]),
-                http_request=Request(scope={"type": "http"}),
-                user_api_key_dict=admin,
-            )
+        await write
 
     message: Final = str(getattr(exc.value, "message", None) or getattr(exc.value, "detail", ""))
     assert "typo" in message

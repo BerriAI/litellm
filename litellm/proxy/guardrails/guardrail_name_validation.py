@@ -60,7 +60,8 @@ async def validate_guardrail_names(
     requested_entries: Final = (
         guardrails if guardrails is not None else (metadata.get("guardrails") if metadata is not None else None)
     )
-    if requested_entries is None:
+    # a dict is the legacy {name: bool} toggle map or a team's {"modify_guardrails": false}, both read at request time
+    if requested_entries is None or isinstance(requested_entries, Mapping):
         return
     requested: Final = _guardrail_entry_names(requested_entries)
     if requested is None:

@@ -13,10 +13,16 @@ from litellm.proxy.guardrails.guardrail_name_validation import validate_guardrai
 DB_ROWS: Final = MappingProxyType({"valid": "active", "also-valid": "active", "submitted": "pending_review"})
 
 
+def _filter(where: Mapping[str, object]) -> Mapping[str, object]:
+    clauses: Final = where.get("AND", (where,))
+    return {key: value for clause in clauses for key, value in clause.items()}  # comprehension-ok: flattens prisma AND clauses
+
+
 def _prisma(rows: Mapping[str, str] = DB_ROWS) -> MagicMock:
-    async def find_many(*, where: Mapping[str, Mapping[str, list[str]] | str]) -> list[SimpleNamespace]:
-        names: Final = where["guardrail_name"]["in"]
-        return [SimpleNamespace(guardrail_name=name) for name in names if rows.get(name) == where["status"]]
+    async def find_many(*, where: Mapping[str, object]) -> list[SimpleNamespace]:
+        flat: Final = _filter(where)
+        names: Final = flat["guardrail_name"]["in"]
+        return [SimpleNamespace(guardrail_name=name) for name in names if rows.get(name) == flat.get("status")]
 
     client: Final = MagicMock()
     client.writer_db.litellm_guardrailstable.find_many = AsyncMock(side_effect=find_many)
@@ -26,7 +32,7 @@ def _prisma(rows: Mapping[str, str] = DB_ROWS) -> MagicMock:
 
 def _looked_up(client: MagicMock) -> list[frozenset[str]]:
     calls: Final = client.writer_db.litellm_guardrailstable.find_many.await_args_list
-    return [frozenset(call.kwargs["where"]["guardrail_name"]["in"]) for call in calls]
+    return [frozenset(_filter(call.kwargs["where"])["guardrail_name"]["in"]) for call in calls]
 
 
 async def _validate(
@@ -152,8 +158,8 @@ async def test_no_requested_names_skips_the_lookup(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("entries", "shown"),
-    (("pii", '"pii"'), ({"valid": {}}, '{"valid": {}}'), ([1], "[1]"), ([None, "stale"], '[null, "stale"]')),
-    ids=("string", "object", "non_name_entry", "null_entry"),
+    (("pii", '"pii"'), (5, "5"), ([1], "[1]"), ([None, "stale"], '[null, "stale"]')),
+    ids=("string", "number", "non_name_entry", "null_entry"),
 )
 async def test_malformed_metadata_guardrails_fail_and_name_the_value(entries: object, shown: str) -> None:
     with pytest.raises(HTTPException) as exc:
@@ -194,3 +200,18 @@ async def test_license_first_puts_the_license_error_ahead_of_an_unknown_name(
         await validate_guardrail_names(["typo"], None, None, _prisma(), license_first=license_first)
 
     assert exc.value.status_code == status_code
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "entries",
+    ({"modify_guardrails": False}, {"prompt_injection": True, "typo": False}),
+    ids=("team_modify_guardrails_permission", "v1_toggle_map"),
+)
+async def test_legacy_dict_forms_read_at_request_time_are_left_alone(entries: dict[str, bool]) -> None:
+    client: Final = _prisma()
+
+    await _validate(None, {"guardrails": entries}, client, {"guardrails": entries})
+    await _validate(None, {"guardrails": entries}, client)
+
+    assert _looked_up(client) == []
