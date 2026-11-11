@@ -1,5 +1,11 @@
-import { describe, expect, it } from "vitest";
-import { PENDING_RELEASE_POLL_MS, keepKnownRelease, pendingReleasePollMs } from "./useLatestReleaseInfo";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { registerErrorHandler } from "@/lib/http/runtime";
+import {
+  PENDING_RELEASE_POLL_MS,
+  fetchLatestRelease,
+  keepKnownRelease,
+  pendingReleasePollMs,
+} from "./useLatestReleaseInfo";
 
 const RELEASE = { version: "1.103.0", new_features: 1, bug_fixes: 2, other_updates: 3, release_url: "https://x" };
 
@@ -46,5 +52,25 @@ describe("keepKnownRelease", () => {
   it("records a first answer as is", () => {
     const first = { release: null, pending: true };
     expect(keepKnownRelease(undefined, first)).toBe(first);
+  });
+});
+
+describe("fetchLatestRelease", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    registerErrorHandler(() => {});
+  });
+
+  it("keeps a failed release fetch away from the dashboard error handler", async () => {
+    const onError = vi.fn();
+    registerErrorHandler(onError);
+    const unavailable = new Response(JSON.stringify({ detail: "Latest release info unavailable" }), {
+      status: 502,
+      headers: { "content-type": "application/json" },
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(unavailable));
+
+    await expect(fetchLatestRelease()).rejects.toMatchObject({ status: 502 });
+    expect(onError).not.toHaveBeenCalled();
   });
 });

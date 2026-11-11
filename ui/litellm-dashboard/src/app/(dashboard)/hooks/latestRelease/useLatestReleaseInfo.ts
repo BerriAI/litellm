@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { fetchClient } from "@/lib/http/api";
+import { backgroundFetchClient } from "@/lib/http/api";
 import type { components } from "@/lib/http/schema";
 import { createQueryKeys } from "../common/queryKeysFactory";
 
@@ -20,8 +20,8 @@ export const keepKnownRelease = (known: unknown, answer: unknown) => {
   return next.pending && previous?.release ? { ...next, release: previous.release } : next;
 };
 
-const fetchLatestRelease = async (): Promise<LatestReleaseAnswer> => {
-  const { data, response } = await fetchClient.GET("/get/latest_release_info");
+export const fetchLatestRelease = async (): Promise<LatestReleaseAnswer> => {
+  const { data, response } = await backgroundFetchClient.GET("/get/latest_release_info");
   return { release: data ?? null, pending: response.status === 202 };
 };
 
