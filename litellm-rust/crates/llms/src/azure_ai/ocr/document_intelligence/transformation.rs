@@ -372,17 +372,16 @@ fn normalize_pages_param(pages: Option<&Value>) -> Result<Option<String>, Error>
 fn valid_page_token(token: &str) -> bool {
     let mut parts = token.split('-');
     let start = parts.next().unwrap_or_default();
-    if start.is_empty() || !start.chars().all(|character| character.is_ascii_digit()) {
-        return false;
-    }
     match parts.next() {
-        None => true,
-        Some(end) => {
-            !end.is_empty()
-                && end.chars().all(|character| character.is_ascii_digit())
-                && parts.next().is_none()
-        }
+        None => is_page_number(start),
+        Some(end) => is_page_number(start) && is_page_number(end) && parts.next().is_none(),
     }
+}
+
+fn is_page_number(part: &str) -> bool {
+    !part.is_empty()
+        && part.chars().all(|character| character.is_ascii_digit())
+        && part.chars().any(|character| character != '0')
 }
 
 fn normalize_features_param(features: Option<&Value>) -> Result<Option<String>, Error> {
@@ -1139,12 +1138,36 @@ mod tests {
     }
 
     #[rstest]
+    #[case::single_page(json!({"pages": "10"}), "10")]
+    #[case::range(json!({"pages": "1-10"}), "1-10")]
+    #[case::list(json!({"pages": ["2", "10-20"]}), "2,10-20")]
+    fn native_page_ranges_from_page_one_are_sent_as_given(
+        #[case] options: Value,
+        #[case] expected: &str,
+    ) {
+        let mapped = map(options).unwrap();
+
+        assert_eq!(
+            serde_json::to_value(mapped).unwrap(),
+            json!({"pages": expected})
+        );
+    }
+
+    #[rstest]
     #[case::negative_page(
         json!({"pages": [-1], "features": ["languages"], "drop_params": true}),
         json!({"features": "languages"})
     )]
     #[case::page_range(
         json!({"pages": "1&&features=bad", "features": "languages", "drop_params": true}),
+        json!({"features": "languages"})
+    )]
+    #[case::page_zero_range(
+        json!({"pages": "0-1", "features": "languages", "drop_params": true}),
+        json!({"features": "languages"})
+    )]
+    #[case::page_zero_token(
+        json!({"pages": ["2", "00"], "features": "languages", "drop_params": true}),
         json!({"features": "languages"})
     )]
     #[case::feature_number(
