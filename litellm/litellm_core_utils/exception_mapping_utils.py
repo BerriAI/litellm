@@ -3,6 +3,7 @@ import json
 import re
 import traceback
 from collections.abc import Mapping
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, Protocol, cast
 
@@ -2511,6 +2512,43 @@ def with_deployment_api_base(litellm_params: object) -> Mapping[str, object]:
 _DEBUG_INFO_ATTRIBUTE: Final = "litellm_debug_info"
 
 
+@dataclass(frozen=True, slots=True)
+class _RequestDebugInfo:
+    with_prompt: str
+    without_prompt: str
+
+
+_NO_REQUEST_DEBUG_INFO: Final = _RequestDebugInfo(with_prompt="", without_prompt="")
+
+
+def _request_debug_info(model: object, extra_kwargs: object, completion_kwargs: object) -> _RequestDebugInfo:
+    params: Final = as_str_mapping(extra_kwargs) or _NO_LITELLM_PARAMS
+    try:
+        api_base: Final = litellm.get_api_base(model=model, optional_params=params)
+        messages: Final = litellm.get_first_chars_messages(
+            kwargs=as_str_mapping(completion_kwargs) or _NO_LITELLM_PARAMS
+        )
+        metadata: Final = as_str_mapping(params.get("metadata")) or _NO_LITELLM_PARAMS
+        shown_api_base: Final = _api_base_without_credentials(api_base) if api_base else ""
+        head: Final = f"\nModel: {model}" + (f"\nAPI Base: `{shown_api_base}`" if shown_api_base else "")
+        prompt: Final = (
+            f"\nMessages: `{messages}`" if messages and litellm.redact_messages_in_exceptions is False else ""
+        )
+        labelled_values: Final = (
+            ("model_group", metadata.get("model_group")),
+            ("deployment", metadata.get("deployment")),
+            ("vertex_project", params.get("vertex_project")),
+            ("vertex_location", params.get("vertex_location")),
+        )
+        tail: Final = "".join(f"\n{label}: `{value}`\n" for label, value in labelled_values if value is not None)
+        return _RequestDebugInfo(
+            with_prompt=add_key_name_and_team_to_alert(request_info=head + prompt + tail, metadata=metadata),
+            without_prompt=add_key_name_and_team_to_alert(request_info=head + tail, metadata=metadata),
+        )
+    except Exception:
+        return _NO_REQUEST_DEBUG_INFO
+
+
 def _attach_debug_info(exception: Exception, debug_info: str) -> None:
     if debug_info and getattr(exception, _DEBUG_INFO_ATTRIBUTE, None) is None:
         setattr(exception, _DEBUG_INFO_ATTRIBUTE, debug_info)
@@ -2534,10 +2572,10 @@ def mapped_stream_exception(
 def with_deployment_debug_info(
     error: Exception, model: str, custom_llm_provider: str, litellm_params: object
 ) -> Exception:
-    debug_info: Final[object] = getattr(
-        mapped_stream_exception(error, model, custom_llm_provider, litellm_params), _DEBUG_INFO_ATTRIBUTE, None
-    )
-    _attach_debug_info(error, debug_info if isinstance(debug_info, str) else "")
+    if not (model or custom_llm_provider):
+        return error
+    request_debug_info: Final = _request_debug_info(model, with_deployment_api_base(litellm_params), _NO_LITELLM_PARAMS)
+    _attach_debug_info(error, request_debug_info.without_prompt)
     return error
 
 
@@ -2564,8 +2602,8 @@ def exception_type(
     model,
     original_exception,
     custom_llm_provider,
-    completion_kwargs={},
-    extra_kwargs={},
+    completion_kwargs: object = _NO_LITELLM_PARAMS,
+    extra_kwargs: object = _NO_LITELLM_PARAMS,
 ):
     """Maps an LLM Provider Exception to OpenAI Exception Format"""
     if any(isinstance(original_exception, exc_type) for exc_type in litellm.LITELLM_EXCEPTION_TYPES):
@@ -2590,7 +2628,12 @@ def exception_type(
         print()  # noqa: T201
 
     litellm_response_headers: Final = _get_response_headers(original_exception=original_exception)
-    extra_information = ""
+    request_debug_info: Final = (
+        _request_debug_info(model, extra_kwargs, completion_kwargs)
+        if model or custom_llm_provider
+        else _NO_REQUEST_DEBUG_INFO
+    )
+    extra_information: Final = request_debug_info.with_prompt
     try:
         error_str = (
             redact_secret_string(str(original_exception)) if _ENABLE_SECRET_REDACTION else str(original_exception)
@@ -2607,47 +2650,8 @@ def exception_type(
             else:
                 exception_type = ""
 
-            ################################################################################
-            # Common Extra information needed for all providers
-            # We pass num retries, api_base, vertex_deployment etc to the exception here
-            ################################################################################
-            try:
-                _api_base: Final = litellm.get_api_base(model=model, optional_params=extra_kwargs)
-                messages: Final = litellm.get_first_chars_messages(kwargs=completion_kwargs)
-                _vertex_project: Final = extra_kwargs.get("vertex_project")
-                _vertex_location: Final = extra_kwargs.get("vertex_location")
-                _metadata: Final = extra_kwargs.get("metadata", {}) or {}
-                _model_group: Final = _metadata.get("model_group")
-                _deployment: Final = _metadata.get("deployment")
-                extra_information = f"\nModel: {model}"
-
-                if isinstance(custom_llm_provider, str) and len(custom_llm_provider) > 0:
-                    exception_provider = custom_llm_provider[0].upper() + custom_llm_provider[1:] + "Exception"
-
-                shown_api_base: Final = _api_base_without_credentials(_api_base) if _api_base else ""
-                if shown_api_base:
-                    extra_information += f"\nAPI Base: `{shown_api_base}`"
-                if messages and len(messages) > 0 and litellm.redact_messages_in_exceptions is False:
-                    extra_information += f"\nMessages: `{messages}`"
-
-                if _model_group is not None:
-                    extra_information += f"\nmodel_group: `{_model_group}`\n"
-                if _deployment is not None:
-                    extra_information += f"\ndeployment: `{_deployment}`\n"
-                if _vertex_project is not None:
-                    extra_information += f"\nvertex_project: `{_vertex_project}`\n"
-                if _vertex_location is not None:
-                    extra_information += f"\nvertex_location: `{_vertex_location}`\n"
-
-                # on litellm proxy add key name + team to exceptions
-                extra_information = add_key_name_and_team_to_alert(request_info=extra_information, metadata=_metadata)
-            except Exception:
-                # DO NOT LET this Block raising the original exception
-                pass
-
-            ################################################################################
-            # End of Common Extra information Needed for all providers
-            ################################################################################
+            if isinstance(custom_llm_provider, str) and len(custom_llm_provider) > 0:
+                exception_provider = custom_llm_provider[0].upper() + custom_llm_provider[1:] + "Exception"
 
             ################################################################################
             #################### Start of Provider Exception mapping ####################
@@ -2940,19 +2944,20 @@ def exception_type(
         # don't let an error with mapping interrupt the user from receiving an error from the llm api calls
         if exception_mapping_worked:
             setattr(e, "litellm_response_headers", litellm_response_headers)
-            _attach_debug_info(e, extra_information)
+            _attach_debug_info(e, request_debug_info.without_prompt)
             raise e
         else:
             for error_type in litellm.LITELLM_EXCEPTION_TYPES:
                 if isinstance(e, error_type):
                     setattr(e, "litellm_response_headers", litellm_response_headers)
-                    _attach_debug_info(e, extra_information)
+                    _attach_debug_info(e, request_debug_info.without_prompt)
                     raise e  # it's already mapped
             raised_exc: Final = APIConnectionError(
                 message=f"{original_exception}\n{redact_string(traceback.format_exc())}",
                 llm_provider="",
                 model="",
             )
+            _attach_debug_info(raised_exc, request_debug_info.without_prompt)
             setattr(raised_exc, "litellm_response_headers", litellm_response_headers)
             raise raised_exc
 

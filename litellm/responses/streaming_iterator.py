@@ -1179,7 +1179,12 @@ class BaseResponsesAPIStreamingIterator:
             return
         if self._replays_stored_stream and not self._yielded_first_chunk:
             return
-        error: Final = self._stream_ended_early_error()
+        error: Final = with_deployment_debug_info(
+            self._stream_ended_early_error(),
+            self.model or "",
+            self.custom_llm_provider or "",
+            _logged_litellm_params(self.logging_obj),
+        )
         self._handle_failure(error)
         if self._output_started:
             raise error
@@ -1191,10 +1196,10 @@ class BaseResponsesAPIStreamingIterator:
         raise _mapped_exception(error, self.model or "", self.custom_llm_provider or "", self.logging_obj) from error
 
     def _raise_for_transport_error(self, error: httpx.ReadError | httpx.RemoteProtocolError) -> NoReturn:
-        self._handle_failure(error)
         described: Final = with_deployment_debug_info(
             error, self.model or "", self.custom_llm_provider or "", _logged_litellm_params(self.logging_obj)
         )
+        self._handle_failure(described)
         if self._output_started:
             raise described
         raise self._fallback_error(described) from described

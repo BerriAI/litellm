@@ -6350,12 +6350,9 @@ def get_model_region(litellm_params: LiteLLM_Params, mode: str | None) -> str | 
     return None
 
 
-def get_first_chars_messages(kwargs: dict) -> str:
-    try:
-        messages: Final = kwargs.get("messages")
-        return "" if messages is None else str(messages)[:100]
-    except Exception:
-        return ""
+def get_first_chars_messages(kwargs: Mapping[str, object]) -> str:
+    messages: Final = kwargs.get("messages")
+    return "" if messages is None else str(messages)[:100]
 
 
 def count_characters(text: str) -> int:

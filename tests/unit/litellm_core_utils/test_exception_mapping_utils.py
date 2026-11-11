@@ -179,7 +179,7 @@ def test_mapped_provider_error_carries_the_deployment_debug_info(
             model="claude-opus-5-5",
             original_exception=provider_error,
             custom_llm_provider="anthropic",
-            completion_kwargs={},
+            completion_kwargs={"messages": [{"role": "user", "content": "CONFIDENTIAL patient record"}]},
             extra_kwargs={
                 "api_base": "https://relay.example",
                 "metadata": {"model_group": "claude-alias", "deployment": "anthropic/claude-opus-5-5"},
@@ -190,7 +190,26 @@ def test_mapped_provider_error_carries_the_deployment_debug_info(
     assert "API Base: `https://relay.example`" in debug_info
     assert "model_group: `claude-alias`" in debug_info
     assert "deployment: `anthropic/claude-opus-5-5`" in debug_info
-    assert "Messages:" not in debug_info
+    assert "CONFIDENTIAL" not in debug_info
+
+
+def test_mapper_that_passes_its_debug_info_keeps_the_prompt_line() -> None:
+    request: Final = httpx.Request("POST", "https://gateway.example/v1/chat/completions")
+    original: Final = OpenAIError(
+        status_code=500, message="upstream failed", request=request, response=httpx.Response(500, request=request)
+    )
+    with pytest.raises(litellm.InternalServerError) as caught:
+        exception_type(
+            model="gpt-5.4-mini",
+            original_exception=original,
+            custom_llm_provider="openai",
+            completion_kwargs={"messages": [{"role": "user", "content": "hello there"}]},
+            extra_kwargs={"metadata": {"deployment": "openai/gpt-5.4-mini"}},
+        )
+    debug_info: Final = caught.value.litellm_debug_info
+    assert isinstance(debug_info, str)
+    assert "Messages: `[{'role': 'user', 'content': 'hello there'}]`" in debug_info
+    assert "deployment: `openai/gpt-5.4-mini`" in debug_info
 
 
 # Test cases for is_error_str_context_window_exceeded

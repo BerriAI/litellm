@@ -394,6 +394,69 @@ async def test_transport_cut_error_names_the_deployment(prefix, error_class):
     assert "deployment: `openai/gpt-4o-mini`" in debug_info
 
 
+class _FailureDebugInfoRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.debug_info: object = None
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self.debug_info = getattr(kwargs["exception"], "litellm_debug_info", None)
+
+
+@pytest.mark.parametrize("prefix", _READ_TIMEOUT_PREFIXES)
+def test_sync_transport_cut_failure_callbacks_see_the_deployment(prefix):
+    recorder: Final = _FailureDebugInfoRecorder()
+    logging_obj: Final = _real_logging_obj(
+        call_type="responses",
+        litellm_params={
+            "metadata": {
+                "api_base": "https://relay.example/openai/v1",
+                "model_group": "responses-alias",
+                "deployment": "openai/gpt-4o-mini",
+            }
+        },
+        callbacks=(recorder,),
+    )
+    iterator: Final = _make_sync_iterator(
+        sse_events=prefix,
+        logging_obj=logging_obj,
+        trailing_error=httpx.ReadError("peer closed connection without sending complete message body"),
+    )
+
+    with pytest.raises((httpx.ReadError, MidStreamFallbackError)):
+        for _ in iterator:
+            pass
+
+    assert isinstance(recorder.debug_info, str)
+    assert "API Base: `https://relay.example/openai/v1`" in recorder.debug_info
+    assert "model_group: `responses-alias`" in recorder.debug_info
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prefix", _READ_TIMEOUT_PREFIXES)
+async def test_stream_ending_without_terminal_event_names_the_deployment(prefix):
+    logging_obj: Final = _failure_tracking_logging_obj()
+    logging_obj.model_call_details = {
+        "litellm_params": {
+            "metadata": {
+                "api_base": "https://relay.example/openai/v1",
+                "model_group": "responses-alias",
+                "deployment": "openai/gpt-4o-mini",
+            }
+        }
+    }
+    iterator: Final = _make_iterator(sse_events=prefix, logging_obj=logging_obj)
+
+    with pytest.raises((litellm.APIConnectionError, MidStreamFallbackError)) as exc_info:
+        async for _ in iterator:
+            pass
+
+    debug_info: Final = exc_info.value.litellm_debug_info
+    assert isinstance(debug_info, str)
+    assert "API Base: `https://relay.example/openai/v1`" in debug_info
+    assert "deployment: `openai/gpt-4o-mini`" in debug_info
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("trailer", [[], [_DONE_MARKER]], ids=["eof", "done-marker"])
 async def test_stream_ending_after_partial_output_without_terminal_event_raises(trailer):
