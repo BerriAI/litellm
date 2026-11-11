@@ -11254,7 +11254,7 @@ def test_request_skips_budget_checks_for_non_spending_requests(
         ("/v1/videos", "POST", False),
         ("/v1/videos/video_abc/remix", "POST", False),
         ("/v1/videos/edits", "POST", False),
-        ("/v1/videos/video_abc/content/extra", "GET", False),
+        ("/v1/videos/video_abc/remix", "GET", False),
         ("/v1/chat/completions", "GET", False),
     ],
 )
