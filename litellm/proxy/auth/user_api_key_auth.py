@@ -2679,7 +2679,11 @@ async def user_api_key_auth_builder(
                             team_id=valid_token.team_id,
                         )
                         skip_budget_checks = request_skips_budget_checks(
-                            route=route, model=model, llm_router=llm_router, request_body=request_data
+                            route=route,
+                            model=model,
+                            llm_router=llm_router,
+                            request_body=request_data,
+                            http_method=RouteChecks.get_request_method(request),
                         )
 
                         # Fetch project object for JWT path if project_id is set
@@ -3197,6 +3201,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
             model=await budget_served_model(model, request_data, request, llm_router, valid_token),
             llm_router=llm_router,
             request_body=request_data,
+            http_method=RouteChecks.get_request_method(request),
         )
 
         # Check 3. Check if user is in their team budget
@@ -4296,6 +4301,7 @@ async def _should_skip_budget_checks(
         model=(model if sub_call else await budget_served_model(model, request_data, request, llm_router, valid_token)),
         llm_router=llm_router,
         request_body=request_data,
+        http_method=RouteChecks.get_request_method(request),
     )
 
 

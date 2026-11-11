@@ -2312,6 +2312,115 @@ async def test_jwt_path_skips_user_model_budget_only_for_zero_spend_mcp_methods(
     assert user_model_budget_check.await_count == (1 if expect_user_model_budget_check else 0)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method, path, expect_rejected",
+    [
+        ("GET", "/v1/videos/{video_id}", False),
+        ("GET", "/videos/{video_id}/content", False),
+        ("POST", "/v1/videos", True),
+        ("POST", "/v1/videos/{video_id}/remix", True),
+    ],
+)
+async def test_jwt_path_spares_only_video_retrieval_from_an_exhausted_user_model_budget(
+    monkeypatch: pytest.MonkeyPatch, method: str, path: str, expect_rejected: bool
+) -> None:
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy._types import JWTAuthBuilderResult, LiteLLM_JWTAuth, Litellm_EntityType, ProxyErrorTypes
+    from litellm.proxy.auth import user_api_key_auth as user_api_key_auth_module
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_builder
+    from litellm.proxy.hooks.model_max_budget_limiter import (
+        PROXY_VirtualKeyModelMaxBudgetLimiter,
+        model_budget_spend_cache_key,
+    )
+    from litellm.types.videos.utils import encode_video_id_with_provider
+
+    video_id: Final = encode_video_id_with_provider(video_id="video_raw", provider="openai", model_id="sora-2")
+    jwt_result: Final = JWTAuthBuilderResult(
+        is_proxy_admin=False,
+        team_object=None,
+        user_object=LiteLLM_UserTable(
+            user_id="jwt-user",
+            model_max_budget={"sora-2": {"budget_limit": 0.3, "time_period": "1d"}},
+        ),
+        end_user_object=None,
+        org_object=None,
+        token="fake.jwt.token",
+        team_id=None,
+        user_id="jwt-user",
+        user_email=None,
+        end_user_id=None,
+        org_id=None,
+        team_membership=None,
+        jwt_claims={},
+        agent_id=None,
+    )
+
+    class _VerifiedJWTAuthManager(JWTAuthManager):
+        @staticmethod
+        async def auth_builder(
+            api_key: object,
+            jwt_handler: object,
+            request_data: object,
+            general_settings: object,
+            route: object,
+            prisma_client: object,
+            user_api_key_cache: object,
+            parent_otel_span: object,
+            proxy_logging_obj: object,
+            request_headers: object = None,
+            request_method: object = None,
+        ) -> JWTAuthBuilderResult:
+            return jwt_result
+
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+    await limiter.dual_cache.async_set_cache(
+        key=model_budget_spend_cache_key(
+            entity_type=Litellm_EntityType.USER, entity_id="jwt-user", budget_model="sora-2", budget_duration="1d"
+        ),
+        value=0.4,
+    )
+    jwt_handler: Final = JWTHandler()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=DualCache(),
+        litellm_jwtauth=LiteLLM_JWTAuth(),
+    )
+    mock_request: Final = MagicMock()
+    mock_request.url.path = path.format(video_id=video_id)
+    mock_request.method = method
+    mock_request.headers = {"authorization": "Bearer fake.jwt.token"}
+    mock_request.query_params = {}
+    request_data: Final[dict[str, object]] = {"model": "sora-2"} if path == "/v1/videos" else {"video_id": video_id}
+
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {"enable_jwt_auth": True})
+    monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "jwt_handler", jwt_handler)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", None)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "model_max_budget_limiter", limiter)
+    monkeypatch.setattr(user_api_key_auth_module, "JWTAuthManager", _VerifiedJWTAuthManager)
+
+    async def authenticate() -> str | None:
+        result: Final = await user_api_key_auth_builder(
+            request=mock_request,
+            api_key="Bearer fake.jwt.token",
+            azure_api_key_header="",
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data=request_data,
+        )
+        return result.user_id
+
+    if not expect_rejected:
+        assert await authenticate() == "jwt-user"
+        return
+    with pytest.raises(ProxyException) as exc_info:
+        await authenticate()
+    assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
+
+
 def _qa_websocket(messages):
     async def receive():
         return {"type": "websocket.connect"}
