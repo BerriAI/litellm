@@ -124,6 +124,7 @@ from litellm.types.utils import (
     Usage,
 )
 from litellm.utils import (
+    EXTRA_BODY_ROUTING_KEYS,
     add_dummy_tool,
     any_assistant_message_has_thinking_blocks,
     has_tool_call_blocks,
@@ -212,7 +213,11 @@ def _with_extra_body_fields(params: Mapping[str, object], drop_params: bool) -> 
     if extra_body is None:
         return without_extra_body
     if isinstance(extra_body, Mapping):
-        fields: Final = _JSON_OBJECT.validate_python(extra_body)
+        fields: Final = {
+            key: value
+            for key, value in _JSON_OBJECT.validate_python(extra_body).items()
+            if key not in EXTRA_BODY_ROUTING_KEYS
+        }
         if "output_config" not in fields:
             return {**without_extra_body, **fields}
         not_normalized: Final = {
@@ -2426,6 +2431,18 @@ class AmazonConverseConfig(BaseConfig):
         return request_params
 
     @staticmethod
+    def without_extra_body_fields(
+        optional_params: Mapping[str, object], dropped_keys: frozenset[str]
+    ) -> dict[str, object]:  # mutable-ok: the Converse handler pops its own keys off the params it is given
+        extra_body: Final = optional_params.get("extra_body")
+        if not dropped_keys or not isinstance(extra_body, Mapping):
+            return dict(optional_params)
+        kept_fields: Final = {
+            key: value for key, value in _JSON_OBJECT.validate_python(extra_body).items() if key not in dropped_keys
+        }
+        return {**optional_params, "extra_body": kept_fields}
+
+    @staticmethod
     def _deployment_base_model(litellm_params: Mapping[str, object]) -> str | None:
         base_model: Final = litellm_params.get("base_model")
         return base_model if isinstance(base_model, str) else None
@@ -2730,7 +2747,7 @@ class AmazonConverseConfig(BaseConfig):
 
     def get_tool_call_names(
         self,
-        tools: list[ToolBlock] | list[OpenAIChatCompletionToolParam] | None = None,
+        tools: Sequence[Mapping[str, object]] | None = None,
     ) -> list[str]:
         if tools is None:
             return []
@@ -2751,7 +2768,7 @@ class AmazonConverseConfig(BaseConfig):
     def apply_tool_call_transformation_if_needed(
         self,
         message: Message,
-        tools: list[ToolBlock] | None = None,
+        tools: Sequence[Mapping[str, object]] | None = None,
         initial_finish_reason: str | None = None,
     ) -> tuple[Message, str | None]:
         """
@@ -3141,12 +3158,13 @@ class AmazonConverseConfig(BaseConfig):
             else mapped_finish_reason
         )
 
+        sent_tools: Final = _with_extra_body_fields(optional_params, True).get("tools")
         (
             returned_message,
             returned_finish_reason,
         ) = self.apply_tool_call_transformation_if_needed(
             message=_message,
-            tools=optional_params.get("tools"),
+            tools=None if sent_tools is None else _TOOLS_AS_SENT.validate_python(sent_tools),
             initial_finish_reason=initial_finish_reason,
         )
         model_response.choices = [

@@ -499,17 +499,33 @@ def _sends_strict(tool: Mapping[str, object], supports_strict_tools: bool) -> bo
     return supports_strict_tools and bool(_TOOL_SPEC_ADAPTER.validate_python(tool["function"]).get("strict"))
 
 
+def _without_strict_tools(params: Mapping[str, object], supports_strict_tools: bool) -> Mapping[str, object] | None:
+    tools: Final = _TOOLS_ADAPTER.validate_python(params.get("tools", ()))
+    if not any(_sends_strict(tool, supports_strict_tools) for tool in tools):
+        return None
+    return {**params, "tools": [_without_strict(tool) for tool in tools]}
+
+
 def bedrock_strict_tools_fallback(
     model: str, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
 ) -> NativeOutputFallback | None:
-    tools: Final = _TOOLS_ADAPTER.validate_python(optional_params.get("tools", ()))
     supports_strict_tools: Final = bedrock_converse_supports_strict_tools(
         bedrock_capability_model(model, litellm_params.get("base_model"))
     )
-    if not any(_sends_strict(tool, supports_strict_tools) for tool in tools):
+    extra_body: Final = optional_params.get("extra_body")
+    extra_body_without_strict: Final = (
+        _without_strict_tools(_JSON_OBJECT.validate_python(extra_body), supports_strict_tools)
+        if isinstance(extra_body, Mapping)
+        else None
+    )
+    without_strict: Final = _without_strict_tools(optional_params, supports_strict_tools)
+    if without_strict is None and extra_body_without_strict is None:
         return None
     return NativeOutputFallback(
-        optional_params={**optional_params, "tools": [_without_strict(tool) for tool in tools]},
+        optional_params={
+            **(optional_params if without_strict is None else without_strict),
+            **({} if extra_body_without_strict is None else {"extra_body": extra_body_without_strict}),
+        },
         litellm_params=litellm_params,
     )
 

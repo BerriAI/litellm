@@ -605,6 +605,127 @@ def test_bedrock_converse_rejects_a_non_object_extra_body_without_drop_params() 
         _converse_body_sent(extra_body="not an object")
 
 
+def test_bedrock_converse_extra_body_skips_the_model_and_additional_drop_params() -> None:
+    sent: Final = _converse_body_sent(
+        extra_body={"instructions": "Answer in French.", "store": True, "model": "bedrock/converse/other-model"},
+        additional_drop_params=["store"],
+    )
+
+    assert sent == _converse_body_sent(instructions="Answer in French.")
+
+
+@pytest.mark.parametrize(
+    "extra_body",
+    [
+        {"aws_bedrock_runtime_endpoint": "https://bedrock.attacker.example"},
+        {"aws_region_name": "eu-west-1"},
+        {"aws_access_key_id": "AKIAOTHERKEY", "aws_secret_access_key": "other-secret"},
+        {"model_id": "us.anthropic.claude-opus-4-6-v1"},
+        {"stream": True},
+    ],
+    ids=["endpoint", "region", "credentials", "model-id", "stream"],
+)
+def test_bedrock_converse_extra_body_cannot_change_where_or_how_litellm_sends_the_call(
+    extra_body: Mapping[str, object],
+) -> None:
+    with respx.mock(assert_all_called=False) as router:
+        route: Final = router.post(
+            url__regex=r"^https://bedrock-runtime\.us-east-1\.amazonaws\.com/model/global\.openai\.gpt-6\.1-sol/converse$"
+        ).mock(return_value=httpx.Response(200, json=_converse_reply("ok")))
+        response: Final = litellm.completion(
+            model="bedrock/converse/global.openai.gpt-6.1-sol",
+            messages=[{"role": "user", "content": "Weather in Paris?"}],
+            aws_access_key_id="AKIAEXTRABODYKEY",
+            aws_secret_access_key="extra-body-secret",
+            aws_region_name="us-east-1",
+            client=HTTPHandler(),
+            extra_body=extra_body,
+        )
+
+    assert isinstance(response, ModelResponse)
+    assert route.call_count == 1
+    assert "Credential=AKIAEXTRABODYKEY/" in route.calls[0].request.headers["authorization"]
+
+
+@pytest.mark.asyncio
+async def test_bedrock_converse_async_call_sends_extra_body_fields_like_top_level_fields() -> None:
+    with respx.mock(assert_all_called=False) as router:
+        route: Final = router.post(url__regex=r"/converse$").mock(
+            return_value=httpx.Response(200, json=_converse_reply("ok"))
+        )
+        await litellm.acompletion(
+            model="bedrock/converse/global.openai.gpt-6.1-sol",
+            messages=[{"role": "user", "content": "Weather in Paris?"}],
+            aws_access_key_id="AKIAEXTRABODYKEY",
+            aws_secret_access_key="extra-body-secret",
+            aws_region_name="us-east-1",
+            client=AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport()),
+            extra_body={"instructions": "Answer in French."},
+        )
+
+    assert json.loads(route.calls[0].request.content) == _converse_body_sent(instructions="Answer in French.")
+
+
+def _converse_reply(text: str) -> Mapping[str, object]:
+    return {
+        "output": {"message": {"role": "assistant", "content": [{"text": text}]}},
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+    }
+
+
+def _opus_converse_call(
+    replies: Sequence[tuple[int, Mapping[str, object]]], **params: object
+) -> tuple[ModelResponse, tuple[Mapping[str, object], ...]]:
+    with respx.mock(assert_all_called=False) as router:
+        route: Final = router.post(url__regex=r"/converse$").mock(
+            side_effect=[httpx.Response(status, json=body) for status, body in replies]
+        )
+        response: Final = litellm.completion(
+            model="bedrock/converse/us.anthropic.claude-opus-4-6-v1",
+            messages=[{"role": "user", "content": "Weather in Paris?"}],
+            aws_access_key_id="AKIAEXTRABODYKEY",
+            aws_secret_access_key="extra-body-secret",
+            aws_region_name="us-east-1",
+            client=HTTPHandler(),
+            **params,
+        )
+    return response, tuple(json.loads(call.request.content) for call in route.calls)
+
+
+def test_bedrock_converse_strict_tools_in_extra_body_get_the_strict_tools_retry() -> None:
+    strict_tool: Final = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get the weather for a city",
+            "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+            "strict": True,
+        },
+    }
+    replies: Final = (
+        (400, {"message": "tools.0.custom.strict: Extra inputs are not permitted"}),
+        (200, _converse_reply("ok")),
+    )
+    _, from_extra_body = _opus_converse_call(replies, drop_params=True, extra_body={"tools": [strict_tool]})
+    _, from_top_level = _opus_converse_call(replies, drop_params=True, tools=[strict_tool])
+
+    assert len(from_extra_body) == 2
+    assert from_extra_body == from_top_level
+
+
+def test_bedrock_converse_tools_in_extra_body_turn_a_tool_call_written_as_text_into_tool_calls() -> None:
+    tool_call_text: Final = json.dumps({"type": "function", "name": "get_weather", "parameters": {"city": "Paris"}})
+    reply: Final = ((200, _converse_reply(tool_call_text)),)
+    from_extra_body, _ = _opus_converse_call(reply, extra_body={"tools": [_WEATHER_TOOL]})
+    from_top_level, _ = _opus_converse_call(reply, tools=[_WEATHER_TOOL])
+
+    assert from_extra_body.choices[0].finish_reason == "tool_calls"
+    assert [call.function for call in from_extra_body.choices[0].message.tool_calls] == [
+        call.function for call in from_top_level.choices[0].message.tool_calls
+    ]
+
+
 @pytest.mark.parametrize(
     ("model_id", "expected_url"),
     [
@@ -9793,16 +9914,6 @@ def test_invalid_model_identifier_stays_a_bad_request_for_a_model_litellm_recogn
     assert [request.url.raw_path for request in sent] == [path]
 
 
-_WEATHER_TOOL: Final = {
-    "type": "function",
-    "function": {
-        "name": "get_weather",
-        "description": "Get the weather for a city",
-        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
-    },
-}
-
-
 def _converse_tool_call_reply(sent: list[httpx.Request]):
     def respond(request: httpx.Request) -> httpx.Response:
         sent.append(request)
@@ -11963,6 +12074,34 @@ def test_a_default_native_schema_rejection_retries_with_the_json_tool(
     retry_request: Final = json.loads(route.calls[1].request.content)
     assert "outputConfig" in first_request and "toolConfig" not in first_request
     assert "toolConfig" in retry_request and "outputConfig" not in retry_request
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_a_native_schema_rejection_retry_still_drops_additional_drop_params_from_extra_body(
+    respx_mock: respx.Router, local_model_cost_map: None
+) -> None:
+    route: Final = respx_mock.post(url__regex=r"/converse$").mock(
+        return_value=httpx.Response(400, json={"message": _BEDROCK_SCHEMA_REFUSAL})
+    )
+
+    with pytest.raises(litellm.BadRequestError, match=re.escape(_BEDROCK_SCHEMA_REFUSAL)):
+        completion(
+            model="bedrock/converse/us.anthropic.claude-sonnet-5",
+            messages=[{"role": "user", "content": "What is the capital of France?"}],
+            response_format=CAPITAL_RESPONSE_FORMAT,
+            thinking={"type": "disabled"},
+            extra_body={"store": True},
+            additional_drop_params=["store"],
+            num_retries=0,
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+            client=HTTPHandler(),
+        )
+
+    sent: Final = [json.loads(call.request.content) for call in route.calls]
+    assert len(sent) == 2
+    assert all("store" not in (body.get("additionalModelRequestFields") or {}) for body in sent)
 
 
 @pytest.mark.respx(assert_all_called=True)
