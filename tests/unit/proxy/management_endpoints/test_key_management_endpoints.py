@@ -14265,7 +14265,7 @@ async def test_bulk_update_keys_runs_custom_key_policy_per_key(monkeypatch):
 def _policy_generate_prisma() -> MagicMock:
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_budgettable.create = AsyncMock(return_value=MagicMock(budget_id="budget-1"))
-    mock_prisma.db.litellm_guardrailstable.find_many = AsyncMock(return_value=[SimpleNamespace(guardrail_name="g1")])
+    mock_prisma.writer_db.litellm_guardrailstable.find_many = AsyncMock(return_value=[SimpleNamespace(guardrail_name="g1")])
     mock_prisma.jsonify_object = MagicMock(side_effect=lambda data: json.loads(data) if isinstance(data, str) else data)
     return mock_prisma
 
@@ -24479,7 +24479,7 @@ def test_key_generate_rejects_an_unregistered_guardrail(
 
     monkeypatch.setattr(proxy_server, "premium_user", True)
     prisma_client: Final = proxy_server.prisma_client
-    prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(return_value=[])
+    prisma_client.writer_db.litellm_guardrailstable.find_many = AsyncMock(return_value=[])
 
     response: Final = spend_permission_client.post("/key/generate", json=body)
 
@@ -24495,7 +24495,7 @@ def test_key_generate_accepts_a_guardrail_active_in_the_db(
 
     monkeypatch.setattr(proxy_server, "premium_user", True)
     prisma_client: Final = proxy_server.prisma_client
-    prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(
+    prisma_client.writer_db.litellm_guardrailstable.find_many = AsyncMock(
         return_value=[SimpleNamespace(guardrail_name="created-on-other-pod")]
     )
 
@@ -24519,7 +24519,7 @@ async def test_update_key_fn_rejects_an_added_unregistered_guardrail_and_keeps_s
     from litellm.proxy.management_endpoints.key_management_endpoints import update_key_fn
 
     mock_prisma_client: Final = _setup_update_key_fn_policy_mocks(monkeypatch, _key_with_stale_guardrail())
-    mock_prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.writer_db.litellm_guardrailstable.find_many = AsyncMock(return_value=[])
 
     with patch(  # test-quality-ok: cache eviction is outside the guardrail check
         "litellm.proxy.management_endpoints.key_management_endpoints.delete_cache_key_object",
@@ -24551,7 +24551,7 @@ async def test_update_key_fn_rejects_an_added_unregistered_guardrail_and_keeps_s
 async def test_process_single_key_update_rejects_an_unregistered_guardrail(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
     mock_prisma_client: Final = AsyncMock()
-    mock_prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.writer_db.litellm_guardrailstable.find_many = AsyncMock(return_value=[])
 
     with pytest.raises(HTTPException) as exc_info:
         await _process_single_key_update_under_policy(
@@ -24568,7 +24568,7 @@ async def test_regenerate_key_rejects_an_unregistered_guardrail():
     from litellm.proxy.management_endpoints.key_management_endpoints import regenerate_key_fn
 
     mock_prisma_client: Final = AsyncMock()
-    mock_prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.writer_db.litellm_guardrailstable.find_many = AsyncMock(return_value=[])
     mock_repo: Final = MagicMock()
     mock_repo.table.find_unique = AsyncMock(return_value=_make_regenerate_existing_key())
 
@@ -24599,7 +24599,7 @@ def test_user_new_rejects_an_unregistered_guardrail_before_creating_anything(
     from litellm.proxy import proxy_server
 
     prisma_client: Final = proxy_server.prisma_client
-    prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(return_value=[])
+    prisma_client.writer_db.litellm_guardrailstable.find_many = AsyncMock(return_value=[])
 
     response: Final = spend_permission_client.post("/user/new", json={"guardrails": ["typo"]})
 
@@ -24612,7 +24612,7 @@ def test_user_new_without_a_key_does_not_check_guardrail_names(spend_permission_
     from litellm.proxy import proxy_server
 
     find_many: Final = AsyncMock(return_value=[])
-    proxy_server.prisma_client.db.litellm_guardrailstable.find_many = find_many
+    proxy_server.prisma_client.writer_db.litellm_guardrailstable.find_many = find_many
 
     response: Final = spend_permission_client.post("/user/new", json={"guardrails": ["typo"], "auto_create_key": False})
 

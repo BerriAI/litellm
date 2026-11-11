@@ -1999,14 +1999,15 @@ def guardrail_loaded_here() -> Iterator[str]:
 
 
 @pytest.mark.asyncio
-async def test_registered_guardrail_names_falls_back_to_active_db_rows(guardrail_loaded_here: str) -> None:
+async def test_registered_guardrail_names_falls_back_to_active_rows_on_the_writer(guardrail_loaded_here: str) -> None:
     from types import SimpleNamespace
 
     from litellm.proxy.guardrails.guardrail_registry import registered_guardrail_names
 
     prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(return_value=[])
     find_many: Final = AsyncMock(return_value=[SimpleNamespace(guardrail_name="created-on-other-pod")])
-    prisma_client.db.litellm_guardrailstable.find_many = find_many
+    prisma_client.writer_db.litellm_guardrailstable.find_many = find_many
 
     registered: Final = await registered_guardrail_names(
         frozenset({guardrail_loaded_here, "created-on-other-pod", "typo"}), prisma_client
@@ -2024,10 +2025,10 @@ async def test_registered_guardrail_names_skips_the_db_when_everything_is_loaded
     from litellm.proxy.guardrails.guardrail_registry import registered_guardrail_names
 
     prisma_client: Final = MagicMock()
-    prisma_client.db.litellm_guardrailstable.find_many = AsyncMock()
+    prisma_client.writer_db.litellm_guardrailstable.find_many = AsyncMock()
 
     assert await registered_guardrail_names(frozenset({guardrail_loaded_here}), prisma_client) == {
         guardrail_loaded_here
     }
     assert await registered_guardrail_names(frozenset({guardrail_loaded_here, "typo"}), None) == {guardrail_loaded_here}
-    prisma_client.db.litellm_guardrailstable.find_many.assert_not_awaited()
+    prisma_client.writer_db.litellm_guardrailstable.find_many.assert_not_awaited()

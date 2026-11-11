@@ -1253,4 +1253,4 @@ async def registered_guardrail_names(names: frozenset[str], prisma_client: Prism
     missing: Final = names - loaded
     if not missing or prisma_client is None:
         return loaded
-    return loaded | await GuardrailsRepository(prisma_client).find_active_guardrail_names(missing)
+    return loaded | await GuardrailsRepository(prisma_client, use_writer=True).find_active_guardrail_names(missing)
