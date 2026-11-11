@@ -100067,5 +100067,43 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
+    },
+    "fal_ai/fal-ai/recraft-20b": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per image at the default realistic_image style, from the fal pricing API; vector styles cost 2x and have no catalog field; the fal.ai page for this id redirects to fal-ai/recraft/v2/text-to-image, which rounds the rate to $0.022"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.0219,
+        "source": "https://api.fal.ai/v1/models/pricing?endpoint_id=fal-ai/recraft-20b",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/fal-ai/stable-diffusion-v3-medium/image-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.035,
+        "source": "https://api.fal.ai/v1/models/pricing?endpoint_id=fal-ai/stable-diffusion-v3-medium/image-to-image",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/fal-ai/pixverse/lipsync": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of output video; when audio_url is not provided the text is spoken with TTS at $0.24 per 100 characters, which is not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.04,
+        "source": "https://fal.ai/models/fal-ai/pixverse/lipsync",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
     }
 }
