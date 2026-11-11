@@ -46,10 +46,10 @@ from tests.integration._support.wire import Reply
 
 _UPSTREAM: Final = "text-embedding-3-small"
 _OPENAI_PREFIX: Final = {
-    400: "litellm.BadRequestError: OpenAIException - ",
-    401: "litellm.AuthenticationError: AuthenticationError: OpenAIException - ",
-    429: "litellm.RateLimitError: RateLimitError: OpenAIException - ",
-    500: "litellm.InternalServerError: InternalServerError: OpenAIException - ",
+    400: "litellm.BadRequestError: OpenAIException - Error code: 400 - ",
+    401: "litellm.AuthenticationError: OpenAIException - Error code: 401 - ",
+    429: "litellm.RateLimitError: RateLimitError: OpenAIException - Error code: 429 - ",
+    500: "litellm.InternalServerError: InternalServerError: OpenAIException - Error code: 500 - ",
 }
 _OPENAI_ERROR_TYPE: Final = {
     400: "invalid_request_error",
@@ -180,9 +180,7 @@ def test_dimensions_on_an_older_openai_model_is_dropped_when_the_deployment_sets
     """
     text: Final = marker()
     with peer() as provider, gateway.scenario() as scenario:
-        model: Final = openai_embedding_model(
-            scenario, provider, upstream="text-embedding-ada-002", drop_params=True
-        )
+        model: Final = openai_embedding_model(scenario, provider, upstream="text-embedding-ada-002", drop_params=True)
         served(embed(gateway, model, text, dimensions=256))
         assert provider.only().body == {"model": "text-embedding-ada-002", "input": text}
 
@@ -351,6 +349,10 @@ def test_a_provider_error_is_returned_with_its_status_in_the_openai_error_envelo
     `error.type` `invalid_request_error`, `authentication_error`, `throttling_error` or `internal_server_error`
     respectively, and a message that starts with litellm's exception prefix for an OpenAI provider and carries
     the provider's text.
+    Pinned current behaviour: on embeddings the message after `OpenAIException - ` is the OpenAI client's own
+    rendering, `Error code: <status> - ` followed by the provider's error body as a Python dict, so the
+    provider's message appears inside it rather than right after the prefix, and the 401 prefix names
+    `AuthenticationError` once while the 429 and 500 prefixes repeat the class name.
     """
     with peer(failing(status, "dec1 embeddings upstream said no")) as provider, gateway.scenario() as scenario:
         model: Final = openai_embedding_model(scenario, provider)
@@ -362,7 +364,10 @@ def test_a_provider_error_is_returned_with_its_status_in_the_openai_error_envelo
             "param": None,
             "code": str(status),
         }, response.text
-        assert error_message(response).startswith(_OPENAI_PREFIX[status] + "dec1 embeddings upstream said no")
+        message: Final = error_message(response)
+        assert message.startswith(
+            _OPENAI_PREFIX[status] + "{'error': {'message': 'dec1 embeddings upstream said no'"
+        ), message
         assert len(provider.posts()) >= 1
 
 

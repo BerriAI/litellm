@@ -134,8 +134,10 @@ def test_a_team_model_is_reachable_under_its_public_name_with_that_teams_key(gat
 
     The proxy stores it under a generated internal `model_name` and keeps the requested name in
     `model_info.team_public_model_name`. A key of that team calling the public name gets 200 from the
-    deployment, and `GET /model/info` shows the deployment with `team_id`, `team_public_model_name` equal to
-    the public name, and a `model_name` that differs from it.
+    deployment. `GET /model/info` shows the deployment with `team_id` and with both `team_public_model_name`
+    and `model_name` equal to the public name: the listing swaps the internal routing key for the public name
+    (litellm/proxy/common_utils/model_listing_utils.py:1). The stored row keeps the internal
+    `model_name_{team_id}_{uuid}` name (litellm/proxy/management_endpoints/model_management_endpoints.py:2204).
     """
     public_name: Final = _unique("dec1-team-model")
     upstream_model: Final = _unique("ok-team-model")
@@ -160,7 +162,13 @@ def test_a_team_model_is_reachable_under_its_public_name_with_that_teams_key(gat
         info: Final = object_value(entries[0]["model_info"])
         assert info["team_id"] == team
         assert info["team_public_model_name"] == public_name
-        assert entries[0]["model_name"] != public_name
+        assert entries[0]["model_name"] == public_name
+        stored: Final = gateway.rows(
+            "SELECT model_name FROM \"LiteLLM_ProxyModelTable\" WHERE model_info->>'team_public_model_name' = %s",
+            (public_name,),
+        )
+        assert len(stored) == 1, stored
+        assert string_value(stored[0]["model_name"]).startswith(f"model_name_{team}_"), stored
 
 
 def test_a_team_model_is_not_reachable_with_another_teams_key(gateway: Gateway) -> None:

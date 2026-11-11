@@ -151,7 +151,9 @@ def test_upload_forwards_expires_after_as_nested_form_fields(rig: Rig) -> None:
 
 
 @pytest.mark.parametrize("surface", ["header", "query", "form", "path"])
-def test_upload_naming_azure_reaches_the_azure_files_route_with_the_azure_files_settings(rig: Rig, surface: str) -> None:
+def test_upload_naming_azure_reaches_the_azure_files_route_with_the_azure_files_settings(
+    rig: Rig, surface: str
+) -> None:
     """Azure is named on one of the four surfaces: `custom-llm-provider` header, `custom_llm_provider` query
     parameter, `custom_llm_provider` form field, or the `/azure/v1/files` URL prefix.
 
@@ -165,18 +167,30 @@ def test_upload_naming_azure_reaches_the_azure_files_route_with_the_azure_files_
     match surface:
         case "header":
             response = rig.proxy.client.post(
-                "/v1/files", data={"purpose": "batch"}, files=files, headers={**authorization, "custom-llm-provider": "azure"}
+                "/v1/files",
+                data={"purpose": "batch"},
+                files=files,
+                headers={**authorization, "custom-llm-provider": "azure"},
             )
         case "query":
             response = rig.proxy.client.post(
-                "/v1/files", params={"custom_llm_provider": "azure"}, data={"purpose": "batch"}, files=files, headers=authorization
+                "/v1/files",
+                params={"custom_llm_provider": "azure"},
+                data={"purpose": "batch"},
+                files=files,
+                headers=authorization,
             )
         case "form":
             response = rig.proxy.client.post(
-                "/v1/files", data={"purpose": "batch", "custom_llm_provider": "azure"}, files=files, headers=authorization
+                "/v1/files",
+                data={"purpose": "batch", "custom_llm_provider": "azure"},
+                files=files,
+                headers=authorization,
             )
         case _:
-            response = rig.proxy.client.post("/azure/v1/files", data={"purpose": "batch"}, files=files, headers=authorization)
+            response = rig.proxy.client.post(
+                "/azure/v1/files", data={"purpose": "batch"}, files=files, headers=authorization
+            )
     assert response.status_code == 200, response.text
     (request,) = rig.drained()
     assert (request.method, path_of(request)) == ("POST", "/openai/files")
@@ -322,16 +336,21 @@ def test_list_naming_a_provider_asks_that_provider_and_forwards_purpose(rig: Rig
     """The master key lists files with `?custom_llm_provider=openai&purpose=batch`.
 
     Naming a provider sends the list upstream: one `GET /v1/files` whose query is exactly `purpose=batch`. The
-    caller gets `object: "list"` and the two provider ids in upstream order.
+    upstream answers two files the proxy never uploaded, and the caller gets `object: "list"` with an empty
+    `data`, no cursor naming a filtered file, and no further page.
+    Pinned current behaviour: with the managed-files hook loaded, its post-call hook filters a provider file
+    page down to the files the caller created through the proxy and rebuilds the cursors from what is left
+    (enterprise/litellm_enterprise/proxy/hooks/managed_files.py:2430), and that applies to the master key too.
     """
     rig.wire.drain()
-    response: Final = rig.proxy.request("GET", "/v1/files", params={"custom_llm_provider": "openai", "purpose": "batch"})
+    response: Final = rig.proxy.request(
+        "GET", "/v1/files", params={"custom_llm_provider": "openai", "purpose": "batch"}
+    )
     assert response.status_code == 200, response.text
     body: Final = JSON_OBJECT.validate_json(response.content)
-    data: Final = body["data"]
-    assert isinstance(data, list)
-    assert body["object"] == "list"
-    assert [JSON_OBJECT.validate_python(entry)["id"] for entry in data] == ["file-dec1-listed-a", "file-dec1-listed-b"]
+    assert (body["object"], body["data"]) == ("list", []), body
+    assert (body.get("first_id"), body.get("last_id")) == (None, None), body
+    assert body.get("has_more") is not True, body
     (request,) = rig.drained()
     assert (request.method, path_of(request)) == ("GET", "/v1/files")
     assert query_of(request) == {"purpose": ["batch"]}

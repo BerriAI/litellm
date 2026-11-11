@@ -86,7 +86,10 @@ def _sent(rig: Rig, method: str, path: str) -> Request:
 
 
 def _managed_file(rig: Rig, key: str, stem: str) -> str:
-    return rig.uploaded_id(f"{stem}.jsonl", jsonl(batch_line(OPENAI_MODEL)), key=key, target_model_names=OPENAI_MODEL)
+    """A managed batch file whose provider id is `file-<stem>`. The proxy re-uploads the rewritten file as
+    `modified_file.jsonl`, so the scripted provider names it after the first line's `custom_id`."""
+    content: Final = jsonl(batch_line(OPENAI_MODEL, custom_id=stem))
+    return rig.uploaded_id(f"{stem}.jsonl", content, key=key, target_model_names=OPENAI_MODEL)
 
 
 def _managed_batch(rig: Rig, key: str, stem: str) -> str:
@@ -179,7 +182,9 @@ def test_create_naming_azure_reaches_the_azure_batches_route(rig: Rig, surface: 
     rig.wire.drain()
     match surface:
         case "body":
-            response = rig.proxy.request("POST", "/v1/batches", _create_body(f"file-{stem}", custom_llm_provider="azure"))
+            response = rig.proxy.request(
+                "POST", "/v1/batches", _create_body(f"file-{stem}", custom_llm_provider="azure")
+            )
         case "header":
             response = rig.proxy.request(
                 "POST", "/v1/batches", _create_body(f"file-{stem}"), headers={"custom-llm-provider": "azure"}
@@ -304,9 +309,7 @@ def test_retrieve_and_cancel_naming_azure_reach_the_azure_routes(rig: Rig, surfa
     request: Final = _sent(rig, "GET", f"/openai/batches/{batch_id}")
     assert query_of(request) == {"api-version": [AZURE_API_VERSION]}
     assert request.headers.get("api-key") == AZURE_MODEL_KEY
-    cancelled: Final = rig.proxy.request(
-        "POST", f"{prefix}/batches/{batch_id}/cancel", params=params, headers=headers
-    )
+    cancelled: Final = rig.proxy.request("POST", f"{prefix}/batches/{batch_id}/cancel", params=params, headers=headers)
     assert cancelled.status_code == 200, cancelled.text
     _sent(rig, "POST", f"/openai/batches/{batch_id}/cancel")
 
@@ -438,7 +441,9 @@ def test_list_shows_a_key_only_its_own_batches_without_calling_a_provider(rig: R
         assert _listed_ids(rig, second) == [second_batch]
         everything: Final = _listed_ids(rig, None, limit="100")
         assert first_batch in everything and second_batch in everything
-        assert [request for request in rig.drained() if request.method == "GET" and path_of(request) == "/v1/batches"] == []
+        assert [
+            request for request in rig.drained() if request.method == "GET" and path_of(request) == "/v1/batches"
+        ] == []
 
 
 def test_list_pages_newest_first_with_limit_and_after(rig: Rig) -> None:

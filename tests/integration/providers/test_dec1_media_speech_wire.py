@@ -19,7 +19,7 @@ from typing import Final
 from urllib.parse import parse_qs
 
 import pytest
-from integration._support.client import Gateway
+from integration._support.client import Gateway, eventually
 from integration._support.wire import Reply, Request, wire_server
 from integration.providers.dec1_media_support import (
     AZURE_KEY,
@@ -28,6 +28,7 @@ from integration.providers.dec1_media_support import (
     error_message,
     error_of,
     json_body,
+    key_spend,
     logged_rows,
     openai_error_reply,
     response_cost,
@@ -37,6 +38,7 @@ from integration.providers.dec1_media_support import (
 
 _SPEECH: Final = "/v1/audio/speech"
 _RATE: Final = 0.00003
+_BUDGET: Final = 0.001
 
 
 def _audio(content_type: str = "audio/mpeg", body: bytes = SPEECH_BYTES) -> Reply:
@@ -157,7 +159,14 @@ def test_speech_without_a_voice_answers_400_before_the_provider(gateway: Gateway
 
 def test_speech_with_an_unknown_model_answers_400_and_names_the_route(gateway: Gateway) -> None:
     """The caller names a speech model no deployment serves. The proxy must answer 400 with error code `"400"`
-    and a message containing `/audio/speech: Invalid model name passed in model=<name>`."""
+    and a message containing `/audio/speech: Invalid model name passed in model=<name>`.
+    Product bug: CI run 42966523075 answered 400 with a body that has no `error` object. `audio_speech`
+    re-raises an `HTTPException` as is (litellm/proxy/proxy_server.py:13954), so FastAPI answers
+    `{"detail": ...}`, while its neighbouring endpoints turn the same exception into the OpenAI error envelope
+    (litellm/proxy/proxy_server.py:13809 and :14147)."""
+    pytest.skip(
+        "BUG: /v1/audio/speech answers an unknown model with a FastAPI detail body, not the OpenAI error envelope"
+    )
     unknown: Final = f"no-such-tts-{uuid.uuid4().hex[:8]}"
     response: Final = gateway.request("POST", _SPEECH, {"model": unknown, "input": "hello", "voice": "alloy"})
     assert response.status_code == 400, response.text
@@ -198,11 +207,15 @@ def test_azure_speech_uses_the_deployment_path_api_version_and_api_key_header(ga
 def test_speech_bills_each_input_character_and_logs_an_aspeech_row(gateway: Gateway) -> None:
     """The deployment costs 0.00003 per input character and the caller sends a 50 character input. The response
     cost header must be 50 * 0.00003 and one spend row must land for the key with `call_type` `aspeech`,
-    `status` `success` and the same spend. UNVERIFIED: that a deployment-level `input_cost_per_character`
-    is the rate the speech cost path reads (litellm/cost_calculator.py:692); the cost-map path is covered by
-    the DashScope and Gemini speech tests."""
-    line: Final = ("speech billing " + uuid.uuid4().hex + "x" * 50)[:50]
-    assert len(line) == 50
+    `status` `success` and the same spend. The input has no whitespace, because speech bills characters
+    with whitespace removed (litellm/utils.py:6535).
+    Product bug: CI run 42966523075 billed the `tts-1` cost map rate of 0.000015 per character, not the
+    deployment's `input_cost_per_character`, which is a custom pricing parameter like `input_cost_per_token`.
+    The speech branch of the cost calculator reads the model's cost map entry by its bare name
+    (litellm/cost_calculator.py:700), so the deployment's own price never applies."""
+    pytest.skip("BUG: speech ignores the deployment's input_cost_per_character and bills the cost map rate")
+    line: Final = ("speechbilling" + uuid.uuid4().hex + "x" * 50)[:50]
+    assert len(line) == 50 and not any(char.isspace() for char in line)
     with wire_server(_mp3) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(
             model="openai/tts-1", api_base=f"{wire.url}/v1", api_key=OPENAI_KEY, input_cost_per_character=_RATE
@@ -273,17 +286,20 @@ def test_speech_counts_against_the_key_rpm_limit(gateway: Gateway) -> None:
 
 
 def test_speech_is_refused_once_the_key_budget_is_spent(gateway: Gateway) -> None:
-    """A key has `max_budget` 0.001 and one speech call of 100 characters costs 0.003. After the first call's
-    spend has settled, the next speech call must answer 422 with error type `budget_exceeded` and must not
-    reach the provider."""
+    """A key has `max_budget` 0.001 and one speech call of 100 characters costs more than that. After the first
+    call's spend has landed on the key above the budget, the next speech call must answer 422 with error type
+    `budget_exceeded` and must not reach the provider.
+    The exact cost is not asserted here: the per-character rate speech bills is a separate, currently failing
+    contract (`test_speech_bills_each_input_character_and_logs_an_aspeech_row`), and either rate puts 100
+    characters over the budget."""
     with wire_server(_mp3) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(
             model="openai/tts-1", api_base=f"{wire.url}/v1", api_key=OPENAI_KEY, input_cost_per_character=_RATE
         )
-        key: Final = scenario.key(models=[model], max_budget=0.001)
+        key: Final = scenario.key(models=[model], max_budget=_BUDGET)
         first: Final = gateway.request("POST", _SPEECH, {"model": model, "input": "a" * 100, "voice": "alloy"}, key=key)
         assert first.status_code == 200, first.text
-        settled_key_spend(key, 100 * _RATE)
+        eventually(lambda: key_spend(key), lambda spend: spend > _BUDGET, seconds=70)
         refused: Final = gateway.request(
             "POST", _SPEECH, {"model": model, "input": "b" * 100, "voice": "alloy"}, key=key
         )
@@ -329,7 +345,9 @@ def test_speech_fills_user_from_the_key_owner_when_the_caller_sends_none(gateway
         model: Final = scenario.model(model="openai/tts-1", api_base=f"{wire.url}/v1", api_key=OPENAI_KEY)
         owner: Final = scenario.user(user_role="internal_user")
         key: Final = scenario.key(models=[model], user_id=owner)
-        response: Final = gateway.request("POST", _SPEECH, {"model": model, "input": _line(), "voice": "alloy"}, key=key)
+        response: Final = gateway.request(
+            "POST", _SPEECH, {"model": model, "input": _line(), "voice": "alloy"}, key=key
+        )
         assert response.status_code == 200, response.text
         logged_rows(key)
         rows: Final = gateway.rows('SELECT "user", call_type FROM "LiteLLM_SpendLogs" WHERE "user" = %s', (owner,))

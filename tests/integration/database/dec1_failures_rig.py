@@ -22,6 +22,7 @@ import asyncio
 import dataclasses
 import json
 import threading
+import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
@@ -76,6 +77,8 @@ DB_UNAVAILABLE_ERROR: Final[Mapping[str, JsonValue]] = {
 READY_BODY: Final[Mapping[str, JsonValue]] = {"status": "healthy", "db": "connected"}
 DISCONNECTED_BODY: Final[Mapping[str, JsonValue]] = {"status": "healthy", "db": "disconnected"}
 _POLL_SECONDS: Final = 0.02
+_SETTLE_PROBE_SECONDS: Final = 1.0
+_SETTLE_STREAK: Final = 5
 
 
 class FaultRelay:
@@ -388,7 +391,10 @@ def failures_rig(
         }
         if before_boot is not None:
             before_boot(database, redis)
-        removed: Final = ("DATABASE_URL_READ_REPLICA", *(() if with_redis else ("REDIS_HOST", "REDIS_PORT", "REDIS_URL")))
+        removed: Final = (
+            "DATABASE_URL_READ_REPLICA",
+            *(() if with_redis else ("REDIS_HOST", "REDIS_PORT", "REDIS_URL")),
+        )
         owned: Final = stack.enter_context(
             owned_proxy_process(
                 shared,
@@ -443,7 +449,9 @@ def anthropic_message(
     return proxy.request("POST", "/v1/messages", body, key=key, headers={"anthropic-version": "2023-06-01"})
 
 
-def stream_chat(proxy: Gateway, model: str = CHAT, *, key: str | None = None, text: str | None = None) -> tuple[int, str]:
+def stream_chat(
+    proxy: Gateway, model: str = CHAT, *, key: str | None = None, text: str | None = None
+) -> tuple[int, str]:
     body: Final[dict[str, JsonValue]] = {
         "model": model,
         "stream": True,
@@ -479,15 +487,34 @@ def await_connected(proxy: Gateway, seconds: float = RECOVERY_SECONDS) -> None:
     eventually(lambda: readiness(proxy), lambda seen: seen == (200, dict(READY_BODY)), seconds=seconds)
 
 
+def await_serving(proxy: Gateway, seconds: float = RECOVERY_SECONDS) -> None:
+    """Wait until database-backed admin reads answer 200 several times in a row.
+
+    Readiness can report `connected` while a reconnect cycle the outage started is still replacing the Prisma
+    client, and queries in that window fail with `Client is not connected to the query engine`. A test that
+    creates or deletes keys right after an outage needs the client settled, not just one good probe."""
+    streak: Final[list[int]] = [0]  # mutable-ok: the run of good probes, read and reset by probe()
+
+    def probe() -> int:
+        response: Final = proxy.request("GET", "/key/list", params={"page": "1", "size": "1"})
+        streak[0] = streak[0] + 1 if response.status_code == 200 else 0
+        time.sleep(_SETTLE_PROBE_SECONDS)
+        return streak[0]
+
+    eventually(probe, lambda seen: seen >= _SETTLE_STREAK, seconds=seconds)
+
+
 @contextmanager
 def database_down(rig: Rig) -> Iterator[None]:
-    """Postgres is unreachable inside the block. Afterwards the relay is open and the proxy reconnected."""
+    """Postgres is unreachable inside the block. Afterwards the relay is open, the proxy reports itself
+    connected, and database-backed admin calls are answered again."""
     rig.database.refuse()
     try:
         yield
     finally:
         rig.database.open()
         await_connected(rig.proxy)
+        await_serving(rig.proxy)
 
 
 @contextmanager

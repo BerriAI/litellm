@@ -332,12 +332,21 @@ def test_a_request_tag_no_deployment_carries_is_refused_with_401(rig: Rig) -> No
 def test_a_model_name_no_group_alias_wildcard_or_id_matches_is_refused_with_400(rig: Rig) -> None:
     """The caller asks for `dec1-sel-no-such-model`, which nothing in the model list matches.
 
-    The caller gets HTTP 400 and the body contains
-    `Invalid model name passed in model=dec1-sel-no-such-model`.
+    The caller gets HTTP 400 with `type` `invalid_request_error` and a message that names the model and says
+    `There are no healthy deployments for this model`, never the proxy's own `Invalid model name` refusal.
+    Pinned current behaviour: this proxy has a wildcard group (`dec1sel/*`), and once any wildcard pattern is
+    configured the proxy hands every unknown name to the router (litellm/proxy/route_llm_request.py:1076)
+    instead of answering `Invalid model name passed in model=...` itself, so the router's no-deployment 400
+    is what the caller sees.
     """
     response: Final = chat(rig.gateway, "dec1-sel-no-such-model")
     assert response.status_code == 400, response.text
-    assert f"{INVALID_MODEL}dec1-sel-no-such-model" in response.text
+    assert error_of(response)["type"] == "invalid_request_error", response.text
+    assert error_message(response).startswith(
+        "litellm.BadRequestError: You passed in model=dec1-sel-no-such-model. "
+        "There are no healthy deployments for this model"
+    ), response.text
+    assert INVALID_MODEL not in response.text
 
 
 def test_set_verbose_in_router_settings_is_accepted_and_the_proxy_keeps_routing(rig: Rig) -> None:

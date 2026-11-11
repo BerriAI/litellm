@@ -55,6 +55,7 @@ FILE_CONTENT: Final = b"dec1 scripted file content\n"
 CREATED_AT: Final = 1700000000
 _FAULT: Final = re.compile(r"fault-(\d{3})")
 _MODEL_PROBES: Final = frozenset({"/v1/models", "/openai/models", "/models"})
+_REWRITTEN_BATCH_STEM: Final = "modified_file"
 
 
 def batch_line(model: str, custom_id: str = "request-1", content: str = "one") -> dict[str, JsonValue]:
@@ -99,7 +100,9 @@ def multipart_parts(request: Request) -> tuple[Message, ...]:
 
 def multipart_field(request: Request, name: str) -> bytes:
     """The raw bytes of the one multipart part named `name` in an upstream upload."""
-    matches: Final = [part for part in multipart_parts(request) if part.get_param("name", header="content-disposition") == name]
+    matches: Final = [
+        part for part in multipart_parts(request) if part.get_param("name", header="content-disposition") == name
+    ]
     assert len(matches) == 1, f"Expected one multipart part named {name!r}: {request.body[:300]!r}"
     payload: Final = matches[0].get_payload(decode=True)
     assert isinstance(payload, bytes)
@@ -129,7 +132,9 @@ def error_of(response: httpx.Response) -> dict[str, JsonValue]:
     return JSON_OBJECT.validate_python(body["error"])
 
 
-def file_object(file_id: str, filename: str = "dec1.jsonl", purpose: str = "batch", size: int = 123) -> dict[str, JsonValue]:
+def file_object(
+    file_id: str, filename: str = "dec1.jsonl", purpose: str = "batch", size: int = 123
+) -> dict[str, JsonValue]:
     return {
         "id": file_id,
         "object": "file",
@@ -252,6 +257,21 @@ def _message(thread_id: str) -> dict[str, JsonValue]:
     }
 
 
+def _upload_stem(filename: str, content: bytes) -> str:
+    """The stem the scripted provider names an uploaded file after: the filename without its extension.
+
+    A managed batch input is rewritten by the proxy and re-uploaded as `modified_file.jsonl`
+    (litellm/litellm_core_utils/batch_utils.py:206) whatever the caller called it, so for that name the stem is
+    the `custom_id` of the file's first request line instead, which the rewrite keeps. Without this every
+    managed upload would get the same provider id."""
+    stem: Final = filename.rsplit(".", 1)[0]
+    if stem != _REWRITTEN_BATCH_STEM:
+        return stem
+    first_line: Final = content.decode("utf-8").strip().split("\n", 1)[0]
+    custom_id: Final = JSON_OBJECT.validate_json(first_line).get("custom_id")
+    return custom_id if isinstance(custom_id, str) and custom_id else stem
+
+
 @dataclass(slots=True)
 class Backend:
     """The scripted provider. Remembers uploaded file bytes so a later content download returns them."""
@@ -312,7 +332,7 @@ class Backend:
         filename: Final = multipart_filename(request)
         content: Final = multipart_field(request, "file")
         purpose: Final = multipart_field(request, "purpose").decode()
-        file_id: Final = "file-" + filename.rsplit(".", 1)[0]
+        file_id: Final = "file-" + _upload_stem(filename, content)
         with self.lock:
             self.uploads[file_id] = content
         return _json(file_object(file_id, filename, purpose, len(content)))
@@ -496,14 +516,15 @@ def booted_rig(
         settings: Final = resource_config(wire.url, litellm_settings)
         merged: Final = {
             **{name: value for name, value in settings.items() if name not in drop_settings},
-            "general_settings": {**JSON_OBJECT.validate_python(settings["general_settings"]), **(general_settings or {})},
+            "general_settings": {
+                **JSON_OBJECT.validate_python(settings["general_settings"]),
+                **(general_settings or {}),
+            },
         }
         config: Final = directory / "dec1-resources-config.yaml"
         config.write_text(yaml.safe_dump(merged))
         environment: Final = {
             name: value for name, value in resource_environment(wire.url).items() if name not in remove_environment
         }
-        with owned_proxy(
-            shared, directory, environment, config=config, remove_environment=remove_environment
-        ) as proxy:
+        with owned_proxy(shared, directory, environment, config=config, remove_environment=remove_environment) as proxy:
             yield Rig(proxy, wire, backend)

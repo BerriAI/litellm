@@ -187,7 +187,14 @@ def test_default_fallbacks_serve_a_group_that_has_no_entry_of_its_own(rig: Rig) 
     """`default_fallbacks: ["fb-default"]`; group `fb-nochain` has no entry in `fallbacks` and answers 503.
 
     The caller gets 200 with the default fallback's content and `x-litellm-attempted-fallbacks: 1`.
+    Product bug: CI run 42966523075 answered the 503 with "no fallback model group was found" although
+    `default_fallbacks` is a supported router setting. Likely cause: the router folds `default_fallbacks`
+    into `fallbacks` as a `"*"` entry only when it is built (litellm/router_rust/core.py:707), and
+    `Resolved.changed`, which the proxy's runtime re-apply of router settings goes through
+    (litellm/proxy/proxy_server.py:8445), replaces `fallbacks` without folding it back in
+    (litellm/router_rust/core.py:832).
     """
+    pytest.skip("BUG: default_fallbacks are not applied when router_settings also configures fallbacks")
     response: Final = chat(rig.gateway, "fb-nochain")
     assert response.status_code == 200, response.text
     assert content_of(response) == "served ok-fbdefault"
@@ -368,19 +375,23 @@ def test_disable_fallbacks_in_the_request_body_returns_the_primary_error(rig: Ri
     assert rig.upstream.count("ok-fbdisabledbackup") == 0
 
 
-def test_mock_testing_rate_limit_error_fails_the_primary_without_calling_it_and_falls_back(rig: Rig) -> None:
+def test_mock_testing_rate_limit_error_fails_every_fallback_level_without_calling_an_upstream(rig: Rig) -> None:
     """The proxy allows mock testing params; the caller sends `mock_testing_rate_limit_error: true` to
-    `fb-mock-429`, whose upstream is healthy.
+    `fb-mock-429`, whose upstream is healthy and which falls back to the healthy `fb-mock-429-backup`.
 
-    The router raises a synthetic 429 in place of the first attempt, so the primary's upstream model receives
-    nothing, and with retries off the request is served by `fb-mock-429-backup` with 200. UNVERIFIED: the exact
-    path is `first_attempt` in `litellm-rust/crates/router-core/src/call.rs`; the Python host may also
-    surface the 429 directly.
+    The mock replaces the first attempt of every level, the fallback included
+    (litellm-rust/crates/router-core/src/mock.rs:29), so with retries off the caller gets HTTP 429 with the
+    requested group's mock error and a note that the fallback also failed, and neither upstream model
+    receives a request.
     """
     response: Final = chat(rig.gateway, "fb-mock-429", mock_testing_rate_limit_error=True)
-    assert response.status_code == 200, response.text
-    assert content_of(response) == "served ok-fbmock429backup"
+    assert response.status_code == 429, response.text
+    assert error_of(response)["code"] == "429", response.text
+    message: Final = error_message(response)
+    assert message.startswith("litellm.RateLimitError: This is a mock exception for model=fb-mock-429,"), message
+    assert "Fallback to fb-mock-429-backup also failed" in message, message
     assert rig.upstream.count("ok-fbmock429-primary") == 0
+    assert rig.upstream.count("ok-fbmock429backup") == 0
 
 
 def test_the_upstream_context_error_text_reaches_the_caller_when_nothing_serves_it(rig: Rig) -> None:

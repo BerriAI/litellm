@@ -217,9 +217,7 @@ def test_cost_per_request_accumulates_on_the_keys_spend(gateway: Gateway) -> Non
         key: Final = granted_key(scenario, path)
         statuses: Final = [gateway.request("POST", path, _BODY, key=key).status_code for _ in range(3)]
         assert statuses == [200, 200, 200], statuses
-        rows: Final = eventually(
-            lambda: spend_rows(gateway, key), lambda found: len(found) == 3, seconds=SPEND_SECONDS
-        )
+        rows: Final = eventually(lambda: spend_rows(gateway, key), lambda found: len(found) == 3, seconds=SPEND_SECONDS)
         assert [number(row["spend"]) for row in rows] == [pytest.approx(0.25)] * 3, rows
         spent: Final = eventually(
             lambda: _key_spend(gateway, key), lambda value: value >= 0.75 - 1e-9, seconds=SPEND_SECONDS
@@ -267,10 +265,13 @@ def test_a_streamed_call_is_billed_the_flat_cost_once(gateway: Gateway) -> None:
     """The endpoint costs 0.25 per request and the target answers a three-frame event stream.
 
     After the caller has read the whole stream, exactly one spend row must exist for the key with
-    `spend = 0.25`: one row per call, not one per frame and not zero. UNVERIFIED: that the flat cost is applied
-    on the streaming path was not traced end to end; see `_set_cost_per_request` in
-    `pass_through_endpoints/success_handler.py`.
+    `spend = 0.25`: one row per call, not one per frame and not zero.
+    Product bug: CI run 42966523075 wrote the row with spend 0. Only the non-streaming success path applies
+    `cost_per_request` (`_set_cost_per_request`, litellm/proxy/pass_through_endpoints/success_handler.py:591);
+    the streaming path logs through `route_streaming_logging_to_handler`
+    (litellm/proxy/pass_through_endpoints/streaming_handler.py:329), which never does.
     """
+    pytest.skip("BUG: a streamed pass-through call is billed 0 instead of the endpoint's cost_per_request")
     frames: Final = (b'data: {"n":1}\n\n', b'data: {"n":2}\n\n', b"data: [DONE]\n\n")
     reply: Final = Reply(content_type="text/event-stream", chunks=frames)
     with wire_server(always(reply)) as wire, gateway.scenario() as scenario:

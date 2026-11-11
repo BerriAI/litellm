@@ -312,6 +312,30 @@ def unaccepting_listener() -> Iterator[str]:
         listener.close()
 
 
+@contextmanager
+def plain_http_port() -> Iterator[int]:
+    """A port that answers the way a plain HTTP/1.1 server answers bytes it cannot parse: whatever arrives
+    first gets `400 Bad Request` and the connection is closed. A TLS client therefore receives a reply that
+    is not TLS at once, instead of waiting for a server that is still looking for the end of a request head,
+    which is what `raw_peer` would do with a ClientHello."""
+    port: Final = allocate_port()
+
+    async def serve(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            await reader.read(4096)
+            writer.write(http_response(400, b"", content_type=None, reason="Bad Request"))
+            await writer.drain()
+        except (ConnectionError, OSError):
+            return
+
+    server: Final = LoopbackServer(port, serve)
+    try:
+        server.start()
+        yield port
+    finally:
+        server.stop()
+
+
 def unbound_api_base() -> str:
     """An API base on a loopback port nothing listens on: every connection attempt is refused at once."""
     return f"http://127.0.0.1:{allocate_port()}/v1"
