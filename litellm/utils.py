@@ -1120,28 +1120,23 @@ def function_setup(
         logging_class: Final = get_litellm_logging_class()
         callback_context: Final[object] = kwargs.pop("_dynamic_callback_context", None)
         _dynamic_callback_context: Final = callback_context if isinstance(callback_context, logging_class) else None
-        dynamic_success_callbacks: list[str | Callable | CustomLogger] | None = (
+        dynamic_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = (
             copy.copy(_dynamic_callback_context.dynamic_success_callbacks) if _dynamic_callback_context else None
         )
-        dynamic_async_success_callbacks: list[str | Callable | CustomLogger] | None = (
+        dynamic_async_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = (
             copy.copy(_dynamic_callback_context.dynamic_async_success_callbacks) if _dynamic_callback_context else None
         )
-        dynamic_failure_callbacks: list[str | Callable | CustomLogger] | None = (
+        dynamic_failure_callbacks: list[str | Callable[..., object] | CustomLogger] | None = (
             copy.copy(_dynamic_callback_context.dynamic_failure_callbacks) if _dynamic_callback_context else None
         )
-        dynamic_async_failure_callbacks: Final[list[str | Callable | CustomLogger] | None] = (
+        dynamic_async_failure_callbacks: Final[list[str | Callable[..., object] | CustomLogger] | None] = (
             copy.copy(_dynamic_callback_context.dynamic_async_failure_callbacks) if _dynamic_callback_context else None
         )
         if kwargs.get("success_callback", None) is not None and isinstance(kwargs["success_callback"], list):
             removed_async_items = []
             for index, callback in enumerate(kwargs["success_callback"]):
                 if coroutine_checker.is_async_callable(callback) or callback == "dynamodb" or callback == "s3":
-                    if dynamic_async_success_callbacks is not None and isinstance(
-                        dynamic_async_success_callbacks, list
-                    ):
-                        dynamic_async_success_callbacks.append(callback)
-                    else:
-                        dynamic_async_success_callbacks = [callback]
+                    dynamic_async_success_callbacks = [*(dynamic_async_success_callbacks or ()), callback]
                     removed_async_items.append(index)
             # Pop the async items from success_callback in reverse order to avoid index issues
             for index in reversed(removed_async_items):

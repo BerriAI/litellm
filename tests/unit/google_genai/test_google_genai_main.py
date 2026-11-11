@@ -674,7 +674,7 @@ async def test_custom_content_adapter_delivers_per_request_success_callbacks_onc
     monkeypatch.setattr(litellm, "_async_success_callback", [global_recorder])
     request: Final = dict(
         model="native_image_test/chat-model", contents=[{"parts": [{"text": "hello"}]}],
-        success_callback=[request_recorder.async_log_success_event if is_async else request_recorder.log_success_event],
+        success_callback=[request_recorder.async_log_success_event if is_async else request_recorder],
     )
     result: Final = await litellm.agenerate_content(**request) if is_async else litellm.generate_content(**request)
     if is_async:
