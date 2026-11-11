@@ -768,6 +768,28 @@ class TestPerformRedaction:
         assert logged_choices[0]["message"]["provider_specific_fields"]["token_ids"] is None
         assert details["complete_streaming_response"].choices[0].get("token_ids") is None
 
+    def test_drops_the_vllm_prompt_fields_that_carry_the_prompt(self):
+        prompt_fields = {"prompt_token_ids": [151644, 872], "prompt_text": "<|im_start|>user\nsecret"}
+
+        def response():
+            return litellm.ModelResponse(
+                choices=[litellm.Choices(message=litellm.Message(content="ok", role="assistant"))], **prompt_fields
+            )
+
+        details = {
+            "stream": True,
+            "complete_streaming_response": response(),
+            "standard_logging_object": {"response": {"choices": [{"message": {"content": "ok"}}], **prompt_fields}},
+        }
+
+        redacted = perform_redaction(details, response())
+
+        assert details["complete_streaming_response"].model_dump(include=set(prompt_fields)) == dict.fromkeys(
+            prompt_fields
+        )
+        assert redacted.model_dump(include=set(prompt_fields)) == dict.fromkeys(prompt_fields)
+        assert prompt_fields.keys().isdisjoint(details["standard_logging_object"]["response"])
+
     def test_redacts_text_completion_stream_text_and_the_token_ids_that_decode_to_it(self):
         details = {
             "stream": True,

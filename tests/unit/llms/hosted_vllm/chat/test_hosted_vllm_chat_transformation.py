@@ -183,15 +183,12 @@ def _vllm_chunk(choice: dict[str, object], **top_level: object) -> str:
     )
 
 
-def test_hosted_vllm_stream_keeps_prompt_fields_on_the_chunk_vllm_sent_them_on():
-    prompt_token_ids: Final = [151644, 872, 198, 151645]
-    prompt_text: Final = "<|im_start|>user\nhi<|im_end|>"
+PROMPT_FIELDS: Final = frozenset({"prompt_token_ids", "prompt_text"})
+
+
+def _hosted_vllm_stream(**prompt_fields: object) -> CustomStreamWrapper:
     sse_lines: Final = (
-        _vllm_chunk(
-            {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
-            prompt_token_ids=prompt_token_ids,
-            prompt_text=prompt_text,
-        ),
+        _vllm_chunk({"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None}, **prompt_fields),
         _vllm_chunk({"index": 0, "delta": {"content": "Hi"}, "finish_reason": None, "token_ids": [9707]}),
         _vllm_chunk({"index": 0, "delta": {"content": ""}, "finish_reason": "stop"}),
         "data: [DONE]",
@@ -205,7 +202,7 @@ def test_hosted_vllm_stream_keeps_prompt_fields_on_the_chunk_vllm_sent_them_on()
         litellm_call_id="call-1",
         function_id="fn-1",
     )
-    stream: Final = CustomStreamWrapper(
+    return CustomStreamWrapper(
         completion_stream=HostedVLLMChatConfig().get_model_response_iterator(
             streaming_response=iter(sse_lines), sync_stream=True, json_mode=False
         ),
@@ -214,9 +211,22 @@ def test_hosted_vllm_stream_keeps_prompt_fields_on_the_chunk_vllm_sent_them_on()
         logging_obj=logging_obj,
     )
 
-    emitted: Final = tuple(chunk.model_dump(include={"prompt_token_ids", "prompt_text"}) for chunk in stream)
 
-    assert emitted == ({"prompt_token_ids": prompt_token_ids, "prompt_text": prompt_text}, {}, {})
+def test_hosted_vllm_stream_keeps_prompt_fields_on_the_chunk_vllm_sent_them_on_and_in_the_built_response():
+    prompt_fields: Final = {"prompt_token_ids": [151644, 872, 198, 151645], "prompt_text": "<|im_start|>user\nhi<|im_end|>"}
+
+    chunks: Final = list(_hosted_vllm_stream(**prompt_fields))
+    built: Final = litellm.stream_chunk_builder(chunks=chunks)
+
+    assert tuple(chunk.model_dump(include=PROMPT_FIELDS) for chunk in chunks) == (prompt_fields, {}, {})
+    assert built is not None
+    assert built.model_dump(include=PROMPT_FIELDS) == prompt_fields
+
+
+def test_hosted_vllm_stream_leaves_out_the_null_prompt_fields_vllm_sends_when_they_were_not_asked_for():
+    chunks: Final = list(_hosted_vllm_stream(prompt_token_ids=None, prompt_text=None))
+
+    assert tuple(chunk.model_dump(include=PROMPT_FIELDS) for chunk in chunks) == ({}, {}, {})
 
 
 def test_hosted_vllm_reasoning_content_kept_and_thinking_blocks_removed():

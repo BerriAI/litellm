@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, Final, Protocol
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 import litellm
-from litellm.constants import REDACTED_BY_LITELLM
+from litellm.constants import REDACTED_BY_LITELLM, VLLM_STREAM_PROMPT_FIELDS
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.classifier_logging import without_classifier_audit
 from litellm.litellm_core_utils.core_helpers import (
@@ -179,7 +179,7 @@ def _redact_streaming_response(streaming_response):
     if hasattr(streaming_response, "choices"):
         for choice in streaming_response.choices:
             _redact_choice_content(choice)
-        redact_vertex_ai_metadata_from_logged_object(streaming_response)
+        _redact_prompt_derived_fields(streaming_response)
         if isinstance(streaming_response, litellm.ModelResponse):
             _redact_bedrock_guardrail_trace(streaming_response)
     elif isinstance(streaming_response, litellm.ResponsesAPIResponse):
@@ -375,6 +375,15 @@ def _drop_field_when_present(item: object, field: str) -> None:
         setattr(item, field, None)
 
 
+def _redact_prompt_derived_fields(response: object) -> None:
+    for field in VLLM_STREAM_PROMPT_FIELDS:
+        if isinstance(response, dict) and field in response:
+            del response[field]  # rebind-ok: redaction scrubs the logged object in place for every caller
+        else:
+            _drop_field_when_present(response, field)
+    redact_vertex_ai_metadata_from_logged_object(response)
+
+
 def _redact_responses_api_output(output_items):
     """Helper to redact ResponsesAPIResponse output items."""
     for output_item in output_items:
@@ -515,7 +524,7 @@ def _redact_standard_logging_object(
             # ModelResponse dict format - redact content in choices
             if isinstance(response.get("choices"), list):
                 _redact_model_response_dict_choices(response["choices"], redacted_str)
-            redact_vertex_ai_metadata_from_logged_object(response)
+            _redact_prompt_derived_fields(response)
             _redact_bedrock_guardrail_trace(response)
         elif isinstance(response, str):
             standard_logging_object["response"] = redacted_str
@@ -680,13 +689,13 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
             if hasattr(_result, "choices") and _result.choices is not None:
                 for choice in _result.choices:
                     _redact_choice_content(choice)
-            redact_vertex_ai_metadata_from_logged_object(_result)
+            _redact_prompt_derived_fields(_result)
             _redact_bedrock_guardrail_trace(_result)
         elif isinstance(_result, dict) and "choices" in _result:
             # Handle dict representation of ModelResponse (e.g., from model_dump())
             if _result.get("choices") is not None:
                 _redact_model_response_dict_choices(_result["choices"], REDACTED_BY_LITELLM)
-            redact_vertex_ai_metadata_from_logged_object(_result)
+            _redact_prompt_derived_fields(_result)
             _redact_bedrock_guardrail_trace(_result)
         elif isinstance(_result, dict) and "output" in _result:
             return _redacted_responses_api_response(_result, redact_instructions=redact_streaming_responses)

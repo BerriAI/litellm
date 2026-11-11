@@ -128,6 +128,22 @@ async def test_a_replayed_stream_keeps_the_cached_completion_tokens_details(repl
     assert rebuilt.usage.completion_tokens_details.text_tokens == 3
 
 
+@pytest.mark.parametrize("content", ["", "Hello world! How are you?"], ids=["single_frame", "sliced"])
+@pytest.mark.parametrize("replay", ["async", "sync"])
+@pytest.mark.asyncio
+async def test_a_replayed_stream_carries_the_cached_vllm_prompt_fields_on_its_first_chunk_only(replay, content):
+    prompt_fields: Final = {"prompt_token_ids": [151644, 872, 198], "prompt_text": "<|im_start|>user\nhi"}
+    cached: Final = {**_async_payload(content=content), **prompt_fields}
+
+    chunks = await _collect_async(cached) if replay == "async" else list(convert_to_streaming_response(cached))
+    rebuilt = litellm.stream_chunk_builder(chunks=chunks)
+
+    assert [chunk.model_dump(include=set(prompt_fields)) for chunk in chunks] == [prompt_fields] + [{}] * (
+        len(chunks) - 1
+    )
+    assert rebuilt.model_dump(include=set(prompt_fields)) == prompt_fields
+
+
 @pytest.mark.parametrize("cached_fields", [7, [1, 2], "", "x" * 5000], ids=["int", "list", "empty", "long"])
 @pytest.mark.asyncio
 async def test_the_async_replay_ignores_cached_provider_fields_that_are_not_an_object(cached_fields):

@@ -1034,9 +1034,11 @@ class OpenAIUnknownModelConfig(OpenAIGPTConfig):
 
 
 class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
+    passthrough_top_level_fields: tuple[str, ...] = ()
+
     def __init__(
         self,
-        streaming_response: object,
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse | None,
         sync_stream: bool,
         json_mode: bool | None = False,
         *,
@@ -1045,7 +1047,7 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
         super().__init__(  # pyright: ignore[reportUnknownMemberType]  # base iterator leaves streaming_response untyped
             streaming_response=streaming_response, sync_stream=sync_stream, json_mode=json_mode
         )
-        self.passthrough_top_level_fields: Final = passthrough_top_level_fields
+        self.passthrough_top_level_fields = passthrough_top_level_fields
 
     def _map_reasoning_to_reasoning_content(self, choices: list) -> list:
         """
@@ -1106,7 +1108,11 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
                 "created": chunk.get("created"),
                 "model": chunk.get("model"),
                 "choices": choices,
-                **{field: chunk[field] for field in self.passthrough_top_level_fields if field in chunk},
+                **{
+                    field: chunk[field]
+                    for field in self.passthrough_top_level_fields
+                    if field in chunk and chunk[field] is not None
+                },
             }
             if "usage" in chunk and chunk["usage"] is not None:
                 kwargs["usage"] = chunk["usage"]

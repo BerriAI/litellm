@@ -307,6 +307,22 @@ class TestOpenAIChatCompletionStreamingHandler:
         assert result.usage.completion_tokens == 350
         assert result.usage.total_tokens == 14147
 
+    def test_chunk_parser_leaves_out_vllm_prompt_fields_unless_the_provider_passes_them_through(self):
+        handler = OpenAIChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
+
+        result = handler.chunk_parser(
+            {
+                "id": "chatcmpl-1",
+                "object": "chat.completion.chunk",
+                "model": "m",
+                "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None}],
+                "prompt_token_ids": [151644, 872],
+                "prompt_text": "<|im_start|>user",
+            }
+        )
+
+        assert result.model_dump(include={"prompt_token_ids", "prompt_text"}) == {}
+
     def test_chunk_parser_preserves_service_tier(self):
         """OpenAI-compatible upstreams serve a service_tier on every streamed
         chunk; chunk_parser must keep it on the emitted ModelResponseStream so

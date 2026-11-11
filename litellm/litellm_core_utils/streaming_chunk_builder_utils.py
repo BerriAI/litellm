@@ -12,7 +12,7 @@ from typing_extensions import ReadOnly, Required
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.constants import VLLM_CHOICE_FIELDS
+from litellm.constants import VLLM_CHOICE_FIELDS, VLLM_STREAM_PROMPT_FIELDS
 from litellm.litellm_core_utils.core_helpers import (
     PROVIDERS_BILLED_FROM_THEIR_OWN_USAGE_FIELDS,
     UPSTREAM_USAGE_COST,
@@ -500,6 +500,7 @@ class ChunkProcessor:
                     if service_tier is not None
                     else MappingProxyType({})
                 ),
+                **_streamed_prompt_fields(chunks),
                 "choices": (
                     [ChunkProcessor.build_base_choice(index, choice_chunks) for index, choice_chunks in choice_streams]
                     if len(choice_streams) > 1
@@ -1508,6 +1509,20 @@ def _field_of(value: object, name: str) -> object:
     if isinstance(value, dict):
         return cast(Mapping[str, object], value).get(name)  # cast-ok: chunk dicts are untyped JSON
     return getattr(value, name, None)
+
+
+def _first_streamed_value(chunks: Sequence[object], field: str) -> object:
+    return next((value for chunk in chunks if (value := _field_of(chunk, field)) is not None), None)
+
+
+def _streamed_prompt_fields(chunks: Sequence[object]) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            field: value
+            for field in VLLM_STREAM_PROMPT_FIELDS
+            if (value := _first_streamed_value(chunks, field)) is not None
+        }
+    )
 
 
 def _first_choices(chunks: Iterable[object]) -> tuple[object, ...]:
