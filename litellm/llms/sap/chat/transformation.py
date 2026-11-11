@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Any, Final, Union
 import httpx
 from pydantic import BaseModel
 
-import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import message_with_file_parts_as_image_urls
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.types.llms.openai import AllMessageValues
@@ -44,7 +43,6 @@ from .models import (
     SAPUserMessage,
 )
 
-_AICORE_ORCHESTRATION_DEPLOYMENT_URL_ENV_VAR: Final = "AICORE_ORCHESTRATION_DEPLOYMENT_URL"
 
 # Keys routed outside SAP orchestration `model.params` (prompt, stream, fallbacks, etc.)
 _SAP_MODEL_PARAMS_EXCLUDED_KEYS: Final[frozenset[str]] = frozenset(
@@ -189,7 +187,6 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         return resolve_deployment_url(
             self.base_url,
             self.resource_group,
-            _AICORE_ORCHESTRATION_DEPLOYMENT_URL_ENV_VAR,
             self._fetch_deployment_url,
         )
 
@@ -264,9 +261,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ):
-        # Per-request override wins; deployment_url handles env var + discovery.
-        base: Final = optional_params.get("deployment_url") or self.deployment_url
-        return join_api_base(base, "v2/completion")
+        return join_api_base(self.deployment_url, "v2/completion")
 
     def _build_prompt_module(
         self,
@@ -332,7 +327,6 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         headers: dict,
     ) -> dict:
         optional_params = dict(optional_params)
-        optional_params.pop("deployment_url", None)
 
         template: Final = _messages_to_sap_template(messages)
 

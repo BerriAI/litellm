@@ -17,8 +17,6 @@ from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllEmbeddingInputValues
 from litellm.types.utils import EmbeddingResponse
 
-_AICORE_EMBEDDING_DEPLOYMENT_URL_ENV_VAR: Final = "AICORE_EMBEDDING_DEPLOYMENT_URL"
-
 from ..chat.handler import GenAIHubOrchestrationError
 from ..credentials import get_token_creator
 from ..deployment import fetch_deployment_url, resolve_deployment_url
@@ -105,7 +103,6 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         return resolve_deployment_url(
             self.base_url,
             self.resource_group,
-            _AICORE_EMBEDDING_DEPLOYMENT_URL_ENV_VAR,
             self._fetch_deployment_url,
         )
 

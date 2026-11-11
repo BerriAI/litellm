@@ -2,7 +2,6 @@ import warnings
 from typing import Final
 
 import pytest
-from unittest.mock import MagicMock, patch
 from pydantic import ValidationError
 
 
@@ -18,33 +17,11 @@ def _clear_sap_deployment_caches():
 def _make_config():
     from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
 
-    cfg = GenAIHubOrchestrationConfig()
-    cfg.token_creator = lambda: "Bearer TEST_TOKEN"
-    cfg._base_url = "https://api.test-sap.com"
-    cfg._resource_group = "test-group"
-    return cfg
-
-def _mock_client(*names: str):
-    """Fake httpx client returning a /lm/deployments response for the given deployment names.
-
-    The backend filters by scenarioId/executableIds/status, so there is no
-    second call to /lm/configurations; the mock only needs one response shape.
-    """
-    resources = [
-        {
-            "scenarioId": "orchestration",
-            "configurationId": f"cfg-{n}",
-            "deploymentUrl": f"https://deploy-{n}.sap.com",
-            "createdAt": f"2024-01-{i + 1:02d}T00:00:00Z",
-            "configurationName": n,
-        }
-        for i, n in enumerate(names)
-    ]
-    resp = MagicMock()
-    resp.json.return_value = {"resources": resources}
-    client = MagicMock()
-    client.get.return_value = resp
-    return client
+    config = GenAIHubOrchestrationConfig()
+    config.token_creator = lambda: "Bearer TEST_TOKEN"
+    config._base_url = "https://api.test-sap.com"
+    config._resource_group = "test-group"
+    return config
 
 
 class TestSAPTransformationIntegration:
@@ -63,7 +40,6 @@ class TestSAPTransformationIntegration:
         optional_params = {
             "temperature": 0.7,
             "max_tokens": 100,
-            "deployment_url": "https://custom.sap.com/deployment/123",
             "model_version": "v1.5",
             "tools": [{"type": "function", "function": {"name": "calculator"}}],
             "frequency_penalty": 0.1,
@@ -77,7 +53,6 @@ class TestSAPTransformationIntegration:
 
         assert "temperature" in model_params
         assert "frequency_penalty" in model_params
-        assert "deployment_url" not in model_params
         assert "model_version" not in model_params
         assert "tools" not in model_params
 
@@ -108,15 +83,14 @@ class TestSAPTransformationIntegration:
                 "expected_in_model": {"temperature", "max_tokens"},
                 "expected_excluded": set(),
             },
-            # Case 2: Parameters with auth/infrastructure components
+            # Case 2: Parameters with framework components
             {
                 "params": {
                     "temperature": 0.8,
-                    "deployment_url": "https://api.sap.com/deployments/test",
                     "max_tokens": 150,
                 },
                 "expected_in_model": {"temperature", "max_tokens"},
-                "expected_excluded": {"deployment_url"},
+                "expected_excluded": set(),
             },
             # Case 3: Parameters with framework components
             {
@@ -135,7 +109,7 @@ class TestSAPTransformationIntegration:
             filtered_params = {
                 k: v
                 for k, v in test_case["params"].items()
-                if k not in {"tools", "model_version", "deployment_url"}
+                if k not in {"tools", "model_version"}
             }
 
             for expected_param in test_case["expected_in_model"]:
@@ -187,7 +161,6 @@ class TestSAPTransformationIntegration:
             ],
             optional_params={
                 "response_format": {"type": "json_object"},
-                "deployment_url": "shouldn't be in results",
             },
             litellm_params={},
             headers={},
@@ -231,7 +204,6 @@ class TestSAPTransformationIntegration:
             ],
             optional_params={
                 "response_format": expected_response_format,
-                "deployment_url": "shouldn't be in results",
             },
             litellm_params={},
             headers={},
@@ -274,7 +246,6 @@ class TestSAPTransformationIntegration:
                 "stream": True,
                 "stream_options": {"chunk_size": 10},
                 "model_version": "latest",
-                "deployment_url": "shouldn't be in results",
             },
             litellm_params={},
             headers={},
@@ -287,7 +258,6 @@ class TestSAPTransformationIntegration:
             model="gpt-4o",
             messages=[{"role": "user", "content": "Hello. Answer {{ ?user_query }}"}],
             optional_params={
-                "deployment_url": "shouldn't be in results",
                 "placeholder_defaults": {"user_query": "default value"},
             },
             litellm_params={},
@@ -305,7 +275,6 @@ class TestSAPTransformationIntegration:
             model="gpt-4o",
             messages=[{"role": "user", "content": "Hello. Answer {{ ?user_query }}"}],
             optional_params={
-                "deployment_url": "shouldn't be in results",
                 "placeholder_values": placeholder_values,
             },
             litellm_params={},
@@ -350,7 +319,6 @@ class TestSAPTransformationIntegration:
                 }
             ],
             optional_params={
-                "deployment_url": "shouldn't be in results",
                 "grounding": grounding_config,
                 "placeholder_values": placeholder_values,
             },
@@ -447,7 +415,6 @@ class TestSAPTransformationIntegration:
             model="gpt-4o",
             messages=[{"role": "user", "content": "Hello."}],
             optional_params={
-                "deployment_url": "shouldn't be in results",
                 "filtering": filtering_config_azure,
             },
             litellm_params={},
@@ -460,7 +427,6 @@ class TestSAPTransformationIntegration:
             model="gpt-4o",
             messages=[{"role": "user", "content": "Hello."}],
             optional_params={
-                "deployment_url": "shouldn't be in results",
                 "filtering": filtering_config_llama,
             },
             litellm_params={},
@@ -505,7 +471,6 @@ class TestSAPTransformationIntegration:
             model="gpt-4o",
             messages=[{"role": "user", "content": "Hello."}],
             optional_params={
-                "deployment_url": "shouldn't be in results",
                 "masking": masking_config,
             },
             litellm_params={},
@@ -591,7 +556,6 @@ class TestSAPTransformationIntegration:
             model="gpt-4o",
             messages=[{"role": "user", "content": "Hello."}],
             optional_params={
-                "deployment_url": "shouldn't be in results",
                 "translation": translation_config,
             },
             litellm_params={},
@@ -631,7 +595,6 @@ class TestSAPTransformationIntegration:
                 model="gpt-4o",
                 messages=[{"role": "user", "content": "Hello."}],
                 optional_params={
-                    "deployment_url": "shouldn't be in results",
                     "fallback_sap_modules": [
                         {
                             "model": model,
@@ -683,8 +646,8 @@ class TestCacheControl:
     """Unit tests for cache_control preservation on message content parts."""
 
     def _transform(self, model: str, messages: list) -> dict:
-        cfg = _make_config()
-        return cfg.transform_request(
+        config = _make_config()
+        return config.transform_request(
             model=model,
             messages=messages,
             optional_params={},
@@ -775,8 +738,8 @@ class TestCacheControl:
             "cache_control": {"type": "ephemeral"},
         }
         messages = [{"role": "user", "content": "Hi"}]
-        cfg = _make_config()
-        body = cfg.transform_request(
+        config = _make_config()
+        body = config.transform_request(
             model="anthropic--claude-3-5-sonnet",
             messages=messages,
             optional_params={"tools": [tool]},
@@ -796,8 +759,8 @@ class TestCacheControl:
             },
         }
         messages = [{"role": "user", "content": "Hi"}]
-        cfg = _make_config()
-        body = cfg.transform_request(
+        config = _make_config()
+        body = config.transform_request(
             model="anthropic--claude-3-5-sonnet",
             messages=messages,
             optional_params={"tools": [tool]},
@@ -971,92 +934,3 @@ class TestCacheControl:
         assert "cache_control" not in content[0]
         assert content[1].get("cache_control") == {"type": "ephemeral"}
 
-
-class TestDeploymentResolution:
-    def test_single_deployment_returns_url(self):
-        cfg = _make_config()
-        with patch("litellm.module_level_client", _mock_client("orch-a")):  # test-quality-ok: patching the HTTP client at the litellm transport boundary
-            url = cfg._fetch_deployment_url()
-        assert url == "https://deploy-orch-a.sap.com"
-
-    def test_multiple_deployments_picks_newest(self):
-        # "older" has createdAt 2024-01-01, "newer" has 2024-01-02
-        cfg = _make_config()
-        with patch("litellm.module_level_client", _mock_client("older", "newer")):  # test-quality-ok: patching the HTTP client at the litellm transport boundary
-            url = cfg._fetch_deployment_url()
-        assert url == "https://deploy-newer.sap.com"
-
-    def test_multiple_deployments_emits_warning(self):
-        cfg = _make_config()
-        with patch("litellm.module_level_client", _mock_client("older", "newer")):  # test-quality-ok: patching the HTTP client at the litellm transport boundary
-            with patch("litellm.llms.sap.deployment.verbose_logger") as mock_log:  # test-quality-ok: patching module-level logger to intercept warning calls
-                url = cfg._fetch_deployment_url()
-        mock_log.warning.assert_called_once()
-        assert 2 == mock_log.warning.call_args[0][1]
-        assert url == "https://deploy-newer.sap.com"
-
-    def test_no_deployments_raises(self):
-        from litellm.llms.sap.chat.handler import GenAIHubOrchestrationError
-
-        cfg = _make_config()
-        with patch("litellm.module_level_client", _mock_client()):  # test-quality-ok: patching the HTTP client at the litellm transport boundary
-            with pytest.raises(GenAIHubOrchestrationError) as exc:
-                cfg._fetch_deployment_url()
-        assert "No orchestration deployment found" in str(exc.value)
-
-    def test_query_params_sent_to_backend(self):
-        """The whole point of this refactor: filtering must happen server-side."""
-        cfg = _make_config()
-        mock = _mock_client("orch-a")
-        with patch("litellm.module_level_client", mock):  # test-quality-ok: patching the HTTP client at the litellm transport boundary
-            cfg._fetch_deployment_url()
-        _, kwargs = mock.get.call_args
-        assert kwargs["params"] == {
-            "scenarioId": "orchestration",
-            "executableIds": ["orchestration"],
-            "status": "RUNNING",
-        }
-
-
-class TestGetCompleteUrl:
-    def test_optional_params_used_first(self):
-        """Step 1: deployment_url in optional_params skips discovery entirely."""
-        cfg = _make_config()
-        explicit = "https://custom.sap.com/deployments/abc"
-        mock = MagicMock()
-        with patch("litellm.module_level_client", mock):  # test-quality-ok: patching the HTTP client at the litellm transport boundary
-            url = cfg.get_complete_url(None, None, "gpt-4o", {"deployment_url": explicit}, {})
-        assert url == f"{explicit}/v2/completion"
-        mock.get.assert_not_called()
-
-    def test_env_var_used_when_no_optional_param(self):
-        """Step 2: AICORE_ORCHESTRATION_DEPLOYMENT_URL skips discovery."""
-        cfg = _make_config()
-        env_url = "https://env.sap.com/deployments/env"
-        mock = MagicMock()
-        with patch("litellm.module_level_client", mock):  # test-quality-ok: patching the HTTP client at the litellm transport boundary
-            with patch.dict("os.environ", {"AICORE_ORCHESTRATION_DEPLOYMENT_URL": env_url}):
-                url = cfg.get_complete_url(None, None, "gpt-4o", {}, {})
-        assert url == f"{env_url}/v2/completion"
-        mock.get.assert_not_called()
-
-    def test_optional_params_beats_env_var(self):
-        """Step 1 takes precedence over step 2."""
-        cfg = _make_config()
-        opt_url = "https://opt.sap.com/deployments/opt"
-        env_url = "https://env.sap.com/deployments/env"
-        mock = MagicMock()
-        with patch("litellm.module_level_client", mock):  # test-quality-ok: patching the HTTP client at the litellm transport boundary
-            with patch.dict("os.environ", {"AICORE_ORCHESTRATION_DEPLOYMENT_URL": env_url}):
-                url = cfg.get_complete_url(None, None, "gpt-4o", {"deployment_url": opt_url}, {})
-        assert url == f"{opt_url}/v2/completion"
-        mock.get.assert_not_called()
-
-    def test_discovery_used_when_no_override(self):
-        """Step 3: no optional_param, no env var — discovery runs."""
-        cfg = _make_config()
-        env = {"AICORE_ORCHESTRATION_DEPLOYMENT_URL": ""}  # empty = falsy
-        with patch("litellm.module_level_client", _mock_client("orch-a")):  # test-quality-ok: patching the HTTP client at the litellm transport boundary
-            with patch.dict("os.environ", env):
-                url = cfg.get_complete_url(None, None, "gpt-4o", {}, {})
-        assert url == "https://deploy-orch-a.sap.com/v2/completion"
