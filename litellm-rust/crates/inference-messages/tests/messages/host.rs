@@ -457,6 +457,34 @@ async fn the_request_context_carries_the_shaped_params_without_model_or_messages
 }
 
 #[rstest]
+#[tokio::test]
+async fn the_request_context_leaves_out_a_listed_param_the_model_refuses(call: MessagesCall) {
+    let upstream = upstream([message_response()]).await;
+    let host = RecordingHost::passthrough(authenticated(
+        MessagesCall {
+            shaping: MessagesShaping {
+                settings: MessagesSettings {
+                    additional_drop_params: vec!["temperature".into()],
+                    ..MessagesSettings::default()
+                },
+                capabilities: AnthropicModelCapabilities {
+                    supports_sampling_params: false,
+                    ..AnthropicModelCapabilities::default()
+                },
+            },
+            ..with_fields(call, json!({"temperature": 0.2}))
+        },
+        upstream.uri(),
+    ));
+
+    run_through(&host).await.expect("messages call succeeds");
+
+    let [optional_params] = <[Value; 1]>::try_from(host.optional_params.into_inner().unwrap())
+        .unwrap_or_else(|seen| panic!("before_provider_request runs once, saw {}", seen.len()));
+    assert_eq!(optional_params, json!({"max_tokens": 16}));
+}
+
+#[rstest]
 #[case::reasoning_effort_on_an_adaptive_model(
     AnthropicModelCapabilities {
         supports_reasoning: true,

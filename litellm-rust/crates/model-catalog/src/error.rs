@@ -167,6 +167,74 @@ impl Error {
     }
 }
 
+impl Error {
+    /// The document parsed but holds fewer models than the integrity limits trust
+    pub fn is_integrity(&self) -> bool {
+        match self.repr() {
+            Repr::Empty | Repr::BelowMinimum { .. } | Repr::Shrunk { .. } => true,
+            Repr::Json(_)
+            | Repr::NotAnObject
+            | Repr::Invalid(_)
+            | Repr::UnknownBlockKey
+            | Repr::UnknownTimezone { .. }
+            | Repr::AliasShadowsModel { .. }
+            | Repr::AliasTaken { .. }
+            | Repr::AliasTargetMissing { .. }
+            | Repr::AliasRowField
+            | Repr::DuplicatePrice { .. }
+            | Repr::SuffixInsideBlock { .. }
+            | Repr::TierRange
+            | Repr::TierReversed
+            | Repr::TierGap { .. }
+            | Repr::MixedTierBasis
+            | Repr::NotPricedByResults
+            | Repr::BandsFromTwoSources
+            | Repr::NotAnOffPeakRate
+            | Repr::NoOffPeakPrices
+            | Repr::NoOffPeakHours
+            | Repr::EmptyList
+            | Repr::InvalidDate { .. }
+            | Repr::MissingProvider
+            | Repr::UnreadField
+            | Repr::NoFallbackRules => false,
+        }
+    }
+
+    /// A problem with a row's aliases, which the served map skips
+    pub fn is_alias(&self) -> bool {
+        match self.repr() {
+            Repr::AliasShadowsModel { .. }
+            | Repr::AliasTaken { .. }
+            | Repr::AliasTargetMissing { .. }
+            | Repr::AliasRowField => true,
+            Repr::Invalid(_) => matches!(self.field().as_deref(), Some("aliases" | "alias_of")),
+            Repr::Json(_)
+            | Repr::Empty
+            | Repr::BelowMinimum { .. }
+            | Repr::Shrunk { .. }
+            | Repr::NotAnObject
+            | Repr::UnknownBlockKey
+            | Repr::UnknownTimezone { .. }
+            | Repr::DuplicatePrice { .. }
+            | Repr::SuffixInsideBlock { .. }
+            | Repr::TierRange
+            | Repr::TierReversed
+            | Repr::TierGap { .. }
+            | Repr::MixedTierBasis
+            | Repr::NotPricedByResults
+            | Repr::BandsFromTwoSources
+            | Repr::NotAnOffPeakRate
+            | Repr::NoOffPeakPrices
+            | Repr::NoOffPeakHours
+            | Repr::EmptyList
+            | Repr::InvalidDate { .. }
+            | Repr::MissingProvider
+            | Repr::UnreadField
+            | Repr::NoFallbackRules => false,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Loaded<T> {
     pub value: T,

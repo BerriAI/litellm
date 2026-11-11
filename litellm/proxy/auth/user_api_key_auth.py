@@ -41,7 +41,7 @@ from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.integrations.otel.runtime import phase_event, phase_span, seed_request_identity
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
-from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias, resolve_served_model
+from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.models.end_user import LiteLLM_EndUserTable
 from litellm.proxy._types import *
 from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_from_headers
@@ -95,6 +95,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     route_skips_budget_checks,
     stamp_matched_model_access_groups,
     team_member_max_budget_alert_check,
+    team_model_aliases_for_auth_check,
     virtual_key_max_budget_alert_check,
     virtual_key_max_budget_check,
     virtual_key_soft_budget_check,
@@ -109,12 +110,14 @@ from litellm.proxy.auth.auth_object_prefetch import (
 )
 from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
+    checks_team_s3_buckets_in_handler,
     fallback_target_model_name,
     get_end_user_id_from_request_body,
     get_model_from_request,
     get_request_route,
     get_request_route_template,
     is_invalid_virtual_key_error,
+    is_request_body_safe,
     iter_request_fallback_targets,
     log_model_access_denial,
     normalize_request_route,
@@ -150,6 +153,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     populate_request_with_path_params,
     read_raw_json_body,
     read_request_body,
+    read_request_path_params,
     resolve_realtime_route_model,
     rewrite_request_model,
     safe_get_request_headers,
@@ -171,7 +175,11 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 from litellm.proxy.db.db_lookup_gate import bounded_db_lookup
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.litellm_pre_call_utils import (
+    LiteLLMProxyRequestSetup,
+    pre_call_served_model,
+    request_served_model,
+)
 from litellm.proxy.spend_tracking.carried_budget_state import (
     carry_committed_budget_spend,
     carry_team_and_user_budget_state,
@@ -328,6 +336,65 @@ def _is_codex_native_litellm_turn(route: str, model: object, llm_router: litellm
     from litellm.proxy.pass_through_endpoints.codex_passthrough_endpoints import routes_to_litellm
 
     return routes_to_litellm(model, llm_router, team_id)
+
+
+_SERVED_MODEL_BUDGET_WAIVER_ROUTES: Final = frozenset(
+    {
+        "/chat/completions",
+        "/v1/chat/completions",
+        "/completions",
+        "/v1/completions",
+        "/responses",
+        "/v1/responses",
+        "/messages",
+        "/v1/messages",
+    }
+)
+
+
+def _inference_model_overridden() -> bool:
+    from litellm.proxy import proxy_server
+
+    cli_model: Final[object] = proxy_server.user_model  # pyright: ignore[reportUnknownMemberType]  # legacy untyped CLI global
+    completion_model: Final = proxy_server.general_settings_view().get("completion_model")
+    return (isinstance(completion_model, str) and completion_model != "") or (
+        isinstance(cli_model, str) and cli_model != ""
+    )
+
+
+async def budget_served_model(
+    model: str | Sequence[str] | None,
+    request_data: Mapping[str, object],
+    request: Request | None,
+    llm_router: litellm.Router | None,
+    valid_token: UserAPIKeyAuth,
+) -> str | Sequence[str] | None:
+    """The model the zero-cost budget waiver judges. For a client's own HTTP request to a chat, completions,
+    responses or messages route that names a string body `model`, it is the model request preparation serves it
+    with through the caller's team, key, global and router aliases. Everywhere else it stays the requested model:
+    requests built inside the proxy, a path or query `model`, a configured `completion_model` or CLI `--model`,
+    and requests whose body auth has not yet passed through the router aliases."""
+    if request is None or llm_router is None or not isinstance(model, str):
+        return model
+    if get_request_route_template(request) not in _SERVED_MODEL_BUDGET_WAIVER_ROUTES:
+        return model
+    if request.scope.get(MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY) is not True or request_data.get("model") != model:
+        return model
+    if "model" in safe_get_request_query_params(request=request) or _inference_model_overridden():
+        return model
+    if not (
+        key_model_aliases_for_auth_check(valid_token)
+        or team_model_aliases_for_auth_check(valid_token)
+        or model in litellm.model_alias_map
+    ):
+        return model
+    from litellm.proxy.proxy_server import prisma_client, proxy_config, proxy_logging_obj
+
+    settings: Final = await proxy_config.get_hierarchical_router_settings(
+        user_api_key_dict=valid_token, prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
+    )
+    group_alias: Final[object] = settings.get("model_group_alias") if isinstance(settings, Mapping) else None
+    return request_served_model(model, valid_token, group_alias, llm_router)
 
 
 async def _resolve_router_settings_model_group_alias(
@@ -969,9 +1036,6 @@ async def _try_team_member_model_budget_fallback(
     model_group_aliases: Final[object] = (
         router_settings.get("model_group_alias") if router_settings is not None else None
     )
-    key_aliases: Final[object] = cast(  # cast-ok: auth aliases are dynamically typed at runtime
-        object, valid_token.aliases
-    )
     resolved_fallback_candidates: Final[tuple[tuple[str, str], ...]] = tuple(
         (
             candidate,
@@ -983,12 +1047,7 @@ async def _try_team_member_model_budget_fallback(
         (
             fallback_candidate,
             fallback_model,
-            resolve_served_model(
-                fallback_model,
-                litellm.model_alias_map,
-                key_aliases,
-                model_group_aliases,
-            ),
+            pre_call_served_model(fallback_model, valid_token, model_group_aliases),
         )
         for fallback_candidate, fallback_model in resolved_fallback_candidates
     )
@@ -1313,6 +1372,12 @@ def _apply_budget_limits_to_end_user_params(
     if budget_info.model_max_budget is not None:
         end_user_params["end_user_model_max_budget"] = budget_info.model_max_budget
 
+    if budget_info.model_tpm_limit is not None:
+        end_user_params["end_user_model_tpm_limit"] = budget_info.model_tpm_limit  # rebind-ok: in-place like siblings
+
+    if budget_info.model_rpm_limit is not None:
+        end_user_params["end_user_model_rpm_limit"] = budget_info.model_rpm_limit  # rebind-ok: in-place like siblings
+
     verbose_proxy_logger.debug("Applied budget limits to end user %s", end_user_id)
 
 
@@ -1444,6 +1509,10 @@ def update_valid_token_with_end_user_params(valid_token: UserAPIKeyAuth, end_use
         valid_token.allowed_model_region = end_user_params["allowed_model_region"]
     if end_user_params.get("end_user_model_max_budget") is not None:
         valid_token.end_user_model_max_budget = end_user_params["end_user_model_max_budget"]
+    if "end_user_model_tpm_limit" in end_user_params:
+        valid_token.end_user_model_tpm_limit = end_user_params["end_user_model_tpm_limit"]  # rebind-ok: in-place
+    if "end_user_model_rpm_limit" in end_user_params:
+        valid_token.end_user_model_rpm_limit = end_user_params["end_user_model_rpm_limit"]  # rebind-ok: in-place
     return valid_token
 
 
@@ -2266,6 +2335,7 @@ async def user_api_key_auth_builder(
     azure_apim_header: str | None,
     request_data: dict[str, object],
     custom_litellm_key_header: str | None = None,
+    defer_team_checks: bool = False,
 ) -> UserAPIKeyAuth:
     from litellm.proxy.proxy_server import (
         general_settings,
@@ -2300,6 +2370,7 @@ async def user_api_key_auth_builder(
                 request_data=request_data,
                 request=request,
                 route=route,
+                defer_team_checks=defer_team_checks,
             )
         pass_through_endpoints: Final[list[dict] | None] = general_settings.get("pass_through_endpoints", None)
         ## CHECK IF X-LITELM-API-KEY IS PASSED IN - supercedes Authorization header
@@ -2985,6 +3056,10 @@ async def user_api_key_auth_builder(
             valid_token.end_user_tpm_limit = end_user_params.get("end_user_tpm_limit")
             valid_token.end_user_rpm_limit = end_user_params.get("end_user_rpm_limit")
             valid_token.end_user_tpd_limit = end_user_params.get("end_user_tpd_limit")
+            if "end_user_model_tpm_limit" in end_user_params:
+                valid_token.end_user_model_tpm_limit = end_user_params["end_user_model_tpm_limit"]
+            if "end_user_model_rpm_limit" in end_user_params:
+                valid_token.end_user_model_rpm_limit = end_user_params["end_user_model_rpm_limit"]
             valid_token.allowed_model_region = end_user_params.get("allowed_model_region")
 
         return await validate_resolved_virtual_key(
@@ -3119,7 +3194,10 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
             team_id=valid_token.team_id,
         )
         skip_budget_checks: Final = request_skips_budget_checks(
-            route=route, model=model, llm_router=llm_router, request_body=request_data
+            route=route,
+            model=await budget_served_model(model, request_data, request, llm_router, valid_token),
+            llm_router=llm_router,
+            request_body=request_data,
         )
 
         # Check 3. Check if user is in their team budget
@@ -3670,6 +3748,18 @@ async def run_centralized_common_checks(
         user_custom_auth,
     )
 
+    if not sub_call and getattr(request.state, "deferred_model_body_check", False) is True:
+        body_model: Final = request_data.get("model")
+        is_request_body_safe(
+            request_body=request_data,
+            general_settings=_GENERAL_SETTINGS_ADAPTER.validate_python(general_settings),
+            llm_router=llm_router,
+            model=body_model if isinstance(body_model, str) else "",
+            route=route,
+            team_id=user_api_key_auth_obj.team_id,
+            defer_s3_buckets=checks_team_s3_buckets_in_handler(request),
+        )
+
     # Public routes (e.g. /health/liveness) are exempt from
     # auth in the builder — the wrapper must not retroactively apply
     # authz on top, or k8s readiness probes and other unauthenticated
@@ -3938,12 +4028,13 @@ async def run_centralized_common_checks(
             dict(end_user_model_max_budget) if end_user_model_max_budget else None
         )
 
-    skip_budget_checks: Final = _should_skip_budget_checks(
+    skip_budget_checks: Final = await _should_skip_budget_checks(
         request_data=request_data,
         route=route,
         request=request,
         llm_router=llm_router,
-        team_id=user_api_key_auth_obj.team_id,
+        valid_token=user_api_key_auth_obj,
+        sub_call=sub_call,
     )
     typed_team_object: Final[LiteLLM_TeamTable | None] = (
         team_object if isinstance(team_object, LiteLLM_TeamTable) else None
@@ -4134,6 +4225,10 @@ async def _apply_key_end_user_default_budget_to_token(
         valid_token.end_user_tpd_limit = default_budget.tpd_limit
     if not keep_token_limits or valid_token.end_user_model_max_budget is None:
         valid_token.end_user_model_max_budget = default_budget.model_max_budget
+    if not keep_token_limits or valid_token.end_user_model_tpm_limit is None:
+        valid_token.end_user_model_tpm_limit = default_budget.model_tpm_limit  # rebind-ok: in-place like siblings
+    if not keep_token_limits or valid_token.end_user_model_rpm_limit is None:
+        valid_token.end_user_model_rpm_limit = default_budget.model_rpm_limit  # rebind-ok: in-place like siblings
 
 
 async def _reserve_budget_after_common_checks(
@@ -4158,6 +4253,7 @@ async def _reserve_budget_after_common_checks(
             reserve_budget_for_request,
         )
 
+        reservation_path_params: Final = read_request_path_params(request)
         user_api_key_auth_obj.budget_reservation = await reserve_budget_for_request(
             request_body=request_data,
             route=route,
@@ -4176,27 +4272,34 @@ async def _reserve_budget_after_common_checks(
                 or user_api_key_auth_obj.billing_agent_policy is not None
             ),
             raw_body=await read_raw_json_body(request=request),
+            path_params=reservation_path_params,
         )
     if request is not None:
         reservation: Final = user_api_key_auth_obj.budget_reservation
         request.state.budget_reservation = reservation  # rebind-ok: read by the release middleware
 
 
-def _should_skip_budget_checks(
+async def _should_skip_budget_checks(
     request_data: dict[str, object],
     route: str,
     request: Request | None,
     llm_router: litellm.Router | None,
-    team_id: str | None = None,
+    valid_token: UserAPIKeyAuth,
+    sub_call: bool = False,
 ) -> bool:
     model: Final = _get_model_from_request_context(
         request_data=request_data,
         route=route,
         request=request,
         llm_router=llm_router,
-        team_id=team_id,
+        team_id=valid_token.team_id,
     )
-    return request_skips_budget_checks(route=route, model=model, llm_router=llm_router, request_body=request_data)
+    return request_skips_budget_checks(
+        route=route,
+        model=(model if sub_call else await budget_served_model(model, request_data, request, llm_router, valid_token)),
+        llm_router=llm_router,
+        request_body=request_data,
+    )
 
 
 def _resolve_request_principal(request: Request, valid_token: UserAPIKeyAuth) -> Principal:
@@ -4502,6 +4605,7 @@ async def user_api_key_auth(
                 azure_apim_header=azure_apim_header,
                 request_data=request_data,
                 custom_litellm_key_header=custom_litellm_key_header,
+                defer_team_checks=True,
             )
         except Exception:
             # The body was read first, so a caller who sent both a malformed body and
@@ -4873,7 +4977,10 @@ async def _run_post_custom_auth_checks(
     # every budget check for these; this path did not, so the same request could
     # be refused under custom auth and served under the other two.
     skip_budget_checks: Final = (
-        is_model_cost_zero(model=current_model, llm_router=llm_router)
+        is_model_cost_zero(
+            model=await budget_served_model(current_model, request_data, request, llm_router, valid_token),
+            llm_router=llm_router,
+        )
         if current_model is not None and llm_router is not None
         else False
     )
@@ -4981,7 +5088,7 @@ async def authorize_internal_virtual_key(
         )
     )
     route: Final = get_request_route(request=request)
-    await pre_db_read_auth_checks(request_data=request_data, request=request, route=route)
+    await pre_db_read_auth_checks(request_data=request_data, request=request, route=route, defer_team_checks=True)
     auth: Final = await validate_resolved_virtual_key(
         request=request,
         request_data=request_data,

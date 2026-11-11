@@ -419,7 +419,7 @@ from litellm.llms.anthropic.messages.convertible_blocks import (
     malformed_tool_result_count_error,
 )
 from litellm.llms.custom_httpx.aiohttp_pool_diagnostics import build_pool_wait_trace_config
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, exclude_rsa_key_exchange_and_chacha20
 from litellm.llms.openai.live import parse_live_session_start
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
@@ -454,7 +454,9 @@ from litellm.proxy.auth.auth_utils import (
 )
 from litellm.proxy.auth.fallback_budget import RouterFallbackBudgetCheck, router_fallback_budget_check
 from litellm.proxy.auth.fallback_model_access import router_fallback_access_check
+from litellm.proxy.auth.fallback_rate_limit import RouterFallbackRateLimitCheck
 from litellm.proxy.auth.handle_jwt import JWTHandler
+from litellm.proxy.auth.legacy_empty_models_check import warn_about_legacy_empty_models
 from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_REMEDY, LicenseCheck
 from litellm.proxy.auth.login_throttle import (
     LoginThrottle,
@@ -545,7 +547,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_body_call_id, with_call_id
-from litellm.proxy.common_utils.fips import enforce_fips_mode
+from litellm.proxy.common_utils.fips import enforce_fips_mode, fips_mode_setting
 from litellm.proxy.common_utils.healthy_model_filter import (
     get_hidden_unhealthy_model_names,
     is_healthy_only_listing_default,
@@ -1795,6 +1797,14 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
                     await asyncio.sleep(5)
 
         await resources.enter_async_context(database_runtime.background_task(_run_agent_grant_id_migration()))
+        await resources.enter_async_context(
+            database_runtime.background_task(
+                warn_about_legacy_empty_models(
+                    keys=VerificationTokenRepository(prisma_client),
+                    teams=TeamRepository(prisma_client),
+                )
+            )
+        )
 
     ## A coordination_redis block saved from the admin UI lives in the database,
     ## which is only reachable once the prisma client exists. Apply it here, before
@@ -3171,6 +3181,10 @@ _GENERAL_SETTINGS_VIEW: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(M
 
 def general_settings_view() -> Mapping[str, object]:
     return _GENERAL_SETTINGS_VIEW.validate_python(general_settings)
+
+
+def user_model_view() -> str | None:
+    return user_model if isinstance(user_model, str) else None
 
 
 config_passthrough_endpoints: list[dict[str, object]] | None = None
@@ -5682,12 +5696,6 @@ def resolve_classifier_plugin(
     return resolved
 
 
-def _swap_in_model_cost_map(new_model_cost_map: dict) -> int:
-    from litellm.litellm_core_utils.get_model_cost_map import adopt_model_cost_map
-
-    return adopt_model_cost_map(new_model_cost_map)
-
-
 def _websearch_handler_params(stored: Mapping[str, object]) -> dict[str, object]:
     """
     Translate stored web search interception settings into handler kwargs.
@@ -6676,6 +6684,11 @@ class ProxyConfig:
         printed_yaml: Final = copy.deepcopy(config)
         printed_yaml.pop("environment_variables", None)
 
+        # Secret manager reads and the rest of config load make outbound TLS calls before enforce_fips_mode runs
+        raw_general_settings: Final = as_str_mapping(config.get("general_settings"))
+        if raw_general_settings is not None and fips_mode_setting(raw_general_settings) is True:
+            exclude_rsa_key_exchange_and_chacha20(True)
+
         self._initialize_secret_manager_from_raw_config(config=config, config_file_path=config_file_path)
 
         config = self._check_for_os_environ_vars(config=config)
@@ -7653,6 +7666,9 @@ class ProxyConfig:
                         is_enforced=router_fallback_budget_check.is_enforced,
                         team_member_model_budget_limiter=model_max_budget_limiter,
                     ),
+                    fallback_rate_limit_check=RouterFallbackRateLimitCheck(
+                        limiter=lambda: proxy_logging_obj.get_proxy_hook("parallel_request_limiter"),
+                    ),
                     auto_router_capability_limit=_license_check.auto_router_capability_limit,
                 )
             )
@@ -7889,7 +7905,7 @@ class ProxyConfig:
             else:
                 raise ValueError("Invalid Key Management System selected")
 
-            from litellm.rust_bridge.host.secret_manager import capture_secret_manager
+            from litellm.secret_managers.native_config import capture_secret_manager
 
             if litellm.secret_manager_client is not previous_client:
                 capture_secret_manager(litellm.secret_manager_client, key_management_system)
@@ -8158,6 +8174,9 @@ class ProxyConfig:
                                 fallback_budget_check=RouterFallbackBudgetCheck(
                                     is_enforced=router_fallback_budget_check.is_enforced,
                                     team_member_model_budget_limiter=model_max_budget_limiter,
+                                ),
+                                fallback_rate_limit_check=RouterFallbackRateLimitCheck(
+                                    limiter=lambda: proxy_logging_obj.get_proxy_hook("parallel_request_limiter"),
                                 ),
                                 auto_router_capability_limit=_license_check.auto_router_capability_limit,
                             )
@@ -9009,9 +9028,8 @@ class ProxyConfig:
         proxy_logging_obj: ProxyLogging,
     ) -> ReconcileOutcome:
         """add_deployment's body, minus the locking. DB_RECONCILE_LOCK MUST already
-        be held. Split out for the one caller that has to hold the lock across more than
-        this reconcile -- clear_cache, which un-serves every db model before calling it
-        and would deadlock on a re-acquire."""
+        be held. Split out for clear_cache, which already holds the lock and would
+        deadlock on a re-acquire."""
         global llm_router, llm_model_list, master_key, general_settings
 
         still_desired_ids: frozenset[str] | None = None
@@ -9515,7 +9533,7 @@ class ProxyConfig:
                 )
                 return
 
-            models_count = _swap_in_model_cost_map(reload_result.model_cost_map)
+            models_count = reload_result.model_count
             self.model_cost_map_loaded_at = current_time
             await record_reload_run(prisma_client, MODEL_COST_MAP_RELOAD_PARAM_NAME, current_time)
             # Adopted last, so neither a failed fetch nor a failed status write is recorded
@@ -10300,23 +10318,34 @@ def _get_streaming_fallback_metadata(
     return True, None, fallback_errors
 
 
+_FALLBACK_METADATA_ID: Final = "litellm-fallback-metadata"
+_RESPONSES_FALLBACK_METADATA_EVENT_TYPE: Final = "litellm.fallback_metadata"
+
+
 def _format_fallback_metadata_sse_event(
     *,
     fallback_model: str | None,
     fallback_errors: list[dict[str, object]],
+    responses_stream: bool,
+    return_raw_model_name: bool,
 ) -> str:
-    import time
-
+    litellm_fallback: Final = {"fallback_model": fallback_model, "errors": fallback_errors}
+    if responses_stream:
+        stamped_model: Final = None if return_raw_model_name else fallback_model
+        event: Final = {
+            "type": _RESPONSES_FALLBACK_METADATA_EVENT_TYPE,
+            "id": _FALLBACK_METADATA_ID,
+            **({"model": stamped_model} if stamped_model else {}),
+            "litellm_fallback": litellm_fallback,
+        }
+        return f"data: {json.dumps(event)}\n\n"
     payload: Final = {
-        "id": "litellm-fallback-metadata",
+        "id": _FALLBACK_METADATA_ID,
         "object": "chat.completion.chunk",
         "created": int(time.time()),
         "model": fallback_model or "",
         "choices": [],
-        "litellm_fallback": {
-            "fallback_model": fallback_model,
-            "errors": fallback_errors,
-        },
+        "litellm_fallback": litellm_fallback,
     }
     return f"data: {json.dumps(payload)}\n\n"
 
@@ -10325,7 +10354,7 @@ def _restamp_streaming_chunk_model(
     *,
     chunk: object,
     requested_model_from_client: str,
-    request_data: dict,
+    request_data: Mapping[str, object],
     model_mismatch_logged: bool,
     fallback_was_attempted: bool = False,
     fallback_model_from_metadata: str | None = None,
@@ -10903,6 +10932,7 @@ async def async_data_generator(
         model_mismatch_logged = False
         fallback_metadata_event_sent = False
         include_fallback_errors: Final = _should_include_fallback_errors(request_data)
+        return_raw_model_name: Final = should_return_raw_model_name(request_data)
         # Use a running string instead of list + join to avoid O(n^2) overhead.
         # Previously "".join(str_so_far_parts) was called every chunk, re-joining
         # the entire accumulated response. String += is O(n) amortized total.
@@ -10917,6 +10947,8 @@ async def async_data_generator(
         # ``get_response_string`` work per chunk on every deployment that
         # happened to ship a streaming-iterator override (the default).
         needs_per_chunk_hook: Final = proxy_logging_obj.needs_per_chunk_streaming_hook()
+        stream_logging_obj: Final[object] = request_data.get("litellm_logging_obj")  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # legacy request data is narrowed below
+        timing_sink: Final = stream_logging_obj if isinstance(stream_logging_obj, LiteLLMLoggingObj) else None
         is_raw_sse_stream: Final = bool(request_data.get("_litellm_raw_sse_stream"))
         strip_stream_usage: Final = bool(request_data.get("_litellm_strip_stream_usage"))
         raw_sse_buffer = ""
@@ -10952,6 +10984,7 @@ async def async_data_generator(
                 yield ": ping\n\n"
                 continue
             chunk = item
+            chunk_received_at = time.perf_counter()
             if needs_per_chunk_hook:
                 ### CALL HOOKS ### - modify outgoing data
                 chunk, _str_so_far = await _apply_streaming_chunk_hooks(
@@ -10997,6 +11030,8 @@ async def async_data_generator(
                     yield _format_fallback_metadata_sse_event(
                         fallback_model=fallback_model_from_metadata,
                         fallback_errors=fallback_errors,
+                        responses_stream=error_state is not None,
+                        return_raw_model_name=return_raw_model_name,
                     )
                     fallback_metadata_event_sent = True
                 continue
@@ -11037,6 +11072,7 @@ async def async_data_generator(
                 error_message = chunk
                 break
 
+            ProxyBaseLLMRequestProcessing.record_first_chunk_overhead(timing_sink, chunk_received_at)
             if not raw_passthrough:
                 try:
                     if error_state is not None:
@@ -11052,6 +11088,8 @@ async def async_data_generator(
                 yield _format_fallback_metadata_sse_event(
                     fallback_model=fallback_model_from_metadata,
                     fallback_errors=fallback_errors,
+                    responses_stream=error_state is not None,
+                    return_raw_model_name=return_raw_model_name,
                 )
                 fallback_metadata_event_sent = True
 
@@ -12423,7 +12461,7 @@ class ProxyStartupEvent:
                 _scheduled_weekly_spend_report,
                 "interval",
                 days=days,
-                next_run_time=datetime.now() + timedelta(seconds=10 + random.randint(0, 300)),
+                next_run_time=datetime.now(timezone.utc) + timedelta(seconds=10 + random.randint(0, 300)),
                 id=WEEKLY_SPEND_REPORT_JOB_ID,
                 replace_existing=True,
                 misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
@@ -15318,7 +15356,12 @@ def _provider_count_outcome(
     if result is not None and result.error is True:
         return ProviderCountFailure(
             status_code=result.status_code or 500,
-            message=result.error_message or "Token counting failed",
+            message=result.error_message
+            or (
+                "Token counting failed"
+                if result.status_code is None
+                else f"The provider's count API answered {result.status_code} with no error message"
+            ),
             rejected_before_provider_call=result.rejected_before_provider_call,
         )
     return result
@@ -15787,6 +15830,14 @@ def _token_count_settings_model(deployment: _TokenCountDeployment, request_model
 _PROVIDERS_COUNTING_WITHOUT_MESSAGES: Final = frozenset(
     {litellm.LlmProviders.GEMINI.value, litellm.LlmProviders.VERTEX_AI.value}
 )
+_CHAT_MODES: Final = frozenset({"chat", "responses"})
+
+
+def _serves_chat(deployment: _TokenCountDeployment, cost_map_row: Mapping[str, object]) -> bool:
+    mode: Final = _non_empty_str(deployment.get("model_info", {}).get("mode")) or _non_empty_str(
+        cost_map_row.get("mode")
+    )
+    return mode is None or mode in _CHAT_MODES
 
 
 _ESTIMABLE_GOOGLE_PART_KEYS: Final = frozenset({"text", "functionCall", "functionResponse", "thoughtSignature"})
@@ -16097,6 +16148,12 @@ async def _routed_count_deployment(
         return None
 
 
+def _with_chat_timeout(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+    if llm_router is None:
+        return litellm_params
+    return {**litellm_params, "timeout": llm_router.settings().timeout_for(litellm_params)}
+
+
 async def _count_request_tokens(
     request: TokenCountRequest,
     routed: Mapping[str, object] | None,
@@ -16121,8 +16178,8 @@ async def _count_request_tokens(
         litellm_model_name = deployment.get("litellm_params", {}).get("model")
         deployment = {  # rebind-ok: merge the named credential into a copy
             **deployment,
-            "litellm_params": with_named_credential(
-                _LITELLM_PARAMS_COPY.validate_python(deployment.get("litellm_params", {}))
+            "litellm_params": _with_chat_timeout(
+                with_named_credential(_LITELLM_PARAMS_COPY.validate_python(deployment.get("litellm_params", {})))
             ),
         }
         # remove the custom_llm_provider_prefix in the litellm_model_name
@@ -16135,9 +16192,10 @@ async def _count_request_tokens(
     deployment_view: Final = _TOKEN_COUNT_DEPLOYMENT.validate_python(
         deployment or _model_group_deployment(llm_router, request.model) or {}
     )
+    cost_map_row: Final = await asyncify(cost_map_entry)(*_token_count_settings_model(deployment_view, request.model))
     settings: Final = await asyncify(resolve_token_count_settings)(
         configured=deployment_view.get("model_info", {}),
-        default=await asyncify(cost_map_entry)(*_token_count_settings_model(deployment_view, request.model)),
+        default=cost_map_row,
         deployment_region=partial(_deployment_aws_region, deployment_view),
     )
 
@@ -16162,6 +16220,15 @@ async def _count_request_tokens(
             code=400,
         )
     prompt_only: Final = bool(prompt) and conversation_empty
+    prompt_as_turn: Final = (
+        prompt_only
+        and provider_counter is not None
+        and provider_counter.should_use_token_counting_api(custom_llm_provider=custom_llm_provider)
+        and _serves_chat(deployment_view, cost_map_row)
+    )
+    prompt_as_message: Final = prompt_as_turn or (
+        prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
+    )
     request_messages: Final = _counted_request_messages(messages, messages_format, count_deployment)
     local_count_error: Final = malformed_tool_result_count_error(request_messages, messages_format, count_deployment)
     malformed_messages: Final = (
@@ -16198,7 +16265,6 @@ async def _count_request_tokens(
     )
     inference_system: Final = system if edited_request is None else edited_request.system
     contents_estimable: Final = not contents or (bool(messages) and _estimable_contents(contents))
-    prompt_as_message: Final = prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
     routed_deployment: Final = _ROUTED_DEPLOYMENT.validate_python(deployment)
     routed_request: Final = (
         None if responses_request is None else with_provider_file_ids(responses_request, routed_deployment)
@@ -16299,7 +16365,7 @@ async def _count_request_tokens(
             _with_get(model_info).get("custom_tokenizer", None),
         )
     system_message: Final = _system_message(local_system)
-    prompt_turn: Final = prompt_only and not (system_message is None and not tools)
+    prompt_turn: Final = prompt_as_turn or (prompt_only and not (system_message is None and not tools))
     typed_messages: Final = cast(  # cast-ok: request messages are raw chat-shaped dicts that token_counter normalizes
         Sequence[AllMessageValues] | None,
         [{"role": "user", "content": prompt}] if prompt_turn else (None if prompt_only else local_messages),
@@ -16461,7 +16527,9 @@ async def model_info_lookup(model: str, custom_llm_provider: str | None = None):
     dependencies=[Depends(user_api_key_auth)],
     response_model=RawRequestTypedDict,
 )
-async def transform_request(request: TransformRequestBody):
+async def transform_request(
+    request: TransformRequestBody, user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
+):
     from litellm.utils import return_raw_request
 
     try:
@@ -16470,6 +16538,7 @@ async def transform_request(request: TransformRequestBody):
             general_settings=general_settings,
             llm_router=llm_router,
             model=request.request_body.get("model", ""),
+            team_id=user_api_key_dict.team_id,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail={"error": str(e)})
@@ -21979,7 +22048,7 @@ async def reload_model_cost_map(
                 detail=f"Failed to reload model cost map: {reload_result.reason}. Current pricing data was kept.",
             )
 
-        models_count = _swap_in_model_cost_map(reload_result.model_cost_map)
+        models_count = reload_result.model_count
         current_time = utc_now()
         proxy_config.model_cost_map_loaded_at = current_time
         provenance: Final = get_model_cost_map_provenance()

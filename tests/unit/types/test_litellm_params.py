@@ -238,6 +238,7 @@ AGENTIC_LOOP_STATE_NAMES: Final = (
     "_agentic_loop_depth",
     "_agentic_loop_fingerprints",
     "_agentic_loop_api_surface",
+    "_agentic_loop_tool_choice",
     "_code_interpreter_interception_active",
     "_code_interpreter_interception_sandbox_key",
     "_code_interpreter_interception_session_scoped",

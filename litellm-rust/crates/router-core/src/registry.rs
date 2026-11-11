@@ -626,6 +626,27 @@ impl Registry {
         }
     }
 
+    pub fn install_built(
+        &mut self,
+        spec: DeploymentSpec,
+        add: bool,
+        install: crate::build::Install,
+    ) -> Result<(), ConfigError> {
+        if install == crate::build::Install::Upsert {
+            let id = self.carried(spec.clone())?.id;
+            if self.by_id.contains_key(&id) {
+                *self = self.apply(
+                    &ChangeSet {
+                        remove: Some(id),
+                        ..ChangeSet::default()
+                    },
+                    None,
+                )?;
+            }
+        }
+        self.push_built(spec, add)
+    }
+
     /// Add one deployment a build accepted at the end and index it in place (`add` is
     /// `add_deployment`, which also names its group). A build installs into a registry of its
     /// own this way, so a list of n deployments builds in O(n) rather than reindexing per
@@ -1529,6 +1550,60 @@ mod tests {
         .unwrap();
         let resolution = registry.resolve(name, ResolveScope::default()).unwrap();
         assert_eq!((resolution.kind, resolution.group.as_str()), (kind, group));
+    }
+
+    #[rstest]
+    #[case::empty(false)]
+    #[case::replacement(true)]
+    fn installing_an_upsert_replaces_only_the_working_snapshot(#[case] populated: bool) {
+        let registry = Registry::build(
+            if populated {
+                vec![spec(
+                    "a",
+                    json!({"model": "openai/old"}),
+                    json!({"id": "1"}),
+                )]
+            } else {
+                Vec::new()
+            },
+            BTreeMap::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        let mut working = registry.clone();
+        working
+            .install_built(
+                spec("a", json!({"model": "openai/new"}), json!({"id": "1"})),
+                true,
+                crate::build::Install::Upsert,
+            )
+            .unwrap();
+        assert_eq!(registry.all().len(), usize::from(populated));
+        assert_eq!(working.all().len(), 1);
+        assert_eq!(working.all()[0].raw_params["model"], json!("openai/new"));
+        assert_eq!(working.host.position_of("1"), Some(0));
+    }
+
+    #[rstest]
+    fn an_invalid_upsert_keeps_the_previous_deployment() {
+        let mut registry = Registry::build(
+            vec![spec(
+                "a",
+                json!({"model": "openai/old"}),
+                json!({"id": "1"}),
+            )],
+            BTreeMap::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        let invalid = spec("a", json!({"model": 42}), json!({"id": "1"}));
+        assert!(
+            registry
+                .install_built(invalid, true, crate::build::Install::Upsert)
+                .is_err()
+        );
+        assert_eq!(registry.all().len(), 1);
+        assert_eq!(registry.all()[0].raw_params["model"], json!("openai/old"));
     }
 
     #[rstest]
