@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
+from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.db.spend_log_tool_index import response_tool_call_names
 from litellm.types.interactions import InteractionsAPIResponse
@@ -211,12 +212,15 @@ class SpendEventDecodeError:
 
 
 def is_offloadable_success(response_obj: object, kwargs: ObjectMapping) -> bool:
-    """Batch retrieves and interaction polls branch on the concrete response class, a video status poll on the
+    """Batch responses and interaction polls branch on the concrete response class, a batch retrieve whose logged
+    response message redaction replaced on the polled batch id the event leaves out, a video status poll on the
     status and video id the event leaves out, and a background response's settling read on the settlement flag it
     leaves out, so they stay in-process."""
+    call_type: Final = kwargs.get("call_type")
     return (
         not isinstance(response_obj, _NOT_OFFLOADED_RESPONSE_TYPES)
-        and not is_video_status_call_type(kwargs.get("call_type"))
+        and not is_batch_retrieve_call_type(call_type)
+        and not is_video_status_call_type(call_type)
         and kwargs.get(SETTLES_BACKGROUND_RESPONSE_KWARG) is not BackgroundResponseSettlement.SETTLES
     )
 
