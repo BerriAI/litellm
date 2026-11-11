@@ -1,6 +1,6 @@
 import base64
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Final
 
@@ -12,6 +12,7 @@ from pydantic import TypeAdapter
 import litellm
 from litellm.decisions.main import _prepare_decisions_call
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.prompt_templates.image_handling import in_memory_cache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.systemone.main import _prepare_systemone_call
 
@@ -148,22 +149,7 @@ async def test_gemini_rejects_excess_images_before_fetching(sync: bool, respx_mo
         return_value=httpx.Response(200, content=b"image")
     )
     with pytest.raises(litellm.BadRequestError, match="at most"):
-        if sync:
-            litellm.systemone(
-                model="gemini/gemini-decision-1",
-                state="Inspect",
-                questions={"ok": {"type": "noul", "instructions": "Is it damaged?"}},
-                images=images,
-                api_key="test",
-            )
-        else:
-            await litellm.asystemone(
-                model="gemini/gemini-decision-1",
-                state="Inspect",
-                questions={"ok": {"type": "noul", "instructions": "Is it damaged?"}},
-                images=images,
-                api_key="test",
-            )
+        await _call_gemini(sync, images)
     assert image_route.call_count == 0
 
 
@@ -195,22 +181,7 @@ async def test_gemini_stops_image_downloads_at_the_request_budget(
         "https://images.example/last.png",
     ]
     with pytest.raises(litellm.ImageFetchError, match="remaining request budget"):
-        if sync:
-            litellm.systemone(
-                model="gemini/gemini-decision-1",
-                state="Inspect",
-                questions={"ok": {"type": "noul", "instructions": "Is it damaged?"}},
-                images=urls,
-                api_key="test",
-            )
-        else:
-            await litellm.asystemone(
-                model="gemini/gemini-decision-1",
-                state="Inspect",
-                questions={"ok": {"type": "noul", "instructions": "Is it damaged?"}},
-                images=urls,
-                api_key="test",
-            )
+        await _call_gemini(sync, urls)
     assert first.call_count == second.call_count == 1
     assert last.call_count == provider.call_count == 0
 
@@ -230,22 +201,8 @@ async def test_gemini_accepts_remote_images_within_the_request_budget(
     provider: Final = respx_mock.post("https://generativelanguage.googleapis.com/v1beta/decisions").mock(
         return_value=httpx.Response(200, json={"answers": {"ok": {"type": "noul", "noul": 0.5}}})
     )
-    if sync:
-        litellm.systemone(
-            model="gemini/gemini-decision-1",
-            state="Inspect",
-            questions={"ok": {"type": "noul", "instructions": "Is it damaged?"}},
-            images=("https://images.example/small.png",),
-            api_key="test",
-        )
-    else:
-        await litellm.asystemone(
-            model="gemini/gemini-decision-1",
-            state="Inspect",
-            questions={"ok": {"type": "noul", "instructions": "Is it damaged?"}},
-            images=("https://images.example/small.png",),
-            api_key="test",
-        )
+    await _call_gemini(sync, ("https://images.example/small.png",))
+    await _call_gemini(sync, ("https://images.example/small.png",))
     sent: Final = TypeAdapter(dict[str, object]).validate_json(provider.calls.last.request.content)
     assert sent["input"] == [
         {"type": "text", "text": "Inspect"},
@@ -256,5 +213,25 @@ async def test_gemini_accepts_remote_images_within_the_request_budget(
 
 @pytest.fixture
 def gemini_httpx_transport(monkeypatch: pytest.MonkeyPatch) -> None:
+    in_memory_cache.flush_cache()
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+async def _call_gemini(sync: bool, images: Sequence[str]) -> None:
+    if sync:
+        litellm.systemone(
+            model="gemini/gemini-decision-1",
+            state="Inspect",
+            questions={"ok": {"type": "noul", "instructions": "Is it damaged?"}},
+            images=images,
+            api_key="test",
+        )
+        return
+    await litellm.asystemone(
+        model="gemini/gemini-decision-1",
+        state="Inspect",
+        questions={"ok": {"type": "noul", "instructions": "Is it damaged?"}},
+        images=images,
+        api_key="test",
+    )

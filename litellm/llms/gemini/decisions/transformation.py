@@ -1,14 +1,13 @@
 from collections.abc import Mapping
+from itertools import chain
 from typing import Final
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import assert_never
 
 from litellm.llms.base_llm.decisions.transformation import (
     BaseDecisionsConfig,
     decisions_text,
-    input_images,
-    ir_to_systemone_request,
     parse_systemone_response,
     systemone_keys,
 )
@@ -18,17 +17,20 @@ from litellm.types.decisions import (
     DecisionsBase64Video,
     DecisionsIRBoxQuestion,
     DecisionsIRChoiceQuestion,
+    DecisionsIRMessages,
     DecisionsIRPredicateQuestion,
     DecisionsIRQuestion,
     DecisionsIRRequest,
     DecisionsIRResponse,
     DecisionsIRScoreQuestion,
-    DecisionsJSON,
+    DecisionsIRState,
+    OpenAIDecisionContentPart,
+    OpenAIDecisionInputImage,
+    OpenAIDecisionInputMessage,
+    OpenAIDecisionInputText,
     UnsupportedDecisionsRequest,
     systemone_choice_key,
 )
-
-_JSON: Final[TypeAdapter[DecisionsJSON]] = TypeAdapter(DecisionsJSON)
 
 
 class _GeminiUsage(BaseModel):
@@ -101,6 +103,34 @@ def _media(
     return {"type": kind, "data": data, "mime_type": header.removeprefix("data:").split(";", 1)[0]}
 
 
+def _part(part: OpenAIDecisionContentPart) -> Mapping[str, object]:
+    match part:
+        case OpenAIDecisionInputText():
+            return {"type": "text", "text": part.text}
+        case OpenAIDecisionInputImage():
+            return _media(part.image_url, "image")
+        case _:
+            assert_never(part)
+
+
+def _message_parts(message: OpenAIDecisionInputMessage) -> tuple[Mapping[str, object], ...]:
+    if isinstance(message.content, str):
+        return ({"type": "text", "text": message.content},)
+    return tuple(_part(part) for part in message.content)
+
+
+def _input_parts(input_: DecisionsIRState | DecisionsIRMessages) -> tuple[Mapping[str, object], ...]:
+    match input_:
+        case DecisionsIRState():
+            return ({"type": "text", "text": decisions_text(input_.state)},) + tuple(
+                _media(image, "image") for image in input_.images
+            )
+        case DecisionsIRMessages():
+            return tuple(chain.from_iterable(_message_parts(message) for message in input_.messages))
+        case _:
+            assert_never(input_)
+
+
 class GeminiDecisionsConfig(BaseDecisionsConfig):
     path = "/v1beta/decisions"
     api_key_env = ("GEMINI_API_KEY", "GOOGLE_API_KEY")
@@ -141,10 +171,8 @@ class GeminiDecisionsConfig(BaseDecisionsConfig):
     ) -> Mapping[str, object] | UnsupportedDecisionsRequest:
         if any(isinstance(question, DecisionsIRBoxQuestion) for question in request.questions):
             return UnsupportedDecisionsRequest("Gemini Decisions does not support box questions")
-        wire: Final = ir_to_systemone_request(model, request)
         parts: Final = (
-            ({"type": "text", "text": decisions_text(_JSON.validate_python(wire["state"]))},)
-            + tuple(_media(image, "image") for image in input_images(request.input))
+            _input_parts(request.input)
             + tuple(_media(audio, "audio") for audio in request.audio)
             + tuple(_media(video, "video") for video in request.videos)
         )

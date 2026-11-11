@@ -304,3 +304,33 @@ def test_empty_decisions_questions_are_rejected_before_provider_call() -> None:
     with pytest.raises(litellm.BadRequestError) as error:
         litellm.decisions(model="gemini/gemini-decision-1", input="mug", questions=[], api_key="test-key")
     assert error.value.status_code == 400
+
+
+def test_message_captions_keep_their_position_next_to_each_image() -> None:
+    request: Final = openai_request_to_ir(
+        OpenAIDecisionRequestBody.model_validate(
+            {
+                "model": "gemini/gemini-decision-1",
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": "Before"},
+                            {"type": "input_image", "image_url": "data:image/png;base64,YQ=="},
+                            {"type": "input_text", "text": "After"},
+                            {"type": "input_image", "image_url": "data:image/png;base64,Yg=="},
+                        ],
+                    }
+                ],
+                "questions": [{"type": "predicate", "instructions": "Did it change?"}],
+            }
+        )
+    )
+    transformed: Final = GeminiDecisionsConfig().transform_decisions_request("gemini-decision-1", request, "gemini")
+    assert not isinstance(transformed, UnsupportedDecisionsRequest)
+    assert transformed["input"] == (
+        {"type": "text", "text": "Before"},
+        {"type": "image", "data": "YQ==", "mime_type": "image/png"},
+        {"type": "text", "text": "After"},
+        {"type": "image", "data": "Yg==", "mime_type": "image/png"},
+    )

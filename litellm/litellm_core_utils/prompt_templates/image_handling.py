@@ -108,6 +108,16 @@ def _rejected_image_fetch(url: str, verdict: SSRFError) -> "litellm.ImageFetchEr
     )
 
 
+def _cached_image(url: str, max_bytes: int | None) -> str | None:
+    cached: Final[object] = in_memory_cache.get_cache(url)
+    if not isinstance(cached, str):
+        return None
+    size: Final = len(cached.partition(",")[2].rstrip("=")) * 3 // 4
+    if max_bytes is not None and size > max_bytes:
+        raise litellm.ImageFetchError(f"Image download exceeds the remaining request budget of {max_bytes} bytes")
+    return cached
+
+
 async def async_convert_url_to_base64(
     url: str, timeout: float | httpx.Timeout | None = None, *, max_bytes: int | None = None
 ) -> str:
@@ -120,8 +130,8 @@ async def async_convert_url_to_base64(
             f"Error: Image URL download is disabled (MAX_IMAGE_URL_DOWNLOAD_SIZE_MB=0). url={url}"
         )
 
-    cached_result: Final = in_memory_cache.get_cache(url)
-    if cached_result and max_bytes is None:
+    cached_result: Final = _cached_image(url, max_bytes)
+    if cached_result:
         return cached_result
 
     client: Final = litellm.module_level_aclient
@@ -159,8 +169,8 @@ def convert_url_to_base64(
             f"Error: Image URL download is disabled (MAX_IMAGE_URL_DOWNLOAD_SIZE_MB=0). url={url}"
         )
 
-    cached_result: Final = in_memory_cache.get_cache(url)
-    if cached_result and max_bytes is None:
+    cached_result: Final = _cached_image(url, max_bytes)
+    if cached_result:
         return cached_result
 
     client: Final = litellm.module_level_client
