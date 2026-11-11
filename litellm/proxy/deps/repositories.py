@@ -59,7 +59,7 @@ SkillSubmissionRepositoryDep: TypeAlias = Annotated[
 
 
 async def get_router_fallback_repository(database: DatabaseDep) -> RouterFallbackStore | None:
-    return None if database is None else ConfigRepository(database.prisma)
+    return None if database is None else ConfigRepository(database.prisma, use_writer=True)
 
 
 RouterFallbackRepositoryDep: TypeAlias = Annotated[RouterFallbackStore | None, Depends(get_router_fallback_repository)]

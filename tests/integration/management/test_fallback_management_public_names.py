@@ -277,6 +277,31 @@ def test_concurrent_writes_through_both_instances_keep_every_rule(gateway: Gatew
         assert covered == frozenset(primaries[1::2]), covered
 
 
+def _read_fallback(instance: Gateway, model: str) -> httpx.Response:
+    return instance.request("GET", f"/fallback/{model}", params={"fallback_type": "general"})
+
+
+def test_the_other_instance_reads_each_write_immediately(gateway: Gateway, peer: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        primary: Final = scenario.model(model=f"openai/n8p-{uuid.uuid4().hex}")
+        first: Final = scenario.model(model=f"openai/n8a-{uuid.uuid4().hex}")
+        second: Final = scenario.model(model=f"openai/n8b-{uuid.uuid4().hex}")
+        for model in (primary, first, second):
+            _wait_until_served(gateway, model)
+        scenario.cleanups.callback(_forget_fallback, gateway, primary, "general")
+
+        assert gateway.request("POST", "/fallback", _fallback_body(primary, [first])).status_code == 200
+        created: Final = _read_fallback(peer, primary)
+        assert gateway.request("POST", "/fallback", _fallback_body(primary, [second, first])).status_code == 200
+        updated: Final = _read_fallback(peer, primary)
+        assert gateway.request("DELETE", f"/fallback/{primary}", params={"fallback_type": "general"}).status_code == 200
+        deleted: Final = _read_fallback(peer, primary)
+
+        assert created.status_code == 200 and _fallback_models(created) == [first], created.text
+        assert updated.status_code == 200 and _fallback_models(updated) == [second, first], updated.text
+        assert deleted.status_code == 404, deleted.text
+
+
 def test_unknown_model_404_lists_team_public_and_internal_names(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         team: Final = scenario.team()

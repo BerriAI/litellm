@@ -11,6 +11,7 @@ DELETE /fallback/{model} - Delete fallbacks for a specific model
 # pyright: reportMissingImports=false
 
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
@@ -44,7 +45,7 @@ from litellm.models.fallback import (
 )
 from litellm.proxy.deps.repositories import RouterFallbackRepositoryDep
 from litellm.repositories.config_repository import ROUTER_SETTINGS_PARAM
-from litellm.router_api import ChangeSet
+from litellm.router_api import ChangeSet, fallback_chain
 from litellm.types.management_endpoints.router_settings_endpoints import (
     FallbackCreateRequest,
     FallbackDeleteResponse,
@@ -56,6 +57,9 @@ from litellm.types.router import ContentPolicyFallbackRule, ContentPolicyFallbac
 router: Final = APIRouter()
 
 _JSON_RULES: Final = TypeAdapter(list[JsonValue])
+_FALLBACK_KEY_BY_TYPE: Final[Mapping[str, str]] = MappingProxyType(
+    {"general": "fallbacks", "context_window": "context_window_fallbacks", "content_policy": "content_policy_fallbacks"}
+)
 _OPTIONAL_JSON_RULES: Final[TypeAdapter[Sequence[JsonValue] | None]] = TypeAdapter(Sequence[JsonValue] | None)
 _CONTENT_POLICY_FALLBACK_RULE: Final[TypeAdapter[ContentPolicyFallbackRule]] = TypeAdapter(ContentPolicyFallbackRule)
 _FALLBACK_TARGETS: Final[TypeAdapter[FallbackTargets]] = TypeAdapter(FallbackTargets)
@@ -106,18 +110,20 @@ def _checked_content_policy_rules(
     return tuple((candidate, _checked_content_policy_rule(candidate)) for candidate in candidates)
 
 
+def _layered_checked_rules(
+    checked_rules: Sequence[tuple[object, ContentPolicyFallbackRule | ValidationError]],
+) -> Sequence[Mapping[str, object]]:
+    return _layered_over_config_rules(
+        tuple(result for _, result in checked_rules if not isinstance(result, ValidationError)),
+        _config_file_rules(
+            litellm.content_policy_fallbacks  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped module list
+        ),
+    )
+
+
 def apply_content_policy_fallbacks(llm_router: "Router", rules: object, *, log_skipped_rules: bool) -> None:
     checked_rules: Final = _checked_content_policy_rules(rules)
-    runtime_rules: Final = tuple(result for _, result in checked_rules if not isinstance(result, ValidationError))
-    layered_rules: Final = (
-        _layered_over_config_rules(
-            runtime_rules,
-            _config_file_rules(
-                litellm.content_policy_fallbacks  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped module list
-            ),
-        )
-        or None
-    )
+    layered_rules: Final = _layered_checked_rules(checked_rules) or None
     for rule, result in checked_rules:
         if log_skipped_rules and isinstance(result, ValidationError):
             _log_ignored_content_policy_rules(rule, result)
@@ -309,6 +315,30 @@ async def create_fallback(
         )
 
 
+async def _saved_rules_in_effect(
+    proxy_config: "ProxyConfig", fallbacks: RouterFallbackStore, fallback_key: str
+) -> Sequence[object]:
+    if proxy_config.router_settings.owned_by_config(fallback_key):
+        file_rules: Final = proxy_config.router_settings.get(fallback_key)
+        return file_rules if isinstance(file_rules, list) else ()
+    saved: Final = await fallbacks.saved_rules(fallback_key)
+    if fallback_key == "content_policy_fallbacks":
+        return _layered_checked_rules(_checked_content_policy_rules(saved))
+    return saved or ()
+
+
+def _fallback_chain_for(rules: Sequence[object], model: str) -> object:
+    try:
+        chain, _ = fallback_chain(
+            fallbacks=rules,  # pyright: ignore[reportArgumentType]  # the chain also resolves the string and rich-target rules the router accepts
+            model_group=model,
+        )
+    except Exception as e:
+        verbose_proxy_logger.error("Error getting fallbacks for model %s: %s", model, e)
+        return []
+    return chain or []
+
+
 @router.get(
     "/fallback/{model}",
     tags=["Fallback Management"],
@@ -319,6 +349,8 @@ async def get_fallback(
     model: str,
     fallback_type: Literal["general", "context_window", "content_policy"] = "general",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    *,
+    fallbacks: RouterFallbackRepositoryDep,
 ):
     """
     Get fallback configuration for a specific model.
@@ -332,7 +364,7 @@ async def get_fallback(
     GET /fallback/gpt-3.5-turbo?fallback_type=general
     ```
     """
-    from litellm.proxy.proxy_server import llm_router
+    from litellm.proxy.proxy_server import llm_router, proxy_config, store_model_in_db
 
     try:
         if llm_router is None:
@@ -341,9 +373,12 @@ async def get_fallback(
                 detail={"error": "Router not initialized"},
             )
 
-        # Get fallbacks using the existing utility function
         fallback_targets: Final = _FALLBACK_TARGETS.validate_python(
             get_all_fallbacks(model=model, llm_router=llm_router, fallback_type=fallback_type)
+            if store_model_in_db is not True or fallbacks is None
+            else _fallback_chain_for(
+                await _saved_rules_in_effect(proxy_config, fallbacks, _FALLBACK_KEY_BY_TYPE[fallback_type]), model
+            )
         )
         fallback_models: Final = [fallback_target_model_name(target) or model for target in fallback_targets]
 

@@ -54,10 +54,7 @@ const (
 `,
 		"calls.go": `package p
 
-import (
-	"context"
-	"fmt"
-)
+import "fmt"
 
 func (c *Client) a() {
 	c.sendRequest("POST", "/team/new", nil)
@@ -74,11 +71,6 @@ func b(client *Client, isUpdate bool, serverID string) {
 	readEndpoint := fmt.Sprintf("%s/%s", endpointMCPRead, serverID)
 	MakeRequest(client, "GET", readEndpoint, nil)
 }
-
-func d(ctx context.Context, client *Client, model string) {
-	MakeRequestWithContext(ctx, client, "POST", "/fallback", nil)
-	MakeRequestWithContext(ctx, client, "GET", fmt.Sprintf("/fallback/%s?fallback_type=%s", model, "general"), nil)
-}
 `,
 	})
 	if len(result.Unresolved) != 0 {
@@ -86,11 +78,9 @@ func d(ctx context.Context, client *Client, model string) {
 	}
 	got := callSet(result.Calls)
 	want := []string{
-		"GET /fallback/{param}",
 		"GET /team/info",
 		"GET /v1/mcp/server/{param}",
 		"POST /credentials",
-		"POST /fallback",
 		"POST /model/new",
 		"POST /model/update",
 		"POST /team/new",
@@ -143,28 +133,6 @@ func MakeRequest(client *Client, method, endpoint string, body interface{}) {
 	})
 	if len(result.Unresolved) != 0 {
 		t.Fatalf("unexpected unresolved: %v", result.Unresolved)
-	}
-}
-
-func TestExtractSkipsOnlyTheHelperForwardingToItsContextVariant(t *testing.T) {
-	result := extractFixture(t, map[string]string{
-		"utils.go": `package p
-
-import "context"
-
-func MakeRequest(client *Client, method, endpoint string, body interface{}) {
-	MakeRequestWithContext(context.Background(), client, method, endpoint, body)
-}
-`,
-		"calls.go": `package p
-
-func a(ctx context.Context, client *Client, path string) {
-	MakeRequestWithContext(ctx, client, "GET", path, nil)
-}
-`,
-	})
-	if len(result.Calls) != 0 || len(result.Unresolved) != 1 || !strings.Contains(result.Unresolved[0], "calls.go") {
-		t.Fatalf("want only the dynamic call in calls.go unresolved, got calls %v and unresolved %v", result.Calls, result.Unresolved)
 	}
 }
 

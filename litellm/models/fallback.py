@@ -19,4 +19,6 @@ FallbackRulesEditor: TypeAlias = Callable[[Sequence[StoredFallback]], FallbackRu
 
 
 class RouterFallbackStore(Protocol):
+    async def saved_rules(self, fallback_key: str) -> Sequence[StoredFallback] | None: ...
+
     async def edit_rules(self, fallback_key: str, edit: FallbackRulesEditor) -> FallbackRulesEdit: ...

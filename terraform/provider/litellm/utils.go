@@ -2,7 +2,6 @@ package litellm
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -92,24 +91,19 @@ func hashedKeyToken(key string) string {
 
 // MakeRequest is a helper function to make HTTP requests
 func MakeRequest(client *Client, method, endpoint string, body interface{}) (*http.Response, error) {
-	return MakeRequestWithContext(context.Background(), client, method, endpoint, body)
-}
+	var req *http.Request
+	var err error
 
-func MakeRequestWithContext(ctx context.Context, client *Client, method, endpoint string, body interface{}) (*http.Response, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-
-	var payload io.Reader
 	if body != nil {
 		jsonData, err := json.Marshal(body)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal request body: %w", err)
 		}
-		payload = bytes.NewBuffer(jsonData)
+		req, err = http.NewRequest(method, fmt.Sprintf("%s%s", client.APIBase, endpoint), bytes.NewBuffer(jsonData))
+	} else {
+		req, err = http.NewRequest(method, fmt.Sprintf("%s%s", client.APIBase, endpoint), nil)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, fmt.Sprintf("%s%s", client.APIBase, endpoint), payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
