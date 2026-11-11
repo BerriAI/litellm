@@ -5660,7 +5660,9 @@ def completion(
     if model is None:
         raise ValueError("model param not passed in.")
     # validate messages
-    messages = validate_and_fix_openai_messages(messages=messages)
+    messages = validate_and_fix_openai_messages(
+        messages=messages, model=model, request_kwargs=_REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
+    )
     tools = validate_and_fix_openai_tools(tools=tools)
     # validate tool_choice
     requested_tool_choice: Final = cast(  # cast-ok: widening an untyped dict to object is always sound
