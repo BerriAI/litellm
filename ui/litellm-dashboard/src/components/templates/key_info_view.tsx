@@ -215,6 +215,15 @@ export default function KeyInfoView({
     );
   }
 
+  const memberKeyEditContext = {
+    userRole: userRole || "",
+    userId: userID || "",
+    keyUserId: currentKeyData.user_id,
+    keyTeamId: currentKeyData.team_id,
+    teamMembers: teamsData?.find((team) => team.team_id === currentKeyData.team_id)?.members_with_roles,
+  };
+  const editingMemberKeyAsTeamAdmin = isTeamAdminEditingMemberKey(memberKeyEditContext);
+
   const handleKeyUpdate = async (formValues: Record<string, any>, dirtyFields: readonly string[] = []) => {
     try {
       if (!accessToken) return;
@@ -331,7 +340,11 @@ export default function KeyInfoView({
       formValues.max_parallel_requests = mapEmptyStringToNull(formValues.max_parallel_requests);
 
       const budgetAlertEmails = dirtyFields.includes(KEY_MAX_BUDGET_ALERT_EMAILS_KEY)
-        ? budgetAlertEmailsMetadata(formValues.max_budget_alert_emails, KEY_MAX_BUDGET_ALERT_EMAILS_KEY)
+        ? budgetAlertEmailsMetadata(
+            formValues.max_budget_alert_emails,
+            KEY_MAX_BUDGET_ALERT_EMAILS_KEY,
+            currentKeyData.metadata,
+          )
         : storedBudgetAlertEmailsMetadata(currentKeyData.metadata, KEY_MAX_BUDGET_ALERT_EMAILS_KEY);
 
       // Convert metadata back to an object if it exists and is a string
@@ -399,14 +412,6 @@ export default function KeyInfoView({
         formValues.budget_duration = wordToCanonical[formValues.budget_duration] ?? formValues.budget_duration;
       }
 
-      const memberKeyEditContext = {
-        userRole: userRole || "",
-        userId: userID || "",
-        keyUserId: currentKeyData.user_id,
-        keyTeamId: currentKeyData.team_id,
-        teamMembers: teamsData?.find((team) => team.team_id === currentKeyData.team_id)?.members_with_roles,
-      };
-      const editingMemberKeyAsTeamAdmin = isTeamAdminEditingMemberKey(memberKeyEditContext);
       if (editingMemberKeyAsTeamAdmin) {
         const trimmed = teamAdminMemberKeyPayload(formValues, dirtyFields);
         if (trimmed.kind === "blocked") {
@@ -1007,6 +1012,7 @@ export default function KeyInfoView({
                   userID={userID}
                   userRole={userRole}
                   premiumUser={premiumUser}
+                  editingMemberKeyAsTeamAdmin={editingMemberKeyAsTeamAdmin}
                 />
               ) : (
                 <div className="space-y-4">

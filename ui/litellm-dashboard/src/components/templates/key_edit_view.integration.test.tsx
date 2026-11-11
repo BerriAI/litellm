@@ -15,6 +15,7 @@ import {
   modelAvailableCall,
   vectorStoreListCall,
 } from "../networking";
+import { toast } from "@/lib/toast";
 import { KeyEditView } from "./key_edit_view";
 import { teamAdminMemberKeyPayload } from "./teamAdminMemberKeyPayload";
 
@@ -3321,7 +3322,10 @@ describe("KeyEditView", () => {
       },
     };
 
-    const renderAlerts = (onSubmit: (values: Record<string, unknown>) => Promise<void>) =>
+    const renderAlerts = (
+      onSubmit: (values: Record<string, unknown>) => Promise<void>,
+      editingMemberKeyAsTeamAdmin = false,
+    ) =>
       renderWithProviders(
         <KeyEditView
           keyData={KEY_WITH_ALERTS}
@@ -3331,6 +3335,7 @@ describe("KeyEditView", () => {
           userID={"test-user"}
           userRole={"Admin"}
           premiumUser={true}
+          editingMemberKeyAsTeamAdmin={editingMemberKeyAsTeamAdmin}
         />,
       );
 
@@ -3395,6 +3400,43 @@ describe("KeyEditView", () => {
 
       expect((await save(onSubmit)).max_budget_alert_emails).toEqual([]);
       expect(onSubmit.mock.calls[0][1]).toContain("max_budget_alert_emails");
+    });
+
+    it("moves a recipient map typed into the metadata JSON box into the rows on blur", async () => {
+      const info = vi.spyOn(toast, "info");
+      const onSubmit = vi.fn().mockResolvedValue(undefined);
+      renderAlerts(onSubmit);
+      await screen.findAllByPlaceholderText("% of budget");
+
+      const metadataBox = screen.getByLabelText("Metadata");
+      fireEvent.change(metadataBox, {
+        target: {
+          value: JSON.stringify({
+            cost_center: "ops",
+            max_budget_alert_emails: { "80": ["typed@example.com"], "95": [] },
+          }),
+        },
+      });
+      fireEvent.blur(metadataBox);
+
+      expect(JSON.parse((metadataBox as HTMLTextAreaElement).value)).toEqual({ cost_center: "ops" });
+      expect(info).toHaveBeenCalledWith(
+        "Moved alert thresholds 80%, 95% from metadata to the Budget Alert Thresholds rows",
+      );
+      expect((await save(onSubmit)).max_budget_alert_emails).toEqual([
+        { threshold: 50, emails: "" },
+        { threshold: 80, emails: "typed@example.com" },
+        { threshold: 95, emails: "" },
+      ]);
+      expect(onSubmit.mock.calls[0][1]).toContain("max_budget_alert_emails");
+    });
+
+    it("hides the rows from a team admin editing a member's key", async () => {
+      renderAlerts(vi.fn(), true);
+
+      expect(await screen.findByLabelText("Metadata")).toBeInTheDocument();
+      expect(screen.queryByPlaceholderText("% of budget")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Add Budget Alert Threshold" })).not.toBeInTheDocument();
     });
 
     it("blocks the save on a duplicate threshold", async () => {

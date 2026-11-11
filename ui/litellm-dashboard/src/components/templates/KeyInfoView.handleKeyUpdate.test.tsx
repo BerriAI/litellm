@@ -793,4 +793,29 @@ describe("KeyInfoView handleKeyUpdate max_budget_alert_emails", () => {
 
     expect(sentPayload.metadata).toEqual({ cost_center: "ops", max_budget_alert_emails: storedAlertEmails });
   });
+  it("keeps the stored entries the rows cannot show when the rows were edited", async () => {
+    const sentPayload = await submit(
+      {
+        metadata: JSON.stringify({ cost_center: "ops" }),
+        max_budget_alert_emails: [{ threshold: 50, emails: "new@example.com" }],
+      },
+      ["max_budget_alert_emails"],
+      {
+        ...baseKeyData,
+        metadata: {
+          cost_center: "ops",
+          max_budget_alert_emails: {
+            "50": ["old@example.com"],
+            "80": ["removed@example.com"],
+            "150": ["c@example.com"],
+          },
+        },
+      },
+    );
+
+    expect(sentPayload.metadata).toEqual({
+      cost_center: "ops",
+      max_budget_alert_emails: { "50": ["new@example.com"], "150": ["c@example.com"] },
+    });
+  });
 });

@@ -91,6 +91,7 @@ interface KeyEditViewProps {
   userID: string | null;
   userRole: string | null;
   premiumUser?: boolean;
+  editingMemberKeyAsTeamAdmin?: boolean;
 }
 
 const sessionKey = (keyData: KeyResponse) => keyData.token || keyData.token_id;
@@ -106,6 +107,7 @@ function KeyEditSession({
   userID,
   userRole,
   premiumUser = false,
+  editingMemberKeyAsTeamAdmin = false,
 }: KeyEditViewProps) {
   const { t } = useTranslation();
   const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
@@ -468,20 +470,22 @@ function KeyEditSession({
             placeholder={t("keyDetail.keyEditView.fields.softBudgetPlaceholder")}
           />
 
-          <BudgetAlertEmailsEditor
-            control={form.control}
-            name="max_budget_alert_emails"
-            label={labelWithHint(
-              t("keyDetail.maxBudgetAlertEmails.budgetAlertThresholds"),
-              t("keyDetail.maxBudgetAlertEmails.budgetAlertThresholdsHint"),
-            )}
-            text={{
-              thresholdPlaceholder: t("keyDetail.maxBudgetAlertEmails.thresholdPlaceholder"),
-              recipientsPlaceholder: t("keyDetail.maxBudgetAlertEmails.recipientsPlaceholder"),
-              removeThreshold: t("keyDetail.maxBudgetAlertEmails.removeThreshold"),
-              addThreshold: t("keyDetail.maxBudgetAlertEmails.addThreshold"),
-            }}
-          />
+          {!editingMemberKeyAsTeamAdmin && (
+            <BudgetAlertEmailsEditor
+              control={form.control}
+              name="max_budget_alert_emails"
+              label={labelWithHint(
+                t("keyDetail.maxBudgetAlertEmails.budgetAlertThresholds"),
+                t("keyDetail.maxBudgetAlertEmails.budgetAlertThresholdsHint"),
+              )}
+              text={{
+                thresholdPlaceholder: t("keyDetail.maxBudgetAlertEmails.thresholdPlaceholder"),
+                recipientsPlaceholder: t("keyDetail.maxBudgetAlertEmails.recipientsPlaceholder"),
+                removeThreshold: t("keyDetail.maxBudgetAlertEmails.removeThreshold"),
+                addThreshold: t("keyDetail.maxBudgetAlertEmails.addThreshold"),
+              }}
+            />
+          )}
 
           <FormField
             control={form.control}
@@ -912,7 +916,7 @@ function KeyEditSession({
             )}
           </FormField>
 
-          <KeyMetadataField form={form} />
+          <KeyMetadataField form={form} budgetAlertRowsShown={!editingMemberKeyAsTeamAdmin} />
 
           <div className="mb-4">
             <FormField control={form.control} name="duration">

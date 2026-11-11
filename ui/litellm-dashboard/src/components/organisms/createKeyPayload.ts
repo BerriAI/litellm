@@ -108,11 +108,12 @@ const buildMetadataJson = (values: Record<string, unknown>, input: KeyCreateInpu
     input.disabledCallbacks.length > 0
       ? { ...(logged as object), litellm_disabled_callbacks: mapDisplayToInternalNames(input.disabledCallbacks) }
       : logged;
+  const metadataObject = disabled ?? {};
   const alertEmails = budgetAlertEmailsMetadata(
     values[KEY_MAX_BUDGET_ALERT_EMAILS_KEY] as readonly BudgetAlertRow[] | undefined,
     KEY_MAX_BUDGET_ALERT_EMAILS_KEY,
+    metadataObject,
   );
-  const metadataObject = disabled ?? {};
   if (typeof metadataObject !== "object" || Array.isArray(metadataObject)) return JSON.stringify(metadataObject);
   const { [KEY_MAX_BUDGET_ALERT_EMAILS_KEY]: _typedAlertEmails, ...withoutTypedAlertEmails } = metadataObject as Record<
     string,

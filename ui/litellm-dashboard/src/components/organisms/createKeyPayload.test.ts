@@ -50,14 +50,20 @@ it("merges the budget alert rows into the metadata JSON box content", () => {
   });
 });
 
-it("drops a recipient map typed into the metadata JSON box, since the rows are its only editor", () => {
+it("keeps typed recipient entries the rows cannot show and lets the rows own every threshold they can", () => {
   const result = build({
-    metadata: JSON.stringify({ cost_center: "ops", max_budget_alert_emails: { "500": "typed@example.com" } }),
-    max_budget_alert_emails: [],
+    metadata: JSON.stringify({
+      cost_center: "ops",
+      max_budget_alert_emails: { "500": "typed@example.com", "80": ["stale@example.com"] },
+    }),
+    max_budget_alert_emails: [{ threshold: 50, emails: "row@example.com" }],
   });
   expect(result.kind).toBe("ok");
   if (result.kind !== "ok") throw new Error(result.kind);
-  expect(JSON.parse(String(result.payload.metadata))).toEqual({ cost_center: "ops" });
+  expect(JSON.parse(String(result.payload.metadata))).toEqual({
+    cost_center: "ops",
+    max_budget_alert_emails: { "500": "typed@example.com", "50": ["row@example.com"] },
+  });
 });
 
 it("keeps the budget alert rows when the metadata JSON box holds null", () => {

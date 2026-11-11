@@ -41,23 +41,45 @@ export const isValidThreshold = (threshold: number | null): threshold is number 
   return isWholeNumber && threshold >= THRESHOLD_MIN && threshold <= THRESHOLD_MAX;
 };
 
+const storedBudgetAlertConfig = (
+  metadata: unknown,
+  metadataKey: BudgetAlertEmailsMetadataKey,
+): Readonly<Record<string, unknown>> => {
+  if (typeof metadata !== "object" || metadata === null) return {};
+  const config: unknown = (metadata as Record<string, unknown>)[metadataKey];
+  return typeof config === "object" && config !== null && !Array.isArray(config)
+    ? (config as Record<string, unknown>)
+    : {};
+};
+
+const budgetAlertRowFromEntry = ([key, emails]: readonly [string, unknown]): BudgetAlertRow | null => {
+  const threshold = Number(key);
+  const recipients = storedRecipients(emails);
+  return /^\d+$/.test(key) && isValidThreshold(threshold) && recipients !== null
+    ? { threshold, emails: recipients.join(", ") }
+    : null;
+};
+
 export const budgetAlertRowsFromMetadata = (
   metadata: unknown,
   metadataKey: BudgetAlertEmailsMetadataKey,
-): readonly BudgetAlertRow[] => {
-  if (typeof metadata !== "object" || metadata === null) return [];
-  const config: unknown = (metadata as Record<string, unknown>)[metadataKey];
-  if (typeof config !== "object" || config === null || Array.isArray(config)) return [];
-  return Object.entries(config as Record<string, unknown>)
-    .flatMap(([key, emails]) => {
-      const threshold = Number(key);
-      const recipients = storedRecipients(emails);
-      return /^\d+$/.test(key) && isValidThreshold(threshold) && recipients !== null
-        ? [{ threshold, emails: recipients.join(", ") }]
-        : [];
+): readonly BudgetAlertRow[] =>
+  Object.entries(storedBudgetAlertConfig(metadata, metadataKey))
+    .flatMap((entry) => {
+      const row = budgetAlertRowFromEntry(entry);
+      return row === null ? [] : [row];
     })
     .sort((a, b) => (a.threshold ?? 0) - (b.threshold ?? 0));
-};
+
+export const budgetAlertEmailsRowsCannotShow = (
+  metadata: unknown,
+  metadataKey: BudgetAlertEmailsMetadataKey,
+): Readonly<Record<string, unknown>> =>
+  Object.fromEntries(
+    Object.entries(storedBudgetAlertConfig(metadata, metadataKey)).filter(
+      (entry) => budgetAlertRowFromEntry(entry) === null,
+    ),
+  );
 
 export const budgetAlertEmailsFromRows = (rows: readonly BudgetAlertRow[]): BudgetAlertEmails =>
   Object.fromEntries(
@@ -69,8 +91,12 @@ export const budgetAlertEmailsFromRows = (rows: readonly BudgetAlertRow[]): Budg
 export const budgetAlertEmailsMetadata = (
   rows: readonly BudgetAlertRow[] | undefined,
   metadataKey: BudgetAlertEmailsMetadataKey,
-): Readonly<Partial<Record<BudgetAlertEmailsMetadataKey, BudgetAlertEmails>>> => {
-  const emails = budgetAlertEmailsFromRows(rows ?? []);
+  metadataWithHiddenEntries: unknown,
+): Readonly<Partial<Record<BudgetAlertEmailsMetadataKey, Readonly<Record<string, unknown>>>>> => {
+  const emails = {
+    ...budgetAlertEmailsRowsCannotShow(metadataWithHiddenEntries, metadataKey),
+    ...budgetAlertEmailsFromRows(rows ?? []),
+  };
   return Object.keys(emails).length > 0 ? { [metadataKey]: emails } : {};
 };
 

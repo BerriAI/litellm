@@ -57,8 +57,13 @@ import TeamDropdown from "../common_components/team_dropdown";
 import OrganizationDropdown from "../common_components/OrganizationDropdown";
 import ProjectDropdown from "../common_components/ProjectDropdown";
 import { CreateUserButton } from "../CreateUserButton";
+import { moveMetadataBudgetAlertsToRows } from "../templates/KeyEditViewControls";
 import { BudgetAlertEmailsEditor, type BudgetAlertEmailsEditorText } from "../key_team_helpers/BudgetAlertEmailsEditor";
-import { budgetAlertRowsSchema, KEY_MAX_BUDGET_ALERT_EMAILS_KEY } from "../key_team_helpers/budgetAlertEmails";
+import {
+  type BudgetAlertRow,
+  budgetAlertRowsSchema,
+  KEY_MAX_BUDGET_ALERT_EMAILS_KEY,
+} from "../key_team_helpers/budgetAlertEmails";
 import { BudgetFallbacksEditor } from "../key_team_helpers/BudgetFallbacksEditor";
 import { END_USER_BUDGET_HINT, EndUserBudgetSelect } from "../key_team_helpers/EndUserBudgetSelect";
 import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
@@ -1644,6 +1649,18 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                               value={(control.value as string | undefined) ?? ""}
                               rows={4}
                               placeholder={t("createKey.metadata.placeholder")}
+                              onBlur={() => {
+                                control.onBlur();
+                                moveMetadataBudgetAlertsToRows(
+                                  form.getValues("metadata") as string | undefined,
+                                  form.getValues(KEY_MAX_BUDGET_ALERT_EMAILS_KEY) as BudgetAlertRow[] | undefined,
+                                  (metadata, rows) => {
+                                    form.setValue("metadata", metadata, { shouldDirty: true });
+                                    form.setValue(KEY_MAX_BUDGET_ALERT_EMAILS_KEY, rows, { shouldDirty: true });
+                                  },
+                                  t,
+                                );
+                              }}
                             />
                           </>
                         )}

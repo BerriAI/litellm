@@ -617,6 +617,32 @@ describe("CreateKey", () => {
       expect(payload).not.toHaveProperty("max_budget_alert_emails");
     });
 
+    it("moves a recipient map typed into the metadata JSON box into the rows on blur", async () => {
+      vi.mocked(toast.info).mockClear();
+      await openModal();
+      await nameTheKey();
+      await openSection(/Optional Settings/i);
+      await addBudgetAlertRow("80", "row@example.com");
+      const metadataBox = await screen.findByLabelText("Metadata");
+      fireEvent.change(metadataBox, {
+        target: { value: JSON.stringify({ team: "research", max_budget_alert_emails: { "80": "typed@example.com" } }) },
+      });
+      fireEvent.blur(metadataBox);
+
+      expect(toast.info).toHaveBeenCalledWith(
+        "Moved alert thresholds 80% from metadata to the Budget Alert Thresholds rows",
+      );
+      expect(screen.getByPlaceholderText("Additional recipients, e.g. finance@example.com")).toHaveValue(
+        "typed@example.com",
+      );
+      await submit();
+
+      expect(JSON.parse(String((await createdPayload()).metadata))).toEqual({
+        team: "research",
+        max_budget_alert_emails: { "80": ["typed@example.com"] },
+      });
+    });
+
     it("blocks the create on a duplicate budget alert threshold", async () => {
       await openModal();
       await nameTheKey();

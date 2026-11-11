@@ -2382,7 +2382,8 @@
       "removeThreshold": "Remove budget alert threshold",
       "addThreshold": "Add Budget Alert Threshold",
       "thresholdRange": "Enter a whole number from 1 to 100",
-      "duplicateThreshold": "Duplicate threshold"
+      "duplicateThreshold": "Duplicate threshold",
+      "movedThresholds": "Moved alert thresholds {{thresholds}} from metadata to the Budget Alert Thresholds rows"
     },
     "estimatedOutputTokens": {
       "invalidPerModel": "Enter a JSON object of positive integers, e.g. {\"gpt-4\": 4096}",

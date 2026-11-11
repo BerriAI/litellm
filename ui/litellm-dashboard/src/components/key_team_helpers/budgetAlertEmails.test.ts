@@ -88,16 +88,46 @@ describe("budgetAlertRowsFromMetadata", () => {
 describe("budgetAlertEmailsMetadata", () => {
   it("writes the threshold map under the given metadata key", () => {
     expect(
-      budgetAlertEmailsMetadata([{ threshold: 80, emails: "dl@example.com" }], KEY_MAX_BUDGET_ALERT_EMAILS_KEY),
+      budgetAlertEmailsMetadata([{ threshold: 80, emails: "dl@example.com" }], KEY_MAX_BUDGET_ALERT_EMAILS_KEY, {}),
     ).toEqual({ max_budget_alert_emails: { "80": ["dl@example.com"] } });
   });
 
   it.each([undefined, [], [{ threshold: null, emails: "dl@example.com" }]])(
     "leaves the key out when no row has a valid threshold %j",
     (rows) => {
-      expect(budgetAlertEmailsMetadata(rows, KEY_MAX_BUDGET_ALERT_EMAILS_KEY)).toEqual({});
+      expect(budgetAlertEmailsMetadata(rows, KEY_MAX_BUDGET_ALERT_EMAILS_KEY, {})).toEqual({});
     },
   );
+
+  it("keeps the stored entries the rows cannot show and lets the rows own every threshold they can", () => {
+    const stored = {
+      max_budget_alert_emails: {
+        "50": ["old@example.com"],
+        "80": ["removed@example.com"],
+        "90": null,
+        "150": ["over@example.com"],
+        "0": ["zero@example.com"],
+        "12.5": ["fraction@example.com"],
+        soon: "label@example.com",
+      },
+    };
+
+    expect(
+      budgetAlertEmailsMetadata(
+        [{ threshold: 50, emails: "new@example.com" }],
+        KEY_MAX_BUDGET_ALERT_EMAILS_KEY,
+        stored,
+      ),
+    ).toEqual({
+      max_budget_alert_emails: {
+        "50": ["new@example.com"],
+        "150": ["over@example.com"],
+        "0": ["zero@example.com"],
+        "12.5": ["fraction@example.com"],
+        soon: "label@example.com",
+      },
+    });
+  });
 });
 
 describe("budgetAlertEmailsFromRows", () => {
