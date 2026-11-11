@@ -3,6 +3,7 @@ Utils used for litellm.transcription() and litellm.atranscription()
 """
 
 import hashlib
+import math
 import os
 from dataclasses import dataclass
 from typing import Final
@@ -15,6 +16,19 @@ from litellm.types.files import (
     get_file_mime_type_from_extension,
 )
 from litellm.types.utils import FileTypes
+
+
+def normalized_audio_duration_seconds(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        seconds: Final = float(value)
+    except OverflowError:
+        return None
+    return seconds if math.isfinite(seconds) and seconds >= 0 else None
+
+
+LIBSNDFILE_UNKNOWN_FRAME_COUNT: Final = 2**63 - 1
 
 
 @dataclass
@@ -323,7 +337,10 @@ def calculate_request_duration(file: FileTypes) -> float | None:
         # Extract duration using soundfile
         file_object: Final = io.BytesIO(file_content)
         with sf.SoundFile(file_object) as audio:
-            duration: Final = len(audio) / audio.samplerate
+            frames: Final = len(audio)
+            if frames >= LIBSNDFILE_UNKNOWN_FRAME_COUNT:
+                return None
+            duration: Final = frames / audio.samplerate
             return duration
 
     except Exception:
