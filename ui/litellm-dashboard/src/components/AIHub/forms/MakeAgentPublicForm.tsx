@@ -41,10 +41,6 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
 
   const handleNext = () => {
     if (currentStep === 0) {
-      if (selectedAgents.size === 0) {
-        toast.fromError(t("aiHub.makeAgentPublic.selectAtLeastOne"));
-        return;
-      }
       setCurrentStep(1);
     }
   };
@@ -87,11 +83,6 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
   }, [visible, agentHubData]);
 
   const handleSubmit = async () => {
-    if (selectedAgents.size === 0) {
-      toast.fromError(t("aiHub.makeAgentPublic.selectAtLeastOne"));
-      return;
-    }
-
     setLoading(true);
     try {
       const agentIdsToMakePublic = Array.from(selectedAgents);
@@ -207,6 +198,11 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
           <p className="font-medium">{t("aiHub.makeAgentPublic.toBeMadePublic")}</p>
           <div className="max-h-48 overflow-y-auto border rounded-lg p-3">
             <div className="space-y-2">
+              {selectedAgents.size === 0 && (
+                <p className="text-sm text-muted-foreground p-2">
+                  {t("aiHub.makeAgentPublic.noSelectedAgents", "No agents selected. Submitting will make all agents private.")}
+                </p>
+              )}
               {Array.from(selectedAgents).map((agentId) => {
                 const agent = agentHubData.find((a) => (a.agent_id || a.name) === agentId);
                 return (
@@ -260,7 +256,7 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
 
         <div className="flex space-x-2">
           {currentStep === 0 && (
-            <Button onClick={handleNext} disabled={selectedAgents.size === 0}>
+            <Button onClick={handleNext} disabled={agentHubData.length === 0}>
               {t("aiHub.makeAgentPublic.next")}
             </Button>
           )}
