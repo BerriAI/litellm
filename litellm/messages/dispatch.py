@@ -137,10 +137,7 @@ def messages_target(model: str, custom_llm_provider: str | None, model_info: obj
 _NATIVE_COMMON_FEATURES: Final = frozenset({Feature.TIMEOUT_VARIANTS, Feature.LATEST_ALIAS})
 
 _FEATURES: Final[detectors.Detectors] = MappingProxyType(
-    {
-        **{feature: detect for feature, detect in detectors.COMMON.items() if feature not in _NATIVE_COMMON_FEATURES},
-        Feature.SAFEGUARDS_CLASSIFIER: route_detectors.safeguards_classifier,
-    }
+    {feature: detect for feature, detect in detectors.COMMON.items() if feature not in _NATIVE_COMMON_FEATURES}
 )
 
 _ASYNC_FEATURES: Final[detectors.Detectors] = MappingProxyType(

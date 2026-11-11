@@ -1,5 +1,6 @@
 mod host;
 mod modify_params;
+mod safeguards;
 pub(crate) mod workload_identity;
 
 use host::MessagesPythonHost;
@@ -13,6 +14,8 @@ fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyR
     let (arguments, hooks) =
         crate::routes::call_hooks(py, LoggingOperation::Messages, &call, asynchronous)?;
     let modify_params = ModifyParams::new(&call.args, &call.kwargs)?;
+    let classifies = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let classified = std::sync::Arc::clone(&classifies);
     crate::routes::run_public_call_after_policy(
         py,
         arguments,
@@ -35,6 +38,12 @@ fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyR
                       services,
                       interceptors,
                       observers| async move {
+                    let route = match classified.load(std::sync::atomic::Ordering::Acquire) {
+                        true => route.with_safeguards(std::sync::Arc::new(
+                            safeguards::PythonSafeguards::new(services.clone()),
+                        )),
+                        false => route,
+                    };
                     let (cache, options) = selection.attach(services);
                     let route = match cache {
                         Some(cache) => route.with_cache(cache),
@@ -53,7 +62,7 @@ fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyR
                 },
             ))
         },
-        MessagesPythonHost::new(call.view()?, asynchronous),
+        MessagesPythonHost::new(call.view()?, asynchronous, classifies),
         hooks,
         modify_params,
         asynchronous,

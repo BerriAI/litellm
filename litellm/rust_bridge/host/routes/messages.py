@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import datetime
 import errno
 import inspect
@@ -42,7 +43,19 @@ from litellm.llms.anthropic.messages.native.handler import (
 from litellm.llms.anthropic.messages.native.handler import (
     _with_deployment_output_effort as _deployment_output_effort,  # pyright: ignore[reportPrivateUsage]  # the handler's own effort rounding
 )
-from litellm.llms.anthropic.messages.native.utils import prepare_native_messages
+from litellm.llms.anthropic.messages.native.streaming_iterator import (
+    _SSE_FRAME_END,  # pyright: ignore[reportPrivateUsage]  # the handler's own SSE framing
+    _SSE_TERMINATOR_OVERLAP,  # pyright: ignore[reportPrivateUsage]  # the handler's own SSE framing
+    _ends_a_frame,  # pyright: ignore[reportPrivateUsage]  # the handler's own SSE framing
+    _stamped_sse_frame,  # pyright: ignore[reportPrivateUsage]  # the handler's own SSE framing
+)
+from litellm.llms.anthropic.messages.native.utils import normalize_native_messages, prepare_native_messages
+from litellm.llms.anthropic.messages.safeguards import (
+    SafeguardsEvaluator,
+    StreamedSafeguardResults,
+    native_route_classifies,
+    with_safeguard_results,
+)
 from litellm.llms.anthropic.messages.utils import is_reasoning_auto_summary_enabled
 from litellm.llms.anthropic.wif import get_anthropic_wif_token
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -52,7 +65,7 @@ from litellm.llms.custom_httpx.llm_http_handler import (
 )
 from litellm.rust_bridge import detectors, failures
 from litellm.rust_bridge.host import cache, callbacks_legacy_python, http_transport
-from litellm.rust_bridge.public_call import NativeCall, known_params, optional_str
+from litellm.rust_bridge.public_call import NativeCall, known_params, optional_sequence, optional_str
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes, ProviderSpecificHeader, anthropic_wif_litellm_params
@@ -646,3 +659,90 @@ def inject_stream_cost(frames: bytes, model: str, request: Mapping[str, object])
 def workload_identity_token(params: Mapping[str, object], api_base: str | None) -> str | None:
     litellm_params: Final = GenericLiteLLMParams(**params)
     return get_anthropic_wif_token(dict(litellm_params), api_base, "")
+
+
+class MessagesSafeguards:
+    def __init__(self, request: Mapping[str, object]) -> None:
+        self._request: Final = request
+        self._frames: _StampedFrames | None = None
+        self._results: object = None
+
+    async def _evaluator(self) -> SafeguardsEvaluator | None:
+        model, provider = _handler_model(self._request)
+        if not await handler.proxy_classifies_tool_uses(model, provider, self._request):
+            return None
+        messages: Final = normalize_native_messages(optional_sequence(self._request.get("messages")) or ())
+        return await asyncio.to_thread(
+            handler._native_safeguards_evaluator,  # pyright: ignore[reportPrivateUsage]  # the handler's own evaluator build
+            self._request,
+            messages,
+        )
+
+    async def results(self, value: Mapping[str, object]) -> object:
+        evaluator: Final = await self._evaluator()
+        if evaluator is None:
+            return None
+        unstamped: Final = response(value)
+        stamped: Final = await with_safeguard_results(unstamped, evaluator)
+        if stamped is unstamped:
+            return None
+        self._results = stamped.get("safeguard_results")
+        return self._results
+
+    def published(self, public: Mapping[str, object]) -> Mapping[str, object]:
+        return public if self._results is None else {**public, "safeguard_results": self._results}
+
+    async def open_stream(self) -> bool:
+        evaluator: Final = await self._evaluator()
+        if evaluator is None:
+            return False
+        self._frames = _StampedFrames(StreamedSafeguardResults(evaluator))
+        return True
+
+    async def frames(self, chunk: bytes) -> Sequence[bytes]:
+        return await self._open_frames().feed(chunk)
+
+    async def flush(self) -> Sequence[bytes]:
+        return await self._open_frames().flush()
+
+    def _open_frames(self) -> _StampedFrames:
+        if self._frames is None:
+            raise RuntimeError("safeguards stream frames before the stream opened")
+        return self._frames
+
+
+class _StampedFrames:
+    def __init__(self, safeguard_results: StreamedSafeguardResults) -> None:
+        self._safeguard_results: Final = safeguard_results
+        self._open_frame: Final = bytearray()
+
+    async def feed(self, chunk: bytes) -> Sequence[bytes]:
+        scan_from: Final = max(len(self._open_frame) - _SSE_TERMINATOR_OVERLAP, 0)
+        self._open_frame.extend(chunk)
+        if not _ends_a_frame(self._open_frame, scan_from):
+            return ()
+        *frames, unterminated = _SSE_FRAME_END.split(self._open_frame)
+        self._open_frame[:] = unterminated
+        return tuple([bytes(await _stamped_sse_frame(frame, self._safeguard_results)) for frame in frames])
+
+    async def flush(self) -> Sequence[bytes]:
+        if not self._open_frame:
+            return ()
+        return (bytes(await _stamped_sse_frame(bytes(self._open_frame), self._safeguard_results)),)
+
+
+def _handler_model(request: Mapping[str, object]) -> tuple[str, str | None]:
+    explicit_provider: Final = optional_str(request.get("custom_llm_provider"))
+    try:
+        model, provider, _, _ = litellm.get_llm_provider(
+            model=str(request["model"]), custom_llm_provider=explicit_provider
+        )
+    except litellm.BadRequestError:
+        return str(request["model"]), explicit_provider
+    return model, provider
+
+
+def safeguards(request: Mapping[str, object]) -> MessagesSafeguards | None:
+    if "safeguards" not in request or not native_route_classifies(str(request["model"]), request["safeguards"]):
+        return None
+    return MessagesSafeguards(request)

@@ -728,3 +728,117 @@ def test_workload_identity_fields_are_the_federation_litellm_params() -> None:
         "anthropic_organization_id",
         "anthropic_disable_workload_identity_federation",
     }
+
+
+_DANGEROUS_TOOL_USE: Final = [{"type": "dangerous_tool_use"}]
+_CLASSIFIER_SETTINGS: Final = {"safeguards_classifier_model": "openai/classifier"}
+_NO_TOOL_USES: Final[dict[str, object]] = {}
+_AVAILABLE: Final = ({"type": "dangerous_tool_use", "status": {"type": "available", "tool_uses": _NO_TOOL_USES}},)
+
+
+@pytest.mark.parametrize(
+    ("request_fields", "general_settings", "classifies"),
+    (
+        pytest.param(
+            {"model": "anthropic/parity-tool-model", "safeguards": _DANGEROUS_TOOL_USE},
+            _CLASSIFIER_SETTINGS,
+            True,
+            id="non-claude",
+        ),
+        pytest.param(
+            {"model": "anthropic/claude-sonnet-4-5", "safeguards": _DANGEROUS_TOOL_USE},
+            _CLASSIFIER_SETTINGS,
+            False,
+            id="claude",
+        ),
+        pytest.param(
+            {"model": "anthropic/parity-tool-model", "safeguards": _DANGEROUS_TOOL_USE}, {}, False, id="unconfigured"
+        ),
+        pytest.param({"model": "anthropic/parity-tool-model"}, _CLASSIFIER_SETTINGS, False, id="not-requested"),
+        pytest.param(
+            {"model": "anthropic/parity-tool-model", "safeguards": [{"type": "other"}]},
+            _CLASSIFIER_SETTINGS,
+            False,
+            id="other-safeguard",
+        ),
+    ),
+)
+def test_safeguards_classify_only_what_the_proxy_answers(
+    monkeypatch: pytest.MonkeyPatch,
+    request_fields: Mapping[str, object],
+    general_settings: Mapping[str, object],
+    classifies: bool,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", general_settings)
+
+    assert (messages_host.safeguards(request_fields) is not None) is classifies
+
+
+@pytest.mark.asyncio
+async def test_safeguards_frames_split_and_stamp_like_the_python_stream(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.llms.anthropic.messages.safeguards import SafeguardsEvaluator
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", _CLASSIFIER_SETTINGS)
+    evaluated: Final[list[object]] = []
+
+    async def evaluate(_evaluator: SafeguardsEvaluator, tool_uses: object) -> object:
+        evaluated.append(tool_uses)
+        return _AVAILABLE
+
+    monkeypatch.setattr(SafeguardsEvaluator, "evaluate", evaluate)
+    classifier: Final = messages_host.safeguards(
+        {
+            "model": "anthropic/parity-tool-model",
+            "safeguards": _DANGEROUS_TOOL_USE,
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+    )
+    assert classifier is not None
+    assert await classifier.open_stream()
+
+    opened: Final = await classifier.frames(
+        b'event: ping\ndata: {"type": "ping"}\n\nevent: message_delta\ndata: {"type": '
+    )
+    closed: Final = await classifier.frames(b'"message_delta", "delta": {"stop_reason": "end_turn"}}\n\ntail')
+    flushed: Final = await classifier.flush()
+
+    assert opened == (b'event: ping\ndata: {"type": "ping"}\n\n',)
+    assert closed == (
+        b'event: message_delta\ndata: {"type": "message_delta", "delta": {"stop_reason": "end_turn", '
+        b'"safeguard_results": [{"type": "dangerous_tool_use", "status": {"type": "available", "tool_uses": {}}}]}}\n\n',
+    )
+    assert flushed == (b"tail",)
+    assert evaluated == [()]
+
+
+@pytest.mark.asyncio
+async def test_safeguards_publish_the_results_python_stamped(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.llms.anthropic.messages.safeguards import SafeguardsEvaluator
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", _CLASSIFIER_SETTINGS)
+    stamped: Final = ({"type": "dangerous_tool_use", "status": {"type": "unsupported"}},)
+
+    async def evaluate(_evaluator: SafeguardsEvaluator, tool_uses: object) -> object:
+        return stamped
+
+    monkeypatch.setattr(SafeguardsEvaluator, "evaluate", evaluate)
+    request: Final = {
+        "model": "anthropic/parity-tool-model",
+        "safeguards": _DANGEROUS_TOOL_USE,
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    unanswered: Final = messages_host.safeguards(request)
+    answered: Final = messages_host.safeguards(request)
+    assert unanswered is not None and answered is not None
+
+    assert await unanswered.results({"content": [], "safeguard_results": []}) is None
+    assert unanswered.published({"id": "msg"}) == {"id": "msg"}
+    assert await answered.results({"content": []}) is stamped
+    assert answered.published({"id": "msg", "safeguard_results": [stamped[0]]}) == {
+        "id": "msg",
+        "safeguard_results": stamped,
+    }

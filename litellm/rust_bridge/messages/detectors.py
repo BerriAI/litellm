@@ -46,10 +46,3 @@ def intercepted(request: NativeCall) -> bool:
     mappings: Final = tuple(mapping for mapping in map(optional_mapping, tools) if mapping is not None)
     provider: Final = _resolved_provider(request)
     return any(interceptor.can_handle(mappings, provider) for interceptor in get_messages_interceptors())
-
-
-def safeguards_classifier(request: NativeCall) -> bool:
-    """Python's proxy classifier evaluates dangerous tool use for non-Claude models."""
-    from litellm.llms.anthropic.messages.safeguards import native_route_classifies
-
-    return native_route_classifies(str(request.resolved["model"]), request.resolved.get("safeguards"))
