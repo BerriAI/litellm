@@ -11607,3 +11607,61 @@ def test_caller_tags_reach_litellm_metadata_whether_metadata_is_a_dict_or_a_json
     LiteLLMProxyRequestSetup.merge_caller_body_tags(request_data=data)
     assert set(data["litellm_metadata"]["tags"]) == {"key-tag", "client-tag"}
     assert data["metadata"] == caller_metadata
+
+
+@pytest.mark.parametrize(
+    ("model", "global_aliases", "key_aliases", "group_alias", "expected"),
+    [
+        pytest.param("a", {"a": "b"}, {"b": "c"}, {"c": "d"}, "d", id="global-then-key-then-router"),
+        pytest.param("a", {}, {}, {"a": {"model": "x"}}, "x", id="router-item-entry"),
+        pytest.param("a", {"a": "b"}, {}, None, "b", id="global-only"),
+        pytest.param("a", {}, {}, None, "a", id="no-alias"),
+    ],
+)
+def test_pre_call_served_model_applies_aliases_in_request_preparation_order(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    global_aliases: dict[str, str],
+    key_aliases: dict[str, str],
+    group_alias: object,
+    expected: str,
+) -> None:
+    from litellm.proxy.litellm_pre_call_utils import pre_call_served_model
+
+    monkeypatch.setattr(litellm, "model_alias_map", global_aliases)
+
+    assert pre_call_served_model(model, UserAPIKeyAuth(aliases=key_aliases), group_alias) == expected
+
+
+@pytest.mark.parametrize(
+    ("token_fields", "expected"),
+    [
+        pytest.param({"aliases": {"requested": 7}}, "requested", id="non-string-key-alias"),
+        pytest.param({"team_model_aliases": {"requested": 7}}, "requested", id="non-string-team-alias"),
+        pytest.param({"aliases": {"mid": 7}, "team_model_aliases": {"requested": "mid"}}, "mid", id="after-team"),
+    ],
+)
+def test_request_served_model_ignores_a_malformed_alias_like_request_preparation_does(
+    token_fields: dict[str, object], expected: str
+) -> None:
+    from litellm.proxy.litellm_pre_call_utils import _update_model_if_key_alias_exists, _update_model_if_team_alias_exists
+    from litellm.proxy.litellm_pre_call_utils import request_served_model
+
+    valid_token: Final = UserAPIKeyAuth(**token_fields)
+    prepared: Final[dict[str, object]] = {"model": "requested"}  # mutable-ok: the rewrite functions edit the body
+    with patch("litellm.proxy.proxy_server.llm_router", None):
+        _update_model_if_team_alias_exists(data=prepared, user_api_key_dict=valid_token)
+    _update_model_if_key_alias_exists(data=prepared, user_api_key_dict=valid_token)
+
+    assert request_served_model("requested", valid_token, None, None) == prepared["model"] == expected
+
+
+def test_stale_team_alias_bypass_flag_is_read_once_per_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
+
+    monkeypatch.setattr(pre_call_utils, "_ENABLE_TEAM_STALE_ALIAS_BYPASS", None)
+    monkeypatch.setenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", "true")
+    first: Final = pre_call_utils._stale_team_alias_bypass_enabled()
+    monkeypatch.setenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", "false")
+
+    assert (first, pre_call_utils._stale_team_alias_bypass_enabled()) == (True, True)
