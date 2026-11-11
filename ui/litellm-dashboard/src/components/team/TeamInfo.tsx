@@ -704,7 +704,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const canEditTeam = is_team_admin || is_proxy_admin || teamEditAccess.kind !== "none";
   const visibleTabs = useMemo(() => getTeamInfoVisibleTabs(canEditTeam), [canEditTeam]);
   const defaultTabKey = useMemo(() => getTeamInfoDefaultTab(editTeam, canEditTeam), [editTeam, canEditTeam]);
-  const [activeTab, setActiveTab] = useUrlTab(visibleTabs, defaultTabKey, "detail_tab");
+  const [activeTab, setActiveTab] = useUrlTab(
+    loading ? getTeamInfoVisibleTabs(true) : visibleTabs,
+    defaultTabKey,
+    "detail_tab",
+  );
   const { onTabChange, hasVisited } = useVisitedTabs(activeTab);
 
   const teamFormValues = (): TeamUpdateFormValues => {

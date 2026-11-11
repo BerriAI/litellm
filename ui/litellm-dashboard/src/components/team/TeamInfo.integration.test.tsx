@@ -430,6 +430,33 @@ describe("TeamInfoView - member budget reset prompt", () => {
     vi.clearAllMocks();
   });
 
+  it.each([
+    ["members", "Members", true],
+    ["member-permissions", "Member Permissions", true],
+    ["settings", "Settings", true],
+    ["settings", "Settings", false],
+  ])("opens %s only when loaded team permissions allow it (%s, %s)", async (tab, label, allowed) => {
+    const response = Promise.withResolvers<TeamData>();
+    vi.mocked(networking.teamInfoCall).mockReturnValue(response.promise);
+    renderWithProviders(<TeamInfoView {...props} is_team_admin={false} is_proxy_admin={false} />, {
+      searchParams: { detail_tab: tab },
+    });
+
+    expect(screen.queryByRole("tab", { name: label })).not.toBeInTheDocument();
+    await waitFor(() => expect(networking.teamInfoCall).toHaveBeenCalled());
+    response.resolve(
+      createMockTeamData({
+        caller_edit_access: allowed ? { kind: "team_admin", editable_fields: [] } : { kind: "none" },
+      }) as TeamData,
+    );
+
+    expect(await screen.findByRole("tab", { name: allowed ? label : "Overview" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    if (!allowed) expect(screen.queryByRole("tab", { name: label })).not.toBeInTheDocument();
+  });
+
   it("keeps a team's key visible while switching its tabs and returning to the key list", async () => {
     const user = userEvent.setup({ delay: null });
     vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData() as TeamData);
