@@ -68,6 +68,7 @@ from litellm.litellm_core_utils.core_helpers import (
     bind_budget_reservation_to_callbacks,
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
+    require_attributes,
 )
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import validate_no_callback_env_reference
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
@@ -113,10 +114,12 @@ from litellm.proxy.common_request_processing import (
     open_sse_before_first_byte,
     resolve_litellm_call_id,
 )
+from litellm.proxy.common_utils.callback_utils import strip_callback_config
 from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_body_call_id, with_call_id
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    is_opaque_pass_through_request,
     read_request_body,
     safe_get_request_headers,
 )
@@ -131,6 +134,7 @@ from litellm.proxy.common_utils.sse_keepalive import (
     wrap_passthrough_sse_bytes_with_keepalive_pings,
 )
 from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy module exports
+    ROUTER_RESERVED_METADATA_FIELDS,
     LiteLLMProxyRequestSetup,
     _get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _key_or_team_allows_client_pricing_override,  # pyright: ignore[reportPrivateUsage]  # reuse the proxy's pricing trust policy
@@ -162,6 +166,8 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     WebSocketSessionUsage,
     WebsocketUpstreamFrameKind,
 )
+from litellm.types.proxy.auth.user_api_key_auth import COMMITTED_BUDGET_SPEND_PARAM
+from litellm.types.proxy.carried_budget_state import CommittedBudgetSpend
 from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, CallTypes, Usage
 
 from .llm_provider_handlers.tinyfish_passthrough_logging_handler import (
@@ -191,7 +197,18 @@ _PRICING_MODEL_OVERRIDE_PARAMS: Final = frozenset(("base_model",))
 
 
 def _is_mergeable_client_metadata(key: str, value: object) -> bool:
-    return not key.startswith("user_api_key_") and (key != "model_info" or isinstance(value, Mapping))
+    return (
+        not key.startswith("user_api_key_")
+        and key not in ROUTER_RESERVED_METADATA_FIELDS
+        and (key != "model_info" or isinstance(value, Mapping))
+    )
+
+
+def _request_body_fields(parsed: object) -> Mapping[str, object]:
+    fields: Final = as_str_mapping(parsed)
+    if fields is None:
+        raise TypeError(f"unsupported operand type(s) for |: '{type(parsed).__name__}' and 'dict'")
+    return fields
 
 
 class _RegisteredPassThroughRoute(TypedDict):
@@ -287,9 +304,9 @@ async def chat_completion_pass_through_endpoint(
         body: Final = await request.body()
         body_str: Final = body.decode()
         try:
-            data = ast.literal_eval(body_str) | data
+            data = {**_request_body_fields(_DECODED_JSON.validate_python(ast.literal_eval(body_str))), **data}
         except Exception:
-            data = json.loads(body_str) | data
+            data = {**_request_body_fields(_DECODED_JSON.validate_python(json.loads(body_str))), **data}
 
         data["adapter_id"] = adapter_id
 
@@ -412,6 +429,10 @@ async def chat_completion_pass_through_endpoint(
             headers=litellm_call_id_headers(litellm_call_id),
             code=error_status_code(e, 500),
         )
+
+
+def _is_provider_payload(request: Request) -> bool:
+    return is_opaque_pass_through_request(get_request_route(request), request.headers.get("content-type", ""))
 
 
 class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
@@ -722,6 +743,8 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         _metadata["litellm_parent_otel_span"] = user_api_key_dict.parent_otel_span
         _metadata["user_api_key_budget_reservation"] = user_api_key_dict.budget_reservation
         _metadata[MODEL_ACCESS_GROUP_METADATA_KEY] = user_api_key_dict.matched_model_access_groups
+        _metadata["user_api_key_metadata"] = _metadata["user_api_key_auth_metadata"]
+        _metadata["user_api_key_team_metadata"] = strip_callback_config(user_api_key_dict.team_metadata)
         # The per-model budget counters are keyed off these. get_sanitized_user_information_from_key
         # returns StandardLoggingUserAPIKeyMetadata, which carries no budget field, so without this
         # the post-call increment finds nothing and every passthrough request goes untracked and
@@ -763,6 +786,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             "litellm_params": {
                 **litellm_params_in_body,
                 "metadata": _metadata,
+                COMMITTED_BUDGET_SPEND_PARAM: user_api_key_dict.committed_budget_spend or CommittedBudgetSpend(),
                 "proxy_server_request": {
                     "url": str(request.url),
                     "method": request.method,
@@ -945,11 +969,16 @@ def _build_passthrough_failure_request_payload(
     model and provider. A user-defined route never gets that, since its URL
     names an upstream model rather than a LiteLLM-managed one.
     """
-    request_payload: Final[dict] = dict(cast(Mapping[str, object], parsed_body or {}))  # cast-ok: json body
+    request_payload: Final = dict(cast(Mapping[str, object], parsed_body or {}))  # cast-ok: json body
     if kwargs:
-        request_payload.update(kwargs)
+        request_payload.update(_json_object(_DECODED_JSON.validate_python(kwargs)))
     if logging_obj is not None:
         request_payload["litellm_logging_obj"] = logging_obj
+        logging_litellm_params: Final = _json_object(logging_obj.model_call_details.get("litellm_params"))
+        existing_litellm_params: Final = _json_object(request_payload.get("litellm_params"))
+        api_base: Final = logging_litellm_params.get("api_base")
+        if isinstance(api_base, str) and api_base and "api_base" not in existing_litellm_params:
+            request_payload["litellm_params"] = {**existing_litellm_params, "api_base": api_base}
     url_route: Final = str(url) if url is not None else ""
     google_provider: Final = (
         _passthrough_google_provider(url_route, custom_llm_provider) if builtin_provider_route else None
@@ -1198,6 +1227,14 @@ def _unfiltered_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
     return headers
 
 
+def _caller_query_source(
+    keep_target_query: bool, query_params: Mapping[str, object] | None, request: Request
+) -> Mapping[str, object]:
+    if keep_target_query:
+        return MappingProxyType({})
+    return query_params or request.query_params
+
+
 def _json_object(value: object) -> Mapping[str, object]:
     return cast("Mapping[str, object]", value) if isinstance(value, Mapping) else MappingProxyType({})  # cast-ok: json
 
@@ -1255,6 +1292,7 @@ async def pass_through_request(
     timeout: float | None = None,
     upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
     operation: GenAIOperation | None = None,
+    keep_target_query: bool = False,
 ):
     """
     Pass through endpoint handler, makes the httpx request for pass-through endpoints and ensures logging hooks are called
@@ -1277,6 +1315,7 @@ async def pass_through_request(
             general_settings.pass_through_request_timeout, then 600s.
         upstream_headers_filter: Optional last rewrite of the headers sent upstream, after x-pass- expansion
         operation: Optional GenAI operation the route reports, unless the upstream names its own
+        keep_target_query: Send the target URL's query exactly as given, adding none of the caller's query params
     """
     from litellm.exceptions import ModifyResponseException
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -1315,7 +1354,10 @@ async def pass_through_request(
             parent_span=user_api_key_dict.parent_otel_span,
         )
 
-        requested_query_params: dict | None = query_params or dict(request.query_params) or None
+        requested_query_params: dict | None = (
+            dict(_caller_query_source(keep_target_query, query_params, request))  # pyright: ignore[reportUnknownArgumentType]  # query_params keeps its legacy untyped dict annotation
+            or None
+        )
 
         endpoint_type: Final[EndpointType] = HttpPassThroughEndpointHelpers.get_endpoint_type(
             str(url), custom_llm_provider
@@ -2237,15 +2279,13 @@ def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> di
     return restored_metadata
 
 
-class _PassThroughRequestEnvelope(TypedDict, total=False):
-    query_params: Mapping[str, object] | None
-    custom_body: Mapping[str, object] | None
-    stream: bool | None
+class _SupportsGet(Protocol):
+    def get(self, key: str, /) -> object: ...
 
 
 async def _parse_request_data_by_content_type(
     request: Request,
-) -> tuple[object, object, None, bool | None]:
+) -> tuple[object, object, None, object]:
     """
     Parse request data based on content type.
 
@@ -2254,6 +2294,8 @@ async def _parse_request_data_by_content_type(
     Returns:
         Tuple of (query_params_data, custom_body_data, file_data, stream)
     """
+    if _is_provider_payload(request):
+        return None, None, None, None
     content_type: Final = request.headers.get("content-type", "")
 
     query_params_data = None
@@ -2264,10 +2306,12 @@ async def _parse_request_data_by_content_type(
     if "application/json" in content_type:
         # ✅ Handle JSON
         try:
-            body: _PassThroughRequestEnvelope = await request.json()
-            query_params_data = body.get("query_params")
-            custom_body_data = body.get("custom_body")
-            stream = body.get("stream")
+            json_body: Final = require_attributes(
+                _DECODED_JSON.validate_python(await request.json()), _SupportsGet, "get"
+            )
+            query_params_data = json_body.get("query_params")
+            custom_body_data = json_body.get("custom_body")
+            stream = json_body.get("stream")
         except json.JSONDecodeError:
             # Handle requests with no body (e.g., DELETE requests)
             pass
@@ -2275,14 +2319,16 @@ async def _parse_request_data_by_content_type(
         # ✅ Try to parse as JSON first (handles misconfigured clients sending JSON with multipart content-type)
         # If that fails, skip parsing - pass_through_request will handle actual multipart
         try:
-            body = await request.json()
+            multipart_json_body: Final = require_attributes(
+                _DECODED_JSON.validate_python(await request.json()), _SupportsGet, "get"
+            )
             # Successfully parsed as JSON - treat as JSON body
-            query_params_data = body.get("query_params")
-            custom_body_data = body.get("custom_body")
-            stream = body.get("stream")
+            query_params_data = multipart_json_body.get("query_params")
+            custom_body_data = multipart_json_body.get("custom_body")
+            stream = multipart_json_body.get("stream")
             # If custom_body is not set, use the entire body
-            if custom_body_data is None and body:
-                custom_body_data = body
+            if custom_body_data is None and multipart_json_body:
+                custom_body_data = multipart_json_body
         except (json.JSONDecodeError, Exception):
             # Not JSON - this is actual multipart data
             # Skip parsing here to avoid consuming the request body stream
@@ -2320,6 +2366,7 @@ def create_pass_through_route(
     timeout: float | None = None,
     upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
     operation: GenAIOperation | None = None,
+    keep_target_query: bool = False,
 ):
     # check if target is an adapter.py or a url
     from litellm._uuid import uuid
@@ -2469,6 +2516,7 @@ def create_pass_through_route(
                         timeout=cast(float | None, param_timeout),
                         upstream_headers_filter=upstream_headers_filter,
                         operation=operation,
+                        keep_target_query=keep_target_query,
                     )
                 finally:
                     if hasattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY):
@@ -2563,6 +2611,21 @@ def _rewrite_vertex_live_setup_model(text_data: str, setup_model_rewriter: Calla
     if rewritten_model == setup_model:
         return text_data
     return json.dumps({**message, "setup": {**setup, "model": rewritten_model}})
+
+
+VERTEX_LIVE_UNDECODABLE_BINARY_CLOSE_REASON: Final = "Rejected Request: binary messages must be UTF-8 encoded JSON"
+
+
+def _rewrite_vertex_live_binary_setup_model(
+    bytes_data: bytes, setup_model_rewriter: Callable[[str], str] | None
+) -> bytes | None:
+    if setup_model_rewriter is None:
+        return bytes_data
+    try:
+        text_data: Final = bytes_data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    return _rewrite_vertex_live_setup_model(text_data, setup_model_rewriter).encode("utf-8")
 
 
 def _resolved_vertex_live_setup(
@@ -2994,6 +3057,28 @@ async def _relay_client_frame(
     return verdict
 
 
+_UNDECODABLE_BINARY_CLIENT_FRAME: Final = _RefuseClientFrame(
+    refusal=WebsocketFrameModelRefused(
+        message=VERTEX_LIVE_UNDECODABLE_BINARY_CLOSE_REASON, error_type="invalid_request_error"
+    )
+)
+
+
+async def _relay_client_binary_frame(
+    websocket: WebSocket,
+    upstream_ws: ClientConnection,
+    bytes_data: bytes,
+    setup_model_rewriter: Callable[[str], str] | None,
+    gate: WebsocketFrameModelGate | None,
+    ledger: _WebsocketTurnLedger,
+) -> _ForwardClientFrame | _RefuseClientFrame:
+    rewritten_bytes: Final = _rewrite_vertex_live_binary_setup_model(bytes_data, setup_model_rewriter)
+    if rewritten_bytes is None:
+        await websocket.close(code=CloseCode.POLICY_VIOLATION, reason=VERTEX_LIVE_UNDECODABLE_BINARY_CLOSE_REASON)
+        return _UNDECODABLE_BINARY_CLIENT_FRAME
+    return await _relay_client_frame(websocket, upstream_ws, bytes_data, rewritten_bytes, gate, ledger)
+
+
 _EXPLICIT_SUCCESS_KWARGS: Final = frozenset({"logging_obj", "passthrough_logging_payload", "custom_llm_provider"})
 WALKOUT_TURN_DRAIN_SECONDS: Final = 600.0
 
@@ -3361,8 +3446,13 @@ async def websocket_passthrough_request(
                             metered_total += _metered_client_text(meter, text_data)
                         elif bytes_data is not None:
                             if isinstance(
-                                await _relay_client_frame(
-                                    websocket, upstream_ws, bytes_data, bytes_data, client_frame_model_gate, ledger
+                                await _relay_client_binary_frame(
+                                    websocket,
+                                    upstream_ws,
+                                    bytes_data,
+                                    setup_model_rewriter,
+                                    client_frame_model_gate,
+                                    ledger,
                                 ),
                                 _RefuseClientFrame,
                             ):

@@ -6,6 +6,7 @@ import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 interface SessionManagementProps {
   endpointType: string | null;
@@ -120,15 +121,7 @@ const SessionManagement: React.FC<SessionManagementProps> = ({
                 <div className="text-xs">
                   <div className="mb-1">{t("playground.chatUi.sessionManagement.copyToContinue")}</div>
                   <div className="bg-gray-800 text-gray-100 p-2 rounded-sm font-mono text-xs whitespace-pre-wrap">
-                    {`curl -X POST "your-proxy-url/v1/responses" \\
-  -H "Authorization: Bearer your-api-key" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "model": "your-model",
-    "input": [{"role": "user", "content": "your message", "type": "message"}],
-    "previous_response_id": "${responsesSessionId}",
-    "stream": true
-  }'`}
+                    {codeSamples.playground.responsesSessionCurl(responsesSessionId)}
                   </div>
                 </div>
               </TooltipContent>

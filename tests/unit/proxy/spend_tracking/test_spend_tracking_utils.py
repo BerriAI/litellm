@@ -8,6 +8,7 @@ from typing import Any, Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import Request
 from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
@@ -32,10 +33,14 @@ from litellm.constants import (
     MANAGED_BACKGROUND_RESPONSE_METADATA_KEY,
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.ocr.transformation import OCRResponse, OCRUsageInfo
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsMetadataFields, SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import get_passthrough_router_request_metadata
+from litellm.proxy.pass_through_endpoints.pass_through_endpoints import HttpPassThroughEndpointHelpers
+from litellm.types.passthrough_endpoints.pass_through_endpoints import PassthroughStandardLoggingPayload
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _extract_usage_for_ocr_call,
@@ -181,6 +186,29 @@ def test_get_logging_payload_includes_kubernetes_pod_routing(
     assert _get_spend_logs_metadata(None)["kubernetes_pod_routing"] is None
 
 
+def test_get_logging_payload_includes_ecologits_impacts():
+    """The ecologits callback attaches impacts under metadata['ecologits'] before
+    the success handlers run, so the spend-log row must carry them into the
+    metadata rendered on the Logs UI panel."""
+    now: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
+    ecologits_impacts: Final = {
+        "ecologits_payload": {"model_name": "claude-haiku-4-5", "output_token_count": 114},
+        "impacts": {"energy": {"value": 1.3e-05, "unit": "kWh"}},
+    }
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_params": {"metadata": {"ecologits": ecologits_impacts}},
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-test", choices=[]),
+        start_time=now,
+        end_time=now,
+    )
+
+    assert json.loads(payload["metadata"])["ecologits"] == ecologits_impacts
+    assert _get_spend_logs_metadata(None).get("ecologits") is None
+
+
 @pytest.mark.parametrize("store_prompts,redact", [(True, False), (False, False), (True, True)])
 def test_classifier_audit_spend_storage_obeys_privacy_and_truncation(monkeypatch, store_prompts, redact):
     from litellm.proxy import proxy_server
@@ -209,6 +237,178 @@ def test_classifier_audit_spend_storage_obeys_privacy_and_truncation(monkeypatch
         assert stored["originating_request_masked"]["input"] == "source-only"
         assert stored["model"] == "classifier"
         assert audit["classifier_input"]["system"] == "rubric" * 1000
+
+
+_TENANT_PROMPT: Final = "tenant-private-prompt"
+_TENANT_RESPONSE: Final = "tenant-private-response"
+
+
+def _tenant_settings(setting: bool | str | None) -> dict[str, object]:
+    return {} if setting is None else {"store_prompts_in_spend_logs": setting}
+
+
+def _spend_log_for(litellm_params: Mapping[str, object]) -> tuple[SpendLogsPayload, dict[str, object]]:
+    now: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
+    messages: Final = [{"role": "user", "content": _TENANT_PROMPT}]
+    kwargs: Final[dict[str, object]] = {
+        "model": "gpt-4o-mini",
+        "litellm_params": {**litellm_params, "proxy_server_request": {"body": {"messages": messages}}},
+        "standard_logging_object": {
+            "call_type": "_arealtime",
+            "model_map_information": None,
+            "messages": messages,
+            "response": {"choices": [{"message": {"content": _TENANT_RESPONSE}}]},
+            "metadata": {},
+        },
+    }
+    response: Final = litellm.ModelResponse(
+        id="tenant-storage",
+        choices=[{"message": {"role": "assistant", "content": _TENANT_RESPONSE}}],
+        usage=litellm.Usage(prompt_tokens=3, completion_tokens=2, total_tokens=5),
+    )
+    return get_logging_payload(kwargs=kwargs, response_obj=response, start_time=now, end_time=now), kwargs
+
+
+def _stores_tenant_content(payload: SpendLogsPayload) -> tuple[bool, bool, bool]:
+    return (
+        _TENANT_PROMPT in payload["messages"],
+        _TENANT_PROMPT in payload["proxy_server_request"],
+        _TENANT_RESPONSE in payload["response"],
+    )
+
+
+@pytest.mark.parametrize("storage_mode", [None, "latest_turn"])
+@pytest.mark.parametrize(
+    ("key_setting", "team_setting", "global_store", "stored"),
+    [
+        (False, None, True, False),
+        (None, False, True, False),
+        (True, False, True, False),
+        (False, True, True, False),
+        (None, "false", True, False),
+        (None, None, True, True),
+        (True, True, True, True),
+        (True, True, False, False),
+    ],
+)
+def test_tenant_prompt_storage_policy_decides_what_spend_logs_keep(
+    monkeypatch: pytest.MonkeyPatch,
+    key_setting: bool | str | None,
+    team_setting: bool | str | None,
+    global_store: bool,
+    stored: bool,
+    storage_mode: str | None,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(
+        proxy_server,
+        "general_settings",
+        {"store_prompts_in_spend_logs": global_store, "spend_logs_prompt_storage": storage_mode},
+    )
+    monkeypatch.delenv("STORE_PROMPTS_IN_SPEND_LOGS", raising=False)
+    payload, kwargs = _spend_log_for(
+        {
+            "metadata": {
+                "user_api_key_metadata": _tenant_settings(key_setting),
+                "user_api_key_team_metadata": _tenant_settings(team_setting),
+                "store_prompts_in_spend_logs": True,
+                "headers": {"litellm-disable-message-redaction": "true"},
+            }
+        }
+    )
+    assert _stores_tenant_content(payload) == (stored, stored, stored)
+    assert kwargs["standard_logging_object"]["messages"] == [{"role": "user", "content": _TENANT_PROMPT}]
+    assert kwargs["standard_logging_object"]["response"] == {"choices": [{"message": {"content": _TENANT_RESPONSE}}]}
+
+
+def _passthrough_logging_params(auth: UserAPIKeyAuth, request: Request) -> Mapping[str, object]:
+    context: Final = HttpPassThroughEndpointHelpers.init_kwargs_for_pass_through_endpoint(
+        request=request,
+        user_api_key_dict=auth,
+        passthrough_logging_payload=PassthroughStandardLoggingPayload(url="https://api.openai.com/v1/chat/completions"),
+        logging_obj=LiteLLMLoggingObj(
+            model="test-model",
+            messages=[],
+            stream=False,
+            call_type="pass_through_endpoint",
+            start_time=datetime.datetime(2026, 1, 1, tzinfo=timezone.utc),
+            litellm_call_id="tenant-storage",
+            function_id="tenant-storage",
+        ),
+        _parsed_body={
+            "messages": [{"role": "user", "content": _TENANT_PROMPT}],
+            "metadata": {
+                "user_api_key_metadata": {"store_prompts_in_spend_logs": True},
+                "user_api_key_team_metadata": {"store_prompts_in_spend_logs": True},
+            },
+        },
+    )
+    return TypeAdapter[Mapping[str, object]](Mapping[str, object]).validate_python(context["litellm_params"])
+
+
+def _router_passthrough_logging_params(auth: UserAPIKeyAuth, request: Request) -> Mapping[str, object]:
+    return {"litellm_metadata": dict(get_passthrough_router_request_metadata(auth, request))}
+
+
+@pytest.mark.parametrize("logging_params_for", [_passthrough_logging_params, _router_passthrough_logging_params])
+@pytest.mark.parametrize(
+    ("key_setting", "team_setting", "stored"),
+    [(False, None, False), (None, False, False), (True, False, False), (None, None, True)],
+)
+def test_passthrough_spend_logs_follow_the_authenticated_tenant_storage_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    logging_params_for: Callable[[UserAPIKeyAuth, Request], Mapping[str, object]],
+    key_setting: bool | None,
+    team_setting: bool | None,
+    stored: bool,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    monkeypatch.delenv("STORE_PROMPTS_IN_SPEND_LOGS", raising=False)
+    auth: Final = UserAPIKeyAuth(
+        api_key="test-storage-key", metadata=_tenant_settings(key_setting), team_metadata=_tenant_settings(team_setting)
+    )
+    request: Final = Request(
+        {"type": "http", "method": "POST", "path": "/openai/v1/chat/completions", "headers": [], "query_string": b""}
+    )
+    payload, _ = _spend_log_for(logging_params_for(auth, request))
+    assert _stores_tenant_content(payload) == (stored, stored, stored)
+
+
+@pytest.mark.parametrize("tenant_field", ["user_api_key_metadata", "user_api_key_team_metadata"])
+def test_tenant_prompt_restriction_redacts_ancillary_fields_without_mutating_callbacks(
+    monkeypatch: pytest.MonkeyPatch, tenant_field: str
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    metadata: Final = {tenant_field: {"store_prompts_in_spend_logs": False}}
+    guardrails: Final = [{"guardrail_name": "test", "guardrail_request": "private-guardrail"}]
+    vectors: Final = [
+        {"vector_store_search_response": {"data": [{"content": [{"text": "private-vector", "type": "text"}]}]}}
+    ]
+    error: Final = {
+        "error_message": 'bad request {"messages": [{"role": "user", "content": "private-error"}]}',
+        "error_class": "BadRequestError",
+    }
+    cleaned: Final = _get_spend_logs_metadata(
+        metadata=metadata, guardrail_information=guardrails, vector_store_request_metadata=vectors
+    )
+    assert "private-guardrail" not in json.dumps(cleaned["guardrail_information"])
+    assert "private-vector" not in json.dumps(cleaned["vector_store_request_metadata"])
+    assert guardrails == [{"guardrail_name": "test", "guardrail_request": "private-guardrail"}]
+    assert vectors[0]["vector_store_search_response"]["data"][0]["content"][0]["text"] == "private-vector"
+    assert "private-error" not in json.dumps(sanitize_error_information_for_spend_logs(error, metadata=metadata))
+    assert "private-error" in error["error_message"]
+
+
+def test_request_body_metadata_cannot_disable_spend_prompt_storage(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    assert should_store_prompts_and_responses_in_spend_logs({"store_prompts_in_spend_logs": False}) is True
 
 
 def test_get_logging_payload_maps_openai_cached_tokens_to_cache_read_input_tokens():

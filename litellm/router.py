@@ -15,6 +15,8 @@ from collections.abc import Callable, Mapping, Sequence
 from types import FunctionType, MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal
 
+from pydantic import TypeAdapter
+
 from litellm.router_config import RouterConfig, build_router_config
 from litellm.router_core import RouterCore, make_core
 from litellm.router_deprecated import DeprecatedRouterMembers
@@ -32,6 +34,7 @@ from litellm.types.router import (
     DeploymentTypedDict,
     FallbackAccessCheck,
     FallbackBudgetCheck,
+    FallbackRateLimitCheck,
     GuardrailTypedDict,
     LiteLLM_Params,
     ModelGroupInfo,
@@ -118,6 +121,7 @@ def _router_init(
     enable_mid_stream_fallback_continuation: bool = False,
     fallback_access_check: FallbackAccessCheck | None = None,
     fallback_budget_check: FallbackBudgetCheck | None = None,
+    fallback_rate_limit_check: FallbackRateLimitCheck | None = None,
     auto_router_capability_limit: AutoRouterCapabilityLimit | None = None,
     session_affinity_repin_on_failover: bool = False,
     _host: PythonHost = python_host,
@@ -164,6 +168,7 @@ def _router_init(
         enable_mid_stream_fallback_continuation (bool): When True, a chat-completions stream that breaks after plain assistant text has been delivered continues on a fallback deployment via assistant prefill instead of surfacing the error. Only deployments whose model supports assistant prefill are eligible, so the partial text is continued, not regenerated; if none is, the original error is surfaced. Streams that emitted tool calls, thinking blocks, audio/images, or constrained (JSON / forced tool_choice) output are never continued. Async-only. Defaults to False.
         fallback_access_check (Optional[FallbackAccessCheck]): Awaited before each cross-model-group fallback attempt on the async path; a fallback target it rejects is skipped. Defaults to None (every configured fallback is attempted).
         fallback_budget_check (Optional[FallbackBudgetCheck]): Awaited before each cross-model-group fallback attempt on the async path; a fallback target it rejects as over budget is skipped. Defaults to None (budget is not re-checked on fallback).
+        fallback_rate_limit_check (Optional[FallbackRateLimitCheck]): Awaited before each cross-model-group fallback attempt on the async path; a fallback target it rejects as over its per-model rate limit is skipped. Defaults to None (rate limits are not re-checked on fallback).
     Returns:
         Router: An instance of the litellm.Router class.
 
@@ -203,6 +208,7 @@ def _router_init(
 
 
 _CORE_SIGNATURE: Final = inspect.signature(_router_init)
+_PASSED_VALUE: Final = TypeAdapter(object)
 
 
 def router_arguments(
@@ -214,7 +220,13 @@ def router_arguments(
         bound: Final = _CORE_SIGNATURE.bind_partial(None, *args, **kwargs).arguments
     except TypeError as error:
         raise TypeError(f"Router.__init__() {error}") from None
-    return MappingProxyType({name: value for name, value in bound.items() if name != "self"})
+    return MappingProxyType(
+        {
+            name: value
+            for name, value in zip(bound, map(_PASSED_VALUE.validate_python, bound.values()))
+            if name != "self"
+        }
+    )
 
 
 def _class_descriptor(cls: type, name: str) -> bool:

@@ -19,7 +19,7 @@ from datetime import datetime as dt_object
 from enum import Enum
 from functools import lru_cache
 from types import MappingProxyType, TracebackType
-from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Protocol, TypeVar, cast
 
 from httpx import Response, Timeout
 from openai import AsyncStream as OpenAIAsyncStream
@@ -90,6 +90,7 @@ from litellm.litellm_core_utils.classifier_logging import (
     is_classifier_call,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
     finite_cost,
     get_provider_response_headers_from_hidden_params,
     is_expected_client_error,
@@ -99,6 +100,7 @@ from litellm.litellm_core_utils.core_helpers import (
     proxy_stamped_used_client_oauth_token,
     reconstruct_model_name,
     reports_native_messages_cost,
+    require_attributes,
     set_response_cost_in_hidden_params,
     single_log_line,
 )
@@ -133,6 +135,7 @@ from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import
 )
 from litellm.litellm_core_utils.llm_cost_calc.zero_cost_diagnostic import (
     diagnose_zero_cost,
+    is_explicitly_free_usage,
     zero_cost_warning,
 )
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import LiteLLMResponseObjectHandler
@@ -666,6 +669,31 @@ class UsageObservation(Enum):
     ESTIMATED = "estimated"
 
 
+class _A2AUsageSlot(Protocol):
+    usage: Mapping[str, object] | None
+
+
+class _A2AResponseCopier(Protocol):
+    model_copy: Callable[..., _A2AUsageSlot]
+
+
+class _MetadataLookup(Protocol):
+    get: Callable[[str], object]
+
+
+class _ParamsLookup(Protocol):
+    def get(self, key: str, default: object, /) -> object: ...
+
+
+def _callback_control_params(litellm_params: object) -> dict[str, object]:
+    mapping: Final = as_str_mapping(litellm_params)
+    if isinstance(mapping, dict):
+        return mapping
+    if mapping is not None:
+        return dict(mapping)
+    return litellm_params.model_dump() if isinstance(litellm_params, BaseModel) else {}
+
+
 class Logging(LiteLLMLoggingBaseClass):
     global \
         supabaseClient, \
@@ -879,6 +907,7 @@ class Logging(LiteLLMLoggingBaseClass):
         # Timing for results that cannot carry ``_hidden_params`` (plain-dict /v1/messages
         # responses and the bridge stream wrappers); see ``update_response_metadata``.
         self.response_timing_metrics: Mapping[str, float] = {}
+        self.first_chunk_overhead_ms: float | None = None
 
         # Passthrough endpoint guardrails config for field targeting
         self.passthrough_guardrails_config: dict[str, object] | None = None
@@ -929,7 +958,9 @@ class Logging(LiteLLMLoggingBaseClass):
         new_call.start_time = start_time
         new_call.litellm_params = litellm_params
         new_call.model_call_details = {
-            **{key: value for key, value in self.model_call_details.items() if not key.startswith("_accounting_")},
+            **{
+                key: value for key, value in self._model_call_details_view.items() if not key.startswith("_accounting_")
+            },
             "litellm_call_id": litellm_call_id,
             "start_time": start_time,
             "first_api_call_start_time": None,
@@ -953,6 +984,11 @@ class Logging(LiteLLMLoggingBaseClass):
     def set_response_timing_metrics(self, timing_metrics: Mapping[str, float]) -> None:
         """Keep ``_response_ms`` / ``litellm_overhead_time_ms`` for a result that has no ``_hidden_params``."""
         self.response_timing_metrics = dict(timing_metrics)
+
+    def set_first_chunk_overhead(self, seconds: float) -> None:
+        """The proxy's own work on the first chunk of a stream, the delay every later chunk inherits."""
+        if self.first_chunk_overhead_ms is None:
+            self.first_chunk_overhead_ms = seconds * 1000
 
     def add_dynamic_callback(self, callback: CustomLogger) -> None:
         self.dynamic_input_callbacks = self._with_dynamic_callback(self.dynamic_input_callbacks, callback)
@@ -2382,6 +2418,33 @@ class Logging(LiteLLMLoggingBaseClass):
             usage=usage,
         )
 
+    def is_usage_explicitly_free(self, result: object) -> bool:
+        usage: Final = get_usage_object(completion_response=result)
+        if usage is None or self.model_call_details.get("response_cost_failure_debug_information") is not None:
+            return False
+        custom_pricing: Final = self.custom_pricing_for(result)
+        if custom_pricing and self.custom_model_info is not None:
+            return is_explicitly_free_usage(usage, self.custom_model_info)
+        if custom_pricing and self.custom_cost_per_token is not None:
+            return is_explicitly_free_usage(usage, self.custom_cost_per_token)
+        custom_llm_provider: Final = self.model_call_details.get("custom_llm_provider")
+        pricing: Final = pricing_entry_for_cost_calc(
+            model=self.model,
+            completion_response=result,
+            custom_llm_provider=self.get_router_pricing_provider() or custom_llm_provider,
+            custom_pricing=custom_pricing,
+            base_model=get_base_model_from_metadata(model_call_details=self.model_call_details),
+            router_model_id=self.get_router_model_id(),
+            region_name=_resolve_mantle_region_for_cost(
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=self.model_call_details.get("litellm_params"),
+            ),
+            litellm_logging_obj=self,
+        )
+        if pricing is None:
+            return False
+        return is_explicitly_free_usage(usage, pricing[1])
+
     def spilled_over_ptu_for(self, result: object) -> bool:
         result_hidden_params: Final = getattr(result, HIDDEN_PARAMS_ATTR, None) or MappingProxyType({})
         additional_headers: Final = (
@@ -2467,7 +2530,7 @@ class Logging(LiteLLMLoggingBaseClass):
         return self.response_cost_calculator(result=result, cache_hit=cache_hit)
 
     @staticmethod
-    def is_sync_litellm_request(litellm_params: Mapping[str, object]) -> bool:
+    def is_sync_litellm_request(litellm_params: _ParamsLookup) -> bool:
         """True for sync SDK entrypoints (``completion``), false for async (``acompletion``, etc.)."""
         return (
             litellm_params.get(CallTypes.acompletion.value, False) is not True
@@ -2732,6 +2795,8 @@ class Logging(LiteLLMLoggingBaseClass):
     def carry_failed_attempt_usage(self) -> None:
         """Move what a failed earlier attempt stashed off the retry sharing this logging object, so the retry logs its
         own usage while the request's failure log still bills every attempt."""
+        if self._carry_parked_success():
+            return
         usage: Final = self._model_call_details_view.get("combined_usage_object")
         response_cost: Final = self._model_call_details_view.get("response_cost")
         billed_by_continuation: Final = self._stash_billed_by_continuation
@@ -2753,6 +2818,25 @@ class Logging(LiteLLMLoggingBaseClass):
         if not owed_on_success or billed_by_continuation:
             return
         self._failed_attempts_owed_on_success = (*self._failed_attempts_owed_on_success, attempt)
+
+    def _carry_parked_success(self) -> bool:
+        """A billed response the router discards after its success log was parked (a safeguard refusal it falls
+        back from) is owed by whichever attempt ends the request, instead of being logged in its place."""
+        parked: Final = self.deferred_success_result
+        if parked is None or self.enqueue_deferred_logging is None:
+            return False
+        self.deferred_success_result = None
+        self.enqueue_deferred_logging = None
+        self._async_success_scheduled = False
+        served: Final = self.served_round(parked[0])
+        if served is None:
+            return True
+        self.model_call_details["failed_attempts_usage"] = (
+            *self.model_call_details.get("failed_attempts_usage", ()),
+            served,
+        )
+        self._failed_attempts_owed_on_success = (*self._failed_attempts_owed_on_success, served)
+        return True
 
     def mark_stash_billed_by_continuation(self) -> None:
         self._stash_billed_by_continuation = True
@@ -2918,11 +3002,12 @@ class Logging(LiteLLMLoggingBaseClass):
         """Deprecated alias of mark_logging_complete, kept for callers of the old name"""
         self.mark_logging_complete(event_type=event_type)
 
-    def should_run_callback(self, callback: litellm.CALLBACK_TYPES, litellm_params: dict, event_hook: str) -> bool:
+    def should_run_callback(self, callback: litellm.CALLBACK_TYPES, litellm_params: object, event_hook: str) -> bool:
         if litellm.global_disable_no_log_param:
             return True
 
-        if litellm_params.get("no-log", False) is True:
+        request_params: Final = require_attributes(litellm_params, _ParamsLookup, "get")
+        if request_params.get("no-log", False) is True:
             # proxy cost tracking cal backs should run
 
             if not (isinstance(callback, CustomLogger) and "_PROXY_" in callback.__class__.__name__):
@@ -2932,7 +3017,7 @@ class Logging(LiteLLMLoggingBaseClass):
         # Check for dynamically disabled callbacks via headers
         if EnterpriseCallbackControls is not None and EnterpriseCallbackControls.is_callback_disabled_dynamically(
             callback=callback,
-            litellm_params=litellm_params,
+            litellm_params=_callback_control_params(litellm_params),
             standard_callback_dynamic_params=self.standard_callback_dynamic_params,
         ):
             verbose_logger.debug(
@@ -3643,8 +3728,8 @@ class Logging(LiteLLMLoggingBaseClass):
             build_logging_payload=True,
             publish_logging_payload=not for_async_request,
         )
-        litellm_params = self.model_call_details.get("litellm_params", {})
-        is_sync_request: Final = self.is_sync_litellm_request(litellm_params)
+        litellm_params = self._model_call_details_view.get("litellm_params", {})
+        is_sync_request: Final = self.is_sync_litellm_request(require_attributes(litellm_params, _ParamsLookup, "get"))
         try:
             ## BUILD COMPLETE STREAMED RESPONSE
             complete_streaming_response: (
@@ -3800,18 +3885,23 @@ class Logging(LiteLLMLoggingBaseClass):
 
                         model = call_details_view["model"]
                         messages = call_details_view["messages"]
-                        optional_params = kwargs.get("optional_params", {})
-                        litellm_params = kwargs.get("litellm_params", {})
+                        optional_params = call_details_view.get("optional_params", {})
+                        litellm_params = call_details_view.get("litellm_params", {})
                         supabaseClient.log_event(
                             model=model,
                             messages=messages,
-                            end_user=optional_params.get("user", "default"),
+                            end_user=require_attributes(optional_params, _ParamsLookup, "get").get("user", "default"),
                             response_obj=result,
                             start_time=start_time,
                             end_time=end_time,
                             litellm_call_id=(
                                 current_call_id
-                                if (current_call_id := litellm_params.get("litellm_call_id")) is not None
+                                if (
+                                    current_call_id := require_attributes(litellm_params, _ParamsLookup, "get").get(
+                                        "litellm_call_id", None
+                                    )
+                                )
+                                is not None
                                 else str(uuid.uuid4())
                             ),
                             print_verbose=print_verbose,
@@ -4369,7 +4459,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         for callback in delivery_callbacks:
             # check if callback can run for this request
-            litellm_params = self.model_call_details.get("litellm_params", {})
+            litellm_params = self._model_call_details_view.get("litellm_params", {})
             should_run = self.should_run_callback(
                 callback=callback,
                 litellm_params=litellm_params,
@@ -4658,8 +4748,8 @@ class Logging(LiteLLMLoggingBaseClass):
         verbose_logger.debug("Logging Details LiteLLM-Failure Call: %s", litellm.failure_callback)
         if not self.should_run_logging(event_type="sync_failure"):  # prevent double logging
             return
-        litellm_params: Final = self.model_call_details.get("litellm_params", {})
-        is_sync_request: Final = self.is_sync_litellm_request(litellm_params)
+        litellm_params: Final = self._model_call_details_view.get("litellm_params", {})
+        is_sync_request: Final = self.is_sync_litellm_request(require_attributes(litellm_params, _ParamsLookup, "get"))
 
         try:
             start_time, end_time = self._failure_handler_helper_fn(
@@ -4879,7 +4969,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.mark_logging_complete(event_type="async_failure")
         for callback in callbacks:
             try:
-                litellm_params = self.model_call_details.get("litellm_params", {})
+                litellm_params = self._model_call_details_view.get("litellm_params", {})
                 should_run = self.should_run_callback(
                     callback=callback,
                     litellm_params=litellm_params,
@@ -5441,7 +5531,7 @@ class Logging(LiteLLMLoggingBaseClass):
         httpx_response: Final[Response | None] = self.model_call_details.get("httpx_response", None)
         if httpx_response is None:
             raise ValueError("Google GenAI Generate Content: httpx_response is None")
-        dict_result: Final = httpx_response.json()
+        dict_result: Final[GenerateContentResponseBody] = httpx_response.json()
         result = litellm.VertexGeminiConfig().transform_google_generate_content_to_openai_model_response(
             completion_response=dict_result,
             model_response=litellm.ModelResponse(),
@@ -5454,7 +5544,7 @@ class Logging(LiteLLMLoggingBaseClass):
         )
         return result
 
-    def _handle_a2a_response_logging(self, result: Any) -> object:
+    def _handle_a2a_response_logging(self, result: object) -> object:
         """
         Handles logging for A2A (Agent-to-Agent) responses.
 
@@ -5473,7 +5563,7 @@ class Logging(LiteLLMLoggingBaseClass):
             return result
 
         # Deep copy result and add usage
-        result_copy: Final = result.model_copy(deep=True)
+        result_copy: Final = require_attributes(result, _A2AResponseCopier, "model_copy").model_copy(deep=True)
         result_copy.usage = usage.model_dump() if hasattr(usage, "model_dump") else dict(usage)
         return result_copy
 
@@ -6354,6 +6444,14 @@ def build_custom_logger_compatible_class(
         newrelic_logger: Final = NewRelicLogger()
         _in_memory_loggers.append(newrelic_logger)
         return newrelic_logger
+    elif logging_integration == "ecologits":
+        from litellm.integrations.ecologits import EcoLogitsLogger
+        for callback in _in_memory_loggers:
+            if isinstance(callback, EcoLogitsLogger):
+                return callback
+        ecologits_logger = EcoLogitsLogger()
+        _in_memory_loggers.append(ecologits_logger)
+        return ecologits_logger
     return None
 
 
@@ -6765,6 +6863,11 @@ def get_custom_logger_compatible_class(
                 if isinstance(callback, OpenTelemetryV2) and callback.callback_name == "newrelic":
                     return callback
                 if isinstance(callback, NewRelicLogger):
+                    return callback
+        elif logging_integration == "ecologits":
+            from litellm.integrations.ecologits import EcoLogitsLogger
+            for callback in _in_memory_loggers:
+                if isinstance(callback, EcoLogitsLogger):
                     return callback
         return None
 
@@ -7475,7 +7578,7 @@ class StandardLoggingPayloadSetup:
     @staticmethod
     def get_standard_logging_payload_trace_id(
         logging_obj: Logging,
-        litellm_params: Mapping[str, Any],
+        litellm_params: Mapping[str, object],
     ) -> str:
         """
         Returns the `litellm_trace_id` for this request
@@ -7491,9 +7594,13 @@ class StandardLoggingPayloadSetup:
         """
         dynamic_litellm_session_id: Final = litellm_params.get("litellm_session_id")
         dynamic_litellm_trace_id: Final = litellm_params.get("litellm_trace_id")
-        metadata: Final[Mapping[str, object] | None] = litellm_params.get("metadata")
-        metadata_session_id: Final = metadata.get("session_id") if metadata else None
-        metadata_trace_id: Final = metadata.get("trace_id") if metadata else None
+        metadata: Final = litellm_params.get("metadata")
+        metadata_session_id: Final = (
+            require_attributes(metadata, _MetadataLookup, "get").get("session_id") if metadata else None
+        )
+        metadata_trace_id: Final = (
+            require_attributes(metadata, _MetadataLookup, "get").get("trace_id") if metadata else None
+        )
 
         ordered_candidates: Final[tuple[object, object, object, object]] = (
             (dynamic_litellm_trace_id, dynamic_litellm_session_id, metadata_trace_id, metadata_session_id)
@@ -7508,7 +7615,7 @@ class StandardLoggingPayloadSetup:
     @staticmethod
     def get_standard_logging_payload_session_id(
         logging_obj: Logging,
-        litellm_params: Mapping[str, Any],
+        litellm_params: Mapping[str, object],
     ) -> str:
         """
         Returns the end-user/conversation `litellm_session_id` for this request, independent of trace_id.
@@ -7523,8 +7630,10 @@ class StandardLoggingPayloadSetup:
         dynamic_litellm_session_id: Final[object] = litellm_params.get("litellm_session_id")
         if dynamic_litellm_session_id:
             return str(dynamic_litellm_session_id)
-        metadata: Final[Mapping[str, object] | None] = litellm_params.get("metadata")
-        metadata_session_id: Final = metadata.get("session_id") if metadata else None
+        metadata: Final = litellm_params.get("metadata")
+        metadata_session_id: Final = (
+            require_attributes(metadata, _MetadataLookup, "get").get("session_id") if metadata else None
+        )
         if metadata_session_id:
             return str(metadata_session_id)
         return logging_obj.litellm_session_id
@@ -7922,8 +8031,15 @@ def get_standard_logging_object_payload(
         if clean_hidden_params["litellm_overhead_time_ms"] is None and status == "success":
             # /v1/messages dict results and the bridge stream wrappers keep it on the logging object;
             # failure payloads stay None like every response type that carries its own _hidden_params
-            timing_metrics: Final = getattr(logging_obj, "response_timing_metrics", None) or {}
+            timing_metrics: Final[Mapping[str, float]] = getattr(logging_obj, "response_timing_metrics", None) or {}
             clean_hidden_params["litellm_overhead_time_ms"] = timing_metrics.get("litellm_overhead_time_ms")
+        # the overhead above was stamped when the stream object came back, before any chunk was
+        # read; the proxy's work on the first chunk (hook, cost injection, serialization) is the
+        # delay the client sees on every chunk, so only that one is added, never a sum over chunks
+        first_chunk_overhead_ms: Final = getattr(logging_obj, "first_chunk_overhead_ms", None)
+        stamped_overhead_ms: Final = clean_hidden_params["litellm_overhead_time_ms"]
+        if status == "success" and stamped_overhead_ms is not None and isinstance(first_chunk_overhead_ms, float):
+            clean_hidden_params["litellm_overhead_time_ms"] = round(stamped_overhead_ms + first_chunk_overhead_ms, 4)
 
         model_cost_information: Final = StandardLoggingPayloadSetup.get_model_cost_information(
             base_model=base_model,

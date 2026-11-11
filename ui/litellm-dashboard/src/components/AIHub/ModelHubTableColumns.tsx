@@ -22,6 +22,7 @@ import { copyToClipboard } from "@/utils/dataUtils";
 import { ModelCustomTags, type ModelCustomMetadataValue } from "./ModelCustomMetadata";
 import { formatModelModeLabel, ProviderLogo } from "./ModelHubProviders";
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
+import type { DeploymentPricing } from "@/components/molecules/models/deploymentPricing";
 
 export interface ModelHubData {
   model_group: string;
@@ -41,6 +42,7 @@ export interface ModelHubData {
   description?: string;
   custom_tags?: string[] | null;
   custom_metadata?: Record<string, ModelCustomMetadataValue> | null;
+  deployment_pricing?: DeploymentPricing[] | null;
   [key: string]: any;
 }
 

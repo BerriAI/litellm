@@ -124,7 +124,7 @@ interface KeySummaryStripProps {
 const KeySummaryStrip: React.FC<KeySummaryStripProps> = ({ summary, loading, hidePromptCachingMetrics }) => {
   const { t } = useTranslation();
   const daily = useMemo(() => summarySeries(summary), [summary]);
-  const trend = (dataKey: string) =>
+  const trend = (dataKey: "spend" | "requests" | "tokens") =>
     loading || daily.length < 2 ? undefined : (
       <Sparkline data={daily} dataKey={dataKey} color={BRAND} className="h-12" />
     );

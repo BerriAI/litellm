@@ -7,6 +7,7 @@ from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, Optional, Protocol, runtime_checkable
 
 from opentelemetry import trace
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -32,6 +33,8 @@ from litellm.types.integrations.langfuse_otel import (
     LangfuseSpanAttributes,
 )
 from litellm.types.utils import StandardCallbackDynamicParams
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -643,7 +646,7 @@ def _tool_call_arguments(arguments: object) -> object:
     if not isinstance(arguments, str):
         return arguments
     try:
-        return json.loads(arguments)
+        return _DECODED_JSON.validate_python(json.loads(arguments))
     except json.JSONDecodeError:
         return {}
 

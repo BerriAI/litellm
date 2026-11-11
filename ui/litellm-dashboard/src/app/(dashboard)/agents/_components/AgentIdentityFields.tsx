@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AgentFormField, type AgentFormValues } from "./AgentFormKit";
 import { entraTenantFromIssuer, IDENTITY_UUID_PATTERN } from "./agent_identity";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 const PROVIDER_OPTIONS: { value: string; labelKey: ParseKeys }[] = [
   { value: "none", labelKey: "agents.identityFields.providers.none" },
@@ -206,7 +207,7 @@ export const AgentIdentityFields = ({ accessToken }: { accessToken: string | nul
                   ref={ref}
                   value={typeof value === "string" ? value : ""}
                   onChange={onChange}
-                  placeholder="Agent.Invoke"
+                  placeholder={codeSamples.agents.identityScope}
                 />
               )}
             </AgentFormField>
