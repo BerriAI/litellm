@@ -3,6 +3,7 @@ import contextlib
 import json
 import logging
 import math
+import time
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -64,7 +65,6 @@ from litellm.litellm_core_utils.bug_report import (
     strip_bug_report_notice,
 )
 from litellm.litellm_core_utils.core_helpers import (
-    attribute_or_none,
     finite_cost,
     get_or_create_metadata_bucket,
     has_attributes,
@@ -72,7 +72,6 @@ from litellm.litellm_core_utils.core_helpers import (
     is_expected_client_error,
     proxy_request_headers,
     redact_nested_match_and_regex_keys,
-    require_attributes,
     stream_cost_injection_requested,
 )
 from litellm.litellm_core_utils.dd_tracing import NullTracer, tracer
@@ -90,7 +89,7 @@ from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
-from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias, resolve_served_model
+from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.served_output_texts import (
     record_served_output_texts,
@@ -311,6 +310,8 @@ from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     add_litellm_data_to_request,
     get_metadata_variable_name,
+    global_then_key_alias_target,
+    pre_call_served_model,
     refresh_proxy_server_request_body_snapshot,
     reject_url_valued_destination,
     sanitize_for_log,
@@ -382,7 +383,7 @@ def resolve_litellm_call_id(client_call_id: str | None) -> str:
     return str(uuid.uuid4())
 
 
-def should_return_raw_model_name(request_data: dict[str, object]) -> bool:
+def should_return_raw_model_name(request_data: Mapping[str, object]) -> bool:
     return any(
         isinstance(metadata, dict) and metadata.get(RETURN_RAW_MODEL_NAME_METADATA_KEY) is True
         for metadata in (request_data.get("metadata"), request_data.get("litellm_metadata"))
@@ -724,10 +725,6 @@ class _ReadsHeaderValues(Protocol):
     def get(self, key: str, default: str = "") -> str: ...
 
 
-class _NativeLoggingRelease(Protocol):
-    def release(self, success: bool, /) -> object: ...
-
-
 def _as_header_reader(headers: _ReadsHeaderValues) -> _ReadsHeaderValues:
     return headers
 
@@ -1022,13 +1019,11 @@ _ROUTER_SETTINGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = Type
 
 
 def _fallback_probe_data(
-    pristine: object, fallback_model: str, key_aliases: object, group_alias: object
+    pristine: object, fallback_model: str, user_api_key_dict: UserAPIKeyAuth, group_alias: object
 ) -> Mapping[str, object]:
     return {
         **_REQUEST_FIELDS.validate_python(pristine),
-        "model": resolve_served_model(
-            fallback_model, _DECODED_JSON.validate_python(litellm.model_alias_map), key_aliases, group_alias
-        ),
+        "model": pre_call_served_model(fallback_model, user_api_key_dict, group_alias),
     }
 
 
@@ -2251,13 +2246,9 @@ async def _team_member_within_fallback_model_budget(
             if proxy_config is not None and llm_router is not None
             else None
         )
-        raw_aliases: Final[object] = cast(  # cast-ok: auth aliases are dynamically typed at runtime
-            object, user_api_key_dict.aliases
-        )
-        served_model: Final = resolve_served_model(
+        served_model: Final = pre_call_served_model(
             model,
-            litellm.model_alias_map,
-            raw_aliases,
+            user_api_key_dict,
             router_settings.get("model_group_alias") if router_settings is not None else None,
         )
         if is_model_cost_zero(model=served_model, llm_router=llm_router):
@@ -2719,17 +2710,9 @@ class ProxyBaseLLMRequestProcessing:
         ### MODEL ALIAS MAPPING ###
         # check if model name in model alias map
         # get the actual model name
-        if isinstance(self.data["model"], str) and self.data["model"] in litellm.model_alias_map:
-            self.data["model"] = litellm.model_alias_map[self.data["model"]]
-
-        # Check key-specific aliases
-        if (
-            isinstance(self.data["model"], str)
-            and user_api_key_dict.aliases
-            and isinstance(user_api_key_dict.aliases, dict)
-            and self.data["model"] in user_api_key_dict.aliases
-        ):
-            self.data["model"] = user_api_key_dict.aliases[self.data["model"]]
+        prepared_model: Final = self.data["model"]
+        if isinstance(prepared_model, str):
+            self.data["model"] = global_then_key_alias_target(prepared_model, user_api_key_dict)
 
         if llm_router is not None and proxy_config is not None:
             self.data.update(
@@ -2950,9 +2933,6 @@ class ProxyBaseLLMRequestProcessing:
                 if isinstance(raw_router_settings, Mapping)
                 else None
             )
-            key_aliases: Final[object] = cast(  # cast-ok: auth aliases are dynamically typed at runtime
-                object, user_api_key_dict.aliases
-            )
             try:
                 for fallback_model in fallback_models:
                     if fallback_model == original_model:
@@ -2970,7 +2950,7 @@ class ProxyBaseLLMRequestProcessing:
                     try:
                         if endpoint_unsupported_by_model(
                             route_type,
-                            _fallback_probe_data(pristine, fallback_model, key_aliases, group_alias),
+                            _fallback_probe_data(pristine, fallback_model, user_api_key_dict, group_alias),
                             llm_router,
                             user_api_key_dict.team_id,
                         ):
@@ -4384,11 +4364,6 @@ class ProxyBaseLLMRequestProcessing:
         Extracted as a static method so tests can exercise the production
         gating logic directly rather than reimplementing the finally block.
         """
-        if getattr(logging_obj, "call_type", None) in ("ocr", "aocr"):
-            pending: Final = attribute_or_none(logging_obj, "_native_pending_logging")
-            if pending is not None:
-                logging_obj._native_pending_logging = None  # rebind-ok: consume the native OCR release signal once
-                require_attributes(pending, _NativeLoggingRelease, "release").release(not exception_raised)
         _enqueue_fn: Final = getattr(logging_obj, "enqueue_deferred_logging", None)
         if _enqueue_fn is None:
             return
@@ -4877,6 +4852,15 @@ class ProxyBaseLLMRequestProcessing:
     _finalize_streaming_generator_cleanup = finalize_streaming_generator_cleanup
 
     @staticmethod
+    def record_first_chunk_overhead(
+        logging_obj: LiteLLMLoggingObj | None, chunk_received_at: float, is_provider_output: bool = True
+    ) -> None:
+        """The proxy's own work on a chunk; the logging object keeps the first one for the stamped overhead.
+        A keepalive ping carries no provider output, so it is never that first chunk."""
+        if logging_obj is not None and is_provider_output:
+            logging_obj.set_first_chunk_overhead(time.perf_counter() - chunk_received_at)
+
+    @staticmethod
     async def async_streaming_data_generator(
         response: object,
         user_api_key_dict: UserAPIKeyAuth,
@@ -4933,12 +4917,12 @@ class ProxyBaseLLMRequestProcessing:
             response=response,
             request_data=request_data,
         )
-        release_stream_failure: Final = _ClientStreamFailureReport.hold_while_streaming(
-            stream_logging_obj if isinstance(stream_logging_obj, LiteLLMLoggingObj) else None
-        )
+        timing_sink: Final = stream_logging_obj if isinstance(stream_logging_obj, LiteLLMLoggingObj) else None
+        release_stream_failure: Final = _ClientStreamFailureReport.hold_while_streaming(timing_sink)
         try:
             str_so_far = ""
             async for chunk in guarded_stream:
+                chunk_received_at = time.perf_counter()
                 # ``.format(chunk)`` was previously evaluated for every chunk
                 # regardless of log level; gate it behind the level check.
                 if debug_enabled:
@@ -4979,6 +4963,9 @@ class ProxyBaseLLMRequestProcessing:
                 delivered_chunk = delivered_chunk or chunk != STREAM_SSE_KEEPALIVE_PING_BYTES
                 serialized = serialize_chunk(chunk)
                 recent_tail = advance_sse_tail(recent_tail, serialized)
+                ProxyBaseLLMRequestProcessing.record_first_chunk_overhead(
+                    timing_sink, chunk_received_at, is_provider_output=chunk != STREAM_SSE_KEEPALIVE_PING_BYTES
+                )
                 yield serialized
             held_tail: Final = flush_tail() if flush_tail is not None else b""
             if held_tail:

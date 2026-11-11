@@ -5,7 +5,11 @@ what ``add_deployment``, ``set_model_list``, upserts and deletes leave behind in
 and ``registry()`` views.
 """
 
+import threading
 import warnings
+from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from typing import Final
 
 import pytest
 
@@ -514,3 +518,80 @@ async def test_the_deprecated_arefresh_model_info_warns(make_core: MakeCore) -> 
         await core.arefresh_model_info()  # pyright: ignore[reportAttributeAccessIssue]  # deprecated, still public
 
     assert any("arefresh_model_info is deprecated" in str(w.message) for w in caught)
+
+
+# -- reads racing writes ----------------------------------------------------------------------------
+
+_GROUPS: Final = 4
+
+
+def _two_per_group(make_core: MakeCore) -> RouterCore:
+    return make_core(model_list=[deployment(f"m{index % _GROUPS}", f"d{index}") for index in range(2 * _GROUPS)])
+
+
+def _group_ids(core: RouterCore) -> Mapping[int, Sequence[str]]:
+    return {group: ids(core.registry().deployments(f"m{group}", source="all")) for group in range(_GROUPS)}
+
+
+@pytest.mark.parametrize("upserted", [0, 3, _GROUPS + 1])
+def test_a_read_on_another_thread_waits_for_an_upsert_to_read_the_list_back(make_core: MakeCore, upserted: int) -> None:
+    """A lookup's positions are read against the mirror of the same registry version: a read that
+    starts once router-core holds a write waits until the mirror is read back, so it never reads
+    past the list nor, after a removal, the neighbouring group's entries."""
+    core: Final = _two_per_group(make_core)
+    hosted: Final = core._hosted  # pyright: ignore[reportAttributeAccessIssue]  # the registry under test
+    write: Final[Callable[[Mapping[str, object]], None]] = hosted.changes_runner
+    started: Final = threading.Event()
+    pool: Final = ThreadPoolExecutor(max_workers=1)
+    reads: Final[list[object]] = []  # mutable-ok: one per write
+
+    def read() -> Mapping[int, Sequence[str]]:
+        started.set()
+        return _group_ids(core)
+
+    def write_with_a_read_started(changes: Mapping[str, object]) -> None:
+        write(changes)
+        started.clear()
+        reads.append(pool.submit(read))
+        assert started.wait(timeout=5)
+        # The reader runs while router-core holds the write and the mirror does not yet.
+        _ = threading.Event().wait(0.02)
+
+    hosted.changes_runner = write_with_a_read_started
+    try:
+        _ = core.apply(ChangeSet(upsert=[typed(f"m{upserted % _GROUPS}", f"d{upserted}", timeout=11)]))
+    finally:
+        hosted.changes_runner = write
+
+    assert reads
+    for future in reads:
+        seen = future.result(timeout=5)  # pyright: ignore[reportAttributeAccessIssue]  # a Future
+        for group in range(_GROUPS):
+            # Between the upsert's removal and its add, its group is served by the other deployment.
+            assert seen[group], (group, seen)
+            assert set(seen[group]) <= {f"d{group}", f"d{group + _GROUPS}"}, (group, seen)
+    pool.shutdown()
+    assert sorted(_group_ids(core)[upserted % _GROUPS]) == sorted(
+        [f"d{upserted % _GROUPS}", f"d{upserted % _GROUPS + _GROUPS}"]
+    )
+
+
+def test_appending_to_the_live_model_list_reads_the_entry_back(make_core: MakeCore) -> None:
+    core: Final = _two_per_group(make_core)
+    live: Final = core._hosted._core_model_list  # pyright: ignore[reportAttributeAccessIssue]  # the live list
+    live.append(deployment("m0", "d8"))
+    assert ids(live) == [*(f"d{index}" for index in range(2 * _GROUPS)), "d8"]
+
+
+def test_deleting_a_live_model_list_entry_reads_the_list_back(make_core: MakeCore) -> None:
+    core: Final = _two_per_group(make_core)
+    live: Final = core._hosted._core_model_list  # pyright: ignore[reportAttributeAccessIssue]  # the live list
+    del live[0]
+    assert ids(live) == [f"d{index}" for index in range(1, 2 * _GROUPS)]
+
+
+def test_ending_a_build_that_never_began_leaves_the_list(make_core: MakeCore) -> None:
+    core: Final = _two_per_group(make_core)
+    live: Final = core._hosted._core_model_list  # pyright: ignore[reportAttributeAccessIssue]  # the live list
+    live.end_build()
+    assert ids(live) == [f"d{index}" for index in range(2 * _GROUPS)]
