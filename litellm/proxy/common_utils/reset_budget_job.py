@@ -774,13 +774,16 @@ class ResetBudgetJob:
     ) -> Mapping[str, datetime]:
         """The window each tier closes, which its end-user resets stamp. A tier
         with no reset time gets one pinned before any page commits, so the retry
-        after a failed window advance reads back the same window."""
+        after a failed window advance reads back the same window. A pin later
+        than ours means another sweep already advanced the tier, so the tier is
+        left out and this sweep resets nothing for it."""
+        pin_at: Final = now.replace(microsecond=now.microsecond - now.microsecond % 1000)
         unset: Final = tuple(
             b.budget_id for b in budgets_to_reset if b.budget_id is not None and b.budget_reset_at is None
         )
         pinned: Final[Mapping[str, datetime]] = (
             await self._with_db_retry(
-                lambda: BudgetRepository(self.prisma_client).pin_unset_reset_times(unset, at=now),
+                lambda: BudgetRepository(self.prisma_client).pin_unset_reset_times(unset, at=pin_at),
                 reason="reset_budget_pin_windows_failure",
             )
             if unset
@@ -793,7 +796,7 @@ class ResetBudgetJob:
                     for b in budgets_to_reset
                     if b.budget_id is not None and b.budget_reset_at is not None
                 },
-                **pinned,
+                **{budget_id: window for budget_id, window in pinned.items() if window <= pin_at},
             }
         )
 
@@ -813,16 +816,19 @@ class ResetBudgetJob:
     async def _collect_budget_cascade(
         self, budgets_to_reset: Sequence[LiteLLM_BudgetTableFull], now: datetime
     ) -> _BudgetCascade:
-        """Resolve every row the expiring budget tiers gate, before any write.
+        """Pin a reset time on the expiring tiers that have none, then resolve
+        every row the tiers that still have a window gate, before any other write.
 
         Keys carrying their own budget_duration are left out: they run on their
         own schedule via reset_budget_for_litellm_keys(), so sweeping them here
         would reset them twice.
         """
-        budget_ids: Final = tuple(b.budget_id for b in budgets_to_reset if b.budget_id is not None)
+        windows: Final = await self._closing_windows(budgets_to_reset, now)
+        budget_ids: Final = tuple(
+            b.budget_id for b in budgets_to_reset if b.budget_id is not None and b.budget_id in windows
+        )
         if not budget_ids:
             return _EMPTY_CASCADE
-        windows: Final = await self._closing_windows(budgets_to_reset, now)
 
         team_memberships: Final[tuple[_TeamMembershipRow, ...]] = await self._fetch_linked_rows(
             table=TeamMembershipRepository(self.prisma_client).table,
@@ -872,7 +878,7 @@ class ResetBudgetJob:
                     compute_budget_reset_at(budget_duration=b.budget_duration, settings=self.reset_settings),
                 )
                 for b in budgets_to_reset
-                if b.budget_id is not None and b.budget_duration is not None
+                if b.budget_id is not None and b.budget_id in windows and b.budget_duration is not None
             ),
             counter_resets=(
                 *(

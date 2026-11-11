@@ -106,13 +106,17 @@ class BudgetRepository(BaseRepository[LiteLLM_BudgetTable]):
 
     async def pin_unset_reset_times(self, budget_ids: Sequence[str], at: datetime) -> Mapping[str, datetime]:
         """Set ``budget_reset_at`` to ``at`` on the tiers that have none, then
-        return every tier's stored reset time. Only empty reset times are
-        written, so sweeps racing on the same tier all read back the first pin."""
-        await self.table.update_many(
+        return every tier's stored reset time. Both run on the writer, so a
+        lagging replica cannot hide the pin. Only empty reset times are written,
+        so a tier another sweep pinned or advanced first returns that value."""
+        writer: Final = _BudgetTable(self._prisma_client, use_writer=True).table
+        await writer.update_many(
+            # bounded-ok: callers pass one get_data page of at most RESET_BUDGET_JOB_BATCH_SIZE tiers
             where={"budget_id": {"in": [*budget_ids]}, "budget_reset_at": None},
             data={"budget_reset_at": at},
         )
-        rows: Final = await self.table.find_many(where={"budget_id": {"in": [*budget_ids]}})
+        # bounded-ok: callers pass one get_data page of at most RESET_BUDGET_JOB_BATCH_SIZE tiers
+        rows: Final = await writer.find_many(where={"budget_id": {"in": [*budget_ids]}})
         return MappingProxyType({row.budget_id: row.budget_reset_at for row in rows if row.budget_reset_at is not None})
 
     async def delete_budget(self, budget_id: str) -> LiteLLM_BudgetTable | None:

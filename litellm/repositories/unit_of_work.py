@@ -193,8 +193,8 @@ class EndUserSpendResetWrites:
     """End-user pages commit ahead of the window advance, so a failed advance
     replays them. Each reset stamps the tier window it closes and skips rows
     already stamped with it: replaying the cap predicate would zero a carried
-    overage, and replaying the zero would erase spend accrued since. A tier
-    deleted mid-sweep has no window, so its resets stay unguarded."""
+    overage, and replaying the zero would erase spend accrued since. Without
+    a window the resets are unguarded."""
 
     table: BatchTable
 

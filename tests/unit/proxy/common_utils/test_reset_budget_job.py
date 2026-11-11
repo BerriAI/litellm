@@ -1,6 +1,7 @@
 import asyncio
 import json
 import sys
+import itertools
 import types
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime, timedelta, timezone
@@ -151,9 +152,27 @@ class MockBatcher:
         return self.calls
 
 
+class _PinningBudgetTable:
+    """The writer's budget table as the reset-time pin sees it: every tier
+    asked about had no reset time, so each reads back the pinned one."""
+
+    def __init__(self):
+        self.pinned_at: datetime | None = None
+
+    async def update_many(self, where: Dict[str, Any], data: Dict[str, Any]) -> int:
+        self.pinned_at = data["budget_reset_at"]
+        return len(where["budget_id"]["in"])
+
+    async def find_many(self, where: Dict[str, Any]) -> List[Any]:
+        return [
+            types.SimpleNamespace(budget_id=budget_id, budget_reset_at=self.pinned_at)
+            for budget_id in where["budget_id"]["in"]
+        ]
+
+
 class MockDB:
     def __init__(self):
-        self.litellm_budgettable = MockTable()
+        self.litellm_budgettable = _PinningBudgetTable()
         self.litellm_teammembership = MockTable()
         self.litellm_verificationtoken = MockTable()
         self.litellm_endusertable = MockTable()
@@ -198,6 +217,7 @@ class MockPrismaClient:
         }
         self.get_data_calls: List[Dict[str, Any]] = []
         self.db = MockDB()
+        self.writer_db = self.db
 
     async def get_data(self, table_name, query_type, **kwargs):
         self.get_data_calls.append({"table_name": table_name, "query_type": query_type, **kwargs})
@@ -3605,6 +3625,25 @@ def test_cascade_rollover_writes_survive_sequential_execution(
 
 _CLOSED_WINDOW: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
+
+@pytest.fixture
+def ticking_reset_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each clock read lands one second after the last, so every sweep pins a
+    distinct reset time and every closed window is due. The 0.6ms offset rounds
+    up when stored to the millisecond."""
+    from litellm.proxy.common_utils import timezone_utils
+
+    seconds: Final = itertools.count()
+
+    class _TickingClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            moment: Final = _CLOSED_WINDOW + timedelta(days=31, seconds=next(seconds), microseconds=600)
+            return moment if tz is None else moment.astimezone(tz)
+
+    monkeypatch.setattr(reset_budget_job_module, "datetime", _TickingClock)
+    monkeypatch.setattr(timezone_utils, "datetime", _TickingClock)
+
 _Cell = float | str | datetime | None
 
 
@@ -3641,11 +3680,16 @@ def _field_matches(row: dict[str, _Cell], field: str, condition: object) -> bool
             return row.get(field) == condition
 
 
+async def _async_value(value):
+    return value
+
+
 class _EndUserLedger:
     """The end-user and budget tables a budget-tier reset reads and writes.
 
     Each batch commits atomically, and ``fail_commit`` names the one commit
-    (1-based) that raises instead, like a lock timeout."""
+    (1-based) that raises instead, like a lock timeout. The read replica never
+    catches up on the budget table, so only writer reads see a pinned reset time."""
 
     def __init__(
         self,
@@ -3658,7 +3702,6 @@ class _EndUserLedger:
                 max_budget=max_budget,
                 budget_duration="1d",
                 budget_reset_at=window,
-                created_at=_CLOSED_WINDOW - timedelta(days=30),
             )
             for budget_id, (max_budget, window) in budgets.items()
         }
@@ -3670,10 +3713,18 @@ class _EndUserLedger:
         self.commits = 0
         self.advances = 0
         self.stale_due_budgets: list[types.SimpleNamespace] | None = None
+        replica: Final = [types.SimpleNamespace(**vars(budget)) for budget in self.budgets.values()]
         self.client = types.SimpleNamespace(
-            db=types.SimpleNamespace(
+            writer_db=types.SimpleNamespace(
                 litellm_budgettable=types.SimpleNamespace(
                     update_many=self._update_budgets, find_many=self._find_budgets
+                ),
+            ),
+            db=types.SimpleNamespace(
+                litellm_budgettable=types.SimpleNamespace(
+                    find_many=lambda where: _async_value(
+                        [budget for budget in replica if _row_matches(vars(budget), where)]
+                    )
                 ),
                 litellm_endusertable=self,
                 litellm_teammembership=MockTable(),
@@ -3706,9 +3757,11 @@ class _EndUserLedger:
         ]
 
     async def _update_budgets(self, where: dict[str, object], data: dict[str, object]) -> int:
+        """Stores the reset time the way a ``timestamp(3)`` column does, rounded to the millisecond."""
+        at = cast(datetime, data["budget_reset_at"]) + timedelta(microseconds=500)
         matching = [budget for budget in self.budgets.values() if _row_matches(vars(budget), where)]
         for budget in matching:
-            budget.budget_reset_at = data["budget_reset_at"]
+            budget.budget_reset_at = at.replace(microsecond=at.microsecond - at.microsecond % 1000)
         return len(matching)
 
     async def _find_budgets(self, where: dict[str, object]):
@@ -3765,7 +3818,7 @@ _OTHER_TIER_WINDOW: Final = _CLOSED_WINDOW - timedelta(hours=6)
     ids=["window-advance-fails", "second-page-fails"],
 )
 def test_retried_budget_reset_never_resets_an_end_user_twice_in_one_window(
-    rollover_enabled, monkeypatch, failing_commit, spend_after_failure, capped_window
+    rollover_enabled, ticking_reset_clock, monkeypatch, failing_commit, spend_after_failure, capped_window
 ):
     """#50898: end-user pages commit before the window advance. When a later
     commit fails the tier stays due, and the retry must leave the rows an
@@ -3802,7 +3855,9 @@ def test_retried_budget_reset_never_resets_an_end_user_twice_in_one_window(
     [None, _CLOSED_WINDOW - timedelta(days=1), _CLOSED_WINDOW + timedelta(days=1), _OTHER_TIER_WINDOW],
     ids=["never-reset", "previous-window", "window-moved-back-by-an-admin", "another-tier-s-window"],
 )
-def test_budget_reset_resets_end_users_last_reset_for_another_window(rollover_enabled, monkeypatch, last_reset_window):
+def test_budget_reset_resets_end_users_last_reset_for_another_window(
+    rollover_enabled, ticking_reset_clock, monkeypatch, last_reset_window
+):
     _make_counter_invalidation_job(monkeypatch)
     ledger: Final = _EndUserLedger(
         budgets={"other-tier": (10.0, _OTHER_TIER_WINDOW), "capped": (10.0, _CLOSED_WINDOW)},
@@ -3825,7 +3880,7 @@ def test_budget_reset_resets_end_users_last_reset_for_another_window(rollover_en
     ids=["next-window-closes", "tier-never-reset", "reset-time-cleared-by-an-admin"],
 )
 def test_end_users_are_reset_again_when_the_next_window_closes(
-    rollover_enabled, monkeypatch, first_window, next_window
+    rollover_enabled, ticking_reset_clock, monkeypatch, first_window, next_window
 ):
     _make_counter_invalidation_job(monkeypatch)
     ledger: Final = _EndUserLedger(
@@ -3843,7 +3898,7 @@ def test_end_users_are_reset_again_when_the_next_window_closes(
 
 
 def test_a_sweep_that_read_an_unset_reset_time_resets_in_the_window_another_sweep_pinned(
-    rollover_enabled, monkeypatch
+    rollover_enabled, ticking_reset_clock, monkeypatch
 ):
     """Without a pod lock every pod sweeps. A pod that read the tier before
     another pinned its reset time must stamp the pinned window, or it resets
@@ -3861,6 +3916,31 @@ def test_a_sweep_that_read_an_unset_reset_time_resets_in_the_window_another_swee
 
     assert ledger.advances == 1
     assert ledger.spend() == {"over-cap": 5.0}
+
+
+def test_a_sweep_that_read_an_unset_reset_time_leaves_a_tier_another_sweep_already_advanced(
+    rollover_enabled, ticking_reset_clock, monkeypatch
+):
+    """The late pod must not reset the tier again or stamp the advanced
+    reset time, which would skip the end user when that next window closes."""
+    _make_counter_invalidation_job(monkeypatch)
+    ledger: Final = _EndUserLedger(budgets={"capped": (10.0, None)}, endusers={"over-cap": ("capped", 15.0, None)})
+    read_before_the_pin: Final = [types.SimpleNamespace(**vars(budget)) for budget in ledger.budgets.values()]
+    job: Final = ResetBudgetJob(proxy_logging_obj=MockProxyLogging(), prisma_client=ledger.client)
+    asyncio.run(job.reset_budget_for_litellm_budget_table())
+    next_window: Final = ledger.budgets["capped"].budget_reset_at
+
+    ledger.stale_due_budgets = read_before_the_pin
+    asyncio.run(job.reset_budget_for_litellm_budget_table())
+    assert ledger.advances == 1
+    assert ledger.spend() == {"over-cap": 5.0}
+
+    ledger.add_spend("over-cap", 17.0)
+    ledger.stale_due_budgets = [
+        types.SimpleNamespace(**{**vars(read_before_the_pin[0]), "budget_reset_at": next_window})
+    ]
+    asyncio.run(job.reset_budget_for_litellm_budget_table())
+    assert ledger.spend() == {"over-cap": 12.0}
 
 
 def test_budget_cascade_zeroes_everything_when_rollover_disabled(reset_budget_job, mock_prisma_client, monkeypatch):
@@ -4181,8 +4261,8 @@ def _wire_cascade_reads_for_test(prisma_client, endusers=()):
 
     End users are read by the paged reset and the post-commit invalidation
     walk rather than by ``get_data``, so callers that care about them pass
-    them here. Tiers with no reset time get one pinned before the cascade
-    reads, so the budget table needs awaitable writes and reads too.
+    them here. Tiers with no reset time are pinned through the writer's
+    budget table before the cascade reads.
     """
     for table in (
         "litellm_teammembership",
@@ -4191,8 +4271,7 @@ def _wire_cascade_reads_for_test(prisma_client, endusers=()):
         "litellm_tagtable",
     ):
         getattr(prisma_client.db, table).find_many = AsyncMock(return_value=[])
-    prisma_client.db.litellm_budgettable.update_many = AsyncMock(return_value=0)
-    prisma_client.db.litellm_budgettable.find_many = AsyncMock(return_value=[])
+    prisma_client.writer_db.litellm_budgettable = _PinningBudgetTable()
     prisma_client.db.litellm_endusertable.find_many = AsyncMock(return_value=list(endusers))
 
 
@@ -4503,7 +4582,7 @@ async def test_reset_budget_endusers_are_zeroed_with_the_budget_window_advance(f
 
     assert prisma_client.db.batch_.call_count == 2, "one end-user page, then the cascade in one transaction"
 
-    enduser_writes: Final = [c for c in batch_calls if c["table"] == "enduser"]
+    enduser_writes: Final = [_without_window_guard(c) for c in batch_calls if c["table"] == "enduser"]
     assert len(enduser_writes) == 1
     assert enduser_writes[0]["where"] == {
         "user_id": {"in": ["user1", "user2", "user3", "user4", "user5", "user6"]},
@@ -4580,7 +4659,7 @@ async def test_reset_budget_continues_other_categories_on_failure(frozen_reset_c
     prisma_client.update_data.assert_not_awaited()
 
     assert len([c for c in batch_calls if c["table"] == "team_membership"]) == 1
-    enduser_writes: Final = [c for c in batch_calls if c["table"] == "enduser"]
+    enduser_writes: Final = [_without_window_guard(c) for c in batch_calls if c["table"] == "enduser"]
     assert len(enduser_writes) == 1
     assert enduser_writes[0]["where"] == {"user_id": {"in": ["user1"]}, "spend": {"gt": 0}}
     assert enduser_writes[0]["data"] == {"spend": 0}
@@ -5051,7 +5130,7 @@ async def test_service_logger_endusers_success():
         await asyncio.sleep(0.1)
         mock_verbose_exc.assert_not_called()
 
-    enduser_writes = [c for c in batch_calls if c["table"] == "enduser"]
+    enduser_writes = [_without_window_guard(c) for c in batch_calls if c["table"] == "enduser"]
     assert len(enduser_writes) == 1
     assert enduser_writes[0]["where"] == {"user_id": {"in": ["user1", "user2"]}, "spend": {"gt": 0}}
 
