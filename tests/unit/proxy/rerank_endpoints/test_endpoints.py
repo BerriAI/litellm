@@ -2,6 +2,7 @@
 Tests for rerank_endpoints/endpoints.py response headers.
 """
 
+import asyncio
 import json
 import logging
 from collections.abc import Iterator
@@ -212,6 +213,59 @@ async def test_a_rejection_raised_before_routing_keeps_its_own_status(monkeypatc
     error = await _rerank_failure(rejection, raised_before_routing=True, monkeypatch=monkeypatch)
 
     assert (error.type, error.param, error.code) == ("bad_request_error", "session_id", "400")
+
+
+@pytest.mark.asyncio
+async def test_hang_up_with_cancel_on_disconnect_cancels_the_rerank_call_and_answers_499(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body: Final = json.dumps({"model": "rerank-model", "query": "q", "documents": ["a", "b"]}).encode()
+    messages: Final = iter(({"type": "http.request", "body": body, "more_body": False}, {"type": "http.disconnect"}))
+    upstream_started: Final = asyncio.Event()
+    upstream_cancelled: Final = asyncio.Event()
+
+    async def receive() -> dict[str, object]:
+        message: Final = next(messages)
+        if message["type"] == "http.disconnect":
+            await upstream_started.wait()
+        return message
+
+    async def held_upstream() -> None:
+        upstream_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            upstream_cancelled.set()
+            raise
+
+    async def holding_route_request(**kwargs: object) -> object:
+        return held_upstream()
+
+    async def fake_add_litellm_data_to_request(**kwargs: object) -> object:
+        return kwargs["data"]
+
+    proxy_logging_obj: Final = MagicMock()
+    proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
+    proxy_logging_obj.post_call_failure_hook = AsyncMock()
+    monkeypatch.setattr(proxy_server_mod, "general_settings", {"cancel_on_disconnect": True})
+    monkeypatch.setattr(proxy_server_mod, "add_litellm_data_to_request", fake_add_litellm_data_to_request)
+    monkeypatch.setattr(proxy_server_mod, "route_request", holding_route_request)
+    monkeypatch.setattr(proxy_server_mod, "proxy_logging_obj", proxy_logging_obj)
+    monkeypatch.setattr(proxy_server_mod, "llm_router", MagicMock())
+    monkeypatch.setattr(proxy_server_mod, "version", "1.2.3")
+    request: Final = Request(
+        scope={"type": "http", "method": "POST", "path": "/rerank", "headers": [], "query_string": b""},
+        receive=receive,
+    )
+
+    with pytest.raises(ProxyException) as raised:
+        await asyncio.wait_for(
+            rerank(request=request, fastapi_response=Response(), user_api_key_dict=UserAPIKeyAuth(api_key="sk-test")),
+            timeout=5,
+        )
+
+    assert raised.value.code == "499"
+    assert upstream_cancelled.is_set()
 
 
 def test_failed_rerank_spend_row_records_arerank(

@@ -12,6 +12,7 @@ from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
+    await_llm_call_cancelling_on_disconnect,
     log_llm_api_exception,
     resolve_litellm_call_id,
 )
@@ -87,7 +88,11 @@ async def rerank(
             llm_router=llm_router,
             user_model=user_model,
         )
-        response: Final = _DECODED_JSON.validate_python(await llm_call)
+        response: Final = _DECODED_JSON.validate_python(
+            await await_llm_call_cancelling_on_disconnect(request, asyncio.ensure_future(llm_call))
+            if "cancel_on_disconnect" in general_settings and general_settings["cancel_on_disconnect"] is True
+            else await llm_call
+        )
 
         ### ALERTING ###
         asyncio.create_task(proxy_logging_obj.update_request_status(litellm_call_id=litellm_call_id, status="success"))

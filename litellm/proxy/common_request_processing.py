@@ -2227,7 +2227,7 @@ async def _cancel_llm_call_on_client_disconnect(
         )
 
 
-async def _await_llm_call_cancelling_on_disconnect(
+async def await_llm_call_cancelling_on_disconnect(
     request: Request,
     llm_api_call: "asyncio.Future[_LlmCallT]",
 ) -> _LlmCallT:
@@ -3401,7 +3401,7 @@ class ProxyBaseLLMRequestProcessing:
 
             try:
                 if general_settings.get("cancel_on_disconnect", False):
-                    responses = await _await_llm_call_cancelling_on_disconnect(request, llm_responses)
+                    responses = await await_llm_call_cancelling_on_disconnect(request, llm_responses)
                 else:
                     responses = await llm_responses
             except asyncio.CancelledError:
