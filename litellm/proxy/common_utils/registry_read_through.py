@@ -19,7 +19,7 @@ would pick a tier it has not loaded.
 
 import asyncio
 import time
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
 from pydantic import TypeAdapter, ValidationError
@@ -41,7 +41,7 @@ if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.repositories.prisma_protocols import TableActions
     from litellm.types.agents import AgentResponse
-    from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
+    from litellm.types.vector_stores import LiteLLM_ManagedVectorStore, LiteLLM_ManagedVectorStoreIndex
 
     _ModelTable: TypeAlias = TableActions[prisma_models.LiteLLM_ProxyModelTable]
     _ModelRows: TypeAlias = Sequence[prisma_models.LiteLLM_ProxyModelTable]
@@ -358,16 +358,21 @@ async def _resync_agents(agent_id_or_name: str) -> bool:
 
 
 async def _reload_vector_store_indexes() -> None:
-    import litellm
     from litellm.proxy import proxy_server
     from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
     from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
 
     prisma_client: Final = proxy_server.prisma_client
     assert prisma_client is not None
-    indexes: Final = await VectorStoreIndexRegistry.get_vector_store_indexes_from_db_writer(
-        WriterPinnedClient(prisma_client.db)
+    _load_missing_vector_store_indexes(
+        await VectorStoreIndexRegistry.get_vector_store_indexes_from_db_writer(WriterPinnedClient(prisma_client.db))
     )
+
+
+def _load_missing_vector_store_indexes(indexes: "Sequence[LiteLLM_ManagedVectorStoreIndex]") -> None:
+    import litellm
+    from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
+
     if not indexes:
         return
     registry: Final = litellm.vector_store_index_registry
@@ -377,6 +382,13 @@ async def _reload_vector_store_indexes() -> None:
     loaded_names: Final = frozenset(index.index_name for index in registry.vector_store_indexes)
     for index in tuple(index for index in indexes if index.index_name not in loaded_names):
         registry.upsert_vector_store_index(vector_store_index=index)
+
+
+def register_created_vector_store_index(row: "Iterable[tuple[str, object]]") -> None:
+    from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
+
+    if _db_backed_registries_enabled("vector_store_indexes"):
+        _load_missing_vector_store_indexes((VectorStoreIndexRegistry.index_from_db_row(row),))
 
 
 async def _resync_vector_stores(vector_store_name: str) -> bool:
@@ -458,10 +470,6 @@ async def lookup_vector_store_index(index_name: str) -> VectorStoreIndexLookup:
     if _vector_store_index_is_loaded(index_name):
         return "managed"
     return "unmanaged" if reloaded else "unknown"
-
-
-async def is_vector_store_index_with_read_through(index_name: str) -> bool:
-    return await lookup_vector_store_index(index_name) == "managed"
 
 
 async def get_vector_store_with_read_through(vector_store_name: str) -> "LiteLLM_ManagedVectorStore | None":

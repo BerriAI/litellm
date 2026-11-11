@@ -25,6 +25,7 @@ from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import read_raw_json_body
+from litellm.proxy.common_utils.registry_read_through import register_created_vector_store_index
 from litellm.proxy.route_llm_request import JSON_OBJECT_ADAPTER
 from litellm.proxy.utils import jsonify_object
 from litellm.proxy.vector_store_endpoints.utils import (
@@ -675,6 +676,7 @@ async def index_create(
             "dict[str, object]", jsonify_object(index_data)
         )
     )
+    register_created_vector_store_index(new_index)
 
     return new_index.model_dump()
 

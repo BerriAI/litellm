@@ -131,7 +131,6 @@ from litellm.proxy.common_utils.openai_error_payload import LITELLM_CALL_ID_HEAD
 from litellm.proxy.common_utils.registry_read_through import (
     VectorStoreIndexLookup,
     get_vector_store_with_read_through,
-    is_vector_store_index_with_read_through,
     lookup_vector_store_index,
 )
 from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
@@ -239,21 +238,24 @@ class RelayRejection(TypedDict):
     error: ReadOnly[str]
 
 
+def _unreadable_vector_store_index(index_name: str) -> HTTPException:
+    unreadable: Final[RelayRejection] = {
+        "error": f"Could not read vector store index '{index_name}' from the database. Retry the request"
+    }
+    return HTTPException(status_code=503, detail=unreadable)
+
+
 def _unroutable_search_index(index_name: str, lookup: VectorStoreIndexLookup) -> HTTPException | None:
     match lookup:
         case "managed":
             return None
         case "unmanaged":
-            not_loaded: Final[RelayRejection] = {
-                "error": f"Azure AI Search index '{index_name}' is not loaded on this proxy, "
-                "and AZURE_API_BASE is not set to relay it"
+            not_registered: Final[RelayRejection] = {
+                "error": f"Azure AI Search index '{index_name}' is not registered on this proxy"
             }
-            return HTTPException(status_code=404, detail=not_loaded)
+            return HTTPException(status_code=404, detail=not_registered)
         case "unknown":
-            unreadable: Final[RelayRejection] = {
-                "error": f"Could not read Azure AI Search index '{index_name}' from the database. Retry the request"
-            }
-            return HTTPException(status_code=503, detail=unreadable)
+            return _unreadable_vector_store_index(index_name)
         case _:
             assert_never(lookup)
 
@@ -996,9 +998,10 @@ async def milvus_proxy_route(
             detail=f"Collection name is required. Got {request_body}",
         )
 
-    is_vector_store_index: Final = await is_vector_store_index_with_read_through(collection_name)
-
-    if not is_vector_store_index:
+    collection_lookup: Final = await lookup_vector_store_index(collection_name)
+    if collection_lookup == "unknown":
+        raise _unreadable_vector_store_index(collection_name)
+    if collection_lookup == "unmanaged":
         raise HTTPException(
             status_code=400,
             detail=f"Collection {collection_name} is not a litellm managed vector store index. Only litellm managed vector store indexes are supported.",
@@ -1077,9 +1080,10 @@ async def milvus_proxy_route(
 
 
 async def _registered_vector_store_index(index_name: str) -> LiteLLM_ManagedVectorStoreIndex:
-    registry: Final = (
-        litellm.vector_store_index_registry if await is_vector_store_index_with_read_through(index_name) else None
-    )
+    index_lookup: Final = await lookup_vector_store_index(index_name)
+    if index_lookup == "unknown":
+        raise _unreadable_vector_store_index(index_name)
+    registry: Final = litellm.vector_store_index_registry if index_lookup == "managed" else None
     index_object: Final = registry.get_vector_store_index_by_name(index_name) if registry is not None else None
     if index_object is None:
         raise HTTPException(

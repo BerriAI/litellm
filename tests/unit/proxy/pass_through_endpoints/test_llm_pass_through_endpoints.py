@@ -5979,7 +5979,6 @@ class TestManagedIndexCreatedOnAnotherReplica:
 
         assert (response.status_code, response.json()) == (200, {"value": [{"id": "doc-1"}]})
         index_rows.assert_awaited_once_with()
-        store_rows.assert_awaited_once_with(where={"vector_store_name": "store-made-on-a"}, order={"created_at": "desc"})
         assert search.calls.last.request.headers["api-key"] == "search-service-key"
         assert json.loads(search.calls.last.request.content) == {"search": "refund policy"}
 
@@ -5998,8 +5997,7 @@ class TestManagedIndexCreatedOnAnotherReplica:
 
         assert response.status_code == 404
         assert response.json()["detail"]["error"] == (
-            "Azure AI Search index 'kb-never-created' is not loaded on this proxy, "
-            "and AZURE_API_BASE is not set to relay it"
+            "Azure AI Search index 'kb-never-created' is not registered on this proxy"
         )
         assert upstream.calls.call_count == 0
 
@@ -6017,7 +6015,7 @@ class TestManagedIndexCreatedOnAnotherReplica:
 
         assert response.status_code == 503
         assert response.json()["detail"]["error"] == (
-            "Could not read Azure AI Search index 'kb-new' from the database. Retry the request"
+            "Could not read vector store index 'kb-new' from the database. Retry the request"
         )
         assert upstream.calls.call_count == 0
 
@@ -6103,6 +6101,38 @@ class TestManagedIndexCreatedOnAnotherReplica:
 
         assert (response.status_code, response.json()) == (200, {"hits": {"hits": []}})
         assert _verified_sigv4_scope(search.calls.last.request) == ("aoss", "us-east-1")
+
+    def test_milvus_search_answers_503_when_the_index_table_read_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        client: Final = _serve_proxy_with_vector_store_tables(
+            monkeypatch, AsyncMock(side_effect=RuntimeError("db down")), AsyncMock(return_value=[])
+        )
+
+        response: Final = client.post(
+            "/milvus/vectors/search", json={"collectionName": "collection-made-on-a", "data": [[0.1, 0.2]]}
+        )
+
+        assert response.status_code == 503
+        assert response.json()["detail"]["error"] == (
+            "Could not read vector store index 'collection-made-on-a' from the database. Retry the request"
+        )
+
+    def test_opensearch_search_answers_503_when_the_index_table_read_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client: Final = _serve_proxy_with_vector_store_tables(
+            monkeypatch, AsyncMock(side_effect=RuntimeError("db down")), AsyncMock(return_value=[])
+        )
+
+        response: Final = client.post(
+            "/opensearch/docs-made-on-a/_search",
+            content=b'{"query":{"match_all":{}}}',
+            headers={"Content-Type": JSON_TYPE},
+        )
+
+        assert response.status_code == 503
+        assert response.json()["detail"]["error"] == (
+            "Could not read vector store index 'docs-made-on-a' from the database. Retry the request"
+        )
 
 
 class TestAzureProxyRouteServiceLevelIndexCreate:

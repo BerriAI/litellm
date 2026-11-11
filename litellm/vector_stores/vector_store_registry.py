@@ -1,6 +1,6 @@
 # litellm/proxy/vector_stores/vector_store_registry.py
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timezone
 from itertools import chain
 from typing import (
@@ -143,7 +143,11 @@ class VectorStoreIndexRegistry:
         client: "WriterPinnedClient",
     ) -> tuple[LiteLLM_ManagedVectorStoreIndex, ...]:
         rows: Final = await ManagedVectorStoreIndexRepository(client).table.find_many()
-        return tuple(LiteLLM_ManagedVectorStoreIndex.model_validate(_DB_ROW.validate_python(dict(row))) for row in rows)
+        return tuple(VectorStoreIndexRegistry.index_from_db_row(row) for row in rows)
+
+    @staticmethod
+    def index_from_db_row(row: "Iterable[tuple[str, object]]") -> LiteLLM_ManagedVectorStoreIndex:
+        return LiteLLM_ManagedVectorStoreIndex.model_validate(_DB_ROW.validate_python(dict(row)))
 
 
 class VectorStoreRegistry:

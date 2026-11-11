@@ -11,6 +11,7 @@ import tempfile
 import warnings
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
+from datetime import datetime
 from typing import Dict, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -491,6 +492,9 @@ class FakeVectorStoreIndexRow:
         self.index_name: Final = index_name
         self.vector_store_name: Final = vector_store_name
 
+    def model_dump(self) -> dict[str, object]:
+        return dict(self)
+
     def __iter__(self) -> Iterator[tuple[str, object]]:
         return iter(
             {
@@ -507,20 +511,29 @@ class FakeVectorStoreIndexRow:
 
 
 class FakeVectorStoreRow:
-    def __init__(self, vector_store_name: str, custom_llm_provider: str, litellm_params: dict[str, str]) -> None:
+    def __init__(
+        self,
+        vector_store_name: str,
+        custom_llm_provider: str,
+        litellm_params: dict[str, str],
+        vector_store_id: str | None = None,
+        created_at: datetime | None = None,
+    ) -> None:
         self.vector_store_name: Final = vector_store_name
         self.custom_llm_provider: Final = custom_llm_provider
         self.litellm_params: Final = litellm_params
+        self.vector_store_id: Final = vector_store_id or f"{vector_store_name}-id"
+        self.created_at: Final = created_at
 
     def __iter__(self) -> Iterator[tuple[str, object]]:
         return iter(
             {
-                "vector_store_id": f"{self.vector_store_name}-id",
+                "vector_store_id": self.vector_store_id,
                 "custom_llm_provider": self.custom_llm_provider,
                 "vector_store_name": self.vector_store_name,
                 "vector_store_description": None,
                 "vector_store_metadata": None,
-                "created_at": None,
+                "created_at": self.created_at,
                 "updated_at": None,
                 "litellm_credential_name": None,
                 "litellm_params": dict(self.litellm_params),

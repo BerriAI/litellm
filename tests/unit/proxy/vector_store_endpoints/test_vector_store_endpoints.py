@@ -1437,6 +1437,39 @@ class TestIndexCreate:
         assert result["index_name"] == "test-index"
         mock_prisma.db.litellm_managedvectorstoreindextable.create.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("fresh_vector_store_read_throughs")
+    async def test_index_created_here_resolves_while_the_table_reload_is_cooling_down(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        from litellm.proxy import proxy_server
+        from litellm.proxy.common_utils.registry_read_through import lookup_vector_store_index
+        from tests.unit.proxy.conftest import FakeVectorStoreIndexRow
+
+        prisma_client = MagicMock()
+        index_table = prisma_client.db.litellm_managedvectorstoreindextable
+        index_table.find_many = AsyncMock(return_value=[])
+        index_table.find_unique = AsyncMock(return_value=None)
+        index_table.create = AsyncMock(return_value=FakeVectorStoreIndexRow("kb-made-here", "azure-ai-search"))
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+        monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+
+        assert await lookup_vector_store_index("kb-made-here") == "unmanaged"
+        await index_create(
+            request=MagicMock(spec=Request),
+            index_create_request=IndexCreateRequest(
+                index_name="kb-made-here",
+                litellm_params={"vector_store_index": "kb-made-here", "vector_store_name": "azure-ai-search"},
+            ),
+            fastapi_response=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(
+                token="sk-test", key_name="sk-...test", user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user"
+            ),
+        )
+
+        assert await lookup_vector_store_index("kb-made-here") == "managed"
+        assert index_table.find_many.await_count == 1
+
 
 class TestIndexList:
     def _admin(self) -> UserAPIKeyAuth:
