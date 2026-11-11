@@ -96,26 +96,30 @@
   /v2/user/info, /v2/team/list, /v2/model/info, /v2/login, /v2/guardrails/*,
   /v1/mcp/*) onto the gateway via a broad /v1 or /v2 prefix.
 */}}
-{{- $gatewayPrefixes := list
-    "/v1/chat" "/chat" "/v1/completions" "/completions" "/v1/embeddings" "/embeddings"
-    "/v1/moderations" "/moderations" "/v1/audio" "/audio" "/v1/images" "/images"
-    "/v1/files" "/files" "/v1/batches" "/batches" "/v1/fine_tuning" "/fine_tuning"
-    "/v1/fine-tuning" "/fine-tuning" "/v1/responses" "/responses" "/v1/threads" "/threads"
-    "/v1/assistants" "/assistants" "/v1/vector_stores" "/vector_stores" "/v1/indexes"
-    "/v1/models" "/models" "/openai" "/engines"
-    "/v1/messages" "/messages" "/v1/skills" "/v1/a2a" "/a2a" "/api/event_logging"
-    "/v1/rerank" "/v2/rerank" "/rerank" "/v1/decisions" "/decisions" "/v1/systemone" "/systemone"
-    "/v1/extraction" "/extraction" "/v1/ocr" "/ocr" "/v1/rag" "/rag"
-    "/v1/video" "/v1/videos" "/video" "/videos" "/v1/search" "/search"
-    "/v1/containers" "/containers" "/v1/evals" "/v1/memory" "/queue/chat"
-    "/v1beta" "/interactions"
-    "/anthropic" "/azure" "/azure_ai" "/azure_speech" "/aws" "/bedrock" "/comprehendmedical" "/transcribe" "/cohere" "/gemini" "/gigachat" "/google"
-    "/vertex_ai" "/vertex-ai" "/assemblyai" "/eu.assemblyai" "/deepgram" "/fal_ai" "/langfuse" "/vllm"
-    "/mistral" "/typesafe" "/openrouter" "/nvidia_nim" "/groq" "/voyage" "/cursor" "/milvus" "/openai_passthrough" "/tinyfish" "/watsonx"
-    "/toolset"
-    "/v1/realtime" "/realtime" "/v1/live/sessions" "/live/sessions"
-    "/health" "/metrics"
+{{- $gatewayPrefixGroups := list
+    (list "/v1/chat" "/chat") (list "/v1/completions" "/completions") (list "/v1/embeddings" "/embeddings")
+    (list "/v1/moderations" "/moderations") (list "/v1/audio" "/audio") (list "/v1/images" "/images")
+    (list "/v1/files" "/files") (list "/v1/batches" "/batches") (list "/v1/fine_tuning" "/fine_tuning")
+    (list "/v1/fine-tuning" "/fine-tuning") (list "/v1/responses" "/responses") (list "/v1/threads" "/threads")
+    (list "/v1/assistants" "/assistants") (list "/v1/vector_stores" "/vector_stores") (list "/v1/models" "/models")
+    (list "/v1/messages" "/messages") (list "/v1/a2a" "/a2a") (list "/v1/rerank" "/rerank")
+    (list "/v1/decisions" "/decisions") (list "/v1/systemone" "/systemone") (list "/v1/extraction" "/extraction")
+    (list "/v1/ocr" "/ocr") (list "/v1/rag" "/rag") (list "/v1/video" "/video")
+    (list "/v1/videos" "/videos") (list "/v1/search" "/search") (list "/v1/containers" "/containers")
+    (list "/v1/realtime" "/realtime") (list "/v1/live/sessions" "/live/sessions") (list "/v1/indexes" "/v1/skills")
+    (list "/v2/rerank" "/v1/evals") (list "/v1/memory" "/v1beta") (list "/openai" "/engines")
+    (list "/api/event_logging" "/queue/chat") (list "/interactions" "/toolset") (list "/anthropic" "/azure")
+    (list "/azure_ai" "/azure_speech") (list "/aws" "/bedrock") (list "/comprehendmedical" "/transcribe")
+    (list "/cohere" "/gemini") (list "/gigachat" "/google") (list "/vertex_ai" "/vertex-ai")
+    (list "/assemblyai" "/eu.assemblyai") (list "/deepgram" "/fal_ai") (list "/langfuse" "/vllm")
+    (list "/mistral" "/typesafe") (list "/openrouter" "/nvidia_nim") (list "/groq" "/voyage")
+    (list "/cursor" "/milvus") (list "/openai_passthrough" "/tinyfish") (list "/watsonx")
+    (list "/health" "/metrics")
 -}}
+{{- $gatewayPrefixes := list -}}
+{{- range $gatewayPrefixGroups -}}
+{{- $gatewayPrefixes = concat $gatewayPrefixes . -}}
+{{- end -}}
 {{- $gatewayExactPaths := list "/test" "/debug/memory/summary" "/eu_jev/v1/systemone" -}}
 {{/*
   /test is gateway-only as an EXACT path (GATEWAY_EXACT_PATHS), but its
@@ -134,6 +138,31 @@
   adding to it.
 */}}
 {{- $builtinPathKeys := list "/|Prefix" -}}
+{{/*
+  An ALB caps a load balancer at 100 listener rules and the AWS Load Balancer
+  Controller makes one rule per Ingress path, so on alb each entry of
+  $gatewayPrefixGroups becomes one rule. Its first prefix is the Ingress path,
+  whose use-annotation action forwards to the gateway, and a conditions
+  annotation adds the second prefix's path-pattern values to the same rule
+  (4 of the 5 values a rule allows).
+*/}}
+{{- $albGatewayGroups := list -}}
+{{- if and (eq $controller "alb") (not $monolith) (not $hasComponentHosts) -}}
+{{- range $i, $group := $gatewayPrefixGroups -}}
+{{- $second := ternary (last $group) "" (eq (len $group) 2) -}}
+{{- $albGatewayGroups = append $albGatewayGroups (dict "name" (printf "litellm-gateway-%d" $i) "first" (first $group) "second" $second) -}}
+{{- end -}}
+{{- end -}}
+{{- $singleHostAnnotations := deepCopy (.Values.ingress.annotations | default dict) -}}
+{{- range $albGatewayGroups -}}
+{{- $forward := dict "type" "forward" "forwardConfig" (dict "targetGroups" (list (dict "serviceName" $gatewayName "servicePort" "http"))) -}}
+{{- $_ := set $singleHostAnnotations (printf "alb.ingress.kubernetes.io/actions.%s" .name) (toJson $forward) -}}
+{{- if .second -}}
+{{- $values := list (trimSuffix "/" .second) (printf "%s/*" (trimSuffix "/" .second)) -}}
+{{- $conditions := list (dict "field" "path-pattern" "pathPatternConfig" (dict "values" $values)) -}}
+{{- $_ := set $singleHostAnnotations (printf "alb.ingress.kubernetes.io/conditions.%s" .name) (toJson $conditions) -}}
+{{- end -}}
+{{- end -}}
 {{- if $hasComponentHosts }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -200,7 +229,7 @@ metadata:
   name: {{ include "litellm.fullname" . }}
   labels:
     {{- include "litellm.commonLabels" . | nindent 4 }}
-  {{- with .Values.ingress.annotations }}
+  {{- with $singleHostAnnotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
   {{- end }}
@@ -246,7 +275,20 @@ spec:
                 port:
                   number: {{ $gatewayPort }}
           {{- end }}
-          {{- range $gatewayPrefixes }}
+          {{- range $albGatewayGroups }}
+          {{- $builtinPathKeys = append $builtinPathKeys (printf "%s|Prefix" .first) }}
+          {{- if .second }}
+          {{- $builtinPathKeys = append $builtinPathKeys (printf "%s|Prefix" .second) }}
+          {{- end }}
+          - path: {{ .first }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .name }}
+                port:
+                  name: use-annotation
+          {{- end }}
+          {{- range (ternary list $gatewayPrefixes (gt (len $albGatewayGroups) 0)) }}
           {{- $pathType := include "litellm.ingress.pathType" (dict "controller" $controller "path" . "pathType" "Prefix") }}
           {{- $builtinPathKeys = append $builtinPathKeys (printf "%s|%s" . $pathType) }}
           - path: {{ . }}

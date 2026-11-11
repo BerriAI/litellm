@@ -14,14 +14,22 @@ _INGRESS_TEMPLATE: Final = Path(__file__).parents[4] / "helm" / "litellm" / "tem
 _PREFIXES_AN_INGRESS_CANNOT_ROUTE: Final = frozenset({"/{provider}/"})
 
 
-def _template_list(name: str) -> frozenset[str]:
+def _template_block(name: str) -> str:
     match: Final = re.search(rf"\${name} := list(.*?)-}}}}", _INGRESS_TEMPLATE.read_text(), re.S)
     assert match is not None, f"${name} not found in {_INGRESS_TEMPLATE}"
-    return frozenset(re.findall(r'"(/[^"]*)"', match.group(1)))
+    return match.group(1)
 
 
-_CHART_PREFIXES: Final = _template_list("gatewayPrefixes")
-_CHART_EXACT_PATHS: Final = _template_list("gatewayExactPaths")
+def _quoted_paths(block: str) -> frozenset[str]:
+    return frozenset(re.findall(r'"(/[^"]*)"', block))
+
+
+_CHART_PREFIX_GROUPS: Final = tuple(
+    tuple(re.findall(r'"(/[^"]*)"', group))
+    for group in re.findall(r"\(list ([^)]*)\)", _template_block("gatewayPrefixGroups"))
+)
+_CHART_PREFIXES: Final = _quoted_paths(_template_block("gatewayPrefixGroups"))
+_CHART_EXACT_PATHS: Final = _quoted_paths(_template_block("gatewayExactPaths"))
 
 
 def _backend_keeps(path: str) -> bool:
@@ -67,3 +75,13 @@ def test_ingress_sends_no_prefix_to_the_gateway_that_the_gateway_dropped(chart_p
 @pytest.mark.parametrize("chart_path", sorted(_CHART_EXACT_PATHS))
 def test_ingress_sends_no_exact_path_to_the_gateway_that_the_gateway_dropped(chart_path: str) -> None:
     assert chart_path in GATEWAY_EXACT_PATHS
+
+
+@pytest.mark.parametrize("group", _CHART_PREFIX_GROUPS, ids=lambda group: " ".join(group))
+def test_each_gateway_prefix_group_fits_one_alb_rule(group: tuple[str, ...]) -> None:
+    assert 1 <= len(group) <= 2, f"{group} needs {2 * len(group)} path-pattern values, an ALB rule takes 5"
+
+
+def test_gateway_prefix_groups_list_each_prefix_once() -> None:
+    flattened: Final = [prefix for group in _CHART_PREFIX_GROUPS for prefix in group]
+    assert len(flattened) == len(set(flattened)), sorted(p for p in set(flattened) if flattened.count(p) > 1)

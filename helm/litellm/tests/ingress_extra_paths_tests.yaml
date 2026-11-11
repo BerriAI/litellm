@@ -7,6 +7,7 @@ tests:
   - it: renders nothing extra between the built-in gateway prefixes and the backend catch-all when unset
     set:
       ingress.enabled: true
+      ingress.controller: nginx
     asserts:
       - equal:
           path: spec.rules[0].http.paths[-1]
@@ -59,6 +60,7 @@ tests:
   - it: keeps every built-in path when extra paths are supplied
     set:
       ingress.enabled: true
+      ingress.controller: nginx
       ingress.extraPaths:
         - path: /hosted_vllm
     asserts:
