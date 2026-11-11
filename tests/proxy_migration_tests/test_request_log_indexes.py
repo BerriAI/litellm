@@ -449,13 +449,21 @@ def _close_a_second_after_a_build_waits_on_it(database_url: str, pin: "psycopg.C
 
 
 @requires_db
-def test_a_lock_timeout_the_database_url_sets_does_not_cancel_the_online_build(scratch_database: str) -> None:
-    with_lock_timeout: Final = make_conninfo(scratch_database, options="-c lock_timeout=200")
+@pytest.mark.parametrize(("setting", "first_server_version"), [("lock_timeout", 0), ("transaction_timeout", 170000)])
+def test_a_timeout_the_database_url_sets_does_not_cancel_the_online_build(
+    scratch_database: str, setting: str, first_server_version: int
+) -> None:
+    with psycopg.connect(scratch_database) as conn:
+        if conn.info.server_version < first_server_version:
+            pytest.skip(f"{setting} needs server version {first_server_version} or later")
+    with_timeout: Final = make_conninfo(scratch_database, options=f"-c {setting}=200")
     pin: Final = _pin_a_snapshot_on(scratch_database, "LiteLLM_SpendLogs")
-    release_the_pin: Final = threading.Thread(target=_close_a_second_after_a_build_waits_on_it, args=(scratch_database, pin))
+    release_the_pin: Final = threading.Thread(
+        target=_close_a_second_after_a_build_waits_on_it, args=(scratch_database, pin)
+    )
     release_the_pin.start()
     try:
-        assert ensure_request_log_indexes(with_lock_timeout, "public") is True
+        assert ensure_request_log_indexes(with_timeout, "public") is True
     finally:
         release_the_pin.join()
 

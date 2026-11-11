@@ -57,6 +57,7 @@ REQUEST_LOG_INDEXES: Final = (
 
 _IDENTIFIER_MAX_BYTES: Final = 63
 _DDL_LOCK_TIMEOUT: Final = "200ms"
+_FIRST_SERVER_VERSION_WITH_TRANSACTION_TIMEOUT: Final = 170000
 _DDL_LOCK_ATTEMPTS: Final = 10
 _DDL_RETRY_BASE_SECONDS: Final = 0.25
 _DDL_RETRY_MAX_SECONDS: Final = 8.0
@@ -178,6 +179,8 @@ def ensure_request_log_indexes(
         with connect(database_url) as connection:
             connection.execute("SET statement_timeout = 0")
             connection.execute("SET lock_timeout = 0")
+            if connection.info.server_version >= _FIRST_SERVER_VERSION_WITH_TRANSACTION_TIMEOUT:
+                connection.execute("SET transaction_timeout = 0")
             results: Final = tuple(_ensure_index(connection, schema, index) for index in indexes)
     except psycopg.Error as exc:
         logger.warning("Could not build the request-log indexes, leaving them for the next index build: %s", exc)
