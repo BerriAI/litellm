@@ -71,6 +71,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
 from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
     _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     raise_on_unknown_guardrails,
+    registered_guardrail_lookup,
     require_caller_user_id_for_non_admin,
     user_api_key_has_admin_view,
     validate_budget_duration,
@@ -82,7 +83,6 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (  # noq
     generate_key_helper_fn,
     prepare_metadata_fields,
     raise_on_logging_credential_change,
-    registered_guardrail_lookup,
 )
 from litellm.proxy.management_helpers.bulk_user_deletion import delete_users_from_current_teams
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports

@@ -171,6 +171,7 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     check_passthrough_routes_caller_permission,
     check_require_trace_id_caller_permission,
     member_budget_patch,
+    raise_on_unknown_licensed_guardrails,
     set_object_metadata_field,
     team_member_has_permission,
     update_metadata_fields,
@@ -1916,6 +1917,12 @@ async def new_team(
             user_api_key_dict,
             metadata_sent="metadata" in data.model_fields_set,
         )
+        await raise_on_unknown_licensed_guardrails(
+            data.guardrails,
+            data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+            None,
+            prisma_client,
+        )
 
         if isinstance(data.metadata, dict):
             TeamMemberBudgetHandler.strip_system_managed_metadata_keys(data.metadata)
@@ -2635,6 +2642,12 @@ async def update_team(
             user_api_key_dict,
             metadata_sent="metadata" in data.model_fields_set,
             existing_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,  # pyright: ignore[reportUnknownArgumentType]  # existing_team_row.metadata is a bare dict
+        )
+        await raise_on_unknown_licensed_guardrails(
+            data.guardrails,
+            data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+            _existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,  # pyright: ignore[reportUnknownArgumentType]  # existing_team_row.metadata is a bare dict
+            prisma_client,
         )
 
         if data.soft_budget is not None:

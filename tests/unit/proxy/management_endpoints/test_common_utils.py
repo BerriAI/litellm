@@ -1663,17 +1663,36 @@ class TestRaiseOnUnknownGuardrails:
         assert exc.value.status_code == 400
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("stored_entries", ("pii", [None, "stale"]), ids=("string", "null_entry"))
-    async def test_resending_an_unchanged_malformed_stored_value_is_allowed(self, stored_entries: object) -> None:
+    @pytest.mark.parametrize(
+        ("stored_entries", "shown"),
+        (("pii", '"pii"'), ([None, "stale"], '[null, "stale"]')),
+        ids=("string", "null_entry"),
+    )
+    async def test_resending_a_malformed_stored_value_fails_and_names_it(
+        self, stored_entries: object, shown: str
+    ) -> None:
         from litellm.proxy.management_endpoints.common_utils import raise_on_unknown_guardrails
 
-        asked: Final[list[frozenset[str]]] = []
+        with pytest.raises(HTTPException) as exc:
+            await raise_on_unknown_guardrails(
+                None,
+                {"guardrails": stored_entries, "note": "unrelated edit"},
+                find_registered=self._lookup([]),
+                existing_metadata={"guardrails": stored_entries},
+            )
 
-        await raise_on_unknown_guardrails(
-            None,
-            {"guardrails": stored_entries, "note": "unrelated edit"},
-            find_registered=self._lookup(asked),
-            existing_metadata={"guardrails": stored_entries},
+        assert exc.value.status_code == 400
+        assert exc.value.detail["error"] == (
+            f"Invalid guardrail detected - {shown}. Please provide a valid list of guardrail names."
         )
 
-        assert asked == []
+    @pytest.mark.asyncio
+    async def test_malformed_message_quotes_a_long_value_only_in_part(self) -> None:
+        from litellm.proxy.management_endpoints.common_utils import raise_on_unknown_guardrails
+
+        with pytest.raises(HTTPException) as exc:
+            await raise_on_unknown_guardrails(None, {"guardrails": "g" * 5000}, find_registered=self._lookup([]))
+
+        message: Final = exc.value.detail["error"]
+        assert '"' + "g" * 99 + "..." in message
+        assert len(message) < 200
