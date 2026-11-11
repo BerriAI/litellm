@@ -2,9 +2,10 @@
 Unified /v1/messages endpoint - (Anthropic Spec)
 """
 
+import copy
 from collections.abc import AsyncGenerator, Mapping
 from types import MappingProxyType
-from typing import Final
+from typing import Final, cast  # noqa: TID251  # proxy_server state and pre_call_hook are typed with bare dicts
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
@@ -52,6 +53,7 @@ from litellm.proxy.common_utils.token_count_log import rejected_token_count
 from litellm.proxy.common_utils.token_count_settings import count_source_fields
 from litellm.proxy.hooks.proxy_track_cost_callback import failure_row_response_cost
 from litellm.proxy.litellm_pre_call_utils import (
+    add_litellm_data_to_request,  # pyright: ignore[reportUnknownVariableType]  # takes and returns a bare dict
     forwarded_anthropic_oauth_token,
     should_auto_drop_params_for_agentic_cli,
 )
@@ -317,6 +319,46 @@ def _provider_context_management(response: TokenCountResponse) -> Mapping[str, o
     return {} if context_management is None else {"context_management": context_management}
 
 
+# The fields /v1/messages guardrails can rewrite that also feed the count. `model` is here because a
+# sensitive-data routing guardrail reroutes by rewriting it.
+_GUARDED_COUNT_FIELDS: Final = ("model", "messages", "system", "tools")
+
+
+async def _guarded_count_body(
+    data: Mapping[str, JsonValue], request: Request, user_api_key_dict: UserAPIKeyAuth
+) -> Mapping[str, JsonValue]:
+    """
+    Run the pre-call guardrails /v1/messages would run and return the body with what they produced.
+
+    Provider counters receive the whole prompt, so content a guardrail redacts, blocks or reroutes
+    on /v1/messages must get the same treatment here. Metadata is built the way /v1/messages builds
+    it, so key, team, project, policy and request guardrails are selected the same way.
+    """
+    from litellm.proxy import proxy_server
+
+    proxy_logging_obj: Final = proxy_server.proxy_logging_obj
+    scan_input: Final = cast(  # cast-ok: add_litellm_data_to_request returns the bare dict it was given
+        dict[str, JsonValue],
+        await add_litellm_data_to_request(
+            data=copy.deepcopy(dict(data)),
+            request=request,
+            user_api_key_dict=user_api_key_dict,
+            proxy_config=proxy_server.proxy_config,
+            general_settings=cast(dict[str, object], proxy_server.general_settings),  # cast-ok: declared as bare dict
+            version=proxy_server.version,
+        ),
+    )
+    scanned: Final = cast(  # cast-ok: pre_call_hook returns the bare dict the guardrails produced
+        Mapping[str, JsonValue],
+        await proxy_logging_obj.pre_call_hook(  # pyright: ignore[reportUnknownMemberType]  # its overloads take bare dicts
+            user_api_key_dict=user_api_key_dict, data=scan_input, call_type="anthropic_messages", guardrails_only=True
+        ),
+    )
+    # A guardrail can drop a field (the Messages translation pops an emptied `system`), so start without them.
+    kept: Final = {key: value for key, value in data.items() if key not in _GUARDED_COUNT_FIELDS}
+    return {**kept, **{key: scanned[key] for key in _GUARDED_COUNT_FIELDS if key in scanned}}
+
+
 @router.post(
     "/v1/messages/count_tokens",
     tags=["Anthropic Messages Token Counting"],
@@ -371,7 +413,8 @@ async def count_tokens(
         auto_drop_params: Final = should_auto_drop_params_for_agentic_cli(
             request.headers.get("user-agent", ""), "drop_params" in data, proxy_config
         )
-        token_fields: Final = _token_count_fields(data, auto_drop_params, llm_router, user_api_key_dict.team_id)
+        guarded: Final = await _guarded_count_body(data, request, user_api_key_dict)
+        token_fields: Final = _token_count_fields(guarded, auto_drop_params, llm_router, user_api_key_dict.team_id)
         token_request: Final = (
             token_fields if isinstance(token_fields, ProxyException) else _token_count_request(token_fields)
         )
@@ -387,6 +430,12 @@ async def count_tokens(
             litellm_call_id=litellm_call_id,
             client_oauth_token=forwarded_anthropic_oauth_token(request.headers),
             **_count_tokens_body_options(data, auto_drop_params),
+        )
+    except ModifyResponseException as e:
+        # A passthrough-mode block answers /v1/messages with a 200 violation message. There is no
+        # count to give for blocked content, so answer it as a rejected request instead.
+        return _anthropic_error_json_response(
+            ProxyException(message=e.message, type="invalid_request_error", param=None, code=400), request
         )
     except HTTPException as e:
         return _anthropic_error_json_response(proxy_exception_from_http_exception(e, {}), request)
