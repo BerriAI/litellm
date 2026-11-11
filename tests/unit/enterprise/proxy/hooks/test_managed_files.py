@@ -3836,7 +3836,7 @@ async def test_afile_retrieve_uses_model_name_when_router_does_not_know_deployme
     assert response.bytes == 836
     retrieve.assert_awaited_once()
     router.registry.return_value.credentials.assert_called_once_with(
-        "bedrock/model-x", form="with_provider"
+        "bedrock/model-x", form="with_provider", team_id=None
     )
     assert retrieve.await_args.kwargs["custom_llm_provider"] == "bedrock"
     assert retrieve.await_args.kwargs["max_retries"] == 0

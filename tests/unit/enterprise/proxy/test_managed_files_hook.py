@@ -2289,7 +2289,7 @@ class _FakeFilesRouter:
     def registry(self) -> "_FakeFilesRouter":
         return self
 
-    def credentials(self, model_id: str, form: str) -> dict[str, str]:
+    def credentials(self, model_id: str, form: str, team_id: str | None = None) -> dict[str, str]:
         assert form == "with_provider"
         return {"custom_llm_provider": self.provider, "api_key": f"key-of-{model_id}"}
 
