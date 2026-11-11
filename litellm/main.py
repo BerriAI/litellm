@@ -5611,9 +5611,6 @@ def completion(
         raise ValueError("model param not passed in.")
     # validate messages
     messages = validate_and_fix_openai_messages(messages=messages)
-    client_messages: Final = cast(  # cast-ok: completion types messages as a bare List
-        Sequence[AllMessageValues], messages
-    )
     tools = validate_and_fix_openai_tools(tools=tools)
     # validate tool_choice
     tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice, model=model)
@@ -5623,6 +5620,9 @@ def completion(
 
     ######### unpacking kwargs #####################
     args: Final = _locals_snapshot(locals())
+    client_messages: Final = cast(  # cast-ok: completion types messages as a bare List
+        Sequence[AllMessageValues], messages
+    )
     supplemental_params: Final = _supplemental_provider_params(
         _REQUEST_KWARGS_ADAPTER.validate_python({**kwargs, "extra_headers": extra_headers}), model
     )

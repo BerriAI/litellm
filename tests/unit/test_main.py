@@ -11854,6 +11854,16 @@ class _TemplatePromptManager(CustomPromptManagement):
         return model, self._apply(messages), non_default_params
 
 
+_FIREWORKS_CHAT_COMPLETIONS_URL: Final = "https://api.fireworks.ai/inference/v1/chat/completions"
+_FIREWORKS_PARIS_COMPLETION: Final = {
+    "id": "chatcmpl-capital",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "accounts/fireworks/models/kimi-k3p1-pro",
+    "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "Paris"}}],
+    "usage": {"prompt_tokens": 12, "completion_tokens": 1, "total_tokens": 13},
+}
+
 _ONE_WORD_CAPITAL_TEMPLATE: Final[tuple[AllMessageValues, ...]] = (
     {"role": "system", "content": "Answer in one word."},
     {"role": "user", "content": "What is the capital of France?"},
@@ -11869,16 +11879,7 @@ async def test_a_prompt_template_that_replaces_the_messages_sends_without_the_de
     monkeypatch.setattr(
         litellm, "callbacks", [_TemplatePromptManager(_ONE_WORD_CAPITAL_TEMPLATE, keeps_caller_messages=False)]
     )
-    route: Final = respx_mock.post("https://api.fireworks.ai/inference/v1/chat/completions").respond(
-        json={
-            "id": "chatcmpl-capital",
-            "object": "chat.completion",
-            "created": 1,
-            "model": "accounts/fireworks/models/kimi-k3p1-pro",
-            "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "Paris"}}],
-            "usage": {"prompt_tokens": 12, "completion_tokens": 1, "total_tokens": 13},
-        }
-    )
+    route: Final = respx_mock.post(_FIREWORKS_CHAT_COMPLETIONS_URL).respond(json=_FIREWORKS_PARIS_COMPLETION)
 
     await _call_completion(
         is_async,
@@ -11908,3 +11909,38 @@ def test_the_400_counts_the_messages_a_prompt_template_puts_ahead_of_the_callers
 
     assert rejected.value.param == "messages[4].content"
     assert not respx_mock.calls
+
+
+@pytest.mark.parametrize(
+    "routing",
+    [
+        {
+            "model": "fireworks_ai/accounts/fireworks/models/kimi-k3p1-pro",
+            "fallbacks": ["fireworks_ai/accounts/fireworks/models/kimi-k3p1-pro"],
+        },
+        {
+            "model": "capital",
+            "model_list": [
+                {
+                    "model_name": "capital",
+                    "litellm_params": {"model": "fireworks_ai/accounts/fireworks/models/kimi-k3p1-pro"},
+                }
+            ],
+        },
+    ],
+    ids=["fallbacks", "model_list"],
+)
+def test_sdk_fallbacks_and_model_list_send_the_callers_request_unchanged(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, routing: Mapping[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post(_FIREWORKS_CHAT_COMPLETIONS_URL).respond(json=_FIREWORKS_PARIS_COMPLETION)
+    messages: Final = [{"role": "user", "content": "What is the capital of France?"}]
+
+    response: Final = litellm.completion(messages=messages, api_key="fake-key", **routing)
+
+    assert response.choices[0].message.content == "Paris"
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "accounts/fireworks/models/kimi-k3p1-pro",
+        "messages": messages,
+    }
