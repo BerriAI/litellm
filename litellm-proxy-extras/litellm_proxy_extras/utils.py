@@ -29,6 +29,7 @@ from litellm_proxy_extras.replica_identity import (
 from litellm_proxy_extras.request_log_indexes import (
     ensure_request_log_indexes,
     filter_request_log_index_diff,
+    lifted_time_limits,
     request_log_index_names,
 )
 
@@ -877,8 +878,7 @@ class ProxyExtrasDBManager:
         schema: Final = ProxyExtrasDBManager._prisma_schema_param(prisma_url) or "public"
         cleaned_url: Final = ProxyExtrasDBManager._strip_prisma_query_params(os.getenv("DIRECT_URL") or prisma_url)
         try:
-            with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True) as conn:
-                conn.execute("SET statement_timeout = 0")
+            with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True) as conn, lifted_time_limits(conn):
                 conn.execute(sql.SQL("SET lock_timeout = {}").format(sql.Literal(lock_timeout)))
                 deferred: Final = request_log_index_names(conn, schema) if skip_request_log_indexes else frozenset()
                 found: Final = tuple(

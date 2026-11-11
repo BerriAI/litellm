@@ -304,11 +304,15 @@ def _hold_snapshot(schema: str, table: str, pinned: threading.Event, seconds: fl
 
 
 @requires_db
-def test_repair_outlives_a_statement_timeout_passed_through_database_url_options(
-    scratch_schema: str, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(("setting", "first_server_version"), [("statement_timeout", 0), ("transaction_timeout", 170000)])
+def test_repair_outlives_a_timeout_passed_through_database_url_options(
+    scratch_schema: str, monkeypatch: pytest.MonkeyPatch, setting: str, first_server_version: int
 ) -> None:
+    with psycopg.connect(_base_url()) as conn:
+        if conn.info.server_version < first_server_version:
+            pytest.skip(f"{setting} needs server version {first_server_version} or later")
     _leave_invalid_index(scratch_schema, HEALTH_TABLE, HEALTH_INDEX, HEALTH_INDEX_COLUMNS)
-    monkeypatch.setenv("DATABASE_URL", f"{_base_url()}?schema={scratch_schema}&options=-c%20statement_timeout%3D2000")
+    monkeypatch.setenv("DATABASE_URL", f"{_base_url()}?schema={scratch_schema}&options=-c%20{setting}%3D2000")
     pinned: Final = threading.Event()
     holder: Final = threading.Thread(target=_hold_snapshot, args=(scratch_schema, HEALTH_TABLE, pinned, 5.0))
     holder.start()

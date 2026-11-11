@@ -13,7 +13,8 @@ import hashlib
 import random
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
@@ -155,6 +156,18 @@ def _connect(database_url: str) -> "psycopg.Connection[tuple[object, ...]]":
     return psycopg.connect(database_url, connect_timeout=10, autocommit=True)
 
 
+@contextmanager
+def lifted_time_limits(connection: "psycopg.Connection[tuple[object, ...]]") -> Iterator[None]:
+    connection.execute("SET statement_timeout = 0")
+    if connection.info.server_version >= _FIRST_SERVER_VERSION_WITH_TRANSACTION_TIMEOUT:
+        connection.execute("SET transaction_timeout = 0")
+    try:
+        yield
+    finally:
+        if not connection.closed:
+            connection.execute("RESET ALL")
+
+
 def ensure_request_log_indexes(
     database_url: str,
     schema: str,
@@ -176,11 +189,8 @@ def ensure_request_log_indexes(
         return False
 
     try:
-        with connect(database_url) as connection:
-            connection.execute("SET statement_timeout = 0")
+        with connect(database_url) as connection, lifted_time_limits(connection):
             connection.execute("SET lock_timeout = 0")
-            if connection.info.server_version >= _FIRST_SERVER_VERSION_WITH_TRANSACTION_TIMEOUT:
-                connection.execute("SET transaction_timeout = 0")
             results: Final = tuple(_ensure_index(connection, schema, index) for index in indexes)
     except psycopg.Error as exc:
         logger.warning("Could not build the request-log indexes, leaving them for the next index build: %s", exc)

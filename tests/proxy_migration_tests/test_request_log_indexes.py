@@ -470,6 +470,33 @@ def test_a_timeout_the_database_url_sets_does_not_cancel_the_online_build(
     assert _index_validity(scratch_database, "litellm_call_id_idx") == {CALL_ID_INDEX: True}
 
 
+class _PooledServerSession(psycopg.Connection[tuple[object, ...]]):
+    def close(self) -> None:
+        return None
+
+
+@requires_db
+@pytest.mark.parametrize(
+    ("setting", "first_server_version"),
+    [("statement_timeout", 0), ("lock_timeout", 0), ("transaction_timeout", 170000)],
+)
+def test_a_pooled_server_session_gets_its_timeout_back_after_the_build(
+    scratch_database: str, setting: str, first_server_version: int
+) -> None:
+    with psycopg.connect(scratch_database) as conn:
+        if conn.info.server_version < first_server_version:
+            pytest.skip(f"{setting} needs server version {first_server_version} or later")
+    with_timeout: Final = make_conninfo(scratch_database, options=f"-c {setting}=4000")
+    session: Final = _PooledServerSession.connect(with_timeout, autocommit=True)
+    try:
+        assert ensure_request_log_indexes(with_timeout, "public", connect=lambda _: session) is True
+        shown: Final = session.execute(sql.SQL("SHOW {}").format(sql.Identifier(setting))).fetchone()
+    finally:
+        psycopg.Connection.close(session)
+
+    assert shown == ("4s",)
+
+
 def _rebuild_as_another_replica(database_url: str, name: str, table: str, column: str) -> int:
     """Drop and rebuild the index from a second connection, as a replica that won the
     race would, and return the oid of the index it built."""
