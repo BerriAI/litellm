@@ -189,6 +189,79 @@ class TestOutputConfigStructuredOutput:
         kwargs = _ADAPTER.translate_request(req)
         assert kwargs["text"]["format"]["strict"] is True
 
+    def test_strict_schema_normalization_applied_recursively(self):
+        """Regression test for #51200.
+
+        When strict=True the Responses adapter must apply the same recursive
+        strict-schema normalisation that the Chat adapter performs via
+        _add_additional_properties_false.  Before the fix the schema was
+        forwarded unchanged, so callers that supplied a Pydantic-generated
+        schema with additionalProperties=True (the Pydantic default) received
+        an HTTP 400 from OpenAI.
+
+        Test: a permissive schema (additionalProperties=True at root and
+        nested object) must have additionalProperties=False on every object
+        sub-schema after translate_request.
+        """
+        permissive_schema = {
+            "type": "object",
+            "properties": {
+                "entry": {
+                    "type": "object",
+                    "properties": {"value": {"type": "string"}},
+                    "required": ["value"],
+                    "additionalProperties": True,
+                }
+            },
+            "required": ["entry"],
+            "additionalProperties": True,
+        }
+        req = _make_request(output_format={"type": "json_schema", "schema": permissive_schema, "strict": True})
+        kwargs = _ADAPTER.translate_request(req)
+        fmt = kwargs["text"]["format"]
+        assert fmt["strict"] is True
+        # Root object must have additionalProperties=False
+        assert fmt["schema"]["additionalProperties"] is False, (
+            "Root additionalProperties must be False in strict mode"
+        )
+        # Nested object must also have additionalProperties=False
+        assert fmt["schema"]["properties"]["entry"]["additionalProperties"] is False, (
+            "Nested object additionalProperties must be False in strict mode"
+        )
+
+    def test_strict_schema_normalization_not_applied_when_strict_false(self):
+        """When strict=False the schema must be forwarded as-is (no normalisation)."""
+        permissive_schema = {
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+            "required": ["value"],
+            "additionalProperties": True,
+        }
+        req = _make_request(output_format={"type": "json_schema", "schema": permissive_schema, "strict": False})
+        kwargs = _ADAPTER.translate_request(req)
+        fmt = kwargs["text"]["format"]
+        assert fmt["strict"] is False
+        # Schema must not be mutated when strict=False
+        assert fmt["schema"]["additionalProperties"] is True, (
+            "additionalProperties must remain True when strict=False"
+        )
+
+    def test_caller_schema_not_mutated(self):
+        """translate_request must not mutate the original schema passed by the caller."""
+        import copy
+        original_schema = {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+            "additionalProperties": True,
+        }
+        original_copy = copy.deepcopy(original_schema)
+        req = _make_request(output_format={"type": "json_schema", "schema": original_schema, "strict": True})
+        _ADAPTER.translate_request(req)
+        assert original_schema == original_copy, (
+            "translate_request must not mutate the caller's schema"
+        )
+
     @pytest.mark.parametrize("format_field", ("output_format", "output_config"))
     @pytest.mark.parametrize("strict_options", ({}, {"strict": None}))
     def test_default_strict_matches_messages_to_chat_adapter(
@@ -217,8 +290,17 @@ class TestOutputConfigStructuredOutput:
         assert kwargs["text"]["format"]["schema"] == self._SCHEMA
         assert kwargs["text"]["format"]["strict"] is False
 
-    def test_optional_property_stays_out_of_required_list(self):
-        """A property absent from required must stay absent from required in the translated schema."""
+    def test_strict_schema_normalization_sets_all_properties_required(self):
+        """In strict mode, all object properties are added to required (OpenAI strict-mode rule).
+
+        Before the fix for #51200, the Responses adapter forwarded the schema
+        unchanged, so an optional property (absent from required) would survive
+        in the translated schema and cause OpenAI to reject the request.
+
+        After the fix, _add_additional_properties_false is applied — consistent
+        with the Chat adapter — which sets required to all properties on every
+        object sub-schema.  This test verifies that behaviour explicitly.
+        """
         schema = {
             "type": "object",
             "properties": {
@@ -230,10 +312,15 @@ class TestOutputConfigStructuredOutput:
         }
         req = _make_request(output_format={"type": "json_schema", "schema": schema})
         kwargs = _ADAPTER.translate_request(req)
-        fmt_schema = kwargs["text"]["format"]["schema"]
-        assert fmt_schema["required"] == ["name"]
-        assert "nickname" not in fmt_schema["required"]
-        assert fmt_schema["additionalProperties"] is False
+        fmt_schema = kwargs["text"]["format"]
+        # strict=True (default when not specified)
+        assert fmt_schema["strict"] is True
+        # Both properties must be in required after strict normalization
+        assert set(fmt_schema["schema"]["required"]) == {"name", "nickname"}, (
+            "Strict-mode normalization must set required to all properties; "
+            "OpenAI rejects strict schemas with optional properties."
+        )
+        assert fmt_schema["schema"]["additionalProperties"] is False
 
     def test_translate_request_does_not_mutate_input_schema(self):
         """translate_request must not mutate the caller's output_format or schema dicts."""
