@@ -18370,6 +18370,12 @@
         "perSecond": "Per Second"
       },
       "invalidPositiveNumber": "Please enter a valid positive number",
+      "weightLabel": "Weight",
+      "weightHint": "Load balancing share for this deployment when several deployments share the same model name. Only used by the simple-shuffle routing strategy.",
+      "weightPlaceholder": "e.g. 0.7",
+      "orderLabel": "Order",
+      "orderHint": "Failover priority for this deployment. Lower orders are tried first, higher orders only receive traffic when the lower ones are failing.",
+      "orderPlaceholder": "e.g. 0 for primary, 1 for fallback",
       "title": "Advanced Settings",
       "customPricing": "Custom Pricing",
       "knowledgeBases": "Attached Knowledge Bases (RAG)",

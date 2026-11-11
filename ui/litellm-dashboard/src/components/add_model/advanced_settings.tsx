@@ -519,8 +519,8 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
             <MountedFormField
               name="weight"
               label={labelWithHint(
-                "Weight",
-                "Load balancing share for this deployment when several deployments share the same model name. Only used by the simple-shuffle routing strategy.",
+                t("addModel.advancedSettings.weightLabel"),
+                t("addModel.advancedSettings.weightHint"),
               )}
               className="mb-4"
             >
@@ -533,15 +533,15 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                   value={(control.value as string | undefined) ?? ""}
                   onChange={control.onChange}
                   onBlur={control.onBlur}
-                  placeholder="e.g. 0.7"
+                  placeholder={t("addModel.advancedSettings.weightPlaceholder")}
                 />
               )}
             </MountedFormField>
             <MountedFormField
               name="order"
               label={labelWithHint(
-                "Order",
-                "Failover priority for this deployment. Lower orders are tried first, higher orders only receive traffic when the lower ones are failing.",
+                t("addModel.advancedSettings.orderLabel"),
+                t("addModel.advancedSettings.orderHint"),
               )}
               className="mb-4"
             >
@@ -554,7 +554,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                   value={(control.value as string | undefined) ?? ""}
                   onChange={control.onChange}
                   onBlur={control.onBlur}
-                  placeholder="e.g. 0 for primary, 1 for fallback"
+                  placeholder={t("addModel.advancedSettings.orderPlaceholder")}
                 />
               )}
             </MountedFormField>
