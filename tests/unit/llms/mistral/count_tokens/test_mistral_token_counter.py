@@ -1,6 +1,5 @@
 import json
 from typing import Final
-from unittest.mock import patch
 
 import httpx
 import pytest
@@ -8,7 +7,6 @@ import respx
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import decoded_json_object
-from litellm.litellm_core_utils.tool_fields import DropPolicy
 from litellm.llms.mistral.count_tokens.token_counter import MistralTokenCounter
 from litellm.llms.mistral.count_tokens.transformation import MistralCountTokensConfig
 
@@ -94,27 +92,6 @@ async def test_count_tokens_success(monkeypatch: pytest.MonkeyPatch):
     assert result.model_used == "mistral-large-4"
     assert result.request_model == "mistral/mistral-large-4"
     assert result.error is False
-
-
-@pytest.mark.asyncio
-async def test_count_responses_request_success(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    counter: Final = MistralTokenCounter()
-    with respx.mock:
-        respx.post(COUNT_URL).mock(
-            return_value=httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 55})
-        )
-        result: Final = await counter.count_responses_request(
-            model_to_use="mistral-large-4",
-            request={"model": "mistral-large-4", "input": "Count this"},
-            policy=DropPolicy(drop_params=False, additional_drop_params=frozenset()),
-            deployment={"litellm_params": {"api_key": "test-key"}},
-            request_model="mistral/mistral-large-4",
-        )
-
-    assert result is not None
-    assert result.total_tokens == 55
-    assert result.tokenizer_type == "mistral_api"
 
 
 @pytest.mark.asyncio
@@ -529,40 +506,6 @@ def test_mistral_config_get_models_lists_ids_that_route_to_mistral():
 
 
 @pytest.mark.asyncio
-async def test_native_responses_count_dispatches_to_mistral(monkeypatch: pytest.MonkeyPatch):
-    import litellm
-    from litellm.llms.mistral.count_tokens.token_counter import MistralTokenCounter
-    from litellm.proxy.proxy_server import (
-        _native_responses_count,  # pyright: ignore[reportPrivateUsage]  # testing private proxy dispatch helper
-    )
-
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    counter: Final = MistralTokenCounter()
-    callback: Final = _native_responses_count(
-        provider_counter=counter,
-        custom_llm_provider="mistral",
-        responses_request={"model": "mistral-large-4", "input": "Hello world"},
-        deployment={"litellm_params": {"model": "mistral/mistral-large-4", "api_key": "test-key"}},
-        request_model="mistral-large-4",
-    )
-    assert callback is not None
-
-    with respx.mock:
-        route: Final = respx.post("https://api.mistral.ai/v1/responses/input_tokens").mock(
-            return_value=httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 5})
-        )
-        result: Final = await callback("mistral-large-4", None)
-        assert result is not None
-        assert getattr(result, "total_tokens", None) == 5
-        assert route.called
-        assert route.calls.last.request.headers["authorization"] == "Bearer test-key"
-        assert decoded_json_object(json.loads(route.calls.last.request.content)) == {
-            "model": "mistral-large-4",
-            "input": "Hello world",
-        }
-
-
-@pytest.mark.asyncio
 async def test_mistral_count_tokens_handler_raises_mistral_error_on_non_200(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.llms.mistral.common_utils import MistralError
     from litellm.llms.mistral.count_tokens.handler import MistralCountTokensHandler
@@ -596,21 +539,24 @@ async def test_mistral_count_tokens_handler_raises_mistral_error_on_invalid_json
 
 
 @pytest.mark.asyncio
-async def test_mistral_count_tokens_handler_transform_value_error(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_mistral_count_tokens_handler_rejects_an_empty_input_without_calling_mistral(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from litellm.llms.mistral.common_utils import MistralError
     from litellm.llms.mistral.count_tokens.handler import MistralCountTokensHandler
 
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    handler: Final = MistralCountTokensHandler()
-    with patch.object(handler, "transform_request_to_count_tokens", side_effect=ValueError("Invalid request")):
+    with respx.mock(assert_all_called=False) as router:
+        route: Final = router.post(COUNT_URL).mock(
+            return_value=httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 1})
+        )
         with pytest.raises(MistralError) as exc_info:
-            await handler.handle_count_tokens_request(
-                model="mistral-large-4",
-                input="hello",
-                api_key="test-key",
+            await MistralCountTokensHandler().handle_count_tokens_request(
+                model="mistral-large-4", input="", api_key="test-key"
             )
 
     assert exc_info.value.status_code == 500
+    assert not route.called
 
 
 @pytest.mark.asyncio
@@ -638,37 +584,125 @@ async def test_count_tokens_system_blocks_instruction(monkeypatch: pytest.Monkey
 
 
 @pytest.mark.asyncio
-async def test_count_tokens_generic_http_error_returns_count_error(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_count_tokens_returns_the_mistral_error_status_instead_of_a_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    counter: Final = MistralTokenCounter()
-    with patch(
-        "litellm.llms.mistral.count_tokens.token_counter.mistral_count_tokens_handler.handle_count_tokens_request",
-        side_effect=httpx.HTTPError("generic http error"),
-    ):
-        result: Final = await counter.count_tokens(
+    with respx.mock:
+        respx.post(COUNT_URL).mock(
+            return_value=httpx.Response(401, json={"detail": "Unauthorized"}),
+        )
+        result: Final = await MistralTokenCounter().count_tokens(
             model_to_use="mistral-large-4",
             messages=[{"role": "user", "content": "hi"}],
             contents=None,
-            deployment={"litellm_params": {"api_key": "test-key"}},
+            deployment={"litellm_params": {"api_key": "bad-key"}},
             request_model="mistral/mistral-large-4",
         )
 
     assert result is not None
-    assert result.error is True
-    assert result.status_code == 500
+    assert (result.error, result.status_code, result.total_tokens) == (True, 401, 0)
+    assert "Unauthorized" in (result.error_message or "")
+
+
+async def _sent_count_input(
+    monkeypatch: pytest.MonkeyPatch, model: str, messages: list[dict[str, object]]
+) -> list[object]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(
+            return_value=httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 3})
+        )
+        result: Final = await MistralTokenCounter().count_tokens(
+            model_to_use=model,
+            messages=messages,
+            contents=None,
+            deployment={"litellm_params": {"api_key": "test-key"}},
+            request_model=f"mistral/{model}",
+        )
+    assert result is not None and result.total_tokens == 3
+    sent_input: Final = decoded_json_object(json.loads(route.calls.last.request.content))["input"]
+    assert isinstance(sent_input, list)
+    return sent_input
+
+
+_REASONED_TURN: Final = {"role": "assistant", "content": "Paris.", "reasoning_content": "France's capital is Paris."}
+_REASONING_ITEM: Final = {
+    "type": "reasoning",
+    "summary": [{"type": "summary_text", "text": "France's capital is Paris."}],
+}
+_ANSWER_ITEM: Final = {"role": "assistant", "content": "Paris."}
+
+
+@pytest.mark.parametrize(
+    ("model", "assistant_turn", "counted_turn"),
+    [
+        ("magistral-medium-latest", _REASONED_TURN, [_REASONING_ITEM, _ANSWER_ITEM]),
+        (
+            "magistral-medium-latest",
+            {
+                "role": "assistant",
+                "content": "Paris.",
+                "thinking_blocks": [{"type": "thinking", "thinking": "France's capital is Paris."}],
+            },
+            [_REASONING_ITEM, _ANSWER_ITEM],
+        ),
+        ("magistral-medium-latest", {**_REASONED_TURN, "content": None}, [{"role": "assistant", "content": ""}]),
+        ("mistral-no-reasoning-test-model", _REASONED_TURN, [_ANSWER_ITEM]),
+    ],
+    ids=["reasoning_content", "thinking_blocks", "no_turn_output", "model_without_reasoning"],
+)
+@pytest.mark.asyncio
+async def test_count_tokens_counts_reasoning_only_where_mistral_chat_replays_it(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    assistant_turn: dict[str, object],
+    counted_turn: list[dict[str, object]],
+) -> None:
+    sent_input: Final = await _sent_count_input(
+        monkeypatch,
+        model,
+        [
+            {"role": "user", "content": "Capital of France?"},
+            assistant_turn,
+            {"role": "user", "content": "And of Spain?"},
+        ],
+    )
+
+    assert sent_input == [
+        {"role": "user", "content": "Capital of France?"},
+        *counted_turn,
+        {"role": "user", "content": "And of Spain?"},
+    ]
 
 
 @pytest.mark.asyncio
-async def test_count_responses_request_azure_returns_none() -> None:
-    counter: Final = MistralTokenCounter()
-    result: Final = await counter.count_responses_request(
-        model_to_use="mistral-large-4",
-        request={"model": "mistral-large-4", "input": "hi"},
-        policy=DropPolicy(drop_params=False, additional_drop_params=frozenset()),
-        deployment={"litellm_params": {"api_base": "https://foo.openai.azure.com", "api_key": "test-key"}},
-        request_model="mistral/mistral-large-4",
+async def test_count_tokens_counts_files_sent_by_file_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent_input: Final = await _sent_count_input(
+        monkeypatch,
+        "mistral-large-4",
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Summarize both"},
+                    {"type": "file", "file": {"file_id": "file-openai-shape"}},
+                    {"type": "file", "file_id": "file-mistral-shape"},
+                ],
+            }
+        ],
     )
-    assert result is None
+
+    assert sent_input == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Summarize both"},
+                {"type": "input_file", "file_id": "file-openai-shape"},
+                {"type": "input_file", "file_id": "file-mistral-shape"},
+            ],
+        }
+    ]
 
 
 def test_get_mistral_count_tokens_endpoint_other_path() -> None:

@@ -4070,10 +4070,6 @@ async def test_gemini_messages_count_tokens_rejects_an_invalid_edit_without_drop
     assert sent_bodies == ()
 
 
-# Groq represents a bridged chat-completions provider without a native count-tokens API,
-# testing context management polyfill and fallback to local token estimation.
-# Previously this test suite used Mistral, but PR #50653 introduced native Mistral count_tokens
-# support, so Groq is used here to continue testing the local estimation fallback.
 _GROQ_MODEL: Final = "groq/llama-3.3-70b-versatile"
 
 
@@ -5410,3 +5406,80 @@ async def test_mistral_proxy_token_counter_chat_and_responses(monkeypatch: pytes
     assert utils_result.tokenizer_type == "mistral_api"
     assert responses_result.total_tokens == 33
     assert responses_result.tokenizer_type == "mistral_api"
+
+
+def _input_texts(item: JsonValue) -> list[str]:
+    assert isinstance(item, dict)
+    content: Final = item.get("content")
+    if isinstance(content, str):
+        return [content]
+    assert isinstance(content, list)
+    return [str(part["text"]) for part in content if isinstance(part, dict) and "text" in part]
+
+
+@pytest.mark.asyncio
+async def test_responses_count_on_mistral_counts_the_turns_previous_response_id_replays(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "mistral-counted",
+                "litellm_params": {"model": "mistral/mistral-large-4", "api_key": "test-mistral-key"},
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    stored_turn: Final = {
+        "request_id": "chatcmpl-stored",
+        "call_type": "aresponses",
+        "session_id": "session-1",
+        "proxy_server_request": {"input": "Who won in 1998?", "model": "mistral-counted"},
+        "response": {
+            "id": "chatcmpl-stored",
+            "object": "chat.completion",
+            "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": "The Bulls."}, "finish_reason": "stop"}
+            ],
+        },
+        "status": "success",
+    }
+    bodies: Final[list[dict[str, JsonValue]]] = []  # mutable-ok: collects what the mock peer receives
+
+    def count_peer(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 41}, request=request)
+
+    with (
+        patch.object(
+            ResponsesSessionHandler,
+            "get_all_spend_logs_for_previous_response_id",
+            new_callable=AsyncMock,
+            return_value=[stored_turn],
+        ),
+        patch.object(
+            mistral_count_tokens_http,
+            "get_async_httpx_client",
+            return_value=AsyncHTTPHandler(transport=httpx.MockTransport(count_peer)),
+        ),
+    ):
+        result: Final = await count_request_tokens(
+            request=TokenCountRequest(model="mistral-counted", messages=[{"role": "user", "content": "And in 1999?"}]),
+            call_endpoint=True,
+            responses_request={
+                "model": "mistral-counted",
+                "input": "And in 1999?",
+                "previous_response_id": "chatcmpl-stored",
+            },
+        )
+
+    assert (result.error, result.total_tokens, result.tokenizer_type) == (False, 41, "mistral_api")
+    (body,) = bodies
+    assert "previous_response_id" not in body
+    sent_input: Final = body["input"]
+    assert isinstance(sent_input, list)
+    assert list(itertools.chain.from_iterable(map(_input_texts, sent_input))) == [
+        "Who won in 1998?",
+        "The Bulls.",
+        "And in 1999?",
+    ]

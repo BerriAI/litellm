@@ -19,7 +19,7 @@ from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing on
 import litellm
 from litellm._logging import verbose_logger
 from litellm.exceptions import UnsupportedParamsError
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -184,14 +184,14 @@ class MistralConfig(OpenAIGPTConfig):
 
         return MistralTokenCounter()
 
-    def _accepts_reasoning(self, model: str) -> bool:
+    def accepts_reasoning(self, model: str) -> bool:
         return "magistral" in model.lower() or supports_reasoning(
             model=model, custom_llm_provider=self.custom_llm_provider
         )
 
     def get_supported_openai_params(self, model: str) -> list[str]:
         is_magistral: Final = "magistral" in model.lower()
-        accepts_reasoning_effort: Final = self._accepts_reasoning(model)
+        accepts_reasoning_effort: Final = self.accepts_reasoning(model)
         accepts_prompt_cache_key: Final = self.custom_llm_provider == "mistral"
         return [
             "stream",
@@ -443,7 +443,7 @@ class MistralConfig(OpenAIGPTConfig):
         The above statement is not valid now. Need to plan to remove all the #1,2,3
         Mistral API supports content as a list.
         """
-        keeps_reasoning: Final = self._accepts_reasoning(model)
+        keeps_reasoning: Final = self.accepts_reasoning(model)
         final_position: Final = len(messages) - 1
         replayed_messages: Final = [
             MistralConfig._with_replayed_reasoning(m, keeps_reasoning, position == final_position)
@@ -705,16 +705,12 @@ class MistralConfig(OpenAIGPTConfig):
                 return ""
 
     @staticmethod
-    def _replayed_reasoning_text(message: ChatCompletionAssistantMessage) -> str | None:
+    def replayed_reasoning_text(message: Mapping[str, object]) -> str | None:
         reasoning_content: Final = message.get("reasoning_content")
         if isinstance(reasoning_content, str) and reasoning_content.strip():
             return reasoning_content
-        thinking_blocks: Final = message.get("thinking_blocks")
-        thinking_text: Final = (
-            "".join(map(MistralConfig._thinking_block_text, thinking_blocks))
-            if isinstance(thinking_blocks, list)
-            else ""
-        )
+        thinking_blocks: Final = as_object_list(message.get("thinking_blocks")) or ()
+        thinking_text: Final = "".join(map(MistralConfig._thinking_block_text, thinking_blocks))
         return thinking_text if thinking_text.strip() else None
 
     @staticmethod
@@ -751,7 +747,7 @@ class MistralConfig(OpenAIGPTConfig):
             return MistralConfig._with_sendable_think_chunks(
                 stripped_message, content_parts, is_final_turn and MistralConfig._is_prefix_turn(message)
             )
-        reasoning_text: Final = MistralConfig._replayed_reasoning_text(message)
+        reasoning_text: Final = MistralConfig.replayed_reasoning_text(message)
         has_turn_output: Final = bool(content_parts) or bool(message.get("tool_calls"))
         if reasoning_text is None or content_parts is None or not has_turn_output:
             return stripped_message

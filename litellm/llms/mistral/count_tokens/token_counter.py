@@ -1,5 +1,6 @@
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import chain
 from types import MappingProxyType
 from typing import Final
 from urllib.parse import urlparse
@@ -10,8 +11,7 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object
-from litellm.litellm_core_utils.tool_fields import DropPolicy
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, decoded_json_object
 from litellm.llms.anthropic.messages.context_management import AnthropicContextManagementError
 from litellm.llms.anthropic.messages.convertible_blocks import deployment_drops_params, unconvertible_blocks_error
 from litellm.llms.anthropic.messages.responses_adapters.handler import count_view_messages
@@ -19,6 +19,7 @@ from litellm.llms.anthropic.messages.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
+from litellm.llms.mistral.chat.transformation import MistralConfig
 from litellm.llms.mistral.common_utils import MistralError, get_mistral_chat_credentials
 from litellm.llms.mistral.count_tokens.handler import (
     MistralCountTokensHandler,
@@ -26,12 +27,12 @@ from litellm.llms.mistral.count_tokens.handler import (
 from litellm.llms.openai.responses.count_tokens.transformation import (
     OpenAICountTokensConfig,
     ResponsesCountRequestParts,
-    native_count_request,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import CountContextManagement, LlmProviders, TokenCountMessagesFormat, TokenCountResponse
 
 mistral_count_tokens_handler: Final = MistralCountTokensHandler()
+_MISTRAL_CHAT_CONFIG: Final = MistralConfig()
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +89,54 @@ def _count_error(model_to_use: str, request_model: str, message: str, status_cod
     )
 
 
+def _file_id(block: object) -> str | None:
+    match block:
+        case {"type": "file", "file": {"file_id": str(file_id)}} if file_id:
+            return file_id
+        case {"type": "file", "file_id": str(file_id)} if file_id:
+            return file_id
+        case _:
+            return None
+
+
+def _file_id_parts(message: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    blocks: Final = as_object_list(message.get("content")) if message.get("role") == "user" else None
+    file_ids: Final = tuple(file_id for file_id in map(_file_id, blocks or ()) if file_id is not None)
+    return tuple({"type": "input_file", "file_id": file_id} for file_id in file_ids)
+
+
+def _replayed_reasoning_items(message: Mapping[str, object], keeps_reasoning: bool) -> tuple[Mapping[str, object], ...]:
+    if not keeps_reasoning or message.get("role") != "assistant":
+        return ()
+    if not message.get("content") and not message.get("tool_calls"):
+        return ()
+    reasoning_text: Final = MistralConfig.replayed_reasoning_text(message)
+    if reasoning_text is None:
+        return ()
+    return ({"type": "reasoning", "summary": [{"type": "summary_text", "text": reasoning_text}]},)
+
+
+def _input_content_parts(content: object) -> tuple[object, ...]:
+    match content:
+        case str(text) if text:
+            return ({"type": "input_text", "text": text},)
+        case _:
+            return tuple(as_object_list(content) or ())
+
+
+def _chat_message_items(
+    message: Mapping[str, object], keeps_reasoning: bool
+) -> tuple[tuple[Mapping[str, object], ...], str | None]:
+    items, instructions = OpenAICountTokensConfig.messages_to_responses_input((message,))
+    file_parts: Final = _file_id_parts(message)
+    sent_items: Final = (
+        tuple({**item, "content": [*_input_content_parts(item.get("content")), *file_parts]} for item in items)
+        if file_parts
+        else tuple(items)
+    )
+    return (*_replayed_reasoning_items(message, keeps_reasoning), *sent_items), instructions
+
+
 async def _sent_messages(
     model: str,
     messages: Sequence[Mapping[str, object]],
@@ -142,12 +191,17 @@ class MistralTokenCounter(BaseTokenCounter):
                     model=model_to_use, messages=messages, system=system, tools=tools, output_format=output_format
                 )
             case "openai":
-                input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(
-                    [dict(message) for message in messages]
+                keeps_reasoning: Final = _MISTRAL_CHAT_CONFIG.accepts_reasoning(model_to_use)
+                converted: Final = tuple(_chat_message_items(message, keeps_reasoning) for message in messages)
+                instruction_parts: Final = tuple(
+                    instructions for _, instructions in converted if instructions is not None
                 )
-                fallback_instructions: Final = MistralTokenCounter._system_instructions(system)
                 return OpenAICountTokensConfig.count_request_parts(
-                    input_items, instructions if instructions is not None else fallback_instructions, tools
+                    tuple(chain.from_iterable(items for items, _ in converted)),
+                    "\n".join(instruction_parts)
+                    if instruction_parts
+                    else MistralTokenCounter._system_instructions(system),
+                    tools,
                 )
             case _:
                 assert_never(messages_format)
@@ -233,27 +287,6 @@ class MistralTokenCounter(BaseTokenCounter):
                 instructions=instructions,
                 text=text,
             ),
-            model_to_use,
-            request_model,
-        )
-
-    async def count_responses_request(
-        self,
-        model_to_use: str,
-        request: Mapping[str, object],
-        policy: DropPolicy,
-        deployment: Mapping[str, object] | None,
-        request_model: str,
-    ) -> TokenCountResponse | None:
-        resolved: Final = _count_credential(deployment, request_model or model_to_use)
-        if resolved is None:
-            return None
-        if isinstance(resolved, MistralError):
-            return _count_error(model_to_use, request_model, resolved.message, resolved.status_code)
-        body: Final = native_count_request(request, model_to_use, policy)
-        return await self._counted(
-            resolved,
-            lambda api_key, api_base: mistral_count_tokens_handler.post_count_request(body, api_key, api_base),
             model_to_use,
             request_model,
         )

@@ -15175,7 +15175,6 @@ async def run_thread(
 from litellm.litellm_core_utils.tool_fields import DropPolicy, drop_policy
 from litellm.llms.anthropic.count_tokens.token_counter import AnthropicTokenCounter
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
-from litellm.llms.mistral.count_tokens.token_counter import MistralTokenCounter
 from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 from litellm.repositories.config_repository import ConfigRepository
@@ -15377,7 +15376,7 @@ async def _try_provider_token_count(
 
 
 async def _try_native_responses_count(
-    provider_counter: OpenAITokenCounter | MistralTokenCounter,
+    provider_counter: OpenAITokenCounter,
     custom_llm_provider: str | None,
     model_to_use: str,
     _region: str | None,
@@ -15894,7 +15893,7 @@ def _native_responses_count(
     deployment: Mapping[str, object] | None,
     request_model: str,
 ) -> Callable[[str, str | None], Awaitable[Union["TokenCountResponse", ProviderCountFailure, None]]] | None:
-    if responses_request is None or not isinstance(provider_counter, (OpenAITokenCounter, MistralTokenCounter)):
+    if responses_request is None or not isinstance(provider_counter, OpenAITokenCounter):
         return None
     return partial(
         _try_native_responses_count,
@@ -16154,11 +16153,7 @@ async def _count_request_tokens(
     )
     chat_count: Final = (
         None
-        if (
-            routed_request is None
-            or provider_counter is None
-            or isinstance(provider_counter, (OpenAITokenCounter, MistralTokenCounter))
-        )
+        if routed_request is None or provider_counter is None or isinstance(provider_counter, OpenAITokenCounter)
         else await chat_count_request(
             model_to_use,
             custom_llm_provider,
