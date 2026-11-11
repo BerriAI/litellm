@@ -21,7 +21,7 @@ from typing_extensions import TypeIs  # noqa: TID251  # narrows a message to its
 
 from litellm._logging import verbose_logger
 from litellm.constants import ANTHROPIC_BILLING_METADATA_PREFIX
-from litellm.exceptions import BadRequestError
+from litellm.exceptions import MalformedRequestFieldError
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -537,7 +537,7 @@ def reject_developer_message_without_content(
     if missing_content_index is None:
         return
     param: Final = f"messages[{missing_content_index}].content"
-    raise BadRequestError(
+    raise MalformedRequestFieldError(
         message=f"Missing required parameter: '{param}'.",
         model=model,
         llm_provider=llm_provider or "",

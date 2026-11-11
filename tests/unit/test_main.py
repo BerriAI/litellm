@@ -11944,3 +11944,36 @@ def test_sdk_fallbacks_and_model_list_send_the_callers_request_unchanged(
         "model": "accounts/fireworks/models/kimi-k3p1-pro",
         "messages": messages,
     }
+
+
+@pytest.mark.asyncio
+async def test_the_400_leaves_a_deployment_with_a_bad_request_cooldown_policy_serving(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post(_FIREWORKS_CHAT_COMPLETIONS_URL).respond(json=_FIREWORKS_PARIS_COMPLETION)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "capital",
+                "litellm_params": {
+                    "model": "fireworks_ai/accounts/fireworks/models/kimi-k3p1-pro",
+                    "api_key": "fake-key",
+                    "cooldown_time": 60,
+                },
+                "model_info": {"id": "fireworks-capital", "allowed_fails_policy": {"BadRequestErrorAllowedFails": 1}},
+            }
+        ],
+        num_retries=0,
+    )
+
+    for _ in range(4):
+        with pytest.raises(litellm.BadRequestError):
+            await router.acompletion(
+                model="capital", messages=list(_CONVERSATION_ENDING_IN_A_DEVELOPER_MESSAGE_WITHOUT_CONTENT)
+            )
+    response: Final = await router.acompletion(
+        model="capital", messages=[{"role": "user", "content": "What is the capital of France?"}]
+    )
+
+    assert response.choices[0].message.content == "Paris"
