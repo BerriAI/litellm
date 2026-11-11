@@ -6258,3 +6258,148 @@ async def test_unsaved_chatgpt_account_probe_requires_proxy_admin(
                 await call
             assert error.value.code == "403"
             assert len(upstream.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_active_callbacks_details_preserve_legacy_fields() -> None:
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.proxy.health_endpoints._health_endpoints import active_callbacks
+
+    class ConcreteLogger(CustomLogger):
+        async def async_pre_call_hook(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def __str__(self) -> str:
+            return "live logger"
+
+    class InheritedLogger(ConcreteLogger):
+        pass
+
+    class DefaultLogger(CustomLogger):
+        async_pre_call_hook = CustomLogger.async_pre_call_hook
+
+    class PropertyLogger(CustomLogger):
+        @property
+        def async_pre_call_hook(self) -> object:
+            raise AssertionError("hook properties must not run")
+
+    class StaticLogger(CustomLogger):
+        @staticmethod
+        async def async_pre_call_hook(*args: object, **kwargs: object) -> None:
+            pass
+
+    class ClassMethodLogger(CustomLogger):
+        @classmethod
+        async def async_pre_call_hook(cls, *args: object, **kwargs: object) -> None:
+            pass
+
+    class StaticDefaultLogger(CustomLogger):
+        async_pre_call_hook = staticmethod(CustomLogger.async_pre_call_hook)
+
+    class NonLogger:
+        async def async_pre_call_hook(self, *args: object, **kwargs: object) -> None:
+            pass
+
+    class RequiresArguments(CustomLogger):
+        def __init__(self, required: str) -> None:
+            raise AssertionError("callback classes must not be instantiated")
+
+        async def async_pre_call_hook(self, *args: object, **kwargs: object) -> None:
+            pass
+
+    callbacks: Final = (
+        ConcreteLogger,
+        ConcreteLogger(),
+        InheritedLogger,
+        InheritedLogger(),
+        CustomLogger,
+        CustomLogger(),
+        DefaultLogger,
+        DefaultLogger(),
+        PropertyLogger,
+        PropertyLogger(),
+        RequiresArguments,
+        StaticLogger,
+        ClassMethodLogger,
+        StaticDefaultLogger,
+        "configured_logger",
+        NonLogger,
+        NonLogger(),
+    )
+    flags: Final = (
+        True,
+        True,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        False,
+        True,
+        True,
+        True,
+        False,
+        False,
+        False,
+        False,
+    )
+    from litellm.proxy.proxy_server import general_settings, proxy_logging_obj
+
+    legacy_lists: Final = {
+        "input_callback": ["input"],
+        "failure_callback": ["failure"],
+        "success_callback": ["success"],
+        "_async_success_callback": ["async_success"],
+        "_async_failure_callback": ["async_failure"],
+        "_async_input_callback": ["async_input"],
+    }
+    with (
+        patch.multiple(litellm, callbacks=list(callbacks), request_timeout=123, **legacy_lists),
+        patch.dict(general_settings, {"alerting": ["email"]}),
+        patch.object(proxy_logging_obj, "alerting", ["email"]),
+    ):
+        result: Final = await active_callbacks()
+    legacy_strings: Final = [str(callback) for callback in callbacks]
+    assert {key: value for key, value in result.items() if key != "litellm.callbacks_detail"} == {
+        "alerting": "['email']",
+        "litellm.callbacks": legacy_strings,
+        **{f"litellm.{key}": value for key, value in legacy_lists.items()},
+        "all_litellm_callbacks": legacy_strings
+        + [
+            "input",
+            "failure",
+            "success",
+            "async_success",
+            "async_failure",
+            "async_input",
+        ],
+        "num_callbacks": len(callbacks) + len(legacy_lists),
+        "num_alerting": 1,
+        "litellm.request_timeout": 123,
+    }
+    assert result["litellm.callbacks_detail"] == [
+        {
+            "repr": str(callback),
+            "kind": "string" if isinstance(callback, str) else "class" if isinstance(callback, type) else "instance",
+            "name": callback
+            if isinstance(callback, str)
+            else (callback.__name__ if isinstance(callback, type) else type(callback).__name__),
+            "module": None
+            if isinstance(callback, str)
+            else (callback.__module__ if isinstance(callback, type) else type(callback).__module__),
+            "is_custom_logger_subclass": index < 14,
+            "implements_async_pre_call_hook": flag,
+        }
+        for index, (callback, flag) in enumerate(zip(callbacks, flags))
+    ]
+
+
+@pytest.mark.asyncio
+async def test_active_callbacks_empty_details() -> None:
+    from litellm.proxy.health_endpoints._health_endpoints import active_callbacks
+
+    with patch.object(litellm, "callbacks", []):
+        result: Final = await active_callbacks()
+    assert result["litellm.callbacks"] == result["litellm.callbacks_detail"] == []
