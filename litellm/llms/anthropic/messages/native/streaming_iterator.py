@@ -1,17 +1,20 @@
 import asyncio
 import contextlib
 import json
+import math
 import re
 from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
 from contextvars import ContextVar
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
 
+import anyio
 import httpx
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import TypedDict
 
 from litellm.constants import (
+    ANTHROPIC_MESSAGES_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS,
     ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS,
     ANTHROPIC_MESSAGES_STREAM_CLIENT_STALL_TIMEOUT_SECONDS,
     ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE,
@@ -41,6 +44,41 @@ GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ: Final = PassThroughEndpointLogging()
 
 _UPSTREAM_PUMP_TASKS: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: stdlib strong-ref set for pump tasks
 _DETACHED_STREAM_DRAINS: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: bounded strong-ref set, detached drains
+
+
+class _PumpExited:
+    pass
+
+
+_PUMP_EXITED: Final = _PumpExited()
+
+
+def _start_detached_drain_deadline(drain_deadline: anyio.CancelScope) -> None:
+    if drain_deadline.deadline == math.inf:
+        drain_deadline.deadline = (  # rebind-ok: anyio cancel scopes are armed by setting their deadline
+            anyio.current_time() + ANTHROPIC_MESSAGES_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS
+        )
+
+
+async def _next_relay_item(
+    queue: "asyncio.Queue[bytes | None | BaseException]", pump_task: "asyncio.Task[None]"
+) -> bytes | None | BaseException | _PumpExited:
+    """The next queued item, or ``_PUMP_EXITED`` once the pump is gone and will never send another."""
+    with contextlib.suppress(asyncio.QueueEmpty):
+        return queue.get_nowait()
+    if pump_task.done():
+        return _PUMP_EXITED
+    getter: Final = asyncio.ensure_future(queue.get())
+    try:
+        await asyncio.wait(frozenset((getter, pump_task)), return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        if not getter.done():
+            getter.cancel()
+    if getter.done() and not getter.cancelled():
+        return getter.result()
+    with contextlib.suppress(asyncio.QueueEmpty):
+        return queue.get_nowait()
+    return _PUMP_EXITED
 
 
 def is_message_stop_chunk(chunk: object) -> bool:
@@ -605,8 +643,12 @@ class BaseAnthropicMessagesStreamingIterator:
         keeps a single ``collected_chunks`` copy for billing, and the number of
         such post-disconnect drains running at once is capped so client behavior
         can't create unbounded worker state; over the cap the pump bills what it
-        has rather than draining further. Detached-drain lifetime is otherwise
-        bounded by the upstream stream/read timeout.
+        has rather than draining further. A drain still reading
+        ``ANTHROPIC_MESSAGES_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS`` after the
+        client left, a stalled provider for one, bills what it has and closes the
+        provider stream too, so it cannot hold its buffered response forever. A
+        relay whose pump exited without an end-of-stream sentinel ends the stream
+        with an incomplete-stream error instead of waiting on an empty queue.
 
         An upstream failure (Bedrock read / decode / chunk-conversion error)
         that happens while the client is still connected is forwarded through
@@ -620,15 +662,21 @@ class BaseAnthropicMessagesStreamingIterator:
             maxsize=ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE
         )
         client_detached: Final = asyncio.Event()
+        drain_deadline: Final = anyio.CancelScope()
 
-        pump_task: Final = asyncio.create_task(self._pump_upstream_to_queue(completion_stream, queue, client_detached))
+        pump_task: Final = asyncio.create_task(
+            self._pump_upstream_to_queue(completion_stream, queue, client_detached, drain_deadline)
+        )
         _UPSTREAM_PUMP_TASKS.add(pump_task)
         pump_task.add_done_callback(_UPSTREAM_PUMP_TASKS.discard)
 
         reached_end = False  # rebind-ok: flipped once the relay consumes the end-of-stream sentinel
         try:
             while True:
-                item = await queue.get()
+                item = await _next_relay_item(queue, pump_task)
+                if isinstance(item, _PumpExited):
+                    yield _incomplete_stream_error_sse_event()
+                    break
                 if item is None:
                     reached_end = True
                     break
@@ -637,6 +685,7 @@ class BaseAnthropicMessagesStreamingIterator:
                 yield item
         finally:
             client_detached.set()
+            _start_detached_drain_deadline(drain_deadline)
             if not reached_end:
                 self._dispatch_pending_deferred_logging()
 
@@ -733,6 +782,7 @@ class BaseAnthropicMessagesStreamingIterator:
         completion_stream: AsyncIterator[bytes | GenericStreamingChunk | ModelResponseStream | Mapping[str, object]],
         queue: "asyncio.Queue[bytes | None | BaseException]",
         client_detached: "asyncio.Event",
+        drain_deadline: anyio.CancelScope,
     ) -> None:
         """Drain the whole upstream into ``queue`` (backpressured) and bill once.
 
@@ -749,32 +799,41 @@ class BaseAnthropicMessagesStreamingIterator:
         collected_chunks: Final[list[bytes]] = []  # mutable-ok: SSE billing buffer appended to across the drain
         saw_terminal_event = False  # rebind-ok: accumulates across the upstream loop
         draining_detached = False  # rebind-ok: set once this pump claims a detached-drain slot
+        over_drain_cap = False  # rebind-ok: set when no detached-drain slot is free
         try:
-            async for chunk in completion_stream:
-                if self.completion_start_time is None:
-                    self.completion_start_time = datetime.now()
-                saw_terminal_event = saw_terminal_event or _is_terminal_stream_chunk(chunk)
-                encoded_chunk = self._convert_chunk_to_sse_format(chunk)
-                collected_chunks.append(encoded_chunk)
-                if not client_detached.is_set():
-                    await self._enqueue_for_client(queue, client_detached, encoded_chunk)
-                    continue
-                if not draining_detached:
-                    if not _try_claim_detached_drain_slot():
-                        verbose_proxy_logger.warning(
-                            "async_sse_wrapper: detached-drain cap (%d) reached; billing %d partial "
-                            "chunks and aborting the upstream stream to stop provider billing",
-                            ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS,
-                            len(collected_chunks),
-                        )
-                        await self._bill_collected_chunks(collected_chunks, stream_teardown=True)
-                        await self._abort_upstream(completion_stream)
-                        return
-                    draining_detached = True
+            with drain_deadline:
+                async for chunk in completion_stream:
+                    if self.completion_start_time is None:
+                        self.completion_start_time = datetime.now()
+                    saw_terminal_event = saw_terminal_event or _is_terminal_stream_chunk(chunk)
+                    encoded_chunk = self._convert_chunk_to_sse_format(chunk)
+                    collected_chunks.append(encoded_chunk)
+                    if not client_detached.is_set():
+                        if not await self._enqueue_for_client(queue, client_detached, encoded_chunk):
+                            _start_detached_drain_deadline(drain_deadline)
+                        continue
+                    if not draining_detached:
+                        if not _try_claim_detached_drain_slot():
+                            over_drain_cap = True
+                            break
+                        draining_detached = True
         except Exception as exc:  # noqa: BLE001  # upstream errors are handled/forwarded by _handle_pump_upstream_error
             await self._handle_pump_upstream_error(queue, client_detached, collected_chunks, exc)
             return
 
+        if over_drain_cap or drain_deadline.cancelled_caught:
+            verbose_proxy_logger.warning(
+                "async_sse_wrapper: %s; billing %d partial chunks and aborting the upstream stream to stop "
+                "provider billing",
+                f"detached-drain cap ({ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS}) reached"
+                if over_drain_cap
+                else f"detached drain still running {ANTHROPIC_MESSAGES_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS}s "
+                "after the client left",
+                len(collected_chunks),
+            )
+            await self._bill_collected_chunks(collected_chunks, stream_teardown=True)
+            await self._abort_upstream(completion_stream)
+            return
         if client_detached.is_set():
             await self._bill_collected_chunks(collected_chunks, stream_teardown=True)
             return

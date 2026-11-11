@@ -1,5 +1,7 @@
 import asyncio
+import gc
 import json
+import tracemalloc
 from collections.abc import AsyncIterator, Mapping, Sequence
 from datetime import datetime
 from typing import Final, Literal
@@ -1945,3 +1947,127 @@ async def test_pump_exits_when_queued_upstream_error_is_never_consumed_and_relay
     await _wait_until_no_live_pumps()
 
     assert len(detached_hook.exceptions) == 1
+
+
+class _BilledChunkCountIterator(BaseAnthropicMessagesStreamingIterator):
+    def __init__(self, litellm_logging_obj: LiteLLMLoggingObj, billed_chunk_counts: list[int]):
+        super().__init__(litellm_logging_obj=litellm_logging_obj, request_body={})
+        self._billed_chunk_counts: Final = billed_chunk_counts
+
+    async def _handle_streaming_logging(self, collected_chunks, *, stream_teardown=False):
+        self._billed_chunk_counts.append(len(collected_chunks))
+
+
+@pytest.mark.asyncio
+async def test_async_sse_wrapper_releases_stalled_upstream_after_client_disconnect(monkeypatch):
+    """
+    Regression: when the provider stalls after the client disconnects, the detached pump kept the
+    provider stream open and every chunk it had buffered for billing alive until the provider read
+    timed out, so each such request leaked its whole response. The drain must stop at its time
+    limit, bill what it read, close the provider stream and free the buffer.
+    """
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS", 0)
+    requests: Final = 5
+    chunks_before_stall: Final = 50
+    payload: Final = "x" * 65536
+    response_bytes: Final = chunks_before_stall * len(payload)
+    provider_stalled: Final = asyncio.Event()
+    upstream_closed: Final = tuple(asyncio.Event() for _ in range(requests))
+    billed_chunk_counts: Final[list[int]] = []
+
+    async def _stalling_stream(closed: asyncio.Event):
+        try:
+            yield {"type": "message_start", "message": {"id": "m", "usage": {"input_tokens": 5, "output_tokens": 1}}}
+            for _ in range(chunks_before_stall):
+                yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": payload}}
+            await provider_stalled.wait()
+        finally:
+            closed.set()
+
+    gc.collect()
+    tracemalloc.start()
+    try:
+        baseline: Final = tracemalloc.get_traced_memory()[0]
+        for index, closed in enumerate(upstream_closed):
+            iterator = _BilledChunkCountIterator(_make_logging_obj(f"stalled_drain_{index}"), billed_chunk_counts)
+            gen = iterator.async_sse_wrapper(_stalling_stream(closed))
+            await gen.__anext__()
+            await gen.aclose()
+        try:
+            await asyncio.wait_for(asyncio.gather(*(closed.wait() for closed in upstream_closed)), timeout=5)
+        except asyncio.TimeoutError:
+            pass
+        gc.collect()
+        retained: Final = tracemalloc.get_traced_memory()[0] - baseline
+        closed_while_stalled: Final = sum(closed.is_set() for closed in upstream_closed)
+        billed_while_stalled: Final = tuple(billed_chunk_counts)
+    finally:
+        tracemalloc.stop()
+        provider_stalled.set()
+        await asyncio.gather(*tuple(streaming_iterator_module._UPSTREAM_PUMP_TASKS), return_exceptions=True)
+
+    assert closed_while_stalled == requests, f"only {closed_while_stalled}/{requests} stalled provider streams closed"
+    assert retained < response_bytes, f"{retained} bytes still held after {requests} disconnected stalled streams"
+    assert billed_while_stalled == (chunks_before_stall + 1,) * requests
+
+
+@pytest.mark.asyncio
+async def test_slow_client_that_resumes_after_the_stall_timeout_gets_an_error_instead_of_hanging(monkeypatch):
+    """
+    Regression: once the pump gave up on a stalled client it stopped feeding the relay without an
+    end-of-stream sentinel, so a client that started reading again drained the queue and then
+    waited forever. It must get the incomplete-stream error and an ended stream.
+    """
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE", 1)
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_CLIENT_STALL_TIMEOUT_SECONDS", 0)
+    iterator = _RecordingLoggingIterator(litellm_logging_obj=_make_logging_obj("resumed_slow_client"), request_body={})
+    gen = iterator.async_sse_wrapper(_finite_stream(20))
+    first_frame: Final = await gen.__anext__()
+    await _wait_until_no_live_pumps()
+
+    async def _read_rest() -> list[bytes]:
+        return [frame async for frame in gen]
+
+    rest: Final = await asyncio.wait_for(_read_rest(), timeout=5)
+
+    assert first_frame.startswith(b"event: message_start\n")
+    assert rest[-1] == _incomplete_stream_error_sse_event()
+    assert any(c.startswith(b"event: message_stop\n") for c in iterator.logged_chunks)
+
+
+
+@pytest.mark.asyncio
+async def test_pump_closes_a_stalled_upstream_after_giving_up_on_a_client_that_never_closes(monkeypatch):
+    """
+    Regression: a client that stops reading without closing its relay is detached by the stall
+    timeout, and the pump then drains on its own. If the provider stalls too, nothing else ever
+    ends that drain, so the drain time limit has to start when the stall timeout gives up.
+    """
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE", 1)
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_CLIENT_STALL_TIMEOUT_SECONDS", 0)
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS", 0)
+    provider_stalled: Final = asyncio.Event()
+    upstream_closed: Final = asyncio.Event()
+
+    async def _stalling_stream():
+        try:
+            yield {"type": "message_start", "message": {"id": "m", "usage": {"input_tokens": 5, "output_tokens": 1}}}
+            for i in range(5):
+                yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": f"t{i}"}}
+            await provider_stalled.wait()
+        finally:
+            upstream_closed.set()
+
+    iterator = _RecordingLoggingIterator(litellm_logging_obj=_make_logging_obj("client_never_closes"), request_body={})
+    gen = iterator.async_sse_wrapper(_stalling_stream())
+    await gen.__anext__()
+    try:
+        await asyncio.wait_for(upstream_closed.wait(), timeout=5)
+    except asyncio.TimeoutError:
+        pass
+    closed_while_stalled: Final = upstream_closed.is_set()
+    provider_stalled.set()
+    await _wait_until_no_live_pumps()
+
+    assert closed_while_stalled, "the stalled provider stream stayed open after the client was given up on"
+    assert iterator.logging_call_count == 1
