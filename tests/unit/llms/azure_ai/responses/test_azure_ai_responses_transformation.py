@@ -17,6 +17,8 @@ from litellm.utils import ProviderConfigManager
 
 FOUNDRY_PROJECT_BASE = "https://res.services.ai.azure.com/api/projects/proj"
 FOUNDRY_RESPONSES_URL = f"{FOUNDRY_PROJECT_BASE}/openai/v1/responses"
+GATEWAY_PROJECT_BASE = "https://apim.example.com/foundry/api/projects/proj"
+GATEWAY_RESPONSES_URL = f"{GATEWAY_PROJECT_BASE}/openai/v1/responses"
 SERVERLESS_BASE = "https://endpoint.eastus.models.ai.azure.com"
 WEATHER_TOOL = {
     "type": "function",
@@ -82,7 +84,8 @@ def _chat_completion_payload(model: str) -> dict:
 
 @pytest.mark.parametrize("model", ["gpt-5.6-luna-20260710154139", "gpt-5.5-20260504143601", "DeepSeek-R1-0528", None])
 @pytest.mark.parametrize(
-    "api_base", [FOUNDRY_PROJECT_BASE, "https://res.services.ai.azure.com", "https://res.openai.azure.com"]
+    "api_base",
+    [FOUNDRY_PROJECT_BASE, GATEWAY_PROJECT_BASE, "https://res.services.ai.azure.com", "https://res.openai.azure.com"],
 )
 def test_azure_openai_v1_hosts_resolve_native_config(model, api_base):
     config = ProviderConfigManager.get_provider_responses_api_config(provider="azure_ai", model=model, api_base=api_base)
@@ -113,7 +116,9 @@ def test_non_openai_surfaces_keep_chat_bridge(model):
     assert config is None
 
 
-@pytest.mark.parametrize("api_base,bridged", [(FOUNDRY_PROJECT_BASE, False), (SERVERLESS_BASE, True)])
+@pytest.mark.parametrize(
+    "api_base,bridged", [(FOUNDRY_PROJECT_BASE, False), (GATEWAY_PROJECT_BASE, False), (SERVERLESS_BASE, True)]
+)
 def test_will_bridge_to_chat_completions_follows_host(api_base, bridged):
     assert _will_bridge_to_chat_completions("gpt-5.6-luna", "azure_ai", False, None, api_base) is bridged
 
@@ -230,6 +235,7 @@ NATIVE_RESPONSES_CASES = [
         "https://res.openai.azure.com/openai/v1/responses",
         "gpt-5.6-sol",
     ),
+    ("azure_ai/gpt-5.6-sol", GATEWAY_PROJECT_BASE, GATEWAY_RESPONSES_URL, "gpt-5.6-sol"),
 ]
 
 
@@ -237,7 +243,7 @@ def _assert_native_responses_request(route, expected_url, expected_model):
     request = route.calls.last.request
     body = json.loads(request.content)
     assert f"{request.url.scheme}://{request.url.host}{request.url.path}" == expected_url
-    on_project: Final = expected_url == FOUNDRY_RESPONSES_URL
+    on_project: Final = expected_url in (FOUNDRY_RESPONSES_URL, GATEWAY_RESPONSES_URL)
     assert request.headers.get("authorization" if on_project else "api-key") == (
         "Bearer fake-key" if on_project else "fake-key"
     )
@@ -303,6 +309,38 @@ async def test_router_aresponses_sends_bare_deployment_name(model, api_base, exp
     )
 
     _assert_native_responses_request(route, expected_url, expected_model)
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize(
+    "api_base,api_version,expected_url",
+    [
+        (GATEWAY_PROJECT_BASE, None, GATEWAY_RESPONSES_URL),
+        (
+            "https://res.cognitiveservices.azure.com/openai/v1",
+            "preview",
+            "https://res.cognitiveservices.azure.com/openai/v1/responses",
+        ),
+    ],
+)
+async def test_aresponses_keeps_previous_response_id_on_gateway_and_cognitiveservices_bases(api_base, api_version, expected_url):
+    route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
+        return_value=httpx.Response(200, json=_responses_payload("gpt-4.1"))
+    )
+
+    await litellm.aresponses(
+        model="azure_ai/gpt-4.1",
+        input="What was the codeword?",
+        previous_response_id="resp_earlier",
+        api_base=api_base,
+        api_version=api_version,
+        api_key="fake-key",
+    )
+
+    request = route.calls.last.request
+    assert f"{request.url.scheme}://{request.url.host}{request.url.path}" == expected_url
+    assert json.loads(request.content)["previous_response_id"] == "resp_earlier"
 
 
 @pytest.mark.asyncio

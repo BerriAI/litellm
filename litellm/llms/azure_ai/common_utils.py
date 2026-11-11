@@ -243,7 +243,9 @@ def is_foundry_project_agent(model: str | None) -> bool:
 
 def azure_ai_supports_native_responses(model: str | None, api_base: str | None) -> bool:
     resolved_base: Final = AzureFoundryModelInfo.get_api_base(api_base)
-    if resolved_base is not None and not is_azure_openai_v1_host(resolved_base):
+    if resolved_base is not None and not (
+        is_azure_openai_v1_host(resolved_base) or foundry_project_root(httpx.URL(resolved_base))
+    ):
         return False
     if model is None:
         return True

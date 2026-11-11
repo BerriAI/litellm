@@ -408,7 +408,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         if (
             api_base is None
             or self._is_foundry_model_inference_base(api_base)
-            or foundry_v1_root(httpx.URL(api_base)) is not None
+            or bool(foundry_project_root(httpx.URL(api_base)))
         ):
             return False
         stripped_model: Final = model.split("/", 1)[1] if "/" in model else model

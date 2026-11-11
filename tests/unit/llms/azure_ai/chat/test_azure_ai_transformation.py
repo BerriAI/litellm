@@ -58,8 +58,11 @@ async def test_get_openai_compatible_provider_info():
         ),
         ("azure_ai/mistral-large-latest", "https://my-resource.services.ai.azure.com", "azure_ai"),
         ("azure_ai/mistral-large-latest", "https://my-resource.openai.azure.com", "azure_ai"),
-        ("azure_ai/gpt-4o", "https://my-resource.openai.azure.com/openai/v1", "azure_ai"),
-        ("azure_ai/gpt-4o", "https://my-resource.openai.azure.com/openai/v1/", "azure_ai"),
+        ("azure_ai/gpt-4o", "https://my-resource.openai.azure.com/openai/v1", "azure"),
+        ("azure_ai/gpt-4o", "https://my-resource.openai.azure.com/openai/v1/", "azure"),
+        ("azure_ai/gpt-4o", "https://my-resource.cognitiveservices.azure.com/openai/v1", "azure"),
+        ("azure_ai/gpt-4o", "https://apim.example.com/team/openai/v1", "azure"),
+        ("azure_ai/gpt-4o", "https://my-resource.services.ai.azure.com/openai/v1", "azure_ai"),
         ("azure_ai/gpt-4o", "https://apim.example.com/api/projects/p", "azure_ai"),
         ("azure_ai/gpt-4o", "https://apim.example.com/foundry/api/projects/p", "azure_ai"),
         ("azure_ai/gpt-4o", "https://gateway.example.com/v1", "azure"),
@@ -201,6 +204,13 @@ CHAT_COMPLETION_PAYLOAD: Final = {
             f"{FOUNDRY_PROJECT_BASE}/openai/v1/", None, FOUNDRY_PROJECT_CHAT_PATH, b"", id="project-openai-v1"
         ),
         pytest.param(
+            f"{FOUNDRY_RESOURCE_BASE}/openai/v1",
+            "preview",
+            "/openai/v1/chat/completions",
+            b"api-version=preview",
+            id="resource-openai-v1-keeps-api-version",
+        ),
+        pytest.param(
             f"{FOUNDRY_RESOURCE_BASE}/openai/v1?api-version=preview&subscription-key=gateway-key",
             "2024-05-01-preview",
             "/openai/v1/chat/completions",
@@ -278,26 +288,25 @@ def test_azure_ai_completion_sends_the_key_in_the_header_the_base_accepts(
     }
 
 
-@pytest.mark.parametrize(("api_version", "expected_query"), [(None, b""), ("preview", b"api-version=preview")])
-def test_azure_ai_completion_keeps_azure_openai_host_v1_base_on_azure_ai(
-    respx_mock: respx.MockRouter, api_version: str | None, expected_query: bytes
+@pytest.mark.parametrize("host", ["example-resource.openai.azure.com", "example-resource.cognitiveservices.azure.com"])
+def test_azure_ai_openai_model_on_resource_v1_base_is_served_and_billed_as_azure(
+    respx_mock: respx.MockRouter, host: str
 ) -> None:
-    route: Final = respx_mock.post(host="example-resource.openai.azure.com", path="/openai/v1/chat/completions").mock(
+    route: Final = respx_mock.post(host=host, path="/openai/v1/chat/completions").mock(
         return_value=Response(200, json=CHAT_COMPLETION_PAYLOAD)
     )
 
     response: Final = litellm.completion(
         model="azure_ai/gpt-4.1-mini",
-        api_base="https://example-resource.openai.azure.com/openai/v1",
-        api_version=api_version,
+        api_base=f"https://{host}/openai/v1",
+        api_version="preview",
         api_key="azure-ai-test-key",
         messages=[{"role": "user", "content": "What is the meaning of life?"}],
     )
 
-    assert route.calls.last.request.headers["api-key"] == "azure-ai-test-key"
-    assert route.calls.last.request.url.query == expected_query
+    assert route.called
     assert response.choices[0].message.content == "42"
-    assert response._hidden_params["custom_llm_provider"] == "azure_ai"
+    assert response._hidden_params["custom_llm_provider"] == "azure"
 
 
 @pytest.mark.parametrize(
