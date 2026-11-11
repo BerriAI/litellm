@@ -73,6 +73,7 @@ class GenerateContentToCompletionHandler:
 
         if isinstance(custom_logging_obj, LiteLLMLoggingObj):
             completion_kwargs["_dynamic_callback_context"] = custom_logging_obj
+            completion_kwargs["litellm_call_id"] = custom_logging_obj.litellm_call_id
 
         if stream:
             completion_kwargs["stream"] = stream

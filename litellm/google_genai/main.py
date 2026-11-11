@@ -14,10 +14,11 @@ from litellm.constants import request_timeout
 from litellm.google_genai.adapters.handler import GenerateContentToCompletionHandler
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.google_genai.transformation import (
+    GENERATE_CONTENT_REQUEST_TOP_LEVEL_FIELDS,
     BaseGoogleGenAIGenerateContentConfig,
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.llms.custom_llm import CustomLLM
+from litellm.llms.custom_llm import CustomLLM, CustomLLMError
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes
@@ -42,6 +43,11 @@ else:
 base_llm_http_handler = BaseLLMHTTPHandler()
 _GENERATE_CONTENT_RESULT: Final = TypeAdapter(object)
 _CUSTOM_GENERATE_CONTENT_BODY: Final = TypeAdapter(dict[str, object])
+_CUSTOM_NATIVE_REQUEST_FIELDS: Final = (
+    *GENERATE_CONTENT_REQUEST_TOP_LEVEL_FIELDS,
+    "systemInstruction",
+    "system_instruction",
+)
 #################################################
 
 
@@ -149,6 +155,7 @@ class GenerateContentHelper:
         if litellm_params.custom_llm_provider is None:
             litellm_params.custom_llm_provider = custom_llm_provider
 
+        custom_handler: Final = _custom_generate_content_handler(custom_llm_provider)
         # get provider config
         generate_content_provider_config: Final[BaseGoogleGenAIGenerateContentConfig | None] = (
             ProviderConfigManager.get_provider_google_genai_generate_content_config(
@@ -156,7 +163,7 @@ class GenerateContentHelper:
                 provider=litellm.LlmProviders(custom_llm_provider),
                 litellm_params=litellm_params.model_dump(include={"base_model", "api_base"}),
             )
-            if _custom_generate_content_handler(custom_llm_provider) is None
+            if custom_handler is None
             else None
         )
 
@@ -165,13 +172,14 @@ class GenerateContentHelper:
             # Signal that we should use the adapter by returning special result
             if litellm_logging_obj is None:
                 raise ValueError("litellm_logging_obj is required, but got None")
-            litellm_logging_obj.update_from_kwargs(  # pyright: ignore[reportUnknownMemberType]  # legacy logging interface is untyped
-                kwargs=kwargs,
-                model=model,
-                optional_params={"generationConfig": _CUSTOM_GENERATE_CONTENT_BODY.validate_python(config or {})},
-                litellm_params={"litellm_call_id": litellm_call_id},
-                custom_llm_provider=custom_llm_provider,
-            )
+            if custom_handler is not None:
+                litellm_logging_obj.update_from_kwargs(  # pyright: ignore[reportUnknownMemberType]  # legacy logging interface is untyped
+                    kwargs=kwargs,
+                    model=model,
+                    optional_params={"generationConfig": _CUSTOM_GENERATE_CONTENT_BODY.validate_python(config or {})},
+                    litellm_params={"litellm_call_id": litellm_call_id},
+                    custom_llm_provider=custom_llm_provider,
+                )
             return GenerateContentSetupResult(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
@@ -249,6 +257,24 @@ def _merge_native_request_fields(
     if not native_request_fields and extra_body is None:
         return None
     return {**native_request_fields, **(extra_body or {})}
+
+
+def _custom_adapter_logging_obj(setup_result: GenerateContentSetupResult) -> LiteLLMLoggingObj | None:
+    if _custom_generate_content_handler(setup_result.custom_llm_provider) is None:
+        return None
+    return setup_result.litellm_logging_obj
+
+
+def _require_custom_stream_hook(setup_result: GenerateContentSetupResult, is_async: bool) -> None:
+    custom_handler: Final = _custom_generate_content_handler(setup_result.custom_llm_provider)
+    if custom_handler is None:
+        return
+    hook_name: Final = "astreaming" if is_async else "streaming"
+    if getattr(type(custom_handler), hook_name) is getattr(CustomLLM, hook_name):
+        raise CustomLLMError(
+            status_code=500,
+            message=f"{setup_result.custom_llm_provider} does not implement {hook_name}, so it cannot stream generateContent",
+        )
 
 
 def _log_custom_generate_content_response(
@@ -401,7 +427,7 @@ def generate_content(
             native_tools: Final = _GENERATE_CONTENT_RESULT.validate_python(tools)
             native_optional_params: Final[Mapping[str, object]] = _CUSTOM_GENERATE_CONTENT_BODY.validate_python(
                 {
-                    **kwargs,
+                    **{field: kwargs[field] for field in _CUSTOM_NATIVE_REQUEST_FIELDS if field in kwargs},
                     "extra_headers": extra_headers,
                     "extra_query": extra_query,
                     "extra_body": extra_body,
@@ -543,6 +569,7 @@ async def agenerate_content_stream(
         if setup_result.generate_content_provider_config is None:
             if "stream" in kwargs:
                 kwargs.pop("stream", None)
+            _require_custom_stream_hook(setup_result, is_async=True)
 
             # Use the adapter to convert to completion format
             return await GenerateContentToCompletionHandler.async_generate_content_handler(
@@ -553,7 +580,7 @@ async def agenerate_content_stream(
                 tools=tools,
                 stream=True,
                 extra_headers=extra_headers,
-                custom_logging_obj=None,
+                custom_logging_obj=_custom_adapter_logging_obj(setup_result),
                 **kwargs,
             )
 
@@ -636,6 +663,7 @@ def generate_content_stream(
         if setup_result.generate_content_provider_config is None:
             if "stream" in kwargs:
                 kwargs.pop("stream", None)
+            _require_custom_stream_hook(setup_result, is_async=_is_async is True)
 
             # Use the adapter to convert to completion format
             return GenerateContentToCompletionHandler.generate_content_handler(
@@ -646,7 +674,7 @@ def generate_content_stream(
                 litellm_params=setup_result.litellm_params,
                 stream=True,
                 extra_headers=extra_headers,
-                custom_logging_obj=None,
+                custom_logging_obj=_custom_adapter_logging_obj(setup_result),
                 **kwargs,
             )
 
