@@ -42,6 +42,7 @@ import { isValidUrl } from "@/lib/forms/urlValidation";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 const GUARDRAIL_MODES: { value: string; labelKey: ParseKeys }[] = [
   { value: "pre_call", labelKey: "guardrails.teamTab.modes.preCall" },
@@ -1210,7 +1211,7 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
                       ref={ref}
                       rows={3}
                       className="font-mono text-xs"
-                      placeholder='{"forward_api_key": true, "headers": {"X-Custom": "value"}}'
+                      placeholder={codeSamples.guardrails.teamGuardrailParamsJson}
                     />
                   )}
                 </FormField>
@@ -1225,7 +1226,7 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
                       ref={ref}
                       rows={3}
                       className="font-mono text-xs"
-                      placeholder='{"description": "Detects PII in requests"}'
+                      placeholder={codeSamples.guardrails.teamGuardrailInfoJson}
                     />
                   )}
                 </FormField>

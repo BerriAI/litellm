@@ -25,7 +25,16 @@ _PASS_THROUGH_PROTECTED_HEADERS: Final[frozenset] = frozenset(
 )
 
 # Header name prefix used to block AWS SigV4 signing headers from being overridden.
-_PASS_THROUGH_PROTECTED_HEADER_PREFIXES: Final[tuple] = ("x-amz-",)
+_PASS_THROUGH_PROTECTED_HEADER_PREFIXES: Final[tuple[str, ...]] = ("x-amz-",)
+
+
+def _is_forwarded_pass_through_header(header_name: str) -> bool:
+    if not header_name.lower().startswith(PASS_THROUGH_HEADER_PREFIX):
+        return False
+    forwarded_name: Final = header_name[len(PASS_THROUGH_HEADER_PREFIX) :].lower()
+    return forwarded_name not in _PASS_THROUGH_PROTECTED_HEADERS and not any(
+        forwarded_name.startswith(prefix) for prefix in _PASS_THROUGH_PROTECTED_HEADER_PREFIXES
+    )
 
 
 class BasePassthroughUtils:
@@ -42,18 +51,11 @@ class BasePassthroughUtils:
         # parse_qs returns a dict where each value is a list, so let's flatten it
         updated_existing_query_params: Final = {k: v[0] if len(v) == 1 else v for k, v in existing_query_params.items()}
 
-        # Start with default query params (lowest priority)
-        merged_params: Final = {}
-        if default_query_params:
-            merged_params.update(default_query_params)
+        return {**(default_query_params or {}), **updated_existing_query_params, **request_query_params}
 
-        # Override with existing URL query params (medium priority)
-        merged_params.update(updated_existing_query_params)
-
-        # Override with request query params (highest priority - client can override anything)
-        merged_params.update(request_query_params)
-
-        return merged_params
+    @staticmethod
+    def pass_through_prefixed_headers(request_headers: Mapping[str, str]) -> Mapping[str, str]:
+        return {name: value for name, value in request_headers.items() if _is_forwarded_pass_through_header(name)}
 
     @staticmethod
     def forward_headers_from_request(
@@ -88,16 +90,13 @@ class BasePassthroughUtils:
         # Credential and protocol-level headers are excluded from this mechanism.
         for header_name, header_value in request_headers.items():
             if header_name.lower().startswith(PASS_THROUGH_HEADER_PREFIX):
-                # Strip the 'x-pass-' prefix and normalize to lowercase
-                actual_header_name = header_name[len(PASS_THROUGH_HEADER_PREFIX) :].lower()
-                if actual_header_name in _PASS_THROUGH_PROTECTED_HEADERS or any(
-                    actual_header_name.startswith(p) for p in _PASS_THROUGH_PROTECTED_HEADER_PREFIXES
-                ):
+                if not _is_forwarded_pass_through_header(header_name):
                     verbose_logger.debug(
                         "x-pass- header %s maps to a protected header name; skipping",
                         header_name,
                     )
                     continue
+                actual_header_name = header_name[len(PASS_THROUGH_HEADER_PREFIX) :].lower()
                 headers[actual_header_name] = header_value
 
         return headers

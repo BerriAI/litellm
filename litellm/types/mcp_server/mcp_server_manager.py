@@ -23,6 +23,8 @@ from litellm.types.mcp import (
 def _validate_mcp_protocol_metadata(value: dict[str, object]) -> dict[str, object]:
     if "protocol_version" in value:
         TypeAdapter[MCPUpstreamProtocol](MCPUpstreamProtocol).validate_python(value["protocol_version"])
+    if "skip_tool_output_validation" in value:
+        TypeAdapter[bool](bool).validate_python(value["skip_tool_output_validation"], strict=True)
     return value
 
 
@@ -297,6 +299,10 @@ class MCPServer(LiteLLMBaseModel):
         """
         return self.oauth2_flow == "client_credentials"
 
+    @property
+    def skip_tool_output_validation(self) -> bool:
+        return (self.mcp_info or {}).get("skip_tool_output_validation") is True
+
     @model_validator(mode="after")
     def resolve_protocol_version(self) -> Self:
         if "protocol_version" not in self.model_fields_set and self.mcp_info is not None:
@@ -376,6 +382,12 @@ class MCPServer(LiteLLMBaseModel):
         discovered ``authorization_url`` / ``token_url`` enriches only the gateway's own OAuth front
         door and is never a precondition for opening a session."""
         return self.is_true_passthrough or self.is_oauth_delegate
+
+    @property
+    def reauthorizes_in_client(self) -> bool:
+        """True when a caller can fix an upstream 401 by authenticating again: the client-forwarded
+        token modes and gateway-vaulted per-user OAuth."""
+        return self.is_client_forwarded_token or (self.is_gateway_managed_oauth2 and self.needs_user_oauth_token)
 
     @property
     def is_dcr_bridge(self) -> bool:

@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 export type ToolPermissionDecision = "allow" | "deny";
 export type ToolPermissionDefaultAction = "allow" | "deny";
@@ -154,13 +155,13 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({ v
           <div key={`${rule.id || index}-${patternIndex}`} className="flex items-start gap-2">
             <Input
               disabled={disabled}
-              placeholder="messages[0].content"
+              placeholder={codeSamples.guardrails.toolParamPath}
               value={path}
               onChange={(e) => updateAllowedParamPath(index, patternIndex, e.target.value)}
             />
             <Input
               disabled={disabled}
-              placeholder="^email@.*$"
+              placeholder={codeSamples.guardrails.toolParamPattern}
               value={pattern}
               onChange={(e) => updateAllowedParamPattern(index, patternIndex, e.target.value)}
             />
@@ -262,7 +263,7 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({ v
                       <p className="text-sm font-medium">{t("guardrails.toolPermission.rule.toolType")}</p>
                       <Input
                         disabled={disabled}
-                        placeholder="^function$"
+                        placeholder={codeSamples.guardrails.toolTypePattern}
                         value={rule.tool_type ?? ""}
                         onChange={(e) =>
                           updateRule(index, {

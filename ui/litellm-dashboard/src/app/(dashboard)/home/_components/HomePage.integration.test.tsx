@@ -7,6 +7,7 @@ import { EMPTY_DAILY_ACTIVITY_METADATA } from "@/components/UsagePage/dailyActiv
 import { all_admin_roles } from "@/utils/roles";
 import { LiteAdminFrame } from "@/components/liteadmin/LiteAdmin";
 import HomePage from "./HomePage";
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 
 const auth = vi.hoisted(() => ({
   accessToken: "sk-test",
@@ -144,7 +145,7 @@ describe("HomePage", () => {
     expect(screen.queryByRole("link", { name: /create new virtual key/i })).not.toBeInTheDocument();
   });
 
-  it("should offer Aria Agent on Home inside the dashboard frame", async () => {
+  it("keeps Home focused on usage without an embedded Aria composer", async () => {
     render(
       <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
         <LiteAdminFrame>
@@ -152,9 +153,8 @@ describe("HomePage", () => {
         </LiteAdminFrame>
       </QueryClientProvider>,
     );
-    const entry = screen.getByRole("region", { name: "Ask Aria Agent" });
-    expect(await within(entry).findByPlaceholderText("What would you like to do?")).toBeInTheDocument();
-    expect(within(entry).getByRole("button", { name: "Send message" })).toBeDisabled();
+    expect(screen.queryByRole("region", { name: "Ask Aria Agent" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Send message" })).not.toBeInTheDocument();
     expect(await screen.findByText("$501.74")).toBeInTheDocument();
   });
 

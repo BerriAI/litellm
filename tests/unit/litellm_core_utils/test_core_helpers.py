@@ -4,7 +4,7 @@ import datetime
 import json
 import logging
 import threading
-from collections.abc import Iterator, Mapping
+from collections.abc import Container, Iterator, Mapping
 from typing import Final
 
 import httpx
@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_or_create_metadata_bucket,
     get_parent_otel_span_from_kwargs,
     get_provider_response_headers_from_hidden_params,
+    json_contains,
     map_finish_reason,
     normalize_drop_params,
     preserve_upstream_non_openai_attributes,
@@ -33,7 +34,9 @@ from litellm.litellm_core_utils.core_helpers import (
     redact_nested_match_and_regex_keys,
     response_cost_in_hidden_params,
     set_provider_response_headers_in_hidden_params,
+    subscript,
     unbind_budget_reservation_from_callbacks,
+    without,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import (
@@ -852,3 +855,55 @@ def test_billed_usage_cost_keeps_the_upstream_charge_after_litellm_wrote_its_bil
     stamp_litellm_bill_on_usage(unreported, unreported.usage, 0.0015)
     assert unreported.usage.cost == 0.0015
     assert billed_usage_cost(unreported, "openai") is None
+
+
+def test_subscript_reads_keys_and_indexes_and_rejects_values_without_item_access() -> None:
+    assert subscript({"role": "user"}, "role") == "user"
+    assert subscript(["system", "user"], 1) == "user"
+    with pytest.raises(TypeError, match="'int' object is not subscriptable"):
+        subscript(5, "role")
+
+
+class _IterOnly:
+    def __iter__(self) -> Iterator[object]:
+        return iter(("error",))
+
+
+class _GetItemOnly:
+    def __getitem__(self, index: int) -> object:
+        return ("error",)[index]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [{"error": 1}, {"data": 1}, ["error"], "an error", "", _IterOnly(), _GetItemOnly()],
+)
+def test_json_contains_answers_what_the_in_operator_answers(value: Container[object]) -> None:
+    assert json_contains(value, "error") is ("error" in value)
+
+
+@pytest.mark.parametrize("value", [5, 1.5, None, True, object()])
+def test_json_contains_raises_the_in_operators_own_error(value: Container[object]) -> None:
+    with pytest.raises(TypeError) as native:
+        _ = "error" in value
+    with pytest.raises(TypeError) as ours:
+        json_contains(value, "error")
+    assert str(ours.value) == str(native.value)
+
+
+def test_without_drops_the_named_keys_and_keeps_the_rest_in_order() -> None:
+    source: Final = {"a": 1, "b": 2, "c": 3, "d": 4}
+
+    assert list(without(source, "b", "d").items()) == [("a", 1), ("c", 3)]
+    assert without(source, "missing") == source
+    assert without(source) == source
+
+
+def test_without_returns_a_new_dict_and_leaves_the_source_unchanged() -> None:
+    source: Final = {"a": 1, "b": 2}
+
+    result: Final = without(source, "a")
+    result["c"] = 3
+
+    assert source == {"a": 1, "b": 2}
+    assert result == {"b": 2, "c": 3}

@@ -3,7 +3,7 @@
  * API request/response shapes are synced from the generated OpenAPI types in @/lib/http/schema.
  */
 
-import type { components } from "@/lib/http/schema";
+import type { components, operations } from "@/lib/http/schema";
 
 export interface PluginSource {
   source: "github" | "url" | "git-subdir" | "archive";
@@ -18,13 +18,26 @@ export type PluginAuthor = components["schemas"]["PluginAuthor"];
 export type Plugin = components["schemas"]["PluginListItem"];
 export type PluginListItem = Plugin;
 export type ListPluginsResponse = components["schemas"]["ListPluginsResponse"];
+export type PluginDownloadEvent = components["schemas"]["PluginDownloadEvent"];
+export type PluginDownloadsResponse = components["schemas"]["PluginDownloadsResponse"];
 
-// Request envelope synced from the OpenAPI spec, with `source` narrowed to our PluginSource
-// union and `version` kept optional (the backend supplies its default).
-export type SkillRegisterRequest = Omit<components["schemas"]["RegisterPluginRequest"], "source" | "version"> & {
-  source: PluginSource;
-  version?: string;
+export type SkillRegisterRequest = Omit<components["schemas"]["RegisterPluginRequest"], "version"> & {
+  version?: components["schemas"]["RegisterPluginRequest"]["version"];
 };
+
+export type SkillListQuery = NonNullable<operations["list_skills_skill_hub_skills_get"]["parameters"]["query"]>;
+
+export type SkillHubSkill = components["schemas"]["SkillHubSkill"];
+export type SkillMetadata = components["schemas"]["SkillHubMetadata"];
+export type SkillImport = Omit<components["schemas"]["ImportSkillRequest"], "ref"> &
+  Partial<Pick<components["schemas"]["ImportSkillRequest"], "ref">>;
+export type SkillMutationResponse = SkillHubSkill | components["schemas"]["SkillHubPendingSkill"];
+export type SkillSubmission = components["schemas"]["SkillHubSubmission"];
+
+export const isPendingSkill = (
+  response: SkillMutationResponse,
+): response is components["schemas"]["SkillHubPendingSkill"] =>
+  "status" in response && response.status === "pending_review";
 
 // Public marketplace types
 export type MarketplacePluginEntry = Pick<Plugin, "name" | "source"> &

@@ -5,7 +5,7 @@ import json
 import logging
 import threading
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, Mock, patch
@@ -68,6 +68,7 @@ from litellm.responses.streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
     MockResponsesAPIStreamingIterator,
 )
+from litellm.types.integrations.custom_logger import AgenticLoopPlan, AgenticLoopRequestPatch
 from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
@@ -452,6 +453,95 @@ def test_response_api_handler_sends_no_stream_options_when_web_search_forces_a_n
     assert sent.body["stream"] is False
     assert "stream_options" not in sent.body
     assert "stream_options" not in recorder.seen_kwargs
+
+
+class _LookupLoop(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.runs = 0
+
+    async def async_should_run_agentic_loop(
+        self,
+        response: object,
+        model: str,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: dict[str, object],
+    ) -> tuple[bool, dict[str, object]]:
+        return True, {"tool_calls": [{"id": "call_lookup", "name": "lookup"}]}
+
+    async def async_run_agentic_loop(
+        self,
+        tools: dict,
+        model: str,
+        messages: list[dict],
+        response: object,
+        anthropic_messages_provider_config: object,
+        anthropic_messages_optional_request_params: dict,
+        logging_obj: object,
+        stream: bool,
+        kwargs: dict,
+    ) -> object:
+        self.runs += 1
+        return response
+
+
+def _a_lookup_call(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "resp_1",
+            "object": "response",
+            "created_at": 0,
+            "status": "completed",
+            "model": "gpt-4o",
+            "output": [
+                {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_lookup",
+                    "name": "lookup",
+                    "arguments": "{}",
+                    "status": "completed",
+                }
+            ],
+            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        },
+    )
+
+
+@pytest.mark.parametrize("allowed_name,runs", [("get_time", 0), ("lookup", 1)])
+def test_response_api_handler_runs_no_hook_call_the_allowed_tools_choice_excludes(allowed_name: str, runs: int):
+    hook: Final = _LookupLoop()
+
+    response: Final = BaseLLMHTTPHandler().response_api_handler(
+        model="gpt-4o",
+        input="what time is it?",
+        responses_api_provider_config=AzureOpenAIResponsesAPIConfig(),
+        response_api_optional_request_params={
+            "tools": [
+                {"type": "function", "name": "get_time", "parameters": {"type": "object", "properties": {}}},
+                {"type": "function", "name": "lookup", "parameters": {"type": "object", "properties": {}}},
+            ],
+            "tool_choice": {
+                "type": "allowed_tools",
+                "mode": "auto",
+                "tools": [{"type": "function", "name": allowed_name}],
+            },
+        },
+        custom_llm_provider="azure",
+        litellm_params=GenericLiteLLMParams(
+            api_key="sk-test", api_base="https://example.openai.azure.com", api_version="2025-04-01-preview"
+        ),
+        logging_obj=Mock(litellm_call_id="call-1", dynamic_success_callbacks=[hook], model_call_details={}),
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_a_lookup_call))),
+    )
+
+    assert hook.runs == runs
+    assert isinstance(response, ResponsesAPIResponse)
+    assert len(response.output) == runs
 
 
 @pytest.mark.asyncio
@@ -3614,20 +3704,40 @@ class TestServerFulfilledToolsInRequest:
             == frozenset()
         )
 
-    def test_interception_callbacks_declare_their_retrieval_tools(self):
+    @pytest.mark.parametrize("hook", ["compression", "headroom", "compresr"])
+    def test_a_retrieval_hook_holds_back_a_stream_carrying_its_retrieve_tool(self, hook):
         from litellm.integrations.compression_interception.handler import (
             LITELLM_CONTENT_RETRIEVE_TOOL_NAME,
             CompressionInterceptionLogger,
+        )
+        from litellm.proxy.guardrails.guardrail_hooks.compresr.compresr import (
+            COMPRESR_RETRIEVE_TOOL_NAME,
+            CompresrGuardrail,
         )
         from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import (
             HEADROOM_RETRIEVE_TOOL_NAME,
             HeadroomGuardrail,
         )
 
-        assert HeadroomGuardrail.server_fulfilled_tool_names == frozenset({HEADROOM_RETRIEVE_TOOL_NAME})
-        assert CompressionInterceptionLogger.server_fulfilled_tool_names == frozenset(
-            {LITELLM_CONTENT_RETRIEVE_TOOL_NAME}
-        )
+        callback, retrieve_tool_name = {
+            "compression": (CompressionInterceptionLogger(), LITELLM_CONTENT_RETRIEVE_TOOL_NAME),
+            "headroom": (
+                HeadroomGuardrail(api_base="https://headroom.test", api_key="hr-test", guardrail_name="headroom"),
+                HEADROOM_RETRIEVE_TOOL_NAME,
+            ),
+            "compresr": (
+                CompresrGuardrail(api_base="https://compresr.test", api_key="cr-test", guardrail_name="compresr"),
+                COMPRESR_RETRIEVE_TOOL_NAME,
+            ),
+        }[hook]
+        tools = [
+            {"name": "Bash", "input_schema": {"type": "object"}},
+            {"name": retrieve_tool_name, "input_schema": {"type": "object"}},
+        ]
+
+        assert BaseLLMHTTPHandler._server_fulfilled_tools_in_request(
+            logging_obj=self._logging_obj_with([callback]), tools=tools
+        ) == frozenset({retrieve_tool_name})
 
 
 def _make_stub_direct_vector_store_config(response):
@@ -4232,12 +4342,14 @@ def test_video_generation_with_input_reference_keeps_file_multipart():
 AZURE_AI_BASE = "https://myfoundry.services.ai.azure.com"
 AZURE_AI_CHAT_COMPLETIONS_URL = f"{AZURE_AI_BASE}/models/chat/completions"
 
+
 def _a_tool_with_an_unsupported_field() -> dict:
     return {
         "type": "function",
         "function": {"name": "lookup", "parameters": {"type": "object", "properties": {}}},
         "strict": True,
     }
+
 
 A_COMPLETION = {
     "id": "chatcmpl-1",
@@ -4436,6 +4548,45 @@ async def test_create_file_async_awaits_the_provider_credential_hook_instead_of_
     provider_config.avalidate_environment.assert_awaited_once()
     assert client.post.call_args.kwargs["headers"] == {"x-api-key": "federated"}
     assert client.post.call_args.kwargs["url"] == "https://files.example/v1/files"
+
+
+def test_create_file_sync_sends_a_presigned_upload_with_its_own_method_url_headers_and_body():
+    provider_config = Mock(spec=BaseFilesConfig)
+    provider_config.validate_environment.return_value = {"x-api-key": "unused-for-presigned"}
+    provider_config.get_complete_file_url.return_value = "https://files.example/v1/files"
+    provider_config.transform_create_file_request.return_value = {
+        "method": "PUT",
+        "url": "https://bucket.s3.example/batch.jsonl",
+        "headers": {"Authorization": "AWS4-HMAC-SHA256 signed"},
+        "data": b'{"recordId": "req-1"}',
+    }
+    file_object = object()
+    provider_config.transform_create_file_response.return_value = file_object
+    upload_response = Mock(spec=httpx.Response)
+    client = Mock(spec=HTTPHandler)
+    client.put.return_value = upload_response
+
+    result = BaseLLMHTTPHandler().create_file(
+        create_file_data={"file": b"{}", "purpose": "batch"},
+        litellm_params={},
+        provider_config=provider_config,
+        headers={},
+        api_base=None,
+        api_key=None,
+        logging_obj=Mock(),
+        client=client,
+        timeout=30,
+    )
+
+    assert result is file_object
+    client.post.assert_not_called()
+    client.put.assert_called_once_with(
+        url="https://bucket.s3.example/batch.jsonl",
+        headers={"Authorization": "AWS4-HMAC-SHA256 signed"},
+        data=b'{"recordId": "req-1"}',
+        timeout=30,
+    )
+    assert provider_config.transform_create_file_response.call_args.kwargs["raw_response"] is upload_response
 
 
 @pytest.mark.asyncio
@@ -4867,6 +5018,92 @@ async def test_json_mode_stream_reaches_the_iterator_of_a_config_without_a_reque
         {"sync_stream": True, "json_mode": True},
         {"sync_stream": False, "json_mode": False},
     ]
+
+
+class _PlainStreamRouteConfig(_TransformRecordingConfig):
+    def __init__(self):
+        super().__init__(transform_async=False)
+
+    def get_complete_url(self, api_base, api_key, model, optional_params, litellm_params, stream=None):
+        return f"{api_base}/{'stream' if stream else 'answer'}"
+
+
+class _StreamRouteConfig(_PlainStreamRouteConfig):
+    @property
+    def has_custom_stream_wrapper(self) -> bool:
+        return True
+
+
+def _answers_only_the_non_streaming_route(request: httpx.Request) -> httpx.Response:
+    if request.url.path.endswith("/answer"):
+        return httpx.Response(200, json=json.loads(request.content))
+    return httpx.Response(403, json={"message": "not authorized to stream"})
+
+
+def _fake_streamed_completion(
+    acompletion: bool,
+    client: HTTPHandler | AsyncHTTPHandler,
+    fake_stream: object = True,
+    provider_config: BaseConfig | None = None,
+):
+    return BaseLLMHTTPHandler().completion(
+        model="stub-model",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base="https://llm.example/v1/chat",
+        custom_llm_provider="openai",
+        model_response=ModelResponse(),
+        encoding=None,
+        logging_obj=_streaming_logging_obj(),
+        optional_params={"fake_stream": fake_stream},
+        timeout=10.0,
+        litellm_params={},
+        acompletion=acompletion,
+        stream=True,
+        client=client,
+        provider_config=provider_config or _StreamRouteConfig(),
+    )
+
+
+async def test_a_fake_streamed_completion_is_sent_to_the_non_streaming_route():
+    sync_client: Final = HTTPHandler(
+        client=httpx.Client(transport=httpx.MockTransport(_answers_only_the_non_streaming_route))
+    )
+    async_client: Final = AsyncHTTPHandler()
+    async_client.client = httpx.AsyncClient(transport=httpx.MockTransport(_answers_only_the_non_streaming_route))
+
+    sync_chunks: Final = list(_fake_streamed_completion(acompletion=False, client=sync_client))
+    async_chunks: Final = [
+        chunk async for chunk in await _fake_streamed_completion(acompletion=True, client=async_client)
+    ]
+
+    assert (_streamed_text(sync_chunks), _streamed_text(async_chunks)) == ("sync", "sync")
+
+
+def _answers_only_the_streaming_route(request: httpx.Request) -> httpx.Response:
+    if request.url.path.endswith("/stream"):
+        return _sse_echoing_transformed_by(request)
+    return httpx.Response(403, json={"message": "only streaming is allowed"})
+
+
+@pytest.mark.parametrize("fake_stream", ["true", 1], ids=["string", "int"])
+async def test_a_fake_stream_value_other_than_true_still_streams_from_the_streaming_route(fake_stream: object):
+    sync_client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_answers_only_the_streaming_route)))
+    async_client: Final = AsyncHTTPHandler()
+    async_client.client = httpx.AsyncClient(transport=httpx.MockTransport(_answers_only_the_streaming_route))
+
+    sync_chunks: Final = list(
+        _fake_streamed_completion(
+            acompletion=False, client=sync_client, fake_stream=fake_stream, provider_config=_PlainStreamRouteConfig()
+        )
+    )
+    async_chunks: Final = [
+        chunk
+        async for chunk in await _fake_streamed_completion(
+            acompletion=True, client=async_client, fake_stream=fake_stream, provider_config=_PlainStreamRouteConfig()
+        )
+    ]
+
+    assert (_streamed_text(sync_chunks), _streamed_text(async_chunks)) == ("sync", "sync")
 
 
 class _ImageEditRecordingConfig(BaseImageEditConfig):
@@ -5341,6 +5578,165 @@ async def test_responses_agentic_followup_sends_the_plans_request_param_over_a_s
     assert followup_calls[0]["prompt_cache_key"] == "from-plan-params"
 
 
+class _PlannedChatLoop(CustomLogger):
+    def __init__(self, plan: AgenticLoopPlan, claimed_call_name: str = "litellm_web_search") -> None:
+        super().__init__()
+        self._plan = plan
+        self._claimed_call_name = claimed_call_name
+        self.logging_objs: list[object] = []
+
+    async def async_should_run_chat_completion_agentic_loop(
+        self,
+        response: object,
+        model: str,
+        messages: Sequence[Mapping[str, object]],
+        tools: Sequence[Mapping[str, object]] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: Mapping[str, object],
+    ) -> tuple[bool, dict[str, object]]:
+        claimed: Final = [
+            {"id": call.id, "name": call.function.name}
+            for call in _tool_calls_of(response)
+            if call.function.name == self._claimed_call_name
+        ]
+        return True, {"tool_calls": claimed or [{"id": "call_search", "name": self._claimed_call_name}]}
+
+    async def async_build_chat_completion_agentic_loop_plan(
+        self,
+        tools: Mapping[str, object],
+        model: str,
+        messages: Sequence[Mapping[str, object]],
+        response: object,
+        optional_params: Mapping[str, object],
+        logging_obj: object,
+        stream: bool,
+        kwargs: Mapping[str, object],
+    ) -> AgenticLoopPlan:
+        self.logging_objs.append(logging_obj)
+        return self._plan
+
+
+class _RunOnlyChatLoop(CustomLogger):
+    def __init__(self, result: ModelResponse) -> None:
+        super().__init__()
+        self._result = result
+
+    async def async_should_run_chat_completion_agentic_loop(
+        self,
+        response: object,
+        model: str,
+        messages: Sequence[Mapping[str, object]],
+        tools: Sequence[Mapping[str, object]] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: Mapping[str, object],
+    ) -> tuple[bool, dict[str, object]]:
+        return True, {"tool_calls": [{"id": "call_search", "name": "litellm_web_search"}]}
+
+    async def async_run_chat_completion_agentic_loop(
+        self,
+        tools: Mapping[str, object],
+        model: str,
+        messages: Sequence[Mapping[str, object]],
+        response: object,
+        optional_params: Mapping[str, object],
+        logging_obj: object,
+        stream: bool,
+        kwargs: Mapping[str, object],
+    ) -> object:
+        return self._result
+
+
+def _tool_calls_of(response: object) -> list:
+    if not isinstance(response, ModelResponse) or not response.choices:
+        return []
+    return response.choices[0].message.tool_calls or []
+
+
+async def _run_chat_completion_agentic_hooks(
+    response: ModelResponse, *callbacks: CustomLogger, kwargs: Mapping[str, object] = MappingProxyType({})
+) -> object:
+    logging_obj: Final = Mock(litellm_call_id="call-1", dynamic_success_callbacks=list(callbacks), model_call_details={})
+    return await BaseLLMHTTPHandler()._call_agentic_chat_completion_hooks(
+        response=response,
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "what is new in litellm?"}],
+        optional_params={},
+        logging_obj=logging_obj,
+        stream=False,
+        custom_llm_provider="openai",
+        kwargs=dict(kwargs),
+    )
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_agentic_hooks_surface_a_failed_follow_up_instead_of_the_tool_call_turn():
+    rate_limited_follow_up: Final = AgenticLoopPlan(
+        run_agentic_loop=True,
+        request_patch=AgenticLoopRequestPatch(
+            messages=[{"role": "user", "content": "here are the search results"}],
+            kwargs={"mock_response": "litellm.RateLimitError"},
+        ),
+    )
+
+    with pytest.raises(litellm.RateLimitError):
+        await _run_chat_completion_agentic_hooks(ModelResponse(), _PlannedChatLoop(rate_limited_follow_up))
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_agentic_hooks_return_the_tool_call_turn_when_the_plan_terminates():
+    response: Final = ModelResponse()
+
+    assert await _run_chat_completion_agentic_hooks(response, _PlannedChatLoop(AgenticLoopPlan(terminate=True))) is response
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_agentic_hooks_move_past_a_plan_that_declines_the_loop():
+    override: Final = ModelResponse()
+    declined: Final = _PlannedChatLoop(AgenticLoopPlan(run_agentic_loop=False))
+    overriding: Final = _PlannedChatLoop(AgenticLoopPlan(response_override=override))
+
+    assert await _run_chat_completion_agentic_hooks(ModelResponse(), declined, overriding) is override
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_agentic_hooks_return_a_run_only_loops_result():
+    loop_result: Final = ModelResponse()
+
+    assert await _run_chat_completion_agentic_hooks(ModelResponse(), _RunOnlyChatLoop(loop_result)) is loop_result
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_agentic_hooks_at_the_cap_drop_every_hooks_internal_call_and_keep_the_clients():
+    response: Final = ModelResponse(
+        choices=[
+            {
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": f"call_{name}", "type": "function", "function": {"name": name, "arguments": "{}"}}
+                        for name in ("litellm_web_search", "litellm_code_execution", "lookup")
+                    ],
+                },
+            }
+        ]
+    )
+    searching: Final = _PlannedChatLoop(AgenticLoopPlan(run_agentic_loop=True))
+    running_code: Final = _PlannedChatLoop(
+        AgenticLoopPlan(run_agentic_loop=True), claimed_call_name="litellm_code_execution"
+    )
+
+    result: Final = await _run_chat_completion_agentic_hooks(
+        response, searching, running_code, kwargs={"_agentic_loop_depth": 1, "max_agentic_loops": 1}
+    )
+
+    assert [call.id for call in _tool_calls_of(result)] == ["call_lookup"]
+
+
 @pytest.mark.asyncio
 async def test_chat_completion_agentic_followup_does_not_repeat_request_params_from_plan_kwargs(monkeypatch):
     """A plan whose kwargs repeat a request param, or the explicitly passed model, must not crash the chat follow-up with a duplicate keyword"""
@@ -5364,17 +5760,17 @@ async def test_chat_completion_agentic_followup_does_not_repeat_request_params_f
         ),
     )
 
-    response: Final = await BaseLLMHTTPHandler()._execute_chat_completion_agentic_plan(
-        plan=plan,
+    response: Final = await BaseLLMHTTPHandler()._call_agentic_chat_completion_hooks(
+        response=ModelResponse(),
         model="gpt-5",
         messages=[{"role": "user", "content": "x"}],
         optional_params={"temperature": 0.2},
-        kwargs=dict(request_kwargs),
+        logging_obj=Mock(
+            litellm_call_id="call-1", dynamic_success_callbacks=[_PlannedChatLoop(plan)], model_call_details={}
+        ),
+        stream=False,
         custom_llm_provider="openai",
-        depth=0,
-        max_loops=3,
-        fingerprints=[],
-        fingerprint="fp",
+        kwargs=dict(request_kwargs),
     )
 
     assert response == "followup-response"
@@ -5382,6 +5778,138 @@ async def test_chat_completion_agentic_followup_does_not_repeat_request_params_f
     assert followup_calls[0]["temperature"] == 0.2
     assert followup_calls[0]["api_base"] == "https://a"
     assert followup_calls[0]["model"] == "openai/gpt-5"
+
+
+def _a_search_tool_call_turn(call_number: int) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": f"chatcmpl-{call_number}",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "served-model",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": f"call-{call_number}",
+                                "type": "function",
+                                "function": {"name": "litellm_web_search", "arguments": '{"query": "weather"}'},
+                            }
+                        ],
+                    },
+                }
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+        },
+    )
+
+
+class _SearchAgainLoop(CustomLogger):
+    def __init__(self, client: AsyncHTTPHandler) -> None:
+        super().__init__()
+        self._client = client
+
+    async def async_should_run_chat_completion_agentic_loop(
+        self,
+        response: object,
+        model: str,
+        messages: Sequence[Mapping[str, object]],
+        tools: Sequence[Mapping[str, object]] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: Mapping[str, object],
+    ) -> tuple[bool, dict[str, object]]:
+        searches: Final = [
+            {"id": call.id, "name": call.function.name}
+            for call in response.choices[0].message.tool_calls or []
+            if call.function.name == "litellm_web_search"
+        ]
+        return bool(searches), {"tool_calls": searches}
+
+    async def async_build_chat_completion_agentic_loop_plan(
+        self,
+        tools: Mapping[str, object],
+        model: str,
+        messages: Sequence[Mapping[str, object]],
+        response: object,
+        optional_params: Mapping[str, object],
+        logging_obj: object,
+        stream: bool,
+        kwargs: Mapping[str, object],
+    ) -> AgenticLoopPlan:
+        return AgenticLoopPlan(
+            run_agentic_loop=True,
+            request_patch=AgenticLoopRequestPatch(
+                messages=[*messages, {"role": "user", "content": "here are the search results"}],
+                kwargs={"client": self._client},
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_hosted_vllm_bills_the_first_call_on_the_failure_log_when_the_follow_up_fails(monkeypatch):
+    loop: Final = _PlannedChatLoop(
+        AgenticLoopPlan(
+            run_agentic_loop=True,
+            request_patch=AgenticLoopRequestPatch(
+                messages=[{"role": "user", "content": "here are the search results"}],
+                kwargs={"mock_response": "litellm.RateLimitError"},
+            ),
+        )
+    )
+    monkeypatch.setattr(litellm, "callbacks", [loop])
+
+    with pytest.raises(litellm.RateLimitError):
+        await litellm.acompletion(
+            model="hosted_vllm/served-model",
+            api_base="https://fake-vllm.test/v1",
+            api_key="transport-only",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(lambda request: _a_search_tool_call_turn(1))),
+            messages=[{"role": "user", "content": "search the web for the weather"}],
+            input_cost_per_token=0.001,
+            output_cost_per_token=0.002,
+            num_retries=0,
+            max_retries=0,
+        )
+
+    (logging_obj,) = loop.logging_objs
+    assert logging_obj.model_call_details["combined_usage_object"].total_tokens == 8
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(5 * 0.001 + 3 * 0.002)
+
+
+@pytest.mark.asyncio
+async def test_hosted_vllm_ends_the_turn_at_max_agentic_loops_without_the_internal_search_call(monkeypatch):
+    upstream_calls: Final[asyncio.Queue[httpx.Request]] = asyncio.Queue()
+
+    def always_search(request: httpx.Request) -> httpx.Response:
+        upstream_calls.put_nowait(request)
+        return _a_search_tool_call_turn(upstream_calls.qsize())
+
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(always_search))
+    monkeypatch.setattr(litellm, "callbacks", [_SearchAgainLoop(client)])
+
+    response: Final = await asyncio.wait_for(
+        litellm.acompletion(
+            model="hosted_vllm/served-model",
+            api_base="https://fake-vllm.test/v1",
+            api_key="transport-only",
+            client=client,
+            messages=[{"role": "user", "content": "search the web for the weather"}],
+            max_agentic_loops=1,
+            num_retries=0,
+            max_retries=0,
+        ),
+        timeout=10,
+    )
+
+    assert upstream_calls.qsize() == 2
+    assert not response.choices[0].message.tool_calls
 
 
 _UPSTREAM_HEADERS: Final = {"x-request-id": "req_upstream", "x-ratelimit-remaining-requests": "41"}
@@ -6014,63 +6542,6 @@ async def _search_through(transport: httpx.MockTransport, is_async: bool) -> obj
         await client.close()
         client.client = async_client
         return await litellm.vector_stores.asearch(**search_kwargs, client=client)
-
-
-class TestAgenticFollowUpKeepsTheProviderPrefix:
-    @staticmethod
-    async def _run_followup(
-        model: str, custom_llm_provider: str, patched_model: str | None = None
-    ) -> ModelResponse:
-        from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-        from litellm.types.integrations.custom_logger import (
-            AgenticLoopPlan,
-            AgenticLoopRequestPatch,
-        )
-
-        response: Final = await BaseLLMHTTPHandler()._execute_chat_completion_agentic_plan(
-            plan=AgenticLoopPlan(
-                run_agentic_loop=True,
-                request_patch=AgenticLoopRequestPatch(
-                    messages=[{"role": "user", "content": "hi"}], model=patched_model
-                ),
-            ),
-            model=model,
-            messages=[{"role": "user", "content": "hi"}],
-            optional_params={"mock_response": "ok from followup"},
-            kwargs={},
-            custom_llm_provider=custom_llm_provider,
-            depth=0,
-            max_loops=2,
-            fingerprints=[],
-            fingerprint="fp",
-        )
-        assert isinstance(response, ModelResponse)
-        return response
-
-    @pytest.mark.asyncio
-    async def test_a_sub_path_model_still_resolves_a_provider(self) -> None:
-        response: Final = await self._run_followup("mantle/anthropic.claude-sonnet-5", "bedrock")
-
-        assert response.choices[0].message.content == "ok from followup"
-
-    @pytest.mark.asyncio
-    async def test_an_ordinary_model_still_resolves_a_provider(self) -> None:
-        response: Final = await self._run_followup("gpt-4o-mini", "openai")
-
-        assert response.choices[0].message.content == "ok from followup"
-
-    @pytest.mark.asyncio
-    async def test_a_hook_that_patches_another_providers_model_reaches_that_provider(self) -> None:
-        response: Final = await self._run_followup("gpt-4o", "openai", patched_model="anthropic/claude-sonnet-4-5")
-
-        assert response.model == "claude-sonnet-4-5"
-        assert response._hidden_params["custom_llm_provider"] == "anthropic"
-
-    @pytest.mark.asyncio
-    async def test_a_hook_echoing_an_org_style_model_stays_on_the_request_provider(self) -> None:
-        response: Final = await self._run_followup("openai/gpt-4o", "openrouter", patched_model="openai/gpt-4o")
-
-        assert response._hidden_params["custom_llm_provider"] == "openrouter"
 
 
 @pytest.mark.asyncio

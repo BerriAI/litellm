@@ -22,13 +22,13 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 from litellm.proxy.image_endpoints.endpoints import batch_to_bytesio
 from litellm.proxy.video_endpoints.utils import (
     VideoRequestRoute,
+    authorized_video_model,
     encode_character_id_in_response,
     encode_video_id_in_response,
     extract_model_from_target_model_names,
     fallback_requested_model,
     get_custom_provider_from_data,
     routable_model_name,
-    video_model_group,
     video_reference_to_id,
 )
 from litellm.types.videos.utils import (
@@ -283,7 +283,7 @@ async def video_status(
     if custom_llm_provider:
         data["custom_llm_provider"] = custom_llm_provider
 
-    resolved_model: Final = video_model_group(decoded, llm_router)
+    resolved_model: Final = await authorized_video_model(decoded, llm_router, user_api_key_dict)
     if resolved_model:
         data["model"] = resolved_model
 
@@ -384,7 +384,7 @@ async def video_content(
     if custom_llm_provider:
         data["custom_llm_provider"] = custom_llm_provider
 
-    resolved_model: Final = video_model_group(decoded, llm_router)
+    resolved_model: Final = await authorized_video_model(decoded, llm_router, user_api_key_dict)
     if resolved_model:
         data["model"] = resolved_model
     # Process request using ProxyBaseLLMRequestProcessing
@@ -490,7 +490,7 @@ async def video_remix(
     if custom_llm_provider:
         data["custom_llm_provider"] = custom_llm_provider
 
-    resolved_model: Final = video_model_group(decoded, llm_router)
+    resolved_model: Final = await authorized_video_model(decoded, llm_router, user_api_key_dict)
     if resolved_model:
         data["model"] = resolved_model
 
@@ -814,7 +814,7 @@ async def video_edit(
     )
     data["custom_llm_provider"] = custom_llm_provider
 
-    resolved_model: Final = video_model_group(decoded, llm_router)
+    resolved_model: Final = await authorized_video_model(decoded, llm_router, user_api_key_dict)
     if resolved_model:
         data["model"] = resolved_model
 
@@ -917,7 +917,7 @@ async def video_extension(
     )
     data["custom_llm_provider"] = custom_llm_provider
 
-    resolved_model: Final = video_model_group(decoded, llm_router)
+    resolved_model: Final = await authorized_video_model(decoded, llm_router, user_api_key_dict)
     if resolved_model:
         data["model"] = resolved_model
 

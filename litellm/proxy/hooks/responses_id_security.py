@@ -5,16 +5,18 @@ This hook uses the DBSpendUpdateWriter to batch-write response IDs to the databa
 instead of writing immediately on each request.
 """
 
-from collections.abc import AsyncGenerator, Callable, Mapping
+from collections.abc import AsyncGenerator, AsyncIterable, Callable, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, TypeVar
+from typing import TYPE_CHECKING, Final, TypeVar
 
 from fastapi import HTTPException
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.base_llm.managed_resources.isolation import resolve_resource_owner_id
 from litellm.proxy._types import LitellmUserRoles
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
@@ -26,7 +28,13 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.responses.main import DeleteResponseResult
-from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD, CallTypesLiteral, LLMResponseTypes, SpecialEnums
+from litellm.types.utils import (
+    ADDRESSED_COMPARISON_RESPONSE_ID_FIELD,
+    ADDRESSED_RESPONSE_ID_FIELD,
+    CallTypesLiteral,
+    LLMResponseTypes,
+    SpecialEnums,
+)
 
 if TYPE_CHECKING:
     from litellm.caching.caching import DualCache
@@ -70,6 +78,7 @@ def _proxy_signing_key() -> str | None:
 
 
 _RESPONSE_PAYLOAD_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_REQUEST_DATA_ADAPTER: Final = TypeAdapter(dict[str, object])
 _ResponseObjectT = TypeVar("_ResponseObjectT", bound=BaseLiteLLMOpenAIResponseObject)
 _AddressedResultT = TypeVar("_AddressedResultT", bound=ResponsesAPIResponse | DeleteResponseResult)
 
@@ -169,16 +178,64 @@ class ResponsesIDSecurity(CustomLogger):
         addressed_id_field: Final = _ADDRESSED_RESPONSE_ID_FIELD_BY_CALL_TYPE.get(call_type)
         if addressed_id_field is None:
             return None
-        retained_id: Final = data.get(ADDRESSED_RESPONSE_ID_FIELD)
+        request_data: Final = _REQUEST_DATA_ADAPTER.validate_python(data)
+        authorized_data: Final = (
+            {**request_data, **self._authorized_comparison_response_id_fields(request_data, user_api_key_dict)}
+            if call_type == "aresponses"
+            else request_data
+        )
+        retained_id: Final = authorized_data.get(ADDRESSED_RESPONSE_ID_FIELD)
         addressed_id: Final = (
-            retained_id if isinstance(retained_id, str) and retained_id else data.get(addressed_id_field)
+            retained_id if isinstance(retained_id, str) and retained_id else authorized_data.get(addressed_id_field)
         )
         if not isinstance(addressed_id, str) or not addressed_id:
-            return data
-        authorized_id: Final = self.authorize_response_id(addressed_id, user_api_key_dict)
-        data[addressed_id_field] = authorized_id
-        data[ADDRESSED_RESPONSE_ID_FIELD] = addressed_id
-        return data
+            return authorized_data
+        return {
+            **authorized_data,
+            addressed_id_field: self.authorize_response_id(addressed_id, user_api_key_dict),
+            ADDRESSED_RESPONSE_ID_FIELD: addressed_id,
+        }
+
+    def _authorized_comparison_response_id_fields(
+        self,
+        data: Mapping[str, object],
+        user_api_key_dict: "UserAPIKeyAuth",
+    ) -> Mapping[str, object]:
+        extra_body: Final = as_str_mapping(data.get("extra_body"))
+        overriding_extra_body: Final = (
+            extra_body if extra_body is not None and "prompt_cache_options" in extra_body else None
+        )
+        options: Final = as_str_mapping(
+            data.get("prompt_cache_options")
+            if overriding_extra_body is None
+            else overriding_extra_body.get("prompt_cache_options")
+        )
+        requested_id: Final = None if options is None else options.get("comparison_response_id")
+        if options is None or not isinstance(requested_id, str):
+            return {}
+        addressed_id: Final = self._comparison_addressed_id(
+            requested_id, data.get(ADDRESSED_COMPARISON_RESPONSE_ID_FIELD)
+        )
+        authorized_options: Final = {
+            **options,
+            "comparison_response_id": self.authorize_response_id(addressed_id, user_api_key_dict),
+        }
+        authorized_field: Final[Mapping[str, object]] = (
+            {"prompt_cache_options": authorized_options}
+            if overriding_extra_body is None
+            else {"extra_body": {**overriding_extra_body, "prompt_cache_options": authorized_options}}
+        )
+        return {**authorized_field, ADDRESSED_COMPARISON_RESPONSE_ID_FIELD: addressed_id}
+
+    def _comparison_addressed_id(self, requested_id: str, retained_id: object) -> str:
+        if (
+            not isinstance(retained_id, str)
+            or self._is_encrypted_response_id(requested_id)
+            or not self._is_encrypted_response_id(retained_id)
+        ):
+            return requested_id
+        original_response_id, _, _ = self._decrypt_response_id(retained_id)
+        return retained_id if original_response_id == requested_id else requested_id
 
     def authorize_response_id(
         self,
@@ -220,7 +277,12 @@ class ResponsesIDSecurity(CustomLogger):
         ):
             return True
 
-        if response_id_user_id and response_id_user_id != user_api_key_dict.user_id:
+        if not response_id_user_id and not response_id_team_id:
+            if general_settings.get("disable_responses_id_security", False):
+                return True
+            raise HTTPException(status_code=403, detail="Forbidden. This response id has no associated owner")
+
+        if response_id_user_id and response_id_user_id != resolve_resource_owner_id(user_api_key_dict):
             if general_settings.get("disable_responses_id_security", False):
                 verbose_proxy_logger.debug(
                     "Responses ID Security is disabled. User %s is accessing response id %s which is not associated with them.",
@@ -338,7 +400,7 @@ class ResponsesIDSecurity(CustomLogger):
 
             managed_id: Final = SpecialEnums.LITELLM_MANAGED_RESPONSE_API_RESPONSE_ID_COMPLETE_STR.value.format(
                 original_id,
-                user_api_key_dict.user_id or "",
+                resolve_resource_owner_id(user_api_key_dict) or "",
                 user_api_key_dict.team_id or "",
             )
             encrypted_id: Final = f"resp_{encrypt_value_helper(value=managed_id)}"
@@ -404,8 +466,8 @@ class ResponsesIDSecurity(CustomLogger):
         return response
 
     async def async_post_call_streaming_iterator_hook(
-        self, user_api_key_dict: "UserAPIKeyAuth", response: Any, request_data: dict[str, object]
-    ) -> AsyncGenerator[BaseLiteLLMOpenAIResponseObject, None]:
+        self, user_api_key_dict: "UserAPIKeyAuth", response: AsyncIterable[object], request_data: dict[str, object]
+    ) -> AsyncGenerator[object, None]:
         advertise: Final = self._streamed_response_id_advertiser(user_api_key_dict, request_data)
         async for chunk in response:
             yield (

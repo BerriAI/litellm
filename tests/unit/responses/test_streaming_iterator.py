@@ -8,6 +8,7 @@ import functools
 import gc
 import json
 import threading
+import time
 import weakref
 from collections.abc import Callable, Mapping
 from datetime import datetime
@@ -25,6 +26,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import UPSTREAM_USAGE_COST, billed_usage_cost
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.responses.streaming_iterator import (
     CachedResponsesAPIStreamingIterator,
     MockResponsesAPIStreamingIterator,
@@ -367,6 +369,136 @@ def test_sync_transport_read_timeout_raises_litellm_timeout(prefix):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("prefix", _READ_TIMEOUT_PREFIXES)
+@pytest.mark.parametrize("error_class", [httpx.ReadError, httpx.RemoteProtocolError])
+async def test_transport_cut_error_names_the_deployment(prefix, error_class):
+    logging_obj: Final = _logging_obj_stub()
+    logging_obj.model_call_details = {
+        "litellm_params": {
+            "metadata": {
+                "api_base": "https://relay.example/openai/v1",
+                "model_group": "responses-alias",
+                "deployment": "openai/gpt-4o-mini",
+            }
+        }
+    }
+    trailing_error: Final = error_class("peer closed connection without sending complete message body")
+    iterator: Final = _make_iterator(sse_events=prefix, logging_obj=logging_obj, trailing_error=trailing_error)
+
+    with pytest.raises((error_class, MidStreamFallbackError)) as exc_info:
+        async for _ in iterator:
+            pass
+
+    debug_info: Final = exc_info.value.litellm_debug_info
+    assert isinstance(debug_info, str)
+    assert "API Base: `https://relay.example/openai/v1`" in debug_info
+    assert "model_group: `responses-alias`" in debug_info
+    assert "deployment: `openai/gpt-4o-mini`" in debug_info
+
+
+class _FailureDebugInfoRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.debug_info: object = None
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self.debug_info = getattr(kwargs["exception"], "litellm_debug_info", None)
+
+
+@pytest.mark.parametrize("prefix", _READ_TIMEOUT_PREFIXES)
+def test_sync_transport_cut_failure_callbacks_see_the_deployment(prefix):
+    recorder: Final = _FailureDebugInfoRecorder()
+    logging_obj: Final = _real_logging_obj(
+        call_type="responses",
+        litellm_params={
+            "metadata": {
+                "api_base": "https://relay.example/openai/v1",
+                "model_group": "responses-alias",
+                "deployment": "openai/gpt-4o-mini",
+            }
+        },
+        callbacks=(recorder,),
+    )
+    iterator: Final = _make_sync_iterator(
+        sse_events=prefix,
+        logging_obj=logging_obj,
+        trailing_error=httpx.ReadError("peer closed connection without sending complete message body"),
+    )
+
+    with pytest.raises((httpx.ReadError, MidStreamFallbackError)):
+        for _ in iterator:
+            pass
+
+    assert isinstance(recorder.debug_info, str)
+    assert "API Base: `https://relay.example/openai/v1`" in recorder.debug_info
+    assert "model_group: `responses-alias`" in recorder.debug_info
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prefix", _READ_TIMEOUT_PREFIXES)
+async def test_stream_ending_without_terminal_event_names_the_deployment(prefix):
+    logging_obj: Final = _failure_tracking_logging_obj()
+    logging_obj.model_call_details = {
+        "litellm_params": {
+            "metadata": {
+                "api_base": "https://relay.example/openai/v1",
+                "model_group": "responses-alias",
+                "deployment": "openai/gpt-4o-mini",
+            }
+        }
+    }
+    iterator: Final = _make_iterator(sse_events=prefix, logging_obj=logging_obj)
+
+    with pytest.raises((litellm.APIConnectionError, MidStreamFallbackError)) as exc_info:
+        async for _ in iterator:
+            pass
+
+    debug_info: Final = exc_info.value.litellm_debug_info
+    assert isinstance(debug_info, str)
+    assert "API Base: `https://relay.example/openai/v1`" in debug_info
+    assert "deployment: `openai/gpt-4o-mini`" in debug_info
+
+
+_DEPLOYMENT_LITELLM_PARAMS: Final = {
+    "metadata": {
+        "api_base": "https://relay.example/openai/v1",
+        "model_group": "responses-alias",
+        "deployment": "openai/gpt-4o-mini",
+    }
+}
+
+
+async def _drain_async(iterator: ResponsesAPIStreamingIterator) -> None:
+    async for _ in iterator:
+        pass
+
+
+async def _drain_sync(iterator: SyncResponsesAPIStreamingIterator) -> None:
+    for _ in iterator:
+        pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("make_iterator", "drain"), [(_make_iterator, _drain_async), (_make_sync_iterator, _drain_sync)]
+)
+async def test_max_streaming_duration_timeout_names_the_deployment(monkeypatch, make_iterator, drain):
+    monkeypatch.setattr(streaming_module, "LITELLM_MAX_STREAMING_DURATION_SECONDS", 10.0)
+    logging_obj: Final = _failure_tracking_logging_obj()
+    logging_obj.model_call_details = {"litellm_params": _DEPLOYMENT_LITELLM_PARAMS}
+    iterator: Final = make_iterator(sse_events=_PARTIAL_OUTPUT_EVENTS, logging_obj=logging_obj)
+    iterator._stream_created_time = time.time() - 20
+
+    with pytest.raises(litellm.Timeout, match="max streaming duration") as exc_info:
+        await drain(iterator)
+
+    debug_info: Final = exc_info.value.litellm_debug_info
+    assert isinstance(debug_info, str)
+    assert "API Base: `https://relay.example/openai/v1`" in debug_info
+    assert "deployment: `openai/gpt-4o-mini`" in debug_info
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("trailer", [[], [_DONE_MARKER]], ids=["eof", "done-marker"])
 async def test_stream_ending_after_partial_output_without_terminal_event_raises(trailer):
     """A clean EOF or `[DONE]` after output text but with no response.completed /
@@ -413,6 +545,20 @@ async def test_complete_stream_still_ends_normally(trailer):
 
     assert seen[-1] == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
     assert logging_obj.async_failure_handler.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_event_without_a_type_reaches_the_caller_instead_of_ending_the_stream():
+    iterator: Final = _make_iterator(
+        sse_events=[_CREATED_EVENT, _sse_event({"note": "hook output without a type"})],
+        logging_obj=_failure_tracking_logging_obj(),
+        config=OpenAIResponsesAPIConfig(),
+    )
+
+    await iterator.__anext__()
+    untyped: Final = await iterator.__anext__()
+
+    assert untyped.model_extra == {"note": "hook output without a type"}
 
 
 @pytest.mark.parametrize("trailing_error", _TRAILING_ERRORS, ids=type)
@@ -730,8 +876,10 @@ def test_run_post_success_hooks_does_not_report_generation_time_as_overhead():
     """LIT-5466: the provider call is timed to first byte, so at stream completion the total minus
     that duration is token generation, not LiteLLM overhead."""
     logging_obj = _logging_obj_stub()
+    logging_obj.stream = True
     logging_obj.model_call_details = {"litellm_params": {}, "llm_api_duration_ms": 200.0}
     logging_obj.caching_details = None
+    logging_obj.response_timing_metrics = {"_response_ms": 300.0, "litellm_overhead_time_ms": 100.0}
 
     class _CompletedEvent:
         def __init__(self) -> None:
@@ -745,6 +893,9 @@ def test_run_post_success_hooks_does_not_report_generation_time_as_overhead():
 
     assert iterator.completed_response._hidden_params["_response_ms"] == 10000.0
     assert "litellm_overhead_time_ms" not in iterator.completed_response._hidden_params
+    logging_obj.set_response_timing_metrics.assert_called_once_with(
+        {"_response_ms": 10000.0, "litellm_overhead_time_ms": 100.0}
+    )
 
 
 def _mock_config_with_completed_response(response: ResponsesAPIResponse) -> Mock:
@@ -838,6 +989,61 @@ def _responses_api_response_with_usage() -> ResponsesAPIResponse:
         object="response",
         output=[],
         usage=ResponseAPIUsage(input_tokens=20, output_tokens=60, total_tokens=80),
+    )
+
+
+@pytest.mark.parametrize(
+    ("rates", "expected_cost"),
+    [
+        ({"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}, 0.0),
+        ({"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}, 140e-6),
+        ({"input_cost_per_token": 0.0}, None),
+        ({}, None),
+        (
+            {
+                "input_cost_per_token": 0.01,
+                "output_cost_per_token": 0.02,
+                "tiered_pricing": [
+                    {"range": [0, 128000], "input_cost_per_token": 0.0, "output_cost_per_token": 0.0}
+                ],
+            },
+            0.0,
+        ),
+        (
+            {
+                "tiered_pricing": [
+                    {"range": [0, 128000], "input_cost_per_token": 0.0, "output_cost_per_token": 0.0}
+                ]
+            },
+            0.0,
+        ),
+    ],
+)
+def test_responses_stream_usage_distinguishes_free_from_unpriced_calls(
+    monkeypatch: pytest.MonkeyPatch, rates: dict[str, object], expected_cost: float | None
+) -> None:
+    from litellm.responses.streaming_iterator import stamp_responses_usage_cost
+
+    model: Final = "responses-zero-cost-regression"
+    monkeypatch.setitem(litellm.model_cost, model, {"litellm_provider": "openai", "mode": "chat", **rates})
+    response: Final = _responses_api_response_with_usage().model_copy(update={"model": model})
+    logging_obj: Final = LiteLLMLoggingObj(
+        model=model,
+        messages=[],
+        stream=True,
+        call_type="responses",
+        start_time=1.0,
+        litellm_call_id="free-response",
+        function_id="test",
+    )
+    logging_obj.optional_params = {}
+    logging_obj.litellm_params = {}
+    logging_obj.model_call_details["custom_llm_provider"] = "openai"
+
+    stamp_responses_usage_cost(response, logging_obj)
+
+    assert getattr(response.usage, "cost", None) == (
+        pytest.approx(expected_cost) if expected_cost is not None else None
     )
 
 
@@ -2723,14 +2929,17 @@ async def test_shutdown_drain_waits_for_a_pending_logging_task():
 
 @pytest.mark.asyncio
 async def test_shutdown_drain_gives_up_on_a_stuck_logging_task_at_its_timeout():
-    stuck: Final = streaming_module.spawn_logging_task(
-        asyncio.get_running_loop(), asyncio.Event().wait(), task_name="stuck"
-    )
+    loop: Final = asyncio.get_running_loop()
+    with patch.object(loop, "time", return_value=0.0):
+        stuck: Final = streaming_module.spawn_logging_task(loop, asyncio.Event().wait(), task_name="stuck")
 
-    await asyncio.wait_for(streaming_module.drain_logging_tasks(timeout=0.05), timeout=1)
-
-    assert not stuck.done()
-    stuck.cancel()
+        try:
+            await streaming_module.drain_logging_tasks(timeout=0)
+            assert not stuck.done()
+        finally:
+            stuck.cancel()
+            with suppress(asyncio.CancelledError):
+                await stuck
 
 
 async def _drain_held_until_released(release: asyncio.Event) -> bool:
