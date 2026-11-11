@@ -6,16 +6,25 @@ Those allowlists store public model names, not ids, so a deployment rename that 
 alone denies the new name while the old entry grants a name nothing serves any more.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
 
+from pydantic import ConfigDict
+
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from litellm.proxy.management_helpers.access_group_model_sync import raw_executor, still_backed
+from litellm.proxy.management_helpers.access_group_model_sync import raw_executor, raw_transactions, still_backed
+from litellm.proxy.management_helpers.access_group_team_sync import TEAM_ADVISORY_LOCK_SQL
 from litellm.router import Router
 from litellm.types.llms.base import LiteLLMBaseModel
+
+
+class _ListingTeam(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    team_id: str
 
 
 class _TouchedRow(LiteLLMBaseModel):
@@ -80,9 +89,54 @@ def _rewrite_sql(set_clause: str, where_clause: str) -> str:
     return f"WITH {ctes} {rows}"
 
 
+_TEAMS_LISTING_SQL: Final = (
+    'SELECT team_id FROM "LiteLLM_TeamTable" WHERE $1 = ANY("models") ORDER BY team_id COLLATE "C"'
+)
+
+_LOCK_ORGS_LISTING_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_OrganizationTable" WHERE $1 = ANY("models") '
+    'ORDER BY organization_id COLLATE "C" FOR UPDATE'
+)
+_LOCK_TEAMS_LISTING_SQL: Final = (
+    'SELECT team_id FROM "LiteLLM_TeamTable" WHERE $1 = ANY("models") ORDER BY team_id COLLATE "C" FOR UPDATE'
+)
+_LOCK_USERS_LISTING_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_UserTable" WHERE $1 = ANY("models") ORDER BY user_id COLLATE "C" FOR UPDATE'
+)
+_LOCK_KEYS_LISTING_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_VerificationToken" WHERE $1 = ANY("models") ORDER BY token COLLATE "C" FOR UPDATE'
+)
+_LOCK_PROJECTS_LISTING_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_ProjectTable" WHERE $1 = ANY("models") ORDER BY project_id COLLATE "C" FOR UPDATE'
+)
+
 _REPLACE_SQL: Final = _rewrite_sql('array_replace(array_remove("models", $2), $1, $2)', '$1 = ANY("models")')
 
 _APPEND_SQL: Final = _rewrite_sql('array_append("models", $2)', '$1 = ANY("models") AND NOT ($2 = ANY("models"))')
+
+
+def _team_ids(rows: Sequence[object]) -> frozenset[str]:
+    return frozenset(_ListingTeam.model_validate(row).team_id for row in rows)
+
+
+async def _rewrite_allowlists(
+    prisma_client: object, old_name: str, new_name: str, *, append: bool, attempts: int
+) -> Sequence[object]:
+    """Team advisory locks come from a snapshot, so a team that starts listing the name before its row lock would
+    be locked without one. That attempt commits having written nothing, and the next one locks the fresh set."""
+    async with raw_transactions(prisma_client).tx() as transaction:
+        listed: Final = _team_ids(await transaction.query_raw(_TEAMS_LISTING_SQL, old_name))
+        for team_id in sorted(listed):
+            _ = await transaction.query_raw(TEAM_ADVISORY_LOCK_SQL, team_id)
+        _ = await transaction.query_raw(_LOCK_ORGS_LISTING_SQL, old_name)
+        locked: Final = _team_ids(await transaction.query_raw(_LOCK_TEAMS_LISTING_SQL, old_name))
+        retry: Final = attempts > 1 and not locked <= listed
+        if not retry:
+            _ = await transaction.query_raw(_LOCK_USERS_LISTING_SQL, old_name)
+            _ = await transaction.query_raw(_LOCK_KEYS_LISTING_SQL, old_name)
+            _ = await transaction.query_raw(_LOCK_PROJECTS_LISTING_SQL, old_name)
+            return await transaction.query_raw(_APPEND_SQL if append else _REPLACE_SQL, old_name, new_name)
+    return await _rewrite_allowlists(prisma_client, old_name, new_name, append=append, attempts=attempts - 1)
 
 
 async def sync_model_allowlists_for_renamed_model(
@@ -98,8 +152,8 @@ async def sync_model_allowlists_for_renamed_model(
         return
     executor: Final = raw_executor(prisma_client)
     old_name_still_backed: Final = await still_backed(executor, llm_router, old_name, model_id)
-    touched_rows: Final = await executor.query_raw(
-        _APPEND_SQL if old_name_still_backed else _REPLACE_SQL, old_name, new_name
+    touched_rows: Final = await _rewrite_allowlists(
+        prisma_client, old_name, new_name, append=old_name_still_backed, attempts=3
     )
     touched: Final = tuple(_TouchedRow.model_validate(row) for row in touched_rows)
     await evict_and_broadcast(

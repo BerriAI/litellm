@@ -1,5 +1,8 @@
 import asyncio
+import base64
+import functools
 import json
+import time
 import traceback
 from collections.abc import Callable, Coroutine, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
@@ -7,7 +10,7 @@ from enum import Enum, auto
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypeAlias, TypedDict, cast, runtime_checkable
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly
 
 import litellm
@@ -15,25 +18,53 @@ from litellm._logging import redact_internal_details_from_client_message, verbos
 from litellm._uuid import uuid
 from litellm.constants import (
     BEDROCK_REALTIME_PENDING_OPENING_MESSAGE_SCOPE_KEY,
+    REALTIME_LAZY_SETUP_CONTENT_GRACE_SECONDS,
+    REALTIME_LAZY_SETUP_DEADLINE_SECONDS,
     REALTIME_METERED_USAGE_KEY,
+    REALTIME_SESSION_ENDED_ABNORMALLY_KEY,
     REALTIME_SESSION_FAILURE_LOGGED_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
 )
+from litellm.litellm_core_utils.audio_utils.utils import normalized_audio_duration_seconds
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeBackend
+from litellm.llms.base_llm.realtime.transcription_protocol import RealtimeTranscriptionProtocolError
+from litellm.llms.base_llm.realtime.transformation import (
+    BaseRealtimeConfig,
+    RealtimeBackend,
+    RealtimeSessionUpdateRejection,
+)
 from litellm.types.llms.openai import (
     OpenAIRealtimeEvents,
     OpenAIRealtimeOutputItemDone,
     OpenAIRealtimeResponseDelta,
     OpenAIRealtimeStreamResponseBaseObject,
     OpenAIRealtimeStreamSessionEvents,
+    OpenAIRealtimeTranslationClosedEvent,
+    OpenAIRealtimeTranslationDurationUsage,
 )
 from litellm.types.realtime import ALL_DELTA_TYPES
 
 from .litellm_logging import Logging as LiteLLMLogging
 from .realtime_errors import client_close_code, realtime_error_event, websocket_close_reason
+from .realtime_guardrails import (
+    RealtimeGuardedItem,
+    RealtimeGuardrailBlock,
+    RealtimeGuardrailRewrite,
+    RealtimeGuardrailVerdict,
+    RealtimeMessageText,
+    RealtimeToolOutput,
+    guardrail_violation_error_event,
+    guardrail_voice_prompt_events,
+    realtime_guarded_item,
+    realtime_guardrail_verdict,
+    realtime_runner_guardrail,
+    realtime_screening_guardrails,
+    rewritten_item,
+)
 
 if TYPE_CHECKING:
+    from openai.types.realtime.realtime_audio_formats import RealtimeAudioFormats
     from websockets.asyncio.client import ClientConnection
     from websockets.exceptions import ConnectionClosed
 
@@ -50,6 +81,10 @@ class BackendClose:
     reason: str
 
     @property
+    def ended_cleanly(self) -> bool:
+        return self.code == 1000
+
+    @property
     def message(self) -> str:
         if not self.reason:
             return f"upstream websocket closed with code {self.code}"
@@ -59,6 +94,7 @@ class BackendClose:
 class ClientLoopExit(Enum):
     CLIENT_DISCONNECTED = auto()
     BACKEND_CLOSED = auto()
+    RELAY_FAILED = auto()
 
 
 def backend_close_from(error: "ConnectionClosed") -> BackendClose:
@@ -88,6 +124,7 @@ class _ClientEventFrame(TypedDict, total=False):
     type: ReadOnly[str]
     item: ReadOnly[_ClientEventItem]
     session: ReadOnly[Mapping[str, object]]
+    response: ReadOnly[Mapping[str, object]]
 
 
 class _ResponseDoneBody(TypedDict, total=False):
@@ -124,6 +161,65 @@ class _LoggingWorker(Protocol):
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
+_SESSION_FIELDS: Final = TypeAdapter(dict[str, object])
+_NO_SESSION_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
+_SESSION_MERGE_MAX_DEPTH: Final = 8
+
+
+class _SessionUpdateFrame(TypedDict):
+    type: ReadOnly[str]
+    session: ReadOnly[Mapping[str, object]]
+
+
+def _merge_session_fields(
+    base: Mapping[str, object], update: Mapping[str, object], depth: int = 0
+) -> Mapping[str, object]:
+    def merged_value(key: str) -> object:
+        if key not in update:
+            return base[key]
+        value: Final = update[key]
+        base_value: Final = base.get(key)
+        if depth < _SESSION_MERGE_MAX_DEPTH and isinstance(value, Mapping) and isinstance(base_value, Mapping):
+            return _merge_session_fields(
+                _SESSION_FIELDS.validate_python(base_value), _SESSION_FIELDS.validate_python(value), depth + 1
+            )
+        return update[key]
+
+    return MappingProxyType({key: merged_value(key) for key in dict.fromkeys((*base, *update))})
+
+
+def _session_update_frame(session: Mapping[str, object]) -> str:
+    frame: Final[_SessionUpdateFrame] = {"type": "session.update", "session": session}
+    return json.dumps(frame, default=_SESSION_FIELDS.validate_python)
+
+
+_HELD_SESSION_UPDATE_TOO_LARGE: Final = RealtimeSessionUpdateRejection(
+    code="session_update_too_large",
+    message=(
+        "The session.update frames sent before the first conversation content add up to more than 10 MB, "
+        "so this session.update was not applied"
+    ),
+    param="session",
+)
+
+
+def _unscreened_audio_error_event(client_event_id: object) -> Mapping[str, object]:
+    return {
+        "type": "error",
+        "event_id": f"event_{uuid.uuid4()}",
+        "error": {
+            "type": "invalid_request_error",
+            "code": "audio_input_not_screenable",
+            "message": (
+                "A realtime_input_transcription guardrail is on, and Gemini Live only transcribes a turn after it "
+                "starts answering it, so audio input was not sent. Send text with conversation.item.create instead"
+            ),
+            "param": None,
+            "event_id": client_event_id if isinstance(client_event_id, str) else None,
+        },
+    }
+
+
 def _decode_json_object(payload: str) -> Mapping[str, object]:
     """Decode a realtime frame into its top-level field mapping."""
     return json.loads(payload)
@@ -143,6 +239,87 @@ def _json_object(value: object) -> Mapping[str, object] | None:
 
 def _mapping_field(container: Mapping[str, object], key: str) -> Mapping[str, object] | None:
     return _json_object(container.get(key))
+
+
+_BETA_AUDIO_FORMAT_BY_GA_TYPE: Final[Mapping[str, str]] = MappingProxyType(
+    {"audio/pcm": "pcm16", "audio/pcmu": "g711_ulaw", "audio/pcma": "g711_alaw"}
+)
+_GA_TO_BETA_TOP_LEVEL_SESSION_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
+    {"output_modalities": "modalities", "max_output_tokens": "max_response_output_tokens"}
+)
+_GA_TO_BETA_AUDIO_INPUT_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "format": "input_audio_format",
+        "transcription": "input_audio_transcription",
+        "noise_reduction": "input_audio_noise_reduction",
+        "turn_detection": "turn_detection",
+    }
+)
+_GA_TO_BETA_AUDIO_OUTPUT_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
+    {"format": "output_audio_format", "voice": "voice", "speed": "speed"}
+)
+_GA_ONLY_SESSION_FIELDS: Final = frozenset(("type", "audio", *_GA_TO_BETA_TOP_LEVEL_SESSION_FIELDS))
+
+
+def _beta_session_value(ga_field: str, value: object) -> object:
+    if ga_field == "output_modalities":
+        return ["audio", "text"] if value == ["audio"] else value
+    if ga_field != "format":
+        return value
+    ga_format: Final = _json_object(value)
+    format_type: Final = None if ga_format is None else ga_format.get("type")
+    return _BETA_AUDIO_FORMAT_BY_GA_TYPE.get(format_type, value) if isinstance(format_type, str) else value
+
+
+def _beta_session_fields(ga_fields: Mapping[str, object], beta_names: Mapping[str, str]) -> Mapping[str, object]:
+    return {
+        beta_names[name]: _beta_session_value(name, value) for name, value in ga_fields.items() if name in beta_names
+    }
+
+
+def ga_session_to_beta(session: Mapping[str, object]) -> Mapping[str, object]:
+    audio: Final = _mapping_field(session, "audio") or _EMPTY_SESSION
+    return {
+        **{key: value for key, value in session.items() if key not in _GA_ONLY_SESSION_FIELDS},
+        **_beta_session_fields(session, _GA_TO_BETA_TOP_LEVEL_SESSION_FIELDS),
+        **_beta_session_fields(_mapping_field(audio, "input") or _EMPTY_SESSION, _GA_TO_BETA_AUDIO_INPUT_FIELDS),
+        **_beta_session_fields(_mapping_field(audio, "output") or _EMPTY_SESSION, _GA_TO_BETA_AUDIO_OUTPUT_FIELDS),
+    }
+
+
+_GA_ONLY_RESPONSE_FIELDS: Final = frozenset(("audio", "output_modalities"))
+_GA_TO_BETA_RESPONSE_FIELDS: Final[Mapping[str, str]] = MappingProxyType({"output_modalities": "modalities"})
+
+
+def ga_response_to_beta(response: Mapping[str, object]) -> Mapping[str, object]:
+    audio: Final = _mapping_field(response, "audio") or _EMPTY_SESSION
+    return {
+        **{key: value for key, value in response.items() if key not in _GA_ONLY_RESPONSE_FIELDS},
+        **_beta_session_fields(response, _GA_TO_BETA_RESPONSE_FIELDS),
+        **_beta_session_fields(_mapping_field(audio, "output") or _EMPTY_SESSION, _GA_TO_BETA_AUDIO_OUTPUT_FIELDS),
+    }
+
+
+_JSON_ARRAY: Final = TypeAdapter(tuple[object, ...])
+_GA_ASSISTANT_CONTENT_TYPE_BY_BETA_TYPE: Final[Mapping[str, str]] = MappingProxyType(
+    {"text": "output_text", "audio": "output_audio"}
+)
+
+
+def _ga_assistant_content_block(block: object) -> object:
+    content_block: Final = _json_object(block)
+    block_type: Final = None if content_block is None else content_block.get("type")
+    if content_block is None or not isinstance(block_type, str):
+        return block
+    ga_type: Final = _GA_ASSISTANT_CONTENT_TYPE_BY_BETA_TYPE.get(block_type)
+    return block if ga_type is None else {**content_block, "type": ga_type}
+
+
+def beta_item_to_ga(item: Mapping[str, object]) -> Mapping[str, object]:
+    content: Final = item.get("content")
+    if item.get("role") != "assistant" or not isinstance(content, list):
+        return item
+    return {**item, "content": [_ga_assistant_content_block(block) for block in _JSON_ARRAY.validate_python(content)]}
 
 
 def _guardrail_event_id() -> str:
@@ -203,6 +380,26 @@ def _gate_session_update(
     return {**client_session, "turn_detection": gate(None)}
 
 
+@functools.cache
+def _translation_audio_format_adapter() -> "TypeAdapter[str | RealtimeAudioFormats | None]":
+    from openai.types.realtime.realtime_audio_formats import RealtimeAudioFormats
+
+    return TypeAdapter(str | RealtimeAudioFormats | None)
+
+
+def _translation_audio_bytes_per_second(audio_format: "str | RealtimeAudioFormats | None") -> float | None:
+    from openai.types.realtime.realtime_audio_formats import AudioPCM, AudioPCMA, AudioPCMU
+
+    match audio_format:
+        case "pcm16" | AudioPCM():
+            return 48000.0
+        case "g711_ulaw" | "g711_alaw" | AudioPCMU() | AudioPCMA():
+            return 8000.0
+        case _:
+            pass
+    return None
+
+
 class RealtimeEventNormalizer(Protocol):
     def should_drop(self, event: object) -> bool: ...
     def normalize(self, event: dict) -> dict: ...
@@ -227,6 +424,64 @@ DefaultLoggedRealTimeEventTypes: Final = [
 ]
 
 
+TRANSLATION_GUARDRAILS_UNSUPPORTED_MESSAGE: Final = "Translation sessions cannot enforce configured realtime guardrails"
+
+
+def _guardrails_run_for_event_hooks(
+    request_data: Mapping[str, object],
+    event_hooks: Sequence["GuardrailEventHooks"],
+    callbacks: Sequence[object],
+) -> bool:
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+
+    return any(
+        isinstance(cb, CustomGuardrail)
+        and any(cb.should_run_guardrail(data={**request_data, "stream": True}, event_type=et) for et in event_hooks)
+        for cb in callbacks
+    )
+
+
+def _opted_out_of_always_on_guardrail(callback: object, request_data: Mapping[str, object]) -> bool:
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+
+    return (
+        isinstance(callback, CustomGuardrail)
+        and callback.event_hook is None
+        and callback.get_disable_global_guardrail(dict(request_data)) is True
+    )
+
+
+def translation_guardrails_apply(request_data: Mapping[str, object]) -> bool:
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    callbacks: Final = tuple(
+        callback for callback in litellm.callbacks if not _opted_out_of_always_on_guardrail(callback, request_data)
+    )
+    if _guardrails_run_for_event_hooks(request_data, (GuardrailEventHooks.post_call,), callbacks):
+        return True
+    if any(
+        isinstance(bucket, Mapping) and "_guardrail_pipelines" in bucket
+        for bucket in (request_data.get("metadata"), request_data.get("litellm_metadata"))
+    ):
+        from litellm.proxy.utils import pipeline_managed_guardrail_names
+
+        if pipeline_managed_guardrail_names(request_data, "pre_call") or pipeline_managed_guardrail_names(
+            request_data, "post_call"
+        ):
+            return True
+    return realtime_guardrails_apply(request_data, callbacks)
+
+
+def realtime_guardrails_apply(request_data: Mapping[str, object], callbacks: Sequence[object]) -> bool:
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    check_data: Final = {**request_data, "stream": True}
+    runner_event_hooks: Final = (GuardrailEventHooks.realtime_input_transcription, GuardrailEventHooks.pre_call)
+    return any(
+        realtime_runner_guardrail(callback, check_data, runner_event_hooks) is not None for callback in callbacks
+    )
+
+
 class RealTimeStreaming:
     def __init__(
         self,
@@ -236,28 +491,50 @@ class RealTimeStreaming:
         provider_config: BaseRealtimeConfig | None = None,
         model: str = "",
         user_api_key_dict: object | None = None,
-        request_data: dict | None = None,
+        request_data: Mapping[str, object] | None = None,
         backend_uses_beta_protocol: bool | None = None,
         force_transcription_model: str | None = None,
         event_normalizer: RealtimeEventNormalizer | None = None,
         usage_meter: RealtimeUsageMeter | None = None,
         logging_worker: _LoggingWorker = GLOBAL_LOGGING_WORKER,
+        translation_session: bool = False,
+        bridges_beta_client_to_ga: bool = False,
+        drop_params: bool = False,
+        lazy_setup_deadline_seconds: float = REALTIME_LAZY_SETUP_DEADLINE_SECONDS,
+        lazy_setup_content_grace_seconds: float = REALTIME_LAZY_SETUP_CONTENT_GRACE_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
     ):
         self.websocket: _ClientWebSocket = websocket
+        self._clock: Final = clock
+        self._lazy_setup_deadline: Final = clock() + lazy_setup_deadline_seconds
+        self._lazy_setup_content_grace_seconds: Final = lazy_setup_content_grace_seconds
+        self._held_client_content: tuple[str, ...] = ()
+        self._held_client_content_bytes: int = 0
+        self._held_client_content_deadline: float | None = None
         self._replay_scope: Final = client_websocket_scope(websocket)
         self.backend_ws = backend_ws
         self.logging_obj = logging_obj
         self._logging_worker = logging_worker
         self.messages: list[OpenAIRealtimeEvents] = []
         self._backend_sent_frames: bool = False
+        self._backend_sent_non_error_frames: bool = False
         self.input_message: dict = {}
         self.input_messages: list[dict[str, str]] = []
         self.session_tools: list[dict] = []
         self.tool_calls: list[dict] = []
+        self._is_translation_session = translation_session
+        self._bridges_beta_client_to_ga: Final = bridges_beta_client_to_ga
+        self._remaps_all_beta_fields_to_ga: Final = bridges_beta_client_to_ga or translation_session
+        self._drop_params: Final = drop_params
+        self._translation_input_seconds = 0.0
+        self._translation_input_bytes_per_second = 48000.0
+        self._translation_output_seconds = 0.0
+        self._translation_output_bytes_per_second = 48000.0
+        self._translation_usage_finalized = False
 
         # Detect whether the client is explicitly opting into the beta protocol.
         self._client_wants_beta = self.detect_beta_header(websocket)
-        self._backend_uses_beta_protocol = (
+        self._backend_uses_beta_protocol = not translation_session and (
             self._client_wants_beta if backend_uses_beta_protocol is None else backend_uses_beta_protocol
         )
 
@@ -276,7 +553,7 @@ class RealTimeStreaming:
         self.current_delta_type: ALL_DELTA_TYPES | None = None
         self.session_configuration_request: str | None = None
         self.user_api_key_dict = user_api_key_dict
-        self.request_data: dict = request_data or {}
+        self.request_data: Mapping[str, object] = request_data or {}
         # Violation counter for end_session_after_n_fails support
         self._violation_count: int = 0
         # When a text message is blocked, hold the guardrail reason so the next
@@ -299,11 +576,16 @@ class RealTimeStreaming:
         # Gemini Live rejects a follow-up BidiGenerateContentSetup once any
         # content (realtimeInput / clientContent / toolResponse) has been sent.
         self._content_sent_after_setup: bool = False
+        self._held_session_update: Mapping[str, object] | None = None
+        self._applied_session_fields: Mapping[str, object] | None = None
+        self._held_session_update_bytes: int = 0
+        self._unscreened_audio_refused: bool = False
         # Whether this is a transcription-only session (session.type == "transcription",
         # e.g. gpt-realtime-whisper). Such sessions must not be sent response.create and
         # their input_audio_transcription.completed usage drives duration-based cost.
         self._force_transcription_model = force_transcription_model
         self._is_transcription_session: bool = force_transcription_model is not None
+        self._bound_nested_transcription_model: str | None = None
         # Optional per-provider GA event normalizer (e.g. XAIRealtimeNormalizer).
         self._event_normalizer = event_normalizer
         self._gate_turn_detection: Final[_TurnDetectionGate] = (
@@ -327,6 +609,7 @@ class RealTimeStreaming:
     _MAX_BUFFERED_BYTES: int = 10 * 1024 * 1024  # 10 MB
 
     _SESSION_EVENT_TYPES = frozenset(["session.created", "session.updated"])
+    _RESPONSE_EVENT_TYPES: Final = frozenset(("response.created", "response.done"))
     _CLIENT_AUDIO_BUFFER_TYPES = frozenset(
         [
             "input_audio_buffer.append",
@@ -336,10 +619,21 @@ class RealTimeStreaming:
         ]
     )
     _CLIENT_AUDIO_BUFFER_COMMIT_TYPES = frozenset(["input_audio_buffer.commit", "input_audio_buffer.end"])
+    _CLIENT_CONTENT_TYPES = frozenset(
+        [
+            "conversation.item.create",
+            "response.create",
+            "input_audio_buffer.append",
+            "input_audio_buffer.commit",
+            "input_audio_buffer.end",
+        ]
+    )
+    _HELD_CONTENT_TYPES: Final = frozenset(["conversation.item.create", "input_audio_buffer.append"])
+    _DEFERRED_SETUP_HELD_CONTENT_TYPES: Final = frozenset(["conversation.item.create"])
     _AUDIO_FORMAT_MAP: dict[str, dict[str, str | int]] = {
         "pcm16": {"type": "audio/pcm", "rate": 24000},
-        "g711_ulaw": {"type": "audio/G711-ulaw", "rate": 8000},
-        "g711_alaw": {"type": "audio/G711-alaw", "rate": 8000},
+        "g711_ulaw": {"type": "audio/pcmu"},
+        "g711_alaw": {"type": "audio/pcma"},
     }
     # GA name → beta name (when client WebSocket includes OpenAI-Beta: realtime=v1)
     _GA_TO_BETA_EVENT_TYPES: dict[str, str] = {
@@ -358,12 +652,12 @@ class RealTimeStreaming:
 
     def _should_store_message(
         self,
-        message_obj: dict | OpenAIRealtimeEvents,
+        message_obj: Mapping[str, object],
     ) -> bool:
         _msg_type: Final = message_obj["type"] if "type" in message_obj else None
         if self.logged_real_time_event_types == "*":
             return True
-        if _msg_type and _msg_type in self.logged_real_time_event_types:
+        if isinstance(_msg_type, str) and _msg_type in self.logged_real_time_event_types:
             return True
         return False
 
@@ -376,7 +670,7 @@ class RealTimeStreaming:
             message_obj: dict[str, Any] = cast(dict[str, Any], message)
         else:
             message_obj = cast(dict[str, Any], json.loads(message))
-        self._collect_tool_calls_from_response_done(cast(dict, message_obj))
+        self._collect_tool_calls_from_response_done(message_obj)
         if not self._should_store_message(message_obj):
             return
         try:
@@ -464,7 +758,7 @@ class RealTimeStreaming:
         input_messages, so it is not duplicated into the response log here.
         """
         try:
-            usage: Final = event_obj.get("usage")
+            usage: Final = as_str_mapping(event_obj.get("usage"))
             if usage is None:
                 return
             # If this event type is already captured by store_message (e.g. the user
@@ -501,7 +795,7 @@ class RealTimeStreaming:
         self.store_message(flush_event)
         self._capture_transcription_usage(flush_event)
 
-    def _collect_tool_calls_from_response_done(self, event_obj: dict | OpenAIRealtimeEvents) -> None:
+    def _collect_tool_calls_from_response_done(self, event_obj: Mapping[str, object] | OpenAIRealtimeEvents) -> None:
         """Extract function_call items from response.done events for spend logging."""
         try:
             if event_obj.get("type") != "response.done":
@@ -532,6 +826,7 @@ class RealTimeStreaming:
 
     async def log_messages(self):
         """Log messages in list"""
+        self._finalize_translation_usage()
         if self.logging_obj:
             if self._usage_meter is not None:
                 self.logging_obj.model_call_details[REALTIME_METERED_USAGE_KEY] = self._usage_meter.snapshot()
@@ -548,6 +843,142 @@ class RealTimeStreaming:
             )
             self.logging_obj.model_call_details[REALTIME_SESSION_SUCCESS_LOGGED_KEY] = True
 
+    def _capture_translation_output_audio(self, event_obj: Mapping[str, object]) -> None:
+        if not self._is_translation_session:
+            return
+        if event_obj.get("type") == "session.closed":
+            usage: Final = as_str_mapping(event_obj.get("usage"))
+            output_seconds: Final = (
+                normalized_audio_duration_seconds(usage.get("output_seconds")) if usage is not None else None
+            )
+            reported_input_seconds: Final = (
+                normalized_audio_duration_seconds(usage.get("input_seconds")) if usage is not None else None
+            )
+            input_seconds: Final = (
+                reported_input_seconds
+                if reported_input_seconds is not None
+                else self._translation_input_seconds or None
+            )
+            synthetic_output_seconds: Final = self._translation_output_seconds or None
+            resolved_output_seconds: Final = output_seconds if output_seconds is not None else synthetic_output_seconds
+            if input_seconds is not None or resolved_output_seconds is not None:
+                if self._should_store_message(event_obj):
+                    supplemental_usage: Final = OpenAIRealtimeTranslationDurationUsage(
+                        type="duration",
+                        input_seconds=float(input_seconds or 0.0) if reported_input_seconds is None else 0.0,
+                        output_seconds=float(synthetic_output_seconds or 0.0) if output_seconds is None else 0.0,
+                    )
+                    if (
+                        supplemental_usage.get("input_seconds", 0.0) > 0
+                        or supplemental_usage.get("output_seconds", 0.0) > 0
+                    ):
+                        self.messages.append(
+                            OpenAIRealtimeTranslationClosedEvent(
+                                type="session.closed",
+                                usage=supplemental_usage,
+                            )
+                        )
+                else:
+                    normalized_usage: Final = (
+                        OpenAIRealtimeTranslationDurationUsage(
+                            type="duration",
+                            input_seconds=input_seconds,
+                            output_seconds=float(resolved_output_seconds or 0.0),
+                        )
+                        if input_seconds is not None
+                        else OpenAIRealtimeTranslationDurationUsage(
+                            type="duration", output_seconds=float(resolved_output_seconds or 0.0)
+                        )
+                    )
+                    self.messages.append(
+                        OpenAIRealtimeTranslationClosedEvent(type="session.closed", usage=normalized_usage)
+                    )
+                self._translation_usage_finalized = True
+            return
+        self._capture_translation_audio_formats(event_obj)
+        if event_obj.get("type") not in (
+            "session.output_audio.delta",
+            "response.output_audio.delta",
+            "response.audio.delta",
+        ):
+            return
+        delta: Final = event_obj.get("delta")
+        if not isinstance(delta, str):
+            return
+        try:
+            decoded: Final = base64.b64decode(delta, validate=True)
+        except (ValueError, TypeError):
+            return
+        self._translation_output_seconds += len(decoded) / self._translation_output_bytes_per_second
+
+    def _capture_translation_input_audio(self, message: str) -> None:
+        if not self._is_translation_session:
+            return
+        try:
+            event: Final = _decode_json_object(message)
+        except (json.JSONDecodeError, TypeError):
+            return
+        if event.get("type") != "session.input_audio_buffer.append" or not isinstance(audio := event.get("audio"), str):
+            return
+        try:
+            decoded: Final = base64.b64decode(audio, validate=True)
+        except (ValueError, TypeError):
+            return
+        self._translation_input_seconds += len(decoded) / self._translation_input_bytes_per_second
+
+    def _capture_translation_audio_formats(self, event_obj: Mapping[str, object]) -> None:
+        if event_obj.get("type") not in ("session.created", "session.updated"):
+            return
+        session: Final = as_str_mapping(event_obj.get("session"))
+        if session is None:
+            return
+        audio: Final = as_str_mapping(session.get("audio"))
+        if audio is None:
+            return
+        for direction, raw_configuration in (("input", audio.get("input")), ("output", audio.get("output"))):
+            if (configuration := as_str_mapping(raw_configuration)) is None:
+                continue
+            try:
+                if (
+                    bytes_per_second := _translation_audio_bytes_per_second(
+                        _translation_audio_format_adapter().validate_python(configuration.get("format"))
+                    )
+                ) is None:
+                    continue
+            except ValidationError:
+                continue
+            if direction == "input":
+                self._translation_input_bytes_per_second = bytes_per_second
+            else:
+                self._translation_output_bytes_per_second = bytes_per_second
+
+    def _finalize_translation_usage(self) -> None:
+        if self._translation_usage_finalized:
+            return
+        for event in self.messages:
+            if event.get("type") != "session.closed":
+                continue
+            if (event_usage := as_str_mapping(event.get("usage"))) is not None and normalized_audio_duration_seconds(
+                event_usage.get("output_seconds")
+            ) is not None:
+                self._translation_usage_finalized = True
+                return
+        if self._translation_output_seconds == 0 and self._translation_input_seconds == 0:
+            return
+        synthetic_usage: Final = (
+            OpenAIRealtimeTranslationDurationUsage(
+                type="duration",
+                input_seconds=self._translation_input_seconds,
+                output_seconds=self._translation_output_seconds,
+            )
+            if self._translation_input_seconds > 0
+            else OpenAIRealtimeTranslationDurationUsage(
+                type="duration", output_seconds=self._translation_output_seconds
+            )
+        )
+        self.messages.append(OpenAIRealtimeTranslationClosedEvent(type="session.closed", usage=synthetic_usage))
+        self._translation_usage_finalized = True
+
     async def _send_to_backend(self, message: str) -> bool:
         """Send a message to the backend WebSocket.
 
@@ -560,10 +991,25 @@ class RealTimeStreaming:
         backend, False if the provider transformation produced no output and
         the message was effectively dropped.
         """
-        message = self._enforce_transcription_session_model(message)
+        from litellm.proxy._types import ProxyException
+
+        try:
+            authorized_message: Final = await self._apply_nested_transcription_model_policy(message)
+        except ProxyException as denied:
+            denial_message: Final = redact_internal_details_from_client_message(denied.message)
+            try:
+                await self.websocket.send_text(realtime_error_event(denial_message, error_type="permission_error"))
+            finally:
+                await self.websocket.close(
+                    code=1008,
+                    reason=websocket_close_reason(
+                        denial_message, fallback="Nested transcription model is not authorized"
+                    ),
+                )
+            return False
         if self.provider_config:
             transformed: Final = self.provider_config.transform_realtime_request(
-                message, self.model, self.session_configuration_request
+                authorized_message, self.model, self.session_configuration_request
             )
             sent = False
             for msg in transformed:
@@ -598,13 +1044,254 @@ class RealTimeStreaming:
                     if is_content_message:
                         self._content_sent_after_setup = True
                     sent = True
+            if sent:
+                self._capture_translation_input_audio(authorized_message)
             return sent
-        await self.backend_ws.send(message)
+        await self.backend_ws.send(authorized_message)
         if self._usage_meter is not None:
-            sent_event: Final = self._parse_backend_event(message)
+            sent_event: Final = self._parse_backend_event(authorized_message)
             if sent_event is not None:
                 self._usage_meter.observe_client_event(sent_event)
+        self._capture_translation_input_audio(authorized_message)
         return True
+
+    async def _apply_nested_transcription_model_policy(self, message: str) -> str:
+        if self._force_transcription_model is not None:
+            return self._enforce_transcription_session_model(message)
+        if self._is_translation_session:
+            return await self._enforce_translation_nested_transcription_model(message)
+        return message
+
+    def _session_update_message_obj(self, message: str) -> Mapping[str, object] | None:
+        try:
+            message_obj: Final = _decode_json_object(message)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        if message_obj.get("type") not in (
+            "session.update",
+            "transcription_session.update",
+        ):
+            return None
+        return message_obj
+
+    def _nested_transcription_models_from_session(
+        self,
+        session: Mapping[str, object],
+    ) -> tuple[str, ...]:
+        audio: Final = as_str_mapping(session.get("audio"))
+        audio_input: Final = as_str_mapping(audio.get("input")) if audio is not None else None
+        nested_transcription: Final = audio_input.get("transcription") if audio_input is not None else None
+        nested_model: Final = self._transcription_model_value(nested_transcription)
+        flat_model: Final = self._transcription_model_value(session.get("input_audio_transcription"))
+        return tuple(dict.fromkeys(model for model in (nested_model, flat_model) if model is not None))
+
+    def _transcription_model_value(self, transcription_config: object) -> str | None:
+        if (fields := as_str_mapping(transcription_config)) is None:
+            return None
+        model: Final = fields.get("model")
+        if isinstance(model, str) and model:
+            return model
+        return None
+
+    def _rewrite_session_update_transcription_model(self, message: str, authorized_model: str) -> str:
+        message_obj: Final = self._session_update_message_obj(message)
+        if message_obj is None:
+            return message
+        session: Final = as_str_mapping(message_obj.get("session"))
+        if session is None:
+            return message
+        transcription: Final = as_str_mapping(session.get("input_audio_transcription"))
+        rewrite_flat: Final = transcription is not None and transcription.get("model") != authorized_model
+        audio: Final = as_str_mapping(session.get("audio"))
+        audio_input: Final = as_str_mapping(audio.get("input")) if audio is not None else None
+        nested_transcription: Final = (
+            as_str_mapping(audio_input.get("transcription")) if audio_input is not None else None
+        )
+        rewrite_nested: Final = (
+            nested_transcription is not None and nested_transcription.get("model") != authorized_model
+        )
+        if not rewrite_flat and not rewrite_nested:
+            return message
+        updated_session: Final = {
+            **session,
+            **(
+                {"input_audio_transcription": {**transcription, "model": authorized_model}}
+                if transcription is not None and rewrite_flat
+                else {}
+            ),
+            **(
+                {
+                    "audio": {
+                        **audio,
+                        "input": {**audio_input, "transcription": {**nested_transcription, "model": authorized_model}},
+                    }
+                }
+                if audio is not None and audio_input is not None and nested_transcription is not None and rewrite_nested
+                else {}
+            ),
+        }
+        return json.dumps({**message_obj, "session": updated_session})
+
+    def _builds_setup_lazily(self) -> bool:
+        if self.provider_config is None:
+            return False
+        return self.provider_config.builds_setup_from_session_update()
+
+    def _holds_session_updates_until_first_content(self) -> bool:
+        return self.session_configuration_request is None and self._builds_setup_lazily()
+
+    async def _rejected_setup_session_update(self, message: str) -> bool:
+        provider_config: Final = self.provider_config
+        if provider_config is None or not provider_config.builds_setup_from_session_update():
+            return False
+        client_event: Final = _decode_json_object(message)
+        session: Final = client_event.get("session")
+        update: Final = _SESSION_FIELDS.validate_python(session) if isinstance(session, Mapping) else _NO_SESSION_FIELDS
+        if self._leaves_applied_setup_unchanged(update):
+            await self._acknowledge_session_setup(self._applied_session_fields or _NO_SESSION_FIELDS)
+            return True
+        rejection: Final = provider_config.setup_session_update_rejection(
+            self.model, update, setup_sent=self.session_configuration_request is not None
+        )
+        if rejection is None:
+            return False
+        await self.websocket.send_text(json.dumps(rejection.error_event(client_event.get("event_id"))))
+        return True
+
+    def _held_session_update_message(self) -> str:
+        return _session_update_frame(self._held_session_update or _NO_SESSION_FIELDS)
+
+    async def _hold_session_update(self, message: str) -> None:
+        client_event: Final = _decode_json_object(message)
+        if self._held_session_update_bytes + len(message.encode("utf-8")) > RealTimeStreaming._MAX_BUFFERED_BYTES:
+            await self.websocket.send_text(
+                json.dumps(_HELD_SESSION_UPDATE_TOO_LARGE.error_event(client_event.get("event_id")))
+            )
+            return
+        session: Final = client_event.get("session")
+        update: Final = _SESSION_FIELDS.validate_python(session) if isinstance(session, Mapping) else _NO_SESSION_FIELDS
+        held: Final = _merge_session_fields(self._held_session_update or _NO_SESSION_FIELDS, update)
+        self._held_session_update = held
+        self._held_session_update_bytes = len(_session_update_frame(held).encode("utf-8"))
+        await self._acknowledge_session_setup(held)
+
+    def _setup_preview(self, session: Mapping[str, object]) -> str | None:
+        if self.provider_config is None:
+            return None
+        preview: Final = self.provider_config.transform_realtime_request(
+            _session_update_frame(session), self.model, None
+        )
+        return next(
+            (frame for frame in preview if isinstance(frame, str) and "setup" in _decode_json_object(frame)), None
+        )
+
+    def _leaves_applied_setup_unchanged(self, update: Mapping[str, object]) -> bool:
+        applied: Final = self._applied_session_fields
+        if self.session_configuration_request is None or applied is None:
+            return False
+        applied_setup: Final = self._setup_preview(applied)
+        merged_setup: Final = self._setup_preview(_merge_session_fields(applied, update))
+        return (
+            applied_setup is not None
+            and merged_setup is not None
+            and _decode_json_object(applied_setup) == _decode_json_object(merged_setup)
+        )
+
+    async def _acknowledge_session_setup(self, session: Mapping[str, object]) -> None:
+        if self.provider_config is None:
+            return
+        setup: Final = self._setup_preview(session)
+        if setup is None:
+            return
+        acknowledged: Final = self.provider_config.transform_session_created_event(
+            self.model, str(self.logging_obj.litellm_trace_id), setup
+        )
+        if acknowledged is None:
+            return
+        event: Final[Mapping[str, object]] = {**acknowledged, "type": "session.updated"}
+        event_str: Final = json.dumps(event)
+        self.store_message(event_str)
+        await self._send_event_to_client(event, event_str)
+
+    async def _send_held_session_update_as_setup(self) -> None:
+        held: Final = self._held_session_update
+        if held is None:
+            return
+        message: Final = self._held_session_update_message()
+        self._held_session_update = None
+        self._held_session_update_bytes = 0
+        if await self._send_to_backend(message):
+            self._applied_session_fields = held
+            await self._send_held_client_content()
+
+    def _holds_client_content(self, msg_type: str | None, message: str) -> bool:
+        held_types: Final = (
+            RealTimeStreaming._DEFERRED_SETUP_HELD_CONTENT_TYPES
+            if self._uses_deferred_backend_setup()
+            else RealTimeStreaming._HELD_CONTENT_TYPES
+        )
+        return (
+            msg_type in held_types
+            and self._held_session_update is not None
+            and self._holds_session_updates_until_first_content()
+            and not self._pending_messages_until_setup
+            and len(self._held_client_content) < RealTimeStreaming._MAX_BUFFERED_MESSAGES
+            and self._held_client_content_bytes + len(message.encode("utf-8")) <= RealTimeStreaming._MAX_BUFFERED_BYTES
+        )
+
+    def _hold_client_content(self, message: str) -> None:
+        if self._held_client_content_deadline is None:
+            self._held_client_content_deadline = self._clock() + self._lazy_setup_content_grace_seconds
+        self._held_client_content = (*self._held_client_content, message)
+        self._held_client_content_bytes += len(message.encode("utf-8"))
+
+    async def _send_held_client_content(self) -> None:
+        held: Final = self._held_client_content
+        self._held_client_content = ()
+        self._held_client_content_bytes = 0
+        self._held_client_content_deadline = None
+        for message in held:
+            await self._send_to_backend(message)
+
+    def _setup_deadline(self) -> float:
+        content_deadline: Final = self._held_client_content_deadline
+        return (
+            self._lazy_setup_deadline if content_deadline is None else min(self._lazy_setup_deadline, content_deadline)
+        )
+
+    async def _send_setup_before_content(self, msg_type: str | None) -> None:
+        if self._holds_session_updates_until_first_content():
+            await self._send_held_session_update_as_setup()
+        await self._send_default_setup_before_first_client_message(msg_type)
+
+    async def _receive_client_message_before_setup_deadline(self) -> str | None:
+        if not self._holds_session_updates_until_first_content():
+            return await self._receive_client_message()
+        receive: Final = asyncio.ensure_future(self._receive_client_message())
+        try:
+            done, _ = await asyncio.wait((receive,), timeout=self._setup_deadline() - self._clock())
+            if not done:
+                await self._send_setup_before_content(None)
+            return await receive
+        finally:
+            receive.cancel()
+
+    async def _send_default_setup_before_first_client_message(self, msg_type: str | None) -> None:
+        if self.session_configuration_request is not None or self.provider_config is None:
+            return
+        if msg_type == "session.update" or (
+            self._uses_deferred_backend_setup()
+            and (msg_type in RealTimeStreaming._CLIENT_AUDIO_BUFFER_TYPES or self._pending_messages_until_setup)
+        ):
+            return
+        default_setup: Final = self.provider_config.session_configuration_request(self.model)
+        if not default_setup:
+            return
+        setup: Final = self.maybe_inject_guardrail_auto_response_disable(default_setup)
+        await self.backend_ws.send(setup)
+        self._cache_session_configuration_request(setup)
+        self._applied_session_fields = _NO_SESSION_FIELDS
+        await self._send_held_client_content()
 
     def _enforce_transcription_session_model(self, message: str) -> str:
         """Force client transcription session updates to the authorized model.
@@ -623,56 +1310,52 @@ class RealTimeStreaming:
         if self._force_transcription_model is None:
             return message
 
-        try:
-            message_obj: Final = _decode_json_object(message)
-        except (json.JSONDecodeError, TypeError):
+        message_obj: Final = self._session_update_message_obj(message)
+        if message_obj is None:
             return message
-
-        if message_obj.get("type") not in (
-            "session.update",
-            "transcription_session.update",
-        ):
-            return message
-
-        session: Final = message_obj.get("session")
-        if not isinstance(session, dict):
-            return message
-
-        if session.get("type") == "transcription":
+        session: Final = as_str_mapping(message_obj.get("session"))
+        if session is not None and session.get("type") == "transcription":
             self._is_transcription_session = True
+        return self._rewrite_session_update_transcription_model(message, self._force_transcription_model)
 
-        authorized_model: Final = self._force_transcription_model
-        changed = False
+    async def _enforce_translation_nested_transcription_model(self, message: str) -> str:
+        message_obj: Final = self._session_update_message_obj(message)
+        session: Final = as_str_mapping(message_obj.get("session")) if message_obj is not None else None
+        bound_model: Final = self._bound_nested_transcription_model
+        requested_models: Final = (
+            tuple(model for model in self._nested_transcription_models_from_session(session) if model != bound_model)
+            if session is not None
+            else ()
+        )
+        if not requested_models:
+            return (
+                message
+                if bound_model is None
+                else self._rewrite_session_update_transcription_model(message, bound_model)
+            )
 
-        transcription: Final = session.get("input_audio_transcription")
-        if isinstance(transcription, dict) and transcription.get("model") != authorized_model:
-            session["input_audio_transcription"] = {
-                **transcription,
-                "model": authorized_model,
-            }
-            changed = True
+        valid_token: Final = self.user_api_key_dict
 
-        audio: Final = session.get("audio")
-        if isinstance(audio, dict):
-            audio_input: Final = audio.get("input")
-            if isinstance(audio_input, dict):
-                nested_transcription: Final = audio_input.get("transcription")
-                if isinstance(nested_transcription, dict) and nested_transcription.get("model") != authorized_model:
-                    session["audio"] = {
-                        **audio,
-                        "input": {
-                            **audio_input,
-                            "transcription": {
-                                **nested_transcription,
-                                "model": authorized_model,
-                            },
-                        },
-                    }
-                    changed = True
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
+        from litellm.proxy.proxy_server import llm_model_list, llm_router
+        from litellm.proxy.realtime_endpoints.endpoints import nested_transcription_upstream_model
 
-        if not changed:
+        if not isinstance(valid_token, UserAPIKeyAuth):
             return message
-        return json.dumps(message_obj)
+
+        for requested_model in requested_models:
+            await can_key_call_resolved_model(
+                model=requested_model,
+                valid_token=valid_token,
+                llm_model_list=llm_model_list,
+                llm_router=llm_router,
+            )
+        upstream_model: Final = nested_transcription_upstream_model(
+            requested_models[0], valid_token.team_id, llm_router
+        )
+        self._bound_nested_transcription_model = upstream_model
+        return self._rewrite_session_update_transcription_model(message, upstream_model)
 
     def _uses_deferred_backend_setup(self) -> bool:
         """True when setup is deferred until the client's first session.update."""
@@ -793,7 +1476,19 @@ class RealTimeStreaming:
         return event
 
     def _event_to_client_json(self, event: dict) -> str:
-        return json.dumps(self._normalize_event_for_ga_client(event))
+        return json.dumps(self._session_event_for_client(self._normalize_event_for_ga_client(event)))
+
+    def _session_event_for_client(self, event: Mapping[str, object]) -> Mapping[str, object]:
+        if not self._bridges_beta_client_to_ga:
+            return event
+        event_type: Final = event.get("type")
+        if event_type in self._SESSION_EVENT_TYPES:
+            session: Final = _mapping_field(event, "session")
+            return event if session is None else {**event, "session": ga_session_to_beta(session)}
+        if event_type in self._RESPONSE_EVENT_TYPES:
+            response: Final = _mapping_field(event, "response")
+            return event if response is None else {**event, "response": ga_response_to_beta(response)}
+        return event
 
     async def _send_event_to_client(self, event: object, event_str: str) -> bool:
         if self._should_drop_event_from_client(event):
@@ -806,7 +1501,7 @@ class RealTimeStreaming:
                 translated: Final = self._translate_event_to_beta(event)
                 if translated is None:
                     return False
-                await self.websocket.send_text(json.dumps(translated))
+                await self.websocket.send_text(json.dumps(self._session_event_for_client(translated)))
                 return True
             except Exception as e:
                 verbose_logger.warning(
@@ -849,6 +1544,20 @@ class RealTimeStreaming:
         event_id: Final = _guardrail_event_id()
         self._guardrail_cancel_event_ids = self._guardrail_cancel_event_ids | {event_id}
         await self._send_to_backend(json.dumps({"type": "response.cancel", "event_id": event_id}))
+
+    async def _send_blocked_turn_to_backend(self, pre_block_backend_message: str | None, item_id: str | None) -> None:
+        if pre_block_backend_message is None and self._is_transcription_session:
+            return
+        await self._send_setup_before_content("conversation.item.create")
+        # Deliver any caller-supplied backend message FIRST so that
+        # protocol contracts requiring a specific ordering (e.g.
+        # Gemini Live's mandatory ``toolResponse`` after a
+        # ``toolCall``) are honored before the guardrail's own
+        # clientContent / cancel messages are sent.
+        if pre_block_backend_message is not None:
+            await self._send_to_backend(pre_block_backend_message)
+        if not self._is_transcription_session:
+            await self._withdraw_blocked_turn(item_id)
 
     async def _withdraw_blocked_turn(self, item_id: str | None) -> None:
         await self._send_guardrail_cancel()
@@ -915,32 +1624,7 @@ class RealTimeStreaming:
         self,
         event_hooks: Sequence["GuardrailEventHooks"],
     ) -> bool:
-        """Return True if any callback would run for one of ``event_hooks``."""
-        from litellm.integrations.custom_guardrail import CustomGuardrail
-
-        return any(
-            isinstance(cb, CustomGuardrail)
-            and any(
-                cb.should_run_guardrail(
-                    data={**self.request_data, "stream": True},
-                    event_type=et,
-                )
-                for et in event_hooks
-            )
-            for cb in litellm.callbacks
-        )
-
-    def _has_realtime_guardrails(self) -> bool:
-        """Return True if any callback is registered for realtime guardrail event types."""
-        from litellm.types.guardrails import GuardrailEventHooks
-
-        return self._has_realtime_guardrails_for_event_hooks(
-            [
-                GuardrailEventHooks.realtime_input_transcription,
-                GuardrailEventHooks.pre_call,
-                GuardrailEventHooks.post_call,
-            ]
-        )
+        return _guardrails_run_for_event_hooks(self.request_data, event_hooks, litellm.callbacks)
 
     def _has_audio_transcription_guardrails(self) -> bool:
         """Return True when a guardrail is configured for the audio/VAD transcript path.
@@ -954,21 +1638,84 @@ class RealTimeStreaming:
         return self._has_realtime_guardrails_for_event_hooks([GuardrailEventHooks.realtime_input_transcription])
 
     def _should_disable_vad_auto_response(self) -> bool:
-        """Transcription-only sessions have no assistant turn to gate and reject realtime session updates."""
-        return not self._is_transcription_session and self._has_audio_transcription_guardrails()
+        """Transcription and translation sessions have no assistant turn to gate and reject realtime session updates."""
+        return (
+            not self._is_transcription_session
+            and not self._is_translation_session
+            and self._has_audio_transcription_guardrails()
+        )
+
+    def _refuses_unscreened_audio(self, msg_type: str | None) -> bool:
+        return (
+            msg_type in RealTimeStreaming._CLIENT_AUDIO_BUFFER_TYPES
+            and self._builds_setup_lazily()
+            and self._should_disable_vad_auto_response()
+        )
+
+    async def _refuse_unscreened_audio(self, msg_type: str | None, message: str) -> None:
+        if self._unscreened_audio_refused and msg_type not in RealTimeStreaming._CLIENT_AUDIO_BUFFER_COMMIT_TYPES:
+            return
+        self._unscreened_audio_refused = True
+        await self.websocket.send_text(
+            json.dumps(_unscreened_audio_error_event(_decode_json_object(message).get("event_id")))
+        )
 
     async def run_realtime_guardrails(
         self,
-        transcript: str,
+        transcript: object,
         item_id: str | None = None,
         pre_block_backend_message: str | None = None,
         event_hooks: Sequence["GuardrailEventHooks"] | None = None,
     ) -> bool:
         """
-        Run registered guardrails on realtime text (transcript, user message, tool output).
-
         Returns True if blocked (synthetic warning already sent to client).
         Returns False if clean (caller should send response.create to the backend).
+        """
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        if isinstance(transcript, str):
+            verdict: Final = await self.apply_realtime_guardrails(
+                (transcript,), "user", item_id, pre_block_backend_message, event_hooks
+            )
+            return isinstance(verdict, RealtimeGuardrailBlock)
+        if realtime_screening_guardrails(
+            "user",
+            event_hooks or (GuardrailEventHooks.realtime_input_transcription,),
+            {**self.request_data, "stream": True},
+            litellm.callbacks,
+        ):
+            raise TypeError(f"Realtime guardrails cannot screen a {type(transcript).__name__} transcript")
+        return False
+
+    async def _screen_client_item(self, guarded_item: RealtimeGuardedItem | None) -> RealtimeGuardrailVerdict:
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        match guarded_item:
+            case RealtimeToolOutput(texts=texts, sanitized_event=sanitized_event):
+                return await self.apply_realtime_guardrails(
+                    texts,
+                    "tool",
+                    pre_block_backend_message=sanitized_event,
+                    event_hooks=[GuardrailEventHooks.pre_call],
+                )
+            case RealtimeMessageText(role=role, texts=texts):
+                return await self.apply_realtime_guardrails(texts, role, event_hooks=[GuardrailEventHooks.pre_call])
+            case None:
+                return None
+
+    async def apply_realtime_guardrails(
+        self,
+        texts: tuple[str, ...],
+        role: str,
+        item_id: str | None = None,
+        pre_block_backend_message: str | None = None,
+        event_hooks: Sequence["GuardrailEventHooks"] | None = None,
+    ) -> RealtimeGuardrailVerdict:
+        """
+        Run registered guardrails on realtime text (transcript, user message, tool output).
+
+        A block has already been reported to the client and the backend when this returns.
+        A rewrite carries the masked texts the caller forwards in place of the originals.
 
         ``pre_block_backend_message`` (if provided) is sent to the backend
         BEFORE any of the guardrail's own backend messages when a block is
@@ -981,120 +1728,42 @@ class RealTimeStreaming:
         transcript completion uses ``realtime_input_transcription`` only;
         typed user messages and tool outputs use ``pre_call``.
         """
-        from litellm.integrations.custom_guardrail import CustomGuardrail
         from litellm.types.guardrails import GuardrailEventHooks
 
-        if event_hooks is None:
-            event_hooks = [GuardrailEventHooks.realtime_input_transcription]
-        _realtime_event_types: Final = event_hooks
-        _check_data: Final = {**self.request_data, "transcript": transcript, "stream": True}
-        _already_run: Final[set] = set()
+        block: Final = await realtime_guardrail_verdict(
+            texts,
+            role,
+            event_hooks if event_hooks is not None else (GuardrailEventHooks.realtime_input_transcription,),
+            self.request_data,
+            self.user_api_key_dict,
+            litellm.callbacks,
+        )
+        if not isinstance(block, RealtimeGuardrailBlock):
+            return block
+        await self._send_blocked_turn_to_backend(pre_block_backend_message, item_id)
+        await self.websocket.send_text(guardrail_violation_error_event(block.message))
+        if not self._is_transcription_session:
+            for voice_prompt_event in guardrail_voice_prompt_events(block.message):
+                await self._send_to_backend(voice_prompt_event)
 
-        for callback in litellm.callbacks:
-            if not isinstance(callback, CustomGuardrail):
-                continue
-            if callback.use_native_lifecycle_hooks:
-                continue
-            if id(callback) in _already_run:
-                continue
-            if not any(callback.should_run_guardrail(data=_check_data, event_type=et) for et in _realtime_event_types):
-                continue
-            _already_run.add(id(callback))
-            try:
-                await callback.apply_guardrail(
-                    inputs={"texts": [transcript], "images": []},
-                    request_data={"user_api_key_dict": self.user_api_key_dict},
-                    input_type="request",
-                )
-            except Exception as e:
-                # Re-raise unexpected errors (no status_code/detail = programming bug, not a block).
-                # HTTPException and guardrail-raised exceptions have a status_code or detail attr.
-                is_guardrail_block = hasattr(e, "status_code") or isinstance(e, ValueError)
-                if not is_guardrail_block:
-                    verbose_logger.exception(
-                        "[realtime guardrail] unexpected error in apply_guardrail: %s",
-                        e,
-                    )
-                    raise
-                # Extract the human-readable error from the detail dict (HTTPException)
-                # or fall back to str(e) for plain ValueError.
-                detail: object | None = getattr(e, "detail", None)
-                if isinstance(detail, dict):
-                    safe_msg = detail.get("error") or str(e)
-                elif detail is not None:
-                    safe_msg = str(detail)
-                else:
-                    safe_msg = str(e) or "I'm sorry, that request was blocked by the content filter."
+        self._violation_count += 1
+        if block.ends_session(self._violation_count):
+            verbose_logger.warning("[realtime guardrail] ending session after violation %d", self._violation_count)
+            await self.backend_ws.close()
 
-                # Use realtime_violation_message if configured; fall back to guardrail error text.
-                error_msg = getattr(callback, "realtime_violation_message", None) or safe_msg
-
-                # Deliver any caller-supplied backend message FIRST so that
-                # protocol contracts requiring a specific ordering (e.g.
-                # Gemini Live's mandatory ``toolResponse`` after a
-                # ``toolCall``) are honored before the guardrail's own
-                # clientContent / cancel messages are sent.
-                if pre_block_backend_message is not None:
-                    await self._send_to_backend(pre_block_backend_message)
-                if not self._is_transcription_session:
-                    await self._withdraw_blocked_turn(item_id)
-                # Send the policy violation hint (shows as small gray status text in UI).
-                await self.websocket.send_text(
-                    json.dumps(
-                        {
-                            "type": "error",
-                            "error": {
-                                "type": "guardrail_violation",
-                                "message": error_msg,
-                                "code": "content_policy_violation",
-                            },
-                        }
-                    )
-                )
-                if not self._is_transcription_session:
-                    # Ask the LLM to voice the exact guardrail message so the
-                    # user hears it as audio in voice sessions (not just text).
-                    guardrail_prompt = (
-                        f"Say exactly the following message to the user, word for word, "
-                        f"do not add anything else: {error_msg}"
-                    )
-                    await self._send_to_backend(
-                        json.dumps(
-                            {
-                                "type": "conversation.item.create",
-                                "item": {
-                                    "type": "message",
-                                    "role": "user",
-                                    "content": [{"type": "input_text", "text": guardrail_prompt}],
-                                },
-                            }
-                        )
-                    )
-                    await self._send_to_backend(json.dumps({"type": "response.create"}))
-
-                self._violation_count += 1
-                end_session_after: int | None = getattr(callback, "end_session_after_n_fails", None)
-                should_end = getattr(callback, "on_violation", None) == "end_session" or (
-                    end_session_after is not None and self._violation_count >= end_session_after
-                )
-                if should_end:
-                    verbose_logger.warning(
-                        "[realtime guardrail] ending session after violation %d",
-                        self._violation_count,
-                    )
-                    await self.backend_ws.close()
-
-                verbose_logger.warning(
-                    "[realtime guardrail] BLOCKED transcript (violation %d): %r",
-                    self._violation_count,
-                    transcript[:80],
-                )
-                return True
-        return False
+        verbose_logger.warning(
+            "[realtime guardrail] BLOCKED transcript (violation %d): %r",
+            self._violation_count,
+            " ".join(texts)[:80],
+        )
+        return block
 
     async def _handle_provider_config_message(self, raw_response: str) -> None:
         """Process a backend message when a provider_config is set (transformed path)."""
-        returned_object: Final = self.provider_config.transform_realtime_response(
+        provider_config: Final = self.provider_config
+        if provider_config is None:
+            raise RuntimeError("Provider response handling requires a provider configuration")
+        returned_object: Final = provider_config.transform_realtime_response(
             raw_response,
             self.model,
             self.logging_obj,
@@ -1123,6 +1792,7 @@ class RealTimeStreaming:
                 continue
             if isinstance(event, dict):
                 self._detect_transcription_session_from_backend(event)
+                self._capture_translation_output_audio(event)
             is_session_created_event = isinstance(event, dict) and event.get("type") == "session.created"
             if is_session_created_event:
                 if self._uses_deferred_backend_setup() and not self._backend_setup_complete:
@@ -1135,6 +1805,9 @@ class RealTimeStreaming:
                                 break
                     finally:
                         self._flushing_pending_messages_until_setup = False
+                if self.session_created_sent_to_client and self._builds_setup_lazily():
+                    await self._maybe_send_guardrail_turn_detection_update()
+                    continue
                 if self.session_created_sent_to_client:
                     # A synthetic session.created (with placeholder defaults) was
                     # already forwarded to the client when we connected.  The
@@ -1167,7 +1840,7 @@ class RealTimeStreaming:
                 self.store_message(event_str)
                 self._capture_transcription_usage(event)
                 await self._send_event_to_client(event, event_str)
-                blocked = await self.run_realtime_guardrails(cast(str, transcript))
+                blocked = await self.run_realtime_guardrails(transcript)
                 if not blocked and self._should_disable_vad_auto_response():
                     await self._send_to_backend(json.dumps({"type": "response.create"}))
                 continue
@@ -1236,6 +1909,7 @@ class RealTimeStreaming:
                     continue
 
             if self.provider_config:
+                self._backend_sent_non_error_frames = True
                 try:
                     await self._handle_provider_config_message(raw_response)
                 except Exception as e:
@@ -1243,6 +1917,8 @@ class RealTimeStreaming:
                     continue
             else:
                 event = self._parse_backend_event(raw_response)
+                if event is None or event.get("type") != "error":
+                    self._backend_sent_non_error_frames = True
                 if event is None:
                     await self.websocket.send_text(raw_response)
                     continue
@@ -1257,6 +1933,7 @@ class RealTimeStreaming:
                     verbose_logger.debug("Realtime: not forwarding an error caused by a guardrail event: %s", event)
                     continue
 
+                self._capture_translation_output_audio(event)
                 if await self._handle_raw_backend_message(event, raw_response):
                     continue
 
@@ -1270,7 +1947,7 @@ class RealTimeStreaming:
                 translated = self._translate_event_to_beta(event)
                 if translated is None:
                     continue
-                await self.websocket.send_text(json.dumps(translated))
+                await self.websocket.send_text(json.dumps(self._session_event_for_client(translated)))
 
     async def backend_to_client_send_messages(self) -> BackendClose:
         import websockets
@@ -1281,23 +1958,32 @@ class RealTimeStreaming:
             verbose_logger.exception("Connection closed in backend to client send messages - %s", e)
             close: Final = backend_close_from(e)
             self._flush_unbilled_transcription_usage()
-            if self._backend_refused_session(close):
-                await self.log_backend_refusal(e)
-            else:
-                await self.log_messages()
+            await self._log_session_end(e if self._backend_refused_session(close) else None)
             return close
         except asyncio.CancelledError:
             self._flush_unbilled_transcription_usage()
-            await self.log_messages()
+            await self._log_session_end(None)
             raise
         except Exception as e:
             verbose_logger.exception("Error in backend to client send messages: %s", e)
             self._flush_unbilled_transcription_usage()
-            await self.log_messages()
+            await self._log_session_end(None)
             return BackendClose(code=1011, reason="proxy failed while relaying the upstream websocket")
 
     def _backend_refused_session(self, close: BackendClose) -> bool:
-        return close.code != 1000 and not self._backend_sent_frames
+        return (
+            not self._backend_sent_non_error_frames
+            and (close.code != 1000 or self._backend_sent_frames)
+            and not self._holds_session_updates_until_first_content()
+        )
+
+    async def _log_session_end(self, transport_refusal: Exception | None) -> None:
+        provider_refusal: Final = None if self.provider_config is None else self.provider_config.session_refusal()
+        refusal: Final = provider_refusal or transport_refusal
+        if refusal is None:
+            await self.log_messages()
+            return
+        await self.log_backend_refusal(refusal)
 
     async def log_backend_refusal(self, error: Exception) -> None:
         if not self.logging_obj:
@@ -1330,7 +2016,7 @@ class RealTimeStreaming:
     _detect_beta_header = detect_beta_header
 
     @staticmethod
-    def _remap_beta_session_to_ga(session: dict) -> dict:
+    def _remap_beta_session_to_ga(session: dict, all_beta_fields: bool = False, drop_temperature: bool = False) -> dict:
         """
         Convert a beta-style session.update payload to the GA nested schema.
 
@@ -1343,6 +2029,11 @@ class RealTimeStreaming:
         session.output_audio_format     → session.audio.output.format (with type/rate)
         session.turn_detection          → session.audio.input.turn_detection
         session.input_audio_transcription → session.audio.input.transcription
+        Only with all_beta_fields:
+        session.input_audio_noise_reduction → session.audio.input.noise_reduction
+        session.speed                   → session.audio.output.speed
+        session.max_response_output_tokens → session.max_output_tokens
+        session.temperature             (dropped when drop_temperature)
         ─────────────────────────────────────────────────────────────────────
         Fields not in the mapping (instructions, tools, etc.) are passed through.
         GA clients that already use the nested shape are unaffected.
@@ -1394,6 +2085,19 @@ class RealTimeStreaming:
         if "input_audio_transcription" in session:
             inp["transcription"] = session.pop("input_audio_transcription")
 
+        if all_beta_fields and "input_audio_noise_reduction" in session:
+            inp["noise_reduction"] = session.pop("input_audio_noise_reduction")
+
+        if all_beta_fields and "speed" in session:
+            out["speed"] = session.pop("speed")
+
+        if all_beta_fields and "max_response_output_tokens" in session:
+            max_tokens: Final = session.pop("max_response_output_tokens")
+            session.setdefault("max_output_tokens", max_tokens)
+
+        if all_beta_fields and drop_temperature:
+            session.pop("temperature", None)
+
         if inp:
             audio["input"] = inp
         if out:
@@ -1411,6 +2115,53 @@ class RealTimeStreaming:
             session["audio"] = existing
 
         return session
+
+    @staticmethod
+    def _remap_beta_response_to_ga(response: Mapping[str, object], drop_temperature: bool) -> dict[str, object]:
+        moved: Final = frozenset(
+            ("modalities", "voice", "output_audio_format", "max_response_output_tokens")
+            + (("temperature",) if drop_temperature else ())
+        )
+        raw_format: Final = response.get("output_audio_format")
+        output_audio: Final = {
+            **({} if "voice" not in response else {"voice": response["voice"]}),
+            **(
+                {}
+                if "output_audio_format" not in response
+                else {
+                    "format": RealTimeStreaming._AUDIO_FORMAT_MAP.get(raw_format, raw_format)
+                    if isinstance(raw_format, str)
+                    else raw_format
+                }
+            ),
+        }
+        modalities: Final = response.get("modalities")
+        modality_names: Final = (
+            frozenset(m.lower() for m in modalities if isinstance(m, str))
+            if isinstance(modalities, list)
+            else frozenset()
+        )
+        output_modalities: Final = (
+            ["audio"] if "audio" in modality_names else ["text"] if "text" in modality_names else None
+        )
+        existing_audio: Final = as_str_mapping(response.get("audio")) or {}
+        existing_output: Final = as_str_mapping(existing_audio.get("output")) or {}
+        return {
+            **{key: value for key, value in response.items() if key not in moved},
+            **(
+                {}
+                if output_modalities is None or "output_modalities" in response
+                else {"output_modalities": output_modalities}
+            ),
+            **(
+                {}
+                if "max_response_output_tokens" not in response or "max_output_tokens" in response
+                else {"max_output_tokens": response["max_response_output_tokens"]}
+            ),
+            **(
+                {} if not output_audio else {"audio": {**existing_audio, "output": {**existing_output, **output_audio}}}
+            ),
+        }
 
     @staticmethod
     def _translate_event_to_beta(event: dict) -> dict | None:
@@ -1482,7 +2233,7 @@ class RealTimeStreaming:
         client_event: _ClientEventFrame
         try:
             while True:
-                message = await self._receive_client_message()
+                message = await self._receive_client_message_before_setup_deadline()
                 if message is None:
                     return ClientLoopExit.CLIENT_DISCONNECTED
 
@@ -1490,92 +2241,22 @@ class RealTimeStreaming:
                 guardrail_turn_detection_injected = False
                 msg_type: str | None = None
                 try:
-                    from litellm.types.guardrails import GuardrailEventHooks
-
                     msg_obj = json.loads(message)
                     client_event = msg_obj
                     msg_type = client_event.get("type")
-
                     if msg_type == "conversation.item.create":
-                        # Check user text messages for prompt injection
-                        item = client_event.get("item", {})
-                        # Check function_call_output first so a client cannot
-                        # bypass the tool-result guardrail by also setting
-                        # role="user" on a function_call_output item.
-                        if item.get("type") == "function_call_output":
-                            # Tool results are client-controlled and fed to the
-                            # model; check them with the same guardrail used for
-                            # user text so an attacker cannot smuggle blocked
-                            # content into a function_call_output.
-                            output: object = item.get("output", "")
-                            output_text = output if isinstance(output, str) else json.dumps(output)
-                            if output_text:
-                                # Build the sanitized function_call_output up
-                                # front so we can hand it to the guardrail
-                                # runner as the pre-block message. Providers
-                                # that pair every toolCall with a toolResponse
-                                # (e.g. Gemini/Vertex Live) require the
-                                # toolResponse to arrive BEFORE any other
-                                # client message — otherwise the guardrail's
-                                # own clientContent would violate the
-                                # pending-tool-call protocol contract and the
-                                # backend could close the connection before
-                                # the sanitized response ever lands. Dropping
-                                # the blocked item outright would similarly
-                                # leave such providers waiting indefinitely.
-                                # The sanitized payload carries no blocked
-                                # content — only a generic policy marker.
-                                sanitized_msg = json.dumps(
-                                    {
-                                        **msg_obj,
-                                        "item": {
-                                            **item,
-                                            "output": json.dumps(
-                                                {
-                                                    "error": "Tool output blocked by content policy",
-                                                }
-                                            ),
-                                        },
-                                    }
-                                )
-                                blocked = await self.run_realtime_guardrails(
-                                    output_text,
-                                    pre_block_backend_message=sanitized_msg,
-                                    event_hooks=[GuardrailEventHooks.pre_call],
-                                )
-                                if blocked:
-                                    # ``_pending_guardrail_message`` is
-                                    # intentionally NOT set here. That flag
-                                    # exists to swallow the reflexive
-                                    # ``response.create`` an OpenAI client
-                                    # sends immediately after a user text
-                                    # message. In a tool-calling flow the
-                                    # client may not send a ``response.create``
-                                    # at all (e.g. Gemini SDKs auto-respond),
-                                    # so leaving the flag set would
-                                    # incorrectly drop an unrelated
-                                    # ``response.create`` from a later
-                                    # interaction turn.
-                                    continue
-                        elif item.get("role") == "user":
-                            content_list: Sequence[object] = item.get("content", [])
-                            texts = [
-                                c.get("text", "")
-                                for c in content_list
-                                if isinstance(c, dict) and c.get("type") == "input_text"
-                            ]
-                            combined_text = " ".join(texts)
-                            if combined_text:
-                                blocked = await self.run_realtime_guardrails(
-                                    combined_text,
-                                    event_hooks=[GuardrailEventHooks.pre_call],
-                                )
-                                if blocked:
-                                    # Store the guardrail reason so the next response.create
-                                    # (sent automatically by the client) is rewritten to
-                                    # include it as response instructions.
-                                    self._pending_guardrail_message = combined_text
-                                    continue  # don't forward the original blocked message
+                        self._pending_guardrail_message = None
+
+                    match await self._screen_client_item(guarded_item := realtime_guarded_item(client_event)):
+                        case RealtimeGuardrailBlock():
+                            if isinstance(guarded_item, RealtimeMessageText):
+                                self._pending_guardrail_message = " ".join(guarded_item.texts)
+                            continue
+                        case RealtimeGuardrailRewrite(texts=masked_texts):
+                            msg_obj["item"] = rewritten_item(client_event, masked_texts)
+                            message = json.dumps(msg_obj)
+                        case None:
+                            pass
 
                     if msg_type == "response.create" and self._pending_guardrail_message:
                         # The guardrail already sent the synthetic AI bubble — drop this
@@ -1594,6 +2275,7 @@ class RealTimeStreaming:
                     if (
                         msg_type == "session.update"
                         and self.session_configuration_request is None
+                        and self._held_session_update is None
                         and not self._guardrail_turn_detection_update_sent
                         and self._should_disable_vad_auto_response()
                         and (
@@ -1644,9 +2326,33 @@ class RealTimeStreaming:
                     if msg_type == "session.update" and not self._backend_uses_beta_protocol:
                         session = client_event.get("session", {})
                         if isinstance(session, dict):
-                            session = self._remap_beta_session_to_ga(session)
+                            session = self._remap_beta_session_to_ga(
+                                session,
+                                all_beta_fields=self._remaps_all_beta_fields_to_ga,
+                                drop_temperature=self._drop_params,
+                            )
+                            if self._is_translation_session:
+                                session.pop("type", None)
                             msg_obj["session"] = session
                             message = json.dumps(msg_obj)
+
+                    if (
+                        msg_type == "response.create"
+                        and self._remaps_all_beta_fields_to_ga
+                        and (beta_response := as_str_mapping(client_event.get("response"))) is not None
+                    ):
+                        msg_obj["response"] = self._remap_beta_response_to_ga(
+                            beta_response, drop_temperature=self._drop_params
+                        )
+                        message = json.dumps(msg_obj)
+
+                    if (
+                        msg_type == "conversation.item.create"
+                        and self._bridges_beta_client_to_ga
+                        and (beta_item := as_str_mapping(client_event.get("item"))) is not None
+                    ):
+                        msg_obj["item"] = beta_item_to_ga(beta_item)
+                        message = json.dumps(msg_obj)
 
                     if msg_type == "session.update" and self._event_normalizer:
                         session = client_event.get("session")
@@ -1657,11 +2363,24 @@ class RealTimeStreaming:
                 except (json.JSONDecodeError, AttributeError):
                     pass
 
+                if self._refuses_unscreened_audio(msg_type):
+                    await self._refuse_unscreened_audio(msg_type, message)
+                    continue
+
                 ## LOGGING
                 # Log after any in-place modifications (GA remap, guardrail
                 # turn_detection injection) so audit logs reflect what we
                 # actually forward to the backend.
                 self.store_input(message=message)
+
+                if self._holds_client_content(msg_type, message):
+                    self._hold_client_content(message)
+                    continue
+                if self._held_client_content and msg_type != "session.update":
+                    await self._send_setup_before_content(msg_type)
+
+                if msg_type in RealTimeStreaming._CLIENT_CONTENT_TYPES and self._uses_deferred_backend_setup():
+                    await self._send_setup_before_content(msg_type)
 
                 if self._should_buffer_client_message_until_setup(message):
                     self._buffer_pending_message_until_setup(message)
@@ -1691,7 +2410,22 @@ class RealTimeStreaming:
                 # ``_maybe_send_guardrail_turn_detection_update`` would retry.
                 if msg_type == "session.update" and self.provider_config is None:
                     await self._send_session_gate_once()
-                sent = await self._send_to_backend(message)
+                if msg_type == "session.update" and await self._rejected_setup_session_update(message):
+                    continue
+                if msg_type == "session.update" and self._holds_session_updates_until_first_content():
+                    await self._hold_session_update(message)
+                    if self._pending_messages_until_setup:
+                        await self._send_held_session_update_as_setup()
+                    continue
+                if msg_type in RealTimeStreaming._CLIENT_CONTENT_TYPES:
+                    await self._send_setup_before_content(msg_type)
+                try:
+                    sent = await self._send_to_backend(message)
+                except RealtimeTranscriptionProtocolError as e:
+                    await self.websocket.send_text(realtime_error_event(str(e), error_type="invalid_request_error"))
+                    if self._uses_deferred_backend_setup():
+                        raise
+                    continue
                 if guardrail_turn_detection_injected and sent:
                     self._guardrail_turn_detection_update_sent = True
 
@@ -1700,16 +2434,28 @@ class RealTimeStreaming:
             return ClientLoopExit.BACKEND_CLOSED
         except Exception as e:
             verbose_logger.debug("Error in client ack messages: %s", e)
-            return ClientLoopExit.CLIENT_DISCONNECTED
+            return ClientLoopExit.RELAY_FAILED
 
     async def bidirectional_forward(self) -> None:
+        if self._is_translation_session and translation_guardrails_apply(self.request_data):
+            await self.websocket.send_text(
+                realtime_error_event(TRANSLATION_GUARDRAILS_UNSUPPORTED_MESSAGE, error_type="guardrail_error")
+            )
+            await self.websocket.close(code=1008, reason=TRANSLATION_GUARDRAILS_UNSUPPORTED_MESSAGE)
+            return
         forward_task: Final = asyncio.create_task(self.backend_to_client_send_messages())
         client_task: Final = asyncio.create_task(self.client_ack_messages())
         try:
             await asyncio.wait((forward_task, client_task), return_when=asyncio.FIRST_COMPLETED)
-            if client_task.done() and client_task.result() is ClientLoopExit.CLIENT_DISCONNECTED:
+            client_exit: Final = client_task.result() if client_task.done() else None
+            if client_exit is ClientLoopExit.RELAY_FAILED and self.logging_obj:
+                self.logging_obj.model_call_details[REALTIME_SESSION_ENDED_ABNORMALLY_KEY] = True
+            if client_exit in (ClientLoopExit.CLIENT_DISCONNECTED, ClientLoopExit.RELAY_FAILED):
                 return
-            await self._close_client(await forward_task)
+            close: Final = await forward_task
+            if not close.ended_cleanly and self.logging_obj:
+                self.logging_obj.model_call_details[REALTIME_SESSION_ENDED_ABNORMALLY_KEY] = True
+            await self._close_client(close)
         finally:
             forward_task.cancel()
             client_task.cancel()
@@ -1719,7 +2465,7 @@ class RealTimeStreaming:
         redacted_message: Final = redact_internal_details_from_client_message(close.message)
         redacted_reason: Final = redact_internal_details_from_client_message(close.reason)
         try:
-            if close.code != 1000:
+            if not close.ended_cleanly:
                 await self.websocket.send_text(realtime_error_event(redacted_message, error_type="server_error"))
             await self.websocket.close(
                 code=client_close_code(close.code),

@@ -12,10 +12,19 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Final, cast
 
+from pydantic import TypeAdapter
+
 from litellm.llms.anthropic.messages.native.utils import anthropic_message_delta
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
+
+_CITATIONS: Final = TypeAdapter(tuple[object, ...])
+
+
+def _citations_of(block: Mapping[str, object]) -> tuple[object, ...]:
+    citations: Final = block.get("citations")
+    return _CITATIONS.validate_python(citations) if isinstance(citations, list) else ()
 
 
 class FakeAnthropicMessagesStreamIterator:
@@ -47,16 +56,30 @@ class FakeAnthropicMessagesStreamIterator:
 
     def _create_content_block_chunks(self, block_dict: Mapping[str, object], index: int) -> list[bytes]:
         """Build SSE chunks for a single content block."""
-        chunks: Final = []
+        chunks: Final = list[bytes]()
         block_type: Final = block_dict.get("type")
 
         if block_type == "text":
+            citations: Final = _citations_of(block_dict)
             content_block_start = {
                 "type": "content_block_start",
                 "index": index,
-                "content_block": {"type": "text", "text": ""},
+                "content_block": {"type": "text", "text": "", "citations": ()}
+                if citations
+                else {"type": "text", "text": ""},
             }
             chunks.append(f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode())
+            citation_deltas: Final = (
+                {
+                    "type": "content_block_delta",
+                    "index": index,
+                    "delta": {"type": "citations_delta", "citation": citation},
+                }
+                for citation in citations
+            )
+            chunks.extend(
+                f"event: content_block_delta\ndata: {json.dumps(delta)}\n\n".encode() for delta in citation_deltas
+            )
             text: Final = block_dict.get("text", "")
             content_block_delta = {
                 "type": "content_block_delta",
@@ -89,36 +112,23 @@ class FakeAnthropicMessagesStreamIterator:
                 }
                 chunks.append(f"event: content_block_delta\ndata: {json.dumps(signature_delta)}\n\n".encode())
 
-        elif block_type == "redacted_thinking":
-            content_block_start = {
+        elif block_type in ("tool_use", "server_tool_use"):
+            empty_input: Final[Mapping[str, object]] = {}
+            tool_use_start: Final = {
                 "type": "content_block_start",
                 "index": index,
-                "content_block": {"type": "redacted_thinking"},
+                "content_block": {**block_dict, "input": empty_input},
             }
-            chunks.append(f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode())
-
-        elif block_type == "tool_use":
-            content_block_start = {
-                "type": "content_block_start",
-                "index": index,
-                "content_block": {
-                    "type": "tool_use",
-                    "id": block_dict.get("id"),
-                    "name": block_dict.get("name"),
-                    "input": {},
-                },
-            }
-            chunks.append(f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode())
-            input_data: Final = block_dict.get("input", {})
-            content_block_delta = {
+            chunks.append(f"event: content_block_start\ndata: {json.dumps(tool_use_start)}\n\n".encode())
+            tool_use_delta: Final = {
                 "type": "content_block_delta",
                 "index": index,
                 "delta": {
                     "type": "input_json_delta",
-                    "partial_json": json.dumps(input_data),
+                    "partial_json": json.dumps(block_dict.get("input", {})),
                 },
             }
-            chunks.append(f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode())
+            chunks.append(f"event: content_block_delta\ndata: {json.dumps(tool_use_delta)}\n\n".encode())
 
         else:
             passthrough_start: Final = {

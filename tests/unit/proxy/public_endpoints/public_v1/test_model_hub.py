@@ -2,6 +2,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -12,6 +13,7 @@ from litellm.proxy._types import LiteLLMRoutes
 from litellm.proxy.proxy_server import app
 from litellm.types.router import DeploymentTypedDict, ModelGroupInfo
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 client = TestClient(app)
 
@@ -19,17 +21,18 @@ MODEL_HUB_PATH = "/public/v1/model_hub"
 LEGACY_MODEL_HUB_PATH = "/public/model_hub"
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class _FakeRouter:
     """Stands in for the running Router: `_get_model_group_info` only ever asks it these."""
 
     infos: Mapping[str, ModelGroupInfo]
     model_group_alias: Mapping[str, str] = MappingProxyType({})
+    team_model_to_deployment_indices: Mapping[tuple[str, str], Sequence[int]] = MappingProxyType({})
 
     def get_model_group_info(self, model_group: str, team_id: str | None = None) -> ModelGroupInfo | None:
         return self.infos.get(model_group)
 
-    def get_model_list_of_routed_group(self, model_group: str) -> list[DeploymentTypedDict]:
+    def get_model_list_of_routed_group(self, model_group: str, team_id: str | None = None) -> list[DeploymentTypedDict]:
         return []
 
 
@@ -47,7 +50,7 @@ def _publish(monkeypatch, infos: Sequence[ModelGroupInfo], prisma_client: object
     monkeypatch.setattr(litellm, "public_model_groups", [info.model_group for info in infos])
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.llm_router",
-        _FakeRouter(infos=MappingProxyType({info.model_group: info for info in infos})),
+        route_entry_points_to_stubs(_FakeRouter(infos=MappingProxyType({info.model_group: info for info in infos}))),
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
 
@@ -350,11 +353,13 @@ def test_no_router_answers_with_a_problem_rather_than_the_openai_error_shape(mon
 
 def test_an_unexpected_router_failure_answers_as_a_problem_not_the_openai_error_shape(monkeypatch):
     class _Exploding:
+        team_model_to_deployment_indices: Final[Mapping[tuple[str, str], Sequence[int]]] = MappingProxyType({})
+
         def get_model_group_info(self, model_group: str, team_id: str | None = None) -> ModelGroupInfo:
             raise RuntimeError("router blew up")
 
     monkeypatch.setattr(litellm, "public_model_groups", ["boom"])
-    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", _Exploding())
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", route_entry_points_to_stubs(_Exploding()))
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
 
     response = _get()

@@ -2,7 +2,8 @@ import base64
 import json
 import os
 from datetime import datetime
-from io import BytesIO
+from io import BytesIO, StringIO
+from pathlib import Path
 from typing import Dict, Final
 from unittest.mock import MagicMock, patch
 
@@ -21,6 +22,46 @@ from litellm.llms.vertex_ai.image_edit.vertex_imagen_transformation import (
     VertexAIImagenImageEditConfig,
 )
 from litellm.types.router import GenericLiteLLMParams
+
+
+@pytest.mark.parametrize("traffic_type", ("ON_DEMAND_PRIORITY", "", None))
+def test_vertex_gemini_edit_preserves_usage_and_traffic_type(traffic_type: str | None) -> None:
+    response: Final = VertexAIGeminiImageEditConfig().transform_image_edit_response(
+        model="gemini-3.1-flash-image",
+        raw_response=httpx.Response(
+            200,
+            json={
+                "candidates": [],
+                "usageMetadata": {
+                    "promptTokenCount": 1131,
+                    "candidatesTokenCount": 0,
+                    "totalTokenCount": 1131,
+                    "promptTokensDetails": [
+                        {"modality": "TEXT", "tokenCount": 7},
+                        {"modality": "IMAGE", "tokenCount": 1124},
+                    ],
+                    **({"trafficType": traffic_type} if traffic_type is not None else {}),
+                },
+            },
+        ),
+        logging_obj=Logging(
+            model="gemini-3.1-flash-image",
+            messages=[],
+            stream=False,
+            call_type="image_edit",
+            start_time=datetime(2025, 1, 1),
+            litellm_call_id="edit",
+            function_id="edit",
+        ),
+    )
+    assert response.usage is not None
+    assert response.usage.input_tokens == 1131
+    assert response.usage.output_tokens == 0
+    assert response.usage.input_tokens_details.text_tokens == 7
+    assert response.usage.input_tokens_details.image_tokens == 1124
+    assert response.hidden_params.get("provider_specific_fields", {}) == (
+        {"traffic_type": traffic_type} if traffic_type else {}
+    )
 
 
 @pytest.mark.parametrize("size", ("1536x1024", "1024x1536", "3072x2048", "256x256", "512x512", "4096x4096"))
@@ -230,10 +271,10 @@ class TestVertexAIGeminiImageEditTransformation:
         )
 
     def test_transform_image_edit_request_without_image_raises(self) -> None:
-        """Test that missing image raises ValueError"""
+        """Test that missing image raises BadRequestError with 400 status code"""
         optional_params = {}
 
-        with pytest.raises(ValueError, match="requires at least one image"):
+        with pytest.raises(litellm.BadRequestError, match="requires at least one image") as exc_info:
             self.config.transform_image_edit_request(
                 model=self.model,
                 prompt=self.prompt,
@@ -242,6 +283,7 @@ class TestVertexAIGeminiImageEditTransformation:
                 litellm_params=MagicMock(),
                 headers={},
             )
+        assert exc_info.value.status_code == 400
 
     def test_validate_environment_with_litellm_params(self) -> None:
         """Test validate_environment uses credentials from litellm_params"""
@@ -511,6 +553,30 @@ class TestVertexAIImagenImageEditTransformation:
             self.config._read_all_bytes(bytearray(b"test_bytearray"))
             == b"test_bytearray"
         )
+
+    @pytest.mark.parametrize(
+        ("image", "expected"),
+        [
+            ([None, b"first image"], b"first image"),
+            ({"data": base64.b64encode(b"from data").decode()}, b"from data"),
+            ({"bytes": None, "content": b"from content"}, b"from content"),
+            ({"path": BytesIO(b"from path")}, b"from path"),
+            (StringIO("from text reader"), b"from text reader"),
+        ],
+    )
+    def test_read_all_bytes_unwraps_lists_dicts_and_readers(self, image: object, expected: bytes) -> None:
+        assert self.config._read_all_bytes(image) == expected
+
+    @pytest.mark.parametrize(
+        ("image", "refusal"),
+        [
+            ({"path": "/etc/passwd"}, "plain string values are not accepted"),
+            ({"path": Path("/etc/passwd")}, "filesystem paths are not accepted"),
+        ],
+    )
+    def test_read_all_bytes_refuses_to_read_a_path_given_inside_a_dict(self, image: object, refusal: str) -> None:
+        with pytest.raises(ValueError, match=refusal):
+            self.config._read_all_bytes(image)
 
 
 _IMAGEN_EDIT_IMAGE_KEY = "bytesBase64Encoded"

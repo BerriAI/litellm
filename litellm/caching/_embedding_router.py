@@ -57,7 +57,7 @@ def resolve_embedding_max_input_tokens(
         return configured_max_input_tokens
     if router is None:
         return None
-    deployment_max_input_tokens, _ = router.get_configured_token_limits(embedding_model)
+    deployment_max_input_tokens, _ = router.registry().group(embedding_model, field="token_limits")
     return deployment_max_input_tokens
 
 

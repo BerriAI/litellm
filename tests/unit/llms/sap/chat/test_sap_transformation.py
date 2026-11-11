@@ -1,4 +1,6 @@
 import warnings
+from typing import Final
+
 import pytest
 from pydantic import ValidationError
 
@@ -907,6 +909,22 @@ class TestCacheControl:
         content = self._template(body)[0]["content"]
         assert "cache_control" not in content[0]
         assert content[1].get("cache_control") == {"type": "ephemeral"}
+
+    def test_pdf_file_part_reaches_sap_as_an_image_url_data_url(self) -> None:
+        pdf_data_url: Final = "data:application/pdf;base64,JVBERi0xLjQK"
+        messages: Final = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Summarize this."},
+                    {"type": "file", "file": {"filename": "report.pdf", "file_data": pdf_data_url}},
+                ],
+            }
+        ]
+        body: Final = self._transform("anthropic--claude-3-5-sonnet", messages)
+        content: Final = self._template(body)[0]["content"]
+        assert content[1]["type"] == "image_url"
+        assert content[1]["image_url"]["url"] == pdf_data_url
 
     def test_message_level_cache_control_folded_onto_trailing_image_block(self):
         messages = [
