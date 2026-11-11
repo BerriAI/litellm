@@ -1053,6 +1053,20 @@ async def test_claude_converse_count_matches_inference_for_an_earlier_empty_user
 
 
 @pytest.mark.asyncio
+async def test_claude_converse_count_keeps_the_spaces_only_user_turn_inference_sends(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "modify_params", False)
+
+    converse_sent, counted = await _converse_sent_and_counted(
+        [_QUESTION, _ANSWER, {"role": "user", "content": "   "}, {"role": "user", "content": "And 3+3?"}], []
+    )
+
+    assert ("user", "   ") in converse_sent
+    assert counted == converse_sent
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("block", ({"type": "text"}, {"type": "text", "text": None}), ids=("no_text", "null_text"))
 async def test_claude_converse_count_answers_400_for_a_malformed_user_text_block(
     block: dict[str, JsonValue], monkeypatch: pytest.MonkeyPatch

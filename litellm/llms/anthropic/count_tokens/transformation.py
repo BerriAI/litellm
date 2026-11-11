@@ -329,15 +329,15 @@ def anthropic_fields_for_chat_tool_use(
     tools: Sequence[Mapping[str, object]] | None,
     translator: _ChatRequestTranslator,
     chat_params: Mapping[str, object] = MappingProxyType({}),
-    lifts_system_messages: bool = False,
+    messages_are_converse_turns: bool = False,
 ) -> AnthropicCountFields | ChatCountTranslationError | None:
     counted_tools: Final = tools or ()
-    lifts_system: Final = lifts_system_messages and any(map(_is_system_role, messages))
+    lifts_system: Final = messages_are_converse_turns and any(map(_is_system_role, messages))
     if (
         not chat_params
         and not any(map(_needs_tool_translation, counted_tools))
         and not any(map(_needs_chat_translation, messages))
-        and not _counts_blank_text_as_chat_sends_it(messages)
+        and (messages_are_converse_turns or not _counts_blank_text_as_chat_sends_it(messages))
         and not (lifts_system and all(map(_is_system_role, messages)))
     ):
         return _fields_with_system_lifted(messages, system, tools) if lifts_system else None
@@ -370,12 +370,12 @@ async def anthropic_count_fields(
     messages_format: TokenCountMessagesFormat,
     translator: _ChatRequestTranslator,
     chat_params: Mapping[str, object] = MappingProxyType({}),
-    lifts_system_messages: bool = False,
+    messages_are_converse_turns: bool = False,
 ) -> AnthropicCountFields | ChatCountTranslationError | None:
     if messages_format != "openai":
         return None
     return await asyncify(anthropic_fields_for_chat_tool_use)(
-        model, messages, system, tools, translator, chat_params, lifts_system_messages
+        model, messages, system, tools, translator, chat_params, messages_are_converse_turns
     )
 
 

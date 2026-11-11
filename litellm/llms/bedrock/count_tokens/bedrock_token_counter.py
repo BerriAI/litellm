@@ -270,7 +270,7 @@ class BedrockTokenCounter(BaseTokenCounter):
                 messages_format,
                 chat_config if isinstance(chat_config, AnthropicConfig) else AnthropicConfig(),
                 chat_params,
-                lifts_system_messages=converse_config is not None,
+                messages_are_converse_turns=converse_config is not None,
             )
             if is_mantle_claude_model(resolved_model)
             else None
