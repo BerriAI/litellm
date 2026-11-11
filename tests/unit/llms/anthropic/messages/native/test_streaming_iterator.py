@@ -2071,3 +2071,45 @@ async def test_pump_closes_a_stalled_upstream_after_giving_up_on_a_client_that_n
 
     assert closed_while_stalled, "the stalled provider stream stayed open after the client was given up on"
     assert iterator.logging_call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_pump_gives_up_on_the_end_sentinel_and_a_resumed_client_still_gets_a_clean_complete_stream(
+    monkeypatch,
+):
+    """
+    Regression: when the upstream had already finished and only the end-of-stream sentinel was
+    left, a stalled client with a full relay queue kept the pump waiting on that last put. The
+    pump must give up at the stall timeout with the request already billed, and a client that
+    resumes must still get every chunk, ending at message_stop with no error event after it.
+    """
+    content_chunks: Final = 3
+    remaining_events: Final = content_chunks + 2
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE", remaining_events)
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_CLIENT_STALL_TIMEOUT_SECONDS", 0)
+    client_stopped_reading: Final = asyncio.Event()
+
+    async def _stream_that_finishes_after_the_client_stalls():
+        yield {"type": "message_start", "message": {"id": "m", "usage": {"input_tokens": 5, "output_tokens": 1}}}
+        await client_stopped_reading.wait()
+        for i in range(content_chunks):
+            yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": f"t{i}"}}
+        yield {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 42}}
+        yield {"type": "message_stop"}
+
+    iterator = _RecordingLoggingIterator(litellm_logging_obj=_make_logging_obj("blocked_end_sentinel"), request_body={})
+    gen = iterator.async_sse_wrapper(_stream_that_finishes_after_the_client_stalls())
+    first_frame: Final = await gen.__anext__()
+    client_stopped_reading.set()
+    await _wait_until_no_live_pumps()
+    billed_before_resume: Final = iterator.logging_call_count
+
+    async def _read_rest() -> list[bytes]:
+        return [frame async for frame in gen]
+
+    frames: Final = [first_frame, *await asyncio.wait_for(_read_rest(), timeout=5)]
+
+    assert billed_before_resume == 1
+    assert len(frames) == remaining_events + 1
+    assert frames[-1].startswith(b"event: message_stop\n")
+    assert not any(frame.startswith(b"event: error\n") for frame in frames)

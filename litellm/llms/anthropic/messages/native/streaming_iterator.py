@@ -672,17 +672,20 @@ class BaseAnthropicMessagesStreamingIterator:
         pump_task.add_done_callback(_UPSTREAM_PUMP_TASKS.discard)
 
         reached_end = False  # rebind-ok: flipped once the relay consumes the end-of-stream sentinel
+        relayed_terminal_event = False  # rebind-ok: flipped once a message_stop or error event reaches the client
         try:
             while True:
                 item = await _next_relay_item(queue, pump_task)
                 if isinstance(item, _PumpExited):
-                    yield _incomplete_stream_error_sse_event()
+                    if not relayed_terminal_event:
+                        yield _incomplete_stream_error_sse_event()
                     break
                 if item is None:
                     reached_end = True
                     break
                 if isinstance(item, BaseException):
                     raise item
+                relayed_terminal_event = relayed_terminal_event or _is_terminal_stream_chunk(item)
                 yield item
         finally:
             client_detached.set()
