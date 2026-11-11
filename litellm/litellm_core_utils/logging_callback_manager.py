@@ -448,13 +448,10 @@ class LoggingCallbackManager:
         self,
     ) -> set[AdditionalLoggingUtils]:
         """
-        Get all custom loggers that are instances of the given class type
-
-        Args:
-            class_type: The class type to match against (e.g., AdditionalLoggingUtils)
+        Get all custom loggers that are instances of AdditionalLoggingUtils
 
         Returns:
-            Set[CustomLogger]: Set of custom loggers that are instances of the given class type
+            Set[AdditionalLoggingUtils]: Custom loggers that are AdditionalLoggingUtils instances
         """
         all_callbacks: Final = self.get_all_callbacks()
         matched_callbacks: Final[set[AdditionalLoggingUtils]] = set()

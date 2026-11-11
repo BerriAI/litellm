@@ -5545,8 +5545,8 @@ def get_masked_values(
     Masks the headers of the request sent from LiteLLM
 
     Args:
-        masked_length: Optional length for the masked portion (number of *). If set, will use exactly this many *
-                     regardless of original string length. The total length will be unmasked_length + masked_length.
+        number_of_asterisks: Optional length for the masked portion (number of *). If set, will use exactly this many *
+                     regardless of original string length. The total length will be unmasked_length + number_of_asterisks.
     """
 
     def _mask_value(v: object) -> object:
