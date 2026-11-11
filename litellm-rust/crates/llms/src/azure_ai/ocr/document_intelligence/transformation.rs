@@ -38,7 +38,9 @@ const AZURE_DI_API_KEY_ENV: &str = "AZURE_DOCUMENT_INTELLIGENCE_API_KEY";
 const AZURE_DI_ENDPOINT_ENV: &str = "AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT";
 const OUTPUT_CONTENT_FORMAT_PARAM: &str = "outputContentFormat";
 const OUTPUT_CONTENT_FORMAT_ALIAS: &str = "output_content_format";
-const QUERY_PARAMS: [&str; 3] = ["pages", "features", OUTPUT_CONTENT_FORMAT_PARAM];
+const PAGES_PARAM: &str = "pages";
+const FEATURES_PARAM: &str = "features";
+const EXTRA_BODY_PARAM: &str = "extra_body";
 const CODE_POINT_STRING_INDEX: &str = "unicodeCodePoint";
 const STRING_INDEX_TYPE_FIELD: &str = "stringIndexType";
 const MARKDOWN_MODEL_ID: &str = "prebuilt-layout";
@@ -218,14 +220,33 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
         non_default_params: &CallArguments,
         model: &str,
     ) -> Result<DocumentIntelligenceParams, Error> {
-        let params = with_query_params_from_extra_body(non_default_params);
-        let output_content_format = requested_output_content_format(&params)?;
+        let output_content_format = resolve_query_option(
+            non_default_params,
+            OUTPUT_CONTENT_FORMAT_PARAM,
+            parse_optional_output_content_format,
+            || requested_output_content_format(non_default_params),
+        )?;
         let slices_markdown_pages = output_content_format == Some(OutputContentFormat::Markdown)
-            && response_format(&params)? != OcrResponseFormat::Native
+            && response_format(non_default_params)? != OcrResponseFormat::Native
             && model_id(model).is_ok_and(|id| id == MARKDOWN_MODEL_ID);
         Ok(DocumentIntelligenceParams {
-            pages: normalize_pages_param(params.get("pages"))?,
-            features: normalize_features_param(params.get("features"))?,
+            pages: resolve_query_option(
+                non_default_params,
+                PAGES_PARAM,
+                |pages| normalize_pages_param(pages, PageNumbering::Azure),
+                || {
+                    normalize_pages_param(
+                        non_default_params.get(PAGES_PARAM),
+                        PageNumbering::ZeroBasedIndex,
+                    )
+                },
+            )?,
+            features: resolve_query_option(
+                non_default_params,
+                FEATURES_PARAM,
+                normalize_features_param,
+                || normalize_features_param(non_default_params.get(FEATURES_PARAM)),
+            )?,
             output_content_format,
             string_index_type: slices_markdown_pages.then_some(CODE_POINT_STRING_INDEX),
         })
@@ -321,19 +342,38 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
     }
 }
 
-fn normalize_pages_param(pages: Option<&Value>) -> Result<Option<String>, Error> {
+#[derive(Clone, Copy)]
+enum PageNumbering {
+    ZeroBasedIndex,
+    Azure,
+}
+
+impl PageNumbering {
+    fn azure_page_number(self, page: i64) -> Result<i64, Error> {
+        match self {
+            _ if page < 0 => Err(Error::Pages(PagesFault::Negative)),
+            Self::ZeroBasedIndex => page
+                .checked_add(1)
+                .ok_or(Error::Pages(PagesFault::OutOfRange)),
+            Self::Azure if page == 0 => Err(Error::Pages(PagesFault::OutOfRange)),
+            Self::Azure => Ok(page),
+        }
+    }
+}
+
+fn normalize_pages_param(
+    pages: Option<&Value>,
+    numbering: PageNumbering,
+) -> Result<Option<String>, Error> {
     let normalized = match pages {
         None | Some(Value::Null) => return Ok(None),
         Some(Value::Array(pages)) if pages.is_empty() => return Ok(None),
         Some(Value::Array(pages)) if pages.iter().all(Value::is_number) => pages
             .iter()
             .map(|page| {
-                let page = page.as_i64().ok_or(Error::Pages(PagesFault::OutOfRange))?;
-                if page < 0 {
-                    return Err(Error::Pages(PagesFault::Negative));
-                }
-                page.checked_add(1)
+                page.as_i64()
                     .ok_or(Error::Pages(PagesFault::OutOfRange))
+                    .and_then(|page| numbering.azure_page_number(page))
             })
             .collect::<Result<BTreeSet<_>, _>>()?
             .into_iter()
@@ -406,18 +446,29 @@ fn normalize_features_param(features: Option<&Value>) -> Result<Option<String>, 
     Ok(Some(normalized.join(",")))
 }
 
-fn with_query_params_from_extra_body(arguments: &CallArguments) -> CallArguments {
-    let overrides = arguments
-        .get("extra_body")
-        .and_then(Value::as_object)
-        .into_iter()
-        .flatten()
-        .filter(|(name, _)| QUERY_PARAMS.contains(&name.as_str()));
-    arguments
-        .iter()
-        .chain(overrides)
-        .map(|(name, value)| (name.clone(), value.clone()))
-        .collect()
+fn resolve_query_option<T>(
+    arguments: &CallArguments,
+    name: &str,
+    parse_extra_body_value: impl FnOnce(Option<&Value>) -> Result<Option<T>, Error>,
+    top_level_value: impl FnOnce() -> Result<Option<T>, Error>,
+) -> Result<Option<T>, Error> {
+    let requested = arguments
+        .get(EXTRA_BODY_PARAM)
+        .and_then(|extra_body| extra_body.get(name));
+    match parse_extra_body_value(requested) {
+        Ok(None) => top_level_value(),
+        Err(_) if drops_unsupported_params(arguments) => top_level_value(),
+        resolved => resolved,
+    }
+}
+
+fn parse_optional_output_content_format(
+    format: Option<&Value>,
+) -> Result<Option<OutputContentFormat>, Error> {
+    format
+        .filter(|format| !is_unset(format))
+        .map(parse_output_content_format)
+        .transpose()
 }
 
 fn requested_output_content_format(
@@ -427,7 +478,7 @@ fn requested_output_content_format(
         .into_iter()
         .filter_map(|name| params.get(name))
         .find(|format| !is_unset(format));
-    match requested.map(parse_output_content_format).transpose() {
+    match parse_optional_output_content_format(requested) {
         Err(Error::OutputContentFormat) if drops_unsupported_params(params) => Ok(None),
         parsed => parsed,
     }
@@ -1144,6 +1195,86 @@ mod tests {
             mapped.output_content_format,
             Some(OutputContentFormat::Markdown)
         );
+    }
+
+    #[rstest]
+    #[case::pair(json!([1, 2]), "1,2")]
+    #[case::unsorted_duplicates(json!([3, 1, 1]), "1,3")]
+    #[case::range(json!("2-3"), "2-3")]
+    #[case::strings(json!(["1", "3-5"]), "1,3-5")]
+    fn extra_body_page_numbers_are_azure_page_numbers(
+        #[case] pages: Value,
+        #[case] expected: &str,
+    ) {
+        let mapped = map(json!({"pages": [5], "extra_body": {"pages": pages}})).unwrap();
+
+        assert_eq!(mapped.pages.as_deref(), Some(expected));
+    }
+
+    #[rstest]
+    #[case::zero_page(json!({"pages": [0]}), Error::Pages(PagesFault::OutOfRange))]
+    #[case::negative_page(json!({"pages": [-1]}), Error::Pages(PagesFault::Negative))]
+    #[case::bad_range(json!({"pages": "abc"}), Error::Pages(PagesFault::Range))]
+    #[case::bad_features(json!({"features": 5}), Error::Features)]
+    #[case::bad_format(json!({"outputContentFormat": "html"}), Error::OutputContentFormat)]
+    fn invalid_extra_body_query_option_is_a_request_error(
+        #[case] extra_body: Value,
+        #[case] expected: Error,
+    ) {
+        let error = map(json!({"extra_body": extra_body})).unwrap_err();
+
+        assert_eq!(format!("{error:?}"), format!("{expected:?}"));
+        assert_eq!(error.http_status_code(), Some(400));
+    }
+
+    #[rstest]
+    #[case::bad_range(json!({"pages": "abc"}))]
+    #[case::zero_page(json!({"pages": [0]}))]
+    #[case::bad_features(json!({"features": 5}))]
+    #[case::bad_format(json!({"outputContentFormat": "html"}))]
+    fn drop_params_drops_an_invalid_extra_body_query_option(#[case] extra_body: Value) {
+        let mapped = map(json!({"drop_params": true, "extra_body": extra_body})).unwrap();
+
+        assert_eq!(serde_json::to_value(mapped).unwrap(), json!({}));
+    }
+
+    #[rstest]
+    #[case::dropped_pages(
+        json!({"drop_params": true, "pages": [0], "extra_body": {"pages": "abc"}}),
+        json!({"pages": "1"})
+    )]
+    #[case::dropped_features(
+        json!({"drop_params": true, "features": "languages", "extra_body": {"features": 5}}),
+        json!({"features": "languages"})
+    )]
+    #[case::dropped_format(
+        json!({"drop_params": true, "outputContentFormat": "text", "extra_body": {"outputContentFormat": "html"}}),
+        json!({"outputContentFormat": "text"})
+    )]
+    #[case::null_pages(json!({"pages": [0], "extra_body": {"pages": null}}), json!({"pages": "1"}))]
+    #[case::empty_features(
+        json!({"features": "languages", "extra_body": {"features": []}}),
+        json!({"features": "languages"})
+    )]
+    #[case::null_format(
+        json!({"outputContentFormat": "text", "extra_body": {"outputContentFormat": null}}),
+        json!({"outputContentFormat": "text"})
+    )]
+    #[case::null_format_over_snake_case(
+        json!({"output_content_format": "text", "extra_body": {"outputContentFormat": null}}),
+        json!({"outputContentFormat": "text"})
+    )]
+    #[case::blank_format(
+        json!({"outputContentFormat": "text", "extra_body": {"outputContentFormat": " "}}),
+        json!({"outputContentFormat": "text"})
+    )]
+    fn unset_or_dropped_extra_body_option_falls_back_to_the_top_level_value(
+        #[case] options: Value,
+        #[case] expected: Value,
+    ) {
+        let mapped = map(options).unwrap();
+
+        assert_eq!(serde_json::to_value(mapped).unwrap(), expected);
     }
 
     fn markdown_pages(analyze_result: Value) -> Vec<String> {

@@ -74,6 +74,8 @@ async fn pages_features_and_extra_options_map_to_the_analyze_call() {
 #[case(json!({"outputContentFormat": "html"}), Error::OutputContentFormat)]
 #[case(json!({"extra_body": {"outputContentFormat": "html"}}), Error::OutputContentFormat)]
 #[case(json!({"extra_body": {"pages": [-1]}}), Error::Pages(PagesFault::Negative))]
+#[case(json!({"extra_body": {"pages": [0]}}), Error::Pages(PagesFault::OutOfRange))]
+#[case(json!({"extra_body": {"features": 5}}), Error::Features)]
 #[tokio::test]
 async fn invalid_pages_features_and_format_are_rejected_before_sending(
     #[case] options: Value,
@@ -281,6 +283,24 @@ async fn the_requested_output_content_format_reaches_azure_in_its_query_spelling
 #[case::dropped(
     json!({"extra_body": {"outputContentFormat": "html"}, "drop_params": true}),
     [None, None, None, None]
+)]
+#[case::azure_page_numbers(
+    json!({"extra_body": {"pages": [1, 2]}}),
+    [Some("1,2"), None, None, None]
+)]
+#[case::dropped_falls_back_to_the_top_level(
+    json!({
+        "drop_params": true,
+        "pages": [0],
+        "features": "languages",
+        "outputContentFormat": "markdown",
+        "extra_body": {"pages": "abc", "features": 5, "outputContentFormat": "html"}
+    }),
+    [Some("1"), Some("languages"), Some("markdown"), Some("unicodeCodePoint")]
+)]
+#[case::null_falls_back_to_the_top_level(
+    json!({"output_content_format": "markdown", "extra_body": {"outputContentFormat": null}}),
+    [None, None, Some("markdown"), Some("unicodeCodePoint")]
 )]
 #[tokio::test]
 async fn azure_query_params_in_extra_body_reach_the_analyze_query(
