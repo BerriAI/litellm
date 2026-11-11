@@ -1,5 +1,5 @@
 from collections.abc import Mapping, Sequence
-from typing import Any, Final, Literal, cast  # noqa: TID251  # JSON chat rows have no typed constructor across roles
+from typing import Any, Final, Literal, TypeAlias, cast  # noqa: TID251  # JSON chat rows have no typed constructor
 
 from pydantic import ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer
 from typing_extensions import TypedDict
@@ -13,7 +13,7 @@ from litellm.types.llms.openai import (
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.utils import ChatCompletionMessageToolCall
 
-GuardrailInformationScope = Literal["per_call", "per_session", "off"]
+GuardrailInformationScope: TypeAlias = Literal["per_call", "per_session", "off"]
 
 
 class GuardrailToolParam(LiteLLMBaseModel):
@@ -131,7 +131,8 @@ class GenericGuardrailAPIOptionalParams(LiteLLMBaseModel):
         description=(
             "How often a call that allows the content unchanged records its guardrail entry in spend logs, OTEL and "
             "logging callbacks. 'per_call' (default) records every call. 'per_session' records the first unchanged "
-            "allow of each session once per side, keyed by the caller and the session id, and records every call "
+            "allow of each session once per side for an hour, keyed by the guardrail, the caller and the session id, "
+            "shared across proxy instances through the proxy's Redis when one is configured, and records every call "
             "that has no session id. 'off' records none. Blocks, rewrites, errors and fail-open passthroughs are "
             "always recorded."
         ),

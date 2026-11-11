@@ -4,7 +4,9 @@ from typing import Final, Literal
 
 import httpx
 import pytest
+from fakeredis import FakeServer
 
+from litellm.caching.redis_cache import RedisCache
 from litellm.exceptions import GuardrailRaisedException
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai.chat.guardrail_translation.handler import OpenAIChatCompletionsHandler
@@ -69,13 +71,16 @@ class _Endpoint:
         return self._respond(request)
 
 
+def _no_shared_redis() -> None:
+    return None
+
+
 def _guardrail(endpoint: _Endpoint, **options: object) -> GenericGuardrailAPI:
     return GenericGuardrailAPI(
         api_base="https://guardrail.test",
-        guardrail_name="scoped-guardrail",
         event_hook="pre_call",
         async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(endpoint)),
-        **options,
+        **{"guardrail_name": "scoped-guardrail", "session_claim_store": _no_shared_redis, **options},
     )
 
 
@@ -191,6 +196,43 @@ async def test_chat_completion_turns_through_the_openai_handler_follow_the_scope
         return _recorded(data)
 
     assert [await chat_turn() for _ in range(2)] == expected
+
+
+@pytest.mark.asyncio
+async def test_per_session_records_once_across_proxy_pods_sharing_redis(
+    shared_redis: tuple[RedisCache, FakeServer],
+) -> None:
+    redis, _ = shared_redis
+    pods: Final = tuple(
+        _guardrail(_Endpoint(_allow), guardrail_information_scope="per_session", session_claim_store=lambda: redis)
+        for _ in range(2)
+    )
+
+    assert [await _run(pod, _turn()) for pod in (*pods, *pods)] == [["success"], [], [], []]
+
+
+@pytest.mark.asyncio
+async def test_per_session_records_each_guardrails_first_call_on_a_shared_redis(
+    shared_redis: tuple[RedisCache, FakeServer],
+) -> None:
+    redis, _ = shared_redis
+
+    def named(name: str) -> GenericGuardrailAPI:
+        return _guardrail(
+            _Endpoint(_allow),
+            guardrail_name=name,
+            guardrail_information_scope="per_session",
+            session_claim_store=lambda: redis,
+        )
+
+    guardrails: Final = (named("vendor-a"), named("vendor-b"))
+
+    assert [await _run(guardrail, _turn()) for guardrail in (*guardrails, *guardrails)] == [
+        ["success"],
+        ["success"],
+        [],
+        [],
+    ]
 
 
 @pytest.mark.asyncio

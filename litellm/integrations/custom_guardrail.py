@@ -1512,7 +1512,7 @@ class CustomGuardrail(CustomLogger):
             return False
         return self.event_hook == event_type.value
 
-    def get_guardrail_dynamic_request_body_params(self, request_data: dict) -> dict[str, object]:
+    def get_guardrail_dynamic_request_body_params(self, request_data: dict) -> dict[str, Any]:
         """
         Returns `extra_body` to be added to the request body for the Guardrail API call
 

@@ -19,6 +19,7 @@ from litellm._version import version as litellm_version
 from litellm.exceptions import GuardrailRaisedException, Timeout
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
+    get_session_id_from_request_data,
     log_guardrail_information,
     skip_guardrail_success_record,
 )
@@ -31,9 +32,10 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.record_scope import (
     Caller,
     RecordScope,
+    SessionClaimStore,
     guardrail_information_scope_from_config,
+    proxy_session_claim_store,
     returned_unchanged,
-    session_id_of,
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
@@ -291,6 +293,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         async_handler: AsyncHTTPHandler | None = None,
         fresh_handler_factory: Callable[[], AsyncHTTPHandler] | None = None,
         guardrail_information_scope: GuardrailInformationScope | None = None,
+        session_claim_store: Callable[[], SessionClaimStore | None] = proxy_session_claim_store,
         **kwargs,
     ):
         self.async_handler = async_handler or get_async_httpx_client(
@@ -347,12 +350,16 @@ class GenericGuardrailAPI(CustomGuardrail):
         if streaming_buffer_until_moderated is not None:
             self.streaming_buffer_until_moderated: bool = streaming_buffer_until_moderated
 
-        self._record_scope: Final = RecordScope(guardrail_information_scope_from_config(guardrail_information_scope))
-
         # Set supported event hooks
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
 
         super().__init__(**kwargs)
+
+        self._record_scope: Final = RecordScope(
+            guardrail_information_scope_from_config(guardrail_information_scope),
+            guardrail_name=self.guardrail_name,
+            shared_store=session_claim_store,
+        )
 
         verbose_proxy_logger.debug("Generic Guardrail API initialized with api_base: %s", self.api_base)
 
@@ -666,8 +673,8 @@ class GenericGuardrailAPI(CustomGuardrail):
             guardrail_response.action == "NONE"
             and not self._record_scope.records_every_allow
             and returned_unchanged(inputs, return_inputs)
-            and not self._record_scope.should_record_allow(
-                session_id=session_id_of(request_data),
+            and not await self._record_scope.should_record_allow(
+                session_id=get_session_id_from_request_data(request_data),  # pyright: ignore[reportUnknownArgumentType]  # request_data is untyped
                 caller=Caller(
                     key_hash=user_metadata.get("user_api_key_hash"),
                     team_id=user_metadata.get("user_api_key_team_id"),
