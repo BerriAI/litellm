@@ -35,6 +35,7 @@ from litellm.litellm_core_utils.model_latest_aliases import is_model_latest_alia
 from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
 from litellm.litellm_core_utils.reasoning_effort_capability import deployment_reasoning_effort_levels
 from litellm.litellm_core_utils.request_timeout_resolver import get_configured_request_timeout
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.anthropic.common_utils import (
     AnthropicError,
     AnthropicModelInfo,
@@ -149,6 +150,7 @@ class MessagesSettings:
     mcp_gateway: bool = False
     ascii_response_headers: bool = False
     joined_reads: bool = False
+    ascii_request_headers: bool = True
 
 
 def response(value: Mapping[str, object]) -> AnthropicMessagesResponse:
@@ -788,12 +790,44 @@ def _python_handler_params(request: Mapping[str, object], custom_llm_provider: o
     )
 
 
+def _resolved_provider(request: Mapping[str, object]) -> str | None:
+    return optional_str(request.get("custom_llm_provider")) or inferred_provider(
+        str(request["model"]), optional_str(request.get("api_base"))
+    )
+
+
+def _scope_provider_specific_header(request: Mapping[str, object]) -> None:
+    scoped: Final = request.get("provider_specific_header")
+    if scoped is None:
+        return
+    ProviderSpecificHeaderUtils.get_provider_specific_headers(
+        provider_specific_header=cast(  # cast-ok: the handler hands the caller's value on unvalidated
+            ProviderSpecificHeader | None, scoped
+        ),
+        custom_llm_provider=_resolved_provider(request),
+        native_anthropic_messages=True,
+    )
+
+
+def _python_messages_url(api_base: str | None) -> str:
+    """`AnthropicMessagesConfig.get_complete_url`, untrimmed, whose `urlsplit` raises a bare
+    ValueError for a base it cannot split (``Invalid IPv6 URL``)."""
+    return ensure_api_route(AnthropicModelInfo.get_api_base(api_base) or "https://api.anthropic.com", "v1/messages")
+
+
 def _raise_as_python_does(request: Mapping[str, object]) -> None:
     iter(cast(Iterable[object], request.get("messages")))  # cast-ok: iterated unchecked, as Python's handler does
     tools: Final = request.get("tools")
     if tools is not None and not isinstance(tools, list | tuple) and has_interceptors():
         interceptor(request)
     _python_handler_params(request, request.get("custom_llm_provider"))
+    # Python's handler scopes the caller's provider_specific_header before it builds any header, so
+    # a value of the wrong shape raises its own error (a str: "'str' object has no attribute 'get'"),
+    # and then builds the URL, unmapped.
+    _scope_provider_specific_header(request)
+    api_base: Final = request.get("api_base")
+    if isinstance(api_base, str) and _resolved_provider(request) == "anthropic":
+        _python_messages_url(api_base)
 
 
 def settings(kwargs: Mapping[str, object], request: Mapping[str, object] | None = None) -> dict[str, object]:
@@ -1095,11 +1129,27 @@ class Sent:
     rejection: httpx.HTTPStatusError | None = None
 
 
+def _unsendable_api_base(api_base: object) -> bool:
+    """A caller api_base the native URL parser rejects or reads otherwise than httpx and aiohttp
+    (no http(s) scheme, whitespace, control or non-ASCII characters): Python's client decides what
+    such a URL does, from a relative-URL error to a request on the host it finds."""
+    if not isinstance(api_base, str) or not api_base:
+        return False
+    return not (
+        api_base.isascii()
+        and api_base.isprintable()
+        and " " not in api_base
+        and api_base.lower().startswith(("http://", "https://"))
+    )
+
+
 def transport_handler(request: Mapping[str, object]) -> AsyncHTTPHandler | None:
     client: Final = request.get("client")
     if isinstance(client, AsyncHTTPHandler):
         return client
-    if not http_transport.sends_through_python(client, request.get("timeout")):
+    if not http_transport.sends_through_python(client, request.get("timeout")) and not _unsendable_api_base(
+        request.get("api_base")
+    ):
         return None
     return get_async_httpx_client(llm_provider=litellm.LlmProviders.ANTHROPIC)
 
@@ -1113,6 +1163,17 @@ def unencodable_header(value: bytes, received: bool) -> Exception:
     return ValueError(text)
 
 
+def _sent_url(request: Mapping[str, object], url: str) -> str:
+    """The native URL builder trims the caller's api_base; Python sends it as given."""
+    api_base: Final = request.get("api_base")
+    if not isinstance(api_base, str) or api_base == api_base.strip() or not _unsendable_api_base(api_base):
+        return url
+    try:
+        return _python_messages_url(api_base) if url == _python_messages_url(api_base.strip()) else url
+    except ValueError:  # a base urlsplit cannot split keeps the URL the native builder made
+        return url
+
+
 async def transport_send(
     handler: AsyncHTTPHandler,
     request: Mapping[str, object],
@@ -1123,7 +1184,7 @@ async def transport_send(
 ) -> Sent:
     try:
         response: Final = await handler.post(  # pyright: ignore[reportUnknownMemberType]  # the handler's untyped dict params
-            url=url,
+            url=_sent_url(request, url),
             headers=dict(headers),
             data=body if isinstance(body, bytes) else json.dumps(body),
             stream=stream,

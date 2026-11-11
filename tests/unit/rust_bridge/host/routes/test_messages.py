@@ -84,6 +84,7 @@ def test_settings_project_caller_configuration_without_resolving_a_model(monkeyp
         "mcp_gateway": False,
         "ascii_response_headers": True,
         "joined_reads": True,
+        "ascii_request_headers": True,
     }
 
 

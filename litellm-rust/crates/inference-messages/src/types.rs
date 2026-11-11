@@ -92,6 +92,10 @@ pub struct MessagesSettings {
     pub ascii_response_headers: bool,
     #[serde(default)]
     pub unencodable_request_header: Option<Vec<u8>>,
+    /// Python's HTTP client encodes every header value it sends as ASCII, so a value it cannot
+    /// encode fails the call before the send.
+    #[serde(default)]
+    pub ascii_request_headers: bool,
 }
 
 impl MessagesSettings {

@@ -57,6 +57,7 @@ struct ProviderCall {
     transform_context: MessagesTransformContext,
     ascii_response_headers: bool,
     unencodable_request_header: Option<Vec<u8>>,
+    ascii_request_headers: bool,
 }
 
 impl ProviderCall {
@@ -384,6 +385,7 @@ async fn provider_call(
         transform_context,
         ascii_response_headers: shaping.settings.ascii_response_headers,
         unencodable_request_header: shaping.settings.unencodable_request_header,
+        ascii_request_headers: shaping.settings.ascii_request_headers,
     })
 }
 
@@ -641,6 +643,19 @@ async fn send_recovering(
         log_request_body(request.provider.as_str(), request.stream, &body);
         if let Some(value) = &request.unencodable_request_header {
             return Err(Error::transport(UnencodableHeader::Sent(value.clone())));
+        }
+        // The credential header built from the caller's api_key never passes the caller header
+        // check, so it is checked on the wire headers as Python's client encodes them.
+        if request.ascii_request_headers
+            && let Some((_, value)) = request
+                .wire
+                .headers
+                .iter()
+                .find(|(_, value)| !value.is_ascii())
+        {
+            return Err(Error::transport(UnencodableHeader::Sent(
+                value.as_bytes().to_vec(),
+            )));
         }
         let authenticated = Authenticated {
             headers: request.wire.headers.clone(),
