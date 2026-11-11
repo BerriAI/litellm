@@ -5761,6 +5761,30 @@ async def test_messages_count_tokens_leaves_out_an_option_the_request_drops(monk
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("body_options", "sent_thinking_type"),
+    (
+        ({}, "disabled"),
+        ({"thinking": {"type": "enabled"}}, "enabled"),
+        ({"additional_drop_params": ["thinking"]}, None),
+    ),
+)
+async def test_messages_count_tokens_counts_the_thinking_the_deployment_sets_unless_the_request_overrides_it(
+    monkeypatch: pytest.MonkeyPatch, body_options: Mapping[str, JsonValue], sent_thinking_type: str | None
+) -> None:
+    _, route = await _count_messages_body(
+        monkeypatch,
+        {"model": "deepseek/deepseek-v4-pro", "api_key": "sk-deepseek-test", "thinking": {"type": "disabled"}},
+        {"messages": [{"role": "user", "content": "Read the README"}], **body_options},
+        _DEEPSEEK_COUNT_ROUTE,
+        httpx.Response(200, json={"input_tokens": 91}),
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert (sent.get("thinking") or {}).get("type") == sent_thinking_type
+
+
+@pytest.mark.asyncio
 async def test_messages_count_tokens_answers_400_for_a_thinking_budget_messages_inference_rejects(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

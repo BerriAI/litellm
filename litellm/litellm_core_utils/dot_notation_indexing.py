@@ -232,7 +232,7 @@ def delete_nested_value(
     return result
 
 
-def delete_nested_values(data: Mapping[str, object], paths: Iterable[str]) -> dict[str, object]:
+def delete_nested_values(data: Mapping[str, object], paths: Iterable[str]) -> Mapping[str, object]:
     result: Final = copy.deepcopy(dict(data))
     for path in dict.fromkeys(paths):
         _delete_nested_value_custom(result, _parse_path_segments(path), 0)

@@ -29,6 +29,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
 )
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.common_utils import (
+    AnthropicModelInfo,
     carries_signed_compaction_block,
     context_management_betas,
     context_management_with_edits,
@@ -48,7 +49,7 @@ if TYPE_CHECKING:
 _COUNT_REQUEST: Final = TypeAdapter(dict[str, JsonValue])
 _COUNTED_MESSAGES: Final = TypeAdapter(list[dict[str, JsonValue]])
 _TRANSFORMED_REQUEST: Final = TypeAdapter(dict[str, object])
-_DROPPED_PATHS: Final = TypeAdapter(tuple[str, ...])
+_DROPPED_PATHS: Final = TypeAdapter(tuple[object, ...])
 _SYSTEM_BLOCKS: Final = TypeAdapter(list[JsonValue])
 _IMAGE_BLOCK: Final = TypeAdapter(ChatCompletionImageObject)
 COUNT_TOKEN_OPTION_NAMES: Final = ("thinking", "tool_choice", "output_config")
@@ -363,7 +364,16 @@ def _max_output_tokens(model: str, custom_llm_provider: str | None) -> int:
 
 def without_dropped_paths(options: Mapping[str, JsonValue], additional_drop_params: object) -> Mapping[str, JsonValue]:
     return _COUNT_REQUEST.validate_python(
-        delete_nested_values(options, _DROPPED_PATHS.validate_python(additional_drop_params or ()))
+        delete_nested_values(
+            options,
+            (
+                path
+                for path in _DROPPED_PATHS.validate_python(
+                    additional_drop_params if isinstance(additional_drop_params, (list, tuple)) else ()
+                )
+                if isinstance(path, str)
+            ),
+        )
     )
 
 
@@ -383,17 +393,19 @@ def messages_count_options(
     from litellm.exceptions import BadRequestError
     from litellm.llms.anthropic.common_utils import AnthropicError
 
+    kept_options: Final = without_dropped_paths(options, litellm_params.get("additional_drop_params"))
+    thinking_betas: Final = AnthropicModelInfo().thinking_betas(kept_options.get("thinking"))
     try:
         request: Final = _TRANSFORMED_REQUEST.validate_python(
             translator.transform_anthropic_messages_request(
                 model=model,
                 messages=_COUNTED_MESSAGES.validate_python(messages),
                 anthropic_messages_optional_request_params={
-                    **without_dropped_paths(options, litellm_params.get("additional_drop_params")),
+                    **kept_options,
                     "max_tokens": _max_output_tokens(model, translator.custom_llm_provider),
                 },
                 litellm_params=GenericLiteLLMParams.model_validate({"drop_params": litellm_params.get("drop_params")}),
-                headers={},
+                headers={"anthropic-beta": ",".join(thinking_betas)} if thinking_betas else {},
             )
         )
     except (AnthropicError, BadRequestError) as e:
@@ -500,6 +512,7 @@ class AnthropicCountTokensConfig:
         auth_header: Mapping[str, str],
         messages: Sequence[Mapping[str, JsonValue]],
         context_management: JsonValue = None,
+        thinking: JsonValue = None,
     ) -> dict[str, str]:
         """The count-tokens headers around a resolved Anthropic auth header
         (``AnthropicModelInfo.get_auth_header``): x-api-key for a static key, an Authorization
@@ -516,6 +529,7 @@ class AnthropicCountTokensConfig:
             ANTHROPIC_TOKEN_COUNTING_BETA_VERSION,
             *compaction_betas,
             *context_management_betas(context_management),
+            *AnthropicModelInfo().thinking_betas(thinking),
         )
         return {
             "Content-Type": "application/json",

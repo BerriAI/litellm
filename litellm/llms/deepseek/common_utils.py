@@ -11,9 +11,9 @@ class DeepSeekModelInfo(BaseLLMModelInfo):
     def get_models(
         self, api_key: str | None = None, api_base: str | None = None
     ) -> list[str]:  # mutable-ok: matches get_models' list[str] contract shared by every provider override
-        from litellm.utils import get_valid_models
+        from litellm.utils import bundled_provider_models
 
-        return get_valid_models(custom_llm_provider=LlmProviders.DEEPSEEK.value)
+        return list(bundled_provider_models(LlmProviders.DEEPSEEK.value))
 
     @staticmethod
     def get_api_key(api_key: str | None = None) -> str | None:

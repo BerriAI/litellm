@@ -15249,6 +15249,7 @@ async def run_thread(
 # async def get_available_routes(user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)):
 from litellm.litellm_core_utils.tool_fields import DropPolicy, drop_policy
 from litellm.llms.anthropic.count_tokens.token_counter import AnthropicTokenCounter
+from litellm.llms.anthropic.count_tokens.transformation import COUNT_TOKEN_OPTION_NAMES, without_dropped_paths
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
@@ -15379,6 +15380,16 @@ async def _with_resolved_credentials(deployment: Mapping[str, object] | None) ->
 
 
 _DEPLOYMENT_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
+_COUNT_OPTION_DEFAULTS: Final = TypeAdapter(Mapping[str, JsonValue])
+
+
+def _count_options_with_defaults(
+    count_options: Mapping[str, JsonValue], defaults: Mapping[str, object], additional_drop_params: object
+) -> Mapping[str, JsonValue]:
+    default_options: Final = _COUNT_OPTION_DEFAULTS.validate_python(
+        {name: defaults[name] for name in COUNT_TOKEN_OPTION_NAMES if defaults.get(name) is not None}
+    )
+    return MappingProxyType(without_dropped_paths({**default_options, **count_options}, additional_drop_params))
 
 
 def _deployment_with_request_drop_params(
@@ -16303,7 +16314,16 @@ async def _count_request_tokens(
                 output_format=output_format,
                 context_management=None if edited_request is not None else context_edits,
                 chat_params=MappingProxyType({}) if chat_count is None else chat_count.params,
-                count_options=count_options,
+                count_options=_count_options_with_defaults(
+                    count_options,
+                    {
+                        **_DEPLOYMENT_LITELLM_PARAMS.validate_python(
+                            (count_deployment or {}).get("litellm_params") or {}
+                        ),
+                        **_router_default_litellm_params(llm_router),
+                    },
+                    sent_params.get("additional_drop_params"),
+                ),
             ),
             model_to_use=model_to_use,
             request_model=request.model,

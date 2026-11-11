@@ -92,6 +92,16 @@ async def test_count_without_a_key_sends_no_api_key_header() -> None:
 
 
 @pytest.mark.asyncio
+async def test_count_waits_no_longer_than_the_deployment_timeout() -> None:
+    _, route = await _count(
+        httpx.Response(200, json={"input_tokens": 91}),
+        litellm_params={"api_key": "sk-deepseek-test", "timeout": 7},
+    )
+
+    assert route.calls.last.request.extensions["timeout"] == {"connect": 7, "read": 7, "write": 7, "pool": 7}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("messages_format", ("anthropic", "openai"))
 async def test_count_sends_tools_without_the_custom_type_deepseek_refuses(
     messages_format: TokenCountMessagesFormat,

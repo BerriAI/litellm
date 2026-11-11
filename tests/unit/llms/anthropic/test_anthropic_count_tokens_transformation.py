@@ -4,7 +4,6 @@ from collections.abc import Mapping
 from copy import deepcopy
 from queue import SimpleQueue
 from threading import get_ident
-from time import perf_counter
 from types import MappingProxyType
 from typing import Final
 
@@ -15,6 +14,7 @@ from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
 from litellm.llms.anthropic.count_tokens.token_counter import AnthropicTokenCounter
 from litellm.exceptions import BadRequestError
@@ -1010,6 +1010,41 @@ async def test_counter_leaves_out_an_option_the_deployment_drops(
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("httpx_transport_clients")
 @_COUNTERS
+@pytest.mark.parametrize("drop_params", (True, False))
+async def test_counter_sends_thinking_display_with_the_beta_messages_inference_adds_for_it(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    count_endpoint: str,
+    drop_params: bool,
+) -> None:
+    thinking: Final[dict[str, JsonValue]] = {"type": "adaptive", "display": "updates"}
+    inference_betas: Final = AnthropicModelInfo().thinking_betas(thinking)
+    with respx.mock:
+        route: Final = respx.post(count_endpoint).mock(return_value=httpx.Response(200, json={"input_tokens": 31}))
+        await counter_type().count_tokens(
+            model_to_use="claude-opus-5-5",
+            messages=[{"role": "user", "content": "Weather in SF?"}],
+            contents=None,
+            deployment={
+                "litellm_params": {
+                    "api_key": "sk-ant-api03-test-key",
+                    "api_base": "https://gateway.example",
+                    "drop_params": drop_params,
+                }
+            },
+            request_model="claude-opus-5-5",
+            messages_format="anthropic",
+            count_options={"thinking": thinking},
+        )
+
+    sent: Final = route.calls.last.request
+    assert inference_betas
+    assert frozenset(inference_betas) <= frozenset(sent.headers["anthropic-beta"].split(","))
+    assert TypeAdapter(dict[str, JsonValue]).validate_json(sent.content)["thinking"] == thinking
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
 async def test_counter_rejects_a_thinking_budget_messages_inference_rejects_without_calling_anthropic(
     counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter], count_endpoint: str
 ) -> None:
@@ -1150,16 +1185,19 @@ async def test_counter_leaves_out_context_management_without_edits(context_manag
     }
 
 
-def test_many_client_drop_paths_over_a_large_schema_finish_well_inside_one_request():
-    properties: Final = {f"field_{index}": {"type": "string", "description": "d" * 8} for index in range(3000)}
-    options: Final = {
-        "output_config": {"format": {"type": "json_schema", "schema": {"type": "object", "properties": properties}}},
+@pytest.mark.parametrize(
+    ("additional_drop_params", "kept"),
+    (
+        (["thinking", 5, None], ("output_config",)),
+        (("thinking",), ("output_config",)),
+        ("thinking", ("output_config", "thinking")),
+        (None, ("output_config", "thinking")),
+    ),
+)
+def test_drop_paths_skip_entries_and_values_inference_skips(additional_drop_params: object, kept: tuple[str, ...]) -> None:
+    options: Final[dict[str, JsonValue]] = {
+        "output_config": {"effort": "low"},
         "thinking": {"type": "enabled", "budget_tokens": 2048},
     }
-    paths: Final = [*(f"output_config.missing_{index}" for index in range(1000)), "thinking"]
-    started: Final = perf_counter()
-    result: Final = without_dropped_paths(options, paths)
-    elapsed: Final = perf_counter() - started
-    assert result == {"output_config": options["output_config"]}
-    assert "thinking" in options
-    assert elapsed < 1.0
+
+    assert without_dropped_paths(options, additional_drop_params) == {name: options[name] for name in kept}

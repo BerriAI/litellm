@@ -19,7 +19,7 @@ from litellm.llms.anthropic.count_tokens.transformation import (
     anthropic_count_fields,
     messages_count_options,
 )
-from litellm.llms.base_llm.base_utils import BaseTokenCounter
+from litellm.llms.base_llm.base_utils import BaseTokenCounter, deployment_timeout
 from litellm.llms.deepseek.chat.transformation import deepseek_reasoning_params
 from litellm.llms.deepseek.common_utils import DeepSeekModelInfo
 from litellm.llms.deepseek.messages.transformation import (
@@ -184,6 +184,7 @@ class DeepSeekTokenCounter(BaseTokenCounter):
                 tools=None if tools is None else _TOOLS.validate_python(sanitize_tools_for_deepseek(tools)),
                 system=system,
                 optional_params=count_options,
+                timeout=deployment_timeout(litellm_params),
             )
         except AnthropicError as e:
             if e.status_code in _COUNT_ROUTE_MISSING:
