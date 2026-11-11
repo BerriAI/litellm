@@ -36,6 +36,7 @@ from litellm.types.rag import (
     RAGIngestResponse,
 )
 from litellm.types.utils import ModelResponse
+from litellm.types.vector_stores import VectorStoreSearchResponse
 from litellm.utils import client
 
 if TYPE_CHECKING:
@@ -257,7 +258,7 @@ async def _execute_query_pipeline(
         {**provider_search_params, **kwargs, **filter_search_params, **store_search_params}
     )
     with internal_sub_call(parent_request_id):
-        search_response: Final = await litellm.vector_stores.asearch(
+        search_response: Final[VectorStoreSearchResponse] = await litellm.vector_stores.asearch(
             vector_store_id=retrieval_config["vector_store_id"],
             query=query_text,
             max_num_results=retrieval_config.get("top_k", 10),

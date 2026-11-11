@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
 import { StackedUsageChart } from "@/components/shared/charts";
 import { Button } from "@/components/ui/button";
 import { backgroundFetchClient } from "@/lib/http/api";
@@ -25,6 +26,7 @@ export default function ModelUsageChart({
   scope: string;
   range: ReturnType<typeof deprecationUsageRange>;
 }) {
+  const { t } = useTranslation();
   const [legendExpanded, setLegendExpanded] = useState(false);
   const activityOptions = {
     queryKey: ["deprecationDailyUsage", scope, model, team, range],
@@ -56,7 +58,8 @@ export default function ModelUsageChart({
     const aliases = new Map(
       days.flatMap((day) =>
         Object.entries(day.breakdown.api_keys).map(
-          ([id, entry]) => [id, entry.metadata.key_alias || `Key · ${id.slice(0, 6)}`] as const,
+          ([id, entry]) =>
+            [id, entry.metadata.key_alias || t("alerts.usageChart.keyFallback", { id: id.slice(0, 6) })] as const,
         ),
       ),
     );
@@ -66,15 +69,15 @@ export default function ModelUsageChart({
     result.data = daily.map((day) => byDate.get(day.date) ?? { date: day.date, label: formatDate(day.date), ...zeros });
     result.labels = result.labels.map((label) => aliases.get(label) || label);
     return result;
-  }, [activity.data, daily]);
+  }, [activity.data, daily, t]);
   function renderContent() {
     if (activity.isPending) return <ChartSkeleton className="h-64" />;
     if (activity.isError)
       return (
         <div role="alert" className="py-6 text-sm">
-          Could not load daily requests.{" "}
+          {t("alerts.usageChart.loadError")}{" "}
           <Button variant="outline" size="sm" onClick={() => void activity.refetch()}>
-            Retry
+            {t("alerts.usageChart.retry")}
           </Button>
         </div>
       );
@@ -106,7 +109,7 @@ export default function ModelUsageChart({
             aria-expanded={legendExpanded}
             onClick={() => setLegendExpanded(!legendExpanded)}
           >
-            {legendExpanded ? "Show fewer key labels" : "Show all key labels"}
+            {legendExpanded ? t("alerts.usageChart.showFewer") : t("alerts.usageChart.showAll")}
           </button>
         )}
       </>
@@ -114,14 +117,12 @@ export default function ModelUsageChart({
   }
   return (
     <Panel
-      title="Daily requests"
-      subtitle={`Requests to this model, stacked by key · ${team ? "Selected team" : "All teams"}`}
+      title={t("alerts.usageChart.title")}
+      subtitle={team ? t("alerts.usageChart.subtitleTeam") : t("alerts.usageChart.subtitleAll")}
       className="shrink-0"
     >
       {renderContent()}
-      <p className="mt-2 text-xs text-muted-foreground">
-        Last 30 days · UTC · Includes zero-usage days. Today is partial.
-      </p>
+      <p className="mt-2 text-xs text-muted-foreground">{t("alerts.usageChart.footnote")}</p>
     </Panel>
   );
 }

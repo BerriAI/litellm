@@ -16,7 +16,7 @@ use crate::{
     host::{RouterRequest, RoutingContext, SelectStage},
     registry::{Deployment, Registry, ResolveKind},
     resolve::{Caller, resolve_request},
-    strategy::{StrategyScope, routing_context},
+    strategy::{StrategyScope, request_override, routing_context},
 };
 
 /// Randomness for the shuffle and retry jitter, injectable so tests are deterministic.
@@ -77,11 +77,23 @@ pub struct Candidates {
     /// The provider-prefixed spelling the name resolved under (`get_pattern`), when the host
     /// was asked for one.
     pub wildcard_request: Option<String>,
+    /// The group the host stamped the pick as served for when a pre-routing hook rewrote the name
+    /// (a Claude Code subagent's bound router): a fallback lookup key.
+    pub served_as: Option<String>,
 }
 
 impl Candidates {
     /// The `model` a no-deployments error names: what `_common_checks_available_deployment`
     /// returned, so the alias-resolved name a wildcard serves and not its pattern.
+    /// The error an empty candidate list raises: it names the deployments the request could
+    /// route to before the cooldown filter.
+    pub(crate) fn none_healthy(&self, registry: &Registry) -> Error {
+        Error::NoHealthyDeployments {
+            model: self.failed_model(registry),
+            request_ids: Some(self.all.iter().map(|d| d.id.clone()).collect()),
+        }
+    }
+
     pub(crate) fn failed_model(&self, registry: &Registry) -> String {
         let model = match self.kind {
             ResolveKind::Wildcard => registry.alias_of(&self.name).unwrap_or(&self.name),
@@ -96,6 +108,9 @@ impl Candidates {
 pub(crate) struct SelectInputs {
     pub target_order: Option<i64>,
     pub skipped_ids: Vec<String>,
+    /// Every deployment an attempt of this request failed on, whatever the status: the callback
+    /// filters read it as `_retry_skipped_deployment_ids`, so an affinity pin can leave one.
+    pub failed_ids: Vec<String>,
     /// A weighted failover hop's `_excluded_deployment_ids`: never picked.
     pub excluded_ids: Arc<[String]>,
     /// Stop before the plugins, order and skip filters: the group less cooldowns and blocked
@@ -217,6 +232,25 @@ fn filter_team_based(
         .collect())
 }
 
+/// `without_deployments_that_cannot_batch`: a batch create on a group the caller may use a healthy
+/// batch deployment of skips the Azure deployments that cannot run batches. A batch upload skips
+/// them while the caller may use any batch deployment of the group, healthy or not, and the retry
+/// count reads the same list.
+fn without_deployments_that_cannot_batch(
+    request: &RouterRequest,
+    all: &[Arc<Deployment>],
+    healthy: Vec<Arc<Deployment>>,
+) -> Vec<Arc<Deployment>> {
+    let has_batch = |pool: &[Arc<Deployment>]| pool.iter().any(|d| d.is_batch_capable());
+    if !request.batch_create || !(has_batch(&healthy) || (request.batch_upload && has_batch(all))) {
+        return healthy;
+    }
+    healthy
+        .into_iter()
+        .filter(|d| !d.cannot_run_batches())
+        .collect()
+}
+
 impl Core {
     fn context<'a>(
         &'a self,
@@ -269,8 +303,12 @@ impl Core {
         // No deployment for the name: route to the first default fallback.
         let default_target = crate::resolve::default_target(&snapshot.settings.dynamic);
         // `get_pattern`: a name no pattern matches is tried again under its inferred provider.
-        let wildcard_name =
-            crate::resolve::wildcard_name(registry, name, request.specific_deployment);
+        let wildcard_name = crate::resolve::wildcard_name(
+            registry,
+            name,
+            request.specific_deployment,
+            request.team_id.as_deref(),
+        );
         let wildcard_request = match wildcard_name {
             Some(model) => {
                 let scope = StrategyScope::Default;
@@ -296,7 +334,7 @@ impl Core {
             caller,
             default_target,
             snapshot.settings.dynamic.default_ref(),
-            jiff::Timestamp::now(),
+            self.health.timestamp(),
         )?
         .ok_or_else(|| Error::UnknownModel {
             // The name `_common_checks_available_deployment` looked for, past the alias.
@@ -440,7 +478,7 @@ impl Core {
         let request_order = request.target_order.filter(|_| !inputs.fallback_hop);
         // `async_callback_filter_deployments` runs after the cooldown and blocked filters on every
         // async candidate list but a deployment named by id and a listed pass-through pick.
-        if settings.callback_filters
+        let preferred = if settings.callback_filters
             && !inputs.count_only
             && !resolution.kind.is_single()
             && request.pass_through != Some(PassThrough::Listed)
@@ -454,11 +492,20 @@ impl Core {
                 StrategyScope::Default,
             );
             ctx.excluded_ids = &inputs.excluded_ids;
-            ctx.skipped_ids = &inputs.skipped_ids;
+            ctx.skipped_ids = &inputs.failed_ids;
             ctx.target_order = inputs.target_order.or(request_order);
-            healthy = self.host.callback_filters(&ctx, healthy).await?;
-        }
+            let filtered = self.host.callback_filters(&ctx, healthy).await?;
+            healthy = filtered.kept;
+            filtered.preferred
+        } else {
+            None
+        };
         if inputs.count_only {
+            let healthy = if resolution.kind.is_single() {
+                healthy
+            } else {
+                without_deployments_that_cannot_batch(request, &all, healthy)
+            };
             return Ok(Candidates {
                 name: name.to_owned(),
                 model_group: resolution.group,
@@ -466,6 +513,7 @@ impl Core {
                 all,
                 healthy,
                 wildcard_request,
+                served_as: None,
             });
         }
 
@@ -503,6 +551,7 @@ impl Core {
                 all,
                 healthy,
                 wildcard_request,
+                served_as: None,
             });
         }
 
@@ -602,8 +651,36 @@ impl Core {
             }
         }
 
-        if let Some(pinned) = request.pinned_deployment_id.as_deref()
-            && healthy.iter().any(|d| d.id == pinned)
+        // `deployments_admitting_embedding_batch`: an embedding pick keeps the deployments whose
+        // input limit admits the batch; when none does, the host keeps what the pick waits for or
+        // the 400 names.
+        if request.embedding_batch && !resolution.kind.is_single() && !healthy.is_empty() {
+            let mut ctx = self.context(
+                snapshot,
+                op,
+                request,
+                &resolution.group,
+                name,
+                StrategyScope::Default,
+            );
+            ctx.pool = &all;
+            healthy = self
+                .host
+                .select(&SelectStage::EmbeddingBatch, &ctx, healthy)
+                .await?;
+        }
+
+        if !resolution.kind.is_single() {
+            healthy = without_deployments_that_cannot_batch(request, &all, healthy);
+        }
+
+        if let Some(pinned) = [
+            request.pinned_deployment_id.as_deref(),
+            preferred.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .find(|id| healthy.iter().any(|d| d.id == *id))
         {
             healthy.retain(|d| d.id == pinned);
         }
@@ -653,6 +730,7 @@ impl Core {
             all,
             healthy,
             wildcard_request,
+            served_as: None,
         })
     }
 
@@ -691,14 +769,43 @@ impl Core {
     ) -> Result<Arc<Deployment>, Error> {
         let no_deployment = || Error::NoHealthyDeployments {
             model: candidates.failed_model(&snapshot.registry),
+            request_ids: None,
         };
-        // A deployment named by its id is returned as is, before any strategy runs.
+        // A deployment named by its id is returned as is, before any strategy runs, past a
+        // per-request strategy override's pre-call check.
         if candidates.kind.is_single() {
-            return candidates
+            let named = candidates
                 .healthy
                 .first()
                 .cloned()
-                .ok_or_else(no_deployment);
+                .ok_or_else(no_deployment)?;
+            if let Some(strategy) = request_override(request.routing_strategy.as_deref())
+                && !matches!(
+                    strategy,
+                    RoutingStrategy::SimpleShuffle | RoutingStrategy::Unset
+                )
+            {
+                let ctx = self.context(
+                    snapshot,
+                    op,
+                    request,
+                    &candidates.model_group,
+                    &candidates.name,
+                    StrategyScope::Override,
+                );
+                let kept = self
+                    .host
+                    .select(
+                        &SelectStage::OverrideCheck(strategy),
+                        &ctx,
+                        vec![named.clone()],
+                    )
+                    .await?;
+                if kept.is_empty() {
+                    return Err(no_deployment());
+                }
+            }
+            return Ok(named);
         }
         let (strategy, scope) = routing_context(
             &snapshot.registry,

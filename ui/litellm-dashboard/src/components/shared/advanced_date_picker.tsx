@@ -312,7 +312,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                         onClick={() => handleRelativeTimeSelect(option)}
                       >
                         <span className={`text-sm ${isSelected ? "text-info font-medium" : "text-foreground"}`}>
-                          {option.label}
+                          {t(option.label)}
                         </span>
                         <span
                           className={`text-xs px-2 py-1 rounded capitalize ${

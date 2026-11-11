@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import type { ParseKeys } from "i18next";
 import { useTranslation } from "react-i18next";
 import { ChevronDown } from "lucide-react";
 import {
@@ -28,9 +29,15 @@ import { useBlockUnpricedConfig } from "./use_block_unpriced_config";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
-const DOCS_LINKS = [
-  { label: "Custom pricing for models", href: "https://docs.litellm.ai/docs/proxy/custom_pricing" },
-  { label: "Spend tracking", href: "https://docs.litellm.ai/docs/proxy/cost_tracking" },
+const DOCS_LINKS: readonly { labelKey: ParseKeys; href: string }[] = [
+  {
+    labelKey: "costTracking.settings.docsLinks.customPricing",
+    href: "https://docs.litellm.ai/docs/proxy/custom_pricing",
+  },
+  {
+    labelKey: "costTracking.settings.docsLinks.spendTracking",
+    href: "https://docs.litellm.ai/docs/proxy/cost_tracking",
+  },
 ];
 
 const REMOVAL_COPY = {
@@ -195,7 +202,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
         <div>
           <div className="flex items-center gap-2">
             <p className="text-xl font-medium text-foreground">{t("costTracking.settings.title")}</p>
-            <DocsMenu items={DOCS_LINKS} />
+            <DocsMenu items={DOCS_LINKS.map(({ labelKey, href }) => ({ label: t(labelKey), href }))} />
           </div>
           <p className="text-muted-foreground mt-1">{t("costTracking.settings.description")}</p>
         </div>

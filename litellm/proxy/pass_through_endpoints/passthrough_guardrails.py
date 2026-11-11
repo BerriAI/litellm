@@ -7,7 +7,7 @@ Handles guardrail execution for passthrough endpoints with:
 - Automatic inheritance from org/team/key levels when enabled
 """
 
-from typing import Any, Final
+from typing import Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import merged_guardrail_entries
@@ -243,14 +243,15 @@ class PassthroughGuardrailHandler:
             verbose_proxy_logger.debug("Passthrough guardrails config is empty, skipping")
             return None
 
-        temp_data: Final[dict[str, Any]] = {"metadata": {}}
+        inherited_metadata: Final = dict[str, list[object]]()
+        temp_data: Final = {"metadata": inherited_metadata}
         add_guardrails_from_key_or_team_metadata(
             key_metadata=user_api_key_dict.metadata,
             team_metadata=user_api_key_dict.team_metadata,
             data=temp_data,
             metadata_variable_name="metadata",
         )
-        inherited_guardrails: Final[list[object]] = temp_data["metadata"].get("guardrails", [])
+        inherited_guardrails: Final = inherited_metadata.get("guardrails", [])
         guardrails_to_run: Final = merged_guardrail_entries(normalized_config, inherited_guardrails)
 
         verbose_proxy_logger.debug("Collected guardrails for passthrough endpoint: %s", guardrails_to_run)

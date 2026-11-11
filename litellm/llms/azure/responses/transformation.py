@@ -11,7 +11,9 @@ from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.constants import AZURE_DEFAULT_RESPONSES_API_VERSION
-from litellm.litellm_core_utils.prompt_templates.common_utils import prompt_cache_breakpoint_within
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
+    prompt_cache_breakpoint_within,
+)
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5Config
 from litellm.llms.azure.common_utils import BaseAzureLLM
@@ -249,9 +251,8 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def compact_url(self, api_base: str) -> str:
         params: Final = httpx.URL(api_base).params
-        v1_params: Final = (
-            params if BaseAzureLLM.is_azure_v1_api_version(params.get("api-version")) else params.remove("api-version")
-        )
+        api_version: Final = next(iter(params.get_list("api-version")), None)
+        v1_params: Final = params if BaseAzureLLM.is_azure_v1_api_version(api_version) else params.remove("api-version")
         return super().compact_url(str(_v1_responses_url(api_base).copy_with(params=v1_params)))
 
     #########################################################

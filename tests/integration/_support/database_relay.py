@@ -6,7 +6,6 @@ from contextlib import contextmanager
 from typing import Final
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-
 from tests.integration._support.async_server import LoopbackServer, close_writer
 from tests.integration._support.ports import allocate_port
 
@@ -74,15 +73,35 @@ class DatabaseRelay:
 
 
 class HeldStatementRelay:
-    def __init__(self, upstream_host: str, upstream_port: int, trigger: bytes) -> None:
+    """Holds the first client statement carrying ``trigger`` until ``release``. With ``after``, only a
+    trigger statement that follows a statement carrying ``after`` is held, so a test can pin the hold to
+    one point of a longer sequence. Starts armed unless ``armed`` is false, then ``arm`` starts it."""
+
+    def __init__(
+        self,
+        upstream_host: str,
+        upstream_port: int,
+        trigger: bytes,
+        *,
+        after: bytes | None = None,
+        armed: bool = True,
+    ) -> None:
         self.port: Final = allocate_port()
         self._upstream_host: Final = upstream_host
         self._upstream_port: Final = upstream_port
         self._trigger: Final = trigger
+        self._after: Final = after
         self._server: Final = LoopbackServer(self.port, self._serve)
         self._loop: Final = self._server.loop
         self._released: Final = asyncio.Event()
+        self._armed: Final = threading.Event()
+        if armed:
+            self._armed.set()
+        self._after_seen: Final = threading.Event()
         self.held: Final = threading.Event()
+
+    def arm(self) -> None:
+        self._armed.set()
 
     def release(self) -> None:
         if not self._loop.is_closed():
@@ -95,21 +114,25 @@ class HeldStatementRelay:
         self.release()
         self._server.stop()
 
-    def _holds(self, window: bytes) -> bool:
-        return not self.held.is_set() and self._trigger in window
+    def _holds(self, markers: frozenset[bytes]) -> bool:
+        if not self._armed.is_set() or self.held.is_set():
+            return False
+        if self._after is not None and not self._after_seen.is_set():
+            if self._after in markers:
+                self._after_seen.set()
+            return False
+        return self._trigger in markers
 
     async def _serve(self, client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter) -> None:
         server_reader, server_writer = await asyncio.open_connection(self._upstream_host, self._upstream_port)
 
         async def forward(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, inspect: bool) -> None:
-            tail = b""  # rebind-ok: carries the previous read's end so a trigger split across reads still matches
+            scanner: Final = StatementMarkerScanner((self._trigger,) + ((self._after,) if self._after else ()))
             try:
                 while chunk := await reader.read(65536):
-                    window: Final = tail + chunk
-                    if inspect and self._holds(window):
+                    if inspect and any(self._holds(markers) for markers in scanner.feed(chunk)):
                         self.held.set()
                         await self._released.wait()
-                    tail = window[-(len(self._trigger) - 1) :]
                     writer.write(chunk)
                     await writer.drain()
             except (ConnectionError, asyncio.IncompleteReadError):
@@ -121,6 +144,47 @@ class HeldStatementRelay:
             forward(client_reader, server_writer, True),
             forward(server_reader, client_writer, False),
         )
+
+
+class StatementMarkerScanner:
+    def __init__(self, markers: tuple[bytes, ...]) -> None:
+        self._markers: Final = markers
+        self._statements: Final[dict[bytes, frozenset[bytes]]] = {}
+        self._buffer = b""
+        self._startup = True
+
+    def feed(self, chunk: bytes) -> Generator[frozenset[bytes]]:
+        self._buffer += chunk
+        while len(self._buffer) >= (4 if self._startup else 5):
+            offset: Final = 0 if self._startup else 1
+            length: Final = int.from_bytes(self._buffer[offset : offset + 4], "big")
+            if length < 4:
+                raise ValueError("Invalid PostgreSQL message length")
+            if len(self._buffer) < length + offset:
+                return
+            message: Final = self._buffer[: length + offset]
+            self._buffer = self._buffer[length + offset :]
+            if self._startup:
+                self._startup = message[4:8] == b"\x04\xd2\x16/"
+                continue
+            payload: Final = message[5:]
+            if message[:1] == b"P":
+                name, _, query = payload.partition(b"\x00")
+                matches: Final = self._matches(query.split(b"\x00", 1)[0])
+                if name:
+                    self._statements[name] = matches
+                yield matches
+            elif message[:1] == b"B":
+                fields: Final = payload.split(b"\x00", 2)
+                prepared: Final = self._statements.get(fields[1], frozenset()) if len(fields) > 1 else frozenset()
+                yield prepared | self._matches(payload)
+            elif message[:1] == b"Q":
+                yield self._matches(payload)
+            elif message[:1] == b"C" and payload[:1] == b"S":
+                self._statements.pop(payload[1:].split(b"\x00", 1)[0], None)
+
+    def _matches(self, query: bytes) -> frozenset[bytes]:
+        return frozenset(marker for marker in self._markers if marker in query)
 
 
 class TriggerScanner:
@@ -295,10 +359,12 @@ def database_relay(database_url: str, trigger: bytes) -> Generator[tuple[Databas
 
 
 @contextmanager
-def held_statement_relay(database_url: str, trigger: bytes) -> Generator[tuple[HeldStatementRelay, str]]:
+def held_statement_relay(
+    database_url: str, trigger: bytes, *, after: bytes | None = None, armed: bool = True
+) -> Generator[tuple[HeldStatementRelay, str]]:
     parts: Final = urlsplit(database_url)
     assert parts.hostname is not None and parts.port is not None, database_url
-    relay: Final = HeldStatementRelay(parts.hostname, parts.port, trigger)
+    relay: Final = HeldStatementRelay(parts.hostname, parts.port, trigger, after=after, armed=armed)
     try:
         relay.start()
         yield relay, _relayed_url(database_url, relay.port)

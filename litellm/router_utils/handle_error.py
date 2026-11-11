@@ -26,7 +26,7 @@ async def send_llm_exception_alert(
     ctx: "RoutingContext | None",
     request_kwargs: dict,
     error_traceback_str: str,
-    original_exception,
+    original_exception: Exception,
 ):
     """
     Only runs if router.slack_alerting_logger is set
@@ -34,7 +34,7 @@ async def send_llm_exception_alert(
 
     Parameters:
         ctx (RoutingContext): The router's routing context.
-        original_exception (Any): The original exception that occurred.
+        original_exception (Exception): The original exception that occurred.
 
     Returns:
         None
@@ -51,7 +51,7 @@ async def send_llm_exception_alert(
         # the proxy is already instrumented to send LLM API call failures
         return
 
-    litellm_debug_info: Final = getattr(original_exception, "litellm_debug_info", None)
+    litellm_debug_info: Final[str | None] = getattr(original_exception, "litellm_debug_info", None)
     exception_str = str(original_exception)
     if litellm_debug_info is not None:
         exception_str += litellm_debug_info

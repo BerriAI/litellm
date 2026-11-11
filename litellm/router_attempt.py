@@ -3,8 +3,7 @@ One router attempt, as the host runs it: the request for the deployment the rout
 
 The Rust router core picks a deployment and hands the attempt to its host; ``PythonHost`` builds
 the keyword arguments for that one deployment here and calls ``litellm.<op>`` with them. Nothing
-here selects, retries, falls back or records cooldowns: the core does all of that. Nothing here
-reads a Python router either, so this module outlives ``router_python_core.py``.
+here selects, retries, falls back or records cooldowns: the core does all of that.
 """
 
 import re
@@ -61,6 +60,16 @@ POSITIONAL: Final = MappingProxyType(
 )
 
 
+# The arguments an endpoint takes without a default, which a call that leaves one out raises
+# ``TypeError`` for before it routes.
+REQUIRED: Final = MappingProxyType(
+    {
+        "atext_completion": ("model", "prompt"),
+        "text_completion": ("model", "prompt"),
+    }
+)
+
+
 def request_from_call(op: str, args: tuple[object, ...], kwargs: Mapping[str, object]) -> Mapping[str, object]:
     """The call's arguments as one keyword request. Raises ``TypeError`` like the endpoint would."""
     names: Final = POSITIONAL.get(op, ())
@@ -71,6 +80,12 @@ def request_from_call(op: str, args: tuple[object, ...], kwargs: Mapping[str, ob
         if name in request:
             raise TypeError(f"{op}() got multiple values for argument {name!r}")
         request[name] = value
+    missing: Final = [name for name in REQUIRED.get(op, ()) if name not in request]
+    if missing:
+        listed: Final = " and ".join(repr(name) for name in missing)
+        raise TypeError(
+            f"{op}() missing {len(missing)} required positional argument{'s' if len(missing) > 1 else ''}: {listed}"
+        )
     return request
 
 

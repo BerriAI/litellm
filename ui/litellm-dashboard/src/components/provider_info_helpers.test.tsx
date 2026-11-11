@@ -11,15 +11,27 @@ import {
   resolveLitellmProviderSlug,
 } from "./provider_info_helpers";
 
-const PROVIDER_CREATE_FIELDS: { provider: string; litellm_provider: string }[] = JSON.parse(
-  readFileSync(resolve(__dirname, "../../../../litellm/proxy/public_endpoints/provider_create_fields.json"), "utf8"),
-);
+const PROVIDER_CREATE_FIELDS: { provider: string; provider_display_name: string; litellm_provider: string }[] =
+  JSON.parse(
+    readFileSync(resolve(__dirname, "../../../../litellm/proxy/public_endpoints/provider_create_fields.json"), "utf8"),
+  );
 
 const BUNDLED_MODEL_MAP: Record<string, { litellm_provider?: string }> = JSON.parse(
   readFileSync(resolve(__dirname, "../../../../model_prices_and_context_window.json"), "utf8"),
 );
 
 describe("provider_info_helpers", () => {
+  it("should identify the upstream LiteLLM Gateway consistently with provider metadata", () => {
+    const metadata = PROVIDER_CREATE_FIELDS.find((provider) => provider.provider === "LITELLM_PROXY");
+    expect(resolveLitellmProviderSlug("LITELLM_PROXY")).toBe(metadata?.litellm_provider);
+    expect(Providers.LITELLM_PROXY).toBe(metadata?.provider_display_name);
+    expect(getProviderLogoAndName("litellm_proxy")).toEqual({
+      displayName: Providers.LITELLM_PROXY,
+      logo: providerLogoMap[Providers.LITELLM_PROXY],
+    });
+    expect(providerLogoMap[Providers.LITELLM_PROXY]).toContain("litellm_monogram");
+  });
+
   it("resolves Meta Model API separately from Meta Llama and isolates their bundled models", () => {
     expect(resolveLitellmProviderSlug("META")).toBe("meta");
     expect(getPlaceholder(Providers.META)).toBe("meta/muse-spark-1.1");

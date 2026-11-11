@@ -223,14 +223,20 @@ pub(crate) fn wildcard_name<'a>(
     registry: &'a Registry,
     name: &'a str,
     specific_deployment: bool,
+    team_id: Option<&str>,
 ) -> Option<&'a str> {
     let model = registry.alias_of(name).unwrap_or(name);
-    (registry.has_wildcards()
+    let lookup = crate::lookup::Lookup::new(registry);
+    let team_patterns = team_id.is_some_and(|team| lookup.has_team_wildcards(team));
+    let team_misses = || team_id.is_none_or(|team| lookup.team_wildcard(model, team).is_empty());
+    let global_misses = || registry.has_wildcards() && registry.wildcard_for(model).is_none();
+    ((team_patterns || registry.has_wildcards())
         && !specific_deployment
         && !registry.has_name(model)
         && (registry.has_name(name) || registry.deployment(name).is_none())
         && registry.routing_group_named(model).is_none()
-        && registry.wildcard_for(model).is_none())
+        && team_misses()
+        && (team_patterns || global_misses()))
     .then_some(model)
 }
 
@@ -339,15 +345,21 @@ pub fn resolve_request(
             let kept = reserved(model, deployments, caller, now)?;
             return resolved(ResolveKind::Group, model, kept);
         }
-        // `_core_wildcard_route_deployments`: the team's own pattern, else the proxy-wide one.
-        let team_owned = team_id
-            .map(|team| crate::lookup::Lookup::new(registry).team_wildcard(model, team))
-            .filter(|deployments| !deployments.is_empty());
-        if let Some(deployments) = team_owned {
+        // `_core_wildcard_route_deployments`: the team's own pattern, else the proxy-wide one,
+        // each tried as spelled and then under the name's provider (`get_pattern`).
+        let team_owned = team_id.and_then(|team| {
+            let lookup = crate::lookup::Lookup::new(registry);
+            [Some(model), caller.wildcard_request]
+                .into_iter()
+                .flatten()
+                .map(|request| (request, lookup.team_wildcard(request, team)))
+                .find(|(_, deployments)| !deployments.is_empty())
+        });
+        if let Some((request, deployments)) = team_owned {
             let routed = deployments.iter().flat_map(|deployment| {
                 let public = deployment.model_info.team_public_model_name.as_deref();
-                let pattern = public.unwrap_or(model);
-                routed_wildcard(pattern, model, std::slice::from_ref(deployment))
+                let pattern = public.unwrap_or(request);
+                routed_wildcard(pattern, request, std::slice::from_ref(deployment))
             });
             let kept = reserved(model, routed.collect(), caller, now)?;
             return resolved(ResolveKind::Wildcard, model, kept);
@@ -428,6 +440,7 @@ pub fn resolve_request(
 mod tests {
     use std::collections::BTreeMap;
 
+    use rstest::rstest;
     use serde_json::{Value, json};
 
     use super::*;
@@ -544,8 +557,11 @@ mod tests {
     #[test]
     fn a_name_no_pattern_matches_is_tried_under_its_provider() {
         let registry = registry(wildcard_group());
-        assert_eq!(wildcard_name(&registry, "gpt-4o", false), Some("gpt-4o"));
-        assert_eq!(wildcard_name(&registry, "openai/gpt-4o", false), None);
+        assert_eq!(
+            wildcard_name(&registry, "gpt-4o", false, None),
+            Some("gpt-4o")
+        );
+        assert_eq!(wildcard_name(&registry, "openai/gpt-4o", false, None), None);
         let caller = Caller {
             wildcard_request: Some("openai/gpt-4o"),
             ..Caller::default()
@@ -562,6 +578,48 @@ mod tests {
         let resolution = resolved.unwrap().unwrap();
         assert_eq!(resolution.group, "openai/*");
         assert_eq!(resolution.deployments[0].params.model, "openai/gpt-4o");
+    }
+
+    #[rstest]
+    fn a_bare_name_is_tried_under_its_provider_against_the_teams_own_wildcard() {
+        let registry = registry(json!([
+            {"model_name": "model_name_tw_1", "litellm_params": {"model": "openai/*"},
+             "model_info": {"id": "tw", "team_id": "TW", "team_public_model_name": "openai/*"}},
+            {"model_name": "g", "litellm_params": {"model": "openai/g"}, "model_info": {"id": "g"}},
+        ]));
+        // No proxy-wide wildcard: only the team's patterns call for the provider spelling.
+        assert_eq!(
+            wildcard_name(&registry, "gpt-4o-mini", false, Some("TW")),
+            Some("gpt-4o-mini")
+        );
+        assert_eq!(wildcard_name(&registry, "gpt-4o-mini", false, None), None);
+        assert_eq!(
+            wildcard_name(&registry, "openai/gpt-4o-mini", false, Some("TW")),
+            None
+        );
+        let resolve = |team_id| {
+            let caller = Caller {
+                team_id,
+                wildcard_request: Some("openai/gpt-4o-mini"),
+                ..Caller::default()
+            };
+            resolve_request(
+                &registry,
+                "gpt-4o-mini",
+                false,
+                caller,
+                None,
+                None,
+                Timestamp::now(),
+            )
+            .unwrap()
+        };
+        let resolution = resolve(Some("TW")).unwrap();
+        assert_eq!(resolution.kind, ResolveKind::Wildcard);
+        assert_eq!(resolution.group, "gpt-4o-mini");
+        assert_eq!(ids(Some(resolution.clone())), ["tw"]);
+        assert_eq!(resolution.deployments[0].params.model, "openai/gpt-4o-mini");
+        assert!(resolve(Some("OTHER")).is_none());
     }
 
     #[test]

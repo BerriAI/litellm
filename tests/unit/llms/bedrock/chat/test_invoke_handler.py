@@ -1214,7 +1214,7 @@ async def test_converse_json_schema_stream_sends_claude_prose_only_when_claude_s
 
     transport: Final = httpx.MockTransport(handle_request)
     request: Final = {
-        "model": "bedrock/us.anthropic.claude-opus-5",
+        "model": "bedrock/anthropic.claude-opus-5",
         "messages": [{"role": "user", "content": "What is the LCM of 24 and 120? Reply in JSON."}],
         "response_format": {
             "type": "json_schema",

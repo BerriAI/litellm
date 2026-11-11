@@ -1,9 +1,22 @@
-from collections.abc import Mapping, Sequence
-from typing import Final
+import asyncio
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from typing import Final, TypeAlias
 
 import pytest
 
-from litellm.rust_bridge.public_call import AsyncFlag, native_call, signature
+import litellm
+from litellm.rust_bridge.public_call import (
+    AsyncFlag,
+    NativeCall,
+    native_acall_hook,
+    native_acall_hook_on_loop,
+    native_call,
+    signature,
+)
+
+NativeAcallHook: TypeAlias = Callable[
+    [Callable[[NativeCall], Awaitable[None]], NativeCall, tuple[object, ...], Mapping[str, object]], Awaitable[None]
+]
 
 
 def _messages(
@@ -76,3 +89,54 @@ def test_flag_keywords_name_positionals_and_drop_only_the_flag() -> None:
 def test_flag_keywords_reject_a_parameter_given_twice() -> None:
     with pytest.raises(TypeError):
         _FLAG.keywords((128,), {"max_tokens": 64})
+
+
+_CALL: Final = native_call(_SIGNATURE, (128, [], "model"), {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kwargs", "expected_timeout", "expected_num_retries"),
+    (
+        ({"timeout": 30.0, "stream_timeout": 0.5, "num_retries": 0}, 30.0, 0),
+        ({"stream": True, "timeout": 30.0, "stream_timeout": 0.5}, 0.5, None),
+        ({"stream": True, "timeout": 30.0}, 30.0, None),
+        ({}, None, None),
+    ),
+)
+@pytest.mark.parametrize("hook", (native_acall_hook, native_acall_hook_on_loop))
+async def test_async_hook_failures_carry_the_client_wrapper_stamp(
+    hook: NativeAcallHook,
+    kwargs: Mapping[str, object],
+    expected_timeout: float | None,
+    expected_num_retries: int | None,
+) -> None:
+    async def native(call: NativeCall) -> None:
+        raise litellm.Timeout(message="timed out", model="model", llm_provider="anthropic")
+
+    with pytest.raises(litellm.Timeout) as raised:
+        await hook(native, _CALL, (), kwargs)
+
+    assert getattr(raised.value, "timeout", "unset") == expected_timeout
+    assert getattr(raised.value, "num_retries", None) == expected_num_retries
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("hook", "yields"), ((native_acall_hook, True), (native_acall_hook_on_loop, False)))
+async def test_only_the_executor_hook_lets_a_task_started_before_the_call_run_first(
+    hook: NativeAcallHook, yields: bool
+) -> None:
+    messages: Final = [{"role": "user", "content": "during about secret"}]
+    sent: Final[list[object]] = []
+
+    async def mask() -> None:
+        messages[0]["content"] = "during about [REDACTED]"
+
+    async def native(call: NativeCall) -> None:
+        sent.append(messages[0]["content"])
+
+    guardrail: Final = asyncio.create_task(mask())
+    await hook(native, _CALL, (), {})
+    await guardrail
+
+    assert sent == ["during about [REDACTED]" if yields else "during about secret"]

@@ -38,10 +38,10 @@ export const WILDCARD_MODEL_GROUP_VALUE = "wildcard";
 const MODEL_TABLE_BODY_HEIGHT = 600;
 const ALL_PROXY_MODELS_LABEL: ParseKeys = "modelsAndEndpoints.allModelsTable.allProxyModels";
 
-const FILTER_LABELS: Record<string, string> = {
-  [MODEL_NAME_COLUMN_ID]: "Public Model Name",
-  [ACCESS_GROUPS_COLUMN_ID]: "Model Access Group",
-  [ROUTING_STATUS_FILTER_ID]: "Status",
+const FILTER_LABELS: Record<string, ParseKeys> = {
+  [MODEL_NAME_COLUMN_ID]: "modelsAndEndpoints.allModelsTable.filterLabels.publicModelName",
+  [ACCESS_GROUPS_COLUMN_ID]: "modelsAndEndpoints.allModelsTable.filterLabels.modelAccessGroup",
+  [ROUTING_STATUS_FILTER_ID]: "modelsAndEndpoints.allModelsTable.filterLabels.status",
 };
 
 const ROUTING_STATUS_FILTER_VALUES = {
@@ -241,7 +241,9 @@ export function AllModelsTable({
             onOpenFilters={() => setFiltersOpen(true)}
             onRefresh={onRefresh}
             isRefreshing={isRefreshing}
-            filterLabels={FILTER_LABELS}
+            filterLabels={Object.fromEntries(
+              Object.entries(FILTER_LABELS).map(([columnId, labelKey]) => [columnId, t(labelKey)]),
+            )}
             formatFilterValue={formatFilterValue}
           >
             <Select value={selectedTeamValue} onValueChange={(value) => onTeamChange(String(value))}>

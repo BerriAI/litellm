@@ -42,7 +42,7 @@ import {
   DEFAULT_CLASSIFIER_TIMEOUT_MS,
   DEFAULT_CLASSIFICATION_RUBRIC,
   ClassificationRubric,
-  effectiveTierLabel,
+  effectiveTierDisplayLabel,
   heuristicScoringRole,
   heuristicTuningType,
   usesHeuristicV2,
@@ -119,25 +119,25 @@ const HowClassificationWorks: React.FC<{ value: ComplexityRouterConfigValue }> =
         {scorerRuns && ranges && (
           <ul className="mt-2 pl-5 text-[13px] text-muted-foreground">
             <li>
-              <strong>{effectiveTierLabel("SIMPLE", value.tier_labels)}</strong>:{" "}
+              <strong>{effectiveTierDisplayLabel("SIMPLE", value.tier_labels, t)}</strong>:{" "}
               {t("addModel.classificationMethodConfig.howItWorks.scoreBelow", { max: ranges.simpleMedium })}
             </li>
             <li>
-              <strong>{effectiveTierLabel("MEDIUM", value.tier_labels)}</strong>:{" "}
+              <strong>{effectiveTierDisplayLabel("MEDIUM", value.tier_labels, t)}</strong>:{" "}
               {t("addModel.classificationMethodConfig.howItWorks.scoreBetween", {
                 min: ranges.simpleMedium,
                 max: ranges.mediumComplex,
               })}
             </li>
             <li>
-              <strong>{effectiveTierLabel("COMPLEX", value.tier_labels)}</strong>:{" "}
+              <strong>{effectiveTierDisplayLabel("COMPLEX", value.tier_labels, t)}</strong>:{" "}
               {t("addModel.classificationMethodConfig.howItWorks.scoreBetween", {
                 min: ranges.mediumComplex,
                 max: ranges.complexReasoning,
               })}
             </li>
             <li>
-              <strong>{effectiveTierLabel("REASONING", value.tier_labels)}</strong>:{" "}
+              <strong>{effectiveTierDisplayLabel("REASONING", value.tier_labels, t)}</strong>:{" "}
               {t("addModel.classificationMethodConfig.howItWorks.scoreAbove", {
                 min: ranges.complexReasoning,
                 floor: ranges.reasoningOverrideFloor,
@@ -506,7 +506,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
             <SelectContent>
               {HEURISTIC_FIRST_MAX_TIER_KEYS.map((tier) => (
                 <SelectItem key={tier} value={tier}>
-                  {effectiveTierLabel(tier, value.tier_labels)}
+                  {effectiveTierDisplayLabel(tier, value.tier_labels, t)}
                 </SelectItem>
               ))}
             </SelectContent>

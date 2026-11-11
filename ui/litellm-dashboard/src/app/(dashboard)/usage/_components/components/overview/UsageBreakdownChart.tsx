@@ -25,13 +25,13 @@ const METRIC_NOUN: Record<UsageMetric, ParseKeys> = {
   requests: "usage.breakdownChart.metricNoun.requests",
 };
 const GRANULARITY_OPTIONS = [
-  { value: "day", label: "Daily" },
-  { value: "week", label: "Weekly" },
-] as const satisfies readonly { value: Granularity; label: string }[];
+  { value: "day", labelKey: "usage.breakdownChart.granularityOptions.day" },
+  { value: "week", labelKey: "usage.breakdownChart.granularityOptions.week" },
+] as const satisfies readonly { value: Granularity; labelKey: ParseKeys }[];
 const SCALE_OPTIONS = [
-  { value: "linear", label: "Linear" },
-  { value: "log", label: "Log" },
-] as const satisfies readonly { value: StackedUsageScale; label: string }[];
+  { value: "linear", labelKey: "usage.breakdownChart.scaleOptions.linear" },
+  { value: "log", labelKey: "usage.breakdownChart.scaleOptions.log" },
+] as const satisfies readonly { value: StackedUsageScale; labelKey: ParseKeys }[];
 
 interface UsageBreakdownChartProps {
   results: readonly DailyData[];
@@ -80,13 +80,13 @@ export default function UsageBreakdownChart({
           <Segmented
             label={t("usage.breakdownChart.bucketSize")}
             value={granularity}
-            options={GRANULARITY_OPTIONS}
+            options={GRANULARITY_OPTIONS.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
             onChange={setGranularity}
           />
           <Segmented
             label={t("usage.breakdownChart.scaleLabel")}
             value={scale}
-            options={SCALE_OPTIONS}
+            options={SCALE_OPTIONS.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
             onChange={setScale}
           />
         </>

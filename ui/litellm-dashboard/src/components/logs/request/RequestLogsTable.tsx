@@ -1,6 +1,7 @@
 "use client";
 
 import type { ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
+import type { TFunction } from "i18next";
 import { ScrollText } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
@@ -39,12 +40,12 @@ interface RequestLogsTableProps {
   toolbarChildren?: ReactNode;
 }
 
-const formatFilterValue = (columnId: string, value: unknown): string => {
+const formatFilterValue = (columnId: string, value: unknown, t: TFunction): string => {
   if (columnId === LOG_FILTER_IDS.SPAN_TYPE) {
-    return SPAN_TYPE_LABELS[String(value)] ?? String(value);
+    return Object.hasOwn(SPAN_TYPE_LABELS, String(value)) ? t(SPAN_TYPE_LABELS[String(value)]) : String(value);
   }
   if (columnId === LOG_FILTER_IDS.CREDENTIAL) {
-    return CREDENTIAL_LABELS[String(value)] ?? String(value);
+    return Object.hasOwn(CREDENTIAL_LABELS, String(value)) ? t(CREDENTIAL_LABELS[String(value)]) : String(value);
   }
   return Array.isArray(value) ? value.join(", ") : String(value);
 };
@@ -100,6 +101,11 @@ export function RequestLogsTable({
     return getRequestLogsTableColumns({ onKeyHashClick, onSessionClick, resolveUserEmail }, t);
   }, [onKeyHashClick, onSessionClick, emailByUserId, t]);
 
+  const filterLabels = useMemo(
+    () => Object.fromEntries(Object.entries(LOG_FILTER_LABELS).map(([id, labelKey]) => [id, t(labelKey)])),
+    [t],
+  );
+
   const isFiltered = columnFilters.length > 0 || searchValue !== "";
 
   return (
@@ -136,8 +142,8 @@ export function RequestLogsTable({
             onRefresh={onRefresh}
             isRefreshing={isRefreshing}
             onOpenFilters={() => setFiltersOpen(true)}
-            filterLabels={LOG_FILTER_LABELS}
-            formatFilterValue={formatFilterValue}
+            filterLabels={filterLabels}
+            formatFilterValue={(columnId, value) => formatFilterValue(columnId, value, t)}
             showViewOptions={false}
           >
             {toolbarChildren}

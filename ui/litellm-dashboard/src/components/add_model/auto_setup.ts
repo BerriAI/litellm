@@ -1,4 +1,4 @@
-import type { TFunction } from "i18next";
+import type { ParseKeys, TFunction } from "i18next";
 import type { AutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useModels";
 import { isAutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useModels";
 import type { ModelGroup } from "@/components/llm_calls/fetch_models";
@@ -14,7 +14,11 @@ export const ROUTER_FAMILIES = {
   glm: "GLM",
   deepseek: "DeepSeek",
 } as const;
-export const ROUTER_GOALS = { cheapest: "Cheapest", balanced: "Balanced", quality: "Best quality" } as const;
+export const ROUTER_GOALS = {
+  cheapest: "addModel.autoSetup.goals.cheapest",
+  balanced: "addModel.autoSetup.goals.balanced",
+  quality: "addModel.autoSetup.goals.quality",
+} as const satisfies Record<string, ParseKeys>;
 export type RouterFamily = keyof typeof ROUTER_FAMILIES;
 export type RouterGoal = keyof typeof ROUTER_GOALS;
 export type FamilyPreference = RouterFamily | "auto";
