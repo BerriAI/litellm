@@ -134,7 +134,6 @@ def test_chat_latest_aliases_take_the_gpt5_request_shape(custom_llm_provider: st
         ("azure_ai", "gpt-chat-latest", "azure_ai/gpt-chat-latest"),
         ("azure", "gpt-chat-latest-eastus", "chat-latest"),
         ("azure_ai", "gpt-chat-latest-2", "chat-latest"),
-        ("openai", "gpt-chat-latest", "chat-latest"),
     ],
 )
 @pytest.mark.parametrize("level", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
@@ -181,9 +180,12 @@ def test_gpt_chat_latest_keeps_tool_choice_on_providers_without_a_row_that_flags
         ("github_copilot", "chat-latest"),
         ("chatgpt", "gpt-chat-latest"),
         ("ragflow", "chat/assistant-1/gpt-chat-latest"),
+        ("openai", "gpt-chat-latest"),
+        ("openai", "openai/gpt-chat-latest"),
+        ("openai", "my-gpt-chat-latest"),
     ],
 )
-def test_chat_latest_names_off_openai_azure_and_foundry_keep_the_params_they_forwarded(
+def test_chat_latest_names_openai_azure_and_foundry_do_not_serve_keep_the_params_they_forwarded(
     custom_llm_provider: str, model: str
 ):
     params: Final = litellm.get_optional_params(
@@ -199,6 +201,15 @@ def test_chat_latest_names_off_openai_azure_and_foundry_keep_the_params_they_for
     assert params["stop"] == ["END"]
     assert params["top_p"] == 0.5
     assert params["presence_penalty"] == 0.1
+
+
+@pytest.mark.parametrize("model", ["gpt-chat-latest", "openai/gpt-chat-latest", "my-gpt-chat-latest"])
+def test_chat_latest_names_openai_does_not_serve_forward_the_effort_and_temperature_they_were_sent(model: str):
+    params: Final = litellm.get_optional_params(
+        model=model, custom_llm_provider="openai", reasoning_effort="high", temperature=0.2, drop_params=False
+    )
+    assert params["reasoning_effort"] == "high"
+    assert params["temperature"] == 0.2
 
 
 def test_a_deployments_declared_levels_do_not_gate_its_sibling_deployments():

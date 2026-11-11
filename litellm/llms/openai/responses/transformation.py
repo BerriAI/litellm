@@ -35,8 +35,8 @@ from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.openai.chat.gpt_reasoning_transformation import (
-    is_chat_latest_name,
     is_gpt_reasoning_series_name,
+    is_openai_chat_latest_model,
     refused_reasoning_effort_warning,
     unsupported_reasoning_effort_message,
 )
@@ -527,7 +527,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
 
         lookup_name: Final = self._model_map_lookup_name(model)
         if self._is_gpt_5_model(model=lookup_name) or (
-            self.custom_llm_provider == LlmProviders.OPENAI and is_chat_latest_name(lookup_name)
+            self.custom_llm_provider == LlmProviders.OPENAI and is_openai_chat_latest_model(lookup_name)
         ):
             reasoning: Final = params.get("reasoning") or {}
             requested_effort: Final = reasoning.get("effort") if isinstance(reasoning, dict) else None

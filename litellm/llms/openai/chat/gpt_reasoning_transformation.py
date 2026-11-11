@@ -143,6 +143,10 @@ def is_chat_latest_name(model: str) -> bool:
     return normalized == OPENAI_CHAT_LATEST_ALIAS or GPT_CHAT_LATEST_DEPLOYMENT_MARKER in normalized
 
 
+def is_openai_chat_latest_model(model: str) -> bool:
+    return is_chat_latest_name(model) and OpenAIGPTConfig.is_openai_catalog_model(model)
+
+
 def is_gpt_reasoning_series_name(model: str) -> bool:
     normalized: Final = model.split("/")[-1]
     return any(marker in model for marker in GPT_REASONING_SERIES_MARKERS) and "gpt-5-chat" not in normalized
@@ -165,6 +169,12 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
     @classmethod
     def is_model_gpt_5_model(cls, model: str) -> bool:
         return is_gpt_reasoning_series_name(model) or is_chat_latest_name(model)
+
+    @classmethod
+    def is_openai_gpt_5_model(cls, model: str) -> bool:
+        """The family check for the openai provider, where a chat-latest name OpenAI does not serve is a
+        proxy alias or another gateway's model, so it keeps the unknown-model handling."""
+        return is_openai_chat_latest_model(model) if is_chat_latest_name(model) else cls.is_model_gpt_5_model(model)
 
     @classmethod
     def is_model_gpt_5_search_model(cls, model: str) -> bool:

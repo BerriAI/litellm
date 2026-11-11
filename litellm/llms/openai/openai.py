@@ -238,9 +238,9 @@ class OpenAIConfig(BaseConfig):
         return self
 
     def _routes_to_gpt_5_config(self, model: str) -> bool:
-        if is_chat_latest_name(model) and type(self) is not OpenAIConfig:
-            return False
-        return openAIGPT5Config.is_model_gpt_5_model(model=model)
+        if type(self) is OpenAIConfig:
+            return openAIGPT5Config.is_openai_gpt_5_model(model)
+        return not is_chat_latest_name(model) and openAIGPT5Config.is_model_gpt_5_model(model=model)
 
     def _gpt_config_for_model(self, model: str) -> OpenAIGPTConfig:
         if type(self) is OpenAIConfig and not OpenAIGPTConfig.is_openai_catalog_model(model):

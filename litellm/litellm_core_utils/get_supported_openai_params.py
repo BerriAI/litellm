@@ -27,6 +27,8 @@ def get_supported_openai_params(
             friendly Bedrock alias). It is additive: the result is the union of the
             params supported by ``model`` and by ``base_model``, so a hint can only
             add capabilities, never strip ones the real model already supports.
+            The exception is a gpt-5-family base_model on azure_ai, which sets the
+            request shape, so its params are the whole answer.
 
     Returns:
     - List if custom_llm_provider is mapped
@@ -56,8 +58,13 @@ def get_supported_openai_params(
         provider_config = None
 
     if provider_config and request_type == "chat_completion":
-        supported_params = provider_config.get_supported_openai_params(model=model)
-        if base_model and base_model != model:
+        azure_ai_gpt_5_base_model: Final = (
+            provider_config.gpt_5_base_model(base_model)
+            if isinstance(provider_config, litellm.AzureAIStudioConfig)
+            else None
+        )
+        supported_params = provider_config.get_supported_openai_params(model=azure_ai_gpt_5_base_model or model)
+        if azure_ai_gpt_5_base_model is None and base_model and base_model != model:
             base_model_params: Final = provider_config.get_supported_openai_params(model=base_model)
             supported_params = list(dict.fromkeys([*supported_params, *base_model_params]))
         return supported_params

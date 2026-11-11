@@ -1475,3 +1475,13 @@ async def test_bridge_sends_text_verbosity_on_a_client_tool_search_follow_up_tur
         ],
         "verbosity": verbosity,
     }
+
+
+@pytest.mark.parametrize(
+    ("model", "bridged"), [("chat-latest", True), ("gpt-chat-latest", False), ("my-gpt-chat-latest", False)]
+)
+def test_only_openais_own_chat_latest_sends_a_reasoning_summary_to_the_responses_api(model: str, bridged: bool) -> None:
+    info, _ = responses_api_bridge_check(
+        model=model, custom_llm_provider="openai", reasoning_effort="medium", reasoning_summary="auto"
+    )
+    assert (info.get("mode") == "responses") is bridged

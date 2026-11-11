@@ -1613,3 +1613,41 @@ def test_a_custom_named_foundry_deployment_takes_its_base_models_request_shape(
     assert params["max_completion_tokens"] == 50
     assert "max_tokens" not in params
     assert "reasoning_effort" not in params
+
+
+_GET_WEATHER_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+}
+
+
+@pytest.mark.parametrize("base_model", ["azure_ai/gpt-5.5", "gpt-5.5", "azure_ai/gpt-chat-latest"])
+@pytest.mark.parametrize(
+    "request_params",
+    [
+        MappingProxyType({"stop": ["END"]}),
+        MappingProxyType({"presence_penalty": 0.5}),
+        MappingProxyType({"top_p": 0.5}),
+        MappingProxyType({"temperature": 0.2}),
+        MappingProxyType({"user": "u-1"}),
+        MappingProxyType({"tools": [_GET_WEATHER_TOOL], "tool_choice": "auto"}),
+        MappingProxyType({"max_tokens": 50, "reasoning_effort": "high"}),
+    ],
+)
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_a_custom_named_foundry_deployment_answers_like_the_deployment_its_base_model_names(
+    local_model_cost_map: None, base_model: str, request_params: MappingProxyType[str, object], drop_params: bool
+) -> None:
+    def optional_params(model: str, deployment_base_model: str | None) -> dict[str, object] | None:
+        try:
+            return litellm.get_optional_params(
+                model=model,
+                custom_llm_provider="azure_ai",
+                base_model=deployment_base_model,
+                drop_params=drop_params,
+                **request_params,
+            )
+        except litellm.UnsupportedParamsError:
+            return None
+
+    assert optional_params("prod-deployment", base_model) == optional_params(base_model.removeprefix("azure_ai/"), None)

@@ -2537,11 +2537,9 @@ class TestResponsesSurfaceSharesTheEffortRule:
         )
         assert mapped["reasoning"] == {"summary": "auto"}
 
-    @pytest.mark.parametrize("model", ["chat-latest", "gpt-chat-latest"])
     @pytest.mark.parametrize("level", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
-    def test_a_row_that_lists_its_effort_levels_forwards_only_those(
-        self, local_model_cost_map: None, model: str, level: str
-    ):
+    def test_a_row_that_lists_its_effort_levels_forwards_only_those(self, local_model_cost_map: None, level: str):
+        model: Final = "chat-latest"
         forwarded: Final = level in litellm.model_cost["chat-latest"]["reasoning_effort_levels"]
         dropped: Final = OpenAIResponsesAPIConfig().map_openai_params(
             response_api_optional_params={"reasoning": {"effort": level, "summary": "auto"}},
@@ -2558,12 +2556,20 @@ class TestResponsesSurfaceSharesTheEffortRule:
                 drop_params=False,
             )
 
-    def test_chat_latest_on_another_openai_shaped_provider_forwards_the_effort_it_was_sent(
-        self, local_model_cost_map: None
+    @pytest.mark.parametrize(
+        ("config", "model"),
+        [
+            (LiteLLMProxyResponsesAPIConfig, "chat-latest"),
+            (OpenAIResponsesAPIConfig, "gpt-chat-latest"),
+            (OpenAIResponsesAPIConfig, "my-gpt-chat-latest"),
+        ],
+    )
+    def test_a_chat_latest_name_openai_does_not_serve_forwards_the_effort_it_was_sent(
+        self, local_model_cost_map: None, config: type[OpenAIResponsesAPIConfig], model: str
     ):
-        mapped: Final = LiteLLMProxyResponsesAPIConfig().map_openai_params(
+        mapped: Final = config().map_openai_params(
             response_api_optional_params={"reasoning": {"effort": "high"}},
-            model="chat-latest",
+            model=model,
             drop_params=False,
         )
         assert mapped["reasoning"] == {"effort": "high"}

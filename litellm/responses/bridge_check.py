@@ -264,7 +264,11 @@ def responses_api_bridge_check(
     if (
         (custom_llm_provider in ("openai", "azure") or on_foundry_openai_endpoint or on_mantle_responses_endpoint)
         and model_info.get("mode") != "responses"
-        and OpenAIGPT5Config.is_model_gpt_5_model(gpt_series_name)
+        and (
+            OpenAIGPT5Config.is_openai_gpt_5_model(gpt_series_name)
+            if custom_llm_provider == "openai"
+            else OpenAIGPT5Config.is_model_gpt_5_model(gpt_series_name)
+        )
         and not OpenAIGPT5Config.is_model_gpt_5_search_model(gpt_series_name)
         and (
             (reasoning_effort is not None and summary_requested)

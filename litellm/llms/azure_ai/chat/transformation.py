@@ -173,6 +173,15 @@ azureAIGPT5Config: Final = AzureAIGPT5Config()
 
 
 class AzureAIStudioConfig(OpenAIConfig):
+    @staticmethod
+    def gpt_5_base_model(base_model: str | None) -> str | None:
+        """The deployment name a gpt-5-family base_model stands for, so a custom-named deployment takes the
+        params and request shape of the deployment named after its base_model."""
+        if base_model is None:
+            return None
+        name: Final = base_model.removeprefix("azure_ai/")
+        return name if azureAIGPT5Config.is_model_gpt_5_model(name) else None
+
     def get_supported_openai_params(self, model: str) -> list:
         model_supports_tool_choice = True  # azure ai supports this by default
         if not supports_tool_choice(model=f"azure_ai/{model}"):
@@ -206,7 +215,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         reasoning_drop_logger: WarningLogger = verbose_logger,
         base_model: str | None = None,
     ) -> dict[str, object]:  # mutable-ok: OpenAIConfig.map_openai_params signature
-        detection_model: Final = base_model or model
+        detection_model: Final = self.gpt_5_base_model(base_model) or model
         if not azureAIGPT5Config.is_model_gpt_5_model(detection_model):
             return super().map_openai_params(
                 non_default_params=non_default_params,

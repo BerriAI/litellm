@@ -6429,7 +6429,7 @@ def completion(
             )
 
         reasoning_drop_warnings.log_unless_dropped_effort_sent(optional_params)
-        if (custom_llm_provider == "openai" and OpenAIGPT5Config.is_model_gpt_5_model(model)) or (
+        if (custom_llm_provider == "openai" and OpenAIGPT5Config.is_openai_gpt_5_model(model)) or (
             custom_llm_provider == "azure"
             and litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(_azure_detection_model)
         ):
