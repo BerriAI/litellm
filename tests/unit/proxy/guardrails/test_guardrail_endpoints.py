@@ -2627,20 +2627,20 @@ def test_no_key_field_reaches_the_guardrail_at_all() -> None:
     assert metadata == {"user_api_key_alias": "billing-app"}
 
 
-def test_credential_headers_do_not_reach_the_guardrail() -> None:
-    """The header bucket carries provider credentials that the logging redaction does not name."""
+def test_no_headers_reach_the_guardrail() -> None:
+    """The bucket carries provider credentials and SSO assertions that no denylist names reliably,
+    and before this endpoint resolved identity the headers it held were the caller's own."""
     metadata: Final = _guardrail_request_metadata(
-        {},
+        {"headers": {"x-caller": "forged"}, "topic": "tax"},
         {
             "headers": {
                 "anthropic-api-key": "sk-ant-secret",
-                "x-amz-security-token": "aws-session-token",
-                "authorization": "Bearer sk-caller",
+                "cf-access-jwt-assertion": "signed-assertion",
                 "user-agent": "curl/8.7",
             }
         },
     )
-    assert metadata == {"headers": {"user-agent": "curl/8.7"}}
+    assert metadata == {"topic": "tax"}
 
 
 def test_a_guardrail_can_annotate_what_it_is_handed() -> None:

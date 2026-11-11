@@ -2348,7 +2348,14 @@ def _metadata_fields(value: object) -> Mapping[str, object]:
 
 
 _WITHHELD_FIELDS: Final[frozenset[str]] = frozenset(
-    {"user_api_key_request_route", "agent_id", "user_api_key_auth", "user_api_key", "user_api_key_hash"}
+    {
+        "user_api_key_request_route",
+        "agent_id",
+        "user_api_key_auth",
+        "user_api_key",
+        "user_api_key_hash",
+        "headers",
+    }
 )
 
 _PROXY_RESOLVED_IDENTITY_FIELDS: Final[frozenset[str]] = frozenset(
@@ -2366,26 +2373,12 @@ _PROXY_RESOLVED_IDENTITY_FIELDS: Final[frozenset[str]] = frozenset(
     }
 )
 
-_SECRET_HEADER_MARKERS: Final = ("authorization", "cookie", "key", "token", "secret", "password", "credential")
-
-
-def _is_secret_header(name: str) -> bool:
-    lowered: Final = name.lower()
-    return any(marker in lowered for marker in _SECRET_HEADER_MARKERS)
-
-
 def _is_json_safe(value: object) -> bool:
     try:
         json.dumps(value)
     except (TypeError, ValueError):
         return False
     return True
-
-
-def _forwarded_identity_value(key: str, value: object) -> object:
-    if key != "headers":
-        return value
-    return {name: item for name, item in _metadata_fields(value).items() if not _is_secret_header(name)}
 
 
 def _is_proxy_identity_field(key: str) -> bool:
@@ -2425,7 +2418,7 @@ def _guardrail_request_metadata(
     strip_caller_supplied_identity(sanitized)
     caller_fields: Final = tuple((key, value) for key, value in sanitized.items() if not _is_proxy_identity_field(key))
     key_identity: Final = tuple(
-        (key, _forwarded_identity_value(key, value))
+        (key, value)
         for key, value in _metadata_fields(proxy).items()
         if _is_proxy_identity_field(key) and key not in _WITHHELD_FIELDS and _is_json_safe(value)
     )
