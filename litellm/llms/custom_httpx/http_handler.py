@@ -230,13 +230,13 @@ def _handler_may_close_client(client_refcount: int, owns_client: bool) -> bool:
 
 
 def _drop_streaming_anchor(_handler: object) -> None:
-    """Release a handler anchored to a streaming response. See ``_anchor_handler_to``.
+    """Release a handler anchored to a streaming response. See ``anchor_handler_to``.
 
     The work is the reference held until this point, so there is nothing to do here.
     """
 
 
-def _anchor_handler_to(response: httpx.Response, handler: object) -> None:
+def anchor_handler_to(response: httpx.Response, handler: object) -> None:
     """Keep the handler alive for as long as a streaming response can still read.
 
     A body still arriving reads through the handler's connection pool, and closing
@@ -868,7 +868,7 @@ class AsyncHTTPHandler:
                 stream=True,
                 follow_redirects=USE_CLIENT_DEFAULT if follow_redirects is None else follow_redirects,
             )
-            _anchor_handler_to(response, self)
+            anchor_handler_to(response, self)
             response.raise_for_status()
         except httpx.TimeoutException as e:
             _raise_timeout(e, start_time)
@@ -965,7 +965,7 @@ class AsyncHTTPHandler:
             )
             response: Final = await self.client.send(req, stream=stream)
             if stream:
-                _anchor_handler_to(response, self)
+                anchor_handler_to(response, self)
             response.raise_for_status()
             return response
         except httpx.ConnectError:
@@ -1142,7 +1142,7 @@ class AsyncHTTPHandler:
             )
             response: Final = await self.client.send(req, stream=stream)
             if stream:
-                _anchor_handler_to(response, self)
+                anchor_handler_to(response, self)
             response.raise_for_status()
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
@@ -1647,7 +1647,7 @@ class HTTPHandler:
                 stream=True,
                 follow_redirects=USE_CLIENT_DEFAULT if follow_redirects is None else follow_redirects,
             )
-            _anchor_handler_to(response, self)
+            anchor_handler_to(response, self)
             response.raise_for_status()
         except httpx.TimeoutException as e:
             _raise_timeout(e, start_time)
@@ -1712,7 +1712,7 @@ class HTTPHandler:
                 )
             response: Final = self.client.send(req, stream=stream)
             if stream:
-                _anchor_handler_to(response, self)
+                anchor_handler_to(response, self)
             response.raise_for_status()
             return response
         except httpx.TimeoutException as e:
@@ -1761,7 +1761,7 @@ class HTTPHandler:
                 )
             response: Final = self.client.send(req, stream=stream)
             if stream:
-                _anchor_handler_to(response, self)
+                anchor_handler_to(response, self)
             response.raise_for_status()
             return response
         except httpx.TimeoutException as e:
@@ -1810,7 +1810,7 @@ class HTTPHandler:
                 )
             response: Final = self.client.send(req, stream=stream)
             if stream:
-                _anchor_handler_to(response, self)
+                anchor_handler_to(response, self)
             return response
         except httpx.TimeoutException as e:
             _raise_timeout(e, start_time)
@@ -1858,7 +1858,7 @@ class HTTPHandler:
                 )
             response: Final = self.client.send(req, stream=stream)
             if stream:
-                _anchor_handler_to(response, self)
+                anchor_handler_to(response, self)
             response.raise_for_status()
             return response
         except httpx.TimeoutException as e:
