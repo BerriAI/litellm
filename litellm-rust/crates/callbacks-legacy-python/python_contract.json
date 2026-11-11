@@ -14,6 +14,13 @@
     "end_time",
     "cache_hit"
   ],
+  "hand_off_stream": [
+    "response",
+    "logger",
+    "kwargs",
+    "start_time",
+    "end_time"
+  ],
   "update_logging": [
     "logger",
     "kwargs",

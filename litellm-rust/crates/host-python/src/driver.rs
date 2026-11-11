@@ -413,10 +413,10 @@ where
         };
         let delivered = {
             let mut parts = self.parts();
-            Python::attach(|py| parts.binding.deliver_response(py, response.bind(py)))
+            Python::attach(|py| parts.binding.deliver_response(py, response))
         };
         match delivered {
-            Ok(()) => self.succeeded(response).await,
+            Ok(response) => self.succeeded(response).await,
             Err(error) => self.failure(error, FailureOrigin::Host).await,
         }
     }

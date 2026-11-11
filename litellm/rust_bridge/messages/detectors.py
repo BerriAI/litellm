@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Final
-
 import litellm
 from litellm.rust_bridge.detectors import overridden, present
-from litellm.rust_bridge.public_call import NativeCall, optional_mapping, optional_sequence, optional_str
+from litellm.rust_bridge.public_call import NativeCall
 
 
 def streamed_mock_response(request: NativeCall) -> bool:
@@ -23,29 +21,6 @@ def websearch_interception(_request: NativeCall) -> bool:
     from litellm.integrations.websearch_interception.handler import WebSearchInterceptionLogger
 
     return any(isinstance(callback, WebSearchInterceptionLogger) for callback in litellm.callbacks)
-
-
-def _resolved_provider(request: NativeCall) -> str | None:
-    from litellm.exceptions import BadRequestError
-    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-
-    provider: Final = optional_str(request.resolved.get("custom_llm_provider"))
-    try:
-        return get_llm_provider(str(request.resolved["model"]), provider)[1]
-    except BadRequestError:
-        return provider
-
-
-def intercepted(request: NativeCall) -> bool:
-    """The async Messages handler delegates matching tools to a registered interceptor."""
-    from litellm.llms.anthropic.messages.native.interceptors import get_messages_interceptors
-
-    tools: Final = optional_sequence(request.resolved.get("tools"))
-    if not tools:
-        return False
-    mappings: Final = tuple(mapping for mapping in map(optional_mapping, tools) if mapping is not None)
-    provider: Final = _resolved_provider(request)
-    return any(interceptor.can_handle(mappings, provider) for interceptor in get_messages_interceptors())
 
 
 def safeguards_classifier(request: NativeCall) -> bool:

@@ -1,6 +1,7 @@
 mod common_utils;
 mod constants;
 mod handler;
+mod host_answer;
 pub mod route;
 mod types;
 mod workload_identity;
@@ -16,6 +17,7 @@ use std::sync::Arc;
 use crate::common_utils::messages_provider;
 
 pub use common_utils::merge_messages_header_sources;
+pub use host_answer::HostAnswer;
 pub use litellm_inference::Error;
 pub use types::{
     MessagesBody, MessagesCall, MessagesCallResponse, MessagesSettings, MessagesShaping,
@@ -30,6 +32,7 @@ pub struct MessagesRoute {
     secrets: Arc<dyn SecretSource>,
     cache: Option<litellm_cache_response::ScopedCache>,
     workload_identity: Option<Arc<dyn WorkloadIdentity>>,
+    host_answer: Option<Arc<dyn HostAnswer>>,
 }
 
 impl MessagesRoute {
@@ -44,6 +47,7 @@ impl MessagesRoute {
             secrets,
             cache: None,
             workload_identity: None,
+            host_answer: None,
         }
     }
 
@@ -51,6 +55,14 @@ impl MessagesRoute {
     pub fn with_workload_identity(self, workload_identity: Arc<dyn WorkloadIdentity>) -> Self {
         Self {
             workload_identity: Some(workload_identity),
+            ..self
+        }
+    }
+
+    #[must_use]
+    pub fn with_host_answer(self, host_answer: Arc<dyn HostAnswer>) -> Self {
+        Self {
+            host_answer: Some(host_answer),
             ..self
         }
     }
@@ -87,7 +99,11 @@ impl MessagesRoute {
         call: MessagesCall,
         context: CallContext<'_, impl Interceptors<Error>>,
     ) -> Result<MessagesCallResponse, Error> {
-        if let Some(mock) = &call.shaping.settings.mock_response {
+        let host_answer = self
+            .host_answer
+            .as_deref()
+            .filter(|_| call.shaping.settings.intercepted);
+        if let (None, Some(mock)) = (host_answer, &call.shaping.settings.mock_response) {
             return Ok(MessagesCallResponse::Complete(MessagesBody::Unchecked(
                 mock.clone(),
             )));
@@ -108,6 +124,10 @@ impl MessagesRoute {
             let model = provider.model.to_owned();
             if let Some(output) = handler::cached(self, config, &model, &context).await? {
                 return Ok(output);
+            }
+            if let Some(host_answer) = host_answer {
+                let stream = call.body.params.stream == Some(true);
+                return handler::answered(self, host_answer, config, model, stream, &context).await;
             }
             let secrets = self.secrets.resolve(config.config().secret_names()).await?;
             handler::execute(self, config, model, call, secrets, &context)

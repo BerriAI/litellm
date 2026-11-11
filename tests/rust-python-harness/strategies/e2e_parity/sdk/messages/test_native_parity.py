@@ -24,7 +24,7 @@ import copy
 import json
 import os
 import re
-from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Iterable, Iterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from types import MappingProxyType
@@ -39,6 +39,10 @@ from litellm.caching.caching_handler import (
     _PENDING_CACHE_WRITES,  # pyright: ignore[reportPrivateUsage]  # a primed entry must land before the measured call reads it
 )
 from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
+from litellm.llms.anthropic.messages.native import interceptors as messages_interceptors
+from litellm.llms.anthropic.messages.native.fake_stream_iterator import FakeAnthropicMessagesStreamIterator
+from litellm.llms.anthropic.messages.native.interceptors import MessagesInterceptor
+from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.messages import dispatch
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.rust_bridge import catalog
@@ -326,6 +330,7 @@ class Case:
     settings: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
     private_keys: bool = False
     cache: Callable[[], Cache] | None = None
+    interceptor: Callable[[], MessagesInterceptor] | None = None
     gaps: Mapping[str, str | None] = field(default_factory=lambda: MappingProxyType({}))
 
     def params(self) -> Iterator[object]:
@@ -1161,6 +1166,111 @@ STRICT_TOOLS_RETRY_CASES: Final = (
     ),
 )
 
+INTERCEPTED_TOOL: Final[Mapping[str, JsonValue]] = MappingProxyType({"type": "parity_intercept", "name": "intercept"})
+_ECHOED_KWARGS: Final = (
+    "model",
+    "messages",
+    "tools",
+    "stream",
+    "max_tokens",
+    "custom_llm_provider",
+    "api_key",
+    "metadata",
+    "system",
+    "temperature",
+    "tool_choice",
+)
+
+
+class _Intercepting(MessagesInterceptor):
+    def can_handle(self, tools: Sequence[Mapping[str, object]] | None, custom_llm_provider: str | None) -> bool:
+        return custom_llm_provider == "anthropic" and any(
+            tool.get("type") == INTERCEPTED_TOOL["type"] for tool in tools or ()
+        )
+
+
+class _Answering(_Intercepting):
+    async def handle(self, **kwargs: object) -> object:  # pyright: ignore[reportIncompatibleMethodOverride]  # kwargs-ok: the interceptor contract's keyword call
+        echoed: Final = {name: kwargs.get(name) for name in _ECHOED_KWARGS}
+        answer: Final = {
+            **TEXT_RESPONSE,
+            "id": "msg_01ParityIntercepted",
+            "content": [{"type": "text", "text": json.dumps(echoed, sort_keys=True, default=repr)}],
+            "extra_keys": sorted(name for name in kwargs if name not in _ECHOED_KWARGS),
+        }
+        if kwargs.get("stream"):
+            return FakeAnthropicMessagesStreamIterator(
+                cast(AnthropicMessagesResponse, answer)
+            )  # cast-ok: a synthetic Messages response
+        return answer
+
+
+class _Delegating(_Intercepting):
+    async def handle(self, **kwargs: object) -> object:  # pyright: ignore[reportIncompatibleMethodOverride]  # kwargs-ok: the interceptor contract's keyword call
+        from litellm.messages import anthropic_messages
+
+        tools: Final = cast(list[Mapping[str, object]], kwargs["tools"])  # cast-ok: the caller's tools
+        return await anthropic_messages(
+            model=kwargs["model"],
+            messages=kwargs["messages"],
+            max_tokens=kwargs["max_tokens"],
+            tools=[tool for tool in tools if tool.get("type") != INTERCEPTED_TOOL["type"]],
+            api_key=kwargs["api_key"],
+            api_base=kwargs["api_base"],
+            stream=kwargs["stream"],
+        )
+
+
+class _Refusing(_Intercepting):
+    async def handle(self, **kwargs: object) -> object:  # pyright: ignore[reportIncompatibleMethodOverride]  # kwargs-ok: the interceptor contract's keyword call
+        raise ValueError("the interceptor refused the call")
+
+
+def _intercepted(**kwargs: object) -> Mapping[str, object]:
+    return _kw(tools=[dict(INTERCEPTED_TOOL), dict(WEATHER_TOOL)], **kwargs)
+
+
+INTERCEPTOR_CASES: Final = (
+    Case("interceptor_answers", _intercepted(), upstream=(), interceptor=_Answering),
+    Case(
+        "interceptor_answers_with_system_and_metadata",
+        _intercepted(system="Be brief.", metadata={"user_id": "user-123"}, temperature=0.5),
+        upstream=(),
+        interceptor=_Answering,
+    ),
+    Case("interceptor_answers_stream", _intercepted(stream=True), upstream=(), interceptor=_Answering),
+    Case(
+        "interceptor_wins_over_mock_response",
+        _intercepted(mock_response="Hi from the mock"),
+        upstream=(),
+        interceptor=_Answering,
+    ),
+    Case(
+        "interceptor_answers_bare_model",
+        _intercepted(custom_llm_provider="anthropic"),
+        upstream=(),
+        model="claude-sonnet-4-5",
+        interceptor=_Answering,
+    ),
+    Case("interceptor_delegates_to_the_public_api", _intercepted(), interceptor=_Delegating),
+    Case(
+        "interceptor_delegates_a_stream",
+        _intercepted(stream=True),
+        upstream=(_stream(TEXT_STREAM),),
+        interceptor=_Delegating,
+    ),
+    Case("interceptor_raises", _intercepted(), upstream=(), interceptor=_Refusing),
+    Case("interceptor_answer_is_cached", _intercepted(), upstream=(), cache=Cache, interceptor=_Answering),
+    Case(
+        "interceptor_stream_answer_with_cache",
+        _intercepted(stream=True),
+        upstream=(),
+        cache=Cache,
+        interceptor=_Answering,
+    ),
+    Case("interceptor_ignores_other_calls", _kw(tools=[dict(WEATHER_TOOL)]), interceptor=_Answering),
+)
+
 CASES: Final = (
     *REQUEST_CASES,
     *PROMPT_CACHING_CASES,
@@ -1174,6 +1284,7 @@ CASES: Final = (
     *STRICT_TOOLS_RETRY_CASES,
     *FALLBACK_CASES,
     *CACHE_CASES,
+    *INTERCEPTOR_CASES,
 )
 
 
@@ -1252,6 +1363,15 @@ def _settings(settings: Mapping[str, object]) -> Generator[None]:
     finally:
         for name, value in saved.items():
             setattr(litellm, name, value)
+
+
+@contextmanager
+def _interceptor(interceptor: Callable[[], MessagesInterceptor] | None) -> Generator[None]:
+    if interceptor is None:
+        yield
+        return
+    with rebound(messages_interceptors, "_interceptors", [interceptor(), *messages_interceptors._interceptors]):  # pyright: ignore[reportPrivateUsage]  # registers a test interceptor ahead of the shipped ones
+        yield
 
 
 @contextmanager
@@ -1446,6 +1566,7 @@ async def _leg(case: Case, server: RecordingServer, probe: FallbackProbe | None)
         _environment(case.env),
         _settings(case.settings),
         _cache(case.cache),
+        _interceptor(case.interceptor),
     ):
         for spec in case.upstream:
             server.enqueue(replace(spec))

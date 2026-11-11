@@ -31,6 +31,8 @@ pub(crate) enum Wrapper {
     Finalize,
     #[strum(serialize = "restore_context")]
     RestoreContext,
+    #[strum(serialize = "hand_off_stream")]
+    HandOffStream,
 }
 
 /// litellm's `Logging` object and the sync and async callback fan-out behind it.

@@ -14,7 +14,7 @@ use pyo3::{
     exceptions::{PyBaseException, PyException},
     gc::{PyTraverseError, PyVisit},
     prelude::*,
-    types::{PyDateTime, PyDict, PyList, PyString},
+    types::{PyBool, PyDateTime, PyDict, PyList, PyString},
 };
 use serde_json::Value;
 
@@ -22,7 +22,7 @@ use crate::{
     DeploymentHooks, LegacyCallbacks, PublicCall, PythonLogger,
     deferred::{PendingLogging, PendingSuccess},
     finalize, is_internal_call,
-    python::{Logging, Streaming},
+    python::{Logging, Streaming, Wrapper},
     setup,
 };
 
@@ -59,6 +59,7 @@ pub struct LegacyLogging {
     cache_key: Option<String>,
     /// When the provider request went out, until its window is recorded (Messages only).
     api_started: Option<f64>,
+    handed_off: bool,
 }
 
 fn retry_reason(reason: &RetryReason) -> Value {
@@ -99,6 +100,7 @@ impl LegacyLogging {
             internal: false,
             cache_key: None,
             api_started: None,
+            handed_off: false,
         }
     }
 
@@ -279,6 +281,30 @@ impl LegacyLogging {
             .as_ref()
             .map(|response| HookStep::Ready(response.clone_ref(py)))
             .ok_or_else(|| HostError::MissingState.into())
+    }
+
+    fn stream_requested(&self, py: Python<'_>) -> PyResult<bool> {
+        Ok(self
+            .call
+            .kwargs()
+            .bind(py)
+            .get_item("stream")?
+            .is_some_and(|stream| stream.is(PyBool::new(py, true))))
+    }
+
+    fn hand_off(&mut self, py: Python<'_>) -> PyResult<HookStep<Self, Py<PyAny>>> {
+        let response = self.response.as_ref().ok_or(HostError::MissingState)?;
+        Wrapper::HandOffStream.call(
+            py,
+            (
+                response,
+                self.logger()?.object(py),
+                self.call.kwargs(),
+                &self.start,
+                &self.end,
+            ),
+        )?;
+        Ok(HookStep::Ready(response.clone_ref(py)))
     }
 
     fn messages_cache_hit(&self) -> bool {
@@ -596,6 +622,9 @@ impl LegacyLogging {
     ) -> PyResult<HookStep<Self, Py<PyAny>>> {
         self.end = Some(datetime(py, timing.end_time)?);
         self.response = Some(response);
+        if self.handed_off {
+            return self.hand_off(py);
+        }
         if self.runs_deployment_hooks() && !self.messages_cache_hit() {
             return Ok(HookStep::Await(
                 DeploymentHooks::after_success(
@@ -620,6 +649,10 @@ impl LegacyLogging {
         self.cache_key = match &facts.source {
             ResultSource::Provider => None,
             ResultSource::Cache { key } => Some(key.clone()),
+            ResultSource::Host => {
+                self.handed_off = self.stream_requested(py)?;
+                return Ok(HookStep::Ready(()));
+            }
         };
         let logger = self.logger()?.object(py);
         if self.messages_cache_hit() {
@@ -743,6 +776,7 @@ impl LegacyLogging {
         self.response = Some(response.clone_ref(py));
         match &self.stream {
             Some(stream) => self.stream_success(py, stream, false)?,
+            None if self.handed_off => {}
             None if self.messages_cache_hit() => self.dispatch_cache_hit(py)?,
             None => self.dispatch_success(py)?,
         }
@@ -1108,6 +1142,80 @@ logger.hooks = {'pre': lambda kwargs: kwargs}
                 c"
 [finalized] = [value for name, value in logger.calls if name == 'finalize']
 assert finalized is replacement
+",
+            );
+        });
+    }
+
+    #[rstest]
+    #[case::unary(false)]
+    #[case::stream(true)]
+    fn a_host_answer_keeps_the_logger_as_set_up_and_a_streamed_one_is_handed_off(
+        #[case] stream: bool,
+    ) {
+        use litellm_host::interceptors::{Cost, ExecutionFacts, ProviderIdentity, ResultSource};
+
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(
+                py,
+                c"
+kwargs = {'logger': logger}
+response = object()
+logger.hooks = {'pre': lambda kwargs: kwargs}
+",
+            );
+            local(&locals, "kwargs").set_item("stream", stream).unwrap();
+            let (mut logging, step) = begin(py, &locals, true);
+            resume(
+                &mut logging,
+                step,
+                py,
+                Ok(local(&locals, "kwargs").unbind()),
+            )
+            .unwrap();
+            let facts = ExecutionFacts {
+                provider: ProviderIdentity {
+                    model: "claude-sonnet-4-5".into(),
+                    provider: "anthropic".into(),
+                },
+                cost: Cost::Deferred,
+                source: ResultSource::Host,
+            };
+            assert!(matches!(
+                logging.result_ready(py, &facts).unwrap(),
+                HookStep::Ready(())
+            ));
+            let response = local(&locals, "response").unbind();
+            let step = logging
+                .transform_response(py, response.clone_ref(py), TIMING)
+                .unwrap();
+            assert_eq!(awaits_deployment_hook(&step), !stream);
+            if !stream {
+                return;
+            }
+            let HookStep::Ready(returned) = step else {
+                panic!("a handed-off stream is returned as is");
+            };
+            assert!(returned.bind(py).is(response.bind(py)));
+            logging
+                .on_event(
+                    py,
+                    PythonCallEvent::Succeeded {
+                        timing: TIMING,
+                        response: &response,
+                    },
+                )
+                .unwrap();
+            run(
+                py,
+                &locals,
+                c"
+names = logger.names()
+assert ('hand_off_stream', response) in logger.calls, names
+assert 'update_logging' not in names, names
+assert 'finalize' not in names, names
+assert not [name for name in names if 'success' in name], names
 ",
             );
         });

@@ -1,5 +1,5 @@
 import inspect
-from collections.abc import Awaitable, Callable, Iterator, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from typing import Final, cast  # noqa: TID251  # narrows legacy callable signatures for inspect
 
 import httpx
@@ -12,6 +12,8 @@ from litellm.exceptions import UnsupportedParamsError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.websearch_interception.handler import WebSearchInterceptionLogger
 from litellm.llms.anthropic.messages.native import handler as python_messages
+from litellm.llms.anthropic.messages.native import interceptors as messages_interceptors
+from litellm.llms.anthropic.messages.native.interceptors import MessagesInterceptor
 from litellm.messages import dispatch
 from litellm.messages.dispatch import (
     _ADISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
@@ -715,12 +717,6 @@ ASYNC_ONLY_FEATURES: Final = (
     pytest.param(
         Feature.WEBSEARCH_INTERCEPTION, {}, {"callbacks": [WebSearchInterceptionLogger()]}, id="websearch-interception"
     ),
-    pytest.param(
-        Feature.MESSAGES_INTERCEPTOR,
-        {"model": "deepseek/deepseek-v4-flash", "tools": [ADVISOR_TOOL]},
-        {},
-        id="messages-interceptor",
-    ),
 )
 
 
@@ -812,29 +808,29 @@ async def test_async_mock_response_falls_back_only_when_streamed(
     assert served_sync is python_result
 
 
+class _Claims(MessagesInterceptor):
+    def can_handle(self, tools: Sequence[Mapping[str, object]] | None, custom_llm_provider: str | None) -> bool:
+        return custom_llm_provider == "anthropic"
+
+    async def handle(self, **kwargs: object) -> AnthropicMessagesResponse:  # pyright: ignore[reportIncompatibleMethodOverride]  # kwargs-ok: test double only needs the override
+        return response()
+
+
 @pytest.mark.asyncio
-async def test_interceptor_feature_follows_the_resolved_provider() -> None:
-    rules: Final[Rules] = (
-        RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, features=frozenset({Feature.MESSAGES_INTERCEPTOR})),
-        RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),
-    )
-    native_result: Final = response()
+async def test_a_call_a_registered_interceptor_owns_runs_on_rust(
+    monkeypatch: pytest.MonkeyPatch, shipped_native: list[str]
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(messages_interceptors, "_interceptors", [_Claims()])
 
-    async def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: stub
-        pytest.fail("anthropic serves the advisor tool itself")
+    def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: rejected fallback
+        pytest.fail("Rust hands the call to the interceptor itself")
 
-    async def native(request: NativeCall) -> AnthropicMessagesResponse:
-        return native_result
+    with rebound(dispatch, "_PYTHON_AMESSAGES", python):
+        result: Final = await _public(True, "anthropic/claude-sonnet-4-5", {"tools": [ADVISOR_TOOL]})
 
-    result: Final = await _ADISPATCH.arun(
-        (16, MESSAGES, "claude-sonnet-4-5"),
-        {"tools": [ADVISOR_TOOL], "custom_llm_provider": "anthropic"},
-        python=python,
-        binding=amessages_binding(native),
-        native=lambda hook, request, call_args, call_kwargs: hook(request),
-        rules=rules,
-    )
-    assert result is native_result
+    assert isinstance(result, dict)
+    assert shipped_native == ["async"]
 
 
 def test_a_federated_request_stays_native(monkeypatch: pytest.MonkeyPatch) -> None:

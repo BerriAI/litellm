@@ -149,7 +149,6 @@ _ASYNC_FEATURES: Final[detectors.Detectors] = MappingProxyType(
         Feature.MOCK_RESPONSE: route_detectors.streamed_mock_response,
         Feature.PRE_REQUEST_HOOK: route_detectors.pre_request_hook,
         Feature.WEBSEARCH_INTERCEPTION: route_detectors.websearch_interception,
-        Feature.MESSAGES_INTERCEPTOR: route_detectors.intercepted,
     }
 )
 

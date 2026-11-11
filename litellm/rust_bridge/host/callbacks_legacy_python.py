@@ -126,6 +126,18 @@ def finalize(
         hidden.update({"cache_key": cache_key, "cache_hit": True})
 
 
+def hand_off_stream(
+    response: object,
+    logger: Logging,
+    kwargs: dict[str, object],  # mutable-ok: `finalize` takes the call kwargs as a dict
+    start_time: datetime.datetime,
+    end_time: datetime.datetime,
+) -> None:
+    logger.stream = True  # rebind-ok: @client marks the caller's logger streaming
+    logger.model_call_details["stream"] = True  # rebind-ok: @client marks the caller's logger streaming
+    finalize(response, logger, kwargs, start_time, end_time, cache_hit=False)
+
+
 class LoggingSurface(Protocol):
     deferred_success_result: tuple[object, datetime.datetime, datetime.datetime] | None
     enqueue_deferred_logging: Callable[[], None] | None

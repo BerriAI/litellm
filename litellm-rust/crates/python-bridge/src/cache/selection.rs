@@ -6,13 +6,13 @@ use litellm_host::{
 };
 use pyo3::{prelude::*, types::PyDict};
 
-pub(crate) struct Cached<P>(std::marker::PhantomData<P>);
+pub(crate) struct Cached<P, C = python::CacheCall>(std::marker::PhantomData<fn() -> (P, C)>);
 
-impl<P: Protocol> Protocol for Cached<P> {
+impl<P: Protocol, C: From<python::CacheCall> + Send + 'static> Protocol for Cached<P, C> {
     type Request = (P::Request, Selection);
     type Response = P::Response;
     type Error = P::Error;
-    type HostCall = python::CacheCall;
+    type HostCall = C;
     type Chunk = P::Chunk;
     type StreamHead = P::StreamHead;
 }
@@ -28,7 +28,7 @@ pub(crate) struct Selection {
 }
 
 impl Selection {
-    pub(crate) fn attach<P: Protocol<HostCall = python::CacheCall>>(
+    pub(crate) fn attach<P: Protocol<HostCall: From<python::CacheCall>>>(
         self,
         services: HostServices<P>,
     ) -> (Option<ScopedCache>, CacheOptions)

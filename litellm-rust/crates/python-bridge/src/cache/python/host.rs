@@ -130,6 +130,18 @@ impl PythonCache {
         Ok(())
     }
 
+    pub fn wrap_stream(&self, py: Python<'_>, stream: Py<PyAny>) -> PyResult<Py<PyAny>> {
+        let (Some(cache), Some(function), Some(arguments)) =
+            (&self.cache, &self.function, &self.arguments)
+        else {
+            return Ok(stream);
+        };
+        py.import(CACHE_HOST_MODULE)?
+            .getattr("wrap_stream")?
+            .call((cache, function, stream), Some(&arguments.bind(py).copy()?))
+            .map(Bound::unbind)
+    }
+
     pub fn resume(
         &mut self,
         py: Python<'_>,

@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
 
@@ -7,6 +7,8 @@ import pytest
 import litellm
 from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
 from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
+from litellm.llms.anthropic.messages.native import interceptors as messages_interceptors
+from litellm.llms.anthropic.messages.native.interceptors import MessagesInterceptor
 from litellm.rust_bridge.host.routes import messages as messages_host
 from litellm.rust_bridge.host.routes.messages import response
 
@@ -728,3 +730,65 @@ def test_workload_identity_fields_are_the_federation_litellm_params() -> None:
         "anthropic_organization_id",
         "anthropic_disable_workload_identity_federation",
     }
+
+
+class _Claims(MessagesInterceptor):
+    def __init__(self, provider: str) -> None:
+        self.provider = provider
+        self.asked: list[tuple[object, str | None]] = []
+
+    def can_handle(self, tools: Sequence[Mapping[str, object]] | None, custom_llm_provider: str | None) -> bool:
+        self.asked.append((tools, custom_llm_provider))
+        return custom_llm_provider == self.provider
+
+    async def handle(self, **kwargs: object) -> object:  # pyright: ignore[reportIncompatibleMethodOverride]  # kwargs-ok: the interceptor contract's keyword call
+        return kwargs
+
+
+_TOOLS: Final = [{"type": "custom_tool", "name": "t"}]
+
+
+@pytest.mark.parametrize(
+    ("request_fields", "provider"),
+    (
+        pytest.param({"model": "anthropic/claude-sonnet-4-5"}, "anthropic", id="prefixed"),
+        pytest.param({"model": "claude-sonnet-4-5", "custom_llm_provider": "anthropic"}, "anthropic", id="explicit"),
+        pytest.param({"model": "not-a-known-model"}, None, id="unresolved"),
+    ),
+)
+def test_interceptor_asks_with_the_tools_and_the_provider_the_handler_resolves(
+    monkeypatch: pytest.MonkeyPatch, request_fields: Mapping[str, object], provider: str | None
+) -> None:
+    declined: Final = _Claims("other")
+    claims: Final = _Claims("anthropic")
+    monkeypatch.setattr(messages_interceptors, "_interceptors", [declined, claims])
+
+    chosen: Final = messages_host.interceptor({**request_fields, "tools": _TOOLS})
+
+    assert chosen is (claims if provider == "anthropic" else None)
+    assert declined.asked == [(_TOOLS, provider)]
+
+
+@pytest.mark.asyncio
+async def test_answer_hands_the_interceptor_the_call_as_the_handler_does() -> None:
+    owner: Final = _Claims("anthropic")
+    request: Final = {
+        "model": "anthropic/claude-sonnet-4-5",
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}, {"type": "text", "text": ""}]}],
+        "max_tokens": 16,
+        "tools": _TOOLS,
+        "stream": None,
+        "system": None,
+        "client": object(),
+        "custom_llm_provider": None,
+        "litellm_call_id": "call-1",
+    }
+
+    handed: Final = await messages_host.answer(owner, request)
+
+    assert isinstance(handed, dict)
+    assert handed["messages"] == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+    assert handed["custom_llm_provider"] == "anthropic"
+    assert handed["stream"] is False
+    assert handed["litellm_call_id"] == "call-1"
+    assert "client" not in handed

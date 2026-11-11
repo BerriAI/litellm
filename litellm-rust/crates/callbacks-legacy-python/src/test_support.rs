@@ -54,6 +54,7 @@ def setup(call_type, args, kwargs, start, asynchronous):
 FAKES = {
     'setup': setup,
     'finalize': lambda response, logger, kwargs, start, end, cache_hit: logger.record('finalize', response),
+    'hand_off_stream': lambda response, logger, kwargs, start, end: logger.record('hand_off_stream', response),
     'update_logging': lambda logger, kwargs, model, optional_params, litellm_params, provider: logger.update_from_kwargs(
         kwargs=kwargs,
         model=model,

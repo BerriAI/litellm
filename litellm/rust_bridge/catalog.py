@@ -70,8 +70,6 @@ class Feature(str, Enum):
     """A logger overriding async_pre_request_hook, which may rewrite the request."""
     WEBSEARCH_INTERCEPTION = "websearch_interception"
     """A WebSearchInterceptionLogger that may answer without calling the provider."""
-    MESSAGES_INTERCEPTOR = "messages_interceptor"
-    """A registered MessagesInterceptor that takes over the call."""
     AGENTIC_LOOP_HOOK = "agentic_loop_hook"
     """A logger overriding async_should_run_agentic_loop, which may run follow-up calls."""
     RESPONSE_CACHE = "response_cache"
@@ -166,7 +164,6 @@ MESSAGES_PYTHON_FEATURES: Final = (COMMON_PYTHON_FEATURES - {Feature.TIMEOUT_VAR
     Feature.SAFEGUARDS_CLASSIFIER,
     Feature.PRE_REQUEST_HOOK,
     Feature.WEBSEARCH_INTERCEPTION,
-    Feature.MESSAGES_INTERCEPTOR,
 }
 
 RESPONSES_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {

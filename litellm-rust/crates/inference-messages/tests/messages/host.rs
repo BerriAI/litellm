@@ -534,3 +534,65 @@ async fn the_request_context_carries_the_requested_reasoning_not_its_translation
         )
     );
 }
+
+#[derive(Default)]
+struct RecordingAnswer(Mutex<Vec<bool>>);
+
+impl litellm_inference_messages::HostAnswer for RecordingAnswer {
+    fn answer(&self, stream: bool) -> futures_util::future::BoxFuture<'_, Result<(), Error>> {
+        self.0.lock().unwrap().push(stream);
+        Box::pin(async { Ok(()) })
+    }
+}
+
+#[rstest]
+#[case::unary(false)]
+#[case::stream(true)]
+#[tokio::test]
+async fn an_intercepted_call_is_answered_by_the_host_before_the_mock_and_the_provider(
+    call: MessagesCall,
+    #[case] streaming: bool,
+) {
+    let upstream = upstream([message_response()]).await;
+    let answer = Arc::new(RecordingAnswer::default());
+    let route = messages_route(no_secrets()).with_host_answer(answer.clone());
+    let mut request = authenticated(
+        with_fields(call, json!({"stream": streaming})),
+        upstream.uri(),
+    );
+    request.shaping.settings.intercepted = true;
+    request.shaping.settings.mock_response = Some(object(json!({"id": "mocked"})));
+    let host = RecordingHost::passthrough(request);
+
+    let output = route
+        .execute(host.request().unwrap(), &host, None)
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        output,
+        MessagesCallResponse::Complete(MessagesBody::Unchecked(body)) if body.is_empty()
+    ));
+    assert_eq!(*answer.0.lock().unwrap(), vec![streaming]);
+    assert!(received(&upstream).await.is_empty());
+    let facts = host.facts.lock().unwrap();
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0].source, ResultSource::Host);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_call_no_interceptor_owns_never_asks_the_host(call: MessagesCall) {
+    let upstream = upstream([message_response()]).await;
+    let answer = Arc::new(RecordingAnswer::default());
+    let route = messages_route(no_secrets()).with_host_answer(answer.clone());
+    let host = RecordingHost::passthrough(authenticated(call, upstream.uri()));
+
+    route
+        .execute(host.request().unwrap(), &host, None)
+        .await
+        .unwrap();
+
+    assert!(answer.0.lock().unwrap().is_empty());
+    assert_eq!(received(&upstream).await.len(), 1);
+}

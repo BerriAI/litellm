@@ -412,6 +412,23 @@ def test_stream_head_is_stamped_in_place_with_the_call_hidden_params() -> None:
     assert "_response_ms" in head
 
 
+def test_a_handed_off_stream_marks_the_logger_streaming_and_carries_the_timing() -> None:
+    logger: Final = _messages_logger()
+    started: Final = datetime.datetime.now()
+
+    legacy.hand_off_stream(
+        object(),
+        logger,
+        {"model": "anthropic/claude-sonnet-4-5"},
+        started,
+        started + datetime.timedelta(milliseconds=5),
+    )
+
+    assert logger.stream is True
+    assert logger.model_call_details["stream"] is True
+    assert logger.response_timing_metrics["_response_ms"] == pytest.approx(5, abs=1)
+
+
 @pytest.mark.asyncio
 async def test_a_native_stream_failure_logs_like_the_python_chunk_processor(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm._logging import verbose_proxy_logger
