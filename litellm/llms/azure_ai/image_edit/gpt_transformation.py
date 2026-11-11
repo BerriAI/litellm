@@ -11,6 +11,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 
 AZURE_AI_GPT_IMAGE_EDIT_DEFAULT_API_VERSION: Final = "2025-04-01-preview"
+CALLER_AUTH_HEADER_NAMES: Final = frozenset({"api-key", "authorization"})
 
 
 class AzureFoundryGPTImageEditConfig(AzureImageEditConfig):
@@ -31,6 +32,8 @@ class AzureFoundryGPTImageEditConfig(AzureImageEditConfig):
         litellm_params: Mapping[str, object] | None = None,
         api_base: str | None = None,
     ) -> dict[str, str]:  # mutable-ok: llm_http_handler adds extra_headers to the returned dict in place
+        if any(name.lower() in CALLER_AUTH_HEADER_NAMES for name in headers):
+            return {**headers}
         params: Final = GenericLiteLLMParams(**(litellm_params or {}))
         return {
             **headers,
@@ -47,6 +50,11 @@ class AzureFoundryGPTImageEditConfig(AzureImageEditConfig):
         api_base: str | None,
         litellm_params: Mapping[str, object],
     ) -> str:
+        foundry_api_base: Final = AzureFoundryModelInfo.get_api_base(api_base)
+        if foundry_api_base is None:
+            raise ValueError(
+                "Azure AI API base is required. Set AZURE_AI_API_BASE environment variable or pass api_base parameter."
+            )
         api_version: Final = (
             litellm_params.get("api_version")
             or get_secret_str("AZURE_AI_API_VERSION")
@@ -55,6 +63,6 @@ class AzureFoundryGPTImageEditConfig(AzureImageEditConfig):
         )
         return super().get_complete_url(  # pyright: ignore[reportUnknownMemberType]  # bare dict in base
             model=model,
-            api_base=AzureFoundryModelInfo.get_api_base(api_base),
+            api_base=foundry_api_base,
             litellm_params={**litellm_params, "api_version": api_version},
         )

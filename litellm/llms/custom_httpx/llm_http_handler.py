@@ -7094,7 +7094,7 @@ class BaseLLMHTTPHandler:
 
         headers: Final = image_edit_provider_config.validate_environment(
             api_key=litellm_params.api_key,
-            headers=image_edit_optional_request_params.get("extra_headers", {}) or {},
+            headers={**(image_edit_optional_request_params.get("extra_headers", {}) or {}), **(extra_headers or {})},
             model=model,
             litellm_params=dict(litellm_params),
             api_base=litellm_params.api_base,
@@ -7196,7 +7196,7 @@ class BaseLLMHTTPHandler:
         headers: Final = await asyncio.to_thread(
             image_edit_provider_config.validate_environment,
             api_key=litellm_params.api_key,
-            headers=image_edit_optional_request_params.get("extra_headers", {}) or {},
+            headers={**(image_edit_optional_request_params.get("extra_headers", {}) or {}), **(extra_headers or {})},
             model=model,
             litellm_params=dict(litellm_params),
             api_base=litellm_params.api_base,
