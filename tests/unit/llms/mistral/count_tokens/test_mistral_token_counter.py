@@ -514,19 +514,18 @@ def test_mistral_model_info_key_and_base_match_chat(monkeypatch: pytest.MonkeyPa
     assert (model_info.get_api_base(), model_info.get_api_key()) == (chat_base, chat_key)
 
 
-def test_mistral_config_get_models_calls_mistral_endpoint():
+def test_mistral_config_get_models_lists_ids_that_route_to_mistral():
     from litellm.llms.mistral.chat.transformation import MistralConfig
 
-    config: Final = MistralConfig()
+    with respx.mock:
+        route: Final = respx.get("https://api.mistral.ai/v1/models").mock(
+            return_value=httpx.Response(200, json={"data": [{"id": "mistral-large-4"}, {"id": "codestral-2508"}]})
+        )
+        models: Final = MistralConfig().get_models(api_key="test-key")
 
-    def mock_fetch(api_base: str | None, bearer_token: str | None) -> list[str]:
-        assert api_base == "https://api.mistral.ai/v1"
-        assert bearer_token == "test-key"
-        return ["mistral-large-4", "mistral-small-latest"]
-
-    with patch.object(config, "_fetch_model_ids", side_effect=mock_fetch):
-        models: Final = config.get_models(api_key="test-key")
-        assert models == ["mistral-large-4", "mistral-small-latest"]
+    assert route.calls.last.request.headers["Authorization"] == "Bearer test-key"
+    assert models == ["mistral/mistral-large-4", "mistral/codestral-2508"]
+    assert {litellm.get_llm_provider(model=model)[1] for model in models} == {"mistral"}
 
 
 @pytest.mark.asyncio

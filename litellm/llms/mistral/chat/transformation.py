@@ -404,10 +404,10 @@ class MistralConfig(OpenAIGPTConfig):
                 "MISTRAL_API_KEY or api_key parameter is not set. Please set the environment variable to query "
                 "Mistral's `/v1/models` endpoint."
             )
-        return self._fetch_model_ids(
-            api_base=resolved_base,
-            bearer_token=resolved_key,
-        )
+        return [
+            f"mistral/{model_id}"
+            for model_id in self._fetch_model_ids(api_base=resolved_base, bearer_token=resolved_key)
+        ]
 
     def _get_openai_compatible_provider_info(self, api_base: str | None, api_key: str | None) -> tuple[str, str | None]:
         return get_mistral_chat_credentials(api_base, api_key)
