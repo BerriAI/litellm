@@ -1511,8 +1511,9 @@ def _complete_azure(ctx: CompletionDispatchContext) -> _CompletionDispatchResult
     api_version = (
         api_version
         or litellm.api_version
-        or get_secret_str("AZURE_API_VERSION")
-        or default_azure_api_version(api_base if isinstance(api_base, str) else None)
+        or default_azure_api_version(
+            api_base if isinstance(api_base, str) else None, get_secret_str("AZURE_API_VERSION")
+        )
     )
 
     api_key = (

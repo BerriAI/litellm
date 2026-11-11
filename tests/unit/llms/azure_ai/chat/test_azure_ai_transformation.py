@@ -319,6 +319,25 @@ def test_azure_ai_openai_model_on_resource_v1_base_is_served_and_billed_as_azure
     assert response._hidden_params["custom_llm_provider"] == "azure"
 
 
+def test_azure_openai_v1_base_ignores_the_dated_azure_api_version_the_proxy_cli_sets(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AZURE_API_VERSION", litellm.AZURE_DEFAULT_API_VERSION)
+    route: Final = respx_mock.post(host="example-resource.openai.azure.com", path="/openai/v1/chat/completions").mock(
+        return_value=Response(200, json=CHAT_COMPLETION_PAYLOAD)
+    )
+
+    response: Final = litellm.completion(
+        model="azure_ai/gpt-4.1-mini",
+        api_base="https://example-resource.openai.azure.com/openai/v1",
+        api_key="azure-ai-test-key",
+        messages=[{"role": "user", "content": "What is the meaning of life?"}],
+    )
+
+    assert response.choices[0].message.content == "42"
+    assert route.calls.last.request.url.query == b""
+
+
 @pytest.mark.parametrize(
     ("api_base", "configured_scope", "env_scope", "expected_scope"),
     [
