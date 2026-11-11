@@ -21,7 +21,7 @@
 # "Using as a module" section.
 #
 # Knobs not surfaced as variables here (per-component sizing/instances,
-# Cloud SQL tier/edition, Memorystore tier, per-component image overrides)
+# Cloud SQL tier/edition, Memorystore tier, a full `image` override)
 # can be set directly on this block — see ../../variables.tf.
 module "litellm" {
   source = "../../"
