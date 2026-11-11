@@ -164,26 +164,58 @@ describe("MakeAgentPublicForm", () => {
     expect(checkboxes[2]).not.toBeChecked();
   });
 
-  it("should show error when no agents selected", async () => {
-    render(<MakeAgentPublicForm {...mockProps} />);
+  it("should disable Next when no agents are selected and none are currently public", async () => {
+    const privateOnlyProps = {
+      ...mockProps,
+      agentHubData: mockProps.agentHubData.map((a) => ({
+        ...a,
+        is_public: false,
+      })),
+    };
+    render(<MakeAgentPublicForm {...privateOnlyProps} />);
 
-    // Deselect all agents first
-    const checkboxes = screen.getAllByRole("checkbox");
-    await act(async () => {
-      fireEvent.click(checkboxes[0]); // Click select all to select all
-    });
-    await act(async () => {
-      fireEvent.click(checkboxes[0]); // Click select all again to deselect all
-    });
-
-    // Try to go to next step
     const nextButton = screen.getByRole("button", { name: "Next" });
+    expect(nextButton).toBeDisabled();
+
     await act(async () => {
       fireEvent.click(nextButton);
     });
 
-    // Should stay on same step
     expect(screen.getByText("Select Agents to Make Public")).toBeInTheDocument();
+  });
+
+  it("should allow removing the last public agent by submitting an empty selection", async () => {
+    mockMakeAgentsPublicCall.mockResolvedValueOnce({});
+
+    render(<MakeAgentPublicForm {...mockProps} />);
+
+    const checkboxes = screen.getAllByRole("checkbox");
+    // Uncheck the preselected public agent (agent-2)
+    await act(async () => {
+      fireEvent.click(checkboxes[2]);
+    });
+
+    const nextButton = screen.getByRole("button", { name: "Next" });
+    expect(nextButton).toBeEnabled();
+
+    await act(async () => {
+      fireEvent.click(nextButton);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Confirm Making Agents Public")).toBeInTheDocument();
+    });
+
+    const submitButton = screen.getByRole("button", { name: "Make Public" });
+    await act(async () => {
+      fireEvent.click(submitButton);
+    });
+
+    await waitFor(() => {
+      expect(mockMakeAgentsPublicCall).toHaveBeenCalledWith("test-token", []);
+      expect(mockProps.onSuccess).toHaveBeenCalled();
+      expect(mockProps.onClose).toHaveBeenCalled();
+    });
   });
 
   it("should display empty state when no agents are available", () => {

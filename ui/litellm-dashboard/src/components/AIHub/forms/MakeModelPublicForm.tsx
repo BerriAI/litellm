@@ -52,6 +52,8 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
   const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
   const [filteredData, setFilteredData] = useState<ModelGroupInfo[]>([]);
   const [loading, setLoading] = useState(false);
+  const hasAlreadyPublicModels = modelHubData.some((model) => model.is_public_model_group === true);
+  const canProceedWithSelection = selectedModels.size > 0 || hasAlreadyPublicModels;
 
   const handleClose = () => {
     setCurrentStep(0);
@@ -62,7 +64,7 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
 
   const handleNext = () => {
     if (currentStep === 0) {
-      if (selectedModels.size === 0) {
+      if (!canProceedWithSelection) {
         toast.fromError(t("aiHub.makeModelPublic.selectAtLeastOne"));
         return;
       }
@@ -115,7 +117,7 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
   }, [visible, modelHubData]);
 
   const handleSubmit = async () => {
-    if (selectedModels.size === 0) {
+    if (!canProceedWithSelection) {
       toast.fromError(t("aiHub.makeModelPublic.selectAtLeastOne"));
       return;
     }
@@ -289,7 +291,7 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
 
         <div className="flex space-x-2">
           {currentStep === 0 && (
-            <Button onClick={handleNext} disabled={selectedModels.size === 0}>
+            <Button onClick={handleNext} disabled={!canProceedWithSelection}>
               {t("aiHub.makeModelPublic.next")}
             </Button>
           )}
