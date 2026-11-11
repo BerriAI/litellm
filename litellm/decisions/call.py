@@ -293,22 +293,32 @@ class _ResolvedSupport:
 
 
 def _takes_audio(
-    provider_config: BaseDecisionsConfig, model: str, custom_llm_provider: str, deployment: _DeploymentCapabilities
+    provider_config: BaseDecisionsConfig,
+    model: str,
+    custom_llm_provider: str,
+    deployment: _DeploymentCapabilities,
+    api_base: str | None = None,
 ) -> bool:
     return provider_config.supports_audio_input(
         model,
         custom_llm_provider,
         deployment.decisions_media_flag(deployment.supports_audio_input, model, custom_llm_provider),
+        api_base=api_base,
     )
 
 
 def _takes_videos(
-    provider_config: BaseDecisionsConfig, model: str, custom_llm_provider: str, deployment: _DeploymentCapabilities
+    provider_config: BaseDecisionsConfig,
+    model: str,
+    custom_llm_provider: str,
+    deployment: _DeploymentCapabilities,
+    api_base: str | None = None,
 ) -> bool:
     return provider_config.supports_video_input(
         model,
         custom_llm_provider,
         deployment.decisions_media_flag(deployment.supports_video_input, model, custom_llm_provider),
+        api_base=api_base,
     )
 
 
@@ -320,14 +330,20 @@ def deployment_refuses_media(
     *,
     audio: bool,
     videos: bool,
+    api_base: str | None = None,
 ) -> bool:
     if _drops_params(call_kwargs):
         return False
     provider_config: Final = get_decisions_provider_config(model, custom_llm_provider)
     canonical_model: Final = provider_config.canonical_model(model)
     deployment: Final = _DeploymentCapabilities.model_validate(model_info)
-    return (audio and not _takes_audio(provider_config, canonical_model, custom_llm_provider, deployment)) or (
-        videos and not _takes_videos(provider_config, canonical_model, custom_llm_provider, deployment)
+    resolved_base: Final = (
+        api_base
+        if api_base is not None
+        else (call_kwargs.get("api_base") if isinstance(call_kwargs.get("api_base"), str) else None)
+    )
+    return (audio and not _takes_audio(provider_config, canonical_model, custom_llm_provider, deployment, api_base=resolved_base)) or (
+        videos and not _takes_videos(provider_config, canonical_model, custom_llm_provider, deployment, api_base=resolved_base)
     )
 
 
@@ -338,14 +354,20 @@ def _resolved_support(
     headers: Mapping[str, str],
     kwargs: Mapping[str, object],
     fields: RequestFields,
+    api_base: str | None = None,
 ) -> _ResolvedSupport:
     deployment: Final = _DeploymentCapabilities.model_validate(kwargs.get("model_info") or {})
+    resolved_base: Final = (
+        api_base
+        if api_base is not None
+        else (kwargs.get("api_base") if isinstance(kwargs.get("api_base"), str) else None)
+    )
     return _ResolvedSupport(
         box_questions=provider_config.supports_box_questions(
-            model, custom_llm_provider, headers, deployment.supports_box_questions
+            model, custom_llm_provider, headers, deployment.supports_box_questions, api_base=resolved_base
         ),
-        audio=bool(fields.audio) and _takes_audio(provider_config, model, custom_llm_provider, deployment),
-        videos=bool(fields.videos) and _takes_videos(provider_config, model, custom_llm_provider, deployment),
+        audio=bool(fields.audio) and _takes_audio(provider_config, model, custom_llm_provider, deployment, api_base=resolved_base),
+        videos=bool(fields.videos) and _takes_videos(provider_config, model, custom_llm_provider, deployment, api_base=resolved_base),
     )
 
 
@@ -540,7 +562,15 @@ def prepare_call(
         raise litellm.BadRequestError(message=str(error), model=model, llm_provider=provider) from error
     try:
         headers: Final = decisions_outbound_headers(extra_headers, provider, kwargs)
-        support: Final = _resolved_support(provider_config, canonical_model, provider, headers, kwargs, fields)
+        support: Final = _resolved_support(
+            provider_config,
+            canonical_model,
+            provider,
+            headers,
+            kwargs,
+            fields,
+            api_base=call_api_base,
+        )
         request_safety_identifier: Final = _request_safety_identifier(safety_identifier, provider_config, kwargs)
         request: Final = _fields_without_unsupported_media(fields, support, kwargs).validate(
             safety_identifier=request_safety_identifier, drops_params=_drops_params(kwargs)
@@ -768,6 +798,7 @@ def _format_response(response: DecisionsIRResponse, call: DecisionsCall) -> Deci
             "model": f"{call.custom_llm_provider}/{call.model}",
             "custom_llm_provider": call.custom_llm_provider,
             "provider_response_model": _pricing_model(response, call),
+            "api_base": call.api_base,
             **({"additional_headers": {RESPONSE_COST_HEADER: provider_cost}} if provider_cost is not None else {}),
         }
     )

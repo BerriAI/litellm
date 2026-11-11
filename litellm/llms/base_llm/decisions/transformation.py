@@ -512,9 +512,11 @@ def catalog_mode(model: str, custom_llm_provider: str) -> str | None:
     return mode if isinstance(mode, str) else None
 
 
-def _is_decisions_model(model: str, custom_llm_provider: str) -> bool:
+def _is_decisions_model(model: str, custom_llm_provider: str, api_base: str | None = None) -> bool:
     try:
-        model_mode: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider).get("mode")
+        model_mode: Final = litellm.get_model_info(
+            model=model, custom_llm_provider=custom_llm_provider, api_base=api_base
+        ).get("mode")
     except Exception:  # noqa: BLE001  # get_model_info raises bare Exception for an unmapped model, which has no mode
         return False
     return is_decisions_model_mode(model_mode)
@@ -643,25 +645,42 @@ class BaseDecisionsConfig(ABC):
         return False
 
     def supports_box_questions(
-        self, model: str, custom_llm_provider: str, headers: Mapping[str, str], deployment_flag: bool | None
+        self,
+        model: str,
+        custom_llm_provider: str,
+        headers: Mapping[str, str],
+        deployment_flag: bool | None,
+        api_base: str | None = None,
     ) -> bool:
         if deployment_flag is not None:
             return deployment_flag
-        return _is_decisions_model(model, custom_llm_provider) and litellm.supports_box_questions(
+        return _is_decisions_model(model, custom_llm_provider, api_base=api_base) and litellm.supports_box_questions(
             model=model, custom_llm_provider=custom_llm_provider
         )
 
-    def supports_audio_input(self, model: str, custom_llm_provider: str, deployment_flag: bool | None) -> bool:
+    def supports_audio_input(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        deployment_flag: bool | None,
+        api_base: str | None = None,
+    ) -> bool:
         if deployment_flag is not None:
             return deployment_flag
-        return _is_decisions_model(model, custom_llm_provider) and litellm.supports_audio_input(
+        return _is_decisions_model(model, custom_llm_provider, api_base=api_base) and litellm.supports_audio_input(
             model=model, custom_llm_provider=custom_llm_provider
         )
 
-    def supports_video_input(self, model: str, custom_llm_provider: str, deployment_flag: bool | None) -> bool:
+    def supports_video_input(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        deployment_flag: bool | None,
+        api_base: str | None = None,
+    ) -> bool:
         if deployment_flag is not None:
             return deployment_flag
-        return _is_decisions_model(model, custom_llm_provider) and litellm.supports_video_input(
+        return _is_decisions_model(model, custom_llm_provider, api_base=api_base) and litellm.supports_video_input(
             model=model, custom_llm_provider=custom_llm_provider
         )
 

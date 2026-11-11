@@ -583,15 +583,7 @@ def test_ollama_decisions_sdk_respects_environment_and_explicit_auth(
             {"model": provider.body_model, "state": _STATE, "questions": _QUESTIONS},
         )
         unused_calls: Final = _upstream_calls(gateway, unused)
-        assert tuple(
-            request
-            for request in unused_calls
-            if not (
-                request["method"] == "POST"
-                and request["path"] == f"/{unused.scenario_id}/api/show"
-                and request["body"] == {"name": provider.body_model}
-            )
-        ) == (), unused_calls
+        assert unused_calls == (), unused_calls
 
 
 def test_test_connection_evaluation_mode_uses_typesafe_decisions_path(gateway: Gateway) -> None:

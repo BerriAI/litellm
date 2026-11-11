@@ -467,6 +467,7 @@ def cost_per_token(
     response_time_ms: float | None = 0.0,
     custom_llm_provider: str | None = None,
     region_name=None,
+    api_base: str | None = None,
     ### CHARACTER PRICING ###
     prompt_characters: int | None = None,
     completion_characters: int | None = None,
@@ -670,7 +671,9 @@ def cost_per_token(
         model = model_without_prefix
 
     if is_decisions_call_type(call_type):
-        decisions_model_info: Final = cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+        decisions_model_info: Final = cached_get_model_info_helper(
+            model=model, custom_llm_provider=custom_llm_provider, api_base=api_base
+        )
         decisions_overrides: Final = decisions_pricing_fields(
             litellm.model_cost.get(decisions_model_info["key"], {})  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # model cost map is dynamically loaded
         )
@@ -687,6 +690,7 @@ def cost_per_token(
                 model_info=cast(  # cast-ok: _decisions fields override same-named ModelInfo rates
                     ModelInfo, {**decisions_model_info, **decisions_overrides}
                 ),
+                api_base=api_base,
             )
     if call_type == "speech" or call_type == "aspeech":
         lyria_generation_cost: Final = (
@@ -700,6 +704,7 @@ def cost_per_token(
             model=model_without_prefix,
             custom_llm_provider=custom_llm_provider,
             preserve_unset_costs=True,
+            api_base=api_base,
         )
         cost_metric: Final = select_cost_metric_for_model(speech_model_info)
         prompt_cost: float = 0.0
@@ -881,7 +886,9 @@ def cost_per_token(
             service_tier=service_tier,
         )
     else:
-        model_info: Final = cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+        model_info: Final = cached_get_model_info_helper(
+            model=model, custom_llm_provider=custom_llm_provider, api_base=api_base
+        )
         if _has_token_or_tiered_pricing(model_info):
             return generic_cost_per_token(
                 model=model,
@@ -889,6 +896,7 @@ def cost_per_token(
                 custom_llm_provider=custom_llm_provider,
                 service_tier=service_tier,
                 data_residency=data_residency,
+                api_base=api_base,
             )
         verbose_logger.debug("No per-token, tiered, or per-second pricing for model=%s; cost is 0", model)
         return 0.0, 0.0
@@ -2282,6 +2290,20 @@ def completion_cost(
                 if litellm_logging_obj is not None:
                     request_model_for_cost = litellm_logging_obj.model
 
+                api_base_for_cost = (
+                    optional_params.get("api_base")
+                    if optional_params is not None and optional_params.get("api_base")
+                    else None
+                )
+                if api_base_for_cost is None and litellm_logging_obj is not None:
+                    logged_params = getattr(litellm_logging_obj, "litellm_params", None)
+                    if isinstance(logged_params, dict):
+                        api_base_for_cost = logged_params.get("api_base")
+                if api_base_for_cost is None and completion_response is not None:
+                    hidden_params = getattr(completion_response, "_hidden_params", None)
+                    if isinstance(hidden_params, dict):
+                        api_base_for_cost = hidden_params.get("api_base")
+
                 (
                     prompt_tokens_cost_usd_dollar,
                     completion_tokens_cost_usd_dollar,
@@ -2296,6 +2318,7 @@ def completion_cost(
                     ),
                     response_time_ms=response_time_ms,
                     region_name=None if explicit_pricing else region_name,
+                    api_base=api_base_for_cost,
                     custom_cost_per_second=custom_cost_per_second,
                     custom_cost_per_token=custom_cost_per_token,
                     requested_model_info_override=requested_model_info_override,
