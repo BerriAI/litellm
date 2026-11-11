@@ -1248,6 +1248,36 @@ def _resolve_billable_service_tier(requested: object, served: object) -> str | N
     return _normalize_service_tier(requested)
 
 
+class _ServiceTierBlock(TypedDict):
+    type: ReadOnly[str]
+
+
+_REQUESTED_SERVICE_TIER: Final[TypeAdapter[str | _ServiceTierBlock]] = TypeAdapter(str | _ServiceTierBlock)
+_REQUEST_FIELDS: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def _service_tier_name(raw_tier: object) -> str | None:
+    try:
+        tier: Final = _REQUESTED_SERVICE_TIER.validate_python(raw_tier)
+    except ValidationError:
+        return None
+    return tier if isinstance(tier, str) else tier["type"]
+
+
+def _request_fields(raw_fields: object) -> Mapping[str, object]:
+    try:
+        return _REQUEST_FIELDS.validate_python(raw_fields)
+    except ValidationError:
+        return {}
+
+
+def _requested_service_tier(optional_params: object) -> str | None:
+    request: Final = _request_fields(optional_params)
+    extra_body: Final = _request_fields(request.get("extra_body"))
+    sent_tiers: Final = (extra_body.get("service_tier"), extra_body.get("serviceTier"), request.get("service_tier"))
+    return next((tier for tier in map(_service_tier_name, sent_tiers) if tier is not None), None)
+
+
 def _served_service_tier(completion_response: object, usage_object: Usage | None) -> str | None:
     """Find the tier the provider actually served: response, then usage, then Gemini trafficType."""
     response_tier: Final = _extract_service_tier(completion_response)
@@ -1862,7 +1892,7 @@ def completion_cost(
             service_tier = explicit_tier
         else:
             service_tier = _resolve_billable_service_tier(  # rebind-ok: resolved from request then response
-                requested=optional_params.get("service_tier") if optional_params is not None else None,
+                requested=_requested_service_tier(optional_params),
                 served=_served_service_tier(completion_response, cost_per_token_usage_object),
             )
 

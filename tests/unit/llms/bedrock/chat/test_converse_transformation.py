@@ -605,6 +605,55 @@ def test_bedrock_converse_rejects_a_non_object_extra_body_without_drop_params() 
         _converse_body_sent(extra_body="not an object")
 
 
+@pytest.mark.parametrize(
+    ("params", "error"),
+    [
+        ({"extra_body": {"tools": {}}}, "tools must be a list of JSON objects, got dict"),
+        ({"extra_body": {"tools": False}}, "tools must be a list of JSON objects, got bool"),
+        ({"extra_body": {"tools": "get_weather"}}, "tools must be a list of JSON objects, got str"),
+        ({"extra_body": {"performanceConfig": "optimized"}}, "performanceConfig must be a JSON object, got str"),
+        ({"extra_body": {"guardrailConfig": "my-guardrail"}}, "guardrailConfig must be a JSON object, got str"),
+        ({"performanceConfig": "optimized"}, "performanceConfig must be a JSON object, got str"),
+    ],
+    ids=["tools_dict", "tools_false", "tools_string", "performance_string", "guardrail_string", "top_level_string"],
+)
+@pytest.mark.parametrize("drop_params", [True, False])
+def test_bedrock_converse_rejects_malformed_tools_or_config_blocks_before_calling_bedrock(
+    params: dict[str, object], error: str, drop_params: bool
+) -> None:
+    with pytest.raises(litellm.BadRequestError, match=error):
+        _converse_body_sent(
+            model="bedrock/converse/mistral.mistral-large-3-675b-instruct", drop_params=drop_params, **params
+        )
+
+
+def test_bedrock_converse_treats_null_extra_body_tools_as_no_tools() -> None:
+    assert _converse_body_sent(extra_body={"tools": None}) == _converse_body_sent()
+
+
+def test_bedrock_converse_extra_body_tools_keep_the_response_format_tool_like_top_level_tools() -> None:
+    weather_tool: Final = {
+        "type": "function",
+        "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+    }
+    request: Final = {
+        "model": "bedrock/converse/us.meta.llama4-maverick-17b-instruct-v1:0",
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "city", "schema": {"type": "object", "properties": {"city": {"type": "string"}}}},
+        },
+    }
+
+    from_extra_body: Final = _converse_body_sent(**request, extra_body={"tools": [weather_tool]})
+    from_top_level: Final = _converse_body_sent(**request, tools=[weather_tool])
+
+    assert from_extra_body["toolConfig"] == from_top_level["toolConfig"]
+    assert sorted(tool["toolSpec"]["name"] for tool in from_extra_body["toolConfig"]["tools"]) == [
+        "get_weather",
+        "json_tool_call",
+    ]
+
+
 def test_bedrock_converse_extra_body_skips_the_model_and_additional_drop_params() -> None:
     sent: Final = _converse_body_sent(
         extra_body={"instructions": "Answer in French.", "store": True, "model": "bedrock/converse/other-model"},

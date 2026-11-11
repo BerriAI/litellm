@@ -519,6 +519,22 @@ def test_cache_key_tells_apart_requests_that_ask_for_token_ids_through_extra_bod
     assert cache.get_cache_key(**request, extra_body={"continuation_token": "abc"}) != plain_key
 
 
+def test_cache_key_tells_apart_requests_whose_extra_body_changes_the_answer() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    request: Final = {
+        "model": "bedrock/converse/mistral.mistral-large-3",
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+
+    plain_key: Final = cache.get_cache_key(**request)
+    french_key: Final = cache.get_cache_key(**request, extra_body={"instructions": "Answer in French.", "top_k": 5})
+
+    assert french_key != plain_key
+    assert french_key != cache.get_cache_key(**request, extra_body={"instructions": "Answer in German.", "top_k": 5})
+    assert french_key == cache.get_cache_key(**request, extra_body={"top_k": 5, "instructions": "Answer in French."})
+    assert cache.get_cache_key(**request, extra_body={}) == plain_key
+
+
 def test_cache_key_tells_apart_requests_that_differ_only_in_tool_call_id_shape() -> None:
     cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
     request: Final = {

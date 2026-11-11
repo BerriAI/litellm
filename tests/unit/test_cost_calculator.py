@@ -7253,6 +7253,34 @@ def test_completion_cost_bills_priority_when_served_tier_overrides_missing_reque
     assert cost == pytest.approx(100 * 0.01 + 50 * 0.02)
 
 
+@pytest.mark.parametrize(
+    "optional_params",
+    [
+        {"extra_body": {"serviceTier": {"type": "priority"}}},
+        {"extra_body": {"service_tier": "priority"}},
+        {"service_tier": "flex", "extra_body": {"serviceTier": {"type": "priority"}}},
+    ],
+    ids=["bedrock_block", "openai_string", "extra_body_wins_over_top_level"],
+)
+def test_completion_cost_bills_the_tier_extra_body_sent_when_the_response_names_none(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, optional_params: dict[str, object]
+) -> None:
+    model: Final = _served_tier_cost_model(monkeypatch)
+    streamed_response: Final = ModelResponse(
+        model=model,
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+
+    cost: Final = completion_cost(
+        completion_response=streamed_response,
+        model=model,
+        custom_llm_provider="openai",
+        optional_params=optional_params,
+    )
+
+    assert cost == pytest.approx(100 * 0.01 + 50 * 0.02)
+
+
 def test_completion_cost_bills_base_when_gemini_serves_on_demand(
     _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:

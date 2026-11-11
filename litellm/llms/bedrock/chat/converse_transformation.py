@@ -213,10 +213,14 @@ def _with_extra_body_fields(params: Mapping[str, object], drop_params: bool) -> 
     if extra_body is None:
         return without_extra_body
     if isinstance(extra_body, Mapping):
-        fields: Final = {
+        sent_fields: Final = {
             key: value
             for key, value in _JSON_OBJECT.validate_python(extra_body).items()
             if key not in EXTRA_BODY_ROUTING_KEYS
+        }
+        fields: Final = {
+            **sent_fields,
+            **_with_the_response_format_tool(without_extra_body, sent_fields.get("tools")),
         }
         if "output_config" not in fields:
             return {**without_extra_body, **fields}
@@ -226,11 +230,38 @@ def _with_extra_body_fields(params: Mapping[str, object], drop_params: bool) -> 
         return {**not_normalized, **fields}
     if drop_params:
         return without_extra_body
-    raise litellm.exceptions.BadRequestError(
-        message=f"extra_body must be a JSON object, got {type(extra_body).__name__}. Set drop_params=True to drop it.",
-        model="bedrock",
-        llm_provider="bedrock",
+    raise _bad_request(
+        f"extra_body must be a JSON object, got {type(extra_body).__name__}. Set drop_params=True to drop it."
     )
+
+
+def _with_the_response_format_tool(params: Mapping[str, object], extra_body_tools: object) -> Mapping[str, object]:
+    if params.get("json_mode") is not True:
+        return {}
+    try:
+        sent_tools: Final = _TOOLS_AS_SENT.validate_python(extra_body_tools)
+        current_tools: Final = _TOOLS_AS_SENT.validate_python(params.get("tools"))
+    except ValidationError:
+        return {}
+    response_format_tools: Final = tuple(
+        tool
+        for tool in current_tools
+        if _JSON_OBJECT.validate_python(tool.get("function", {})).get("name") == RESPONSE_FORMAT_TOOL_NAME
+    )
+    return {"tools": [*response_format_tools, *sent_tools]} if response_format_tools else {}
+
+
+def _bad_request(message: str) -> litellm.exceptions.BadRequestError:
+    return litellm.exceptions.BadRequestError(message=message, model="bedrock", llm_provider="bedrock")
+
+
+def _tools_field(value: object) -> list[Mapping[str, object]]:
+    if value is None:
+        return []
+    try:
+        return list(_TOOLS_AS_SENT.validate_python(value))
+    except ValidationError:
+        raise _bad_request(f"tools must be a list of JSON objects, got {type(value).__name__}") from None
 
 
 def _has_native_text_format(output_config: object) -> bool:
@@ -2221,7 +2252,7 @@ class AmazonConverseConfig(BaseConfig):
             output_config,
         ) = self._prepare_request_params(optional_params, model, drop_params, deployment_model_info(litellm_params))
 
-        original_tools: Final = inference_params.pop("tools", [])
+        original_tools: Final = _tools_field(inference_params.pop("tools", None))
 
         # Process tools and collect beta values
         bedrock_tools, anthropic_beta_list = self._process_tools_and_beta(
@@ -2287,8 +2318,11 @@ class AmazonConverseConfig(BaseConfig):
             data["system"] = system_content_blocks
 
         for config_name, config_class, config_value in config_block_entries:
-            if config_value is not None:
-                data[config_name] = config_class(**config_value)
+            if config_value is None:
+                continue
+            if not isinstance(config_value, Mapping):
+                raise _bad_request(f"{config_name} must be a JSON object, got {config_value.__class__.__name__}")
+            data[config_name] = config_class(**config_value)
 
         # Tool Config
         if bedrock_tool_config is not None:

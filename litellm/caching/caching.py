@@ -63,7 +63,7 @@ class _SupportsAsyncDeleteCacheKeys(Protocol):
     def delete_cache_keys(self) -> Callable[[object], Awaitable[object]] | None: ...
 
 
-def _keyed_provider_params_in_extra_body(kwargs: Mapping[str, object]) -> str:
+def _extra_body_cache_material(kwargs: Mapping[str, object]) -> str:
     raw_extra_body: Final = kwargs.get("extra_body")
     if not isinstance(raw_extra_body, dict):
         return ""
@@ -71,9 +71,9 @@ def _keyed_provider_params_in_extra_body(kwargs: Mapping[str, object]) -> str:
         Mapping[str, object], raw_extra_body
     )
     return "".join(
-        f"extra_body.{param}: {extra_body[param]}"
-        for param in sorted(_ALWAYS_KEYED_PROVIDER_PARAMS)
-        if extra_body.get(param)
+        f"extra_body.{field}: {extra_body[field]}"
+        for field in sorted(extra_body, key=str)
+        if extra_body[field] or field not in _ALWAYS_KEYED_PROVIDER_PARAMS
     )
 
 
@@ -454,10 +454,7 @@ class Cache:
             "" if embeds_thought_signature_in_tool_call_id(kwargs) else "thought_signature_in_tool_call_id: False"
         )
         hashed_cache_key = Cache._get_hashed_cache_key(
-            cache_key
-            + _keyed_provider_params_in_extra_body(kwargs)
-            + reasoning_summary_material
-            + tool_call_id_shape_material
+            cache_key + _extra_body_cache_material(kwargs) + reasoning_summary_material + tool_call_id_shape_material
         )
         hashed_cache_key = self._add_namespace_to_cache_key(hashed_cache_key, **kwargs)
         verbose_logger.debug(

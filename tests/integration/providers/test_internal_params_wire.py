@@ -239,7 +239,7 @@ def _custom_key(body: Mapping[str, object], provider: str) -> object:
         case "anthropic":
             return _at(body, "extra_body", "custom_provider_key")
         case "converse":
-            return _at(body, "additionalModelRequestFields", "extra_body", "custom_provider_key")
+            return _at(body, "additionalModelRequestFields", "custom_provider_key")
     return _at(body, "custom_provider_key")
 
 
