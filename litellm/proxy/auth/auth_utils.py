@@ -633,7 +633,11 @@ def is_request_body_safe(
             _reject_url_valued_fallback_target(target)
     litellm_params: Final = _coerce_metadata_to_dict(request_body.get("litellm_params"))
     if litellm_params is not None:
-        reject_server_owned_wif_params(litellm_params)
+        reject_server_owned_wif_params(
+            {key: value for key, value in litellm_params.items() if key != "chatgpt_auth_file"}
+            if manages_deployments
+            else litellm_params
+        )
         if not manages_deployments:
             reject_federated_credential_reference(litellm_params)
         litellm_params_metadata: Final = _coerce_metadata_to_dict(litellm_params.get("metadata"))

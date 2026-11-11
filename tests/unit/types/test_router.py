@@ -325,8 +325,10 @@ def test_openai_wif_fields_round_trip_through_model_dump():
         assert dumped[field] == value, field
 
 
-def test_server_owned_registry_is_anthropic_plus_openai():
-    assert server_owned_wif_litellm_params == anthropic_wif_litellm_params + openai_wif_litellm_params
+def test_server_owned_registry_is_anthropic_plus_openai_plus_chatgpt_auth_file():
+    assert server_owned_wif_litellm_params == (
+        anthropic_wif_litellm_params + openai_wif_litellm_params + ("chatgpt_auth_file",)
+    )
     assert set(openai_wif_litellm_params) == {
         "openai_identity_provider_id",
         "openai_service_account_id",
