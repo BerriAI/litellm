@@ -502,7 +502,7 @@ def test_vector_store_ids_to_run_reads_every_store_id_a_malformed_vector_store_i
     [
         ("query_image", {"type": "base64", "media_type": "image/jpeg", "data": "/9j/"}, {"max_num_results": 3}),
         ("rewrite_query", True, {"max_num_results": 3, "rewrite_query": True}),
-        ("rewrite_query", False, {"max_num_results": 3, "rewrite_query": False}),
+        ("rewrite_query", False, {"max_num_results": 3}),
     ],
 )
 def test_file_search_tool_passes_its_store_only_the_fields_a_store_search_takes(
