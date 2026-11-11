@@ -373,37 +373,6 @@ async def test_a_slow_google_token_fetch_for_one_rag_store_does_not_hold_up_anot
 
 
 @pytest.mark.asyncio
-async def test_concurrent_rag_searches_share_one_rejected_google_token_fetch(
-    respx_mock: respx.MockRouter,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-
-    def revoked_token_response(request: requests.PreparedRequest) -> tuple[int, dict[str, str], str]:
-        time.sleep(0.3)
-        return 400, {}, json.dumps({"error": "invalid_grant", "error_description": "Token has been expired or revoked."})
-
-    search_route: Final = respx_mock.post("https://vertex.test/revoked:retrieveContexts").mock(
-        return_value=httpx.Response(200, json={"contexts": {"contexts": []}})
-    )
-    credentials: Final = _authorized_user_credentials(f"revoked-{uuid.uuid4().hex}")
-
-    with responses.RequestsMock() as google:
-        google.add_callback(responses.POST, GOOGLE_TOKEN_URL, callback=revoked_token_response)
-        burst: Final = await asyncio.gather(
-            *(_search_rag_store("https://vertex.test/revoked", credentials) for _ in range(5)),
-            return_exceptions=True,
-        )
-        assert len(google.calls) == 1
-        assert all(isinstance(result, litellm.APIConnectionError) and "invalid_grant" in str(result) for result in burst)
-        with pytest.raises(litellm.APIConnectionError, match="invalid_grant"):
-            await _search_rag_store("https://vertex.test/revoked", credentials)
-        assert len(google.calls) == 2
-
-    assert search_route.call_count == 0
-
-
-@pytest.mark.asyncio
 async def test_a_rag_store_reloads_a_rotated_key_file_when_google_rejects_the_old_key(
     tmp_path: pathlib.Path,
     respx_mock: respx.MockRouter,

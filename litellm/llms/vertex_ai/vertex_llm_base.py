@@ -136,6 +136,7 @@ class VertexBase:
         self._credential_refresh_locks: weakref.WeakKeyDictionary[_VertexCredentialsObject, threading.RLock] = (
             weakref.WeakKeyDictionary()
         )
+        self._unkeyable_credentials_refresh_lock: Final = threading.RLock()
 
     @staticmethod
     def get_vertex_region(vertex_region: str | None, model: str) -> str:
@@ -413,7 +414,10 @@ class VertexBase:
 
     def _credential_refresh_lock(self, credentials: _VertexCredentialsObject) -> threading.RLock:
         with self._credentials_cache_lock:
-            return self._credential_refresh_locks.setdefault(credentials, threading.RLock())
+            try:
+                return self._credential_refresh_locks.setdefault(credentials, threading.RLock())
+            except TypeError:
+                return self._unkeyable_credentials_refresh_lock
 
     def _refresh_if_still_needed(
         self,
@@ -445,7 +449,8 @@ class VertexBase:
     def _refresh_rejected(error: Exception) -> bool:
         from google.auth.exceptions import RefreshError
 
-        return isinstance(error, RefreshError) or "Reauthentication is needed" in str(error)
+        retryable: Final[object] = getattr(error, "retryable", False)
+        return (isinstance(error, RefreshError) and retryable is not True) or "Reauthentication is needed" in str(error)
 
     def _acquire_async_refresh_lock(self, credential_cache_key: _VertexCredentialCacheKey) -> asyncio.Lock:
         """Increment the refcount and return the lock for ``credential_cache_key``.
