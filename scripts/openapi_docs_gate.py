@@ -5,7 +5,7 @@ Sibling of scripts/test_quality_gate.py, pointed at the proxy's OpenAPI document
 instead of a source tree. Each rule is counted over every POST operation the proxy
 serves at HEAD and at the merge-base with the branch this change merges into, and the
 gate fails only when a rule grew past the merge-base count, so a new endpoint has to
-ship with a request schema, a description and a 200 schema while the undocumented
+ship with a request schema, a description and a success response schema while the undocumented
 routes that already exist are only ever allowed to shrink.
 
 The merge-base counts come from scripts/lint_base_counts.py: the disk cache, then the
@@ -167,7 +167,8 @@ def cmd_check(base: str) -> None:
     print(
         "Give every new POST route a request body schema (a typed body parameter, or "
         "`openapi_extra={'requestBody': inline_request_body(Model, example)}` when the handler reads "
-        "`request.body()`), a docstring, and a 200 schema (`response_model=` or `responses={200: {'model': ...}}`), "
+        "`request.body()`), a docstring, and a schema on its lowest 2xx response (`response_model=` or "
+        "`responses={200: {'model': ...}}`), "
         "or document an equal number of existing routes; the ceiling is the merge-base count. Run "
         "`python scripts/check_openapi_docs.py` to see every finding."
     )

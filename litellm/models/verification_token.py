@@ -5,7 +5,9 @@ Canonical definition for ``litellm_verificationtoken``. Re-exported from
 ``litellm.proxy._types`` for backwards compatibility.
 """
 
+from collections.abc import Iterable
 from datetime import datetime
+from typing import Protocol
 
 from pydantic import ConfigDict
 
@@ -77,3 +79,9 @@ class LiteLLM_DeletedVerificationToken(LiteLLM_VerificationToken):
     litellm_changed_by: str | None = None
 
     model_config = ConfigDict(protected_namespaces=())
+
+
+class KeyRevocationStore(Protocol):
+    async def find_by_tokens(self, tokens: Iterable[str]) -> tuple[LiteLLM_VerificationToken, ...]: ...
+
+    async def block_tokens(self, tokens: Iterable[str]) -> None: ...
