@@ -1,4 +1,5 @@
 import React from "react";
+import { Trans, useTranslation } from "react-i18next";
 import VectorStorePermissions from "./permissions/VectorStorePermissions";
 import MCPServerPermissions from "./permissions/MCPServerPermissions";
 import AgentPermissions from "./permissions/AgentPermissions";
@@ -26,6 +27,7 @@ export function ObjectPermissionsView({
   className = "",
   accessToken,
 }: ObjectPermissionsViewProps) {
+  const { t } = useTranslation();
   const vectorStores = objectPermission?.vector_stores || [];
   const mcpServers = objectPermission?.mcp_servers || [];
   const mcpAccessGroups = objectPermission?.mcp_access_groups || [];
@@ -43,8 +45,10 @@ export function ObjectPermissionsView({
     if (missingAccessGroupIds.length > 0) {
       return (
         <p className="mt-1 block text-xs break-words text-destructive">
-          Private plugin access is suspended: access group {missingAccessGroupIds.join(", ")} not found. Only enabled
-          (public) Claude Code plugins are visible until the id is removed or the group recreated.
+          <Trans
+            i18nKey="objectPermissionsView.skills.suspended"
+            components={{ groups: <>{missingAccessGroupIds.join(", ")}</> }}
+          />
         </p>
       );
     }
@@ -52,8 +56,8 @@ export function ObjectPermissionsView({
       return (
         <p className="mt-1 block text-xs text-muted-foreground">
           {showsInheritedSkills
-            ? "No private skills granted. Only enabled (public) Claude Code plugins are visible."
-            : "No private skills granted directly here. Grants from access groups are not listed on this page; only enabled (public) Claude Code plugins are visible by default."}
+            ? t("objectPermissionsView.skills.noneGranted")
+            : t("objectPermissionsView.skills.noneGrantedDirectly")}
         </p>
       );
     }
@@ -62,9 +66,10 @@ export function ObjectPermissionsView({
         {skills.join(", ")}
         {skills.length > 0 && inheritedOnlySkills.length > 0 ? ", " : ""}
         {inheritedOnlySkills.map((grant, index) => (
-          <span key={grant.id} title={inheritedGrantTooltip(grant)} className="text-muted-foreground">
+          <span key={grant.id} title={inheritedGrantTooltip(grant, t)} className="text-muted-foreground">
             {index > 0 ? ", " : ""}
-            {grant.id} (access group)
+            {grant.id}
+            {t("objectPermissionsView.skills.accessGroupSuffix")}
           </span>
         ))}
       </p>
@@ -89,17 +94,17 @@ export function ObjectPermissionsView({
         accessToken={accessToken}
       />
       <div className="min-w-0 rounded-md border border-border p-4">
-        <p className="text-sm font-medium text-foreground">Search tools</p>
+        <p className="text-sm font-medium text-foreground">{t("objectPermissionsView.searchTools.title")}</p>
         {searchTools.length === 0 ? (
           <p className="mt-1 block text-xs text-muted-foreground">
-            No restriction — all configured search tools are allowed for this team.
+            {t("objectPermissionsView.searchTools.noRestriction")}
           </p>
         ) : (
           <p className="mt-1 block text-xs break-words text-foreground">{searchTools.join(", ")}</p>
         )}
       </div>
       <div className="min-w-0 rounded-md border border-border p-4">
-        <p className="text-sm font-medium text-foreground">Skills</p>
+        <p className="text-sm font-medium text-foreground">{t("objectPermissionsView.skills.title")}</p>
         {skillsContent}
       </div>
     </div>
@@ -110,8 +115,8 @@ export function ObjectPermissionsView({
       <div className={`@container bg-card border border-border rounded-lg p-6 ${className}`}>
         <div className="flex items-center gap-2 mb-6">
           <div>
-            <p className="font-semibold text-foreground">Object Permissions</p>
-            <p className="text-xs text-muted-foreground">Access control for Vector Stores and MCP Servers</p>
+            <p className="font-semibold text-foreground">{t("objectPermissionsView.title")}</p>
+            <p className="text-xs text-muted-foreground">{t("objectPermissionsView.subtitle")}</p>
           </div>
         </div>
         {content}
@@ -121,7 +126,7 @@ export function ObjectPermissionsView({
 
   return (
     <div className={`${className}`}>
-      <p className="font-medium text-foreground mb-3">Object Permissions</p>
+      <p className="font-medium text-foreground mb-3">{t("objectPermissionsView.title")}</p>
       {content}
     </div>
   );

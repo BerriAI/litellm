@@ -61,7 +61,6 @@ async def oauth_authorization_uses_gateway_credential(request: Request) -> bool:
     from litellm.proxy.proxy_server import (  # noqa: PLC0415  # startup owns the active auth configuration
         jwt_handler,
         master_key,
-        user_custom_auth,
     )
 
     if "x-litellm-api-key" in request.headers:
@@ -71,10 +70,26 @@ async def oauth_authorization_uses_gateway_credential(request: Request) -> bool:
         return "authorization" in request.headers
     if token.startswith("sk-") or (master_key and secrets.compare_digest(token.encode(), master_key.encode())):
         return True
-    if user_custom_auth is not None or jwt_handler.litellm_jwtauth.oidc_userinfo_enabled:
+    if custom_auth_configured() or jwt_handler.litellm_jwtauth.oidc_userinfo_enabled:
         return True
     if not JWTHandler.is_jwt(token):
-        return await _opaque_bearer_is_gateway_credential(token)
+        return is_sealed_gateway_bearer(token) or await virtual_key_may_exist(token)
+    return jwt_issuer_may_be_litellm(token)
+
+
+def custom_auth_configured() -> bool:
+    from litellm.proxy.proxy_server import (  # noqa: PLC0415  # startup owns the active auth configuration
+        user_custom_auth,
+    )
+
+    return user_custom_auth is not None
+
+
+def jwt_issuer_may_be_litellm(token: str) -> bool:
+    """False only when the JWT names an issuer LiteLLM's JWT auth is not configured to accept."""
+    from litellm.proxy.auth.handle_jwt import JWTHandler  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.proxy_server import jwt_handler  # noqa: PLC0415  # startup owns the active auth configuration
+
     claims: Final = JWTHandler.get_unverified_claims(token)
     issuer: Final = claims.get("iss") if claims is not None else None
     global_issuer: Final = os.getenv("JWT_ISSUER")
@@ -86,25 +101,35 @@ async def oauth_authorization_uses_gateway_credential(request: Request) -> bool:
     )
 
 
-async def _opaque_bearer_is_gateway_credential(token: str) -> bool:
-    from litellm.proxy._types import hash_token  # noqa: PLC0415  # proxy import cycle
+def is_sealed_gateway_bearer(token: str) -> bool:
+    """True for a bearer only the gateway issues: a bridge or refresh envelope, a v2 GCM blob, or a
+    dashboard UI token. A UI token that cannot be read still counts, so a lookup fault never reads as foreign."""
     from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken  # noqa: PLC0415  # proxy import cycle
-    from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError  # noqa: PLC0415  # proxy import cycle
-    from litellm.proxy.auth.resolvers.store import IdentityStore  # noqa: PLC0415  # proxy import cycle
     from litellm.proxy.mcp_server.outbound_credentials.envelope import (  # noqa: PLC0415  # envelope imports bridge types
         is_envelope,
         is_refresh_envelope,
-    )
-    from litellm.proxy.proxy_server import (  # noqa: PLC0415  # startup owns the identity store dependencies
-        prisma_client,
-        user_api_key_cache,
     )
 
     if is_envelope(token) or is_refresh_envelope(token) or token.startswith(V2_GCM_PREFIX):
         return True
     try:
-        if ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(token) is not None:
-            return True
+        return ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(token) is not None
+    except Exception as exc:  # noqa: BLE001  # an identity lookup fault must not permit cookie fallback
+        verbose_logger.debug("OAuth bearer ownership could not be checked (%s)", type(exc).__name__)
+        return True
+
+
+async def virtual_key_may_exist(token: str) -> bool:
+    """False only when the key table answers that ``token`` is not a virtual key; a lookup fault counts as held."""
+    from litellm.proxy._types import hash_token  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.auth.resolvers.store import IdentityStore  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.proxy_server import (  # noqa: PLC0415  # startup owns the identity store dependencies
+        prisma_client,
+        user_api_key_cache,
+    )
+
+    try:
         await IdentityStore(prisma_client, user_api_key_cache).resolve(hashed_token=hash_token(token))
     except KeyNotFoundError:
         return False

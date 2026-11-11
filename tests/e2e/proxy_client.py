@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 import time
 import warnings
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from functools import reduce
@@ -153,6 +153,21 @@ class NotServableOn:
 
     replica: str
     last_result: Result[ModelsListResponse] | None
+
+
+@dataclass(frozen=True, slots=True)
+class ModelRegistered:
+    model_name: str
+    model_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class ModelNotRegistered:
+    model_name: str
+    reason: str
+
+
+ModelRegistration = ModelRegistered | ModelNotRegistered
 
 
 def await_servable(
@@ -461,6 +476,7 @@ class ProxyClient:
     model_servable_db_sync_seconds: float = MODEL_SERVABLE_DB_SYNC_SECONDS
     model_servable_interval: float = MODEL_SERVABLE_INTERVAL
     model_servable_request_timeout: float = MODEL_SERVABLE_REQUEST_TIMEOUT
+    settle: Callable[[float], None] = settle_propagation
 
     def with_caller(self, caller: Caller) -> ProxyClient:
         return replace(self, caller=caller)
@@ -694,31 +710,59 @@ class ProxyClient:
         balancer address is configured (every request opens a fresh connection, so
         the caller's next request re-rolls), so waiting out PROPAGATION_TIMEOUT is
         what makes the model safe to use anywhere."""
-        model_id = unwrap(
-            self.transport.post(
-                "/model/new",
-                headers=self.management_headers(),
-                json=body.model_copy(update={"litellm_params": route_cache_model(
-                    body.litellm_params, provider_edge_base,
-                    enabled=os.environ.get("E2E_PROVIDER_CACHE", "0") == "1" and not provider_live,
-                    mode=body.model_info.mode,
-                )}),
-                response_type=ModelNewResponse,
-            )
-        ).model_id
+        model_id = unwrap(self._post_model(body, provider_live=provider_live)).model_id
         written_at = time.monotonic()
         try:
             self._await_model_servable(body.model_name, listed_for)
         except BaseException:
             self.delete_model(model_id)
             raise
-        settle_propagation(written_at)
+        self.settle(written_at)
         return model_id
+
+    @step("Add a batch of deployments, then wait once for all of them to propagate")
+    def register_models(
+        self, bodies: Sequence[ModelNewBody], *, provider_live: bool = False
+    ) -> tuple[ModelRegistration, ...]:
+        posted: Final = tuple((body.model_name, self._post_model(body, provider_live=provider_live)) for body in bodies)
+        written_at: Final = time.monotonic()
+        registrations: Final = tuple(self._servable_registration(name, result) for name, result in posted)
+        self.settle(written_at)
+        return registrations
+
+    def _post_model(self, body: ModelNewBody, *, provider_live: bool) -> Result[ModelNewResponse]:
+        return self.transport.post(
+            "/model/new",
+            headers=self.management_headers(),
+            json=body.model_copy(update={"litellm_params": route_cache_model(
+                body.litellm_params, provider_edge_base,
+                enabled=os.environ.get("E2E_PROVIDER_CACHE", "0") == "1" and not provider_live,
+                mode=body.model_info.mode,
+            )}),
+            response_type=ModelNewResponse,
+        )
+
+    def _servable_registration(self, model_name: str, posted: Result[ModelNewResponse]) -> ModelRegistration:
+        if not isinstance(posted, Success):
+            return ModelNotRegistered(model_name=model_name, reason=f"/model/new failed: {posted!r}")
+        match self._servable_outcome(model_name, None):
+            case Servable():
+                return ModelRegistered(model_name=model_name, model_id=posted.data.model_id)
+            case NotServableOn() as missing:
+                self.delete_model(posted.data.model_id)
+                return ModelNotRegistered(model_name=model_name, reason=self._not_servable_message(model_name, missing))
 
     def _await_model_servable(self, model_name: str, listed_for: str | None = None) -> None:
         """Block until every replica lists `model_name`, or fail at model_servable_timeout."""
+        match self._servable_outcome(model_name, listed_for):
+            case Servable():
+                return
+            case NotServableOn() as missing:
+                raise AssertionError(self._not_servable_message(model_name, missing))
+
+    def _servable_outcome(self, model_name: str, listed_for: str | None) -> Servable | NotServableOn:
         headers: Final = self.management_headers(listed_for)
-        outcome: Final = await_servable_everywhere(
+        return await_servable_everywhere(
             {url: self._models_poller(transport, headers) for url, transport in self.replicas.items()},
             model_name=model_name,
             timeout=self.model_servable_timeout,
@@ -728,19 +772,15 @@ class ProxyClient:
             now=time.monotonic,
             sleep=time.sleep,
         )
-        match outcome:
-            case Servable():
-                return
-            case NotServableOn(replica=replica, last_result=last_result):
-                raise AssertionError(
-                    servable_timeout_message(
-                        model_name=model_name,
-                        replica=replica,
-                        timeout=self.model_servable_timeout,
-                        db_sync_seconds=self.model_servable_db_sync_seconds,
-                        last_result=last_result,
-                    )
-                )
+
+    def _not_servable_message(self, model_name: str, missing: NotServableOn) -> str:
+        return servable_timeout_message(
+            model_name=model_name,
+            replica=missing.replica,
+            timeout=self.model_servable_timeout,
+            db_sync_seconds=self.model_servable_db_sync_seconds,
+            last_result=missing.last_result,
+        )
 
     @staticmethod
     def _models_poller(transport: Transport, headers: AuthHeaders) -> ModelsPoller:
