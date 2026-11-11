@@ -24,7 +24,7 @@ from litellm.llms.base_llm.google_genai.transformation import (
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.custom_llm import CustomLLM, CustomLLMError
 from litellm.llms.vertex_ai.gemini.transformation import snake_to_camel
-from litellm.main import _register_custom_pricing_for_request
+from litellm.main import register_custom_pricing_for_request
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes, LlmProviders
@@ -196,7 +196,7 @@ class GenerateContentHelper:
                     custom_llm_provider=custom_llm_provider,
                 )
                 if any(request_kwargs.get(key) is not None for key in CUSTOM_PRICING_PARAMS):
-                    _register_custom_pricing_for_request(
+                    register_custom_pricing_for_request(
                         model=model,
                         custom_llm_provider=custom_llm_provider,
                         kwargs=dict(request_kwargs),

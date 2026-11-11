@@ -1194,7 +1194,7 @@ def _get_router_deployment_id(kwargs: dict) -> str | None:
     return None
 
 
-def _register_custom_pricing_for_request(
+def register_custom_pricing_for_request(
     model: str,
     custom_llm_provider: str,
     kwargs: dict,
@@ -5635,7 +5635,7 @@ def completion(
             or output_cost_per_second is not None
             or cost_per_second is not None
         ):
-            _register_custom_pricing_for_request(
+            register_custom_pricing_for_request(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 kwargs=kwargs,
@@ -6614,7 +6614,7 @@ def embedding(
         or output_cost_per_second is not None
         or cost_per_second is not None
     ):
-        _register_custom_pricing_for_request(
+        register_custom_pricing_for_request(
             model=model,
             custom_llm_provider=custom_llm_provider,
             kwargs=kwargs,
