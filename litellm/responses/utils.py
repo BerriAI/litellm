@@ -579,14 +579,16 @@ class ResponsesAPIRequestUtils:
     @staticmethod
     def _affinity_item_updates(
         item_type: object, item_id: object, encrypted_content: object, model_id: str
-    ) -> dict[str, str]:
+    ) -> Mapping[str, str]:
         encoded_id: Final = ResponsesAPIRequestUtils.affinity_item_id(item_type, item_id, encrypted_content, model_id)
         wrapped: Final = (
             ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(encrypted_content, model_id)
             if isinstance(encrypted_content, str) and encrypted_content
             else None
         )
-        return {key: value for key, value in (("id", encoded_id), ("encrypted_content", wrapped)) if value is not None}
+        return MappingProxyType(
+            {key: value for key, value in (("id", encoded_id), ("encrypted_content", wrapped)) if value is not None}
+        )
 
     @staticmethod
     def encode_stream_event_for_affinity(event: _StreamEventT, model_id: str) -> _StreamEventT:

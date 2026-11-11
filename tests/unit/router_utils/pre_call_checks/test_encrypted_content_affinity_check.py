@@ -166,6 +166,26 @@ class TestUpdateEncryptedContentItemIds:
         result = ResponsesAPIRequestUtils._update_encrypted_content_item_ids_in_response(response, None)
         assert result["output"][0]["id"] == "rs_xyz"
 
+    @pytest.mark.parametrize(
+        "response",
+        [
+            {"id": "resp_failed", "status": "failed", "error": {"code": "server_error", "message": "boom"}},
+            {
+                "id": "resp_failed",
+                "status": "failed",
+                "error": {"code": "server_error", "message": "boom"},
+                "output": None,
+            },
+        ],
+        ids=["output-absent", "output-none"],
+    )
+    def test_passes_a_response_without_output_through_unchanged(self, response: dict[str, object]):
+        expected: Final = {**response}
+        result: Final = ResponsesAPIRequestUtils._update_encrypted_content_item_ids_in_response(
+            response, "deployment-1"
+        )
+        assert result == expected
+
     def test_leaves_read_only_output_items_as_returned(self):
         result: Final = ResponsesAPIRequestUtils._update_encrypted_content_item_ids_in_response(
             {"id": "resp_123", "output": [_ReadOnlyReasoningItem("rs_xyz", "reasoning", "secret")]}, "deployment-1"
