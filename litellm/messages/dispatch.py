@@ -134,7 +134,7 @@ def messages_target(model: str, custom_llm_provider: str | None, model_info: obj
     return _route_target(model, resolved_model, resolved_provider, model_info, api_base, compacting=False)
 
 
-_NATIVE_COMMON_FEATURES: Final = frozenset({Feature.TIMEOUT_VARIANTS, Feature.LATEST_ALIAS})
+_NATIVE_COMMON_FEATURES: Final = frozenset({Feature.TIMEOUT_VARIANTS, Feature.LATEST_ALIAS, Feature.MOCK_RESPONSE})
 
 _FEATURES: Final[detectors.Detectors] = MappingProxyType(
     {
@@ -146,7 +146,6 @@ _FEATURES: Final[detectors.Detectors] = MappingProxyType(
 _ASYNC_FEATURES: Final[detectors.Detectors] = MappingProxyType(
     {
         **_FEATURES,
-        Feature.MOCK_RESPONSE: route_detectors.streamed_mock_response,
         Feature.PRE_REQUEST_HOOK: route_detectors.pre_request_hook,
         Feature.WEBSEARCH_INTERCEPTION: route_detectors.websearch_interception,
         Feature.MESSAGES_INTERCEPTOR: route_detectors.intercepted,

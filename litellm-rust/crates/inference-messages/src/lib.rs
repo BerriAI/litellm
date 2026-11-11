@@ -87,11 +87,6 @@ impl MessagesRoute {
         call: MessagesCall,
         context: CallContext<'_, impl Interceptors<Error>>,
     ) -> Result<MessagesCallResponse, Error> {
-        if let Some(mock) = &call.shaping.settings.mock_response {
-            return Ok(MessagesCallResponse::Complete(MessagesBody::Unchecked(
-                mock.clone(),
-            )));
-        }
         litellm_inference::diagnostic::call(async {
             let provider = resolve_llm_provider(
                 &call.body.model,
@@ -108,6 +103,10 @@ impl MessagesRoute {
             let model = provider.model.to_owned();
             if let Some(output) = handler::cached(self, config, &model, &context).await? {
                 return Ok(output);
+            }
+            if let Some(mock) = call.shaping.settings.mock_response {
+                let stream = call.body.params.stream == Some(true);
+                return Ok(handler::mocked(self, config, model, &context, mock, stream).await);
             }
             let secrets = self.secrets.resolve(config.config().secret_names()).await?;
             handler::execute(self, config, model, call, secrets, &context)

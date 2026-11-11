@@ -50,7 +50,7 @@ from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
 from litellm.llms.custom_httpx.llm_http_handler import (
     _merge_messages_header_sources as _merged_headers,  # pyright: ignore[reportPrivateUsage]  # the handler's own header merge
 )
-from litellm.rust_bridge import detectors, failures
+from litellm.rust_bridge import detectors, execution, failures
 from litellm.rust_bridge.host import cache, callbacks_legacy_python, http_transport
 from litellm.rust_bridge.public_call import NativeCall, known_params, optional_str
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
@@ -532,7 +532,38 @@ def settings(kwargs: Mapping[str, object], request: Mapping[str, object] | None 
         request_timeout=get_configured_request_timeout(),
         drops_unsupported_params=drops_unsupported_params(kwargs.get("drop_params")),
     )
-    return asdict(configured if request is None else _with_call_settings(configured, request))
+    return asdict(
+        configured if request is None else _with_call_settings(configured, request, kwargs.get("litellm_logging_obj"))
+    )
+
+
+def _flag_messages_call(logger: object, asynchronous: bool) -> None:
+    if not isinstance(logger, LiteLLMLoggingObj):
+        return
+    logger.model_call_details.setdefault("litellm_params", {})[CallTypes.aanthropic_messages.value] = asynchronous
+
+
+@dataclass(frozen=True, slots=True)
+class _Answered:
+    value: AnthropicMessagesResponse
+
+    def send(self, _value: object) -> execution.Complete:
+        return execution.Complete(self.value)
+
+    def throw(self, error: BaseException) -> execution.Step:
+        raise error
+
+    def close(self) -> None:
+        return None
+
+
+def sync_mock(request: Mapping[str, object]) -> _Answered | None:
+    logger: Final = request.get("litellm_logging_obj")
+    mock: Final = _mock(request, logger, asynchronous=False)
+    if mock is None:
+        return None
+    _flag_messages_call(logger, asynchronous=False)
+    return _Answered(response(mock))
 
 
 def _handler_params(request: Mapping[str, object]) -> GenericLiteLLMParams:
@@ -559,21 +590,26 @@ def _model_without_latest_alias(request: Mapping[str, object], model: str, custo
     return f"{prefix}/{resolved}" if separator and prefix == provider else resolved
 
 
-def _mock(request: Mapping[str, object]) -> Mapping[str, object] | None:
+def _mock(request: Mapping[str, object], logger: object, asynchronous: bool) -> Mapping[str, object] | None:
     mock: Final = request.get("mock_response")
     if not mock or not isinstance(mock, str):
         return None
     _validate_metadata(request.get("metadata"))
     messages: Final = request.get("messages")
     max_tokens: Final = request.get("max_tokens")
-    return dict(
-        _mock_response(
-            model=_requested_model(request),
-            messages=messages if isinstance(messages, list) else [],
-            max_tokens=max_tokens if isinstance(max_tokens, int) else 0,
-            mock_response=mock,
+    model: Final = _requested_model(request)
+    try:
+        return dict(
+            _mock_response(
+                model=model,
+                messages=messages if isinstance(messages, list) else [],
+                max_tokens=max_tokens if isinstance(max_tokens, int) else 0,
+                mock_response=mock,
+            )
         )
-    )
+    except Exception:
+        _flag_messages_call(logger, asynchronous)
+        raise
 
 
 def _stream_cost_model(request: Mapping[str, object]) -> str | None:
@@ -614,10 +650,12 @@ def _affinity_extra_headers(
     return dict(_merged_headers(headers, extra_headers, affinity))
 
 
-def _with_call_settings(configured: MessagesSettings, request: Mapping[str, object]) -> MessagesSettings:
+def _with_call_settings(
+    configured: MessagesSettings, request: Mapping[str, object], logger: object
+) -> MessagesSettings:
     explicit_provider: Final = optional_str(request.get("custom_llm_provider"))
     model: Final = _model_without_latest_alias(request, str(request["model"]), explicit_provider)
-    mock: Final = _mock(request)
+    mock: Final = _mock(request, logger, asynchronous=True)
     if mock is not None:
         return replace(configured, model=model, mock_response=mock)
     return replace(

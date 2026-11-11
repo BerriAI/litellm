@@ -285,6 +285,40 @@ impl LegacyLogging {
         self.operation == LoggingOperation::Messages && self.cache_key.is_some()
     }
 
+    fn flag_unsent_messages_call(&self, py: Python<'_>) -> PyResult<()> {
+        if self.operation != LoggingOperation::Messages
+            || self.request.is_some()
+            || self.cache_key.is_some()
+        {
+            return Ok(());
+        }
+        let details = self.logger()?.object(py).getattr("model_call_details")?;
+        details
+            .call_method1("setdefault", ("litellm_params", PyDict::new(py)))?
+            .set_item("aanthropic_messages", self.asynchronous)
+    }
+
+    fn unstreamed_stream_request(&self, py: Python<'_>) -> PyResult<bool> {
+        if self.operation != LoggingOperation::Messages
+            || self.stream.is_some()
+            || self.messages_cache_hit()
+        {
+            return Ok(false);
+        }
+        let Some(stream) = self.call.kwargs().bind(py).get_item("stream")? else {
+            return Ok(false);
+        };
+        if !stream.is_exact_instance_of::<pyo3::types::PyBool>() || !stream.is_truthy()? {
+            return Ok(false);
+        }
+        let logger = self.logger()?.object(py);
+        logger.setattr("stream", true)?;
+        logger
+            .getattr("model_call_details")?
+            .set_item("stream", true)?;
+        Ok(true)
+    }
+
     fn dispatch_cache_hit(&self, py: Python<'_>) -> PyResult<()> {
         let logger = self.logger()?;
         let logged = Logging::CacheHitSuccess.call(
@@ -596,6 +630,10 @@ impl LegacyLogging {
     ) -> PyResult<HookStep<Self, Py<PyAny>>> {
         self.end = Some(datetime(py, timing.end_time)?);
         self.response = Some(response);
+        self.flag_unsent_messages_call(py)?;
+        if self.unstreamed_stream_request(py)? {
+            return self.finalize(py);
+        }
         if self.runs_deployment_hooks() && !self.messages_cache_hit() {
             return Ok(HookStep::Await(
                 DeploymentHooks::after_success(
@@ -744,6 +782,7 @@ impl LegacyLogging {
         match &self.stream {
             Some(stream) => self.stream_success(py, stream, false)?,
             None if self.messages_cache_hit() => self.dispatch_cache_hit(py)?,
+            None if self.unstreamed_stream_request(py)? => {}
             None => self.dispatch_success(py)?,
         }
         Ok(HookStep::Ready(()))

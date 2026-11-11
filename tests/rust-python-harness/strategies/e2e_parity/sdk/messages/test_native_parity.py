@@ -350,10 +350,26 @@ S15_COMPLETE_DEADLINE: Final = (
     "so a body trickling in slower than the timeout succeeds in Python and times out natively"
 )
 
+C_UNSENT_CALL_FLAG: Final = (
+    "C: a call that fails natively before its provider request logs no aanthropic_messages flag, "
+    "which Python's handler sets before it shapes the request"
+)
+
 KNOWN_GAPS: Final[Mapping[str, Mapping[str, str | None]]] = MappingProxyType(
     {
         "response_private_keys": _gaps(outcome=S6_PRIVATE_KEYS),
         "missing_max_tokens": _gaps(dispatch=A10_NO_MAX_TOKENS),
+        **{
+            name: _gaps(logged_call=C_UNSENT_CALL_FLAG)
+            for name in (
+                "speed_on_model_without_speed",
+                "temperature_on_adaptive_model",
+                "top_k_on_adaptive_model",
+                "legacy_thinking_non_numeric_budget_on_adaptive_model",
+                "legacy_thinking_null_budget_on_adaptive_model",
+                "missing_api_key",
+            )
+        },
     }
 )
 
@@ -848,6 +864,21 @@ SERVED_NATIVELY_CASES: Final = (
     Case("mock_response_context_window", _kw(mock_response="litellm.ContextWindowExceededError"), upstream=()),
     Case("mock_response_empty_calls_the_provider", _kw(mock_response="")),
     Case("mock_response_bad_metadata", _kw(mock_response="Hi", metadata={"user_id": 123}), upstream=()),
+    Case("mock_response_stream", _kw(mock_response="Hi from the mock", stream=True), upstream=()),
+    Case("mock_response_stream_rate_limit", _kw(mock_response="litellm.RateLimitError", stream=True), upstream=()),
+    Case(
+        "mock_response_stream_empty_calls_the_provider",
+        _kw(mock_response="", stream=True),
+        upstream=(_stream(TEXT_STREAM),),
+    ),
+    Case("mock_response_cached", _kw(mock_response="Hi from the mock"), upstream=(), cache=Cache),
+    Case("mock_response_stream_cached", _kw(mock_response="Hi from the mock", stream=True), upstream=(), cache=Cache),
+    Case("mock_response_sync", _kw(mock_response="Hi from the mock"), upstream=(), sync=True),
+    Case("mock_response_sync_stream", _kw(mock_response="Hi from the mock", stream=True), upstream=(), sync=True),
+    Case("mock_response_sync_rate_limit", _kw(mock_response="litellm.RateLimitError"), upstream=(), sync=True),
+    Case("mock_response_sync_internal_error", _kw(mock_response="litellm.InternalServerError"), upstream=(), sync=True),
+    Case("mock_response_sync_bad_metadata", _kw(mock_response="Hi", metadata={"user_id": 123}), upstream=(), sync=True),
+    Case("mock_response_sync_empty_calls_the_provider", _kw(mock_response=""), sync=True),
     Case("latest_alias", model=LATEST_ALIAS),
     Case("latest_alias_bare_with_provider", _kw(custom_llm_provider="anthropic"), model="claude-opus-latest"),
     Case("latest_alias_stream", _kw(stream=True), upstream=(_stream(TEXT_STREAM),), model=LATEST_ALIAS),
@@ -1419,6 +1450,7 @@ def _logged(
             "custom_llm_provider": details.get("custom_llm_provider"),
             "model": details.get("model"),
             "stream": details.get("stream"),
+            "aanthropic_messages": litellm_params.get("aanthropic_messages"),
         },
         "logged_request": {
             "messages": details.get("messages"),
@@ -1531,9 +1563,11 @@ async def test_native_messages_match_python(
 @pytest.mark.parametrize("case", [pytest.param(case, id=case.name) for case in SERVED_NATIVELY_CASES])
 def test_catalog_serves_the_case_natively(case: Case, parity_server: RecordingServer) -> None:
     with isolated_callback_registries(), _environment(case.env), _settings(case.settings):
-        request: Final = dispatch._public_request(dispatch._AMESSAGES, (), _kwargs(case, parity_server))  # pyright: ignore[reportPrivateUsage]  # the public binding the async entry routes by
+        binding: Final = dispatch._MESSAGES if case.sync else dispatch._AMESSAGES  # pyright: ignore[reportPrivateUsage]  # the public binding the entry routes by
+        features: Final = dispatch._FEATURES if case.sync else dispatch._ASYNC_FEATURES  # pyright: ignore[reportPrivateUsage]  # the entry's own detectors
+        request: Final = dispatch._public_request(binding, (), _kwargs(case, parity_server))  # pyright: ignore[reportPrivateUsage]  # the public binding the entry routes by
         assert request is not None
-        context: Final = dispatch._context(request, dispatch._ASYNC_FEATURES)  # pyright: ignore[reportPrivateUsage]  # the async entry's own route context
+        context: Final = dispatch._context(request, features)  # pyright: ignore[reportPrivateUsage]  # the entry's own route context
         assert catalog.rollout(context) is Rollout.RUST_REQUIRED, context.features
 
 

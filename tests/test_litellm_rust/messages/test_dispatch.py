@@ -471,7 +471,6 @@ STRICT_TOOL: Final = {"name": "a", "input_schema": {"type": "object"}, "strict":
 @pytest.mark.parametrize(
     ("feature", "model", "kwargs", "settings"),
     (
-        (Feature.MOCK_RESPONSE, "anthropic/claude-sonnet-4-5", {"mock_response": "hi"}, {}),
         (
             Feature.PROXY_MCP_TOOLS,
             "anthropic/claude-sonnet-4-5",
@@ -769,15 +768,13 @@ async def test_handler_hooks_the_sync_entry_never_runs_keep_only_async_calls_on_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("kwargs", "async_on_python"),
+    "kwargs",
     (
-        pytest.param({"mock_response": "hi"}, False, id="unary"),
-        pytest.param({"mock_response": "hi", "stream": True}, True, id="streamed"),
+        pytest.param({"mock_response": "hi"}, id="unary"),
+        pytest.param({"mock_response": "hi", "stream": True}, id="streamed"),
     ),
 )
-async def test_async_mock_response_falls_back_only_when_streamed(
-    monkeypatch: pytest.MonkeyPatch, kwargs: Mapping[str, object], async_on_python: bool
-) -> None:
+async def test_mock_response_is_served_natively(monkeypatch: pytest.MonkeyPatch, kwargs: Mapping[str, object]) -> None:
     rules: Final[Rules] = (
         RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, features=frozenset({Feature.MOCK_RESPONSE})),
         RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),
@@ -808,8 +805,8 @@ async def test_async_mock_response_falls_back_only_when_streamed(
         native=lambda hook, request, args, native_kwargs: hook(request),
         rules=rules,
     )
-    assert served_async is (python_result if async_on_python else native_result)
-    assert served_sync is python_result
+    assert served_async is native_result
+    assert served_sync is native_result
 
 
 @pytest.mark.asyncio
@@ -908,8 +905,6 @@ async def test_anthropic_runs_on_rust_without_the_opt_in(
 @pytest.mark.parametrize(
     ("asynchronous", "kwargs", "callbacks", "feature"),
     (
-        pytest.param(False, {"mock_response": "hi"}, [], Feature.MOCK_RESPONSE, id="sync-mock"),
-        pytest.param(True, {"mock_response": "hi", "stream": True}, [], Feature.MOCK_RESPONSE, id="streamed-mock"),
         pytest.param(True, {"client": object()}, [], Feature.CALLER_CLIENT, id="caller-client"),
         pytest.param(True, {}, [_Rewrite()], Feature.PRE_REQUEST_HOOK, id="pre-request-hook"),
         pytest.param(True, {}, [WebSearchInterceptionLogger()], Feature.WEBSEARCH_INTERCEPTION, id="websearch"),

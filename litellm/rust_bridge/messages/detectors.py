@@ -5,12 +5,8 @@ from __future__ import annotations
 from typing import Final
 
 import litellm
-from litellm.rust_bridge.detectors import overridden, present
+from litellm.rust_bridge.detectors import overridden
 from litellm.rust_bridge.public_call import NativeCall, optional_mapping, optional_sequence, optional_str
-
-
-def streamed_mock_response(request: NativeCall) -> bool:
-    return present(request, "mock_response") and request.resolved.get("stream") is True
 
 
 def pre_request_hook(_request: NativeCall) -> bool:
