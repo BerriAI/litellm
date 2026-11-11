@@ -79,6 +79,7 @@ from litellm.proxy.auth.budget_throttle import throttled_limit
 from litellm.proxy.common_utils.callback_utils import get_model_group_from_litellm_kwargs
 from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
 from litellm.proxy.common_utils.proxy_rate_limit_error import (
+    PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS,
     ProxyRateLimitError,
     map_v3_rate_limit_type,
 )
@@ -502,6 +503,7 @@ class RequestRateLimiterStash:
     reserved_model: RateLimitedModel | None = None
     reserved_scopes: frozenset[tuple[str, str]] = field(default_factory=frozenset)
     reserved_window_identities: frozenset[ReservationWindowIdentity] = field(default_factory=frozenset)
+    fallback_models: frozenset[str] = field(default_factory=frozenset)
     ptu_ceiling: PTUTeamCeiling | None = None
     ptu_reserved_tokens: int = 0
     ptu_reserved_window_identities: frozenset[ReservationWindowIdentity] = field(default_factory=frozenset)
@@ -2510,6 +2512,26 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             },
         )
 
+    def _end_user_model_rate_limit_descriptor(
+        self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None
+    ) -> RateLimitDescriptor | None:
+        model: Final = self._rate_limited_model(requested_model)
+        if model is None or not user_api_key_dict.end_user_id:
+            return None
+        tpm_limit: Final = model.limit_in(user_api_key_dict.end_user_model_tpm_limit)
+        rpm_limit: Final = model.limit_in(user_api_key_dict.end_user_model_rpm_limit)
+        if tpm_limit is None and rpm_limit is None:
+            return None
+        return RateLimitDescriptor(
+            key="model_per_end_user",
+            value=f"{user_api_key_dict.end_user_id}:{model.group}",
+            rate_limit={
+                "requests_per_unit": rpm_limit,
+                "tokens_per_unit": tpm_limit,
+                "window_size": self.window_size,
+            },
+        )
+
     def _add_model_per_key_rate_limit_descriptor(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -3002,6 +3024,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 requested_model=candidate,
                 descriptors=descriptors,
             )
+            if (end_user_model := self._end_user_model_rate_limit_descriptor(user_api_key_dict, candidate)) is not None:
+                descriptors.append(end_user_model)
 
         # Per-request-tag rate limits scoped to this key
         self._add_tag_per_key_rate_limit_descriptor(
@@ -3757,6 +3781,34 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         response: Final = await admission
         if response["overall_code"] == "OK":
             await self._release_parallel_request_slots(acquisition, user_api_key_dict.parent_otel_span)
+
+    async def async_fallback_target_allowed(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        model: str,
+        request_data: Mapping[str, object],
+    ) -> bool:
+        """Reserve the caller's per-model limits on a router fallback target. False when any is exhausted."""
+        data: Final = MappingProxyType({**request_data, "model": model})
+        stash: Final = _request_stash.get()
+        hidden_stash: Final = _request_stash.set(None)
+        try:
+            built: Final = await self._build_request_rate_limit_descriptors(user_api_key_dict, data, None)
+        finally:
+            _request_stash.reset(hidden_stash)
+        descriptors: Final = [
+            descriptor for descriptor in built if descriptor["key"] in PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS
+        ]
+        allowed: Final = (
+            not descriptors
+            or (await self.should_rate_limit(descriptors, parent_otel_span=user_api_key_dict.parent_otel_span))[
+                "overall_code"
+            ]
+            == "OK"
+        )
+        if allowed and stash is not None:
+            stash.fallback_models = stash.fallback_models | {model}
+        return allowed
 
     @asynccontextmanager
     async def request_capacity(
@@ -4529,26 +4581,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             targets.append(("end_user", user_api_key_end_user_id))
         if user_api_key_organization_id:
             targets.append(("organization", user_api_key_organization_id))
+        model_scope_owners: Final = (
+            ("model_per_key", user_api_key),
+            ("model_per_team", user_api_key_team_id),
+            ("model_per_end_user", f"{user_api_key_end_user_id}" if user_api_key_end_user_id else None),
+            ("model_per_organization", user_api_key_organization_id),
+            ("model_per_project", user_api_key_project_id),
+        )
         if model_group:
             for group in dict.fromkeys(model_groups or (model_group,)):
-                if user_api_key:
-                    targets.append(("model_per_key", f"{user_api_key}:{group}"))
-                if user_api_key_team_id:
-                    targets.append(("model_per_team", f"{user_api_key_team_id}:{group}"))
-                if user_api_key_organization_id:
-                    targets.append(
-                        (
-                            "model_per_organization",
-                            f"{user_api_key_organization_id}:{group}",
-                        )
-                    )
-                if user_api_key_project_id:
-                    targets.append(
-                        (
-                            "model_per_project",
-                            f"{user_api_key_project_id}:{group}",
-                        )
-                    )
+                targets.extend((scope, f"{owner}:{group}") for scope, owner in model_scope_owners if owner)
         if agent_id:
             targets.append(("agent", agent_id))
             if session_id:
@@ -4690,12 +4732,21 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         reserved_tokens: Final = open_reservation.reserved_tokens if open_reservation is not None else 0
         reserved_model: Final = stash.reserved_model if stash is not None else None
         reserved_scopes: Final[frozenset[tuple[str, str]]] = stash.reserved_scopes if stash is not None else frozenset()
-        # Reconciliation must target the same model-scoped counter that the
-        # pre-call reservation incremented. If a reservation was made,
+        served_model: Final = self._rate_limited_model(model_group)
         # ``reserved_model`` (resolved at admission, so an alias map reload
-        # mid-flight cannot move the charge) is authoritative; otherwise fall
-        # back to the router's ``model_group`` (the no-reservation charge path).
-        reconcile_model: Final = reserved_model if reserved_model is not None else self._rate_limited_model(model_group)
+        # mid-flight cannot move the charge) settles the request unless the
+        # router fell back to a group this limiter admitted as a fallback
+        # target: then the served group is charged and the abandoned group's
+        # per-model reservation is refunded. Client-supplied ``model_group``
+        # metadata alone never moves the charge.
+        fell_back: Final = (
+            stash is not None
+            and reserved_model is not None
+            and served_model is not None
+            and served_model.requested != reserved_model.requested
+            and served_model.requested in stash.fallback_models
+        )
+        reconcile_model: Final = served_model if fell_back or reserved_model is None else reserved_model
         reconcile_models: Final = self._rate_limited_models(reconcile_model)
 
         pipeline_operations: Final[list[ReservationOperation]] = []
@@ -4734,6 +4785,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
         )
         charged_targets: Final = [target for target in targets if target not in key_owned_team_scopes]
+        abandoned_scopes: Final = (
+            tuple(
+                sorted(
+                    scope
+                    for scope in reserved_scopes
+                    if scope[0] in PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS and scope not in charged_targets
+                )
+            )
+            if fell_back
+            else ()
+        )
         if reserved_tokens > 0 and total_tokens < reserved_tokens:
             verbose_proxy_logger.debug(
                 "Releasing unused TPM budget on success: reserved=%s, actual=%s, release=%s",
@@ -4746,6 +4808,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 targets=charged_targets,
                 reserved_scopes=reserved_scopes,
                 actual_tokens=total_tokens,
+                reserved_tokens=reserved_tokens,
+            )
+        )
+        pipeline_operations.extend(
+            self._build_reservation_aware_tpm_ops(
+                targets=abandoned_scopes,
+                reserved_scopes=reserved_scopes,
+                actual_tokens=0,
                 reserved_tokens=reserved_tokens,
             )
         )

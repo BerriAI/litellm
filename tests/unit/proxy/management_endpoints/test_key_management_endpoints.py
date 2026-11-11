@@ -51,6 +51,7 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import AuthCacheInvalidationSubscriber
+from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     budget_windows_absent_cache_key,
@@ -101,6 +102,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     persist_deleted_verification_tokens,
     prepare_key_update_data,
     prepare_metadata_fields,
+    raise_on_logging_credential_change,
     reset_key_spend_fn,
     update_key_fn,
     validate_key_list_check,
@@ -112,6 +114,7 @@ from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     BulkUpdateKeyResponse,
     CustomKeyPolicyRequest,
 )
+from litellm.types.utils import CredentialItem
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 client = TestClient(app)
@@ -2104,6 +2107,34 @@ async def test_update_key_end_user_budget_id_folds_into_metadata_and_survives_om
         data=UpdateKeyRequest(key="sk-1", key_alias="renamed"), existing_key_row=existing_key
     )
     assert untouched["metadata"]["end_user_budget_id"] == "svc-a-budget"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stored_duration", "stored_reset_at", "moves_reset"),
+    [
+        ("30d", datetime(2020, 1, 1, tzinfo=timezone.utc), False),
+        ("30d", datetime(2020, 1, 1), False),
+        ("30d", datetime(2099, 1, 1, tzinfo=timezone.utc), True),
+        ("7d", datetime(2020, 1, 1, tzinfo=timezone.utc), True),
+        ("30d", None, True),
+    ],
+)
+async def test_update_key_keeps_a_due_budget_reset_when_the_duration_is_resent(
+    stored_duration: str, stored_reset_at: datetime | None, moves_reset: bool
+) -> None:
+    existing_key: Final = LiteLLM_VerificationToken(
+        token="hashed", budget_duration=stored_duration, budget_reset_at=stored_reset_at
+    )
+
+    updated: Final = await prepare_key_update_data(
+        data=UpdateKeyRequest(key="sk-1", budget_duration="30d"), existing_key_row=existing_key
+    )
+
+    assert updated["budget_duration"] == "30d"
+    reset_at: Final = updated.get("budget_reset_at")
+    assert (isinstance(reset_at, datetime) and reset_at > datetime.now(timezone.utc)) is moves_reset
+    assert ("budget_reset_at" in updated) is moves_reset
 
 
 @pytest.mark.asyncio
@@ -8693,6 +8724,7 @@ async def test_reset_key_spend_success(monkeypatch):
         mock_spend_counter_cache.in_memory_cache.set_cache.assert_any_call(
             key=f"spend_db_floor:spend:key:{hashed_key}", value=50.0, ttl=5
         )
+        assert spend.deleted() == {f"spend:committed:key:{hashed_key}"}
 
 
 @pytest.mark.asyncio
@@ -9013,7 +9045,10 @@ async def test_update_key_spend_updates_counter(monkeypatch):
 
         mock_delete_cache.assert_awaited_once()
         assert spend.memory == {f"spend:key:{hashed_key}": 0.0}
-        assert spend.commands == [f"SET spend:key:{hashed_key} 0.0 60"]
+        assert spend.commands == [
+            f"SET spend:key:{hashed_key} 0.0 60",
+            f"DEL spend:committed:key:{hashed_key}",
+        ]
 
 
 @pytest.mark.asyncio
@@ -24403,3 +24438,29 @@ async def test_key_aliases_answers_503_when_the_database_is_unreachable(monkeypa
         )
 
     assert (exc_info.value.code, exc_info.value.type) == ("503", "no_db_connection")
+
+
+def test_non_admin_resaving_referencing_key_metadata_read_back_encrypted_is_not_a_logging_change(monkeypatch):
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-32-bytes-aaaaaaaaaaaaaa")
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [CredentialItem(credential_name="space-a", credential_values={"arize_api_key": "k"}, credential_info={})],
+    )
+    stored = encrypt_callback_vars(
+        {
+            "logging": [
+                {"callback_name": "arize", "litellm_credential_name": "space-a", "callback_vars": {}},
+                {"callback_name": "langfuse", "callback_vars": {"langfuse_secret_key": "sk-lf-secret"}},
+            ]
+        }
+    )
+    assert stored["logging"][1]["callback_vars"]["langfuse_secret_key"] != "sk-lf-secret"
+    key_row = LiteLLM_VerificationToken(token="hashed", metadata=stored)
+    internal_user = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER)
+
+    raise_on_logging_credential_change({**stored, "note": "unrelated edit"}, key_row, internal_user)
+    with pytest.raises(HTTPException) as removed:
+        raise_on_logging_credential_change({"note": "unrelated edit"}, key_row, internal_user)
+
+    assert removed.value.status_code == 403

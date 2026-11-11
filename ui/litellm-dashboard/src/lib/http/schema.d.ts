@@ -2131,6 +2131,8 @@ export interface paths {
          *     - rpm_limit: Optional[int] - The requests per minute limit for the budget.
          *     - tpd_limit: Optional[int] - The tokens per day limit for the budget. Charged by batch submissions instead of tpm_limit/rpm_limit.
          *     - model_max_budget: Optional[dict] - Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d", "tpm_limit": 100000, "rpm_limit": 100000}}
+         *     - model_tpm_limit: Optional[dict] - Max tokens per minute per model, shared by everything on this budget. Example: {"gpt-4o": 400000}
+         *     - model_rpm_limit: Optional[dict] - Max requests per minute per model, shared by everything on this budget. Example: {"gpt-4o": 200}
          *     - budget_reset_at: Optional[datetime] - Datetime when the initial budget is reset. Default is now.
          */
         post: operations["new_budget_budget_new_post"];
@@ -2188,6 +2190,8 @@ export interface paths {
          *     - rpm_limit: Optional[int] - The requests per minute limit for the budget.
          *     - tpd_limit: Optional[int] - The tokens per day limit for the budget. Charged by batch submissions instead of tpm_limit/rpm_limit.
          *     - model_max_budget: Optional[dict] - Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d", "tpm_limit": 100000, "rpm_limit": 100000}}
+         *     - model_tpm_limit: Optional[dict] - Max tokens per minute per model, shared by everything on this budget. Example: {"gpt-4o": 400000}
+         *     - model_rpm_limit: Optional[dict] - Max requests per minute per model, shared by everything on this budget. Example: {"gpt-4o": 200}
          *     - budget_reset_at: Optional[datetime] - Update the Datetime when the budget was last reset.
          */
         post: operations["update_budget_budget_update_post"];
@@ -4545,12 +4549,13 @@ export interface paths {
          *     - allowed_model_region: Optional[Union[Literal["eu"], Literal["us"]]] - Require all user requests to use models in this specific region.
          *     - default_model: Optional[str] - If no equivalent model in the allowed region, default all requests to this model.
          *     - models: Optional[list[str]] - Restrict this customer's access to the listed models.
-         *     - metadata: Optional[dict] = Metadata for customer, store information for customer. Example metadata = {"data_training_opt_out": True}
          *     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
          *     - tpm_limit: Optional[int] - [Not Implemented Yet] Specify tpm limit for a given customer (Tokens per minute)
          *     - rpm_limit: Optional[int] - [Not Implemented Yet] Specify rpm limit for a given customer (Requests per minute)
          *     - tpd_limit: Optional[int] - Specify tpd limit for a given customer (Tokens per day). Batch submissions are charged against it instead of tpm_limit/rpm_limit
          *     - model_max_budget: Optional[dict] - [Not Implemented Yet] Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d"}}
+         *     - model_tpm_limit: Optional[dict] - Max tokens per minute per model for this customer, shared across every key the customer is sent on. Stored on the customer's budget. Example: {"gpt-4o": 400000}
+         *     - model_rpm_limit: Optional[dict] - Max requests per minute per model for this customer. Stored on the customer's budget. Example: {"gpt-4o": 200}
          *     - max_parallel_requests: Optional[int] - [Not Implemented Yet] Specify max parallel requests for a given customer.
          *     - soft_budget: Optional[float] - [Not Implemented Yet] Get alerts when customer crosses given budget, doesn't block requests.
          *     - spend: Optional[float] - Specify initial spend for a given customer.
@@ -4574,7 +4579,7 @@ export interface paths {
          *     ```
          *     curl --location 'http://0.0.0.0:4000/customer/new'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"         --header 'Content-Type: application/json'         --data '{
          *             "user_id" : "ishaan-jaff-3",
-         *             "allowed_region": "eu",
+         *             "allowed_model_region": "eu",
          *             "budget_id": "free_tier",
          *             "models": ["gpt-4o-mini"],
          *             "default_model": "azure/gpt-3.5-turbo-eu"
@@ -5223,12 +5228,13 @@ export interface paths {
          *     - allowed_model_region: Optional[Union[Literal["eu"], Literal["us"]]] - Require all user requests to use models in this specific region.
          *     - default_model: Optional[str] - If no equivalent model in the allowed region, default all requests to this model.
          *     - models: Optional[list[str]] - Restrict this customer's access to the listed models.
-         *     - metadata: Optional[dict] = Metadata for customer, store information for customer. Example metadata = {"data_training_opt_out": True}
          *     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
          *     - tpm_limit: Optional[int] - [Not Implemented Yet] Specify tpm limit for a given customer (Tokens per minute)
          *     - rpm_limit: Optional[int] - [Not Implemented Yet] Specify rpm limit for a given customer (Requests per minute)
          *     - tpd_limit: Optional[int] - Specify tpd limit for a given customer (Tokens per day). Batch submissions are charged against it instead of tpm_limit/rpm_limit
          *     - model_max_budget: Optional[dict] - [Not Implemented Yet] Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d"}}
+         *     - model_tpm_limit: Optional[dict] - Max tokens per minute per model for this customer, shared across every key the customer is sent on. Stored on the customer's budget. Example: {"gpt-4o": 400000}
+         *     - model_rpm_limit: Optional[dict] - Max requests per minute per model for this customer. Stored on the customer's budget. Example: {"gpt-4o": 200}
          *     - max_parallel_requests: Optional[int] - [Not Implemented Yet] Specify max parallel requests for a given customer.
          *     - soft_budget: Optional[float] - [Not Implemented Yet] Get alerts when customer crosses given budget, doesn't block requests.
          *     - spend: Optional[float] - Specify initial spend for a given customer.
@@ -5252,7 +5258,7 @@ export interface paths {
          *     ```
          *     curl --location 'http://0.0.0.0:4000/customer/new'         --header "Authorization: Bearer $LITELLM_MASTER_KEY"         --header 'Content-Type: application/json'         --data '{
          *             "user_id" : "ishaan-jaff-3",
-         *             "allowed_region": "eu",
+         *             "allowed_model_region": "eu",
          *             "budget_id": "free_tier",
          *             "models": ["gpt-4o-mini"],
          *             "default_model": "azure/gpt-3.5-turbo-eu"
@@ -6071,7 +6077,11 @@ export interface paths {
          * Latest Release Info
          * @description Newest stable release on the LiteLLM changelog, linked to its changelog page, with the PR count of its whole
          *     minor line (e.g. v1.105.0 + v1.105.1) from GitHub split into new features, bug fixes and other updates.
-         *     Returns null when the changelog or GitHub can't be reached so the dashboard upgrade banner simply doesn't render.
+         *     Never waits on the changelog or GitHub. It answers from the cache and, when the cache is empty or expired, responds
+         *     202 with null and fetches after the response is sent, so a later call returns the release. Responds 502 once that
+         *     fetch has failed because the changelog or GitHub couldn't be reached or answered with something unusable, so the dashboard
+         *     upgrade notice simply doesn't render. The three counts are all zero when the release notes list no change in a
+         *     format this proxy can count.
          *     Set LITELLM_DISABLE_LATEST_RELEASE_CHECK=true to return null without making any outbound request.
          */
         get: operations["latest_release_info_get_latest_release_info_get"];
@@ -26239,6 +26249,17 @@ export interface components {
             /** Updated By */
             updated_by?: string | null;
         };
+        /** AccessGroupRule */
+        AccessGroupRule: {
+            /** Access Group */
+            access_group: string;
+            /** Attribute */
+            attribute: string;
+            /** Contains */
+            contains?: string | number | boolean | null;
+            /** Equals */
+            equals?: string | number | boolean | null;
+        };
         /** AccessGroupUpdateRequest */
         AccessGroupUpdateRequest: {
             /** Access Agent Ids */
@@ -27905,7 +27926,7 @@ export interface components {
             router_type: string;
             /**
              * Saved Spend
-             * @description Recorded historical savings plus newer estimates, net of classifier cost
+             * @description Recorded historical savings plus newer estimates, net of classifier cost. None until a turn is estimated. A turn that starts within the longest prompt-cache TTL its breakpoints use (5 minutes, or 1 hour with a 1h breakpoint) of the session's first observed turn, or of the last turn whose observation was incomplete, is not estimated, because the baseline's cache state is unknown then. Two kinds of turn are still estimated inside that window: turns that took the identical baseline path, and turns whose whole cached prefix the session had already written
              */
             saved_spend: number | null;
             /**
@@ -27930,6 +27951,11 @@ export interface components {
              * @description What the session's routed traffic actually cost, classifier calls included
              */
             spend: number;
+            /**
+             * Total Spend
+             * @description Spend billed to this key under the session id, routed or not, from a shared Redis counter whose one-hour expiry every billed request resets. None without a shared Redis or once the counter expired. A best-effort figure, not a lifetime total: a session idle past the expiry restarts from zero, and a failed Redis write, eviction or flush drops spend without notice
+             */
+            total_spend?: number | null;
             /**
              * Turns
              * @description Auto-routed turns the rollup has recorded for this session so far
@@ -28757,6 +28783,13 @@ export interface components {
             providers?: {
                 [key: string]: components["schemas"]["MetricWithMetadata"];
             };
+            /**
+             * Teams
+             * @description Customer spend by the key's current team, or last team for deleted keys. Keys without a known team are grouped under Unassigned
+             */
+            teams?: {
+                [key: string]: components["schemas"]["MetricWithMetadata"];
+            } | null;
         };
         /** BudgetConfig */
         BudgetConfig: {
@@ -28855,6 +28888,20 @@ export interface components {
              */
             model_max_budget?: {
                 [key: string]: components["schemas"]["BudgetConfig"];
+            } | null;
+            /**
+             * Model Rpm Limit
+             * @description Max requests per minute per model for this budget id, shared by every key, team and customer on it (e.g. {'gpt-4o': 200})
+             */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /**
+             * Model Tpm Limit
+             * @description Max tokens per minute per model for this budget id, shared by every key, team and customer on it (e.g. {'gpt-4o': 400000})
+             */
+            model_tpm_limit?: {
+                [key: string]: number;
             } | null;
             /**
              * Rpm Limit
@@ -30808,6 +30855,8 @@ export interface components {
          * @description Documents all the fields supported by `general_settings` in config.yaml
          */
         ConfigGeneralSettings: {
+            /** Access Group Rules */
+            access_group_rules?: components["schemas"]["AccessGroupRule"][] | null;
             /**
              * Admission Queue Timeout Seconds
              * @description maximum time a request waits for a worker slot
@@ -35499,6 +35548,14 @@ export interface components {
             model_max_budget?: {
                 [key: string]: unknown;
             } | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: number;
+            } | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
@@ -35537,6 +35594,14 @@ export interface components {
             /** Model Max Budget */
             model_max_budget?: {
                 [key: string]: unknown;
+            } | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: number;
             } | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
@@ -36558,6 +36623,8 @@ export interface components {
             cache_read_input_audio_token_cost_priority?: number | null;
             /** Cache Read Input Image Token Cost */
             cache_read_input_image_token_cost?: number | null;
+            /** Cache Read Input Image Token Cost Batches */
+            cache_read_input_image_token_cost_batches?: number | null;
             /** Cache Read Input Token Cost */
             cache_read_input_token_cost?: number | null;
             /** Cache Read Input Token Cost Above 100K Tokens */
@@ -40160,6 +40227,20 @@ export interface components {
             model_max_budget?: {
                 [key: string]: components["schemas"]["BudgetConfig"];
             } | null;
+            /**
+             * Model Rpm Limit
+             * @description Max requests per minute per model for this budget id, shared by every key, team and customer on it (e.g. {'gpt-4o': 200})
+             */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /**
+             * Model Tpm Limit
+             * @description Max tokens per minute per model for this budget id, shared by every key, team and customer on it (e.g. {'gpt-4o': 400000})
+             */
+            model_tpm_limit?: {
+                [key: string]: number;
+            } | null;
             /** Models */
             models?: string[] | null;
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
@@ -41686,6 +41767,37 @@ export interface components {
              * @constant
              */
             type: "tool_search_call";
+        } & {
+            [key: string]: unknown;
+        };
+        /** OutputToolSearchOutput */
+        OutputToolSearchOutput: {
+            /** Call Id */
+            call_id?: string | null;
+            /**
+             * Execution
+             * @enum {string}
+             */
+            execution: "server" | "client";
+            /** Id */
+            id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "completed" | "incomplete";
+            /**
+             * Tools
+             * @default []
+             */
+            tools: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Type
+             * @constant
+             */
+            type: "tool_search_output";
         } & {
             [key: string]: unknown;
         };
@@ -44019,7 +44131,7 @@ export interface components {
             heuristic_v2_success_threshold?: number | null;
             /**
              * Housekeeping Patterns
-             * @description Additional case-sensitive literal sentinels that mark a request as client housekeeping, on top of the built-in conversation-title ones. For clients whose wording the built-ins don't cover, or after a client release changes its strings.
+             * @description Additional case-sensitive literal sentinels that mark a request as client housekeeping, on top of the built-in conversation-title, agent-summary and prompt-suggestion ones. For clients whose wording the built-ins don't cover, or after a client release changes its strings.
              */
             housekeeping_patterns?: string[] | null;
             /**
@@ -45781,7 +45893,7 @@ export interface components {
             /** Output */
             output: (components["schemas"]["ResponseOutputMessage"] | components["schemas"]["ResponseFileSearchToolCall"] | components["schemas"]["ResponseFunctionToolCall"] | components["schemas"]["ResponseFunctionToolCallOutputItem"] | components["schemas"]["ResponseFunctionWebSearch"] | components["schemas"]["ResponseComputerToolCall"] | components["schemas"]["ResponseComputerToolCallOutputItem"] | components["schemas"]["ResponseReasoningItem"] | components["schemas"]["ResponseToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItem"] | components["schemas"]["ResponseCompactionItem"] | components["schemas"]["ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCall"] | components["schemas"]["LocalShellCall"] | components["schemas"]["LocalShellCallOutput"] | components["schemas"]["ResponseFunctionShellToolCall"] | components["schemas"]["ResponseFunctionShellToolCallOutput"] | components["schemas"]["ResponseApplyPatchToolCall"] | components["schemas"]["ResponseApplyPatchToolCallOutput"] | components["schemas"]["McpCall"] | components["schemas"]["McpListTools"] | components["schemas"]["McpApprovalRequest"] | components["schemas"]["McpApprovalResponse"] | components["schemas"]["ResponseCustomToolCall"] | components["schemas"]["ResponseCustomToolCallOutputItem"] | {
                 [key: string]: unknown;
-            })[] | (components["schemas"]["GenericResponseOutputItem"] | components["schemas"]["OutputCodeInterpreterCall"] | components["schemas"]["OutputFunctionToolCall"] | components["schemas"]["OutputImageGenerationCall"] | components["schemas"]["ResponseFunctionToolCall"] | components["schemas"]["ResponseFunctionWebSearch"] | components["schemas"]["CustomToolCallOutputItem"] | components["schemas"]["OutputToolSearchCall"] | components["schemas"]["ResponseCompactionItem"])[];
+            })[] | (components["schemas"]["GenericResponseOutputItem"] | components["schemas"]["OutputCodeInterpreterCall"] | components["schemas"]["OutputFunctionToolCall"] | components["schemas"]["OutputImageGenerationCall"] | components["schemas"]["ResponseFunctionToolCall"] | components["schemas"]["ResponseFunctionWebSearch"] | components["schemas"]["CustomToolCallOutputItem"] | components["schemas"]["OutputToolSearchCall"] | components["schemas"]["OutputToolSearchOutput"] | components["schemas"]["ResponseCompactionItem"])[];
             /** Parallel Tool Calls */
             parallel_tool_calls?: boolean | null;
             /** Previous Response Id */
@@ -47594,6 +47706,12 @@ export interface components {
              * @default 0
              */
             gateway_injected_caching_savings_spend: number;
+            /**
+             * Guardrail Spend
+             * @description Guardrail spend in USD, already included in spend, so model spend is spend - guardrail_spend. Rows recorded before this field existed report 0 even when their spend includes guardrail cost
+             * @default 0
+             */
+            guardrail_spend: number;
             /**
              * Prompt Caching Savings Spend
              * @default 0
@@ -51351,6 +51469,14 @@ export interface components {
             end_user_model_max_budget?: {
                 [key: string]: unknown;
             } | null;
+            /** End User Model Rpm Limit */
+            end_user_model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** End User Model Tpm Limit */
+            end_user_model_tpm_limit?: {
+                [key: string]: number;
+            } | null;
             end_user_object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /** End User Rpm Limit */
             end_user_rpm_limit?: number | null;
@@ -52359,6 +52485,8 @@ export interface components {
             discoverable?: boolean | null;
             /** Enable Tag Filtering */
             enable_tag_filtering?: boolean | null;
+            /** Encrypted Content Boundary */
+            encrypted_content_boundary?: string | null;
             /** Enforce Supported Endpoints */
             enforce_supported_endpoints?: boolean | null;
             /** Explicit Cache Read Input Token Cost */
@@ -52693,6 +52821,8 @@ export interface components {
             cache_read_input_audio_token_cost_priority?: number | null;
             /** Cache Read Input Image Token Cost */
             cache_read_input_image_token_cost?: number | null;
+            /** Cache Read Input Image Token Cost Batches */
+            cache_read_input_image_token_cost_batches?: number | null;
             /** Cache Read Input Token Cost */
             cache_read_input_token_cost?: number | null;
             /** Cache Read Input Token Cost Above 100K Tokens */
@@ -59743,6 +59873,7 @@ export interface operations {
                 page?: number;
                 page_size?: number;
                 exclude_end_user_ids?: string | null;
+                team_ids?: string | null;
             };
             header?: never;
             path?: never;
@@ -59781,6 +59912,7 @@ export interface operations {
                 api_key?: string | null;
                 exclude_end_user_ids?: string | null;
                 timezone?: number | null;
+                team_ids?: string | null;
             };
             header?: never;
             path?: never;
@@ -59820,6 +59952,7 @@ export interface operations {
                 api_key?: string | null;
                 exclude_end_user_ids?: string | null;
                 timezone?: number | null;
+                team_ids?: string | null;
             };
             header?: never;
             path?: never;
@@ -59860,6 +59993,7 @@ export interface operations {
                 api_key?: string | null;
                 exclude_end_user_ids?: string | null;
                 timezone?: number | null;
+                team_ids?: string | null;
             };
             header?: never;
             path?: never;
@@ -59899,6 +60033,7 @@ export interface operations {
                 api_key?: string | null;
                 exclude_end_user_ids?: string | null;
                 timezone?: number | null;
+                team_ids?: string | null;
             };
             header?: never;
             path?: never;
@@ -59938,6 +60073,7 @@ export interface operations {
                 api_key?: string | null;
                 exclude_end_user_ids?: string | null;
                 timezone?: number | null;
+                team_ids?: string | null;
             };
             header?: never;
             path?: never;
@@ -60794,6 +60930,7 @@ export interface operations {
                 page?: number;
                 page_size?: number;
                 exclude_end_user_ids?: string | null;
+                team_ids?: string | null;
             };
             header?: never;
             path?: never;
@@ -60832,6 +60969,7 @@ export interface operations {
                 api_key?: string | null;
                 exclude_end_user_ids?: string | null;
                 timezone?: number | null;
+                team_ids?: string | null;
             };
             header?: never;
             path?: never;
@@ -60871,6 +61009,7 @@ export interface operations {
                 api_key?: string | null;
                 exclude_end_user_ids?: string | null;
                 timezone?: number | null;
+                team_ids?: string | null;
             };
             header?: never;
             path?: never;
@@ -60911,6 +61050,7 @@ export interface operations {
                 api_key?: string | null;
                 exclude_end_user_ids?: string | null;
                 timezone?: number | null;
+                team_ids?: string | null;
             };
             header?: never;
             path?: never;
@@ -60950,6 +61090,7 @@ export interface operations {
                 api_key?: string | null;
                 exclude_end_user_ids?: string | null;
                 timezone?: number | null;
+                team_ids?: string | null;
             };
             header?: never;
             path?: never;
@@ -60989,6 +61130,7 @@ export interface operations {
                 api_key?: string | null;
                 exclude_end_user_ids?: string | null;
                 timezone?: number | null;
+                team_ids?: string | null;
             };
             header?: never;
             path?: never;
@@ -62935,6 +63077,20 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["LatestReleaseInfo"] | null;
                 };
+            };
+            /** @description The release is being fetched in the background, so ask again shortly */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The changelog or GitHub could not be reached or answered with something unusable */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

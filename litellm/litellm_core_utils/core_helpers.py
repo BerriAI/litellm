@@ -123,7 +123,7 @@ def proxy_request_headers(container: Mapping[str, object] | None) -> Mapping[str
 
 def stream_cost_injection_requested(request_headers: Mapping[str, object] | None) -> bool:
     """The global include_cost_in_streaming_usage flag or the per-request header asks for usage.cost on streams."""
-    if bool(getattr(litellm, "include_cost_in_streaming_usage", False)):
+    if litellm.include_cost_in_streaming_usage:
         return True
     if not request_headers:
         return False

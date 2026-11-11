@@ -2484,3 +2484,58 @@ def test_prefixed_alias_over_a_bare_catch_all_lists_ids_that_route_through_it(mo
     ]
     assert f"team-partial-route/{_ROUTE_OPENAI_ID}" in v1_models
     assert unrouted_ids == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested_model, token_aliases",
+    [
+        ("free-key", {"aliases": {"free-key": "free-model"}}),
+        ("free-team", {"team_model_aliases": {"free-team": "free-model"}}),
+        ("free-team", {"team_model_aliases": {"free-team": "free-model"}, "aliases": {"free-model": "paid-model"}}),
+        ("free-model", {"aliases": {"paid-model": "free-model"}}),
+        ("free-team", {"team_model_aliases": {"free-team": ""}}),
+        (
+            "free-team",
+            {"team_id": "t1", "team_model_aliases": {"free-team": "model_name_t1_deleted"}},
+        ),
+    ],
+)
+async def test_caller_alias_target_matches_the_model_add_litellm_data_to_request_dispatches(
+    requested_model: str, token_aliases: Mapping[str, object]
+) -> None:
+    from unittest.mock import MagicMock
+
+    from fastapi import Request
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.litellm_pre_call_utils import caller_alias_target
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    router: Final = Router(
+        model_list=[
+            {"model_name": "free-model", "litellm_params": {"model": "openai/free-backend", "api_key": "sk-fixture"}},
+            {"model_name": "paid-model", "litellm_params": {"model": "openai/paid-backend", "api_key": "sk-fixture"}},
+        ]
+    )
+    valid_token: Final = UserAPIKeyAuth(api_key="hashed-key", **token_aliases)
+    request: Final = MagicMock(spec=Request)
+    request.url = MagicMock()
+    request.url.path = "/v1/chat/completions"
+    request.method = "POST"
+    request.query_params = {}
+    request.headers = {"Content-Type": "application/json"}
+    request.client = MagicMock()
+    request.client.host = "127.0.0.1"
+
+    with patch("litellm.proxy.proxy_server.llm_router", router):
+        dispatched: Final = await add_litellm_data_to_request(
+            data={"model": requested_model},
+            request=request,
+            user_api_key_dict=valid_token,
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+        )
+        served: Final = caller_alias_target(requested_model, valid_token, router)
+        assert served == dispatched["model"]
