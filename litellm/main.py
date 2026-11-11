@@ -5787,8 +5787,10 @@ def completion(
                 base_model=base_model,
             )
 
-        if provider_config is not None:
+        if provider_config is not None and not provider_config.keeps_developer_role():
             reject_developer_message_without_content(client_messages, model=model, llm_provider=custom_llm_provider)
+
+        if provider_config is not None:
             translated_messages: Final = provider_config.translate_developer_role_to_system_role(messages=messages)
             history_for_route: Final = _history_without_unanswered_tool_search_calls(
                 translated_messages, custom_llm_provider, provider_config

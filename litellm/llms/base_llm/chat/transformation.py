@@ -207,6 +207,9 @@ class BaseConfig(ABC):
         """
         return map_developer_role_to_system_role(messages=messages)
 
+    def keeps_developer_role(self) -> bool:
+        return False
+
     def should_retry_llm_api_inside_llm_translation_on_http_error(
         self, e: httpx.HTTPStatusError, litellm_params: dict
     ) -> bool:
