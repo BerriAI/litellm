@@ -29,7 +29,7 @@ async def test_apply_guardrail_endpoint_returns_correct_response(
         mock_proxy_logging_ctx(),
     ):
         # Create a mock guardrail
-        mock_guardrail = Mock(spec=CustomGuardrail)
+        mock_guardrail = Mock(spec=CustomGuardrail, event_hook=None)
         # Apply guardrail returns GenericGuardrailAPIInputs (dict with texts key)
         mock_guardrail.apply_guardrail = AsyncMock(
             return_value={"texts": ["Redacted text: [REDACTED] and [REDACTED]"]}
@@ -116,7 +116,7 @@ async def test_apply_guardrail_endpoint_with_presidio_guardrail(mock_proxy_loggi
         mock_proxy_logging_ctx(),
     ):
         # Create a mock guardrail that simulates Presidio behavior
-        mock_guardrail = Mock(spec=CustomGuardrail)
+        mock_guardrail = Mock(spec=CustomGuardrail, event_hook=None)
         # Simulate masking PII entities - returns GenericGuardrailAPIInputs (dict with texts key)
         mock_guardrail.apply_guardrail = AsyncMock(
             return_value={
@@ -168,7 +168,7 @@ async def test_apply_guardrail_endpoint_without_optional_params(mock_proxy_loggi
         mock_proxy_logging_ctx(),
     ):
         # Create a mock guardrail
-        mock_guardrail = Mock(spec=CustomGuardrail)
+        mock_guardrail = Mock(spec=CustomGuardrail, event_hook=None)
         # Returns GenericGuardrailAPIInputs (dict with texts key)
         mock_guardrail.apply_guardrail = AsyncMock(
             return_value={"texts": ["Processed text"]}
