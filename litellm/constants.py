@@ -2374,6 +2374,7 @@ ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS: Final = (
     MAX_FILE_DOWNLOADS_PER_MINUTE_KEY,
 )
 FILE_USAGE_MAX_TRACKED_COUNTERS: Final = 20_000
+MESSAGE_THREAD_MAX_TRACKED_OWNERS: Final = 20_000
 
 # Shared read-only empty mapping, for defaulting optional Mapping parameters without
 # constructing a fresh mutable dict at each call site.

@@ -89,7 +89,7 @@ from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
-from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias, resolve_served_model
+from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.served_output_texts import (
     record_served_output_texts,
@@ -310,6 +310,8 @@ from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     add_litellm_data_to_request,
     get_metadata_variable_name,
+    global_then_key_alias_target,
+    pre_call_served_model,
     refresh_proxy_server_request_body_snapshot,
     reject_url_valued_destination,
     sanitize_for_log,
@@ -1017,13 +1019,11 @@ _ROUTER_SETTINGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = Type
 
 
 def _fallback_probe_data(
-    pristine: object, fallback_model: str, key_aliases: object, group_alias: object
+    pristine: object, fallback_model: str, user_api_key_dict: UserAPIKeyAuth, group_alias: object
 ) -> Mapping[str, object]:
     return {
         **_REQUEST_FIELDS.validate_python(pristine),
-        "model": resolve_served_model(
-            fallback_model, _DECODED_JSON.validate_python(litellm.model_alias_map), key_aliases, group_alias
-        ),
+        "model": pre_call_served_model(fallback_model, user_api_key_dict, group_alias),
     }
 
 
@@ -2246,13 +2246,9 @@ async def _team_member_within_fallback_model_budget(
             if proxy_config is not None and llm_router is not None
             else None
         )
-        raw_aliases: Final[object] = cast(  # cast-ok: auth aliases are dynamically typed at runtime
-            object, user_api_key_dict.aliases
-        )
-        served_model: Final = resolve_served_model(
+        served_model: Final = pre_call_served_model(
             model,
-            litellm.model_alias_map,
-            raw_aliases,
+            user_api_key_dict,
             router_settings.get("model_group_alias") if router_settings is not None else None,
         )
         if is_model_cost_zero(model=served_model, llm_router=llm_router):
@@ -2714,17 +2710,9 @@ class ProxyBaseLLMRequestProcessing:
         ### MODEL ALIAS MAPPING ###
         # check if model name in model alias map
         # get the actual model name
-        if isinstance(self.data["model"], str) and self.data["model"] in litellm.model_alias_map:
-            self.data["model"] = litellm.model_alias_map[self.data["model"]]
-
-        # Check key-specific aliases
-        if (
-            isinstance(self.data["model"], str)
-            and user_api_key_dict.aliases
-            and isinstance(user_api_key_dict.aliases, dict)
-            and self.data["model"] in user_api_key_dict.aliases
-        ):
-            self.data["model"] = user_api_key_dict.aliases[self.data["model"]]
+        prepared_model: Final = self.data["model"]
+        if isinstance(prepared_model, str):
+            self.data["model"] = global_then_key_alias_target(prepared_model, user_api_key_dict)
 
         if llm_router is not None and proxy_config is not None:
             self.data.update(
@@ -2945,9 +2933,6 @@ class ProxyBaseLLMRequestProcessing:
                 if isinstance(raw_router_settings, Mapping)
                 else None
             )
-            key_aliases: Final[object] = cast(  # cast-ok: auth aliases are dynamically typed at runtime
-                object, user_api_key_dict.aliases
-            )
             try:
                 for fallback_model in fallback_models:
                     if fallback_model == original_model:
@@ -2965,7 +2950,7 @@ class ProxyBaseLLMRequestProcessing:
                     try:
                         if endpoint_unsupported_by_model(
                             route_type,
-                            _fallback_probe_data(pristine, fallback_model, key_aliases, group_alias),
+                            _fallback_probe_data(pristine, fallback_model, user_api_key_dict, group_alias),
                             llm_router,
                             user_api_key_dict.team_id,
                         ):
