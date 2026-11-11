@@ -828,7 +828,7 @@ class BaseAzureLLM(BaseOpenAILLM):
             )
 
             v1_params: Final[_AzureV1ClientParams] = {
-                "api_key": v1_api_key,
+                "api_key": v1_api_key or "",
                 "base_url": f"{ensure_api_route(api_base or '', 'openai/v1')}/",
             }
             if "timeout" in azure_client_params:

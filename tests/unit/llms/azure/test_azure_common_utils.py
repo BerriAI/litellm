@@ -1767,6 +1767,34 @@ def test_azure_v1_api_client_targets_openai_v1_once_whatever_the_api_base_ends_i
     assert str(client.base_url) == "https://test.openai.azure.com/openai/v1/"
 
 
+def test_azure_v1_base_without_an_azure_credential_never_sends_the_openai_api_key(
+    no_azure_api_key, respx_mock, monkeypatch
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-key-meant-for-api-openai-com")
+    route: Final = respx_mock.post(
+        host="no-credential-resource.openai.azure.com", path="/openai/v1/chat/completions"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-4.1-mini",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+            },
+        )
+    )
+
+    litellm.completion(
+        model="azure/gpt-4.1-mini",
+        api_base="https://no-credential-resource.openai.azure.com/openai/v1",
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert "authorization" not in route.calls.last.request.headers
+
+
 @pytest.mark.parametrize("api_version", ["v1", "latest", "preview"])
 def test_azure_v1_api_with_azure_ad_token_provider(api_version):
     """
