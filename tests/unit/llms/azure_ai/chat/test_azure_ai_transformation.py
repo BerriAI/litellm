@@ -1567,6 +1567,46 @@ def test_azure_ai_inlines_a_remote_pdf_file_part(respx_mock: respx.MockRouter, m
     assert request["messages"] == [{"role": "user", "content": [{"type": "file", "file": inlined_file}, question]}]
 
 
+def test_azure_ai_inlines_a_remote_pdf_link_that_names_no_format(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    pdf_bytes: Final = b"%PDF-1.4 azure_ai unformatted remote file fixture"
+    pdf_name: Final = f"{uuid.uuid4().hex}.pdf"
+    pdf_url: Final = f"https://docs.example/{pdf_name}"
+    respx_mock.get(pdf_url).mock(return_value=Response(200, content=pdf_bytes, headers={"Content-Type": "application/pdf"}))
+    question: Final = {"type": "text", "text": "What is the codeword?"}
+
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="gpt-5.6-sol",
+        messages=[{"role": "user", "content": [{"type": "file", "file": {"file_id": pdf_url}}, question]}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    inlined_file: Final = {
+        "file_data": f"data:application/pdf;base64,{base64.b64encode(pdf_bytes).decode()}",
+        "filename": pdf_name,
+    }
+    assert request["messages"] == [{"role": "user", "content": [{"type": "file", "file": inlined_file}, question]}]
+
+
+def test_azure_ai_leaves_a_remote_non_pdf_file_link_unfetched() -> None:
+    question: Final = {"type": "text", "text": "What is the codeword?"}
+    remote_file: Final = {"file_id": "https://nonexistent.invalid/notes.txt"}
+
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="gpt-5.6-sol",
+        messages=[{"role": "user", "content": [question, {"type": "file", "file": remote_file}]}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"] == [{"role": "user", "content": "What is the codeword?"}]
+
+
 def test_azure_ai_keeps_a_pdf_file_id_part_without_the_litellm_format_hint() -> None:
     question: Final = {"type": "text", "text": "What is the codeword?"}
 

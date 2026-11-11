@@ -7059,3 +7059,24 @@ def test_stream_structured_output_drops_text_after_first_message_item(
     content: Final = "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
     assert content == expected_content
     assert chunks[-1].choices[0].finish_reason == "stop"
+
+
+@pytest.mark.parametrize(
+    ("file", "expected_input_file"),
+    [
+        pytest.param(
+            {"file_id": "https://docs.example/report.pdf", "filename": "report.pdf"},
+            {"type": "input_file", "file_url": "https://docs.example/report.pdf", "filename": "report.pdf"},
+            id="remote_link",
+        ),
+        pytest.param({"file_id": "file-123"}, {"type": "input_file", "file_id": "file-123"}, id="uploaded_file_id"),
+    ],
+)
+def test_chat_file_part_reaches_responses_as_the_matching_input_file(
+    file: dict[str, str], expected_input_file: dict[str, str]
+) -> None:
+    input_items, _ = LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(
+        [{"role": "user", "content": [{"type": "file", "file": file}]}]
+    )
+
+    assert input_items == [{"type": "message", "role": "user", "content": [expected_input_file]}]

@@ -495,10 +495,8 @@ class TestTransformMessages:
                 "image_url": {"url": "https://example.com/img.jpg"},
             },
         ]
-        with patch.object(self.config, "_upload_image", return_value="file-123"):
-            result = self.config._transform_messages([
-                {"role": "user", "content": content}
-            ])
+        config = GigaChatConfig(upload_file=MagicMock(return_value="file-123"))
+        result = config._transform_messages([{"role": "user", "content": content}])
         assert result[0]["content"] == "describe this"
         assert result[0]["attachments"] == ["file-123"]
 
@@ -507,10 +505,8 @@ class TestTransformMessages:
             {"type": "text", "text": "look"},
             {"type": "image_url", "image_url": "https://example.com/img.jpg"},
         ]
-        with patch.object(self.config, "_upload_image", return_value="file-456"):
-            result = self.config._transform_messages([
-                {"role": "user", "content": content}
-            ])
+        config = GigaChatConfig(upload_file=MagicMock(return_value="file-456"))
+        result = config._transform_messages([{"role": "user", "content": content}])
         assert result[0]["content"] == "look"
         assert "file-456" in result[0]["attachments"]
 
@@ -531,11 +527,9 @@ class TestTransformMessages:
             {"type": "text", "text": "summarize"},
             {"type": "file", "file": file},
         ]
-        with patch.object(self.config, "_upload_image", return_value="file-789") as upload:
-            result: Final = self.config._transform_messages([
-                {"role": "user", "content": content}
-            ])
-        upload.assert_called_once_with(upload_source)
+        upload: Final = MagicMock(return_value="file-789")
+        result: Final = GigaChatConfig(upload_file=upload)._transform_messages([{"role": "user", "content": content}])
+        upload.assert_called_once_with(upload_source, None, None)
         assert result[0]["content"] == "summarize"
         assert result[0]["attachments"] == ["file-789"]
 
@@ -548,13 +542,11 @@ class TestTransformMessages:
                 "file": {"filename": "report.pdf", "file_id": "https://example.com/report.pdf", "format": "application/pdf"},
             },
         ]
-        with (
-            patch(f"{TRANSFORM_MODULE}.convert_url_to_base64", return_value=fetched) as fetch,
-            patch.object(self.config, "_upload_image", return_value="file-789") as upload,
-        ):
-            result: Final = self.config._transform_messages([{"role": "user", "content": content}])
+        upload: Final = MagicMock(return_value="file-789")
+        with patch(f"{TRANSFORM_MODULE}.convert_url_to_base64", return_value=fetched) as fetch:
+            result: Final = GigaChatConfig(upload_file=upload)._transform_messages([{"role": "user", "content": content}])
         fetch.assert_called_once_with("https://example.com/report.pdf")
-        upload.assert_called_once_with(fetched)
+        upload.assert_called_once_with(fetched, None, None)
         assert result[0]["attachments"] == ["file-789"]
 
     @pytest.mark.parametrize(
@@ -564,9 +556,9 @@ class TestTransformMessages:
     )
     def test_remote_pdf_file_part_on_a_private_address_is_refused_before_any_upload(self, url: str) -> None:
         content: Final = [{"type": "file", "file": {"file_id": url, "format": "application/pdf"}}]
-        with patch.object(self.config, "_upload_image", return_value="file-789") as upload:
-            with pytest.raises(litellm.ImageFetchError):
-                self.config._transform_messages([{"role": "user", "content": content}])
+        upload: Final = MagicMock(return_value="file-789")
+        with pytest.raises(litellm.ImageFetchError):
+            GigaChatConfig(upload_file=upload)._transform_messages([{"role": "user", "content": content}])
         upload.assert_not_called()
 
 
@@ -924,7 +916,7 @@ class TestUploadImage:
     def setup_method(self):
         self.config = GigaChatConfig()
 
-    @patch(f"{TRANSFORM_MODULE}.upload_file_sync", side_effect=Exception("fail"))
-    def test_upload_image_failure_returns_none(self, mock_upload):
-        result = self.config._upload_image("https://example.com/img.jpg")
+    def test_upload_image_failure_returns_none(self):
+        config = GigaChatConfig(upload_file=MagicMock(side_effect=Exception("fail")))
+        result = config._upload_image("https://example.com/img.jpg")
         assert result is None

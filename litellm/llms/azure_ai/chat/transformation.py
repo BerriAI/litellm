@@ -23,7 +23,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     is_pdf_file_part,
     message_without_file_formats,
 )
-from litellm.litellm_core_utils.prompt_templates.image_handling import inline_remote_files, inline_remote_media
+from litellm.litellm_core_utils.prompt_templates.image_handling import inline_remote_media, inline_remote_pdf_files
 from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
     prompt_cache_breakpoint_for_wire,
     with_prompt_cache_breakpoint,
@@ -437,7 +437,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         if extra_body and isinstance(extra_body, dict):
             optional_params.update(extra_body)
         optional_params.pop("max_retries", None)
-        inlined_messages: Final = inline_remote_media(messages, should_inline=inline_remote_files)
+        inlined_messages: Final = inline_remote_media(messages, should_inline=inline_remote_pdf_files)
         return {
             "model": model,
             "messages": self._transform_messages(

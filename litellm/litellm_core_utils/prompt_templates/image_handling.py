@@ -22,7 +22,7 @@ import litellm
 from litellm import verbose_logger
 from litellm.caching.caching import InMemoryCache
 from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB, NON_LLM_CONNECTION_TIMEOUT
-from litellm.litellm_core_utils.prompt_templates.common_utils import REMOTE_URL_PREFIXES
+from litellm.litellm_core_utils.prompt_templates.common_utils import REMOTE_URL_PREFIXES, is_pdf_file_part
 from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     infer_content_type_from_url_and_content,
 )
@@ -249,6 +249,14 @@ def is_unformatted_pdf_link_image(media: RemoteMedia) -> bool:
     image_format: Final = media.fields.get("format")
     return inline_remote_image_urls(media) and is_unformatted_pdf_link(
         media.url, image_format if isinstance(image_format, str) else None
+    )
+
+
+def inline_remote_pdf_files(media: RemoteMedia) -> bool:
+    file_format: Final = media.fields.get("format")
+    return inline_remote_files(media) and (
+        is_pdf_file_part({"type": "file", "file": media.fields})
+        or is_unformatted_pdf_link(media.url, file_format if isinstance(file_format, str) else None)
     )
 
 

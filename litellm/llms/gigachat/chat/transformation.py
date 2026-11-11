@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
-from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
@@ -96,6 +96,7 @@ class GigaChatConfig(BaseConfig):
         max_tokens: int | None = None,
         repetition_penalty: float | None = None,
         profanity_check: bool | None = None,
+        upload_file: Callable[[str, str | None, str | None], object] = upload_file_sync,
     ) -> None:
         config_params: Final[Mapping[str, float | int | bool | None]] = MappingProxyType(
             {
@@ -112,6 +113,7 @@ class GigaChatConfig(BaseConfig):
         # Instance variables for current request context
         self._current_credentials: str | None = None
         self._current_api_base: str | None = None
+        self._upload_file: Final = upload_file
 
     def get_complete_url(
         self,
@@ -301,11 +303,7 @@ class GigaChatConfig(BaseConfig):
             file_id string or None if upload failed
         """
         try:
-            return upload_file_sync(
-                image_url=image_url,
-                credentials=self._current_credentials,
-                api_base=self._current_api_base,
-            )
+            return self._upload_file(image_url, self._current_credentials, self._current_api_base)
         except Exception as e:
             verbose_logger.error("Failed to upload image: %s", e)
             return None
