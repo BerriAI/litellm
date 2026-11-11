@@ -158,14 +158,21 @@ def _connect(database_url: str) -> "psycopg.Connection[tuple[object, ...]]":
 
 @contextmanager
 def lifted_time_limits(connection: "psycopg.Connection[tuple[object, ...]]") -> Iterator[None]:
+    with_transaction_timeout: Final = (
+        connection.info.server_version >= _FIRST_SERVER_VERSION_WITH_TRANSACTION_TIMEOUT
+    )
     connection.execute("SET statement_timeout = 0")
-    if connection.info.server_version >= _FIRST_SERVER_VERSION_WITH_TRANSACTION_TIMEOUT:
+    connection.execute("SET lock_timeout = 0")
+    if with_transaction_timeout:
         connection.execute("SET transaction_timeout = 0")
     try:
         yield
     finally:
         if not connection.closed:
-            connection.execute("RESET ALL")
+            connection.execute("RESET statement_timeout")
+            connection.execute("RESET lock_timeout")
+            if with_transaction_timeout:
+                connection.execute("RESET transaction_timeout")
 
 
 def ensure_request_log_indexes(
@@ -190,7 +197,6 @@ def ensure_request_log_indexes(
 
     try:
         with connect(database_url) as connection, lifted_time_limits(connection):
-            connection.execute("SET lock_timeout = 0")
             results: Final = tuple(_ensure_index(connection, schema, index) for index in indexes)
     except psycopg.Error as exc:
         logger.warning("Could not build the request-log indexes, leaving them for the next index build: %s", exc)

@@ -497,6 +497,19 @@ def test_a_pooled_server_session_gets_its_timeout_back_after_the_build(
     assert shown == ("4s",)
 
 
+@requires_db
+def test_a_pooled_server_session_keeps_the_search_path_another_client_set(scratch_database: str) -> None:
+    session: Final = _PooledServerSession.connect(scratch_database, autocommit=True)
+    try:
+        session.execute("SET search_path = public, pg_catalog")
+        assert ensure_request_log_indexes(scratch_database, "public", connect=lambda _: session) is True
+        shown: Final = session.execute("SHOW search_path").fetchone()
+    finally:
+        psycopg.Connection.close(session)
+
+    assert shown == ("public, pg_catalog",)
+
+
 def _rebuild_as_another_replica(database_url: str, name: str, table: str, column: str) -> int:
     """Drop and rebuild the index from a second connection, as a replica that won the
     race would, and return the oid of the index it built."""
