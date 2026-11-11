@@ -21915,6 +21915,7 @@ async def get_config(
 
         # Check if slack alerting is on
         _alerting: Final = _general_settings.get("alerting", [])
+        _alerting_types: Final = proxy_logging_obj.slack_alerting_instance.alert_types
         alerting_data: Final = []
         if "slack" in _alerting:
             _slack_values, _ = resolve_fields(
@@ -21922,7 +21923,6 @@ async def get_config(
             )
             _slack_env_vars: Final = _apply_alerting_env_role_gate(_slack_values, is_full_admin)
 
-            _alerting_types: Final = proxy_logging_obj.slack_alerting_instance.alert_types
             _all_alert_types: Final = proxy_logging_obj.slack_alerting_instance._all_possible_alert_types()
             _alerts_to_webhook: Final = _apply_webhook_role_gate(
                 proxy_logging_obj.slack_alerting_instance.alert_to_webhook_url, is_full_admin
@@ -21967,6 +21967,7 @@ async def get_config(
             "callbacks": _data_to_return,
             "alerts": alerting_data,
             "active_alerting_destinations": tuple(_alerting),
+            "alert_types": _alerting_types,
             "router_settings": _router_settings,
             "available_callbacks": all_available_callbacks,
         }

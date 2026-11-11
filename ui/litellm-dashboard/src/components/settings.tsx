@@ -337,6 +337,8 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   const [catchAllWebhookURL, setCatchAllWebhookURL] = useState<string>("");
   const [alertToWebhooks, setAlertToWebhooks] = useState<Record<string, string>>({});
   const [activeAlerts, setActiveAlerts] = useState<string[]>([]);
+  const [savedAlerts, setSavedAlerts] = useState<string[]>([]);
+  const [isSavingAlerts, setIsSavingAlerts] = useState(false);
 
   const [showAddCallbacksModal, setShowAddCallbacksModal] = useState(false);
   const [callbackConfigs, setCallbackConfigs] = useState<any[]>([]);
@@ -435,16 +437,20 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
         setAllCallbacks(data.available_callbacks);
 
         let alerts_data = data.alerts;
-        if (alerts_data) {
-          if (alerts_data.length > 0) {
-            let _alert_info = alerts_data[0];
-            let catch_all_webhook = _alert_info.variables.SLACK_WEBHOOK_URL;
-
-            let active_alerts = _alert_info.active_alerts;
-            setActiveAlerts(active_alerts);
-            setCatchAllWebhookURL(catch_all_webhook);
-            setAlertToWebhooks(_alert_info.alerts_to_webhook);
-          }
+        const slack_alert_info = alerts_data?.find(
+          (alert: {
+            name: string;
+            active_alerts?: string[] | null;
+            variables?: { SLACK_WEBHOOK_URL?: string | null } | null;
+            alerts_to_webhook?: Record<string, string> | null;
+          }) => alert.name === "slack",
+        );
+        const loadedAlerts: string[] = data.alert_types ?? slack_alert_info?.active_alerts ?? [];
+        setActiveAlerts(loadedAlerts);
+        setSavedAlerts(loadedAlerts);
+        if (slack_alert_info) {
+          setCatchAllWebhookURL(slack_alert_info.variables?.SLACK_WEBHOOK_URL ?? "");
+          setAlertToWebhooks(slack_alert_info.alerts_to_webhook ?? {});
         }
 
         setAlerts(alerts_data);
@@ -558,18 +564,25 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
       updatedAlertToWebhooks[key] = newWebhookValue;
     });
 
+    const alertTypesChanged =
+      activeAlerts.length !== savedAlerts.length || activeAlerts.some((alert) => !savedAlerts.includes(alert));
     const payload = {
       general_settings: {
         alert_to_webhook_url: updatedAlertToWebhooks,
-        alert_types: activeAlerts,
+        ...(alertTypesChanged ? { alert_types: activeAlerts } : {}),
       },
     };
 
+    setIsSavingAlerts(true);
     try {
       await setCallbacksCall(accessToken, payload);
     } catch (error) {
       toast.fromError(error);
+      return;
+    } finally {
+      setIsSavingAlerts(false);
     }
+    setSavedAlerts(activeAlerts);
     toast.success(t("loggingAndAlerts.alertTypes.toasts.saved"));
   };
 
@@ -713,7 +726,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                   ))}
                 </TableBody>
               </Table>
-              <Button size="xs" className="mt-2" onClick={handleSaveAlerts}>
+              <Button size="xs" className="mt-2" onClick={handleSaveAlerts} disabled={isSavingAlerts}>
                 {t("loggingAndAlerts.alertTypes.saveChanges")}
               </Button>
 

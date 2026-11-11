@@ -1413,6 +1413,34 @@ def test_get_config_callbacks_redacts_slack_webhook_urls_for_view_only_admin(cli
     assert admin_slack["variables"]["SLACK_WEBHOOK_URL"] != "REDACTED"
 
 
+def test_get_config_callbacks_returns_alert_types_when_slack_alerting_is_off(client, auth_as, mock_prisma, monkeypatch):
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import AlertType, LitellmUserRoles
+
+    _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "llm_router", None)
+    fake_proxy_config = MagicMock()
+    fake_proxy_config.get_config = AsyncMock(
+        return_value={
+            "litellm_settings": {"success_callback": []},
+            "general_settings": {"alerting": ["ms_teams"]},
+            "environment_variables": {},
+        }
+    )
+    monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
+    teams_alert_types: Final = [AlertType.llm_exceptions, AlertType.spend_reports]
+    monkeypatch.setattr(ps.proxy_logging_obj.slack_alerting_instance, "alert_types", teams_alert_types)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.get("/get/config/callbacks")
+    assert response.status_code == 200
+    body = response.json()
+
+    assert body["alert_types"] == ["llm_exceptions", "spend_reports"]
+    assert all(alert["name"] != "slack" for alert in body["alerts"])
+
+
 def test_redact_callback_env_vars_helper_handles_none_and_non_secret_keys():
     from litellm.proxy import proxy_server as ps
 
