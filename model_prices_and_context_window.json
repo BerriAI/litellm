@@ -56675,7 +56675,7 @@
     "runwayml/seedance2": {
         "litellm_provider": "runwayml",
         "mode": "video_generation",
-        "output_cost_per_second": 0.36,
+        "output_cost_per_second": 0.3,
         "output_cost_per_second_1080p": 0.4,
         "output_cost_per_second_4k": 1.5,
         "source": "https://docs.dev.runwayml.com/guides/pricing/",
@@ -56687,14 +56687,13 @@
         "supported_output_modalities": [
             "video"
         ],
-        "metadata": {
-            "comment": "36 credits per second at 480p/720p, 40 at 1080p, 150 at 4K @ $0.01 per credit"
-        }
+        "metadata": {"comment":"14/30/40/150 credits per second at 480p/720p/1080p/4K @ $0.01 per credit; 56 credit minimum per generation not modeled"},
+        "output_cost_per_second_480p": 0.14
     },
     "runwayml/seedance2_fast": {
         "litellm_provider": "runwayml",
         "mode": "video_generation",
-        "output_cost_per_second": 0.29,
+        "output_cost_per_second": 0.24,
         "source": "https://docs.dev.runwayml.com/guides/pricing/",
         "supported_modalities": [
             "text",
@@ -56704,14 +56703,13 @@
         "supported_output_modalities": [
             "video"
         ],
-        "metadata": {
-            "comment": "29 credits per second at 480p/720p @ $0.01 per credit = $0.29 per second"
-        }
+        "metadata": {"comment":"11 credits per second at 480p, 24 at 720p @ $0.01 per credit; 44 credit minimum per generation not modeled"},
+        "output_cost_per_second_480p": 0.11
     },
     "runwayml/seedance2_mini": {
         "litellm_provider": "runwayml",
         "mode": "video_generation",
-        "output_cost_per_second": 0.16,
+        "output_cost_per_second": 0.15,
         "source": "https://docs.dev.runwayml.com/guides/pricing/",
         "supported_modalities": [
             "text",
@@ -56721,9 +56719,8 @@
         "supported_output_modalities": [
             "video"
         ],
-        "metadata": {
-            "comment": "16 credits per second @ $0.01 per credit = $0.16 per second; 64 credit minimum per task not modeled"
-        }
+        "metadata": {"comment":"7 credits per second at 480p, 15 at 720p @ $0.01 per credit; 28 credit minimum per generation not modeled"},
+        "output_cost_per_second_480p": 0.07
     },
     "runwayml/seedance2_5": {
         "litellm_provider": "runwayml",
@@ -56848,11 +56845,9 @@
     "runwayml/eleven_multilingual_v2": {
         "litellm_provider": "runwayml",
         "mode": "audio_speech",
-        "input_cost_per_character": 3e-07,
+        "input_cost_per_character": 0.0002,
         "source": "https://docs.dev.runwayml.com/guides/pricing/",
-        "metadata": {
-            "comment": "Estimated cost based on standard TTS pricing. RunwayML uses ElevenLabs models."
-        }
+        "metadata": {"comment":"1 credit per 50 characters @ $0.01 per credit = $0.0002 per character"}
     },
     "fireworks_ai/accounts/fireworks/models/qwen3-coder-480b-a35b-instruct": {
         "max_input_tokens": 262144,
@@ -100443,5 +100438,347 @@
         "supports_tool_choice": true,
         "supports_video_input": true,
         "supports_vision": true
+    },
+    "runwayml/kling2.5_turbo_pro": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"12 credits per second @ $0.01 per credit = $0.12 per second"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.12,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "runwayml/kling3.0_standard": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"13 credits per second with audio, 9 without @ $0.01 per credit; priced at the with-audio rate (audio defaults to true)"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.13,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "runwayml/kling3.0_pro": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"17 credits per second with audio, 12 without @ $0.01 per credit; priced at the with-audio rate (audio defaults to true)"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.17,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "runwayml/kling3.0_4k": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"43 credits per second @ $0.01 per credit = $0.43 per second, with or without audio"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.43,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "runwayml/klingO3_standard": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"13 credits per second @ $0.01 per credit = $0.13 per second; video-to-video is billed per second of the input video, not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.13,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "runwayml/klingO3_pro": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"17 credits per second @ $0.01 per credit = $0.17 per second; video-to-video is billed per second of the input video, not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.17,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "runwayml/klingO3_4k": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"43 credits per second @ $0.01 per credit = $0.43 per second; video-to-video is billed per second of the input video, not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.43,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "runwayml/kling_4_flash": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"9.4 credits per second (720p) without input video @ $0.01 per credit = $0.094 per second; the with-input-video rate (6.3 credits per output second plus 6.3 per second of the greater of input and output duration), rounding up to the next credit and the 29 credit minimum are not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.094,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "runwayml/wan3": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"5/10/20 credits per second at 480p/720p/1080p @ $0.01 per credit"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "output_cost_per_second_1080p": 0.2,
+        "output_cost_per_second_480p": 0.05,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "runwayml/wan3_prime": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"6.8/14/28 credits per second at 480p/720p/1080p @ $0.01 per credit"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.14,
+        "output_cost_per_second_1080p": 0.28,
+        "output_cost_per_second_480p": 0.068,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "runwayml/grok_imagine_1_5": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"10/16/29 credits per second at 480p/720p/1080p @ $0.01 per credit; 1 credit per image or audio reference not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.16,
+        "output_cost_per_second_1080p": 0.29,
+        "output_cost_per_second_480p": 0.1,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "runwayml/grok_imagine_1_5_lite": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"2/3/14 credits per second at 480p/720p/1080p @ $0.01 per credit; 1 credit for an image-to-video start frame not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.03,
+        "output_cost_per_second_1080p": 0.14,
+        "output_cost_per_second_480p": 0.02,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "runwayml/h3_max": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"8 credits per second at 768p, 5 at 480p @ $0.01 per credit"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.08,
+        "output_cost_per_second_480p": 0.05,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "runwayml/happyhorse_1_0": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"15 credits per second at 720p, 30 at 1080p @ $0.01 per credit"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.15,
+        "output_cost_per_second_1080p": 0.3,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "runwayml/gemini_omni_flash_1.2": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"7/10/21 credits per second at 720p/1080p/4K @ $0.01 per credit; the 360p rate (2 credits per second), 1 credit per reference image or keyframe, 1 credit per second of input video and the 6 credit minimum per request are not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.07,
+        "output_cost_per_second_1080p": 0.1,
+        "output_cost_per_second_4k": 0.21,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "runwayml/gemini_omni_flash_1.1": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"10/15/30 credits per second at 720p/1080p/4K @ $0.01 per credit; the 360p rate (3.4 credits per second), 1 credit per reference image and 1 credit per second of input video are not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "output_cost_per_second_1080p": 0.15,
+        "output_cost_per_second_4k": 0.3,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "runwayml/muse_image": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"1 credit per image (any resolution) @ $0.01 per credit = $0.01 per image"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "image"
+        ]
+    },
+    "runwayml/seedream5_lite": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"4 credits per image (any resolution) @ $0.01 per credit = $0.04 per image"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "image"
+        ]
+    },
+    "runwayml/seedream5_flash": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"2 credits per image (any resolution) @ $0.01 per credit = $0.02 per image"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.02,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "image"
+        ]
+    },
+    "runwayml/gemini_image3.1_flash_lite": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"4 credits per 1K image @ $0.01 per credit = $0.04 per image"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "image"
+        ]
+    },
+    "runwayml/bria_fibo_edit_1_5": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"5 credits per image @ $0.01 per credit = $0.05 per image"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "image"
+        ]
+    },
+    "runwayml/gemini_2.5_flash": {
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"5 credits per image (any resolution) @ $0.01 per credit = $0.05 per image"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "image"
+        ]
+    },
+    "runwayml/eleven_v3": {
+        "input_cost_per_character": 0.0002,
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"1 credit per 50 characters @ $0.01 per credit = $0.0002 per character; 1 credit minimum not modeled"},
+        "mode": "audio_speech",
+        "source": "https://docs.dev.runwayml.com/guides/pricing/"
+    },
+    "runwayml/eleven_v4": {
+        "input_cost_per_character": 5e-05,
+        "litellm_provider": "runwayml",
+        "metadata": {"comment":"5 credits per 1,000 characters @ $0.01 per credit = $0.00005 per character; 1 credit minimum not modeled"},
+        "mode": "audio_speech",
+        "source": "https://docs.dev.runwayml.com/guides/pricing/"
     }
 }
