@@ -110,7 +110,6 @@ from litellm.router import Router
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     REASONING_EFFORT,
-    ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
 )
 from litellm.types.responses.main import DeleteResponseResult
@@ -398,6 +397,9 @@ async def responses_api(
         # instead of a polling ID that immediately fails in the background task.
         processor = ProxyBaseLLMRequestProcessing(data=data)
         try:
+            # A background request runs after its polling id is returned, so a total_timeout it
+            # cannot apply is refused (or a header one dropped) before the id is handed out.
+            _ = processor.total_timeout_for(request, "aresponses", is_streaming_request=None)
             data, _logging_obj = await processor.common_processing_pre_call_logic(
                 request=request,
                 general_settings=general_settings,
@@ -1706,16 +1708,18 @@ def _missing_responses_param_response(param: str) -> JSONResponse:
 
 def _responses_input_as_token_count_messages(
     input_value: str | ResponseInputParam,
-    instructions: str | None,
+    request_params: Mapping[str, object],
 ) -> tuple[Mapping[str, object], ...]:
     from litellm.responses.litellm_completion_transformation.transformation import (
         LiteLLMCompletionResponsesConfig,
     )
 
-    request_params: Final[ResponsesAPIOptionalRequestParams] = {"instructions": instructions}
     transformed: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
         input=input_value,
-        responses_api_request=request_params,
+        responses_api_request={
+            "instructions": request_params.get("instructions"),
+            "tools": request_params.get("tools"),
+        },
         only_since_compaction=True,
     )
     return tuple(
@@ -1796,10 +1800,7 @@ async def responses_input_tokens(
     try:
         payload: Final[_TokenCountPayload] = {
             "model": model_name,
-            "messages": _responses_input_as_token_count_messages(
-                input_value=input_value,
-                instructions=data.get("instructions"),
-            ),
+            "messages": _responses_input_as_token_count_messages(input_value=input_value, request_params=data),
             "tools": token_fields.get("tools"),
         }
         token_request: Final = TokenCountRequest.model_validate(payload)

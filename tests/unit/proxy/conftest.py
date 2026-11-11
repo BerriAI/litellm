@@ -523,6 +523,7 @@ def postgres_span_names() -> Iterator[Callable[[], Awaitable[tuple[str, ...]]]]:
 def fips_openssl(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_hashlib, "get_fips_mode", lambda: 1)
     monkeypatch.setattr(_hashlib, "scrypt", MagicMock(side_effect=ValueError("[digital envelope routines] unsupported")))
+    monkeypatch.setattr("litellm.proxy.common_utils.encrypt_decrypt_utils._KBKDF_PROPERTIES", None)
 
 
 @pytest.fixture

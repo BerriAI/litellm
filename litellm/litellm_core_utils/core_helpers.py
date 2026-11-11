@@ -113,6 +113,27 @@ _Key = TypeVar("_Key")  # rebind-ok: a TypeVar cannot be Final
 _Value = TypeVar("_Value")  # rebind-ok: a TypeVar cannot be Final
 
 
+INCLUDE_COST_IN_STREAMING_USAGE_HEADER: Final = "x-litellm-include-cost-in-streaming-usage"
+
+
+def proxy_request_headers(container: Mapping[str, object] | None) -> Mapping[str, object] | None:
+    proxy_server_request: Final = as_str_mapping(container.get("proxy_server_request")) if container else None
+    return as_str_mapping(proxy_server_request.get("headers")) if proxy_server_request else None
+
+
+def stream_cost_injection_requested(request_headers: Mapping[str, object] | None) -> bool:
+    """The global include_cost_in_streaming_usage flag or the per-request header asks for usage.cost on streams."""
+    if litellm.include_cost_in_streaming_usage:
+        return True
+    if not request_headers:
+        return False
+    header_value: Final = next(
+        (value for name, value in request_headers.items() if name.lower() == INCLUDE_COST_IN_STREAMING_USAGE_HEADER),
+        None,
+    )
+    return isinstance(header_value, str) and header_value.strip().lower() == "true"
+
+
 def without(
     mapping: Mapping[_Key, _Value], *keys: object
 ) -> dict[_Key, _Value]:  # mutable-ok: a fresh copy the caller owns

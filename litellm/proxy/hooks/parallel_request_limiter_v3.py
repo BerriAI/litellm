@@ -65,6 +65,7 @@ from litellm.litellm_core_utils.token_counter import (
     offload_token_count,
     split_embedding_input_tokens,
 )
+from litellm.litellm_core_utils.total_deadline import total_timeout_held
 from litellm.llms.azure.ptu_capacity import normalized_tokens
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
@@ -78,6 +79,7 @@ from litellm.proxy.auth.budget_throttle import throttled_limit
 from litellm.proxy.common_utils.callback_utils import get_model_group_from_litellm_kwargs
 from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
 from litellm.proxy.common_utils.proxy_rate_limit_error import (
+    PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS,
     ProxyRateLimitError,
     map_v3_rate_limit_type,
 )
@@ -2506,6 +2508,26 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             },
         )
 
+    def _end_user_model_rate_limit_descriptor(
+        self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None
+    ) -> RateLimitDescriptor | None:
+        model: Final = self._rate_limited_model(requested_model)
+        if model is None or not user_api_key_dict.end_user_id:
+            return None
+        tpm_limit: Final = model.limit_in(user_api_key_dict.end_user_model_tpm_limit)
+        rpm_limit: Final = model.limit_in(user_api_key_dict.end_user_model_rpm_limit)
+        if tpm_limit is None and rpm_limit is None:
+            return None
+        return RateLimitDescriptor(
+            key="model_per_end_user",
+            value=f"{user_api_key_dict.end_user_id}:{model.group}",
+            rate_limit={
+                "requests_per_unit": rpm_limit,
+                "tokens_per_unit": tpm_limit,
+                "window_size": self.window_size,
+            },
+        )
+
     def _add_model_per_key_rate_limit_descriptor(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -2998,6 +3020,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 requested_model=candidate,
                 descriptors=descriptors,
             )
+            if (end_user_model := self._end_user_model_rate_limit_descriptor(user_api_key_dict, candidate)) is not None:
+                descriptors.append(end_user_model)
 
         # Per-request-tag rate limits scoped to this key
         self._add_tag_per_key_rate_limit_descriptor(
@@ -3754,6 +3778,27 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if response["overall_code"] == "OK":
             await self._release_parallel_request_slots(acquisition, user_api_key_dict.parent_otel_span)
 
+    async def async_fallback_target_allowed(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        model: str,
+        request_data: Mapping[str, object],
+    ) -> bool:
+        """Reserve the caller's per-model limits on a router fallback target. False when any is exhausted."""
+        data: Final = MappingProxyType({**request_data, "model": model})
+        hidden_stash: Final = _request_stash.set(None)
+        try:
+            built: Final = await self._build_request_rate_limit_descriptors(user_api_key_dict, data, None)
+        finally:
+            _request_stash.reset(hidden_stash)
+        descriptors: Final = [
+            descriptor for descriptor in built if descriptor["key"] in PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS
+        ]
+        if not descriptors:
+            return True
+        response: Final = await self.should_rate_limit(descriptors, parent_otel_span=user_api_key_dict.parent_otel_span)
+        return response["overall_code"] == "OK"
+
     @asynccontextmanager
     async def request_capacity(
         self,
@@ -3801,6 +3846,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 raise cancellation
 
     @with_service_target(RATE_LIMITS_TARGET)
+    @total_timeout_held()
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -4523,26 +4569,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             targets.append(("end_user", user_api_key_end_user_id))
         if user_api_key_organization_id:
             targets.append(("organization", user_api_key_organization_id))
+        model_scope_owners: Final = (
+            ("model_per_key", user_api_key),
+            ("model_per_team", user_api_key_team_id),
+            ("model_per_end_user", f"{user_api_key_end_user_id}" if user_api_key_end_user_id else None),
+            ("model_per_organization", user_api_key_organization_id),
+            ("model_per_project", user_api_key_project_id),
+        )
         if model_group:
             for group in dict.fromkeys(model_groups or (model_group,)):
-                if user_api_key:
-                    targets.append(("model_per_key", f"{user_api_key}:{group}"))
-                if user_api_key_team_id:
-                    targets.append(("model_per_team", f"{user_api_key_team_id}:{group}"))
-                if user_api_key_organization_id:
-                    targets.append(
-                        (
-                            "model_per_organization",
-                            f"{user_api_key_organization_id}:{group}",
-                        )
-                    )
-                if user_api_key_project_id:
-                    targets.append(
-                        (
-                            "model_per_project",
-                            f"{user_api_key_project_id}:{group}",
-                        )
-                    )
+                targets.extend((scope, f"{owner}:{group}") for scope, owner in model_scope_owners if owner)
         if agent_id:
             targets.append(("agent", agent_id))
             if session_id:
