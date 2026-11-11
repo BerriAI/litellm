@@ -1,14 +1,19 @@
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, patch
+from starlette.requests import Request
+from starlette.routing import Route
+
 import litellm
-from litellm.proxy.auth.user_api_key_auth import (
-    _run_post_custom_auth_checks,
-    update_valid_token_with_end_user_params,
-)
 from litellm.proxy._types import (
     LiteLLM_BudgetTable,
     LiteLLM_EndUserTable,
     UserAPIKeyAuth,
+)
+from litellm.proxy.auth.user_api_key_auth import (
+    _run_post_custom_auth_checks,
+    update_valid_token_with_end_user_params,
 )
 
 
@@ -19,6 +24,7 @@ async def test_custom_auth_run_post_custom_auth_checks_without_end_user_id():
     # custom_auth_run_common_checks for custom-auth deployments. The
     # helper itself no longer calls common_checks.
     valid_token = UserAPIKeyAuth(token="test_token")
+    http_request: Final = Request({"type": "http", "method": "POST", "path": "/v1/chat/completions"})
 
     # Default: common_checks should NOT be called inside the helper
     with patch(
@@ -27,7 +33,7 @@ async def test_custom_auth_run_post_custom_auth_checks_without_end_user_id():
         mock_common.return_value = True
         result = await _run_post_custom_auth_checks(
             valid_token=valid_token,
-            request=None,
+            request=http_request,
             request_data={},
             route="/v1/chat/completions",
             parent_otel_span=None,
@@ -50,7 +56,7 @@ async def test_custom_auth_run_post_custom_auth_checks_without_end_user_id():
         mock_common.return_value = True
         result = await _run_post_custom_auth_checks(
             valid_token=valid_token,
-            request=None,
+            request=http_request,
             request_data={},
             route="/v1/chat/completions",
             parent_otel_span=None,
@@ -137,6 +143,7 @@ async def test_custom_auth_defers_end_user_budget_to_common_checks_when_enabled(
     # With custom_auth_run_common_checks set, the wrapper's common_checks()
     # enforces the end-user budget, so the helper must not double-enforce it.
     valid_token = UserAPIKeyAuth(token="test_token", end_user_id="customer-1")
+    http_request: Final = Request({"type": "http", "method": "POST", "path": "/v1/chat/completions"})
     end_user_obj = LiteLLM_EndUserTable(
         user_id="customer-1",
         blocked=False,
@@ -165,7 +172,7 @@ async def test_custom_auth_defers_end_user_budget_to_common_checks_when_enabled(
     ):
         await _run_post_custom_auth_checks(
             valid_token=valid_token,
-            request=None,
+            request=http_request,
             request_data={"model": "gpt-4"},
             route="/v1/chat/completions",
             parent_otel_span=None,
@@ -403,3 +410,106 @@ def test_end_user_budget_tpd_limit_reaches_the_token():
 
     assert result.end_user_rpm_limit == 5
     assert result.end_user_tpd_limit == 750000
+
+
+def test_update_valid_token_loads_per_model_tpm_and_rpm_limits_from_the_customer_budget():
+    valid_token: Final = UserAPIKeyAuth(token="test_token")
+    end_user_params: Final[dict[str, object]] = {
+        "end_user_id": "acme",
+        "end_user_model_tpm_limit": {"gpt-4o": 400000},
+        "end_user_model_rpm_limit": {"gpt-4o": 200},
+    }
+
+    result: Final = update_valid_token_with_end_user_params(valid_token, end_user_params)
+
+    assert result.end_user_model_tpm_limit == {"gpt-4o": 400000}
+    assert result.end_user_model_rpm_limit == {"gpt-4o": 200}
+
+
+def test_update_valid_token_keeps_custom_auth_per_model_limits_when_the_budget_has_none():
+    valid_token: Final = UserAPIKeyAuth(
+        token="test_token",
+        end_user_id="acme",
+        end_user_model_tpm_limit={"gpt-4o": 1000},
+        end_user_model_rpm_limit={"gpt-4o": 10},
+    )
+
+    result: Final = update_valid_token_with_end_user_params(valid_token, {"end_user_id": "acme"})
+
+    assert result.end_user_model_tpm_limit == {"gpt-4o": 1000}
+    assert result.end_user_model_rpm_limit == {"gpt-4o": 10}
+
+
+def test_apply_budget_limits_copies_per_model_limits_onto_end_user_params():
+    from litellm.proxy.auth.user_api_key_auth import _apply_budget_limits_to_end_user_params
+
+    end_user_params: Final[dict[str, object]] = {}
+    budget: Final = LiteLLM_BudgetTable(model_tpm_limit={"gpt-4o": 400000}, model_rpm_limit={"gpt-4o": 200})
+
+    _apply_budget_limits_to_end_user_params(end_user_params, budget, "acme")
+
+    assert end_user_params == {
+        "end_user_model_tpm_limit": {"gpt-4o": 400000},
+        "end_user_model_rpm_limit": {"gpt-4o": 200},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested_model, key_aliases, run_common_checks, expect_enforced",
+    [
+        ("free-key", {"free-key": "free-model"}, True, False),
+        ("free-model", {"free-model": "paid-model"}, True, True),
+        ("free-key", {"free-key": "free-model"}, False, True),
+    ],
+)
+async def test_custom_auth_judges_the_zero_cost_waiver_by_the_key_alias_target(
+    requested_model: str,
+    key_aliases: dict[str, str],
+    run_common_checks: bool,
+    expect_enforced: bool,
+    free_and_paid_router: litellm.Router,
+) -> None:
+    valid_token: Final = UserAPIKeyAuth(
+        token="test_token",
+        aliases=key_aliases,
+        end_user_id="end-user",
+        end_user_model_max_budget={requested_model: {"budget_limit": 1.0, "time_period": "1d"}},
+    )
+    limiter: Final = MagicMock()
+    limiter.is_end_user_within_model_budget = AsyncMock(
+        side_effect=litellm.BudgetExceededError(current_cost=5.0, max_budget=1.0)
+    )
+    http_request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "headers": [],
+            "query_string": b"",
+            "route": Route("/v1/chat/completions", endpoint=lambda request: None),
+        }
+    )
+
+    async def run() -> UserAPIKeyAuth:
+        return await _run_post_custom_auth_checks(
+            valid_token=valid_token,
+            request=http_request,
+            request_data={"model": requested_model},
+            route="/v1/chat/completions",
+            parent_otel_span=None,
+        )
+
+    with (
+        patch("litellm.proxy.proxy_server.llm_router", free_and_paid_router),
+        patch("litellm.proxy.proxy_server.model_max_budget_limiter", limiter),
+        patch("litellm.proxy.proxy_server.general_settings", {"custom_auth_run_common_checks": run_common_checks}),
+    ):
+        if expect_enforced:
+            with pytest.raises(litellm.BudgetExceededError):
+                await run()
+            assert limiter.is_end_user_within_model_budget.await_args.kwargs["model"] == requested_model
+        else:
+            result: Final = await run()
+            assert result.token == "test_token"
+            limiter.is_end_user_within_model_budget.assert_not_awaited()

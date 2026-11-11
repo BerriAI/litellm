@@ -5,7 +5,8 @@ Tests for LiteLLMAnthropicToResponsesAPIAdapter
 
 import json
 import os
-from typing import Any, Dict, Final, List
+from collections.abc import Mapping
+from typing import Any, Dict, Final, List, Literal
 from unittest.mock import MagicMock
 
 import pytest
@@ -20,7 +21,12 @@ from litellm.constants import (
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     encrypted_reasoning_signature,
+)
+from litellm.llms.anthropic.messages.adapters.transformation import (
+    LiteLLMAnthropicMessagesAdapter,
 )
 from litellm.llms.anthropic.messages.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
@@ -44,6 +50,7 @@ def _make_request(**overrides) -> AnthropicMessagesRequest:
 
 
 _ADAPTER = LiteLLMAnthropicToResponsesAPIAdapter()
+_MODEL: Final = "openai/gpt-6.1-sol"
 
 
 # ---------------------------------------------------------------------------
@@ -138,21 +145,23 @@ class TestOutputConfigStructuredOutput:
     }
 
     def test_output_config_format_json_schema_converted(self):
-        """output_config.format.json_schema is converted to OpenAI text.format, defaulting strict to False."""
+        """output_config.format.json_schema becomes strict OpenAI text.format."""
         req = _make_request(output_config={"format": {"type": "json_schema", "schema": self._SCHEMA}})
         kwargs = _ADAPTER.translate_request(req)
         assert "text" in kwargs
         fmt = kwargs["text"]["format"]
         assert fmt["type"] == "json_schema"
         assert fmt["schema"] == self._SCHEMA
-        assert fmt["strict"] is False
+        assert fmt["strict"] is True
         assert fmt["name"] == "structured_output"
 
-    def test_output_config_format_explicit_strict_true_is_preserved(self):
-        """Nested output_config.format with explicit strict=True is preserved."""
-        req = _make_request(output_config={"format": {"type": "json_schema", "schema": self._SCHEMA, "strict": True}})
-        kwargs = _ADAPTER.translate_request(req)
-        assert kwargs["text"]["format"]["strict"] is True
+    @pytest.mark.parametrize("strict", (True, False))
+    def test_output_config_format_explicit_strict_is_preserved(self, strict: bool) -> None:
+        req: Final = _make_request(
+            output_config={"format": {"type": "json_schema", "schema": self._SCHEMA, "strict": strict}}
+        )
+        kwargs: Final = _ADAPTER.translate_request(req)
+        assert kwargs["text"]["format"]["strict"] is strict
 
     def test_output_config_without_format_does_not_set_text(self):
         """output_config with only non-format keys doesn't produce text.format."""
@@ -161,12 +170,12 @@ class TestOutputConfigStructuredOutput:
         assert "text" not in kwargs
 
     def test_output_format_still_works(self):
-        """The original output_format field still takes precedence when present, defaulting strict to False."""
+        """The original output_format field still defaults to strict mode."""
         req = _make_request(output_format={"type": "json_schema", "schema": self._SCHEMA})
         kwargs = _ADAPTER.translate_request(req)
         assert "text" in kwargs
         assert kwargs["text"]["format"]["type"] == "json_schema"
-        assert kwargs["text"]["format"]["strict"] is False
+        assert kwargs["text"]["format"]["strict"] is True
 
     def test_output_format_explicit_strict_false_is_preserved(self):
         """output_format with an explicit strict=False is preserved as False."""
@@ -179,6 +188,23 @@ class TestOutputConfigStructuredOutput:
         req = _make_request(output_format={"type": "json_schema", "schema": self._SCHEMA, "strict": True})
         kwargs = _ADAPTER.translate_request(req)
         assert kwargs["text"]["format"]["strict"] is True
+
+    @pytest.mark.parametrize("format_field", ("output_format", "output_config"))
+    @pytest.mark.parametrize("strict_options", ({}, {"strict": None}))
+    def test_default_strict_matches_messages_to_chat_adapter(
+        self,
+        format_field: Literal["output_format", "output_config"],
+        strict_options: Mapping[str, None],
+    ) -> None:
+        output_format: Final = {"type": "json_schema", "schema": self._SCHEMA, **strict_options}
+        request: Final = _make_request(
+            **{format_field: output_format if format_field == "output_format" else {"format": output_format}}
+        )
+        chat, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(request)
+        responses: Final = _ADAPTER.translate_request(request)
+
+        assert chat["response_format"]["json_schema"]["strict"] is True
+        assert responses["text"]["format"]["strict"] is chat["response_format"]["json_schema"]["strict"]
 
     def test_output_format_takes_precedence_over_output_config(self):
         """output_format takes precedence over output_config.format, for both schema and strict."""
@@ -957,13 +983,13 @@ class TestTranslateThinkingToReasoning:
     """Anthropic thinking param -> Responses API reasoning param."""
 
     def test_budget_high_effort(self):
-        result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 10000})
+        result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 10000}, model=_MODEL)
         # Default (reasoning_auto_summary=False): only effort, no summary
         assert result == {"effort": "high"}
         assert result is not None and "summary" not in result
 
     def test_budget_above_threshold_high_effort(self):
-        result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 50000})
+        result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 50000}, model=_MODEL)
         assert result is not None
         assert result["effort"] == "high"
         assert "summary" not in result
@@ -973,7 +999,8 @@ class TestTranslateThinkingToReasoning:
             {
                 "type": "enabled",
                 "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
-            }
+            },
+            model=_MODEL,
         )
         assert result == {"effort": "medium"}
         assert result is not None and "summary" not in result
@@ -983,13 +1010,14 @@ class TestTranslateThinkingToReasoning:
             {
                 "type": "enabled",
                 "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
-            }
+            },
+            model=_MODEL,
         )
         assert result == {"effort": "low"}
         assert result is not None and "summary" not in result
 
     def test_budget_minimal_effort(self):
-        result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 500})
+        result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 500}, model=_MODEL)
         assert result == {"effort": "minimal"}
         assert result is not None and "summary" not in result
 
@@ -998,7 +1026,8 @@ class TestTranslateThinkingToReasoning:
             {
                 "type": "enabled",
                 "budget_tokens": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
-            }
+            },
+            model=_MODEL,
         )
         assert result_high is not None
         assert result_high["effort"] == "high"
@@ -1006,7 +1035,8 @@ class TestTranslateThinkingToReasoning:
             {
                 "type": "enabled",
                 "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
-            }
+            },
+            model=_MODEL,
         )
         assert result_medium is not None
         assert result_medium["effort"] == "medium"
@@ -1015,23 +1045,24 @@ class TestTranslateThinkingToReasoning:
             {
                 "type": "enabled",
                 "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
-            }
+            },
+            model=_MODEL,
         )
         assert result_low is not None
         assert result_low["effort"] == "low"
         assert "summary" not in result_low
 
     def test_disabled_type_returns_none(self):
-        result = _ADAPTER.translate_thinking_to_reasoning({"type": "disabled"})
+        result = _ADAPTER.translate_thinking_to_reasoning({"type": "disabled"}, model=_MODEL)
         assert result is None
 
     def test_non_dict_returns_none(self):
-        result = _ADAPTER.translate_thinking_to_reasoning("enabled")  # type: ignore
+        result = _ADAPTER.translate_thinking_to_reasoning("enabled", model=_MODEL)  # type: ignore
         assert result is None
 
     def test_missing_budget_defaults_to_minimal(self):
         """Missing budget_tokens defaults to 0, below the low threshold -> minimal."""
-        result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled"})
+        result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled"}, model=_MODEL)
         assert result == {"effort": "minimal"}
         assert result is not None and "summary" not in result
 
@@ -1042,7 +1073,7 @@ class TestTranslateThinkingToReasoning:
         original = litellm.reasoning_auto_summary
         try:
             litellm.reasoning_auto_summary = True
-            result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 10000})
+            result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 10000}, model=_MODEL)
             assert result == {"effort": "high", "summary": "detailed"}
         finally:
             litellm.reasoning_auto_summary = original
@@ -1059,7 +1090,8 @@ class TestTranslateThinkingToReasoning:
                 {
                     "type": "enabled",
                     "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
-                }
+                },
+                model=_MODEL,
             )
             assert result == {"effort": "medium", "summary": "detailed"}
         finally:

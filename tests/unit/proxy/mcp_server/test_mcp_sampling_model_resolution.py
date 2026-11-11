@@ -15,6 +15,7 @@ import pytest
 from litellm.proxy.mcp_server.sampling_handler import (
     _resolve_model_from_preferences,
 )
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
 def _prefs(*, hints=None, cost=None, speed=None, intelligence=None):
@@ -41,7 +42,7 @@ class TestHintMatching:
 
     @patch("litellm.model_list", None)
     def test_should_use_router_model_names(self):
-        router = MagicMock()
+        router = route_entry_points_to_stubs(MagicMock())
         router.get_model_names.return_value = ["router-gpt", "router-claude"]
         with patch("litellm.proxy.proxy_server.llm_router", router):
             prefs = _prefs(hints=[SimpleNamespace(name="router-claude")])

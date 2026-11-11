@@ -13,6 +13,7 @@ litellm-config = { path = "crates/config" }
 litellm-error = { path = "crates/error" }
 litellm-router = { path = "crates/router" }
 litellm-router-types = { path = "crates/router-types" }
+litellm-router-core = { path = "crates/router-core" }
 litellm-tracing = { path = "crates/tracing" }
 litellm-spend-clickhouse = { path = "crates/spend-clickhouse" }
 litellm-storage-clickhouse = { path = "crates/storage-clickhouse" }
@@ -25,6 +26,7 @@ litellm-inference-ocr = { path = "crates/inference-ocr" }
 litellm-inference-testing = { path = "crates/inference-testing" }
 litellm-gateway-mcp = { path = "crates/gateway-mcp" }
 litellm-gateway = { path = "crates/gateway" }
+litellm-gateway-forward = { path = "crates/gateway-forward" }
 litellm-gateway-inference = { path = "crates/gateway-inference" }
 litellm-gateway-auth = { path = "crates/gateway-auth" }
 litellm-gateway-management = { path = "crates/gateway-management" }
@@ -37,6 +39,7 @@ litellm-callbacks-legacy-python = { path = "crates/callbacks-legacy-python" }
 litellm-framer = { path = "crates/framer" }
 litellm-auth = { path = "crates/auth" }
 litellm-auth-types = { path = "crates/auth-types" }
+litellm-secret-value = { path = "crates/secret-value" }
 litellm-auth-aws = { path = "crates/auth-aws" }
 litellm-auth-azure = { path = "crates/auth-azure" }
 litellm-auth-gcp = { path = "crates/auth-gcp" }
@@ -56,11 +59,10 @@ litellm-db-testing = { path = "crates/db-testing" }
 litellm-cache = { path = "crates/cache" }
 litellm-cache-azure-blob = { path = "crates/cache-azure-blob" }
 litellm-cache-memory = { path = "crates/cache-memory" }
-litellm-cache-redis = { path = "crates/cache-redis" }
 litellm-cache-s3 = { path = "crates/cache-s3" }
+litellm-s3 = { path = "crates/s3" }
 litellm-cache-gcs = { path = "crates/cache-gcs" }
 litellm-cache-disk = { path = "crates/cache-disk" }
-litellm-cache-redis-semantic = { path = "crates/cache-redis-semantic" }
 litellm-cache-response = { path = "crates/cache-response" }
 litellm-cache-qdrant-semantic = { path = "crates/cache-qdrant-semantic" }
 litellm-cache-testing = { path = "crates/cache-testing" }
@@ -72,17 +74,25 @@ litellm-host-python = { path = "crates/host-python" }
 litellm-python-compat = { path = "crates/python-compat" }
 litellm-circuit-breaker = { path = "crates/circuit-breaker" }
 litellm-redis-client = { path = "crates/redis-client" }
+litellm-redis-connect = { path = "crates/redis-connect" }
+litellm-redis-store = { path = "crates/redis-store" }
 litellm-redis-testing = { path = "crates/redis-testing" }
+litellm-redis-resolve = { path = "crates/redis-resolve" }
+litellm-redis-types = { path = "crates/redis-types" }
 litellm-cost = { path = "crates/cost" }
 litellm-model-catalog = { path = "crates/model-catalog" }
 litellm-model-catalog-refresh = { path = "crates/model-catalog-refresh" }
 
+arc-swap = "1.9.2"
+async-trait = "0.1.91"
 askama = { version = "0.16.1", default-features = false, features = ["derive", "std"] }
 tracing = "0.1"
 axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio", "multipart"] }
 axum-login = "0.18.0"
 tower-sessions = { version = "0.14.0", features = ["memory-store"] }
 bytes = "1"
+backon = { version = "1.6.0", default-features = false, features = ["std", "tokio-sleep"] }
+aws-sdk-s3 = { version = "1.146.1", default-features = false, features = ["rt-tokio"] }
 http = "1"
 google-cloud-auth = { version = "1.16.0", default-features = false }
 jsonwebtoken = { version = "11.1.0", default-features = false }
@@ -96,7 +106,6 @@ macro_rules_attribute = "0.2.3"
 schemars = "1"
 reqwest = { version = "0.13", default-features = false, features = ["json", "multipart", "rustls", "http2", "stream", "query"] }
 redis = "1.8.0"
-redis-test = "1.0.4"
 testcontainers-modules = "0.15.0"
 qdrant-client = { version = "1.19.0", default-features = false }
 uuid = { version = "1", features = ["v4"] }
@@ -152,3 +161,9 @@ panic = "unwind"
 debug = false
 incremental = false
 strip = "symbols"
+
+[profile.ci]
+inherits = "release"
+opt-level = 0
+lto = false
+codegen-units = 256

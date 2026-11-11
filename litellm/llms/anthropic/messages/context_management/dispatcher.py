@@ -8,6 +8,7 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.types.llms.anthropic import AppliedEdit
 
+from ..convertible_blocks import drop_non_string_tool_result_texts
 from .constants import CLEAR_TOOL_USES_EDIT_TYPE, COMPACT_EDIT_TYPE
 from .editors import (
     CheckedEdit,
@@ -103,7 +104,7 @@ async def apply_context_management(
 
     Every ``clear_tool_uses_20250919`` edit is validated before any editor runs, so a malformed one raises its 400
     before a ``compact_20260112`` summary call is paid for, or runs without its malformed fields under
-    ``drop_invalid_edits``.
+    ``drop_invalid_edits``, which also drops non-string ``tool_result`` text first, as the provider never receives it.
 
     The dispatcher is async so async editors (``compact_20260112``) can
     ``await`` the configured summarization model. Sync editors run in a
@@ -119,7 +120,7 @@ async def apply_context_management(
         raise first_error
     well_formed_edits: Final = tuple(check.edit for check in checked)
 
-    current_messages = messages
+    current_messages = list(drop_non_string_tool_result_texts(messages, drop_invalid_edits))
     current_system = system
     aggregated_applied: Final[list[AppliedEdit]] = []
     aggregated_compaction_block = None
