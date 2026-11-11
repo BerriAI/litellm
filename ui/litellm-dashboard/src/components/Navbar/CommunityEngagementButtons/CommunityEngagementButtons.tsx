@@ -5,23 +5,25 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { cn } from "@/lib/cva.config";
 import { Github, Slack } from "lucide-react";
 import React from "react";
+import { useTranslation } from "react-i18next";
 
 const COMMUNITY_LINKS = [
   {
     href: "https://www.litellm.ai/support",
-    label: "Join Slack",
-    tooltip: "LiteLLM Slack community",
+    label: "shell.communityButtons.slackLabel",
+    tooltip: "shell.communityButtons.slackTooltip",
     Icon: Slack,
   },
   {
     href: "https://github.com/BerriAI/litellm",
-    label: "LiteLLM on GitHub",
-    tooltip: "LiteLLM on GitHub",
+    label: "shell.communityButtons.githubLabel",
+    tooltip: "shell.communityButtons.githubTooltip",
     Icon: Github,
   },
 ] as const;
 
 export const CommunityEngagementButtons: React.FC = () => {
+  const { t } = useTranslation();
   const disableShowPrompts = useDisableShowPrompts();
 
   if (disableShowPrompts) {
@@ -30,7 +32,7 @@ export const CommunityEngagementButtons: React.FC = () => {
 
   return (
     <TooltipProvider>
-      <ButtonGroup aria-label="Community links">
+      <ButtonGroup aria-label={t("shell.communityButtons.label")}>
         {COMMUNITY_LINKS.map(({ href, label, tooltip, Icon }) => (
           <Tooltip key={href}>
             <TooltipTrigger
@@ -39,14 +41,14 @@ export const CommunityEngagementButtons: React.FC = () => {
                   href={href}
                   target="_blank"
                   rel="noopener noreferrer"
-                  aria-label={label}
+                  aria-label={t(label)}
                   className={cn(buttonVariants({ variant: "outline", size: "icon" }), "text-muted-foreground")}
                 />
               }
             >
               <Icon />
             </TooltipTrigger>
-            <TooltipContent>{tooltip}</TooltipContent>
+            <TooltipContent>{t(tooltip)}</TooltipContent>
           </Tooltip>
         ))}
       </ButtonGroup>

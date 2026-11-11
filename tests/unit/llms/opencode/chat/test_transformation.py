@@ -14,6 +14,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import RESPONSE_COST_HEADER
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.llms.opencode.chat.transformation import OpenCodeGoMessagesChatConfig
 from litellm.llms.opencode.common_utils import go_headers
 
 
@@ -354,6 +355,17 @@ def test_gemini_custom_base_normalizes_version_and_models(go_catalog: None, suff
         assert response.choices[0].message.content == "hello"
 
 
+def test_gemini_hosted_mcp_error_names_the_opencode_go_route(go_catalog: None) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match="fixture-gemini on opencode_go cannot run"):
+        litellm.completion(
+            model="opencode_go/fixture-gemini",
+            api_key="fake-go-key",
+            api_base="https://gateway.example/google",
+            messages=[{"role": "user", "content": "hello"}],
+            tools=[{"type": "mcp", "server_label": "deepwiki", "server_url": "https://mcp.deepwiki.com/mcp"}],
+        )
+
+
 def test_gemini_sync_stream_preserves_tool_calls_and_usage(go_catalog: None) -> None:
     chunk: Final = {
         "candidates": [
@@ -580,3 +592,22 @@ def test_stream_chunk_builder_reads_list_cost_from_dict_chunks():
 
     assert assembled is not None
     assert assembled._hidden_params["response_cost"] == GO_REPORTED_USAGE["opencode"]["list_cost"]
+
+
+@pytest.mark.parametrize(("model", "cache_marks"), [("qwen3.8-flash", 0), ("minimax-m3", 0), ("claude-haiku-5-5", 4)])
+def test_go_messages_route_carries_prompt_cache_breakpoint_to_cache_control_only_for_claude(model: str, cache_marks: int):
+    marked_notes: Final = [
+        {"type": "text", "text": f"Note {n}", "prompt_cache_breakpoint": {"mode": "explicit"}} for n in range(4)
+    ]
+
+    request: Final = OpenCodeGoMessagesChatConfig().transform_request(
+        model=model,
+        messages=[{"role": "user", "content": [*marked_notes, {"type": "text", "text": "Answer in one line."}]}],
+        optional_params={"max_tokens": 64},
+        litellm_params={},
+        headers={},
+    )
+
+    wire: Final = json.dumps(request)
+    assert wire.count('"cache_control"') == cache_marks
+    assert "prompt_cache_breakpoint" not in wire

@@ -10,6 +10,8 @@ from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils import batch_utils as core_batch_utils
+from litellm.litellm_core_utils.cloud_storage_security import stored_s3_bucket_kwargs
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
 from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
@@ -38,8 +40,8 @@ class BatchCostUsageResult:
     completion_cost: float = 0.0
 
 
-_COMPLETED_BATCH_STATUSES: Final = frozenset({"completed", "complete"})
 _DECODED_BATCH_LINE: Final = TypeAdapter(object)
+batch_cost_is_final: Final = core_batch_utils.batch_cost_is_final
 
 
 def _uses_native_vertex_output(
@@ -52,26 +54,6 @@ def _uses_native_vertex_output(
     if model_name and litellm.disable_vertex_batch_output_transformation:
         return True
     return first_row is not None and is_native_vertex_batch_output_row(first_row)
-
-
-_TERMINAL_BATCH_STATUSES: Final = _COMPLETED_BATCH_STATUSES | frozenset({"failed", "cancelled", "expired"})
-
-
-def batch_cost_is_final(batch: Batch) -> bool:
-    """Whether this retrieve of the batch is the one to account its cost from.
-
-    A batch still in flight has nothing to price, and a "completed" batch can report
-    no output_file_id for a moment before the output populates; pricing either records
-    $0 under the batch's single spend row and pins it there. Final means a completed
-    batch whose output file has arrived or whose counts prove no line succeeded, or
-    any other terminal status (failed, cancelled, expired).
-    """
-    if batch.status not in _TERMINAL_BATCH_STATUSES:
-        return False
-    if batch.status not in _COMPLETED_BATCH_STATUSES or batch.output_file_id is not None:
-        return True
-    request_counts: Final = batch.request_counts
-    return request_counts is not None and request_counts.total > 0 and request_counts.completed == 0
 
 
 async def calculate_batch_cost_and_usage(
@@ -570,7 +552,7 @@ async def fetch_batch_managed_file_content(
         "file_id": provider_output_file_id,
         "custom_llm_provider": custom_llm_provider,
         **cast(  # cast-ok: preserve dynamic provider credentials without validation
-            FileContentCallOptions, credentials
+            FileContentCallOptions, {**credentials, **stored_s3_bucket_kwargs(provider_output_file_id)}
         ),
     }
 
@@ -660,9 +642,11 @@ def extract_file_access_credentials(
             "bucket_name",
             "s3_endpoint_url",
             "s3_region_name",
+            "s3_bucket_name",
+            "s3_output_bucket_name",
+            "allow_legacy_cloud_file_ids",
             "timeout",
             "max_retries",
-            "_litellm_internal_model_credentials",
             *AWS_CREDENTIAL_KWARGS_KEYS,
             # A federated deployment holds no api_key, so without these the fetch that reads a
             # finished batch's output has nothing to authenticate with and its cost is never billed.

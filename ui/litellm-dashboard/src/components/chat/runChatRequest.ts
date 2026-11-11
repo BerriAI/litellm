@@ -1,4 +1,6 @@
 import OpenAI from "openai";
+import type { TFunction } from "i18next";
+import i18n from "@/i18n/i18n";
 import { makeOpenAIResponsesRequest } from "@/components/llm_calls/responses_api";
 import { backgroundResponseUpdate } from "./backgroundChat";
 import { generateChatImages } from "./imageHelpers";
@@ -30,30 +32,34 @@ function requestErrorMessage(
   messages: ChatRequestOptions["messages"],
   mode: ChatRequestOptions["mode"],
 ): string {
-  const message = error instanceof Error ? error.message : "Something went wrong. Please try again.";
+  const t = i18n.getFixedT("en");
+  const message = error instanceof Error ? error.message : t("chat.runChatRequest.genericError");
   const hasFile =
     mode === "chat" && messages.some((item) => item.attachments?.some((attachment) => attachment.kind === "file"));
   const fileRejectionStatus = error instanceof OpenAI.APIError && (error.status === 400 || error.status === 422);
   if (hasFile && fileRejectionStatus) {
-    return message + " Try a model that supports file inputs, or paste the relevant text.";
+    return message + t("chat.runChatRequest.fileInputHint");
   }
   return message;
 }
 
-export async function runChatRequest({
-  model,
-  mode,
-  prompt,
-  accessToken,
-  signal,
-  messages,
-  previousResponseId,
-  background = false,
-  research = false,
-  mcpServers,
-  onResponseId,
-  onUpdate,
-}: ChatRequestOptions): Promise<void> {
+export async function runChatRequest(
+  {
+    model,
+    mode,
+    prompt,
+    accessToken,
+    signal,
+    messages,
+    previousResponseId,
+    background = false,
+    research = false,
+    mcpServers,
+    onResponseId,
+    onUpdate,
+  }: ChatRequestOptions,
+  t: TFunction = i18n.t.bind(i18n),
+): Promise<void> {
   let content = "";
   let reasoningContent = "";
   const mcpEvents: MCPEvent[] = [];
@@ -61,7 +67,7 @@ export async function runChatRequest({
   try {
     signal.throwIfAborted();
     if (research && !background) {
-      onUpdate({ content: "Enable background chats before starting deep research." });
+      onUpdate({ content: i18n.getFixedT("en")("chat.runChatRequest.researchNeedsBackground") });
       return;
     }
     if (mode === "image") {
@@ -110,7 +116,7 @@ export async function runChatRequest({
       background
         ? (response) => {
             onResponseId(null);
-            onUpdate(backgroundResponseUpdate(response));
+            onUpdate(backgroundResponseUpdate(response, t));
           }
         : undefined,
       research ? { instructions: RESEARCH_INSTRUCTIONS } : undefined,

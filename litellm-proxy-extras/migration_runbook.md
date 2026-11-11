@@ -141,7 +141,8 @@ which columns the old Prisma client selects and writes, so dropping a column tha
 declared is `info`, and dropping one it does declare is `breaking`. The source tree at `--base`
 holds the raw `SELECT <alias>.*` queries whose plans go stale. The report's footnote names both.
 
-`create-release.yml` runs this and puts the result at the top of the release body. To see it for
+Manually dispatch `migration-impact.yml` to add the report to the workflow summary. Reports are
+not added to release bodies automatically. To see it for
 any pair of versions yourself:
 
 ```bash

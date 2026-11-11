@@ -17,18 +17,20 @@ import {
   ComboboxValue,
   useComboboxAnchor,
 } from "@/components/ui/combobox";
+import type { TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Team } from "@/components/key_team_helpers/key_list";
 import { splitWildcardModels } from "./modelUtils";
 
 const MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE = {
-  label: "All Proxy Models",
+  labelKey: "modelSelect.specialOptions.allProxyModels",
   value: "all-proxy-models",
 } as const;
 
 const MODEL_SELECT_NO_DEFAULT_MODELS_SPECIAL_VALUE = {
-  label: "No Default Models",
+  labelKey: "modelSelect.specialOptions.noDefaultModels",
   value: "no-default-models",
 } as const;
 
@@ -137,14 +139,16 @@ const unavailableGroups = (
   selectedOptions: ModelOption[],
   offeredByValue: Map<string, ModelOption>,
   offeredListKnown: boolean,
+  t: TFunction,
 ): ModelOptionGroup[] => {
   if (!offeredListKnown) return [];
   const items = selectedOptions.filter((option) => !offeredByValue.has(option.value));
   if (items.length === 0) return [];
-  return [{ label: "Unavailable", items }];
+  return [{ label: t("modelSelect.groups.unavailable"), items }];
 };
 
 export const ModelSelect = (props: ModelSelectProps) => {
+  const { t } = useTranslation();
   const anchor = useComboboxAnchor();
   const { id, teamID, organizationID, options, context, dataTestId, value = [], onChange, style } = props;
   const { showAllProxyModelsOverride, includeSpecialOptions } = options || {};
@@ -186,12 +190,12 @@ export const ModelSelect = (props: ModelSelectProps) => {
     ...(includeSpecialOptions
       ? [
           {
-            label: "Special Options",
+            label: t("modelSelect.groups.special"),
             items: [
               ...(shouldShowAllProxyModels
                 ? [
                     {
-                      label: MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.label,
+                      label: t(MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.labelKey),
                       value: MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value,
                       disabled:
                         value.length > 0 &&
@@ -202,7 +206,7 @@ export const ModelSelect = (props: ModelSelectProps) => {
                   ]
                 : []),
               {
-                label: MODEL_SELECT_NO_DEFAULT_MODELS_SPECIAL_VALUE.label,
+                label: t(MODEL_SELECT_NO_DEFAULT_MODELS_SPECIAL_VALUE.labelKey),
                 value: MODEL_SELECT_NO_DEFAULT_MODELS_SPECIAL_VALUE.value,
                 disabled:
                   value.length > 0 &&
@@ -215,13 +219,13 @@ export const ModelSelect = (props: ModelSelectProps) => {
     ...(wildcard.length > 0
       ? [
           {
-            label: "Wildcard Options",
+            label: t("modelSelect.groups.wildcard"),
             items: wildcard.map((model) => {
               const provider = model.replace("/*", "");
               const capitalizedProvider = provider.charAt(0).toUpperCase() + provider.slice(1);
 
               return {
-                label: `All ${capitalizedProvider} models`,
+                label: t("modelSelect.wildcardOption", { provider: capitalizedProvider }),
                 value: model,
                 disabled: hasSpecialOptionSelected,
               };
@@ -230,7 +234,7 @@ export const ModelSelect = (props: ModelSelectProps) => {
         ]
       : []),
     {
-      label: "Models",
+      label: t("modelSelect.groups.models"),
       items: regular.map((model) => ({
         label: model,
         value: model,
@@ -240,15 +244,17 @@ export const ModelSelect = (props: ModelSelectProps) => {
   ];
 
   const offeredByValue = new Map(offeredGroups.flatMap((group) => group.items).map((option) => [option.value, option]));
-  const selectedOptions = value.map(
-    (v) =>
-      offeredByValue.get(v) ?? MODEL_SENTINEL_OPTIONS.find((option) => option.value === v) ?? { label: v, value: v },
-  );
+  const sentinelOption = (v: string): ModelOption | undefined => {
+    const sentinel = MODEL_SENTINEL_OPTIONS.find((option) => option.value === v);
+    return sentinel === undefined ? undefined : { label: t(sentinel.labelKey), value: sentinel.value };
+  };
+  const selectedOptions = value.map((v) => offeredByValue.get(v) ?? sentinelOption(v) ?? { label: v, value: v });
   const groups: ModelOptionGroup[] = [
     ...unavailableGroups(
       selectedOptions,
       offeredByValue,
       isOfferedListKnown(allProxyModels !== undefined, context, organizationID, organizationModels),
+      t,
     ),
     ...offeredGroups,
   ];
@@ -275,19 +281,24 @@ export const ModelSelect = (props: ModelSelectProps) => {
                 ))}
                 {overflowOptions.length > 0 && (
                   <Tooltip>
-                    <TooltipTrigger
-                      render={<span className="px-1 text-xs text-muted-foreground" />}
-                    >{`+${overflowOptions.length} more`}</TooltipTrigger>
+                    <TooltipTrigger render={<span className="px-1 text-xs text-muted-foreground" />}>
+                      {t("modelSelect.moreSelected", { count: overflowOptions.length })}
+                    </TooltipTrigger>
                     <TooltipContent>{overflowOptions.map((option) => option.value).join(", ")}</TooltipContent>
                   </Tooltip>
                 )}
               </>
             )}
           </ComboboxValue>
-          <ComboboxChipsInput id={id} placeholder="Select Models" aria-label="Select Models" className="min-w-24" />
+          <ComboboxChipsInput
+            id={id}
+            placeholder={t("modelSelect.placeholder")}
+            aria-label={t("modelSelect.placeholder")}
+            className="min-w-24"
+          />
         </ComboboxChips>
         <ComboboxContent anchor={anchor}>
-          <ComboboxEmpty>No models found</ComboboxEmpty>
+          <ComboboxEmpty>{t("modelSelect.empty")}</ComboboxEmpty>
           <ComboboxList>
             {(group: ModelOptionGroup) => (
               <ComboboxGroup key={group.label} items={group.items}>

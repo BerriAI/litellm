@@ -1,8 +1,11 @@
 from typing import TYPE_CHECKING, Any, Final
 
 import orjson
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.auth.auth_utils import video_access_group
+from litellm.proxy.openai_files_endpoints.common_utils import authorize_model_for_key
 from litellm.types.videos.main import DecodedVideoId, VideoObject
 from litellm.types.videos.utils import (
     decode_video_id_with_provider,
@@ -13,6 +16,8 @@ from litellm.types.videos.utils import (
 
 if TYPE_CHECKING:
     from litellm.router import Router
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def extract_model_from_target_model_names(target_model_names: object) -> str | None:
@@ -30,7 +35,7 @@ def video_reference_to_id(video_ref: object) -> str:
     if not isinstance(video_ref, str):
         return ""
     try:
-        parsed_ref: Final = orjson.loads(video_ref)
+        parsed_ref: Final = _DECODED_JSON.validate_python(orjson.loads(video_ref))
     except orjson.JSONDecodeError:
         return video_ref
     return parsed_ref.get("id", "") if isinstance(parsed_ref, dict) else video_ref
@@ -44,7 +49,7 @@ def get_custom_provider_from_data(data: dict[str, Any]) -> str | None:
     extra_body = data.get("extra_body")
     if isinstance(extra_body, str):
         try:
-            parsed_extra_body: Final = orjson.loads(extra_body)
+            parsed_extra_body: Final = _DECODED_JSON.validate_python(orjson.loads(extra_body))
             if isinstance(parsed_extra_body, dict):
                 extra_body = parsed_extra_body
         except Exception:
@@ -118,6 +123,20 @@ def video_model_group(decoded: DecodedVideoId, llm_router: "Router | None") -> s
     ):
         return resolved
     return creating_group
+
+
+async def authorized_video_model(
+    decoded: DecodedVideoId, llm_router: "Router | None", user_api_key_dict: UserAPIKeyAuth
+) -> str | None:
+    model: Final = video_model_group(decoded, llm_router)
+    if model is None:
+        return None
+    await authorize_model_for_key(
+        model_id=video_access_group(decoded, llm_router, resolved_model=model) or model,
+        llm_router=llm_router,
+        user_api_key_dict=user_api_key_dict,
+    )
+    return model
 
 
 def fallback_requested_model(requested_model: str | None, response: object, llm_router: "Router | None") -> str | None:

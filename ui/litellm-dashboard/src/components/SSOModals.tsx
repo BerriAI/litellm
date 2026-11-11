@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { FormProvider, useWatch, type UseFormReturn } from "react-hook-form";
+import { useTranslation } from "react-i18next";
 import { getSSOSettings, updateSSOSettings } from "./networking";
-import { CLEARED_SSO_SETTINGS, diffSSOSettingsPayload } from "./Settings/AdminSettings/SSOSettings/utils";
+import { CLEARED_SSO_SETTINGS } from "./Settings/AdminSettings/SSOSettings/utils";
 import { toast } from "@/lib/toast";
 import { parseErrorMessage } from "./shared/errorUtils";
 import { Button } from "@/components/ui/button";
@@ -13,6 +14,7 @@ import {
   ProxyBaseUrlField,
   RoleMappingTeamFields,
   SSOProviderSelectField,
+  buildSSOSettingsPatch,
   emptySSOSettingsFormValues,
   renderProviderFields,
   submitMountedSSOValues,
@@ -110,6 +112,7 @@ const SSOModals: React.FC<SSOModalsProps> = ({
   accessToken,
   ssoConfigured = false, // Default to false if not provided
 }) => {
+  const { t } = useTranslation();
   const [isClearConfirmModalVisible, setIsClearConfirmModalVisible] = useState(false);
   const provider = useWatch({ control: form.control, name: "sso_provider" });
   const useRoleMappings = useWatch({ control: form.control, name: "use_role_mappings" });
@@ -184,14 +187,16 @@ const SSOModals: React.FC<SSOModalsProps> = ({
   // Enhanced form submission handler
   const handleFormSubmit = async (formValues: SSOSettingsFormValues) => {
     if (!accessToken) {
-      toast.fromError("No access token available");
+      toast.fromError(t("adminPanel.ssoModals.toasts.noAccessToken"));
       return;
     }
 
     try {
-      const payload = diffSSOSettingsPayload(
-        buildLegacySSOPayload({ ...emptySSOSettingsFormValues, ...form.formState.defaultValues }),
-        buildLegacySSOPayload(formValues),
+      const payload = buildSSOSettingsPatch(
+        { ...emptySSOSettingsFormValues, ...form.formState.defaultValues },
+        formValues,
+        "admin-panel",
+        buildLegacySSOPayload,
       );
 
       // Save SSO settings using the new API
@@ -200,14 +205,14 @@ const SSOModals: React.FC<SSOModalsProps> = ({
       // Continue with the original flow (show instructions)
       handleShowInstructions(formValues);
     } catch (error: unknown) {
-      toast.fromError("Failed to save SSO settings: " + parseErrorMessage(error));
+      toast.fromError(t("adminPanel.ssoModals.toasts.saveFailed", { error: parseErrorMessage(error) }));
     }
   };
 
   // Handle clearing SSO settings
   const handleClearSSO = async () => {
     if (!accessToken) {
-      toast.fromError("No access token available");
+      toast.fromError(t("adminPanel.ssoModals.toasts.noAccessToken"));
       return;
     }
 
@@ -223,10 +228,10 @@ const SSOModals: React.FC<SSOModalsProps> = ({
       // Close the main SSO modal and trigger refresh
       handleAddSSOOk();
 
-      toast.success("SSO settings cleared successfully");
+      toast.success(t("adminPanel.ssoModals.toasts.clearSuccess"));
     } catch (error) {
       console.error("Failed to clear SSO settings:", error);
-      toast.fromError("Failed to clear SSO settings");
+      toast.fromError(t("adminPanel.ssoModals.toasts.clearFailed"));
     }
   };
 
@@ -236,7 +241,9 @@ const SSOModals: React.FC<SSOModalsProps> = ({
       <Dialog open={isAddSSOModalVisible} onOpenChange={(open) => !open && handleAddSSOCancel()}>
         <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[800px]">
           <DialogHeader>
-            <DialogTitle>{ssoConfigured ? "Edit SSO Settings" : "Add SSO"}</DialogTitle>
+            <DialogTitle>
+              {ssoConfigured ? t("adminPanel.ssoModals.titleEdit") : t("adminPanel.ssoModals.titleAdd")}
+            </DialogTitle>
           </DialogHeader>
           <FormProvider {...form}>
             <form
@@ -250,7 +257,9 @@ const SSOModals: React.FC<SSOModalsProps> = ({
                 {provider ? renderProviderFields(provider) : null}
                 <ProxyAdminEmailField />
                 <ProxyBaseUrlField />
-                {showRoleMappingToggle && <MappingToggleField name="use_role_mappings" label="Use Role Mappings" />}
+                {showRoleMappingToggle && (
+                  <MappingToggleField name="use_role_mappings" label={t("adminPanel.ssoModals.useRoleMappings")} />
+                )}
                 {useRoleMappings && (
                   <>
                     <GroupClaimField />
@@ -261,10 +270,10 @@ const SSOModals: React.FC<SSOModalsProps> = ({
               <div className="mt-4 flex items-center justify-end gap-2">
                 {ssoConfigured && (
                   <Button type="button" variant="secondary" onClick={() => setIsClearConfirmModalVisible(true)}>
-                    Clear
+                    {t("adminPanel.ssoModals.clear")}
                   </Button>
                 )}
-                <Button type="submit">Save</Button>
+                <Button type="submit">{t("adminPanel.ssoModals.save")}</Button>
               </div>
             </form>
           </FormProvider>
@@ -275,16 +284,16 @@ const SSOModals: React.FC<SSOModalsProps> = ({
       <Dialog open={isClearConfirmModalVisible} onOpenChange={(open) => !open && setIsClearConfirmModalVisible(false)}>
         <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Confirm Clear SSO Settings</DialogTitle>
+            <DialogTitle>{t("adminPanel.ssoModals.clearConfirm.title")}</DialogTitle>
           </DialogHeader>
-          <p>Are you sure you want to clear all SSO settings? This action cannot be undone.</p>
-          <p>Users will no longer be able to login using SSO after this change.</p>
+          <p>{t("adminPanel.ssoModals.clearConfirm.message")}</p>
+          <p>{t("adminPanel.ssoModals.clearConfirm.warning")}</p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsClearConfirmModalVisible(false)}>
-              Cancel
+              {t("adminPanel.ssoModals.clearConfirm.cancel")}
             </Button>
             <Button onClick={handleClearSSO} variant="destructive">
-              Yes, Clear
+              {t("adminPanel.ssoModals.clearConfirm.confirm")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -293,16 +302,16 @@ const SSOModals: React.FC<SSOModalsProps> = ({
       <Dialog open={isInstructionsModalVisible} onOpenChange={(open) => !open && handleInstructionsCancel()}>
         <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[800px]">
           <DialogHeader>
-            <DialogTitle>SSO Setup Instructions</DialogTitle>
+            <DialogTitle>{t("adminPanel.ssoModals.instructions.title")}</DialogTitle>
           </DialogHeader>
-          <p>Follow these steps to complete the SSO setup:</p>
-          <p className="text-sm mt-2">1. DO NOT Exit this TAB</p>
-          <p className="text-sm mt-2">2. Open a new tab, visit your proxy base url</p>
-          <p className="text-sm mt-2">3. Confirm your SSO is configured correctly and you can login on the new Tab</p>
-          <p className="text-sm mt-2">4. If Step 3 is successful, you can close this tab</p>
+          <p>{t("adminPanel.ssoModals.instructions.intro")}</p>
+          <p className="text-sm mt-2">{t("adminPanel.ssoModals.instructions.step1")}</p>
+          <p className="text-sm mt-2">{t("adminPanel.ssoModals.instructions.step2")}</p>
+          <p className="text-sm mt-2">{t("adminPanel.ssoModals.instructions.step3")}</p>
+          <p className="text-sm mt-2">{t("adminPanel.ssoModals.instructions.step4")}</p>
           <div style={{ textAlign: "right", marginTop: "10px" }}>
             <Button type="button" onClick={handleInstructionsOk}>
-              Done
+              {t("adminPanel.ssoModals.instructions.done")}
             </Button>
           </div>
         </DialogContent>

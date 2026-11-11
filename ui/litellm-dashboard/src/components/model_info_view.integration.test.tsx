@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import ModelInfoView from "./model_info_view";
 import { toast } from "@/lib/toast";
 import * as networking from "./networking";
+import { useUserLookup } from "@/app/(dashboard)/hooks/users/useUsers";
 vi.mock("./model_info/KubernetesPodsCard", () => ({
   default: ({ modelId }: { modelId: string }) => <div data-testid="kubernetes-pods-card">{modelId}</div>,
 }));
@@ -47,6 +48,16 @@ vi.mock("@/app/(dashboard)/hooks/models/useModelCostMap", () => ({
 const mockUseTeams = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   useTeams: () => mockUseTeams(),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/users/useUsers", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/app/(dashboard)/hooks/users/useUsers")>();
+  return { ...actual, useUserLookup: vi.fn() };
+});
+
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  useRouter: () => ({ push: vi.fn() }),
 }));
 
 const mockUsePtuCostAttributionEnabled = vi.fn();
@@ -107,6 +118,7 @@ describe("ModelInfoView", () => {
       },
     });
     vi.clearAllMocks();
+    vi.mocked(useUserLookup).mockReturnValue({ data: null } as ReturnType<typeof useUserLookup>);
     mockUsePtuCostAttributionEnabled.mockReturnValue(false);
     mockUseTeams.mockReturnValue({ data: undefined, isLoading: false, error: null });
 
@@ -191,6 +203,22 @@ describe("ModelInfoView", () => {
     await waitFor(() => {
       expect(screen.getByText("Model Settings")).toBeInTheDocument();
     });
+  });
+
+  it("should display the model metadata logo in the provider details", async () => {
+    const logoUrl = "https://cdn.example.com/gateway.svg";
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [{ ...defaultModelData, model_info: { ...defaultModelData.model_info, logo_url: logoUrl } }],
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    expect(await screen.findByRole("img", { name: "openai logo" })).toHaveAttribute("src", logoUrl);
+    expect(screen.getByRole("heading", { name: "openai" })).toBeInTheDocument();
   });
 
   it("shows Kubernetes pods for discovery-enabled models", async () => {
@@ -571,6 +599,18 @@ describe("ModelInfoView", () => {
     expect(screen.getByText("Output (1080p): $0.12/s")).toBeInTheDocument();
     expect(screen.getByText("Output (4k): $0.30/s")).toBeInTheDocument();
     expect(screen.queryByText(/\$0\.00\/1M tokens/)).not.toBeInTheDocument();
+  });
+
+  it("shows the server's reason when saving the model settings is rejected", async () => {
+    const rejection = new Error("A strategy router cannot route to itself");
+    mockModelPatchUpdateCall.mockRejectedValueOnce(rejection);
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(mockToast.fromError).toHaveBeenCalledWith(rejection));
   });
 
   it("should display edit settings button when user can edit model", async () => {
@@ -1486,6 +1526,18 @@ describe("ModelInfoView", () => {
       expect(screen.getByText(/Created At/)).toBeInTheDocument();
       expect(screen.getByText(/Created By/)).toBeInTheDocument();
     });
+  });
+
+  it("shows the creator alias as a link to the user page", async () => {
+    vi.mocked(useUserLookup).mockReturnValue({
+      data: { user_alias: "Alice", user_email: "alice@example.com" },
+    } as ReturnType<typeof useUserLookup>);
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    expect(await screen.findByRole("link", { name: "Alice" })).toHaveAttribute(
+      "href",
+      expect.stringContaining("/users?user=123"),
+    );
   });
 
   describe("team alias", () => {

@@ -1,4 +1,5 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { SimpleTooltip } from "@/components/ui/tooltip";
@@ -13,6 +14,7 @@ interface ClassifierTypeRadiosProps {
 }
 
 const ClassifierTypeRadios: React.FC<ClassifierTypeRadiosProps> = ({ value, classifierType, onTypeChange }) => {
+  const { t } = useTranslation();
   const scorerLocked = Boolean(value.custom_tier_set);
   const scorerLockedReason = restrictedBy(value, "heuristicClassifier")?.reason;
   return (
@@ -26,10 +28,8 @@ const ClassifierTypeRadios: React.FC<ClassifierTypeRadiosProps> = ({ value, clas
           <Label className="items-start font-normal leading-normal has-data-disabled:cursor-not-allowed has-data-disabled:opacity-50">
             <RadioGroupItem value="heuristic" className="mt-0.5" disabled={scorerLocked} />
             <span>
-              <strong className="font-semibold">Heuristic</strong>{" "}
-              <span className="text-muted-foreground">
-                (default), rule-based scoring with no API calls and &lt;1ms latency
-              </span>
+              <strong className="font-semibold">{t("addModel.classifierTypeRadios.heuristic.label")}</strong>{" "}
+              <span className="text-muted-foreground">{t("addModel.classifierTypeRadios.heuristic.description")}</span>
             </span>
           </Label>
         </SimpleTooltip>
@@ -37,9 +37,9 @@ const ClassifierTypeRadios: React.FC<ClassifierTypeRadiosProps> = ({ value, clas
           <Label className="items-start font-normal leading-normal has-data-disabled:cursor-not-allowed has-data-disabled:opacity-50">
             <RadioGroupItem value="heuristic_v2" className="mt-0.5" disabled={scorerLocked} />
             <span>
-              <strong className="font-semibold">Heuristic v2</strong>{" "}
+              <strong className="font-semibold">{t("addModel.classifierTypeRadios.heuristicV2.label")}</strong>{" "}
               <span className="text-muted-foreground">
-                uses bundled calibrated four-tier probabilities with no API call
+                {t("addModel.classifierTypeRadios.heuristicV2.description")}
               </span>
             </span>
           </Label>
@@ -47,24 +47,24 @@ const ClassifierTypeRadios: React.FC<ClassifierTypeRadiosProps> = ({ value, clas
         <Label className="items-start font-normal leading-normal">
           <RadioGroupItem value="llm" className="mt-0.5" />
           <span>
-            <strong className="font-semibold">LLM Classifier</strong>{" "}
-            <span className="text-muted-foreground">calls a model to decide the tier (e.g. a small/fast model)</span>
+            <strong className="font-semibold">{t("addModel.classifierTypeRadios.llm.label")}</strong>{" "}
+            <span className="text-muted-foreground">{t("addModel.classifierTypeRadios.llm.description")}</span>
           </span>
         </Label>
         <Label className="items-start font-normal leading-normal">
           <RadioGroupItem value="jev" className="mt-0.5" />
           <span>
-            <strong className="font-semibold">OSS Classifier</strong>{" "}
-            <span className="text-muted-foreground">uses Jev, Laya, Bespoke, or Databricks to decide the tier</span>
+            <strong className="font-semibold">{t("addModel.classifierTypeRadios.oss.label")}</strong>{" "}
+            <span className="text-muted-foreground">{t("addModel.classifierTypeRadios.oss.description")}</span>
           </span>
         </Label>
         <SimpleTooltip content={scorerLockedReason}>
           <Label className="items-start font-normal leading-normal has-data-disabled:cursor-not-allowed has-data-disabled:opacity-50">
             <RadioGroupItem value="heuristic_first" className="mt-0.5" disabled={scorerLocked} />
             <span>
-              <strong className="font-semibold">Heuristic first</strong>{" "}
+              <strong className="font-semibold">{t("addModel.classifierTypeRadios.heuristicFirst.label")}</strong>{" "}
               <span className="text-muted-foreground">
-                scores locally, and only pays for the classifier when the score does not confidently land a cheap tier
+                {t("addModel.classifierTypeRadios.heuristicFirst.description")}
               </span>
             </span>
           </Label>
@@ -73,11 +73,8 @@ const ClassifierTypeRadios: React.FC<ClassifierTypeRadiosProps> = ({ value, clas
           <Label className="items-start font-normal leading-normal has-data-disabled:cursor-not-allowed has-data-disabled:opacity-50">
             <RadioGroupItem value="hybrid" className="mt-0.5" disabled={scorerLocked} />
             <span>
-              <strong className="font-semibold">Hybrid</strong>{" "}
-              <span className="text-muted-foreground">
-                keeps the local score at any tier, and only pays for the classifier when that score lands near a tier
-                boundary
-              </span>
+              <strong className="font-semibold">{t("addModel.classifierTypeRadios.hybrid.label")}</strong>{" "}
+              <span className="text-muted-foreground">{t("addModel.classifierTypeRadios.hybrid.description")}</span>
             </span>
           </Label>
         </SimpleTooltip>

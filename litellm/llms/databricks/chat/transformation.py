@@ -19,17 +19,21 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     should_convert_tool_call_to_json_mode,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    extract_reasoning_content,
     merge_consecutive_system_messages,
     strip_litellm_internal_message_fields,
     strip_name_from_message,
     strip_prefill_prefix_field,
 )
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    extract_reasoning_content,
+)
+from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.base_utils import (
     type_to_response_format_param,  # pyright: ignore[reportUnknownVariableType]  # base_utils helper returns an untyped dict
 )
+from litellm.llms.base_llm.chat.transformation import REQUEST_PARAMS
 from litellm.types.llms.anthropic import AllAnthropicToolsValues
 from litellm.types.llms.databricks import (
     AllDatabricksContentValues,
@@ -394,7 +398,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         return "databricks"
 
     @classmethod
-    def get_config(cls, *, model: str | None = None):
+    def get_config(cls, *, model: str | None = None, configured_max_output_tokens: int | None = None):
         return super().get_config()
 
     def get_json_schema_from_pydantic_object(
@@ -467,7 +471,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         use_ai_gateway: Final = self.uses_ai_gateway(model)
         return join_api_base(self._get_api_base(api_base, use_ai_gateway=use_ai_gateway), "chat/completions")
 
-    def get_supported_openai_params(self, model: str | None = None) -> list:
+    def get_supported_openai_params(self, model: str | None = None) -> list[str]:
         return [
             "stream",
             "stop",
@@ -540,12 +544,12 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         model: str,
         value: dict | None,
         optional_params: dict,
-        is_thinking_enabled: bool,
+        tool_is_forced: bool,
     ) -> DatabricksTool | None:
         if value is None:
             return None
 
-        tool: Final = self.map_response_format_to_anthropic_tool(value, optional_params, is_thinking_enabled)
+        tool: Final = self.map_response_format_to_anthropic_tool(value, optional_params, tool_is_forced)
 
         databricks_tool: Final = self.convert_anthropic_tool_to_databricks_tool(tool)
         return databricks_tool
@@ -573,8 +577,12 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         drop_params: bool,
         replace_max_completion_tokens_with_max_tokens: bool = True,
     ) -> dict:
-        is_thinking_enabled: Final = self.is_thinking_enabled(non_default_params)
-        mapped_params: Final = super().map_openai_params(non_default_params, optional_params, model, drop_params)
+        request_params: Final = (
+            tool_params_without_hosted_mcp(non_default_params, model=model, route="databricks", drop_params=drop_params)
+            if "claude" in model
+            else non_default_params
+        )
+        mapped_params: Final = super().map_openai_params(request_params, optional_params, model, drop_params)
         if "claude" in model:
             AnthropicConfig.translate_legacy_thinking_for_adaptive_model(
                 model=model, optional_params=mapped_params, custom_llm_provider="databricks", drop_params=drop_params
@@ -583,24 +591,27 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             mapped_params["tools"] = self._map_openai_to_dbrx_tool(
                 model=model, tools=mapped_params["tools"], drop_params=drop_params
             )
-        if "max_completion_tokens" in non_default_params and replace_max_completion_tokens_with_max_tokens:
-            mapped_params["max_tokens"] = non_default_params[
+        if "max_completion_tokens" in request_params and replace_max_completion_tokens_with_max_tokens:
+            mapped_params["max_tokens"] = request_params[
                 "max_completion_tokens"
             ]  # most openai-compatible providers support 'max_tokens' not 'max_completion_tokens'
             mapped_params.pop("max_completion_tokens", None)
 
-        if "response_format" in non_default_params and "claude" in model:
+        if "response_format" in request_params and "claude" in model:
+            tool_is_forced: Final = AnthropicConfig.response_format_tool_can_be_forced(
+                model, "databricks", REQUEST_PARAMS.validate_python(request_params)
+            )
             _tool: Final = self.map_response_format_to_databricks_tool(
                 model,
-                non_default_params["response_format"],
+                request_params["response_format"],
                 mapped_params,
-                is_thinking_enabled,
+                tool_is_forced,
             )
 
             if _tool is not None:
                 self._add_tools_to_optional_params(optional_params=optional_params, tools=[_tool])
                 optional_params["json_mode"] = True
-                if not is_thinking_enabled:
+                if tool_is_forced:
                     _tool_choice: Final = ChatCompletionToolChoiceObjectParam(
                         type="function",
                         function=ChatCompletionToolChoiceFunctionParam(name=RESPONSE_FORMAT_TOOL_NAME),
@@ -610,20 +621,22 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                 "response_format", None
             )  # unsupported for claude models - if json_schema -> convert to tool call
 
-        if "reasoning_effort" in non_default_params and self._uses_anthropic_thinking_param(model):
-            reasoning_effort_value: Final = non_default_params.get("reasoning_effort")
+        if "reasoning_effort" in request_params and self._uses_anthropic_thinking_param(model):
+            reasoning_effort_value: Final = request_params.get("reasoning_effort")
             mapped_thinking: Final = AnthropicConfig._map_reasoning_effort(
                 reasoning_effort=reasoning_effort_value,
                 model=model,
                 custom_llm_provider="databricks",
                 llm_provider="databricks",
             )
-            if mapped_thinking is None:
+            if mapped_thinking is None or mapped_thinking.get("type") == "disabled":
                 optional_params.pop("thinking", None)
                 optional_params.pop("output_config", None)
-            else:
+            if mapped_thinking is not None:
                 optional_params["thinking"] = mapped_thinking
-                if AnthropicConfig._is_adaptive_thinking_model(model, "databricks"):
+                if mapped_thinking.get("type") != "disabled" and AnthropicConfig._is_adaptive_thinking_model(
+                    model, "databricks"
+                ):
                     mapped_effort: str | None = None
                     if isinstance(reasoning_effort_value, str):
                         mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(reasoning_effort_value)
@@ -637,7 +650,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             optional_params.pop("reasoning_effort", None)
         ## handle thinking tokens
         self.update_optional_params_with_thinking_tokens(
-            non_default_params=non_default_params, optional_params=mapped_params
+            non_default_params=request_params, optional_params=mapped_params
         )
         gated_thinking: Final = strip_beta_gated_thinking(
             mapped_params.get("thinking"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # mapped_params is the base config's bare dict

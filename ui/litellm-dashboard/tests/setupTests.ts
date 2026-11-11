@@ -257,6 +257,9 @@ if (typeof HTMLElement !== "undefined") {
     },
   });
 }
+if (typeof Element !== "undefined" && typeof Element.prototype.scrollIntoView !== "function") {
+  Element.prototype.scrollIntoView = () => {};
+}
 if (typeof document !== "undefined" && !("elementFromPoint" in document)) {
   Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => null });
 }

@@ -33,6 +33,7 @@ from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import (
     _agent_capped_servers,
     is_mcp_admitted_user_subject,
 )
+from litellm.proxy.utils import InternalUsageCache
 from litellm.types.agents import AgentCaller
 
 
@@ -9089,7 +9090,7 @@ class TestUserSubjectTeamUnion:
         assert billed is not None and billed.team_id == "t1", "throttling and billing pick the same source"
 
         descriptors: list = []
-        limiter = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=MagicMock())
+        limiter = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
         limiter._add_mcp_per_team_rate_limit_descriptor(auth, "srv1", descriptors)
         charged = {d["value"]: d["rate_limit"]["requests_per_unit"] for d in descriptors}
         assert charged == {"t1:srv1": 5}, "only the attributing team's bucket is charged"
@@ -12452,7 +12453,6 @@ async def test_personal_key_display_name_billing_uses_original_tool_grant(
 async def test_personal_key_display_name_billing_uses_allowed_servers(
     monkeypatch: pytest.MonkeyPatch, personal_key_owner_teams: UserAPIKeyAuth
 ) -> None:
-    from litellm.proxy import proxy_server
     from litellm.proxy.auth import auth_checks
     from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
     from litellm.types.mcp import MCPTransport
@@ -12845,7 +12845,7 @@ async def test_personal_key_team_mcp_rpm_limit_charges_granting_team(
 
     stamped: Final = personal_key_owner_teams.model_copy(update={"mcp_source_team_rpm_limits": limits})
     descriptors: list[RateLimitDescriptor] = []
-    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=MagicMock())
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
     limiter._add_mcp_per_team_rate_limit_descriptor(stamped, server_b.name, descriptors)
     assert len(descriptors) == 1
     assert descriptors[0]["key"] == "mcp_per_team"
@@ -13224,8 +13224,8 @@ async def test_admin_owned_team_key_reaches_only_its_team_mcp_servers(
     expected_servers: set[str],
     credential_shape: dict[str, object],
 ) -> None:
-    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
     from litellm.proxy.auth import auth_checks
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
 
     async def _get_team_object(team_id: str, **_: object) -> LiteLLM_TeamTable:
         return _personal_key_team(team_id) if team_id in _PERSONAL_KEY_TEAMS else LiteLLM_TeamTable(team_id=team_id)

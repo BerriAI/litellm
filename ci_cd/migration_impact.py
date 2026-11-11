@@ -187,6 +187,7 @@ _FROM_JOIN: Final = re.compile(
     r'\b(?:FROM|JOIN)\s+"(?P<table>\w+)"(?:\s+AS)?(?:\s+(?P<alias>[A-Za-z_]\w*))?', re.IGNORECASE
 )
 _STAR_ALIAS: Final = re.compile(r"\b(?P<alias>[A-Za-z_]\w*)\.\*")
+_JSON_AGG_ROW: Final = re.compile(r"\bjsonb?_agg\s*\(\s*[A-Za-z_]\w*\.\*\s*\)", re.IGNORECASE)
 _BARE_STAR: Final = re.compile(r"\bSELECT\s+\*", re.IGNORECASE)
 # Release tags an operator could actually be running: 1.99.0, v1.99.0, 1.99.0.post1, v1.99.0-stable.
 _STABLE_TAG: Final = re.compile(r"^v?\d+\.\d+\.\d+(?:\.post\d+|-stable(?:\.patch\.\d+)?)?$")
@@ -451,9 +452,10 @@ def _alias_map(body: str) -> tuple[Mapping[str, str], tuple[str, ...]]:
 
 def _star_reads_in_literal(body: str, location: str) -> tuple[StarRead, ...]:
     aliases, tables = _alias_map(body)
+    result_columns: Final = _JSON_AGG_ROW.sub(" ", body)
     starred: Final = tuple(
         (aliases[match.group("alias")], match.group("alias"))
-        for match in _STAR_ALIAS.finditer(body)
+        for match in _STAR_ALIAS.finditer(result_columns)
         if match.group("alias") in aliases
     )
     bare: Final = ((tables[0], "*"),) if not starred and _BARE_STAR.search(body) and len(tables) == 1 else ()

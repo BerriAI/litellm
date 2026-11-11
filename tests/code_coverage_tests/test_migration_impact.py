@@ -170,6 +170,17 @@ def test_star_read_discovery_ignores_view_definitions() -> None:
     assert impact.star_reads_in_source(VIEW_SOURCE, "litellm/proxy/db/create_views.py") == ()
 
 
+def test_json_aggregates_do_not_hide_separate_whole_row_reads() -> None:
+    source = '''query = """
+        SELECT json_agg(t.*), JSONB_AGG (t.*)
+        FROM "LiteLLM_TeamTable" t
+    """'''
+    assert impact.star_reads_in_source(source, "query.py") == ()
+    source_with_row = source.replace("SELECT json_agg", "SELECT t.*, json_agg")
+    reads = impact.star_reads_in_source(source_with_row, "query.py")
+    assert tuple(read.table for read in reads) == ("LiteLLM_TeamTable",)
+
+
 def test_add_column_on_a_whole_row_read_table_is_a_prepared_plan_change() -> None:
     finding = _classify('ALTER TABLE "LiteLLM_VerificationToken" ADD COLUMN "key_type" TEXT', reads=(_auth_read(),))
     assert finding.severity == impact.PREPARED_PLAN

@@ -10,9 +10,11 @@ Verifies that:
 - ANTHROPIC_API_KEY / ANTHROPIC_API_BASE take precedence over their aliases.
 """
 
+import itertools
 import json
 import logging
 import os
+import subprocess
 import sys
 import threading
 from collections.abc import Mapping
@@ -26,7 +28,12 @@ import pytest
 import respx
 
 import litellm
-from litellm.llms.anthropic.common_utils import ToolsWithoutStrict, is_claude_tool_target, tools_without_strict
+from litellm.llms.anthropic.common_utils import (
+    ToolsWithoutStrict,
+    is_claude_tool_target,
+    tools_without_strict,
+    without_stale_tool_search_results,
+)
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
@@ -1744,7 +1751,7 @@ class TestAnthropicThinkingSignatureSelfHeal:
 
     def test_strip_keeps_encrypted_reasoning_blocks_for_the_responses_bridge(self):
         """The /v1/messages handler runs this before dispatch, so the bridge must still see the replay."""
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
             encrypted_reasoning_signature,
         )
         from litellm.llms.anthropic.common_utils import (
@@ -1765,7 +1772,7 @@ class TestAnthropicThinkingSignatureSelfHeal:
 
     def test_strip_encrypted_reasoning_drops_only_the_bridge_tagged_blocks(self):
         """A session resumed on an Anthropic model replays reasoning only OpenAI can verify."""
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
             encrypted_reasoning_signature,
         )
         from litellm.llms.anthropic.common_utils import (
@@ -4604,6 +4611,7 @@ def test_anthropic_error_frame_exception_classes_an_overloaded_frame_as_internal
     error: Final = anthropic_error_frame_exception("overloaded_error", "Overloaded", 503, "claude-sonnet-4-5")
 
     assert type(error) is litellm.InternalServerError
+    assert error.provider_status_code == 529
 
 
 _NON_NUMERIC_BUDGETS: Final = (True, False, None, "", "lots", [4096])
@@ -4706,6 +4714,79 @@ def test_is_claude_tool_target(custom_llm_provider: str, model: str, expected: b
     assert is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model) is expected
 
 
+def test_dropping_a_stale_tool_search_keeps_every_other_turn_as_it_was_sent() -> None:
+    search_use: Final = {
+        "type": "server_tool_use",
+        "id": "srvtoolu_01Search",
+        "name": "tool_search_tool_regex",
+        "input": {"pattern": "weather"},
+    }
+    search_result: Final = {
+        "type": "tool_search_tool_result",
+        "tool_use_id": "srvtoolu_01Search",
+        "content": {
+            "type": "tool_search_tool_search_result",
+            "tool_references": [{"type": "tool_reference", "tool_name": "get_weather"}],
+        },
+    }
+    weather_call: Final = {
+        "type": "tool_use",
+        "id": "toolu_01Weather",
+        "name": "get_weather",
+        "input": {"city": "Paris"},
+    }
+    messages: Final = [
+        {"role": "user", "content": "What is the weather in Paris?"},
+        {"role": "assistant", "content": [search_use, search_result, weather_call]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01Weather", "content": "18C"}]},
+        {"role": "assistant", "content": "It is 18C in Paris."},
+        {"role": "user", "content": "Thanks"},
+        {"role": "assistant", "content": [{"type": "text", "text": "Anything else?"}]},
+        {"role": "user", "content": "And in Osaka?"},
+    ]
+
+    kept: Final = without_stale_tool_search_results(messages, [{"name": "get_local_time"}])
+
+    assert kept == (messages[0], {"role": "assistant", "content": [weather_call]}, *messages[2:])
+
+
+def test_a_replayed_tool_search_keeps_the_tools_it_found_that_the_follow_up_still_sends() -> None:
+    def reference(name: str) -> dict[str, str]:
+        return {"type": "tool_reference", "tool_name": name}
+
+    search_use: Final = {
+        "type": "server_tool_use",
+        "id": "srvtoolu_01Search",
+        "name": "tool_search_tool_regex",
+        "input": {"pattern": "weather|time"},
+    }
+
+    def search_result(*names: str) -> dict[str, object]:
+        return {
+            "type": "tool_search_tool_result",
+            "tool_use_id": "srvtoolu_01Search",
+            "content": {
+                "type": "tool_search_tool_search_result",
+                "tool_references": [reference(name) for name in names],
+            },
+        }
+
+    weather_call: Final = {"type": "tool_use", "id": "toolu_01Weather", "name": "get_weather", "input": {"city": "Paris"}}
+    messages: Final = [
+        {"role": "user", "content": "What is the weather and the time in Paris?"},
+        {"role": "assistant", "content": [search_use, search_result("get_weather", "get_local_time"), weather_call]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01Weather", "content": "18C"}]},
+    ]
+
+    kept: Final = without_stale_tool_search_results(messages, [{"name": "get_weather"}, {"name": "get_news"}])
+
+    assert kept == (
+        messages[0],
+        {"role": "assistant", "content": [search_use, search_result("get_weather"), weather_call]},
+        messages[2],
+    )
+
+
 @pytest.mark.parametrize(
     "tools",
     [
@@ -4728,3 +4809,179 @@ def test_tools_without_strict_drops_only_the_strict_key_and_counts_the_strict_to
     assert tools_without_strict(tools) == ToolsWithoutStrict(
         tools=({"name": "a"}, {"name": "b"}, {"name": "c"}), dropped_count=1
     )
+
+
+@pytest.mark.parametrize("registration_order", [("caching-off", "unflagged"), ("unflagged", "caching-off")])
+def test_auto_injection_reads_a_deployments_own_prompt_caching_flag_not_a_siblings(
+    registration_order: tuple[str, ...],
+) -> None:
+    from litellm import Router
+    from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
+
+    model: Final = "anthropic.claude-qa-cache-model"
+    litellm.register_model({model: {"litellm_provider": "bedrock", "mode": "chat", "supports_prompt_caching": True}})
+    model_infos: Final = {
+        "caching-off": {"id": "caching-off-id", "supports_prompt_caching": False},
+        "unflagged": {"id": "unflagged-id"},
+    }
+    Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {"model": f"bedrock/{model}", "aws_region_name": "us-east-1"},
+                "model_info": model_infos[name],
+            }
+            for name in registration_order
+        ]
+    )
+
+    assert {name: supports_anthropic_cache_control(model, "bedrock", model_infos[name]) for name in registration_order} == {
+        "caching-off": False,
+        "unflagged": True,
+    }
+
+
+def test_auto_injection_leaves_an_unmapped_claude_deployment_uncached_instead_of_raising() -> None:
+    from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
+
+    assert supports_anthropic_cache_control("claude-qa-unmapped-model", "anthropic", {"id": "unmapped-id"}) is False
+
+
+def test_auto_injection_honors_a_register_model_opt_out_made_under_the_provider_prefixed_name() -> None:
+    from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
+    from litellm.utils import catalog_with_runtime_registrations
+
+    model: Final = next(
+        key
+        for key, entry in catalog_with_runtime_registrations().items()
+        if entry.get("litellm_provider") == "anthropic" and entry.get("supports_prompt_caching") is True
+    )
+    litellm.register_model({f"anthropic/{model}": {"supports_prompt_caching": False}})
+
+    assert supports_anthropic_cache_control(model, "anthropic", {"id": "plain-id"}) is False
+
+
+@pytest.mark.parametrize("route_prefix", ["bedrock/", "bedrock/converse/"])
+def test_auto_injection_honors_a_register_model_opt_out_made_under_a_bedrock_route_prefixed_name(route_prefix: str) -> None:
+    from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
+    from litellm.utils import catalog_with_runtime_registrations
+
+    model: Final = next(
+        key
+        for key, entry in catalog_with_runtime_registrations().items()
+        if entry.get("litellm_provider") == "bedrock_converse"
+        and entry.get("supports_prompt_caching") is True
+        and key.startswith("us.anthropic.claude")
+    )
+    litellm.register_model({f"{route_prefix}{model}": {"supports_prompt_caching": False}})
+
+    assert (
+        supports_anthropic_cache_control(model, "bedrock", {"id": "plain-id"}),
+        supports_anthropic_cache_control(model, "bedrock"),
+    ) == (False, False)
+
+
+@pytest.mark.parametrize(
+    ("declared", "catalog_caching", "expected"),
+    [("true", False, True), (1, False, True), ("false", True, False), (0, True, False), ("maybe", True, True)],
+)
+def test_auto_injection_reads_a_string_or_numeric_deployment_prompt_caching_flag_as_the_bool_it_spells(
+    declared: object, catalog_caching: bool, expected: bool
+) -> None:
+    from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
+
+    model: Final = f"claude-qa-lax-flag-model-{catalog_caching}"
+    litellm.register_model(
+        {model: {"litellm_provider": "anthropic", "mode": "chat", "supports_prompt_caching": catalog_caching}}
+    )
+
+    assert (
+        supports_anthropic_cache_control(model, "anthropic", {"id": "lax-id", "supports_prompt_caching": declared})
+        is expected
+    )
+
+
+@pytest.mark.parametrize("reload_cost_map", [False, True], ids=["before-reload", "after-reload"])
+@pytest.mark.parametrize(
+    ("registrations", "expected"),
+    [
+        ((("", True), ("anthropic/", False)), False),
+        ((("anthropic/", False), ("", True)), True),
+        ((("", False), ("anthropic/", True), ("", False)), False),
+    ],
+    ids=["prefixed-opt-out-last", "bare-opt-in-last", "bare-opt-out-registered-again-last"],
+)
+def test_the_later_of_a_bare_and_a_prefixed_register_model_entry_wins_for_routed_and_sdk_calls(
+    registrations: tuple[tuple[str, bool], ...], expected: bool, reload_cost_map: bool
+) -> None:
+    from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
+    from litellm.utils import catalog_with_runtime_registrations, reapply_runtime_model_cost_registrations
+
+    model: Final = next(
+        key
+        for key, entry in catalog_with_runtime_registrations().items()
+        if entry.get("litellm_provider") == "anthropic" and entry.get("supports_prompt_caching") is True
+    )
+    for prefix, flag in registrations:
+        litellm.register_model({f"{prefix}{model}": {"supports_prompt_caching": flag}})
+    if reload_cost_map:
+        reapply_runtime_model_cost_registrations()
+
+    assert (
+        supports_anthropic_cache_control(model, "anthropic", {"id": "plain-id"}),
+        supports_anthropic_cache_control(model, "anthropic"),
+    ) == (expected, expected)
+
+
+def test_a_register_model_opt_out_for_one_claude_model_leaves_every_other_routed_models_catalog_flag() -> None:
+    from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
+    from litellm.utils import catalog_with_runtime_registrations
+
+    opted_out, untouched = itertools.islice(
+        (
+            key
+            for key, entry in catalog_with_runtime_registrations().items()
+            if entry.get("litellm_provider") == "anthropic" and entry.get("supports_prompt_caching") is True
+        ),
+        2,
+    )
+    litellm.register_model({f"anthropic/{opted_out}": {"supports_prompt_caching": False}})
+
+    assert supports_anthropic_cache_control(untouched, "anthropic", {"id": "plain-id"}) is True
+
+
+_MASKED_HOSTED_WEB_CALL_PROBE: Final = """
+import json
+
+from litellm.llms.anthropic.common_utils import write_request_hosted_web_call_arguments
+
+message = {
+    "role": "assistant",
+    "provider_specific_fields": {
+        "web_search_calls": [
+            {
+                "id": "ws_srvtoolu_1",
+                "type": "web_search_call",
+                "status": "completed",
+                "action": {"type": "search", "query": "deploy token 12345", "queries": ["deploy token 12345"]},
+            }
+        ]
+    },
+}
+write_request_hosted_web_call_arguments(message, {"srvtoolu_1": json.dumps({"query": "deploy token [REDACTED]"})})
+print(json.dumps(message["provider_specific_fields"]["web_search_calls"]))
+"""
+
+
+def test_a_masked_replayed_hosted_web_call_serializes_before_its_openai_model_was_ever_built() -> None:
+    result: Final = subprocess.run(
+        (sys.executable, "-I", "-c", _MASKED_HOSTED_WEB_CALL_PROBE),
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=120,
+    )
+    hosted: Final = json.loads(result.stdout.strip().splitlines()[-1])
+    assert [call["action"] for call in hosted] == [
+        {"type": "search", "query": "deploy token [REDACTED]", "queries": ["deploy token [REDACTED]"]}
+    ]
