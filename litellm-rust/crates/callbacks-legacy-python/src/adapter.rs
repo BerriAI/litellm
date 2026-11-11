@@ -2290,6 +2290,53 @@ mod terminal_tests {
     }
 
     #[rstest]
+    #[case::requested_stream(
+        c"kwargs = {'logger': logger, 'stream': True}",
+        true,
+        &["finalize"]
+    )]
+    #[case::unstreamed(c"kwargs = {'logger': logger, 'stream': False}", false, &["success_hook"])]
+    #[case::stream_flag_not_true(c"kwargs = {'logger': logger, 'stream': 'true'}", false, &["success_hook"])]
+    fn a_whole_messages_result_for_a_requested_stream_is_finalized_without_success_logging(
+        #[case] script: &CStr,
+        #[case] handed_back: bool,
+        #[case] expected: &[&str],
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(py, c"response = object()");
+            run(py, &locals, script);
+            let mut logging = LegacyLogging {
+                operation: crate::LoggingOperation::Messages,
+                ..logged(py, &locals, true)
+            };
+            let step = logging
+                .transform_public_response(py, local(&locals, "response").unbind(), TIMING)
+                .unwrap();
+            assert_eq!(matches!(step, HookStep::Ready(_)), handed_back);
+            if handed_back {
+                assert!(matches!(
+                    succeed(py, &locals, &mut logging),
+                    HookStep::Ready(())
+                ));
+            }
+            let names: Vec<String> = local(&locals, "logger")
+                .call_method0("names")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(names, expected);
+            if handed_back {
+                run(
+                    py,
+                    &locals,
+                    c"assert logger.stream is True and logger.model_call_details['stream'] is True",
+                );
+            }
+        });
+    }
+
+    #[rstest]
     #[case::sync_listened(false, c"", &["submit"])]
     #[case::async_listened(
         true,

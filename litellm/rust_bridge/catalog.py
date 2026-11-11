@@ -165,6 +165,7 @@ MESSAGES_PYTHON_FEATURES: Final = (
         Feature.CALLER_CLIENT,
         Feature.TLS_POLICY,
         Feature.AGENTIC_LOOP_HOOK,
+        Feature.PROXY_MCP_TOOLS,
     }
 ) | {
     Feature.WEBSEARCH_INTERCEPTION,

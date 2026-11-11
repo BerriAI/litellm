@@ -56,6 +56,22 @@ def store_response(
     )
 
 
+def store_verbatim(
+    cache: Cache,
+    response: Mapping[str, object],
+    /,
+    **kwargs: object,  # kwargs-ok: the cache call's own arguments
+) -> None:
+    from litellm.caching.caching_handler import create_cache_write_task
+
+    create_cache_write_task(
+        lambda: cache.async_add_cache(  # pyright: ignore[reportUnknownMemberType]  # Cache.async_add_cache leaves its result untyped
+            response,
+            **kwargs,  # pyright: ignore[reportArgumentType]  # the cache call's own keyword arguments, as Python passes them
+        )
+    )
+
+
 async def store_stream(
     cache: Cache,
     entry: Mapping[str, object],

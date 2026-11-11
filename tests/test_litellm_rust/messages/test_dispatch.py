@@ -433,57 +433,6 @@ STRICT_TOOL: Final = {"name": "a", "input_schema": {"type": "object"}, "strict":
 
 
 @pytest.mark.parametrize(
-    ("feature", "model", "kwargs", "settings"),
-    (
-        (
-            Feature.PROXY_MCP_TOOLS,
-            "anthropic/claude-sonnet-4-5",
-            {"tools": [{"type": "mcp", "server_label": "gateway", "server_url": "litellm_proxy"}]},
-            {},
-        ),
-    ),
-)
-def test_each_detected_feature_reaches_its_rule(
-    monkeypatch: pytest.MonkeyPatch,
-    feature: Feature,
-    model: str,
-    kwargs: Mapping[str, object],
-    settings: Mapping[str, object],
-) -> None:
-    rules: Final[Rules] = (
-        RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, features=frozenset({feature})),
-        RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),
-    )
-    python_result: Final = response(model)
-    native_result: Final = response(model)
-
-    def served(call_kwargs: Mapping[str, object]) -> AnthropicMessagesResponse:
-        messages: Final = call_kwargs.get("messages", MESSAGES)
-        return _DISPATCH.run(
-            (16, messages, model),
-            {name: value for name, value in call_kwargs.items() if name != "messages"},
-            python=lambda *call_args, **python_kwargs: python_result,
-            binding=messages_binding(lambda request: native_result),
-            native=lambda hook, request, call_args, native_kwargs: hook(request),
-            rules=rules,
-        )
-
-    monkeypatch.setattr(litellm, "callbacks", [])
-    monkeypatch.setattr(litellm, "cache", None)
-    monkeypatch.setattr(litellm, "ssl_security_level", None)
-    for setting in ("modify_params", "enable_anthropic_prompt_caching", "include_cost_in_streaming_usage"):
-        monkeypatch.setattr(litellm, setting, False)
-    for name in ("SSL_SECURITY_LEVEL", "SSL_ECDH_CURVE", "ANTHROPIC_FEDERATION_RULE_ID", "ANTHROPIC_ORGANIZATION_ID"):
-        monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
-    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
-    assert served({}) is native_result
-    for name, value in settings.items():
-        monkeypatch.setattr(litellm, name, value)
-    assert served(kwargs) is python_result
-
-
-@pytest.mark.parametrize(
     "kwargs",
     (
         pytest.param({"shared_session": object()}, id="proxy-shared-session"),
@@ -985,6 +934,32 @@ async def test_anthropic_serves_agentic_loop_callbacks_on_rust(
 
     with rebound(dispatch, "_PYTHON_MESSAGES", python), rebound(dispatch, "_PYTHON_AMESSAGES", python):
         result: Final = await _public(asynchronous, "anthropic/claude-sonnet-4-5", {})
+
+    assert isinstance(result, dict)
+    assert shipped_native == ["async" if asynchronous else "sync"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", (False, True), ids=("sync", "async"))
+@pytest.mark.parametrize(
+    "server_url",
+    (
+        pytest.param("litellm_proxy", id="whole-gateway"),
+        pytest.param("litellm_proxy/mcp/deepwiki", id="one-server"),
+        pytest.param("https://gateway.example/mcp/deepwiki", id="proxy-path"),
+    ),
+)
+async def test_anthropic_serves_gateway_mcp_tools_on_rust(
+    monkeypatch: pytest.MonkeyPatch, shipped_native: list[str], asynchronous: bool, server_url: str
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    tools: Final = [{"type": "mcp", "server_label": "gateway", "server_url": server_url, "require_approval": "never"}]
+
+    def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: rejected fallback
+        pytest.fail("anthropic has no Python Messages path")
+
+    with rebound(dispatch, "_PYTHON_MESSAGES", python), rebound(dispatch, "_PYTHON_AMESSAGES", python):
+        result: Final = await _public(asynchronous, "anthropic/claude-sonnet-4-5", {"tools": tools})
 
     assert isinstance(result, dict)
     assert shipped_native == ["async" if asynchronous else "sync"]

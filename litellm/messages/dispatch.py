@@ -142,6 +142,7 @@ _NATIVE_COMMON_FEATURES: Final = frozenset(
         Feature.CALLER_CLIENT,
         Feature.TLS_POLICY,
         Feature.AGENTIC_LOOP_HOOK,
+        Feature.PROXY_MCP_TOOLS,
     }
 )
 

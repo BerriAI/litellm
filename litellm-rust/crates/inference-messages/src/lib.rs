@@ -174,6 +174,14 @@ impl MessagesRoute {
                     handler::mocked(self, config, model, &context, mock, requested_stream).await,
                 );
             }
+            if let Some(host_answer) = self
+                .host_answer
+                .as_deref()
+                .filter(|_| call.shaping.settings.mcp_gateway)
+            {
+                let stream = call.body.params.stream == Some(true);
+                return handler::answered(self, host_answer, config, model, stream, &context).await;
+            }
             let secrets = self.secrets.resolve(config.config().secret_names()).await?;
             handler::execute(self, config, model, call, secrets, &context)
                 .boxed()

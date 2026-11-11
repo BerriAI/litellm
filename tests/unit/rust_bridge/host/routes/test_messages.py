@@ -65,6 +65,7 @@ def test_settings_project_caller_configuration_without_resolving_a_model(monkeyp
         "mock_response": None,
         "stream_cost_model": None,
         "extra_headers": None,
+        "mcp_gateway": False,
     }
 
 
@@ -1400,3 +1401,134 @@ async def test_answer_hands_a_hooked_call_on_with_the_callers_stream(
     assert handed["messages"] is hooked_messages
     assert handed["system"] == "hooked"
     assert handed["stream"] is expected
+
+
+MCP_REFERENCE: Final = MappingProxyType(
+    {"type": "mcp", "server_label": "litellm", "server_url": "litellm_proxy/mcp/deepwiki", "require_approval": "never"}
+)
+
+
+@pytest.mark.parametrize(
+    ("extra", "expected"),
+    [
+        pytest.param({"tools": [dict(MCP_REFERENCE)]}, True, id="gateway-reference"),
+        pytest.param({"tools": [{**MCP_REFERENCE, "server_url": "litellm_proxy"}]}, True, id="whole-gateway"),
+        pytest.param({"tools": [dict(MCP_REFERENCE)], "_skip_mcp_handler": True}, False, id="gateway-follow-up"),
+        pytest.param({"tools": [{"name": "a", "input_schema": {"type": "object"}}]}, False, id="native-tool"),
+        pytest.param({"tools": []}, False, id="no-tools"),
+        pytest.param({"tools": [dict(MCP_REFERENCE)], "mock_response": "hi"}, False, id="mock-answers-first"),
+    ],
+)
+def test_settings_hand_the_call_to_the_mcp_gateway_where_the_python_handler_does(
+    extra: dict[str, object], expected: bool
+) -> None:
+    settings: Final = messages_host.settings({}, {**_CALL, "model": "anthropic/claude-sonnet-4-5", **extra})
+
+    assert settings["mcp_gateway"] is expected
+
+
+def test_gateway_is_none_for_a_call_the_handler_serves_itself() -> None:
+    assert messages_host.gateway({**_CALL, "model": "anthropic/claude-sonnet-4-5"}, True) is None
+
+
+def _gateway_request() -> dict[str, object]:
+    return {
+        **_CALL,
+        "model": "anthropic/claude-sonnet-4-5",
+        "messages": [{"role": "user", "content": [{"type": "text", "text": ""}, {"type": "text", "text": "hi"}]}],
+        "tools": [dict(MCP_REFERENCE)],
+        "metadata": {"user_id": "u-1", "session": "dropped"},
+        "stream": True,
+        "temperature": 0.2,
+        "litellm_metadata": {"tags": ["t1"]},
+    }
+
+
+def test_sync_gateway_hands_the_mcp_run_what_the_python_handler_hands_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.llms.anthropic.messages.native import handler, mcp_handler
+
+    sentinel: Final = object()
+    handed: Final[list[dict[str, object]]] = []
+
+    def run(**kwargs: object) -> object:
+        handed.append(kwargs)
+        return sentinel
+
+    monkeypatch.setattr(mcp_handler, "anthropic_messages_with_mcp", run)
+    monkeypatch.setattr(messages_host, "anthropic_messages_with_mcp", run)
+    request: Final = _gateway_request()
+
+    assert handler.anthropic_messages_handler(**_gateway_request()) is sentinel  # noqa: TID251  # the Python handler under comparison
+    assert messages_host.gateway(request, False) is sentinel
+    assert handed[1] == handed[0]
+    assert handed[1]["model"] == "claude-sonnet-4-5"
+    assert handed[1]["custom_llm_provider"] == "anthropic"
+    assert handed[1]["metadata"] == {"user_id": "u-1"}
+    assert handed[1]["messages"] == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+    assert "_skip_mcp_handler" not in handed[1]
+
+
+def test_async_gateway_tells_the_logger_the_agentic_loop_params_as_the_handler_does(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    sentinel: Final = object()
+    handed: Final[list[dict[str, object]]] = []
+
+    def run(**kwargs: object) -> object:
+        handed.append(kwargs)
+        return sentinel
+
+    monkeypatch.setattr(messages_host, "anthropic_messages_with_mcp", run)
+    logger: Final = Logging(
+        model="anthropic/claude-sonnet-4-5",
+        messages=[],
+        stream=False,
+        call_type="aanthropic_messages",
+        start_time=None,
+        litellm_call_id="call-1",
+        function_id="fn",
+    )
+
+    assert messages_host.gateway({**_gateway_request(), "litellm_logging_obj": logger}, True) is sentinel
+    assert logger.model_call_details["agentic_loop_params"] == {
+        "model": "anthropic/claude-sonnet-4-5",
+        "custom_llm_provider": "anthropic",
+    }
+    assert logger.model_call_details["litellm_params"]["aanthropic_messages"] is True
+    assert "is_async" not in handed[0]
+    assert handed[0]["litellm_logging_obj"] is logger
+
+
+def test_async_gateway_hands_hooked_messages_on_as_already_sanitized(monkeypatch: pytest.MonkeyPatch) -> None:
+    handed: Final[list[dict[str, object]]] = []
+
+    def run(**kwargs: object) -> object:
+        handed.append(kwargs)
+        return None
+
+    monkeypatch.setattr(messages_host, "anthropic_messages_with_mcp", run)
+    hooked: Final = [
+        {"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}]}
+    ]
+
+    messages_host.gateway({**_gateway_request(), "messages": hooked}, True, hooked=True)
+
+    assert handed[0]["messages"] == hooked
+
+
+def test_sync_answer_serves_the_gateway_after_a_mock(monkeypatch: pytest.MonkeyPatch) -> None:
+    sentinel: Final = object()
+
+    def run(**_: object) -> object:
+        return sentinel
+
+    monkeypatch.setattr(messages_host, "anthropic_messages_with_mcp", run)
+
+    served: Final = messages_host.sync_answer(_gateway_request())
+    mocked: Final = messages_host.sync_answer({**_gateway_request(), "mock_response": "hi"})
+
+    assert served is not None and served.value is sentinel
+    assert mocked is not None and isinstance(mocked.value, dict)
+    assert messages_host.sync_answer({**_CALL, "model": "anthropic/claude-sonnet-4-5"}) is None

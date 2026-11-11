@@ -84,6 +84,8 @@ pub struct MessagesSettings {
     pub drops_unsupported_params: bool,
     #[serde(default)]
     pub intercepted: bool,
+    #[serde(default)]
+    pub mcp_gateway: bool,
 }
 
 impl MessagesSettings {

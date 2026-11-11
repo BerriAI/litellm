@@ -9,7 +9,7 @@ import ipaddress
 import json
 import os
 import socket
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from typing import Final, TypeAlias, cast  # noqa: TID251  # narrows native payloads to public TypedDicts
 
@@ -43,15 +43,25 @@ from litellm.llms.anthropic.common_utils import (
 from litellm.llms.anthropic.messages.native import handler
 from litellm.llms.anthropic.messages.native import utils as native_utils
 from litellm.llms.anthropic.messages.native.handler import (
+    _bridge_target as _bridged,  # pyright: ignore[reportPrivateUsage]  # the handler's own bridge target
+)
+from litellm.llms.anthropic.messages.native.handler import (
+    _BridgeTarget,  # pyright: ignore[reportPrivateUsage]  # the handler's own bridge target
+)
+from litellm.llms.anthropic.messages.native.handler import (
     _native_messages_config as native_messages_config,  # pyright: ignore[reportPrivateUsage]  # the handler's own config lookup
 )
 from litellm.llms.anthropic.messages.native.handler import (
     _resolve_requested_provider as _requested_provider,  # pyright: ignore[reportPrivateUsage]  # the handler's own provider resolution
 )
 from litellm.llms.anthropic.messages.native.handler import (
+    _sets_own_entra_credential as _own_entra_credential,  # pyright: ignore[reportPrivateUsage]  # the handler's own credential check
+)
+from litellm.llms.anthropic.messages.native.handler import (
     _with_deployment_output_effort as _deployment_output_effort,  # pyright: ignore[reportPrivateUsage]  # the handler's own effort rounding
 )
 from litellm.llms.anthropic.messages.native.interceptors import MessagesInterceptor, get_messages_interceptors
+from litellm.llms.anthropic.messages.native.mcp_handler import anthropic_messages_with_mcp
 from litellm.llms.anthropic.messages.native.streaming_iterator import (
     _SSE_FRAME_END,  # pyright: ignore[reportPrivateUsage]  # the handler's own SSE framing
     _SSE_TERMINATOR_OVERLAP,  # pyright: ignore[reportPrivateUsage]  # the handler's own SSE framing
@@ -78,6 +88,7 @@ from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import (
     _merge_messages_header_sources as _merged_headers,  # pyright: ignore[reportPrivateUsage]  # the handler's own header merge
 )
+from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
 from litellm.rust_bridge import detectors, execution, failures
 from litellm.rust_bridge.execution import AsyncStream
 from litellm.rust_bridge.host import cache, callbacks_legacy_python, http_transport
@@ -133,6 +144,7 @@ class MessagesSettings:
     mock_response: Mapping[str, object] | None = None
     stream_cost_model: str | None = None
     extra_headers: Mapping[str, object] | None = None
+    mcp_gateway: bool = False
 
 
 def response(value: Mapping[str, object]) -> AnthropicMessagesResponse:
@@ -719,7 +731,7 @@ def _flag_messages_call(logger: object, asynchronous: bool) -> None:
 
 @dataclass(frozen=True, slots=True)
 class _Answered:
-    value: AnthropicMessagesResponse
+    value: object
 
     def send(self, _value: object) -> execution.Complete:
         return execution.Complete(self.value)
@@ -731,13 +743,14 @@ class _Answered:
         return None
 
 
-def sync_mock(request: Mapping[str, object]) -> _Answered | None:
+def sync_answer(request: Mapping[str, object]) -> _Answered | None:
     logger: Final = request.get("litellm_logging_obj")
     mock: Final = _mock(request, logger, asynchronous=False)
-    if mock is None:
-        return None
-    _flag_messages_call(logger, asynchronous=False)
-    return _Answered(response(mock))
+    if mock is not None:
+        _flag_messages_call(logger, asynchronous=False)
+        return _Answered(response(mock))
+    served: Final = gateway(request, asynchronous=False)
+    return None if served is None else _Answered(served)
 
 
 def _handler_params(request: Mapping[str, object]) -> GenericLiteLLMParams:
@@ -837,6 +850,122 @@ def _with_call_settings(
         model=model,
         stream_cost_model=_stream_cost_model(request),
         extra_headers=_affinity_extra_headers(request, model, explicit_provider),
+        mcp_gateway=_takes_mcp_gateway(request),
+    )
+
+
+def _takes_mcp_gateway(request: Mapping[str, object]) -> bool:
+    tools: Final = optional_sequence(request.get("tools"))
+    return not request.get("_skip_mcp_handler", False) and bool(tools) and may_name_litellm_mcp_gateway(tools)
+
+
+MessagesResult: TypeAlias = AnthropicMessagesResponse | Iterator[bytes] | AsyncIterator[object]
+
+
+def gateway(
+    request: Mapping[str, object], asynchronous: bool, hooked: bool = False
+) -> Coroutine[object, object, MessagesResult] | None:
+    if not _takes_mcp_gateway(request):
+        return None
+    model: Final = str(request["model"])
+    provider: Final = optional_str(request.get("custom_llm_provider"))
+    api_base: Final = optional_str(request.get("api_base"))
+    tools: Final = cast(_JsonBlocks, request.get("tools"))  # cast-ok: handed on unchecked, as the handler does
+    messages: Final = cast(_JsonBlocks, request["messages"])  # cast-ok: handed on unchecked, as the handler does
+    system: Final = cast(  # cast-ok: handed on unchecked, as the handler does
+        str | _JsonBlocks | None, request.get("system")
+    )
+    if not asynchronous:
+        return _gateway(request, messages, system, model=model, provider=provider, tools=tools, presanitized=False)
+    entry_kwargs: Final = {name: value for name, value in request.items() if name not in _ENTRY_PARAMS}
+    entry_messages, entry_system = (
+        (messages, system)
+        if hooked
+        else prepare_native_messages(
+            messages, system, entry_kwargs, model=model, custom_llm_provider=provider, tools=tools, api_base=api_base
+        )
+    )
+    return _gateway(
+        {**request, **entry_kwargs, "is_async": True},
+        entry_messages,
+        entry_system,
+        model=model,
+        provider=handler.provider_after_pre_request_hooks(model, provider, entry_kwargs),
+        tools=tools,
+        presanitized=True,
+    )
+
+
+def _gateway(
+    call: Mapping[str, object],
+    messages: _JsonBlocks,
+    system: str | _JsonBlocks | None,
+    *,
+    model: str,
+    provider: str | None,
+    tools: _JsonBlocks,
+    presanitized: bool,
+) -> Coroutine[object, object, MessagesResult]:
+    kwargs: Final = {name: value for name, value in call.items() if name not in _HANDLER_PARAMS}
+    api_key: Final = optional_str(call.get("api_key"))
+    api_base: Final = optional_str(call.get("api_base"))
+    prepared_messages, prepared_system = prepare_native_messages(
+        messages,
+        system,
+        kwargs,
+        model=model,
+        custom_llm_provider=provider,
+        tools=tools,
+        api_base=api_base,
+        presanitized=presanitized,
+    )
+    metadata: Final = _validate_metadata(call.get("metadata"))
+    is_async: Final = kwargs.pop("is_async", False)
+    logging_obj: Final = kwargs.get("litellm_logging_obj")
+    litellm_params: Final = GenericLiteLLMParams(
+        **kwargs, api_key=api_key, api_base=api_base, custom_llm_provider=provider
+    )
+    resolved_model, resolved_provider, dynamic_api_key, dynamic_api_base = _requested_provider(
+        model, provider, litellm_params
+    )
+    if isinstance(logging_obj, LiteLLMLoggingObj):
+        logging_obj.model_call_details["agentic_loop_params"] = {
+            "model": model,
+            "custom_llm_provider": resolved_provider,
+        }
+        logging_obj.model_call_details.setdefault("litellm_params", {})[CallTypes.aanthropic_messages.value] = is_async
+        if kwargs.get("_websearch_interception_converted_stream", False):
+            logging_obj.model_call_details["websearch_interception_converted_stream"] = True
+    bridge: Final = _bridged(
+        _BridgeTarget(model=model, api_key=api_key, api_base=api_base),
+        _BridgeTarget(
+            model=resolved_model,
+            api_key=None if _own_entra_credential(litellm_params) else dynamic_api_key,
+            api_base=dynamic_api_base,
+        ),
+        resolved_provider,
+    )
+    kwargs.pop("_skip_mcp_handler", False)
+    return anthropic_messages_with_mcp(
+        max_tokens=cast(int, call["max_tokens"]),  # cast-ok: handed on unchecked, as the handler does
+        messages=prepared_messages,
+        model=resolved_model,
+        metadata=metadata,
+        stop_sequences=call.get("stop_sequences"),
+        stream=call.get("stream", False),
+        system=prepared_system,
+        temperature=call.get("temperature"),
+        thinking=call.get("thinking"),
+        tool_choice=call.get("tool_choice"),
+        tools=tools,
+        top_k=call.get("top_k"),
+        top_p=call.get("top_p"),
+        container=call.get("container"),
+        api_key=bridge.api_key,
+        api_base=bridge.api_base,
+        client=call.get("client"),
+        custom_llm_provider=resolved_provider,
+        **kwargs,
     )
 
 

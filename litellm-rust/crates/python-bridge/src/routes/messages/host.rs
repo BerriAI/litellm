@@ -122,6 +122,11 @@ impl From<TransportCall> for MessagesHostCall {
     }
 }
 
+enum Answered {
+    Stream,
+    Whole { verbatim: bool },
+}
+
 #[derive(serde::Deserialize)]
 struct HostSettings {
     #[serde(flatten)]
@@ -149,7 +154,7 @@ pub(super) struct MessagesPythonHost {
     interceptor: Option<Py<PyAny>>,
     pending_answer: Option<Reply<()>>,
     answer: Option<Py<PyAny>>,
-    streamed_answer: bool,
+    answered: Option<Answered>,
 }
 
 impl MessagesPythonHost {
@@ -175,7 +180,7 @@ impl MessagesPythonHost {
             interceptor: None,
             pending_answer: None,
             answer: None,
-            streamed_answer: false,
+            answered: None,
         }
     }
 
@@ -196,18 +201,27 @@ impl MessagesPythonHost {
         stream: bool,
         reply: Reply<()>,
     ) -> PyResult<Option<Py<PyAny>>> {
-        let interceptor = self
-            .interceptor
-            .as_ref()
-            .ok_or(litellm_host_python::Error::MissingState)?;
-        let pending = py.import(ROUTE_HOST_MODULE)?.getattr("answer")?.call1((
-            interceptor,
-            self.view.request(py)?,
-            stream,
-            self.hooked,
-        ))?;
+        let module = py.import(ROUTE_HOST_MODULE)?;
+        let request = self.view.request(py)?;
+        let pending = match &self.interceptor {
+            Some(interceptor) => {
+                module
+                    .getattr("answer")?
+                    .call1((interceptor, request, stream, self.hooked))?
+            }
+            None => module
+                .getattr("gateway")?
+                .call1((request, self.asynchronous, self.hooked))?,
+        };
+        if pending.is_none() {
+            return Err(litellm_host_python::Error::MissingState.into());
+        }
         self.pending_answer = Some(reply);
-        self.streamed_answer = stream;
+        self.answered = Some(match (stream, &self.interceptor) {
+            (true, _) => Answered::Stream,
+            (false, Some(_)) => Answered::Whole { verbatim: false },
+            (false, None) => Answered::Whole { verbatim: true },
+        });
         Ok(Some(pending.unbind()))
     }
 
@@ -514,11 +528,13 @@ impl PythonBinding for MessagesPythonHost {
     }
 
     fn deliver_response(&mut self, py: Python<'_>, response: Py<PyAny>) -> PyResult<Py<PyAny>> {
-        if std::mem::take(&mut self.streamed_answer) {
-            return self.cache.wrap_stream(py, response);
-        }
-        if !self.requested_stream {
-            self.cache.store_response(py, response.bind(py))?;
+        match self.answered.take() {
+            Some(Answered::Stream) => return self.cache.wrap_stream(py, response),
+            Some(Answered::Whole { verbatim }) => {
+                self.cache.store_response(py, response.bind(py), verbatim)?;
+            }
+            None if self.requested_stream => {}
+            None => self.cache.store_response(py, response.bind(py), false)?,
         }
         Ok(response)
     }
@@ -631,7 +647,7 @@ impl PythonOwned for MessagesPythonHost {
         self.interceptor = None;
         self.pending_answer = None;
         self.answer = None;
-        self.streamed_answer = false;
+        self.answered = None;
     }
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
         self.view.traverse(visit)?;

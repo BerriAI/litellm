@@ -1,6 +1,6 @@
 import asyncio
 import datetime
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Final
 
 import pytest
@@ -10,7 +10,7 @@ from litellm.caching.caching import Cache
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.anthropic.messages.native.response_cache import AnthropicMessagesStreamCacheWriter
-from litellm.rust_bridge.host.cache import configured_cache, store_response, wrap_stream
+from litellm.rust_bridge.host.cache import configured_cache, store_response, store_verbatim, wrap_stream
 from litellm.types.caching import LiteLLMCacheType
 
 
@@ -30,9 +30,9 @@ def test_configured_cache_preserves_identity_and_observes_runtime_replacement(mo
 _REQUEST: Final = {"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "hi"}]}
 
 
-async def _stored(response: dict[str, object]) -> object:
+async def _stored(response: dict[str, object], store: Callable[..., None] = store_response) -> object:
     cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
-    store_response(cache, response, **_REQUEST)
+    store(cache, response, **_REQUEST)
     await asyncio.gather(*_PENDING_CACHE_WRITES)
     return await cache.async_get_cache(**_REQUEST)
 
@@ -101,3 +101,12 @@ def test_wrap_stream_leaves_a_stream_the_cache_would_not_store(monkeypatch: pyte
         )
         is stream
     )
+
+
+@pytest.mark.asyncio
+async def test_store_verbatim_keeps_the_rust_marker_header_in_the_cached_entry() -> None:
+    response: Final[dict[str, object]] = {
+        "id": "msg_3",
+        "_hidden_params": {"additional_headers": {"x-litellm-rust": "true", "llm_provider-x": "1"}},
+    }
+    assert await _stored(response, store_verbatim) == response
