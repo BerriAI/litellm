@@ -18,6 +18,7 @@ from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import REMOTE_URL_PREFIXES
+from litellm.litellm_core_utils.prompt_templates.image_handling import convert_url_to_base64
 from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
@@ -48,7 +49,7 @@ def _file_part_upload_source(part: Mapping[str, object]) -> str | None:
         case {"type": "file", "file": {"file_data": str() as file_data}} if file_data:
             return file_data
         case {"type": "file", "file": {"file_id": str() as file_id}} if file_id.startswith(REMOTE_URL_PREFIXES):
-            return file_id
+            return convert_url_to_base64(file_id)
         case _:
             return None
 
