@@ -168,7 +168,9 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         self, model: str, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
     ) -> bool:
         return bedrock_native_output_retry_requested(
-            model, optional_params, model_info=deployment_model_info(litellm_params)
+            bedrock_capability_model(model, litellm_params.get("base_model")),
+            optional_params,
+            model_info=deployment_model_info(litellm_params),
         )
 
     def map_openai_params(

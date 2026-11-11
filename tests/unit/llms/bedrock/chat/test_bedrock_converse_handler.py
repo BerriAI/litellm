@@ -351,7 +351,9 @@ _FAKE_STREAMED_REQUESTS: Final = pytest.mark.parametrize(
 )
 
 
-def _bedrock_router(model: str, *, timeout: float, stream_timeout: float) -> litellm.Router:
+def _bedrock_router(
+    model: str, *, timeout: float, stream_timeout: float, base_model: str | None = None
+) -> litellm.Router:
     return litellm.Router(
         model_list=[
             {
@@ -361,6 +363,7 @@ def _bedrock_router(model: str, *, timeout: float, stream_timeout: float) -> lit
                     "aws_access_key_id": "fake",
                     "aws_secret_access_key": "fake",
                     "aws_region_name": "us-east-1",
+                    **({} if base_model is None else {"base_model": base_model}),
                 },
             }
         ],
@@ -709,14 +712,23 @@ def _denies_invoke_streaming_and_rejects_native_output(request: httpx.Request) -
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "base_model"),
+    [
+        ("bedrock/invoke/us.anthropic.claude-opus-5-5", None),
+        (
+            "bedrock/invoke/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123",
+            "us.anthropic.claude-opus-5-5",
+        ),
+    ],
+    ids=["model-id", "arn-with-base-model"],
+)
 async def test_a_rejected_schema_after_a_denied_invoke_stream_falls_back_to_the_json_tool_still_buffered(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, model: str, base_model: str | None
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(side_effect=_denies_invoke_streaming_and_rejects_native_output)
-    router: Final = _bedrock_router(
-        "bedrock/invoke/us.anthropic.claude-opus-5-5", timeout=60, stream_timeout=STREAM_TIMEOUT_SECONDS
-    )
+    router: Final = _bedrock_router(model, timeout=60, stream_timeout=STREAM_TIMEOUT_SECONDS, base_model=base_model)
 
     response: Final = await router.acompletion(
         model="bedrock",

@@ -5832,13 +5832,15 @@ def get_optional_params(
             drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "bedrock":
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
         from litellm.llms.bedrock.common_utils import bedrock_capability_model, invoke_model_with_base_model_provider
 
         bedrock_model_info: Final[type[BedrockModelInfo]] = litellm_utils.BedrockModelInfo
         bedrock_base_model: Final = bedrock_model_info.get_base_model(model)
-        capability_model: Final = bedrock_capability_model(
-            invoke_model_with_base_model_provider(model, base_model) if bedrock_route == "invoke" else model, base_model
+        routed_model: Final = (
+            invoke_model_with_base_model_provider(model, base_model) if bedrock_route == "invoke" else model
         )
+        capability_model: Final = bedrock_capability_model(routed_model, base_model)
         if bedrock_route == "converse" or bedrock_route == "converse_like":
             optional_params = litellm.AmazonConverseConfig().map_openai_params(
                 model=capability_model,
@@ -5854,7 +5856,7 @@ def get_optional_params(
                 optional_params=optional_params,
                 drop_params=bool(drop_params),
             )
-        elif "anthropic" in bedrock_base_model and bedrock_route == "invoke":
+        elif bedrock_route == "invoke" and BaseAWSLLM.get_bedrock_invoke_provider(routed_model) == "anthropic":
             if bedrock_base_model in litellm.AmazonAnthropicConfig.get_legacy_anthropic_model_names():
                 optional_params = litellm.AmazonAnthropicConfig().map_openai_params(
                     non_default_params=non_default_params,
