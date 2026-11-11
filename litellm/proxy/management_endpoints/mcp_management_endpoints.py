@@ -70,6 +70,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
 from litellm.proxy.management_endpoints.sso.id_jag_assertion_capture import (
     id_jag_assertion_capture_gap,
 )
+from litellm.proxy.management_helpers.access_group_member_sync import sync_access_groups_for_deleted_mcp_server
 from litellm.proxy.management_helpers.audit_logs import (
     get_audit_log_changed_by,
     is_audit_logging_enabled,
@@ -2636,6 +2637,8 @@ if MCP_AVAILABLE:
 
         # Ensure registry is up to date by reloading from database
         await global_mcp_server_manager.reload_servers_from_database()
+
+        await sync_access_groups_for_deleted_mcp_server(prisma_client, server_id=server_id)
 
         # TODO: Enterprise: Finish audit log trail
         if is_audit_logging_enabled():
