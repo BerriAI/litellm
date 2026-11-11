@@ -928,23 +928,21 @@ def image_edit(
                 raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
 
             model_response: Final = ImageResponse()
-            custom_optional_params: Final = _OBJECT_DICT_ADAPTER.validate_python(
-                {
-                    **kwargs,
-                    **{
-                        key: value
-                        for key, value in {
-                            "mask": _single_mask(mask),
-                            "n": n,
-                            "quality": quality,
-                            "response_format": response_format,
-                            "size": size,
-                            "user": user,
-                        }.items()
-                        if value is not None and key not in additional_drop_params
-                    },
-                }
-            )
+            explicit_edit_params: Final = {
+                "mask": _single_mask(mask),
+                "n": n,
+                "quality": quality,
+                "response_format": response_format,
+                "size": size,
+                "user": user,
+            }
+            requested_edit_params: Final = {
+                **_OBJECT_DICT_ADAPTER.validate_python(kwargs),
+                **{key: value for key, value in explicit_edit_params.items() if value is not None},
+            }
+            custom_optional_params: Final = {
+                key: value for key, value in requested_edit_params.items() if key not in additional_drop_params
+            }
 
             if _is_async:
                 async_custom_client: AsyncHTTPHandler | None = None
