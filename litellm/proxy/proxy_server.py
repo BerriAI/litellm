@@ -9024,9 +9024,8 @@ class ProxyConfig:
         proxy_logging_obj: ProxyLogging,
     ) -> ReconcileOutcome:
         """add_deployment's body, minus the locking. DB_RECONCILE_LOCK MUST already
-        be held. Split out for the one caller that has to hold the lock across more than
-        this reconcile -- clear_cache, which un-serves every db model before calling it
-        and would deadlock on a re-acquire."""
+        be held. Split out for clear_cache, which already holds the lock and would
+        deadlock on a re-acquire."""
         global llm_router, llm_model_list, master_key, general_settings
 
         still_desired_ids: frozenset[str] | None = None
