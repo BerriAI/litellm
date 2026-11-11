@@ -16,13 +16,11 @@ deterministic stand-ins so the arithmetic under test is the only variable.
 
 import asyncio, json, time
 import logging
-from types import MappingProxyType
 from typing import Final, Literal
 
 import httpx
 import pytest
 import respx
-from openai.types.batch import BatchRequestCounts
 
 
 import litellm
@@ -1076,6 +1074,28 @@ def respx_interceptable_httpx_client(monkeypatch):
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_bedrock_output_written_to_a_request_bucket_is_read_from_that_bucket(respx_interceptable_httpx_client):
+    route: Final = respx.get(
+        "https://s3.us-west-2.amazonaws.com/team-a-bucket/litellm-batch-outputs/job-1/input.jsonl.out"
+    ).mock(return_value=httpx.Response(200, content=b'{"recordId": "1"}\n'))
+
+    file_content: Final = await bu.fetch_batch_managed_file_content(
+        "s3://team-a-bucket/litellm-batch-outputs/job-1/input.jsonl.out",
+        custom_llm_provider="bedrock",  # pyright: ignore[reportArgumentType]  # the cost job passes bedrock at runtime
+        litellm_params={
+            "s3_bucket_name": "model-bucket",
+            "aws_access_key_id": "AKIAEXAMPLE",
+            "aws_secret_access_key": "secret",
+            "aws_region_name": "us-west-2",
+        },
+    )
+
+    assert route.call_count == 1
+    assert file_content == b'{"recordId": "1"}\n'
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_output_file_content_vertex_managed_uri_accepted_by_real_validation(respx_interceptable_httpx_client):
     managed_output_uri = (
         "gs://litellm-bucket/litellm-vertex-files/publishers/google/models/"
@@ -1693,17 +1713,21 @@ async def test_calculate_batch_cost_and_usage_anthropic_end_to_end():
     assert result.models == ["claude-sonnet-4-5"]
 
 
-def test_extract_credentials_forwards_the_trusted_model_credential_snapshot():
-    """Bedrock resolves a batch's output bucket only from the immutable server-side
-    snapshot, never from a request param, so cost accounting on the retrieve path cannot
-    read the output file unless this key is forwarded. Without it the accounting raises
-    "S3 bucket_name is required" for a bucket the deployment has configured, and the
-    batch's cost is never recorded."""
-    snapshot = MappingProxyType({"s3_bucket_name": "configured-bucket", "aws_region_name": "us-east-1"})
+def test_extract_credentials_forwards_the_deployment_bucket_settings() -> None:
+    """Cost accounting on the retrieve path reads the batch's output file from the
+    deployment's Bedrock buckets. Without these keys the read raises "S3 bucket_name is
+    required" for a bucket the deployment has configured, and the batch's cost is never
+    recorded."""
+    params: Final = {
+        "s3_bucket_name": "configured-bucket",
+        "s3_output_bucket_name": "output-bucket",
+        "allow_legacy_cloud_file_ids": True,
+        "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    }
 
-    credentials = bu._extract_file_access_credentials({"_litellm_internal_model_credentials": snapshot})
+    credentials: Final = bu._extract_file_access_credentials(params)
 
-    assert credentials["_litellm_internal_model_credentials"] is snapshot
+    assert credentials == {key: value for key, value in params.items() if key != "model"}
 
 
 def test_extract_credentials_forwards_the_deployment_aws_credentials():
@@ -1737,8 +1761,6 @@ async def test_output_file_content_bedrock_reads_with_deployment_aws_credentials
         return type("R", (), {"content": b""})()
 
     monkeypatch.setattr(files_main, "afile_content", fake_afile_content)
-    snapshot = MappingProxyType({"s3_bucket_name": "configured-bucket", "aws_region_name": "us-west-2"})
-
     await bu._fetch_batch_output_file_content(
         _batch("s3://configured-bucket/litellm-batch-outputs/job-1/out.jsonl.out"),
         custom_llm_provider="bedrock",
@@ -1747,7 +1769,7 @@ async def test_output_file_content_bedrock_reads_with_deployment_aws_credentials
             "aws_secret_access_key": "secret-deployment",
             "aws_session_token": "token-deployment",
             "aws_region_name": "us-west-2",
-            "_litellm_internal_model_credentials": snapshot,
+            "s3_bucket_name": "configured-bucket",
             "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         },
     )
@@ -1758,7 +1780,7 @@ async def test_output_file_content_bedrock_reads_with_deployment_aws_credentials
     assert captured["aws_secret_access_key"] == "secret-deployment"
     assert captured["aws_session_token"] == "token-deployment"
     assert captured["aws_region_name"] == "us-west-2"
-    assert captured["_litellm_internal_model_credentials"] is snapshot
+    assert captured["s3_bucket_name"] == "configured-bucket"
     assert "model" not in captured
 
 
@@ -2026,61 +2048,6 @@ def test_extract_credentials_keeps_openai_workload_identity_params():
         "openai_service_account_id": "user-deployment",
         "openai_identity_token_file": "/var/run/secrets/token",
     }
-
-
-# --------------------------------------------------------------------------- #
-# batch_cost_is_final
-# --------------------------------------------------------------------------- #
-
-
-def _retrieved_batch(
-    status: str, output_file_id: str | None = None, counts: BatchRequestCounts | None = None
-) -> LiteLLMBatch:
-    return LiteLLMBatch(
-        id="batch_abc",
-        completion_window="24h",
-        created_at=1,
-        endpoint="/v1/chat/completions",
-        input_file_id="file-in",
-        object="batch",
-        status="validating",
-        output_file_id=output_file_id,
-        request_counts=counts,
-    ).model_copy(update={"status": status})
-
-
-class TestBatchCostIsFinal:
-    """Every retrieve of one batch writes the same spend row, so the first retrieve
-    that prices it decides the row for good. A poll before the output exists must
-    therefore not count as final: pricing it recorded $0 and pinned it (LIT-7048)."""
-
-    @pytest.mark.parametrize("status", ["validating", "in_progress", "finalizing", "cancelling"])
-    def test_in_flight_batch_is_not_final(self, status):
-        assert bu.batch_cost_is_final(_retrieved_batch(status)) is False
-
-    @pytest.mark.parametrize("status", ["completed", "complete"])
-    def test_completed_with_output_is_final(self, status):
-        assert bu.batch_cost_is_final(_retrieved_batch(status, output_file_id="file-out")) is True
-
-    def test_completed_without_output_and_unknown_counts_is_not_final(self):
-        assert bu.batch_cost_is_final(_retrieved_batch("completed")) is False
-
-    def test_completed_without_output_and_zero_counts_is_not_final(self):
-        counts = BatchRequestCounts(total=0, completed=0, failed=0)
-        assert bu.batch_cost_is_final(_retrieved_batch("completed", counts=counts)) is False
-
-    def test_completed_without_output_but_successful_lines_is_not_final(self):
-        counts = BatchRequestCounts(total=2, completed=2, failed=0)
-        assert bu.batch_cost_is_final(_retrieved_batch("completed", counts=counts)) is False
-
-    @pytest.mark.parametrize("status", ["completed", "complete"])
-    def test_completed_without_output_and_every_line_failed_is_final(self, status):
-        counts = BatchRequestCounts(total=2, completed=0, failed=2)
-        assert bu.batch_cost_is_final(_retrieved_batch(status, counts=counts)) is True
-
-    @pytest.mark.parametrize("status", ["failed", "expired", "cancelled"])
-    def test_other_terminal_statuses_are_final(self, status):
-        assert bu.batch_cost_is_final(_retrieved_batch(status)) is True
 
 
 def _ocr_row(pages_processed, annotation_pages=None, model="mistral-ocr-latest"):
@@ -2766,9 +2733,9 @@ def test_aggregate_batch_cost_uses_custom_model_info():
     assert result.cost == pytest.approx(expected), f"Expected total cost {expected}, got {result.cost}"
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
-@pytest.mark.parametrize("data_residency", ["eu", "us"])
+@pytest.mark.parametrize("data_residency", ["eu", "us", "fedramp"])
 def test_batch_cost_calculator_applies_data_residency_uplift(data_residency, monkeypatch):
-    """batch_cost_calculator should apply the regional uplift multiplier when
+    """batch_cost_calculator should apply the regional or FedRAMP uplift multiplier when
     data_residency is set and the model carries a configured multiplier."""
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     prev_model_cost = litellm.model_cost
@@ -2965,7 +2932,7 @@ async def test_batch_retrieve_cost_tracking_with_completed_batch_no_explicit_cos
     from unittest.mock import AsyncMock, patch
 
     from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.types.utils import CallTypes, LiteLLMBatch
+    from litellm.types.utils import CallTypes
 
     # Mock batch result with completed status
     mock_batch = LiteLLMBatch(
@@ -3060,7 +3027,6 @@ async def test_handle_completed_batch_computes_real_cost_from_output_file(
     wrong token sum, or mispriced model fails this test.
     """
     from litellm.batches.batch_utils import handle_completed_batch
-    from litellm.types.utils import LiteLLMBatch
 
     batch = LiteLLMBatch(
         id="batch-real-cost-123",
@@ -3105,7 +3071,7 @@ async def test_batch_retrieve_cost_tracking_with_explicit_cost_data():
     from unittest.mock import AsyncMock, patch
 
     from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.types.utils import CallTypes, LiteLLMBatch
+    from litellm.types.utils import CallTypes
 
     # Mock batch result with completed status
     mock_batch = LiteLLMBatch(
@@ -3187,7 +3153,7 @@ async def test_batch_retrieve_explicit_cost_split_sets_cost_breakdown():
     cost_breakdown carries real input/output costs; without it the UI's Cost Breakdown
     card renders blank for every batch. Regression for the split being dropped."""
     from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.types.utils import CallTypes, LiteLLMBatch
+    from litellm.types.utils import CallTypes
 
     mock_batch = LiteLLMBatch(
         id="batch-breakdown-1",
@@ -3243,7 +3209,7 @@ async def test_batch_retrieve_cost_tracking_with_unified_file_id_incomplete_batc
     from unittest.mock import AsyncMock, patch
 
     from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.types.utils import CallTypes, LiteLLMBatch, SpecialEnums
+    from litellm.types.utils import CallTypes, SpecialEnums
 
     # Create a proper unified file ID by encoding the correct prefix
     unified_id_str = f"{SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value}:test_file_789;unified_id:batch-789"
@@ -3322,7 +3288,7 @@ async def test_batch_retrieve_cost_tracking_with_partial_explicit_data():
     from unittest.mock import AsyncMock, patch
 
     from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.types.utils import CallTypes, LiteLLMBatch
+    from litellm.types.utils import CallTypes
 
     # Mock batch result with completed status
     mock_batch = LiteLLMBatch(

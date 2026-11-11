@@ -133,10 +133,8 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     get_management_object_ttl,
     model_access_group_cache_key,
     model_access_group_registry_cache_key,
-    model_access_group_spend_counter_key,
     object_permission_cache_key,
     project_cache_key,
-    project_spend_counter_key,
     tag_cache_key,
     tag_registry_cache_key,
     team_membership_auth_cache_key,
@@ -151,8 +149,21 @@ from litellm.proxy.guardrails.tool_name_extraction import (
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.spend_tracking.carried_budget_state import carry_organization_budget_state
-from litellm.proxy.spend_tracking.spend_counter_batch import SPEND_COUNTERS_TARGET
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
+from litellm.redis.stores.spend_counters import (
+    SPEND_COUNTERS_TARGET,
+    end_user_counter,
+    key_counter,
+    key_window_counter,
+    model_access_group_counter,
+    org_counter,
+    project_counter,
+    tag_counter,
+    team_counter,
+    team_member_counter,
+    team_window_counter,
+    user_counter,
+)
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.organization_repository import OrganizationRepository
@@ -169,6 +180,7 @@ from litellm.repositories.table_repositories import (
 )
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
+from litellm.responses.additional_tools import additional_tools_in_input
 from litellm.router import Router
 from litellm.router_api import RegistryReader
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
@@ -545,7 +557,7 @@ def _get_router_zero_cost_cache(llm_router: RegistryReader) -> dict[str, bool] |
     return cache if isinstance(cache, dict) else None
 
 
-def is_model_cost_zero(model: str | list[str] | None, llm_router: RegistryReader | None) -> bool:
+def is_model_cost_zero(model: str | Sequence[str] | None, llm_router: RegistryReader | None) -> bool:
     """
     Check if a model has zero cost (no configured pricing).
 
@@ -574,7 +586,6 @@ def is_model_cost_zero(model: str | list[str] | None, llm_router: RegistryReader
                     return False
                 continue
         try:
-            # Use the router registry's group info directly for better reliability
             model_group_info = llm_router.registry().group(model_name, include_hidden=True)
 
             if model_group_info is None:
@@ -1027,15 +1038,15 @@ async def check_tools_allowlist(
     call_types: Final = get_call_types_for_route(route)
     if not call_types or not any(ct.value in TOOL_CAPABLE_CALL_TYPES for ct in call_types):
         return
-    tool_names: Final = extract_request_tool_names(route, request_body)
-    if not tool_names:
-        return
     key_meta: Final = (valid_token.metadata or {}) if isinstance(valid_token.metadata, dict) else {}
     team_meta: Final = (valid_token.team_metadata or {}) if isinstance(valid_token.team_metadata, dict) else {}
     key_allowed: Final = key_meta.get("allowed_tools")
     team_allowed: Final = team_meta.get("allowed_tools")
     effective: Final = key_allowed if (isinstance(key_allowed, list) and len(key_allowed) > 0) else team_allowed
     if not isinstance(effective, list) or len(effective) == 0:
+        return
+    tool_names: Final = extract_request_tool_names(route, request_body)
+    if not tool_names:
         return
     allowed_set: Final = {str(t) for t in effective}
     disallowed: Final = [n for n in tool_names if n not in allowed_set]
@@ -1111,7 +1122,7 @@ def route_skips_budget_checks(route: str) -> bool:
 
 def request_skips_budget_checks(
     route: str,
-    model: str | list[str] | None,
+    model: str | Sequence[str] | None,
     llm_router: Router | None,
     *,
     request_body: Mapping[str, object] | None = None,
@@ -1135,7 +1146,7 @@ async def common_checks(
     proxy_logging_obj: ProxyLogging,
     valid_token: UserAPIKeyAuth | None,
     request: Request,
-    skip_budget_checks: bool = False,
+    skip_budget_checks: bool | None = None,
     project_object: LiteLLM_ProjectTableCachedObj | None = None,
 ) -> bool:
     """
@@ -1170,11 +1181,15 @@ async def common_checks(
         team_id=valid_token.team_id if valid_token is not None else None,
     )
 
-    skip_all_budget_checks: Final = skip_budget_checks or request_skips_budget_checks(
-        route=route,
-        model=_model,
-        llm_router=llm_router,
-        request_body=_typed_request_body(request_body),
+    skip_all_budget_checks: Final = (
+        skip_budget_checks
+        if skip_budget_checks is not None
+        else request_skips_budget_checks(
+            route=route,
+            model=_model,
+            llm_router=llm_router,
+            request_body=_typed_request_body(request_body),
+        )
     )
 
     membership_user_id: Final = (
@@ -1427,7 +1442,7 @@ async def common_checks(
 
             user_budget: Final = user_object.max_budget
             user_spend: Final = await get_current_spend(
-                counter_key=f"spend:user:{user_object.user_id}",
+                counter_key=user_counter(user_object.user_id),
                 fallback_spend=user_object.spend or 0.0,
                 max_budget=user_budget,
             )
@@ -1975,7 +1990,7 @@ async def check_end_user_budget(
     from litellm.proxy.proxy_server import get_current_spend
 
     end_user_spend: Final = await get_current_spend(
-        counter_key=f"spend:end_user:{end_user_obj.user_id}",
+        counter_key=end_user_counter(end_user_obj.user_id),
         fallback_spend=end_user_obj.spend or 0.0,
         max_budget=end_user_budget,
         fallback_authoritative=True,
@@ -3188,7 +3203,7 @@ async def cache_team_object(
     usage_cache: Final = None if proxy_logging_obj is None else proxy_logging_obj.internal_usage_cache.dual_cache
     # On a shared Redis the write below replaces the team entry and the alias DEL below removes the alias entry
     # for both caches, so the usage cache only has its own memory to clear.
-    redis_shared: Final = usage_cache is not None and usage_cache.redis_cache is user_api_key_cache.redis_cache
+    redis_shared: Final = usage_cache is not None and usage_cache.redis_cache is user_api_key_cache.redis_connection
 
     await _invalidate_usage_cache_entry(usage_cache, key, redis_shared=redis_shared, stale="team object")
 
@@ -3329,37 +3344,40 @@ async def invalidate_team_member_spend_state(
     await await_inflight_team_membership_load(user_id=user_id, team_id=team_id)
 
     if new_spend is not None:
-        from litellm.proxy.proxy_server import SPEND_DB_FLOOR_CACHE_TTL_SECONDS, spend_counter_cache
+        from litellm.proxy.proxy_server import (
+            SPEND_DB_FLOOR_CACHE_TTL_SECONDS,
+            spend_counter_cache,
+            spend_counter_store,
+        )
 
-        spend_counter_key: Final = f"spend:team_member:{user_id}:{team_id}"
+        spend_counter_key: Final = team_member_counter(user_id, team_id)
         spend_db_floor_key: Final = f"spend_db_floor:{spend_counter_key}"
 
-        spend_counter_cache.in_memory_cache.set_cache(key=spend_counter_key, value=new_spend, ttl=60)
-        if spend_counter_cache.redis_cache is not None:
+        try:
+            await spend_counter_store.set(spend_counter_key, new_spend, ttl=60)
+        except Exception as e:  # noqa: BLE001  # fall back to deleting the stale entry before giving up
+            verbose_proxy_logger.warning(
+                "Failed to set spend counter %s in Redis after reset: %s; deleting it instead so the next "
+                "read reseeds from the DB rather than keeping the stale pre-reset value authoritative",
+                spend_counter_key,
+                e,
+            )
             try:
-                await spend_counter_cache.redis_cache.async_set_cache(key=spend_counter_key, value=new_spend, ttl=60)
-            except Exception as e:  # noqa: BLE001  # fall back to deleting the stale entry before giving up
+                await spend_counter_store.delete((spend_counter_key,))
+            except Exception:  # noqa: BLE001  # stale value now authoritative in Redis; surface instead of reporting success
                 verbose_proxy_logger.warning(
-                    "Failed to set spend counter %s in Redis after reset: %s; deleting it instead so the next "
-                    "read reseeds from the DB rather than keeping the stale pre-reset value authoritative",
+                    "Failed to delete stale spend counter %s in Redis after a failed reset write",
                     spend_counter_key,
-                    e,
+                    exc_info=True,
                 )
-                try:
-                    await spend_counter_cache.redis_cache.async_delete_cache(key=spend_counter_key)
-                except Exception:  # noqa: BLE001  # stale value now authoritative in Redis; surface instead of reporting success
-                    verbose_proxy_logger.warning(
-                        "Failed to delete stale spend counter %s in Redis after a failed reset write",
-                        spend_counter_key,
-                        exc_info=True,
-                    )
-                    raise HTTPException(
-                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                        detail={
-                            "error": "Spend was reset in the database, but Redis is unreachable and still "
-                            "holds the pre-reset counter. Retry once Redis is reachable."
-                        },
-                    ) from e
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail={
+                        "error": "Spend was reset in the database, but Redis is unreachable and still "
+                        "holds the pre-reset counter. Retry once Redis is reachable."
+                    },
+                ) from e
+            spend_counter_store.set_local(spend_counter_key, new_spend, ttl=60)
 
         spend_counter_cache.in_memory_cache.set_cache(
             key=spend_db_floor_key,
@@ -4955,11 +4973,9 @@ def _owning_team_names_for_team_deployment(
     if llm_router is None or team_id is None or not model.startswith(f"model_name_{team_id}_"):
         return ()
     deployment: Final = llm_router.registry().deployments(model, source="first_in_group")
-    public_name: Final = (
-        deployment.model_info.team_public_model_name
-        if deployment is not None and deployment.model_info.team_id == team_id
-        else None
-    )
+    if deployment is None or deployment.model_info.team_id != team_id:
+        return ()
+    public_name: Final = deployment.model_info.team_public_model_name
     legacy_aliases: Final = tuple(alias for alias, target in (team_model_aliases or {}).items() if target == model)
     return (*((public_name,) if public_name else ()), *legacy_aliases)
 
@@ -5827,7 +5843,7 @@ async def get_authorized_resources_from_key_access_groups(
             continue
         team_authorized = bool(key_team_id and key_team_id in (ag.assigned_team_ids or []))
         key_authorized = bool(key_token and key_token in (ag.assigned_key_ids or []))
-        if team_authorized or key_authorized:
+        if team_authorized or key_authorized or ag_id in valid_token.access_group_rule_grants:
             authorized_resources.extend(getattr(ag, resource_field, []) or [])
 
     return list(set(authorized_resources))
@@ -6723,7 +6739,7 @@ async def virtual_key_max_budget_check(
         from litellm.proxy.proxy_server import get_current_spend
 
         fallback_spend: Final = valid_token.spend or 0.0
-        counter_key: Final = f"spend:key:{valid_token.token}"
+        counter_key: Final = key_counter(str(valid_token.token))
 
         # Read spend from cross-pod counter (Redis-first) or cached object (fallback)
         spend: Final = await get_current_spend(
@@ -6812,7 +6828,7 @@ async def _virtual_key_multi_budget_check(
 
     for window in valid_token.budget_limits:
         w: dict = window if isinstance(window, dict) else window.model_dump()
-        counter_key = f"spend:key:{valid_token.token}:window:{w['budget_duration']}"
+        counter_key = key_window_counter(str(valid_token.token), str(w["budget_duration"]))
         window_spend = await get_current_spend(
             counter_key=counter_key,
             fallback_spend=0.0,
@@ -7064,6 +7080,27 @@ def team_member_max_budget_alert_check(
 _team_member_max_budget_alert_check: Final = team_member_max_budget_alert_check
 
 
+def _raise_team_member_without_membership(user_id: str, team_id: str) -> None:
+    from litellm.proxy.litellm_pre_call_utils import sanitize_for_log
+
+    verbose_proxy_logger.warning(
+        "fail_closed_budget_enforcement: rejecting request, user_id=%s has no membership row in team_id=%s "
+        "so spend against the team member budget cannot be verified",
+        sanitize_for_log(user_id),
+        sanitize_for_log(team_id),
+    )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={
+            "error": (
+                f"User={user_id} has no membership in Team={team_id}, so their spend against the team member "
+                "budget cannot be verified and fail_closed_budget_enforcement is enabled. Add them to the team "
+                "with POST /team/member_add."
+            )
+        },
+    )
+
+
 async def _check_team_member_budget(
     team_object: LiteLLM_TeamTable | None,
     user_object: LiteLLM_UserTable | None,
@@ -7113,13 +7150,16 @@ async def _check_team_member_budget(
         )
 
         if team_member_budget is not None:
+            from litellm.proxy.proxy_server import fail_closed_budget_enforcement_enabled, get_current_spend
+
+            if loaded_membership is None and fail_closed_budget_enforcement_enabled():
+                _raise_team_member_without_membership(user_id=valid_token.user_id, team_id=team_object.team_id)
+
             team_member_spend = (loaded_membership.spend if loaded_membership is not None else 0.0) or 0.0
 
             # Read from cross-pod counter (Redis-first) if available
-            from litellm.proxy.proxy_server import get_current_spend
-
             team_member_spend = await get_current_spend(
-                counter_key=f"spend:team_member:{valid_token.user_id}:{team_object.team_id}",
+                counter_key=team_member_counter(valid_token.user_id, team_object.team_id),
                 fallback_spend=team_member_spend,
                 max_budget=team_member_budget,
             )
@@ -7231,7 +7271,7 @@ async def team_max_budget_check(
 
         # Read spend from cross-pod counter (Redis-first) or cached object (fallback)
         spend: Final = await get_current_spend(
-            counter_key=f"spend:team:{team_object.team_id}",
+            counter_key=team_counter(team_object.team_id),
             fallback_spend=team_object.spend or 0.0,
             max_budget=team_object.max_budget,
         )
@@ -7284,7 +7324,7 @@ async def _team_multi_budget_check(
 
     for window in team_object.budget_limits:
         w: dict = window if isinstance(window, dict) else window.model_dump()
-        counter_key = f"spend:team:{team_object.team_id}:window:{w['budget_duration']}"
+        counter_key = team_window_counter(team_object.team_id, str(w["budget_duration"]))
         window_spend = await get_current_spend(
             counter_key=counter_key,
             fallback_spend=0.0,
@@ -7403,7 +7443,7 @@ async def _project_max_budget_check(
     from litellm.proxy.proxy_server import get_current_spend
 
     project_spend: Final = await get_current_spend(
-        counter_key=project_spend_counter_key(project_object.project_id),
+        counter_key=project_counter(project_object.project_id),
         fallback_spend=project_object.spend or 0.0,
         max_budget=max_budget,
     )
@@ -7610,7 +7650,7 @@ async def organization_max_budget_check(
     from litellm.proxy.proxy_server import get_current_spend
 
     org_spend: Final = await get_current_spend(
-        counter_key=f"spend:org:{org_id}",
+        counter_key=org_counter(org_id),
         fallback_spend=org_table.spend or 0.0,
         max_budget=org_max_budget,
     )
@@ -7700,7 +7740,7 @@ async def tag_max_budget_check_for_tags(
             from litellm.proxy.proxy_server import get_current_spend
 
             tag_spend = await get_current_spend(
-                counter_key=f"spend:tag:{tag_name}",
+                counter_key=tag_counter(tag_name),
                 fallback_spend=tag_object.spend or 0.0,
                 max_budget=tag_object.litellm_budget_table.max_budget,
                 fallback_authoritative=True,
@@ -7755,7 +7795,7 @@ async def _model_access_group_max_budget_check(
             continue
 
         group_spend = await get_current_spend(
-            counter_key=model_access_group_spend_counter_key(group),
+            counter_key=model_access_group_counter(group),
             fallback_spend=budget.spend,
             max_budget=budget.max_budget,
             fallback_authoritative=True,
@@ -7975,6 +8015,10 @@ def _tools(tools: object) -> tuple[object, ...]:
         return ()
 
 
+def _request_tools(request_body: Mapping[str, object]) -> tuple[object, ...]:
+    return (*_tools(request_body.get("tools")), *additional_tools_in_input(request_body.get("input")))
+
+
 def _tool_vector_store_ids(tool: object) -> tuple[str, ...]:
     try:
         tool_fields: Final = _TOOL_ADAPTER.validate_python(tool, strict=True)
@@ -7985,14 +8029,14 @@ def _tool_vector_store_ids(tool: object) -> tuple[str, ...]:
 
 def _strict_requested_vector_store_ids(request_body: Mapping[str, object]) -> tuple[str, ...]:
     """
-    Same fields VectorStoreRegistry.get_vector_store_ids_to_run reads, but a vector_store_ids that is
-    not a list of strings is a 400 instead of being skipped or iterated, and tools that are not
-    objects name no store.
+    Same fields VectorStoreRegistry.get_vector_store_ids_to_run reads, plus the tools of `additional_tools`
+    input items, but a vector_store_ids that is not a list of strings is a 400 instead of being skipped or
+    iterated, and tools that are not objects name no store.
     """
     return tuple(
         chain(
             _validated_vector_store_ids(request_body.get("vector_store_ids")),
-            chain.from_iterable(_tool_vector_store_ids(tool) for tool in _tools(request_body.get("tools"))),
+            chain.from_iterable(_tool_vector_store_ids(tool) for tool in _request_tools(request_body)),
         )
     )
 
@@ -8031,7 +8075,7 @@ def _legacy_requested_vector_store_ids(
     return tuple(
         chain(
             top_level,
-            chain.from_iterable(vector_store_ids_in_tool(tool) for tool in _tools(request_body.get("tools"))),
+            chain.from_iterable(vector_store_ids_in_tool(tool) for tool in _request_tools(request_body)),
         )
     )
 
@@ -8100,8 +8144,8 @@ async def vector_store_access_check(
     """
     Checks whether the caller may use every vector store the request names.
 
-    Requested stores come from `vector_store_ids`, `tools[].vector_store_ids` and the RAG
-    `retrieval_config.vector_store_id`. Grants come from each identity's
+    Requested stores come from `vector_store_ids`, `tools[].vector_store_ids`, the tools of
+    `additional_tools` input items and the RAG `retrieval_config.vector_store_id`. Grants come from each identity's
     `object_permission.vector_stores`.
 
     Both modes read the same request fields, with or without a vector store registry, and answer 400

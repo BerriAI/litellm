@@ -28,6 +28,7 @@ from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Union, cast, get_args
 
+from litellm._internal_context import is_resent_failure
 from litellm._logging import redact_string
 from litellm._uuid import uuid
 
@@ -40,6 +41,7 @@ import openai
 from openai import AsyncStream, Stream
 from openai.types.audio import TranscriptionStreamEvent
 from pydantic import BaseModel, TypeAdapter, ValidationError
+from typing_extensions import TypedDict as ExtraItemsTypedDict
 from typing_extensions import assert_never, overload
 
 import litellm
@@ -73,7 +75,9 @@ from litellm.constants import (
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
-    raise_if_allowed_tools_tool_choice_unsupported,
+    drops_unsupported_allowed_tools_tool_choice,
+    parse_allowed_tools_tool_choice,
+    raise_if_hosted_tool_choice_unsupported,
 )
 from litellm.litellm_core_utils.asyncify import asyncify, run_async_function
 from litellm.litellm_core_utils.audio_utils.utils import (
@@ -81,11 +85,14 @@ from litellm.litellm_core_utils.audio_utils.utils import (
     get_audio_file_for_health_check,
 )
 from litellm.litellm_core_utils.chat_completion_agentic_loop import (
+    bill_first_round_on_failure,
     maybe_run_chat_completion_agentic_loop,
 )
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_litellm_params import (
+    AGENTIC_LOOP_CONTROL_KWARGS_KEYS,
+    AGENTIC_LOOP_TOOL_CHOICE_KEY,
     AWS_CREDENTIAL_KWARGS_KEYS,
     OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS,
     PROVIDER_AFFINITY_HEADER_KWARG_KEY,
@@ -111,6 +118,7 @@ from litellm.litellm_core_utils.mock_functions import (
     mock_embedding,
     mock_image_generation,
 )
+from litellm.litellm_core_utils.per_call_pricing import per_call_model_info
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response as get_content_from_model_response,  # noqa: PLC0414  # public re-export
 )
@@ -120,6 +128,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
 from litellm.litellm_core_utils.reasoning_effort_capability import (
+    RequestedReasoningEffort,
     model_group_from_metadata,
     reasoning_effort_needs_allowing,
     resolve_chat_reasoning,
@@ -140,13 +149,16 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_route_for_request,
     bedrock_strict_tools_fallback,
     deployment_model_info,
-    without_bedrock_native_output_opt_in,
+    for_bedrock_json_tool_retry,
     without_bedrock_route_prefix,
 )
 from litellm.llms.bedrock_mantle.chat.claude_transformation import bedrock_mantle_chat_config
 from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, http2_enabled
-from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
+from litellm.llms.openai.chat.gpt_reasoning_transformation import (
+    DeferredReasoningDropWarnings,
+    OpenAIGPT5Config,
+)
 from litellm.llms.openai.common_utils import get_openai_credentials
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.vertex_ai.common_utils import (
@@ -167,7 +179,6 @@ from litellm.types.router import GenericLiteLLMParams, validate_litellm_params_s
 from litellm.types.utils import (
     AgenticLoopParams,
     BaseUrlRoutingHint,
-    CustomPricingLiteLLMParams,
     ModelResponseStream,
     ProviderRoutingHints,
     RawRequestTypedDict,
@@ -218,7 +229,7 @@ from litellm.utils import (
     token_counter as token_counter,  # noqa: PLC0414  # public re-export
 )
 
-from ._logging import verbose_logger
+from ._logging import WarningLogger, verbose_logger
 from .caching.caching import disable_cache, enable_cache, update_cache
 from .litellm_core_utils.core_helpers import (
     as_str_mapping,
@@ -403,6 +414,10 @@ def _resolve_control_options(kwargs: Mapping[str, object], model: str) -> Contro
             raise litellm.BadRequestError(message=message, model=model, llm_provider=None, body={"param": param})
         case _:
             return assert_never(control)
+
+
+class _ForwardedCompletionParams(ExtraItemsTypedDict, total=False, extra_items=object):
+    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -954,26 +969,31 @@ async def acompletion(
         # no equivalent: every provider already funnels through one shared
         # handler where the loop is dispatched.
         if isinstance(response, litellm.ModelResponse):
-            looped: Final = await maybe_run_chat_completion_agentic_loop(
-                response=response,
-                model=model,
-                messages=messages,
-                optional_params={
-                    k: v
-                    for k, v in completion_kwargs.items()
-                    if v is not None
-                    and k
-                    not in (
-                        "model",
-                        "messages",
-                        "stream",
-                        "acompletion",
-                        "deployment_id",
-                    )
-                },
-                kwargs=kwargs,
+            looped: Final = await bill_first_round_on_failure(
+                maybe_run_chat_completion_agentic_loop(
+                    response=response,
+                    model=model,
+                    messages=messages,
+                    optional_params={
+                        k: v
+                        for k, v in completion_kwargs.items()
+                        if v is not None
+                        and k
+                        not in (
+                            "model",
+                            "messages",
+                            "stream",
+                            "acompletion",
+                            "deployment_id",
+                        )
+                    },
+                    kwargs=kwargs,
+                    logging_obj=kwargs.get("litellm_logging_obj"),
+                    custom_llm_provider=custom_llm_provider,
+                    stream=bool(stream),
+                ),
                 logging_obj=kwargs.get("litellm_logging_obj"),
-                custom_llm_provider=custom_llm_provider,
+                response=response,
                 stream=bool(stream),
             )
             if looped is not None:
@@ -1323,7 +1343,6 @@ from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the o
 )
 from litellm.responses.bridge_check import (
     bridge_reasoning_effort,
-    keep_registered_mode,
     str_keyed_mapping,
 )
 from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
@@ -1429,46 +1448,6 @@ def _locals_snapshot(values: Mapping[str, object]) -> Mapping[str, object]:
     return values
 
 
-def _build_custom_pricing_entry(
-    custom_llm_provider: str,
-    kwargs: dict,
-    model_info: dict | None = None,
-) -> dict:
-    """Build a complete model cost entry from kwargs and model_info.
-
-    Collects all CustomPricingLiteLLMParams fields present in kwargs and
-    merges metadata from model_info (mode, supports_prompt_caching, max_tokens)
-    so that register_model() receives the full pricing configuration.
-    """
-    entry: Final[dict] = {"litellm_provider": custom_llm_provider}
-
-    for field_name in CustomPricingLiteLLMParams.model_fields:
-        value = kwargs.get(field_name)
-        if value is not None:
-            entry[field_name] = value
-
-    if model_info and isinstance(model_info, dict):
-        for key in ("mode", "supports_prompt_caching", "max_tokens"):
-            if key in model_info and model_info[key] is not None:
-                entry.setdefault(key, model_info[key])
-
-    return entry
-
-
-def _get_router_deployment_id(kwargs: dict) -> str | None:
-    for metadata_key in ("litellm_metadata", "metadata"):
-        metadata = kwargs.get(metadata_key) or {}
-        if not isinstance(metadata, dict):
-            continue
-        deployment_model_info = metadata.get("model_info") or {}
-        if not isinstance(deployment_model_info, dict):
-            continue
-        deployment_id = deployment_model_info.get("id")
-        if deployment_id is not None:
-            return str(deployment_id)
-    return None
-
-
 def _record_agentic_loop_params(
     logging_obj: object, requested_model: str, custom_llm_provider: str, owns_agentic_loop: bool
 ) -> None:
@@ -1476,53 +1455,6 @@ def _record_agentic_loop_params(
         return
     logging_obj.record_agentic_loop_params(
         AgenticLoopParams(model=requested_model, custom_llm_provider=custom_llm_provider)
-    )
-
-
-def _register_custom_pricing_for_request(
-    model: str,
-    custom_llm_provider: str,
-    kwargs: dict,
-    model_info: dict | None,
-) -> None:
-    """Register per-request custom pricing in litellm.model_cost.
-
-    Router-originated requests (identified by the deployment id the router puts
-    in metadata) get their full pricing registered under that unique id only;
-    the shared ``{provider}/{model}`` key receives the entry with pricing fields
-    stripped, mirroring Router._create_deployment. This keeps one deployment's
-    pricing overrides (e.g. a zero-cost wildcard) from clobbering built-in
-    pricing used by sibling deployments of the same backend model. Direct SDK
-    calls keep the legacy behavior of registering the shared key with pricing.
-    Either way the shared key's ``mode`` follows ``keep_registered_mode``, as on
-    deployment registration, since a call routes by its own ``model_info``.
-    """
-    entry: Final = _build_custom_pricing_entry(
-        custom_llm_provider=custom_llm_provider,
-        kwargs=kwargs,
-        model_info=model_info,
-    )
-    shared_key: Final = f"{custom_llm_provider}/{model}"
-    deployment_id: Final = _get_router_deployment_id(kwargs)
-    if deployment_id is None:
-        litellm.register_model({shared_key: keep_registered_mode(shared_key, entry)}, persist_across_reloads=False)
-        return
-    shared_entry: Final = keep_registered_mode(
-        shared_key, CustomPricingLiteLLMParams.strip_custom_pricing_fields(entry)
-    )
-    litellm.register_model(
-        {deployment_id: entry},
-        persist_across_reloads=False,
-        warning_display_name=shared_key,
-        custom_llm_provider=custom_llm_provider,
-        add_to_provider_model_sets=False,
-    )
-    litellm.register_model(
-        {shared_key: shared_entry},
-        persist_across_reloads=False,
-        warning_display_name=shared_key,
-        custom_llm_provider=custom_llm_provider,
-        add_to_provider_model_sets=False,
     )
 
 
@@ -4450,7 +4382,7 @@ def _native_output_fallback(
     first_attempt_params: Mapping[str, object],
     first_attempt_litellm_params: Mapping[str, object],
 ) -> NativeOutputFallback:
-    litellm_params: Final = without_bedrock_native_output_opt_in(first_attempt_litellm_params)
+    litellm_params: Final = for_bedrock_json_tool_retry(first_attempt_litellm_params)
     remapped_params: Final = ctx.optional_params_for_model_info(deployment_model_info(litellm_params))
     return NativeOutputFallback(
         optional_params={
@@ -4472,6 +4404,14 @@ def _converse_native_output_fallback(
 ) -> NativeOutputFallback | None:
     fallback: Final = _native_output_fallback(ctx, first_attempt_params, first_attempt_litellm_params)
     return None if AmazonConverseConfig.sends_native_text_format(fallback.optional_params) else fallback
+
+
+def _buffered_stream_fallback(
+    first_attempt_params: Mapping[str, object], first_attempt_litellm_params: Mapping[str, object]
+) -> NativeOutputFallback:
+    return NativeOutputFallback(
+        optional_params={**first_attempt_params, "fake_stream": True}, litellm_params=first_attempt_litellm_params
+    )
 
 
 def _native_output_attempt_timeout(
@@ -4577,17 +4517,25 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
             )
 
         converse_params: Final = _OPTIONAL_PARAMS_ADAPTER.validate_python(optional_params)
+        converse_uses_native_output: Final = AmazonConverseConfig().uses_native_output(
+            converse_model, converse_params, litellm_params
+        )
         response = call_with_native_output_fallback(
             converse_attempt,
             (
                 partial(_converse_native_output_fallback, ctx, converse_params, dict(litellm_params))
-                if AmazonConverseConfig().uses_opt_in_native_output(converse_model, converse_params, litellm_params)
+                if converse_uses_native_output
                 else None
             ),
             converse_model,
             strict_tools_fallback=(
                 partial(bedrock_strict_tools_fallback, converse_model, converse_params, dict(litellm_params))
                 if drops_unsupported_params(litellm_params.get("drop_params"))
+                else None
+            ),
+            buffered_stream_fallback=(
+                partial(_buffered_stream_fallback, converse_params, dict(litellm_params))
+                if converse_uses_native_output
                 else None
             ),
         )
@@ -4632,15 +4580,20 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
             )
 
         invoke_params: Final = _OPTIONAL_PARAMS_ADAPTER.validate_python(optional_params)
+        invoke_uses_native_output: Final = isinstance(
+            provider_config, AmazonAnthropicClaudeConfig
+        ) and provider_config.uses_native_output(model, invoke_params, litellm_params)
         response = call_with_native_output_fallback(
             invoke_attempt,
-            (
-                partial(_native_output_fallback, ctx, invoke_params, dict(litellm_params))
-                if isinstance(provider_config, AmazonAnthropicClaudeConfig)
-                and provider_config.uses_opt_in_native_output(model, invoke_params, litellm_params)
+            partial(_native_output_fallback, ctx, invoke_params, dict(litellm_params))
+            if invoke_uses_native_output
+            else None,
+            model,
+            buffered_stream_fallback=(
+                partial(_buffered_stream_fallback, invoke_params, dict(litellm_params))
+                if invoke_uses_native_output
                 else None
             ),
-            model,
         )
 
     return response
@@ -5529,6 +5482,51 @@ def _complete_langflow(ctx: CompletionDispatchContext) -> _CompletionDispatchRes
     )
 
 
+def _responses_bridge_optional_params(
+    optional_params: dict[str, object],  # mutable-ok: completion's optional_params, which the Responses bridge takes
+    summary_alias: object,
+    requested: RequestedReasoningEffort,
+    *,
+    custom_llm_provider: str,
+    model: str,
+    base_model: str | None,
+    api_base: str | None,
+    deployment_model_info: Mapping[str, object] | None,
+    drop_params: bool,
+    additional_drop_params: object,
+) -> dict[str, object]:  # mutable-ok: completion's optional_params, which the Responses bridge takes
+    if isinstance(requested, dict):
+        from litellm.responses.utils import (
+            RefusedReasoningFields,
+            bridge_reasoning,
+            raise_refused_reasoning_fields,
+        )
+
+        bridged_reasoning: Final = bridge_reasoning(
+            requested=requested,
+            effort_kept="reasoning_effort" in optional_params,
+            summary_alias=summary_alias,
+            model=model,
+            base_model=base_model,
+            custom_llm_provider=custom_llm_provider,
+            api_base=api_base,
+            deployment_model_info=deployment_model_info,
+            drop_params=drop_params,
+            additional_drop_params=additional_drop_params,
+        )
+        if isinstance(bridged_reasoning, RefusedReasoningFields):
+            raise_refused_reasoning_fields(bridged_reasoning, model, custom_llm_provider)
+        return {**optional_params, "reasoning_effort": bridged_reasoning}
+    if summary_alias is None:
+        return optional_params
+    kept_effort: Final = optional_params.get("reasoning_effort", requested)
+    if isinstance(kept_effort, dict):
+        return {**optional_params, "reasoning_effort": {**kept_effort, "summary": summary_alias}}
+    if kept_effort is None:
+        return {**optional_params, "reasoning_effort": {"summary": summary_alias}}
+    return {**optional_params, "reasoning_effort": {"effort": kept_effort, "summary": summary_alias}}
+
+
 def _complete_databricks_agent(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     from litellm.llms.databricks.agent.transformation import DatabricksAgentConfig
 
@@ -5665,7 +5663,16 @@ def completion(
     messages = validate_and_fix_openai_messages(messages=messages)
     tools = validate_and_fix_openai_tools(tools=tools)
     # validate tool_choice
-    tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice, model=model)
+    requested_tool_choice: Final = cast(  # cast-ok: widening an untyped dict to object is always sound
+        object, tool_choice
+    )
+    tool_choice = validate_chat_completion_tool_choice(
+        tool_choice=tool_choice,
+        model=model,
+        drop_params=drops_unsupported_params(
+            cast("Mapping[str, object]", kwargs).get("drop_params")  # cast-ok: kwargs is the untyped request dict
+        ),
+    )
     # validate optional params
     stop = validate_openai_optional_params(stop=stop)
     thinking = validate_and_fix_thinking_param(thinking=thinking)
@@ -5787,9 +5794,9 @@ def completion(
     ### CUSTOM MODEL COST ###
     input_cost_per_token: Final = kwargs.get("input_cost_per_token", None)
     output_cost_per_token: Final = kwargs.get("output_cost_per_token", None)
-    cost_per_second: Final = kwargs.get("cost_per_second", None)
     input_cost_per_second: Final = kwargs.get("input_cost_per_second", None)
     output_cost_per_second: Final = kwargs.get("output_cost_per_second", None)
+    cost_per_second: Final = kwargs.get("cost_per_second", None)
     ### CUSTOM PROMPT TEMPLATE ###
     initial_prompt_value: Final = kwargs.get("initial_prompt_value", None)
     roles: Final = kwargs.get("roles", None)
@@ -5872,6 +5879,7 @@ def completion(
             merge_with_first_system=True,
         )
 
+    reasoning_drop_warnings: Final = DeferredReasoningDropWarnings(logger=verbose_logger)
     try:
         if base_url is not None:
             api_base = base_url
@@ -5962,7 +5970,15 @@ def completion(
         if not is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model):
             tools = _drop_anthropic_only_tool_keys(tools=tools)
 
-        raise_if_allowed_tools_tool_choice_unsupported(
+        drops_tool_choice: Final = drops_unsupported_allowed_tools_tool_choice(
+            tool_choice=cast(  # cast-ok: widening an untyped dict to object is always sound, the helper validates it with pydantic
+                object, tool_choice
+            ),
+            custom_llm_provider=custom_llm_provider,
+            model=model,
+            drop_params=drop_unsupported_reasoning,
+        )
+        raise_if_hosted_tool_choice_unsupported(
             tool_choice=cast(  # cast-ok: widening an untyped dict to object is always sound, the helper validates it with pydantic
                 object, tool_choice
             ),
@@ -5987,19 +6003,7 @@ def completion(
                 "aws_region_name", None
             )  # support region-based pricing for bedrock
 
-        ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
-        if (
-            (input_cost_per_token is not None and output_cost_per_token is not None)
-            or input_cost_per_second is not None
-            or output_cost_per_second is not None
-            or cost_per_second is not None
-        ):
-            _register_custom_pricing_for_request(
-                model=model,
-                custom_llm_provider=custom_llm_provider,
-                kwargs=kwargs,
-                model_info=model_info,
-            )
+        logging.set_per_call_pricing(per_call_model_info(model, custom_llm_provider, kwargs, "chat"))
         ### BUILD CUSTOM PROMPT TEMPLATE -- IF GIVEN ###
         custom_prompt_dict = {}
         if initial_prompt_value or roles or final_prompt_value or bos_token or eos_token:
@@ -6097,7 +6101,7 @@ def completion(
             "response_format": response_format,
             "seed": seed,
             "tools": tools,
-            "tool_choice": tool_choice,
+            "tool_choice": None if drops_tool_choice else tool_choice,
             "max_retries": max_retries,
             "logprobs": logprobs,
             "top_logprobs": top_logprobs,
@@ -6131,14 +6135,22 @@ def completion(
         mapping_args: Final = MappingProxyType({**optional_param_args, "reasoning_effort": provider_reasoning_effort})
         mapping_special_params: Final = MappingProxyType(dict(provider_params))
 
-        def optional_params_for_model_info(deployment_info: Mapping[str, object] | None) -> dict[str, object]:
-            return get_optional_params(**mapping_args, model_info=deployment_info, **mapping_special_params)
+        def optional_params_for_model_info(
+            deployment_info: Mapping[str, object] | None,
+            reasoning_drop_logger: WarningLogger = verbose_logger,
+        ) -> dict[str, object]:
+            return get_optional_params(
+                **mapping_args,
+                model_info=deployment_info,
+                _litellm_reasoning_drop_logger=reasoning_drop_logger,
+                **mapping_special_params,
+            )
 
         validated_model_info: Final = (
             _MODEL_INFO_ADAPTER.validate_python(model_info) if isinstance(model_info, dict) else None
         )
         deployment_base_model: Final = base_model if isinstance(base_model, str) else None
-        optional_params = optional_params_for_model_info(validated_model_info)
+        optional_params = optional_params_for_model_info(validated_model_info, reasoning_drop_warnings)
         fakes_stream: Final = partial(
             _completion_fakes_stream,
             model,
@@ -6162,7 +6174,6 @@ def completion(
                 return resolve_timeout(stream_kind=StreamKind.NOT_STREAMED)
             return resolve_timeout(stream_kind=StreamKind.FAKED if fakes_stream(attempt_params) else StreamKind.LIVE)
 
-        ### TIMEOUT LOGIC ###
         timeout = timeout_for_optional_params(optional_params)
         logging.record_applied_timeout(timeout)
         processed_non_default_params: Final = pre_process_non_default_params(
@@ -6205,6 +6216,11 @@ def completion(
             messages if readable_messages is None else list(readable_messages)
         )
 
+        supplied_client_api_base: Final = (
+            str(client.base_url)
+            if custom_llm_provider == "openai" and isinstance(client, openai.OpenAI | openai.AsyncOpenAI)
+            else None
+        )
         # For logging - save the values of the litellm-specific params passed in
         requested_litellm_params: Final = get_litellm_params(
             acompletion=acompletion,
@@ -6213,7 +6229,7 @@ def completion(
             logger_fn=logger_fn,
             verbose=verbose,
             custom_llm_provider=custom_llm_provider,
-            api_base=api_base,
+            api_base=supplied_client_api_base or api_base,
             litellm_call_id=kwargs.get("litellm_call_id", None),
             model_alias_map=litellm.model_alias_map,
             completion_call_id=id,
@@ -6269,6 +6285,7 @@ def completion(
                     *ANTHROPIC_WIF_KWARGS_KEYS,
                     *OPENAI_WIF_KWARGS_KEYS,
                     *OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS,
+                    *AGENTIC_LOOP_CONTROL_KWARGS_KEYS,
                     "github_copilot_auth_type",
                     "github_copilot_host",
                     "github_copilot_user_session",
@@ -6281,7 +6298,18 @@ def completion(
                 if key in kwargs
             },
         )
-        litellm_params: Final = with_control_options(requested_litellm_params, control_options)
+        litellm_params: Final = with_control_options(
+            {
+                **requested_litellm_params,
+                **(
+                    {AGENTIC_LOOP_TOOL_CHOICE_KEY: requested_tool_choice}
+                    if AGENTIC_LOOP_TOOL_CHOICE_KEY not in kwargs
+                    and parse_allowed_tools_tool_choice(requested_tool_choice) is not None
+                    else {}
+                ),
+            },
+            control_options,
+        )
         affinity_api_base: Final = (
             str(client.base_url)
             if isinstance(client, openai.OpenAI | openai.AsyncOpenAI)
@@ -6319,6 +6347,7 @@ def completion(
         )
         if mock_response is not None or mock_tool_calls or mock_timeout:
             kwargs.pop("mock_timeout", None)  # remove for any fallbacks triggered
+            reasoning_drop_warnings.log_unless_dropped_effort_sent(optional_params)
             return mock_completion(
                 model,
                 messages,
@@ -6367,41 +6396,19 @@ def completion(
             from litellm.completion_extras import responses_api_bridge
 
             optional_params, rs_val = strip_reasoning_summary_aliases_from_optional_params(optional_params)
-
-            if isinstance(resolved_reasoning_effort, dict):
-                from litellm.responses.utils import (
-                    RefusedReasoningFields,
-                    bridge_reasoning,
-                    raise_refused_reasoning_fields,
-                )
-
-                bridged_reasoning: Final = bridge_reasoning(
-                    requested=resolved_reasoning_effort,
-                    effort_kept="reasoning_effort" in optional_params,
-                    summary_alias=rs_val,
-                    model=model,
-                    base_model=base_model if isinstance(base_model, str) else None,
-                    custom_llm_provider=custom_llm_provider,
-                    api_base=api_base,
-                    deployment_model_info=typed_deployment_model_info,
-                    drop_params=drop_unsupported_reasoning,
-                    additional_drop_params=routing_kwargs.get("additional_drop_params"),
-                )
-                if isinstance(bridged_reasoning, RefusedReasoningFields):
-                    raise_refused_reasoning_fields(bridged_reasoning, model, custom_llm_provider)
-                optional_params["reasoning_effort"] = bridged_reasoning
-            elif rs_val is not None:
-                eff: Final = optional_params.get("reasoning_effort", resolved_reasoning_effort)
-                if isinstance(eff, dict):
-                    optional_params["reasoning_effort"] = {**eff, "summary": rs_val}
-                elif eff is not None:
-                    optional_params["reasoning_effort"] = {
-                        "effort": eff,
-                        "summary": rs_val,
-                    }
-                else:
-                    optional_params["reasoning_effort"] = {"summary": rs_val}
-
+            bridge_optional_params: Final = _responses_bridge_optional_params(
+                optional_params,
+                rs_val,
+                resolved_reasoning_effort,
+                custom_llm_provider=custom_llm_provider,
+                model=model,
+                base_model=deployment_base_model,
+                api_base=api_base,
+                deployment_model_info=typed_deployment_model_info,
+                drop_params=drop_unsupported_reasoning,
+                additional_drop_params=routing_kwargs.get("additional_drop_params"),
+            )
+            reasoning_drop_warnings.log_unless_dropped_effort_sent(bridge_optional_params)
             return responses_api_bridge.completion(  # pyright: ignore[reportReturnType]  # bridge returns a coroutine on the acompletion path; awaited by the async caller
                 model=model,
                 messages=messages,
@@ -6411,7 +6418,7 @@ def completion(
                 api_base=api_base,
                 acompletion=acompletion,
                 logging_obj=logging,
-                optional_params=optional_params,
+                optional_params=bridge_optional_params,
                 litellm_params=litellm_params,
                 timeout=timeout,
                 client=client,  # pass AsyncOpenAI, OpenAI client
@@ -6420,7 +6427,9 @@ def completion(
                 stream=stream,
                 cache=kwargs.get("cache"),
             )
-        elif (custom_llm_provider == "openai" and OpenAIGPT5Config.is_model_gpt_5_model(model)) or (
+
+        reasoning_drop_warnings.log_unless_dropped_effort_sent(optional_params)
+        if (custom_llm_provider == "openai" and OpenAIGPT5Config.is_model_gpt_5_model(model)) or (
             custom_llm_provider == "azure"
             and litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(_azure_detection_model)
         ):
@@ -6686,6 +6695,7 @@ def completion(
             raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
         return response
     except Exception as e:
+        reasoning_drop_warnings.log_unless_dropped_effort_sent(MappingProxyType({}))
         ## Map to OpenAI Exception
         raise exception_type(
             model=model,
@@ -6694,6 +6704,10 @@ def completion(
             completion_kwargs=args,
             extra_kwargs=kwargs,
         )
+
+
+def _is_not_resent_failure(error: BaseException) -> bool:
+    return isinstance(error, Exception) and not is_resent_failure(error)
 
 
 def completion_with_retries(*args, **kwargs):
@@ -6715,10 +6729,15 @@ def completion_with_retries(*args, **kwargs):
         retryer = tenacity.Retrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
-        retryer = tenacity.Retrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
+        retryer = tenacity.Retrying(
+            stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
+            reraise=True,
+        )
     return retryer(original_function, *args, **kwargs)
 
 
@@ -6741,10 +6760,15 @@ async def acompletion_with_retries(*args, **kwargs):
         retryer = tenacity.AsyncRetrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
-        retryer = tenacity.AsyncRetrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
+        retryer = tenacity.AsyncRetrying(
+            stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
+            reraise=True,
+        )
     return await retryer(original_function, *args, **kwargs)
 
 
@@ -6769,10 +6793,15 @@ def responses_with_retries(*args, **kwargs):
         retryer = tenacity.Retrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
-        retryer = tenacity.Retrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
+        retryer = tenacity.Retrying(
+            stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
+            reraise=True,
+        )
     return retryer(original_function, *args, **kwargs)
 
 
@@ -6796,10 +6825,15 @@ async def aresponses_with_retries(*args, **kwargs):
         retryer = tenacity.AsyncRetrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
-        retryer = tenacity.AsyncRetrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
+        retryer = tenacity.AsyncRetrying(
+            stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
+            reraise=True,
+        )
     return await retryer(original_function, *args, **kwargs)
 
 
@@ -7006,12 +7040,6 @@ def embedding(
             headers.update(proxy_headers)
         except Exception as e:
             verbose_logger.warning("Failed to get proxy auth headers: %s", e)
-    ### CUSTOM MODEL COST ###
-    input_cost_per_token: Final = kwargs.get("input_cost_per_token", None)
-    output_cost_per_token: Final = kwargs.get("output_cost_per_token", None)
-    cost_per_second: Final = kwargs.get("cost_per_second", None)
-    input_cost_per_second: Final = kwargs.get("input_cost_per_second", None)
-    output_cost_per_second: Final = kwargs.get("output_cost_per_second", None)
     openai_params: Final = [
         "user",
         "dimensions",
@@ -7058,21 +7086,8 @@ def embedding(
         **non_default_params,
     )
 
-    ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
-    if (
-        (input_cost_per_token is not None and output_cost_per_token is not None)
-        or input_cost_per_second is not None
-        or output_cost_per_second is not None
-        or cost_per_second is not None
-    ):
-        _register_custom_pricing_for_request(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            kwargs=kwargs,
-            model_info=kwargs.get("model_info"),
-        )
-
     logging: Final[LiteLLMLoggingObj] = litellm_logging_obj
+    logging.set_per_call_pricing(per_call_model_info(model, custom_llm_provider, kwargs, "embedding"))
     logging.update_environment_variables(
         model=model,
         user=user,
@@ -8167,7 +8182,7 @@ def text_completion(
 
     text_completion_response = TextCompletionResponse()
 
-    optional_params: Final[dict[str, Any]] = {}
+    optional_params: Final[dict[str, object]] = {}
     # default values for all optional params are none, litellm only passes them to the llm when they are set to non None values
     if best_of is not None:
         optional_params["best_of"] = best_of
@@ -8234,7 +8249,7 @@ def text_completion(
 
                 def process_prompt(i, individual_prompt):
                     decoded_prompt: Final = tokenizer.decode(individual_prompt)
-                    all_params: Final = {**kwargs, **optional_params}
+                    all_params: Final = _ForwardedCompletionParams(**{**kwargs, **optional_params})
                     response: Final[TextCompletionResponse] = text_completion(
                         model=model,
                         prompt=decoded_prompt,
@@ -8308,7 +8323,7 @@ def text_completion(
         messages=messages,
         *args,
         **kwargs,
-        **optional_params,
+        **_ForwardedCompletionParams(**optional_params),
     )
     if kwargs.get("acompletion", False) is True:
         return response
@@ -8652,7 +8667,7 @@ def transcription(
 ) -> (
     TranscriptionResponse
     | Stream[TranscriptionStreamEvent]
-    | Coroutine[Any, Any, TranscriptionResponse | AsyncStream[TranscriptionStreamEvent]]
+    | Coroutine[object, object, TranscriptionResponse | AsyncStream[TranscriptionStreamEvent]]
 ):
     """
     Calls openai + azure whisper endpoints.
@@ -8741,7 +8756,7 @@ def transcription(
         TranscriptionResponse
         | Stream[TranscriptionStreamEvent]
         | AsyncStream[TranscriptionStreamEvent]
-        | Coroutine[Any, Any, TranscriptionResponse | AsyncStream[TranscriptionStreamEvent]]
+        | Coroutine[object, object, TranscriptionResponse | AsyncStream[TranscriptionStreamEvent]]
     )
 
     provider_config: Final = ProviderConfigManager.get_provider_audio_transcription_config(

@@ -26,6 +26,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.llms.a2a.common_utils import resolve_a2a_hop_auth_header
+from litellm.llms.azure.common_utils import caused_by_entra_rejection
 from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.a2a.agent_card import point_agent_card_at_proxy
@@ -1202,6 +1203,8 @@ async def invoke_agent_a2a(
             pass
         if isinstance(e, litellm.BadRequestError):
             return _jsonrpc_error(body.get("id"), -32602, e.message, 400)
+        if isinstance(e, litellm.AuthenticationError) and caused_by_entra_rejection(e):
+            return _jsonrpc_error(body.get("id"), -32000, e.message, 401)
         return _jsonrpc_error(body.get("id"), -32603, f"Internal error: {e}", 500)
 
 

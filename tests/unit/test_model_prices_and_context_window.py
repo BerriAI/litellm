@@ -279,6 +279,10 @@ def test_azure_rows_price_web_search_when_their_openai_model_does(prices: dict):
 PRIORITY_SUFFIX: Final = "_priority"
 MIN_PRIORITY_MARKUP: Final = 1.0
 MAX_PRIORITY_MARKUP: Final = 5.0
+# Vertex pricing, verified 2026-11-03: https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing
+VERIFIED_PRIORITY_MARKUP_MAXIMA: Final = MappingProxyType(
+    {("gemini-2.5-flash", "input_cost_per_audio_token_above_200k_tokens_priority"): 6.0}
+)
 
 
 def _rate(value: JsonValue | None) -> float | None:
@@ -312,7 +316,7 @@ def test_priority_rates_stay_within_a_premium_of_their_standard_rate(path: Path)
     overpriced: Final = tuple(
         f"{name}.{key} is {markup:.1f}x its standard rate"
         for name, key, markup in markups
-        if not MIN_PRIORITY_MARKUP <= markup <= MAX_PRIORITY_MARKUP
+        if not MIN_PRIORITY_MARKUP <= markup <= VERIFIED_PRIORITY_MARKUP_MAXIMA.get((name, key), MAX_PRIORITY_MARKUP)
     )
     assert overpriced == (), (
         "a priority rate is a premium on the standard rate, so one below it or far above it was likely copied from "
@@ -954,6 +958,30 @@ def test_gemini_4_argon_google_rows_carry_supports_continuation_in_both_cost_map
     assert _supports_continuation_rows(BACKUP_PRICES_PATH) == main_rows
 
 
+def test_gemini_4_rows_share_the_gemini_3_search_allowance_in_both_cost_map_copies() -> None:
+    main_rows: Final = _search_free_requests_rows(PRICES_PATH)
+    # 5,000 free grounding requests per month shared across Gemini 3 and newer:
+    # https://ai.google.dev/gemini-api/docs/pricing#gemini-4-carbon and
+    # https://cloud.google.com/vertex-ai/generative-ai/pricing (2026-11-10)
+    gemini_4_rows: Final = {
+        "gemini/gemini-4-argon",
+        "vertex_ai/gemini-4-argon",
+        "vertex_ai/gemini-4-argon-cyber-permissive",
+        "gemini/gemini-4-carbon",
+        "vertex_ai/gemini-4-carbon",
+        "vertex_ai/gemini-4-carbon-cyber-permissive",
+    }
+    assert gemini_4_rows <= main_rows.keys(), sorted(main_rows)
+    gemini_3_allowances: Final = {
+        json.dumps(main_rows[key]["search_free_requests"], sort_keys=True)
+        for key in ("gemini/gemini-3.8-flash", "vertex_ai/gemini-3.8-flash")
+    }
+    assert {
+        json.dumps(main_rows[key]["search_free_requests"], sort_keys=True) for key in gemini_4_rows
+    } == gemini_3_allowances
+    assert _search_free_requests_rows(BACKUP_PRICES_PATH) == main_rows
+
+
 @pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
 def test_search_free_requests_rows_are_grounding_rows_with_one_allowance_per_group(path: Path) -> None:
     rows = _search_free_requests_rows(path)
@@ -1020,3 +1048,39 @@ def test_bedrock_gpt_oss_rows_declare_vision_support_like_their_safeguard_siblin
 def test_bedrock_gpt_oss_vision_is_explicitly_disabled_for_the_router_gate() -> None:
     assert litellm.utils.is_vision_explicitly_disabled("bedrock/openai.gpt-oss-120b-1:0") is True
     assert litellm.utils.is_vision_explicitly_disabled("bedrock_mantle/openai.gpt-oss-20b") is True
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_azure_ai_claude_rows_bill_web_search_like_their_anthropic_rows(path: Path) -> None:
+    prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
+    pairs: Final = {
+        key: (row, prices[key.removeprefix("azure_ai/")])
+        for key, row in prices.items()
+        if key.startswith("azure_ai/claude") and isinstance(row, dict) and key.removeprefix("azure_ai/") in prices
+    }
+    priced_pairs: Final = {
+        key: (row, bare)
+        for key, (row, bare) in pairs.items()
+        if isinstance(bare, dict) and bare.get("search_context_cost_per_query")
+    }
+    assert priced_pairs
+    drifted: Final = tuple(
+        key
+        for key, (row, bare) in priced_pairs.items()
+        if row.get("search_context_cost_per_query") != bare["search_context_cost_per_query"]
+        or row.get("supports_web_search") is not True
+    )
+    assert drifted == (), drifted
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_azure_ai_claude_rows_priced_for_web_search_say_they_support_it(path: Path) -> None:
+    prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
+    priced_rows: Final = {
+        key: row
+        for key, row in prices.items()
+        if key.startswith("azure_ai/claude") and isinstance(row, dict) and row.get("search_context_cost_per_query")
+    }
+    assert priced_rows
+    unflagged: Final = tuple(key for key, row in priced_rows.items() if row.get("supports_web_search") is not True)
+    assert unflagged == (), unflagged

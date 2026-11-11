@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 import litellm
 from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     encrypted_reasoning_signature,
 )
 from litellm.llms.anthropic.messages.native.streaming_iterator import aclose_superseded_attempt

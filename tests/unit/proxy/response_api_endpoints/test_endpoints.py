@@ -9,7 +9,7 @@ import datetime
 import json
 import re
 import unittest
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from typing import Any, Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
@@ -26,6 +26,7 @@ import litellm
 from litellm.caching.caching import DualCache
 from litellm.constants import EMPTY_MAPPING
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.proxy_server import app
@@ -36,6 +37,7 @@ from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.router import RouterErrors
 from litellm.types.utils import CallTypesLiteral
 from tests._master_key import MASTER_KEY
+from tests._support.clock_loops import AutojumpClockLoop
 
 
 @pytest.mark.asyncio
@@ -154,8 +156,9 @@ async def test_streaming_upstream_errors_keep_the_client_protocol(
     assert result.status_code == 200, result.text
     assert message in result.text
     if path == "/v1/responses":
-        assert frames[-1] == "data: [DONE]", result.text
-        assert frames[-2].startswith("event: response.failed\n"), result.text
+        assert all("data: [DONE]" not in frame for frame in frames), result.text
+        assert frames[-1].startswith("event: response.failed\n"), result.text
+        assert [frame.splitlines()[0] for frame in frames] == [f"event: {event['type']}" for event in events]
         if partial:
             assert [event["type"] for event in events] == [
                 "response.created",
@@ -186,6 +189,173 @@ async def test_streaming_upstream_errors_keep_the_client_protocol(
         assert events[0]["object"] == "chat.completion.chunk", result.text
         assert "response.failed" not in result.text
         assert "error" in events[-1]
+
+
+class _FirstFrameHook(CustomLogger):
+    def __init__(self, first: str | bytes | Exception) -> None:
+        super().__init__()
+        self.first: Final = first
+
+    async def async_post_call_streaming_iterator_hook(
+        self, user_api_key_dict: object, response: object, request_data: object
+    ) -> AsyncIterator[str | bytes]:
+        if isinstance(self.first, Exception):
+            raise self.first
+        yield self.first
+
+
+_DATA_ERROR_FRAME: Final = 'data: {"error": {"message": "denied", "type": "guardrail_scan_error", "code": 403}}\n\n'
+_NAMED_ERROR_FRAME: Final = (
+    b'event: error\ndata: {"type": "error", "error": {"type": "overloaded_error", "message": "denied", "code": "529"}}\n\n'
+)
+
+
+async def _post_through_first_frame_hook(
+    monkeypatch: pytest.MonkeyPatch, path: str, first: str | bytes | Exception
+) -> httpx.Response:
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    model: Final = "gpt-6-astra"
+    upstream_url: Final = "https://streaming.example/v1"
+    is_chat: Final = path == "/v1/chat/completions"
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {"model": "openai/" + model, "api_base": upstream_url, "api_key": "fixture-key"},
+            }
+        ],
+        num_retries=0,
+    )
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [_FirstFrameHook(first)])
+    monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, _auth_override)
+    with respx.mock as transport:
+        transport.post(upstream_url + ("/chat/completions" if is_chat else "/responses")).respond(
+            200, content="data: [DONE]\n\n", headers={"Content-Type": "text/event-stream"}
+        )
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://testserver") as client:
+            return await client.post(
+                path,
+                json={
+                    "model": model,
+                    "stream": True,
+                    **({"messages": [{"role": "user", "content": "hello"}]} if is_chat else {"input": "hello"}),
+                },
+            )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path,first_frame,expected_status",
+    [
+        ("/v1/responses", _DATA_ERROR_FRAME, 403),
+        ("/v1/chat/completions", _DATA_ERROR_FRAME, 403),
+        ("/v1/chat/completions", _NAMED_ERROR_FRAME, 200),
+        ("/cursor/chat/completions", _NAMED_ERROR_FRAME, 200),
+        ("/v1/responses", _NAMED_ERROR_FRAME, 529),
+        ("/v1/responses", _NAMED_ERROR_FRAME.replace(b"event: error", b"event: response.created"), 200),
+        ("/v1/chat/completions", _DATA_ERROR_FRAME + "data: [DONE]\n\n", 200),
+        ("/v1/responses", _DATA_ERROR_FRAME + "data: [DONE]\n\n", 200),
+    ],
+)
+async def test_only_a_lone_first_error_frame_answers_with_its_status(
+    monkeypatch: pytest.MonkeyPatch, path: str, first_frame: str | bytes, expected_status: int
+) -> None:
+    result: Final = await _post_through_first_frame_hook(monkeypatch, path, first_frame)
+
+    assert result.status_code == expected_status, result.text
+    if expected_status == 200:
+        assert result.headers["content-type"].startswith("text/event-stream"), result.text
+    else:
+        assert result.json()["error"]["message"] == "denied"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/cursor/chat/completions", "/v1/chat/completions"])
+async def test_a_hook_failure_before_the_first_chunk_answers_in_chat_completions_shape(
+    monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    message: Final = "rate limited before the first chunk"
+    result: Final = await _post_through_first_frame_hook(
+        monkeypatch, path, HTTPException(status_code=429, detail=message)
+    )
+    frames: Final = tuple(frame for frame in result.text.split("\n\n") if frame)
+
+    assert result.status_code == 429, result.text
+    assert frames[-1] == "data: [DONE]", result.text
+    assert message in json.loads(frames[0].removeprefix("data: "))["error"]["message"]
+    assert len(frames) == 2, result.text
+
+
+@pytest.mark.parametrize("path", ["/v1/responses", "/v1/chat/completions"])
+def test_a_failure_after_keepalive_pings_keeps_the_client_protocol(monkeypatch: pytest.MonkeyPatch, path: str) -> None:
+    async def request_and_check() -> None:
+        import litellm.proxy.proxy_server as ps
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        model: Final = "gpt-6-astra"
+        message: Final = "Upstream is rate limiting this key"
+        upstream_url: Final = "https://streaming.example/v1"
+        is_chat: Final = path == "/v1/chat/completions"
+
+        async def slow_rate_limit(_: httpx.Request) -> httpx.Response:
+            await asyncio.sleep(0.3)
+            return httpx.Response(429, json={"error": {"message": message, "type": "rate_limit_error", "code": None}})
+
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": model,
+                    "litellm_params": {
+                        "model": "openai/" + model,
+                        "api_base": upstream_url,
+                        "api_key": "fixture-key",
+                        "max_retries": 0,
+                    },
+                }
+            ],
+            num_retries=0,
+        )
+        monkeypatch.setattr(ps, "llm_router", router)
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", 0.05)
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, _auth_override)
+        with respx.mock as transport:
+            transport.post(upstream_url + ("/chat/completions" if is_chat else "/responses")).mock(
+                side_effect=slow_rate_limit
+            )
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://testserver") as client:
+                result: Final = await client.post(
+                    path,
+                    json={
+                        "model": model,
+                        "stream": True,
+                        **({"messages": [{"role": "user", "content": "hello"}]} if is_chat else {"input": "hello"}),
+                    },
+                )
+        frames: Final = tuple(frame for frame in result.text.split("\n\n") if frame)
+
+        assert result.status_code == 200, result.text
+        assert frames[0] == ": ping", result.text
+        if is_chat:
+            assert frames[-1] == "data: [DONE]", result.text
+            assert message in json.loads(frames[-2].removeprefix("data: "))["error"]["message"]
+        else:
+            assert "data: [DONE]" not in result.text
+            assert frames[-1].startswith("event: error\ndata: "), result.text
+            error: Final = json.loads(frames[-1].split("data: ", 1)[1])["error"]
+            assert error["code"] == "429"
+            assert message in error["message"]
+
+    loop: Final = AutojumpClockLoop()
+    try:
+        loop.run_until_complete(request_and_check())
+    finally:
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.close()
 
 
 _COMPACTION_ITEM: Final = {
@@ -1478,6 +1648,25 @@ async def test_a_streamed_read_cut_before_its_terminal_event_ends_in_a_responses
     assert "before any terminal event" in events[-1]["response"]["error"]["message"]
 
 
+def _resumed_wire() -> str:
+    return "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in _resumed_events("resp_read"))
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_read_whose_first_event_is_a_named_error_answers_with_its_status(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "callbacks", [_FirstFrameHook(_NAMED_ERROR_FRAME)])
+    result, _ = await _read_through_proxy(
+        monkeypatch,
+        {"stream": "true"},
+        httpx.Response(200, content=_resumed_wire(), headers={"Content-Type": "text/event-stream"}),
+    )
+
+    assert result.status_code == 529, result.text
+    assert result.json()["error"]["message"] == "denied"
+
+
 @pytest.mark.asyncio
 async def test_a_plain_read_through_the_proxy_still_answers_json(monkeypatch: pytest.MonkeyPatch):
     result, upstream_requests = await _read_through_proxy(
@@ -2557,6 +2746,66 @@ class TestResponsesWSFirstFrameModelAuth:
         }
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("nested", [True, False])
+    async def test_frame_guard_forwards_the_tool_choice_a_guardrail_rewrote(self, nested: bool):
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+
+        async def pre_call_hook(user_api_key_dict, data, call_type, guardrails_only):
+            return {**data, "tools": [], "tool_choice": "none"}
+
+        proxy_logging_obj = MagicMock(during_call_hook=AsyncMock())
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=pre_call_hook)
+        guard = _responses_ws_frame_guard(
+            {"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock(), proxy_logging_obj, MagicMock()
+        )
+        body = {
+            "input": "hi",
+            "tools": [{"type": "function", "name": "a"}],
+            "tool_choice": {"type": "function", "name": "a"},
+        }
+        frame = {"type": "response.create", "response": body} if nested else {"type": "response.create", **body}
+
+        guarded = json.loads((await guard(json.dumps(frame))).frame)
+
+        sent = guarded["response"] if nested else guarded
+        assert (sent["tools"], sent["tool_choice"]) == ([], "none")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("nested", [True, False])
+    async def test_frame_guard_forwards_the_extra_body_tools_a_rewrite_guardrail_stripped(self, nested: bool):
+        from litellm.proxy.guardrails.guardrail_hooks.tool_permission import ToolPermissionGuardrail
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="ws-rewrite",
+            rules=[{"id": "deny_shell", "tool_name": r"^shell$", "decision": "deny"}],
+            default_action="allow",
+            on_disallowed_action="rewrite",
+            event_hook=GuardrailEventHooks.pre_call,
+            default_on=True,
+        )
+
+        async def pre_call_hook(user_api_key_dict, data, call_type, guardrails_only):
+            return await guardrail.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict, cache=MagicMock(), data=data, call_type=call_type
+            )
+
+        proxy_logging_obj = MagicMock(during_call_hook=AsyncMock())
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=pre_call_hook)
+        guard = _responses_ws_frame_guard(
+            {"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock(), proxy_logging_obj, MagicMock()
+        )
+        weather = {"type": "function", "name": "get_weather"}
+        body = {"input": "hi", "extra_body": {"tools": [weather, {"type": "function", "name": "shell"}]}}
+        frame = {"type": "response.create", "response": body} if nested else {"type": "response.create", **body}
+
+        guarded = json.loads((await guard(json.dumps(frame))).frame)
+
+        sent = guarded["response"] if nested else guarded
+        assert sent["extra_body"] == {"tools": [weather]}
+
+    @pytest.mark.asyncio
     async def test_frame_guard_strips_the_proxy_owned_metadata_keys_a_client_sends(self):
         from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
 
@@ -2991,7 +3240,7 @@ class TestResponsesWSFirstFrameModelAuth:
         assert dict(guarded.pii_tokens) == {"<EMAIL_ADDRESS_1>": "alice@example.com"}
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("field", ["input", "instructions", "tools"])
+    @pytest.mark.parametrize("field", ["input", "instructions", "tools", "tool_choice", "extra_body"])
     async def test_frame_guard_rejects_and_bills_a_guarded_field_beside_a_nested_response(self, field: str):
         from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
         from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
@@ -3442,12 +3691,19 @@ class TestResponsesWSFirstFrameModelAuth:
             "standard_logging_guardrail_information": [{"guardrail_cost": 0.2}, {"guardrail_cost": 0.4}],
         }
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "relay_outcome",
         ["still_relaying", "already_returned", "returns_despite_the_cancel", "crashes_despite_the_cancel"],
     )
-    async def test_session_limit_frees_the_slot_at_once_and_never_cuts_the_failure_row(self, relay_outcome: str):
+    def test_session_limit_frees_the_slot_at_once_and_never_cuts_the_failure_row(self, relay_outcome: str) -> None:
+        loop: Final = AutojumpClockLoop()
+        try:
+            loop.run_until_complete(self._assert_session_limit_releases_slot_before_failure_row(relay_outcome))
+        finally:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.close()
+
+    async def _assert_session_limit_releases_slot_before_failure_row(self, relay_outcome: str) -> None:
         from litellm.exceptions import RateLimitError
         from litellm.proxy.response_api_endpoints.endpoints import responses_websocket_endpoint
 
@@ -5825,9 +6081,11 @@ class TestGuardrailBlockedResponsesShape:
         assert response.status_code == 200, response.text
         assert response.headers["content-type"].startswith("text/event-stream")
         frames = _sse_data_frames(response.text)
-        assert frames[-1] == "[DONE]"
-        events = [json.loads(frame) for frame in frames[:-1]]
+        assert "[DONE]" not in frames
+        events = [json.loads(frame) for frame in frames]
         types = [event["type"] for event in events]
+        assert types[-1] == "response.completed"
+        assert [line[7:] for line in response.text.splitlines() if line.startswith("event: ")] == types
         assert "response.created" in types
         completed = [event for event in events if event["type"] == "response.completed"]
         assert len(completed) == 1
@@ -5854,7 +6112,8 @@ class TestGuardrailBlockedResponsesShape:
 
         assert response.status_code == 200, response.text
         frames = _sse_data_frames(response.text)
-        completed = [json.loads(frame) for frame in frames[:-1] if json.loads(frame)["type"] == "response.completed"]
+        assert "[DONE]" not in frames
+        completed = [json.loads(frame) for frame in frames if json.loads(frame)["type"] == "response.completed"]
         usage = completed[0]["response"]["usage"]
         assert usage["input_tokens"] == 14
         assert usage["output_tokens"] == 20
@@ -5914,6 +6173,24 @@ _SUMMARY_INPUT: Final = [{"type": "message", "role": "user", "content": _COMPACT
 def test_input_token_count_reads_a_compaction_item_as_its_summary():
     from litellm.proxy.response_api_endpoints.endpoints import _responses_input_as_token_count_messages
 
-    assert _responses_input_as_token_count_messages(_COMPACTED_INPUT, None) == (
-        _responses_input_as_token_count_messages(_SUMMARY_INPUT, None)
+    assert _responses_input_as_token_count_messages(_COMPACTED_INPUT, {}) == (
+        _responses_input_as_token_count_messages(_SUMMARY_INPUT, {})
     )
+
+
+def test_input_token_count_keeps_the_joined_name_of_a_self_named_namespace_member():
+    from litellm.proxy.response_api_endpoints.endpoints import _responses_input_as_token_count_messages
+
+    echo: Final = [
+        {"role": "user", "content": "Search for the release notes."},
+        {"type": "function_call", "name": "search", "namespace": "search", "call_id": "call_1", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "call_1", "output": "found"},
+    ]
+    namespace_tools: Final = [{"type": "namespace", "name": "search", "tools": [{"type": "function", "name": "search"}]}]
+
+    def called_names(tools: object) -> list[str]:
+        messages = _responses_input_as_token_count_messages(cast(Any, echo), {"tools": tools})
+        return [call["function"]["name"] for message in messages for call in message.get("tool_calls") or []]
+
+    assert called_names(namespace_tools) == ["search__search"]
+    assert called_names([{"type": "function", "name": "search", "defer_loading": True}]) == ["search"]

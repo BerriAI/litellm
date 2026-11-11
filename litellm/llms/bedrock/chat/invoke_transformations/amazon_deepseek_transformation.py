@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Final, cast
 from httpx import Response
 
 from litellm import verbose_logger
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     parse_content_for_reasoning,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator

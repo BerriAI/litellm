@@ -14,6 +14,7 @@ import itertools
 import json
 import logging
 import os
+import subprocess
 import sys
 import threading
 from collections.abc import Mapping
@@ -27,7 +28,12 @@ import pytest
 import respx
 
 import litellm
-from litellm.llms.anthropic.common_utils import ToolsWithoutStrict, is_claude_tool_target, tools_without_strict
+from litellm.llms.anthropic.common_utils import (
+    ToolsWithoutStrict,
+    is_claude_tool_target,
+    tools_without_strict,
+    without_stale_tool_search_results,
+)
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
@@ -1745,7 +1751,7 @@ class TestAnthropicThinkingSignatureSelfHeal:
 
     def test_strip_keeps_encrypted_reasoning_blocks_for_the_responses_bridge(self):
         """The /v1/messages handler runs this before dispatch, so the bridge must still see the replay."""
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
             encrypted_reasoning_signature,
         )
         from litellm.llms.anthropic.common_utils import (
@@ -1766,7 +1772,7 @@ class TestAnthropicThinkingSignatureSelfHeal:
 
     def test_strip_encrypted_reasoning_drops_only_the_bridge_tagged_blocks(self):
         """A session resumed on an Anthropic model replays reasoning only OpenAI can verify."""
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
             encrypted_reasoning_signature,
         )
         from litellm.llms.anthropic.common_utils import (
@@ -4605,6 +4611,7 @@ def test_anthropic_error_frame_exception_classes_an_overloaded_frame_as_internal
     error: Final = anthropic_error_frame_exception("overloaded_error", "Overloaded", 503, "claude-sonnet-4-5")
 
     assert type(error) is litellm.InternalServerError
+    assert error.provider_status_code == 529
 
 
 _NON_NUMERIC_BUDGETS: Final = (True, False, None, "", "lots", [4096])
@@ -4705,6 +4712,79 @@ def test_requires_native_compaction_beta_is_false_without_a_signal(
 )
 def test_is_claude_tool_target(custom_llm_provider: str, model: str, expected: bool):
     assert is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model) is expected
+
+
+def test_dropping_a_stale_tool_search_keeps_every_other_turn_as_it_was_sent() -> None:
+    search_use: Final = {
+        "type": "server_tool_use",
+        "id": "srvtoolu_01Search",
+        "name": "tool_search_tool_regex",
+        "input": {"pattern": "weather"},
+    }
+    search_result: Final = {
+        "type": "tool_search_tool_result",
+        "tool_use_id": "srvtoolu_01Search",
+        "content": {
+            "type": "tool_search_tool_search_result",
+            "tool_references": [{"type": "tool_reference", "tool_name": "get_weather"}],
+        },
+    }
+    weather_call: Final = {
+        "type": "tool_use",
+        "id": "toolu_01Weather",
+        "name": "get_weather",
+        "input": {"city": "Paris"},
+    }
+    messages: Final = [
+        {"role": "user", "content": "What is the weather in Paris?"},
+        {"role": "assistant", "content": [search_use, search_result, weather_call]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01Weather", "content": "18C"}]},
+        {"role": "assistant", "content": "It is 18C in Paris."},
+        {"role": "user", "content": "Thanks"},
+        {"role": "assistant", "content": [{"type": "text", "text": "Anything else?"}]},
+        {"role": "user", "content": "And in Osaka?"},
+    ]
+
+    kept: Final = without_stale_tool_search_results(messages, [{"name": "get_local_time"}])
+
+    assert kept == (messages[0], {"role": "assistant", "content": [weather_call]}, *messages[2:])
+
+
+def test_a_replayed_tool_search_keeps_the_tools_it_found_that_the_follow_up_still_sends() -> None:
+    def reference(name: str) -> dict[str, str]:
+        return {"type": "tool_reference", "tool_name": name}
+
+    search_use: Final = {
+        "type": "server_tool_use",
+        "id": "srvtoolu_01Search",
+        "name": "tool_search_tool_regex",
+        "input": {"pattern": "weather|time"},
+    }
+
+    def search_result(*names: str) -> dict[str, object]:
+        return {
+            "type": "tool_search_tool_result",
+            "tool_use_id": "srvtoolu_01Search",
+            "content": {
+                "type": "tool_search_tool_search_result",
+                "tool_references": [reference(name) for name in names],
+            },
+        }
+
+    weather_call: Final = {"type": "tool_use", "id": "toolu_01Weather", "name": "get_weather", "input": {"city": "Paris"}}
+    messages: Final = [
+        {"role": "user", "content": "What is the weather and the time in Paris?"},
+        {"role": "assistant", "content": [search_use, search_result("get_weather", "get_local_time"), weather_call]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01Weather", "content": "18C"}]},
+    ]
+
+    kept: Final = without_stale_tool_search_results(messages, [{"name": "get_weather"}, {"name": "get_news"}])
+
+    assert kept == (
+        messages[0],
+        {"role": "assistant", "content": [search_use, search_result("get_weather"), weather_call]},
+        messages[2],
+    )
 
 
 @pytest.mark.parametrize(
@@ -4868,3 +4948,40 @@ def test_a_register_model_opt_out_for_one_claude_model_leaves_every_other_routed
     litellm.register_model({f"anthropic/{opted_out}": {"supports_prompt_caching": False}})
 
     assert supports_anthropic_cache_control(untouched, "anthropic", {"id": "plain-id"}) is True
+
+
+_MASKED_HOSTED_WEB_CALL_PROBE: Final = """
+import json
+
+from litellm.llms.anthropic.common_utils import write_request_hosted_web_call_arguments
+
+message = {
+    "role": "assistant",
+    "provider_specific_fields": {
+        "web_search_calls": [
+            {
+                "id": "ws_srvtoolu_1",
+                "type": "web_search_call",
+                "status": "completed",
+                "action": {"type": "search", "query": "deploy token 12345", "queries": ["deploy token 12345"]},
+            }
+        ]
+    },
+}
+write_request_hosted_web_call_arguments(message, {"srvtoolu_1": json.dumps({"query": "deploy token [REDACTED]"})})
+print(json.dumps(message["provider_specific_fields"]["web_search_calls"]))
+"""
+
+
+def test_a_masked_replayed_hosted_web_call_serializes_before_its_openai_model_was_ever_built() -> None:
+    result: Final = subprocess.run(
+        (sys.executable, "-I", "-c", _MASKED_HOSTED_WEB_CALL_PROBE),
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=120,
+    )
+    hosted: Final = json.loads(result.stdout.strip().splitlines()[-1])
+    assert [call["action"] for call in hosted] == [
+        {"type": "search", "query": "deploy token [REDACTED]", "queries": ["deploy token [REDACTED]"]}
+    ]

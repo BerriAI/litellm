@@ -10,7 +10,7 @@ from collections.abc import Callable, Container, Iterable, Iterator, Mapping, Se
 from dataclasses import dataclass, replace
 from enum import Enum
 from types import MappingProxyType
-from typing import Annotated, Any, Final, TypeAlias, TypedDict, TypeVar, cast, overload
+from typing import Annotated, Any, Final, Protocol, TypeAlias, TypedDict, TypeVar, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 from pydantic import BaseModel, BeforeValidator, ConfigDict, JsonValue, TypeAdapter, ValidationError, model_validator
@@ -22,7 +22,7 @@ import litellm.types.llms
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import REDACTED_BY_LITELLM
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, require_attributes
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     anthropic_system_messages,
     find_anthropic_server_tool_result,
@@ -2012,9 +2012,36 @@ def _tool_call_ids_with_a_kept_server_result(message: object) -> frozenset[str]:
         return frozenset()
     return frozenset(
         tool_call_id
-        for tool_call in parts_of(message_field(message, "tool_calls"))
+        for tool_call in (
+            *parts_of(message_field(message, "tool_calls")),
+            *parts_of(message_field(provider_specific_fields, "server_tool_calls")),
+        )
         if isinstance(tool_call_id := message_field(tool_call, "id"), str)
         and tool_call_is_rebuilt_as_server_tool_use(tool_call_id, provider_specific_fields)
+    )
+
+
+def _assistant_tool_calls_with_server_tool_calls(
+    message: ChatCompletionAssistantMessage,
+) -> Sequence[ChatCompletionAssistantToolCall] | None:
+    from litellm.llms.anthropic.common_utils import anthropic_server_tool_call_params
+
+    tool_calls: Final = message.get("tool_calls")
+    server_tool_calls: Final = anthropic_server_tool_call_params(message)
+    if not server_tool_calls:
+        return tool_calls
+    client_tool_call_ids: Final = frozenset(tool_call["id"] for tool_call in tool_calls or ())
+    return (
+        *(tool_call for tool_call in server_tool_calls if tool_call["id"] not in client_tool_call_ids),
+        *(tool_calls or ()),
+    )
+
+
+def _server_tool_call_ids(message: object) -> frozenset[str]:
+    from litellm.llms.anthropic.common_utils import anthropic_server_tool_call_params
+
+    return frozenset(
+        tool_call["id"] for tool_call in anthropic_server_tool_call_params(message) if tool_call["id"] is not None
     )
 
 
@@ -2102,6 +2129,12 @@ def _unrun_server_tool_use_ids(blocks: Sequence[Mapping[str, object]]) -> frozen
     )
 
 
+def _paused_server_tool_use_ids(blocks: Sequence[Mapping[str, object]]) -> frozenset[object]:
+    if any(block.get("type") == "tool_use" for block in blocks):
+        return frozenset()
+    return _unrun_server_tool_use_ids(blocks)
+
+
 def _last_block_id_among(blocks: Sequence[Mapping[str, object]], ids: frozenset[object]) -> object:
     return next(block_id for block in reversed(blocks) if (block_id := _block_id(block)) in ids)
 
@@ -2115,7 +2148,7 @@ def _paused_turn_replay(
     tuple[_AnthropicToolInvokeItem, ...],
     tuple[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock, ...],
 ]:
-    unrun_ids: Final = _unrun_server_tool_use_ids(tool_invokes)
+    unrun_ids: Final = _paused_server_tool_use_ids(tool_invokes)
     if not unrun_ids:
         return tuple(tool_invokes), tuple(thinking_blocks)
     dropped_ids: Final = (
@@ -2125,10 +2158,11 @@ def _paused_turn_replay(
 
 
 def convert_to_anthropic_tool_invoke(
-    tool_calls: list[ChatCompletionAssistantToolCall],
+    tool_calls: Sequence[ChatCompletionAssistantToolCall],
     web_search_results: Sequence[object] | None = None,
     tool_results: Sequence[object] | None = None,
     answered_tool_ids: Container[str] = frozenset(),
+    server_tool_call_ids: Container[str] = frozenset(),
 ) -> list[_AnthropicToolInvokeItem]:
     """
     OpenAI tool invokes:
@@ -2206,14 +2240,11 @@ def convert_to_anthropic_tool_invoke(
             anthropic_tool_invoke.append(server_tool_result)
         elif is_anthropic_tool_search_use(tool_id, tool_name) and tool_id not in answered_tool_ids:
             continue
-        elif is_anthropic_server_tool_use(tool_id) and tool_id not in answered_tool_ids:
+        elif (
+            tool_id in server_tool_call_ids or is_anthropic_server_tool_use(tool_id)
+        ) and tool_id not in answered_tool_ids:
             anthropic_tool_invoke.append(
-                {
-                    "type": "server_tool_use",
-                    "id": tool_id,
-                    "name": tool_name,
-                    "input": tool_input,
-                }
+                {"type": "server_tool_use", "id": tool_id, "name": tool_name, "input": tool_input}
             )
         else:
             sanitized_tool_id = sanitize_anthropic_tool_use_id(tool_id)
@@ -3174,7 +3205,7 @@ def anthropic_messages_pt(
             # If so, we need to interleave thinking blocks with tool call groups
             # to preserve the original content block ordering.
             # Fixes: https://github.com/BerriAI/litellm/issues/23047
-            assistant_tool_calls = assistant_content_block.get("tool_calls")
+            assistant_tool_calls = _assistant_tool_calls_with_server_tool_calls(assistant_content_block)
             _has_server_tool_calls = False
             if assistant_tool_calls is not None:
                 for _tc in assistant_tool_calls:
@@ -3198,11 +3229,12 @@ def anthropic_messages_pt(
                     web_search_results=_provider_specific_fields.get("web_search_results"),
                     tool_results=_provider_specific_fields.get("tool_results"),
                     answered_tool_ids=client_answered_tool_ids,
+                    server_tool_call_ids=_server_tool_call_ids(assistant_content_block),
                 )
                 if assistant_tool_calls is not None
                 else ()
             )
-            turn_paused = bool(_unrun_server_tool_use_ids(tool_invoke_results))
+            turn_paused = bool(_paused_server_tool_use_ids(tool_invoke_results))
             replayed_tool_invokes, replayed_thinking_blocks = _paused_turn_replay(
                 tool_invoke_results, thinking_blocks or (), is_final_message=msg_i == len(messages) - 1
             )
@@ -4118,7 +4150,7 @@ class BedrockImageProcessor:
     _validate_format = validate_format
 
     @staticmethod
-    def _get_document_format(mime_type: str, supported_doc_formats: list[str]) -> str:
+    def _get_document_format(mime_type: str, supported_doc_formats: Sequence[str]) -> str:
         """
         Get the document format from the mime type
 
@@ -4291,7 +4323,7 @@ def _convert_to_bedrock_tool_call_invoke(
     - extract name 
     - extract id
     """
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
         split_concatenated_json_objects,
     )
 
@@ -5034,11 +5066,15 @@ class BedrockConverseMessagesProcessor:
         drop_params: bool = False,
         model_info: Mapping[str, object] | None = None,
     ) -> list[BedrockMessageBlock]:
-        from litellm.llms.bedrock.common_utils import bedrock_converse_accepts_redacted_thinking
+        from litellm.llms.bedrock.common_utils import (
+            bedrock_converse_accepts_redacted_thinking,
+            bedrock_converse_rejects_signed_thinking,
+        )
 
         contents: list[BedrockMessageBlock] = []
         msg_i = 0
         to_claude: Final = bedrock_converse_accepts_redacted_thinking(model, base_model)
+        drop_signed_thinking: Final = bedrock_converse_rejects_signed_thinking(model, base_model)
 
         messages = BedrockConverseMessagesProcessor._initial_message_setup(
             messages, model, llm_provider, user_continue_message
@@ -5194,7 +5230,9 @@ class BedrockConverseMessagesProcessor:
                 thinking_blocks = assistant_message_block.get("thinking_blocks")
                 converted_thinking_blocks = (
                     BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
-                        _thinking_in_replay_order(_assistant_content, thinking_blocks), to_claude=to_claude
+                        _thinking_in_replay_order(_assistant_content, thinking_blocks),
+                        to_claude=to_claude,
+                        drop_signed=drop_signed_thinking,
                     )
                 )
                 assistant_content = BedrockConverseMessagesProcessor.add_thinking_blocks_to_assistant_content(
@@ -5226,8 +5264,8 @@ class BedrockConverseMessagesProcessor:
                             deployment_model=deployment_model,
                             model_info=model_info,
                         )
-                        if _cache_point_block is not None and not (
-                            drop_params and _as_thinking_block(element) is not None
+                        if _cache_point_block is not None and BedrockConverseMessagesProcessor.keeps_cache_point(
+                            element, drop_params=drop_params, drop_signed=drop_signed_thinking
                         ):
                             assistants_parts.append(_cache_point_block)
                     assistant_content.extend(assistants_parts)
@@ -5286,6 +5324,7 @@ class BedrockConverseMessagesProcessor:
         thinking_blocks: Sequence[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
         *,
         to_claude: bool = False,
+        drop_signed: bool = False,
     ) -> list[BedrockContentBlock]:
         return [
             BedrockContentBlock(
@@ -5295,7 +5334,26 @@ class BedrockConverseMessagesProcessor:
             )
             for thinking_block in thinking_blocks
             if not (to_claude and is_encrypted_reasoning_block(thinking_block))
+            and not (drop_signed and BedrockConverseMessagesProcessor._is_signed(thinking_block))
         ]
+
+    @staticmethod
+    def keeps_cache_point(element: object, *, drop_params: bool, drop_signed: bool) -> bool:
+        match _as_thinking_block(element):
+            case None:
+                return True
+            case thinking_block:
+                return not (
+                    drop_params or (drop_signed and BedrockConverseMessagesProcessor._is_signed(thinking_block))
+                )
+
+    @staticmethod
+    def _is_signed(thinking_block: ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock) -> bool:
+        match thinking_block:
+            case {"signature": signature} if signature:
+                return True
+            case _:
+                return False
 
     @staticmethod
     def _to_reasoning_content_block(
@@ -5455,11 +5513,15 @@ def _bedrock_converse_messages_pt(
     - Please ensure that function response turn comes immediately after a function call turn
     - Conversation blocks and tool result blocks cannot be provided in the same turn. Issue: https://github.com/BerriAI/litellm/issues/6053
     """
-    from litellm.llms.bedrock.common_utils import bedrock_converse_accepts_redacted_thinking
+    from litellm.llms.bedrock.common_utils import (
+        bedrock_converse_accepts_redacted_thinking,
+        bedrock_converse_rejects_signed_thinking,
+    )
 
     contents: list[BedrockMessageBlock] = []
     msg_i = 0
     to_claude: Final = bedrock_converse_accepts_redacted_thinking(model, base_model)
+    drop_signed_thinking: Final = bedrock_converse_rejects_signed_thinking(model, base_model)
 
     messages = BedrockConverseMessagesProcessor._initial_message_setup(
         messages, model, llm_provider, user_continue_message
@@ -5616,7 +5678,9 @@ def _bedrock_converse_messages_pt(
             thinking_blocks = assistant_message_block.get("thinking_blocks")
             converted_thinking_blocks = (
                 BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
-                    _thinking_in_replay_order(_assistant_content, thinking_blocks), to_claude=to_claude
+                    _thinking_in_replay_order(_assistant_content, thinking_blocks),
+                    to_claude=to_claude,
+                    drop_signed=drop_signed_thinking,
                 )
             )
             assistant_content = BedrockConverseMessagesProcessor.add_thinking_blocks_to_assistant_content(
@@ -5649,8 +5713,8 @@ def _bedrock_converse_messages_pt(
                             deployment_model=deployment_model,
                             model_info=model_info,
                         )
-                        if _cache_point_block is not None and not (
-                            drop_params and _as_thinking_block(element) is not None
+                        if _cache_point_block is not None and BedrockConverseMessagesProcessor.keeps_cache_point(
+                            element, drop_params=drop_params, drop_signed=drop_signed_thinking
                         ):
                             assistants_parts.append(_cache_point_block)
                 assistant_content.extend(assistants_parts)
@@ -5879,7 +5943,7 @@ def _bedrock_tools_pt(
             description = name
 
         defs = parameters.pop("$defs", {})
-        defs_copy = copy.deepcopy(defs) if isinstance(defs, dict) else {}
+        defs_copy = defs if isinstance(defs, dict) else {}
         # Expand $ref references in parameters using the definitions
         # Note: We don't pre-flatten defs as that causes exponential memory growth
         # with circular references (see issue #19098). unpack_defs handles nested
@@ -6507,6 +6571,20 @@ def has_tool_with_name(tools: object, tool_name: str) -> bool:
     return False
 
 
+class _SupportsModelDump(Protocol):
+    def model_dump(self) -> dict[str, object]: ...
+
+
+class _StructuredMessagesSource(Protocol):
+    def get_structured_messages(self, data: dict[str, object], /) -> Sequence[object] | None: ...
+
+
+def _instantiate_structured_message_sources(
+    source_classes: Iterable[Callable[[], _StructuredMessagesSource]],
+) -> Sequence[_StructuredMessagesSource]:
+    return [source_cls() for source_cls in source_classes]
+
+
 def resolve_structured_messages(
     messages: list[dict[str, object]] | None,
     request_kwargs: dict[str, Any],
@@ -6544,16 +6622,17 @@ def resolve_structured_messages(
                     break
 
     # 2. Fallback: try each mapped handler until one produces messages
-    handlers_to_try: Final[list[Any]] = []
-    if call_type is not None and call_type in mappings:
-        handlers_to_try.append(mappings[call_type]())
-    else:
-        handlers_to_try.extend(handler_cls() for handler_cls in mappings.values())
+    handlers_to_try: Final = _instantiate_structured_message_sources(
+        (mappings[call_type],) if call_type is not None and call_type in mappings else mappings.values()
+    )
 
     for handler in handlers_to_try:
         structured = handler.get_structured_messages(request_kwargs)
         if structured:
-            return [msg if isinstance(msg, dict) else msg.model_dump() for msg in structured]
+            return [
+                msg if isinstance(msg, dict) else require_attributes(msg, _SupportsModelDump, "model_dump").model_dump()
+                for msg in structured
+            ]
     return None
 
 

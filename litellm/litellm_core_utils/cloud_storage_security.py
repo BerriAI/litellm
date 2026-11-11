@@ -2,12 +2,10 @@ import posixpath
 import re
 from collections.abc import Mapping, Sequence
 from itertools import accumulate, repeat
-from types import MappingProxyType
 from typing import Final
 from urllib.parse import quote, unquote
 
 from litellm._uuid import uuid
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
 
 VERTEX_AI_MANAGED_GCS_PREFIX: Final = "litellm-vertex-files/"
 BEDROCK_MANAGED_S3_BATCH_PREFIX: Final = "litellm-bedrock-files-"
@@ -19,7 +17,28 @@ BEDROCK_MANAGED_S3_PREFIXES: Final = (
     BEDROCK_MANAGED_S3_OUTPUT_PREFIX,
 )
 MANAGED_CLOUD_STORAGE_SCHEMES: Final = ("s3://", "gs://")
-_MAPPING_PROXY_TYPE: Final[type] = type(MappingProxyType({}))
+STORED_S3_BUCKET_PARAM: Final = "stored_s3_bucket_name"
+REQUEST_S3_BUCKET_PARAMS: Final = frozenset({"s3_bucket_name", "s3_output_bucket_name"})
+
+
+def stored_s3_bucket_kwargs(stored_file_id: str) -> Mapping[str, str]:
+    """The bucket (and any prefix before LiteLLM's own path) of an ``s3://`` file id LiteLLM recorded itself,
+    as the param that lets Bedrock read it back.
+
+    Only pass ids from LiteLLM's own records (managed file rows, provider batch responses), never one a caller sent.
+    """
+    if not stored_file_id.startswith("s3://"):
+        return {}
+    bucket, _, object_key = stored_file_id.removeprefix("s3://").partition("/")
+    if not bucket:
+        return {}
+    segments: Final = object_key.split("/")
+    prefix_depth: Final = next(
+        (depth for depth in range(len(segments)) if "/".join(segments[depth:]).startswith(BEDROCK_MANAGED_S3_PREFIXES)),
+        0,
+    )
+    prefix: Final = "/".join(segments[:prefix_depth])
+    return {STORED_S3_BUCKET_PARAM: f"{bucket}/{prefix}" if prefix else bucket}
 
 
 MAX_FILE_ID_DECODE_PASSES: Final = 8
@@ -138,13 +157,7 @@ def encode_s3_object_key_for_url(object_key: str) -> str:
 def should_allow_legacy_cloud_file_ids(
     litellm_params: Mapping[str, object] | None = None,
 ) -> bool:
-    value = None
-    if isinstance(litellm_params, Mapping):
-        trusted_model_credentials: Final = litellm_params.get("_litellm_internal_model_credentials")
-        if isinstance(trusted_model_credentials, _MAPPING_PROXY_TYPE):
-            trusted_mapping: Final = as_str_mapping(trusted_model_credentials)
-            value = trusted_mapping.get("allow_legacy_cloud_file_ids") if trusted_mapping is not None else None
-
+    value: Final = litellm_params.get("allow_legacy_cloud_file_ids") if litellm_params is not None else None
     if isinstance(value, bool):
         return value
     if isinstance(value, str):

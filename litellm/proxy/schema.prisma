@@ -19,6 +19,8 @@ model LiteLLM_BudgetTable {
   rpm_limit     BigInt?
   tpd_limit     BigInt?
   model_max_budget Json?
+  model_tpm_limit Json?
+  model_rpm_limit Json?
   budget_duration String?
   budget_reset_at DateTime?
   allowed_models String[] @default([]) // per-member model scope; empty = inherit team models
@@ -881,6 +883,7 @@ model LiteLLM_DailyUserSpend {
   prompt_caching_savings_spend Float       @default(0.0)
   gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend     Float       @default(0.0)
+  guardrail_spend              Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -917,6 +920,7 @@ model LiteLLM_DailyGlobalSpend {
   prompt_caching_savings_spend Float       @default(0.0)
   gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend     Float       @default(0.0)
+  guardrail_spend              Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -950,6 +954,7 @@ model LiteLLM_DailyOrganizationSpend {
   prompt_caching_savings_spend Float       @default(0.0)
   gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend     Float       @default(0.0)
+  guardrail_spend              Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -988,6 +993,7 @@ model LiteLLM_DailyEndUserSpend {
   prompt_caching_savings_spend Float       @default(0.0)
   gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend     Float       @default(0.0)
+  guardrail_spend              Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -1025,6 +1031,7 @@ model LiteLLM_DailyAgentSpend {
   prompt_caching_savings_spend Float       @default(0.0)
   gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend     Float       @default(0.0)
+  guardrail_spend              Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -1062,6 +1069,7 @@ model LiteLLM_DailyTeamSpend {
   prompt_caching_savings_spend Float       @default(0.0)
   gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend     Float       @default(0.0)
+  guardrail_spend              Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -1102,6 +1110,7 @@ model LiteLLM_DailyTagSpend {
   prompt_caching_savings_spend Float       @default(0.0)
   gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend     Float       @default(0.0)
+  guardrail_spend              Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -1615,8 +1624,76 @@ model LiteLLM_ClaudeCodePluginTable {
   updated_at    DateTime? @default(now()) @updatedAt
   created_by    String?
 
+  uploaded_archive LiteLLM_ClaudeCodePluginUpload?
+  versions LiteLLM_ClaudeCodePluginVersion[]
+  downloads        LiteLLM_ClaudeCodePluginDownload[]
+  anonymous_download_count BigInt @default(0)
+
   @@map("LiteLLM_ClaudeCodePluginTable")
 }
+
+model LiteLLM_ClaudeCodePluginVersion {
+  id                String @id @default(uuid())
+  plugin_id         String
+  version           String?
+  description       String?
+  manifest_json     String?
+  published_at      DateTime?
+  published_by      String?
+  archive_available Boolean @default(false)
+  content           Bytes?
+  plugin            LiteLLM_ClaudeCodePluginTable @relation(fields: [plugin_id], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([plugin_id, version])
+  @@index([plugin_id, published_at])
+}
+
+
+model LiteLLM_SkillSubmission {
+  id               String   @id @default(uuid())
+  plugin_name      String
+  operation        String
+  status           String   @default("pending_review")
+  proposal_json    String
+  archive_content  Bytes?
+  submitted_by     String
+  created_at       DateTime @default(now())
+  base_plugin_id   String?
+  base_updated_at  DateTime?
+  reviewed_by      String?
+  reviewed_at      DateTime?
+  rejection_reason String?
+  scan_json        String?
+
+  @@index([submitted_by, created_at(sort: Desc), id(sort: Desc)])
+  @@index([submitted_by, status, created_at(sort: Desc), id(sort: Desc)])
+  @@index([status, created_at(sort: Desc), id(sort: Desc)])
+  @@index([created_at(sort: Desc), id(sort: Desc)])
+}
+
+model LiteLLM_ClaudeCodePluginDownload {
+  id            BigInt   @id @default(autoincrement())
+  plugin_id     String
+  downloaded_at DateTime @default(now())
+  version       String?
+  digest        String
+  authenticated Boolean
+  user_id       String?
+  user_email    String?
+  key_alias     String?
+  team_id       String?
+  team_alias    String?
+  plugin        LiteLLM_ClaudeCodePluginTable @relation(fields: [plugin_id], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([plugin_id, id])
+}
+
+model LiteLLM_ClaudeCodePluginUpload {
+  plugin_name String @id
+  content     Bytes
+  plugin      LiteLLM_ClaudeCodePluginTable @relation(fields: [plugin_name], references: [name], onDelete: Cascade, onUpdate: Cascade)
+}
+
 
 // User/team-scoped memory store with a GLOBAL unique key.
 // `value` is a string (typically markdown/text meant for LLM context);
@@ -1985,6 +2062,11 @@ model LiteLLM_BackgroundInteractionSettlement {
   @@index([settled_at], map: "idx_background_interaction_settlement_settled_at")
 }
 
+model LiteLLM_BackgroundResponseSettlement {
+  response_id String   @id
+  settled_at  DateTime @default(now())
+}
+
 model LiteLLM_Lens {
   reviews LiteLLM_LensReview[]
   id      String @id
@@ -2062,74 +2144,27 @@ model LiteLLM_TelemetryReport {
   @@index([created_at])
 }
 
-enum AccountingEventKind {
-  inbound_usage
-  outbound_usage
-  cost
-}
-
 enum AccountingDeliveryState {
   pending
   applied
   parked
 }
 
-enum AccountingDeliveryTarget {
-  LiteLLM_VerificationToken
-  LiteLLM_UserTable
-  LiteLLM_TeamTable
-  LiteLLM_TeamMembership
-  LiteLLM_OrganizationTable
-  LiteLLM_OrganizationMembership
-  LiteLLM_EndUserTable
-  LiteLLM_AgentsTable
-  LiteLLM_TagTable
-  LiteLLM_ProjectTable
-  LiteLLM_ModelAccessGroupBudgetTable
-  LiteLLM_BudgetTable
-  LiteLLM_BudgetWindowSpend
-  LiteLLM_DailyUserSpend
-  LiteLLM_DailyTeamSpend
-  LiteLLM_DailyOrganizationSpend
-  LiteLLM_DailyEndUserSpend
-  LiteLLM_DailyAgentSpend
-  LiteLLM_DailyTagSpend
-  LiteLLM_DailyModelUsage
-  LiteLLM_DailyToolSpend
-  LiteLLM_AutoRouterDailySpend
-}
+model LiteLLM_SpendLogDelivery {
+  delivery_id        String                  @id @default(dbgenerated("(gen_random_uuid())::text"))
+  request_id         String
+  state              AccountingDeliveryState @default(pending)
+  accounting_payload Json
+  is_batch           Boolean
+  attempts           Int                     @default(0)
+  next_attempt_at    DateTime                @default(now())
+  applied_at         DateTime?
+  last_error         String?
+  created_at         DateTime                @default(now())
 
-// Durable accounting ledger. One row per usage or cost event; payload holds the
-// private event envelope versioned by schema_version. Usage rows retain request-scoped
-// pricing context; cost rows include resolved rates and the finalized pricing snapshot.
-model LiteLLM_AccountingEvent {
-  event_id        String              @id
-  kind            AccountingEventKind
-  source_event_id String?
-  schema_version  Int
-  payload_hash    String
-  occurred_at     DateTime
-  recorded_at     DateTime            @default(now())
-  payload         Json
-
-  @@index([recorded_at])
-  @@index([kind, source_event_id])
-}
-
-// One row per (event, target table, version): pending work for the projector and,
-// once applied in the same transaction as the target write, the receipt that stops a retry.
-model LiteLLM_AccountingDelivery {
-  event_id        String
-  target          AccountingDeliveryTarget
-  version         Int
-  state           AccountingDeliveryState  @default(pending)
-  attempts        Int                      @default(0)
-  next_attempt_at DateTime                 @default(now())
-  applied_at      DateTime?
-  last_error      String?
-
-  @@id([event_id, target, version])
-  @@index([target, state, next_attempt_at])
+  @@index([state, next_attempt_at])
+  @@index([state, applied_at])
+  @@index([request_id])
 }
 
 model LiteLLM_SubscriptionAccountTable {

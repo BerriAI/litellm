@@ -305,6 +305,29 @@ export const getSourceLink = (source: Plugin["source"]): string | null => {
   return linksToUrl && source.url && BROWSABLE_URL_REGEX.test(source.url) ? source.url : null;
 };
 
+export const getManagedSkillArchivePath = (
+  name: string,
+  source: Plugin["source"],
+  proxyBaseUrl: string,
+  pageOrigin?: string,
+): string | null => {
+  if (source.source !== "archive" || !validatePluginName(name)) {
+    return null;
+  }
+  if (source.sha256 && !SHA256_REGEX.test(source.sha256)) {
+    return null;
+  }
+  const path = source.sha256
+    ? `/claude-code/plugins/${name}/archive/${source.sha256}.zip`
+    : `/skill-hub/skills/${name}/archive`;
+  try {
+    const expectedUrl = new URL(`${proxyBaseUrl.replace(/\/+$/, "")}${path}`, pageOrigin);
+    return /^https?:$/.test(expectedUrl.protocol) && source.url === expectedUrl.href ? path : null;
+  } catch {
+    return null;
+  }
+};
+
 /**
  * Get badge color based on category
  */

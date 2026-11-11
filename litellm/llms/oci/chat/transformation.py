@@ -19,6 +19,7 @@ from pydantic import TypeAdapter, ValidationError
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_OCI_CHAT_MAX_TOKENS
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     merge_consecutive_system_messages,
@@ -891,13 +892,14 @@ class OCIStreamWrapper(CustomStreamWrapper):
         if payload == "[DONE]":
             return None
         try:
-            dict_chunk: Final = json.loads(payload)
+            decoded_chunk: Final = _DECODED_JSON.validate_python(json.loads(payload))
         except json.JSONDecodeError as e:
             raise OCIError(
                 status_code=500,
                 message=f"Chunk cannot be parsed as JSON: {e}",
             )
 
+        dict_chunk: Final = decoded_json_object(decoded_chunk)
         if dict_chunk.get("apiFormat") == "COHERE":
             result: Final = handle_cohere_stream_chunk(
                 dict_chunk,

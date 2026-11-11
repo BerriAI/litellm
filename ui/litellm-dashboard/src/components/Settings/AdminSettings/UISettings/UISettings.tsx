@@ -18,6 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Label } from "@/components/ui/label";
 import PageVisibilitySettings from "./PageVisibilitySettings";
 import BackgroundChatSettings from "./BackgroundChatSettings";
+import { productNames } from "@/i18n/untranslated/productNames";
 
 interface SettingRowProps {
   ariaLabel: string;
@@ -332,7 +333,7 @@ export default function UISettings() {
               <Select
                 value={usageRange}
                 disabled={isUpdating || usageRangeConfigOwned}
-                items={relativeTimeOptions.map((option) => ({ value: option.settingValue, label: option.label }))}
+                items={relativeTimeOptions.map((option) => ({ value: option.settingValue, label: t(option.label) }))}
                 onValueChange={(value) => {
                   if (value === null) return;
                   updateSettings(
@@ -354,7 +355,7 @@ export default function UISettings() {
                 <SelectContent>
                   {relativeTimeOptions.map((option) => (
                     <SelectItem key={option.settingValue} value={option.settingValue}>
-                      {option.label}
+                      {t(option.label)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -453,7 +454,7 @@ export default function UISettings() {
             <Separator />
             <div className="flex items-start justify-between gap-3">
               <div className="space-y-1">
-                <p className="text-sm font-medium text-foreground">Moyai</p>
+                <p className="text-sm font-medium text-foreground">{productNames.moyai}</p>
                 <p className="text-sm text-muted-foreground">
                   {moyaiUrl
                     ? t("adminPanel.uiSettings.moyai.connectedTo", { url: moyaiUrl })
