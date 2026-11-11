@@ -109,6 +109,10 @@ def _deployment(
     }
 
 
+def _session_total_recorded(response: httpx.Response) -> bool:
+    return response.status_code == 200 and JSON_OBJECT.validate_json(response.content).get("total_spend") is not None
+
+
 def _session_response(
     gateway: Gateway,
     key: str,
@@ -126,7 +130,7 @@ def _session_response(
                 params={"session_id": session_id},
                 key=key,
             ),
-            lambda response: response.status_code == 200,
+            _session_total_recorded,
             seconds=seconds,
             return_last_on_timeout=return_last_on_timeout,
         )
@@ -149,7 +153,7 @@ def _session_response(
 
     response_state: Final = eventually(
         read_response_state,
-        lambda state: state[0].status_code == 200 or state[1],
+        lambda state: _session_total_recorded(state[0]) or state[1],
         seconds=seconds,
         return_last_on_timeout=return_last_on_timeout,
     )
@@ -211,6 +215,7 @@ def _session_contract(session_id: str, router_name: str) -> dict[str, object]:
         "turns": 1,
         "last_model": "openai/integration-simple",
         "spend": pytest.approx(0.000015),
+        "total_spend": pytest.approx(0.000015),
         "savings_estimated_turns": 1,
         "savings_estimated_actual_spend": pytest.approx(0.000015),
         "saved_spend": pytest.approx(0.000135),
@@ -336,6 +341,7 @@ def test_auto_router_session_tracks_key_scoped_spend_and_bounds_long_session_ids
                     "turns": 1,
                     "last_model": "openai/integration-simple",
                     "spend": pytest.approx(0.000015),
+                    "total_spend": pytest.approx(0.000015),
                     "savings_estimated_turns": 1,
                     "savings_estimated_actual_spend": pytest.approx(0.000015),
                     "saved_spend": pytest.approx(0.000135),
@@ -404,6 +410,7 @@ def test_auto_router_session_tracks_key_scoped_spend_and_bounds_long_session_ids
                         "turns": 2,
                         "last_model": "openai/integration-medium",
                         "spend": pytest.approx(0.000045),
+                        "total_spend": pytest.approx(0.000045),
                         "savings_estimated_turns": 2,
                         "savings_estimated_actual_spend": pytest.approx(0.000045),
                         "saved_spend": pytest.approx(0.000255),
@@ -586,6 +593,7 @@ def test_auto_router_session_tracks_key_scoped_spend_and_bounds_long_session_ids
                     "turns": 1,
                     "last_model": "openai/integration-simple",
                     "spend": pytest.approx(0.000015),
+                    "total_spend": pytest.approx(0.000015),
                     "savings_estimated_turns": 1,
                     "savings_estimated_actual_spend": pytest.approx(0.000015),
                     "saved_spend": pytest.approx(0.000135),
