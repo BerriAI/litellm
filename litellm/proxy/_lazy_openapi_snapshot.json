@@ -21293,26 +21293,6 @@
         "post": {
           "description": "Create a new guardrail\n\n\ud83d\udc49 [Guardrail docs](https://docs.litellm.ai/docs/proxy/guardrails/quick_start)\n\nExample Request:\n```bash\ncurl -X POST \"http://localhost:4000/guardrails\" \\\n    -H \"Authorization: Bearer <your_api_key>\" \\\n    -H \"Content-Type: application/json\" \\\n    -d '{\n        \"guardrail\": {\n            \"guardrail_name\": \"my-bedrock-guard\",\n            \"litellm_params\": {\n                \"guardrail\": \"bedrock\",\n                \"mode\": \"pre_call\",\n                \"guardrailIdentifier\": \"ff6ujrregl1q\",\n                \"guardrailVersion\": \"DRAFT\",\n                \"default_on\": true\n            },\n            \"guardrail_info\": {\n                \"description\": \"Bedrock content moderation guardrail\"\n            }\n        }\n    }'\n```\n\nExample Response:\n```json\n{\n    \"guardrail_id\": \"123e4567-e89b-12d3-a456-426614174000\",\n    \"guardrail_name\": \"my-bedrock-guard\",\n    \"litellm_params\": {\n        \"guardrail\": \"bedrock\",\n        \"mode\": \"pre_call\",\n        \"guardrailIdentifier\": \"ff6ujrregl1q\",\n        \"guardrailVersion\": \"DRAFT\",\n        \"default_on\": true\n    },\n    \"guardrail_info\": {\n        \"description\": \"Bedrock content moderation guardrail\"\n    },\n    \"created_at\": \"2023-11-09T12:34:56.789Z\",\n    \"updated_at\": \"2023-11-09T12:34:56.789Z\"\n}\n```",
           "operationId": "create_guardrail_guardrails_post",
-          "parameters": [
-            {
-              "description": "The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
-              "in": "header",
-              "name": "litellm-changed-by",
-              "required": false,
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "description": "The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
-                "title": "Litellm-Changed-By"
-              }
-            }
-          ],
           "requestBody": {
             "content": {
               "application/json": {
@@ -21449,26 +21429,6 @@
         "post": {
           "description": "Register a guardrail for onboarding (team submission).\n\nAccepts a guardrail config in the\n[Generic Guardrail API](https://docs.litellm.ai/docs/adding_provider/generic_guardrail_api) format.\nThe submission is stored with status `pending_review` until an admin approves it.",
           "operationId": "register_guardrail_guardrails_register_post",
-          "parameters": [
-            {
-              "description": "The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
-              "in": "header",
-              "name": "litellm-changed-by",
-              "required": false,
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "description": "The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
-                "title": "Litellm-Changed-By"
-              }
-            }
-          ],
           "requestBody": {
             "content": {
               "application/json": {
@@ -21660,24 +21620,6 @@
                 "title": "Guardrail Id",
                 "type": "string"
               }
-            },
-            {
-              "description": "The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
-              "in": "header",
-              "name": "litellm-changed-by",
-              "required": false,
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "description": "The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
-                "title": "Litellm-Changed-By"
-              }
             }
           ],
           "responses": {
@@ -21723,24 +21665,6 @@
               "schema": {
                 "title": "Guardrail Id",
                 "type": "string"
-              }
-            },
-            {
-              "description": "The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
-              "in": "header",
-              "name": "litellm-changed-by",
-              "required": false,
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "description": "The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
-                "title": "Litellm-Changed-By"
               }
             }
           ],
@@ -22304,24 +22228,6 @@
                 "title": "Guardrail Id",
                 "type": "string"
               }
-            },
-            {
-              "description": "The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
-              "in": "header",
-              "name": "litellm-changed-by",
-              "required": false,
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "description": "The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
-                "title": "Litellm-Changed-By"
-              }
             }
           ],
           "responses": {
@@ -22410,24 +22316,6 @@
                 "title": "Guardrail Id",
                 "type": "string"
               }
-            },
-            {
-              "description": "The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
-              "in": "header",
-              "name": "litellm-changed-by",
-              "required": false,
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "description": "The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
-                "title": "Litellm-Changed-By"
-              }
             }
           ],
           "requestBody": {
@@ -22481,24 +22369,6 @@
               "schema": {
                 "title": "Guardrail Id",
                 "type": "string"
-              }
-            },
-            {
-              "description": "The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
-              "in": "header",
-              "name": "litellm-changed-by",
-              "required": false,
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "description": "The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
-                "title": "Litellm-Changed-By"
               }
             }
           ],
@@ -42680,26 +42550,6 @@
         "post": {
           "description": "Register a guardrail for onboarding (team submission).\n\nAccepts a guardrail config in the\n[Generic Guardrail API](https://docs.litellm.ai/docs/adding_provider/generic_guardrail_api) format.\nThe submission is stored with status `pending_review` until an admin approves it.",
           "operationId": "register_guardrail_guardrails_register_post_2",
-          "parameters": [
-            {
-              "description": "The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
-              "in": "header",
-              "name": "litellm-changed-by",
-              "required": false,
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "description": "The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
-                "title": "Litellm-Changed-By"
-              }
-            }
-          ],
           "requestBody": {
             "content": {
               "application/json": {

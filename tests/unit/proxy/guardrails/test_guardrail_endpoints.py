@@ -1,6 +1,7 @@
+import copy
 import json
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime
 from types import MappingProxyType
 from typing import Dict, Final, List, Literal, Optional
@@ -2029,28 +2030,47 @@ async def test_delete_guardrail_endpoint(
             assert "Failed to remove guardrail" in str(mock_logger.warning.call_args)
 
 
-# --- Audit log for guardrail changes (LIT-10639) ---
-
 PLANTED_API_KEY: Final = "sk-planted-guardrail-api-key"
-PLANTED_HEADER_SECRET: Final = "Bearer planted-guardrail-header-secret"
-# LiteLLM_AuditLogs masks every value under a "key"-named field again on the way in, so api_key lands as asterisks
-MASKED_API_KEY: Final = "********"
+PLANTED_AUTH_HEADER: Final = "Bearer planted-guardrail-auth-header"
+PLANTED_APIKEY_HEADER: Final = "planted-guardrail-apikey-header"
+ROTATED_API_KEY: Final = "sk-planted-rotated-api-key"
+PLANTED_SECRETS: Final = (PLANTED_API_KEY, ROTATED_API_KEY, PLANTED_AUTH_HEADER, PLANTED_APIKEY_HEADER, "litellm_enc::")
 AUDIT_ADMIN: Final = UserAPIKeyAuth(
     user_role=LitellmUserRoles.PROXY_ADMIN, user_id="security-admin", api_key="hashed-admin-key"
 )
+STORED_PARAMS: Final = MappingProxyType(
+    {
+        "guardrail": "generic_guardrail_api",
+        "mode": "pre_call",
+        "default_on": False,
+        "api_base": "https://guardrails.example.com/validate",
+        "api_key": PLANTED_API_KEY,
+        "headers": {"Authorization": PLANTED_AUTH_HEADER, "apikey": PLANTED_APIKEY_HEADER, "X-Tenant": "acme"},
+    }
+)
+STORED_GUARDRAIL_SNAPSHOT: Final = MappingProxyType(
+    {
+        "guardrail_id": "gr-audit",
+        "guardrail_name": "audited-guard",
+        "guardrail_info": {"description": "audited"},
+        "litellm_params": {"guardrail": "generic_guardrail_api", "mode": "pre_call", "default_on": False},
+    }
+)
 
 
-def _guardrail_with_secrets(api_key: str = PLANTED_API_KEY) -> Guardrail:
+def _stored_guardrail() -> Guardrail:
+    return Guardrail(
+        guardrail_id="gr-audit",
+        guardrail_name="audited-guard",
+        litellm_params=copy.deepcopy(dict(STORED_PARAMS)),
+        guardrail_info={"description": "audited"},
+    )
+
+
+def _requested_guardrail(**params: object) -> Guardrail:
     return Guardrail(
         guardrail_name="audited-guard",
-        litellm_params=LitellmParams(
-            guardrail="generic_guardrail_api",
-            mode="pre_call",
-            api_base="https://guardrails.example.com/validate",
-            api_key=api_key,
-            headers={"Authorization": PLANTED_HEADER_SECRET, "X-Tenant": "acme"},
-            send_user_api_key_alias=True,
-        ),
+        litellm_params=LitellmParams(**{**STORED_PARAMS, **params}),
         guardrail_info={"description": "audited"},
     )
 
@@ -2069,140 +2089,138 @@ def audit_prisma(mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch) -> Mock
     return prisma
 
 
-async def _written_audit_rows(prisma: Mock) -> list[dict[str, object]]:
+async def _written_audit_rows(prisma: Mock) -> tuple[Mapping[str, object], ...]:
     from litellm.proxy.management_helpers.audit_logs import drain_audit_tasks
 
     await drain_audit_tasks()
     insert: Final[AsyncMock] = prisma.db.litellm_auditlog.create
-    return [dict(call.kwargs["data"]) for call in insert.call_args_list]
+    return tuple(MappingProxyType(call.kwargs["data"]) for call in insert.call_args_list)
 
 
-def _audit_json(row: dict[str, object], field: str) -> dict[str, object]:
-    value = row[field]
+def _audit_snapshot(row: Mapping[str, object], field: str) -> Mapping[str, object]:
+    value: Final = row[field]
     assert isinstance(value, str), f"{field} should be a JSON string, got {value!r}"
     return json.loads(value)
 
 
-def _assert_no_planted_secret(row: dict[str, object]) -> None:
-    serialized = json.dumps(row, default=str)
-    for secret in (PLANTED_API_KEY, "planted-guardrail-header-secret", "sk-old-planted-key"):
-        assert secret not in serialized, f"planted secret {secret!r} leaked into the audit row: {serialized}"
+def _assert_no_planted_secret(row: Mapping[str, object]) -> None:
+    serialized: Final = json.dumps(dict(row), default=str)
+    for secret in PLANTED_SECRETS:
+        assert secret not in serialized, f"{secret!r} leaked into the audit row: {serialized}"
+
+
+def _patch_guardrail_registry(mocker: MockerFixture, registry: Mock, handler: Mock) -> None:
+    mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", registry)
+    mocker.patch("litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER", handler)
 
 
 @pytest.mark.asyncio
-async def test_create_guardrail_writes_created_audit_row_with_secrets_redacted(
+async def test_create_guardrail_audit_row_records_the_caller_and_no_provider_secret(
     mocker: MockerFixture, audit_prisma: Mock, mock_guardrail_registry: Mock, mock_in_memory_handler: Mock
 ):
     mock_guardrail_registry.add_guardrail_to_db = AsyncMock(
         side_effect=lambda guardrail, prisma_client: {**guardrail, "guardrail_id": "gr-audit"}
     )
-    mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_guardrail_registry)
-    mocker.patch("litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER", mock_in_memory_handler)
+    _patch_guardrail_registry(mocker, mock_guardrail_registry, mock_in_memory_handler)
 
-    await create_guardrail(CreateGuardrailRequest(guardrail=_guardrail_with_secrets()), user_api_key_dict=AUDIT_ADMIN)
+    await create_guardrail(CreateGuardrailRequest(guardrail=_requested_guardrail()), user_api_key_dict=AUDIT_ADMIN)
 
-    rows = await _written_audit_rows(audit_prisma)
-    assert len(rows) == 1, rows
-    row = rows[0]
-    assert {k: row[k] for k in ("action", "table_name", "object_id", "changed_by", "changed_by_api_key")} == {
-        "action": "created",
-        "table_name": "LiteLLM_GuardrailsTable",
-        "object_id": "gr-audit",
-        "changed_by": "security-admin",
-        "changed_by_api_key": "hashed-admin-key",
-    }
-    assert "before_value" not in row, row
-    after = _audit_json(row, "updated_values")
-    assert after["guardrail_name"] == "audited-guard"
-    assert after["guardrail_info"] == {"description": "audited"}
-    assert after["litellm_params"]["api_base"] == "https://guardrails.example.com/validate"
-    assert after["litellm_params"]["api_key"] == MASKED_API_KEY
-    assert after["litellm_params"]["headers"] == {"Authorization": "REDACTED", "X-Tenant": "acme"}
-    assert after["litellm_params"]["send_user_api_key_alias"] is True, "a flag is not a credential, keep it auditable"
-    _assert_no_planted_secret(row)
+    rows: Final = await _written_audit_rows(audit_prisma)
+    assert [
+        {
+            k: row.get(k)
+            for k in ("action", "table_name", "object_id", "changed_by", "changed_by_api_key", "before_value")
+        }
+        for row in rows
+    ] == [
+        {
+            "action": "created",
+            "table_name": "LiteLLM_GuardrailsTable",
+            "object_id": "gr-audit",
+            "changed_by": "security-admin",
+            "changed_by_api_key": "hashed-admin-key",
+            "before_value": None,
+        }
+    ], rows
+    assert _audit_snapshot(rows[0], "updated_values") == STORED_GUARDRAIL_SNAPSHOT
+    _assert_no_planted_secret(rows[0])
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["put", "patch"])
-async def test_update_guardrail_writes_before_and_after_audit_row(
+async def test_update_guardrail_audit_row_shows_the_mode_change_and_names_the_rotated_key_without_its_value(
     method: str, mocker: MockerFixture, audit_prisma: Mock, mock_guardrail_registry: Mock, mock_in_memory_handler: Mock
 ):
-    before: Final = {**_guardrail_with_secrets(api_key="sk-old-planted-key"), "guardrail_id": "gr-audit"}
-    mock_guardrail_registry.get_guardrail_by_id_from_db = AsyncMock(return_value=before)
+    mock_guardrail_registry.get_guardrail_by_id_from_db = AsyncMock(return_value=_stored_guardrail())
     mock_guardrail_registry.update_guardrail_in_db = AsyncMock(
-        side_effect=lambda guardrail_id, guardrail, prisma_client: {**guardrail, "guardrail_id": guardrail_id}
+        return_value={
+            **_stored_guardrail(),
+            "litellm_params": {**copy.deepcopy(dict(STORED_PARAMS)), "mode": "post_call", "api_key": ROTATED_API_KEY},
+        }
     )
-    mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_guardrail_registry)
-    mocker.patch("litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER", mock_in_memory_handler)
+    _patch_guardrail_registry(mocker, mock_guardrail_registry, mock_in_memory_handler)
 
     if method == "put":
         await update_guardrail(
-            "gr-audit", UpdateGuardrailRequest(guardrail=_guardrail_with_secrets()), user_api_key_dict=AUDIT_ADMIN
+            "gr-audit",
+            UpdateGuardrailRequest(guardrail=_requested_guardrail(mode="post_call", api_key=ROTATED_API_KEY)),
+            user_api_key_dict=AUDIT_ADMIN,
         )
     else:
         await patch_guardrail(
             "gr-audit",
-            PatchGuardrailRequest(litellm_params={"api_key": PLANTED_API_KEY, "mode": "post_call"}),
+            PatchGuardrailRequest(litellm_params={"api_key": ROTATED_API_KEY, "mode": "post_call"}),
             user_api_key_dict=AUDIT_ADMIN,
         )
 
-    rows = await _written_audit_rows(audit_prisma)
-    assert [(r["action"], r["object_id"], r["table_name"]) for r in rows] == [
-        ("updated", "gr-audit", "LiteLLM_GuardrailsTable")
+    rows: Final = await _written_audit_rows(audit_prisma)
+    assert [(r["action"], r["object_id"], r["changed_by"]) for r in rows] == [
+        ("updated", "gr-audit", "security-admin")
     ], rows
-    before_value = _audit_json(rows[0], "before_value")
-    after_value = _audit_json(rows[0], "updated_values")
-    assert before_value["litellm_params"]["mode"] == "pre_call"
-    assert after_value["litellm_params"]["mode"] == ("pre_call" if method == "put" else "post_call")
-    for snapshot in (before_value, after_value):
-        assert snapshot["litellm_params"]["api_key"] == MASKED_API_KEY, snapshot
-        assert snapshot["litellm_params"]["headers"] == {"Authorization": "REDACTED", "X-Tenant": "acme"}, snapshot
+    assert _audit_snapshot(rows[0], "before_value") == STORED_GUARDRAIL_SNAPSHOT
+    assert _audit_snapshot(rows[0], "updated_values") == {
+        **STORED_GUARDRAIL_SNAPSHOT,
+        "litellm_params": {"guardrail": "generic_guardrail_api", "mode": "post_call", "default_on": False},
+        "changed_litellm_params": ["api_key"],
+    }
     _assert_no_planted_secret(rows[0])
 
 
 @pytest.mark.asyncio
-async def test_delete_guardrail_writes_deleted_audit_row_with_prior_config(
+async def test_put_guardrail_audit_row_reports_what_was_saved_not_what_the_live_sync_added(
     mocker: MockerFixture, audit_prisma: Mock, mock_guardrail_registry: Mock, mock_in_memory_handler: Mock
 ):
-    mock_guardrail_registry.get_guardrail_by_id_from_db = AsyncMock(
-        return_value={**_guardrail_with_secrets(), "guardrail_id": "gr-audit"}
+    def _sync_adds_a_header(guardrail: Guardrail, reject_invalid_logging_only_scope: bool) -> None:
+        guardrail["litellm_params"]["headers"]["x-api-key"] = "added-by-live-sync"
+
+    mock_guardrail_registry.get_guardrail_by_id_from_db = AsyncMock(return_value=_stored_guardrail())
+    mock_guardrail_registry.update_guardrail_in_db = AsyncMock(return_value=_stored_guardrail())
+    mock_in_memory_handler.sync_guardrail_from_db = mocker.Mock(side_effect=_sync_adds_a_header)
+    _patch_guardrail_registry(mocker, mock_guardrail_registry, mock_in_memory_handler)
+
+    await update_guardrail(
+        "gr-audit", UpdateGuardrailRequest(guardrail=_requested_guardrail()), user_api_key_dict=AUDIT_ADMIN
     )
-    mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_guardrail_registry)
-    mocker.patch("litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER", mock_in_memory_handler)
+
+    rows: Final = await _written_audit_rows(audit_prisma)
+    assert [_audit_snapshot(r, "updated_values") for r in rows] == [STORED_GUARDRAIL_SNAPSHOT], rows
+
+
+@pytest.mark.asyncio
+async def test_delete_guardrail_audit_row_keeps_the_deleted_guardrail_without_secrets(
+    mocker: MockerFixture, audit_prisma: Mock, mock_guardrail_registry: Mock, mock_in_memory_handler: Mock
+):
+    mock_guardrail_registry.get_guardrail_by_id_from_db = AsyncMock(return_value=_stored_guardrail())
+    _patch_guardrail_registry(mocker, mock_guardrail_registry, mock_in_memory_handler)
 
     await delete_guardrail(guardrail_id="gr-audit", user_api_key_dict=AUDIT_ADMIN)
 
-    rows = await _written_audit_rows(audit_prisma)
-    assert [(r["action"], r["object_id"]) for r in rows] == [("deleted", "gr-audit")], rows
-    assert "updated_values" not in rows[0], rows[0]
-    before_value = _audit_json(rows[0], "before_value")
-    assert before_value["guardrail_name"] == "audited-guard"
-    assert before_value["litellm_params"]["api_key"] == MASKED_API_KEY
+    rows: Final = await _written_audit_rows(audit_prisma)
+    assert [(r["action"], r["object_id"], r.get("updated_values")) for r in rows] == [("deleted", "gr-audit", None)], (
+        rows
+    )
+    assert _audit_snapshot(rows[0], "before_value") == STORED_GUARDRAIL_SNAPSHOT
     _assert_no_planted_secret(rows[0])
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "key_metadata, expected_changed_by",
-    [({"allow_litellm_changed_by_header": True}, "jane@acme.com"), ({}, "security-admin")],
-    ids=["header_allowed_for_key", "header_ignored_without_permission"],
-)
-async def test_guardrail_audit_row_records_litellm_changed_by_only_when_the_key_allows_it(
-    key_metadata: dict[str, object],
-    expected_changed_by: str,
-    mocker: MockerFixture,
-    audit_prisma: Mock,
-    mock_guardrail_registry: Mock,
-    mock_in_memory_handler: Mock,
-):
-    mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_guardrail_registry)
-    mocker.patch("litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER", mock_in_memory_handler)
-    caller: Final = AUDIT_ADMIN.model_copy(update={"metadata": key_metadata})
-
-    await delete_guardrail(guardrail_id="gr-audit", user_api_key_dict=caller, litellm_changed_by="jane@acme.com")
-
-    rows = await _written_audit_rows(audit_prisma)
-    assert [r["changed_by"] for r in rows] == [expected_changed_by], rows
 
 
 @pytest.mark.asyncio
@@ -2210,33 +2228,23 @@ async def test_rejected_guardrail_update_writes_no_audit_row(
     mocker: MockerFixture, audit_prisma: Mock, mock_guardrail_registry: Mock, mock_in_memory_handler: Mock
 ):
     mock_in_memory_handler.sync_guardrail_from_db = mocker.Mock(side_effect=ValueError("invalid config"))
-    mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_guardrail_registry)
-    mocker.patch("litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER", mock_in_memory_handler)
+    _patch_guardrail_registry(mocker, mock_guardrail_registry, mock_in_memory_handler)
 
     with pytest.raises(HTTPException) as exc_info:
         await update_guardrail("gr-audit", MOCK_UPDATE_REQUEST, user_api_key_dict=AUDIT_ADMIN)
 
     assert exc_info.value.status_code == 422
-    assert await _written_audit_rows(audit_prisma) == [], "a rolled-back update must not be audited"
+    assert await _written_audit_rows(audit_prisma) == (), "a rolled-back update must not be audited"
 
 
 def _team_guardrail_row(status: str):
     from prisma.models import LiteLLM_GuardrailsTable
 
-    now = datetime.now()
+    now: Final = datetime(2026, 11, 11, 12, 0, 0)
     return LiteLLM_GuardrailsTable(
         guardrail_id="team-gr",
         guardrail_name="team-guard",
-        litellm_params=json.dumps(
-            encrypt_guardrail_litellm_params(
-                {
-                    "guardrail": "generic_guardrail_api",
-                    "mode": "pre_call",
-                    "api_base": "https://guardrails.example.com/validate",
-                    "api_key": PLANTED_API_KEY,
-                }
-            )
-        ),
+        litellm_params=json.dumps(encrypt_guardrail_litellm_params(dict(STORED_PARAMS))),
         guardrail_info=json.dumps({"description": "team"}),
         status=status,
         team_id="team-1",
@@ -2245,33 +2253,42 @@ def _team_guardrail_row(status: str):
     )
 
 
+def _team_guardrail_snapshot(status: str) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            "guardrail_id": "team-gr",
+            "guardrail_name": "team-guard",
+            "guardrail_info": {"description": "team"},
+            "status": status,
+            "team_id": "team-1",
+            "litellm_params": {"guardrail": "generic_guardrail_api", "mode": "pre_call", "default_on": False},
+        }
+    )
+
+
 @pytest.mark.asyncio
-async def test_register_guardrail_writes_created_audit_row_with_secrets_redacted(audit_prisma: Mock) -> None:
+async def test_register_guardrail_audit_row_records_the_pending_submission_without_secrets(
+    audit_prisma: Mock,
+) -> None:
     audit_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=None)
     audit_prisma.db.litellm_guardrailstable.create = AsyncMock(return_value=_team_guardrail_row("pending_review"))
-    request = RegisterGuardrailRequest(
-        guardrail_name="team-guard",
-        litellm_params={**MOCK_REGISTER_REQUEST.litellm_params, "api_key": PLANTED_API_KEY},
-        team_id="team-1",
+    request: Final = RegisterGuardrailRequest(
+        guardrail_name="team-guard", litellm_params=dict(STORED_PARAMS), team_id="team-1"
     )
 
     await register_guardrail(request, AUDIT_ADMIN)
 
-    rows = await _written_audit_rows(audit_prisma)
+    rows: Final = await _written_audit_rows(audit_prisma)
     assert [(r["action"], r["object_id"]) for r in rows] == [("created", "team-gr")], rows
-    after = _audit_json(rows[0], "updated_values")
-    assert after["status"] == "pending_review"
-    assert after["litellm_params"]["api_key"] == MASKED_API_KEY
-    assert after["guardrail_info"] == {"description": "team"}
+    assert _audit_snapshot(rows[0], "updated_values") == _team_guardrail_snapshot("pending_review")
     _assert_no_planted_secret(rows[0])
-    assert "litellm_enc::" not in json.dumps(rows[0], default=str), "the encrypted key must be redacted, not copied"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "review, new_status", [(approve_guardrail_submission, "active"), (reject_guardrail_submission, "rejected")]
 )
-async def test_guardrail_submission_review_writes_status_change_audit_row(
+async def test_guardrail_submission_review_audit_row_shows_the_status_change(
     review: Callable[[str, UserAPIKeyAuth], Awaitable[object]],
     new_status: str,
     mocker: MockerFixture,
@@ -2284,10 +2301,10 @@ async def test_guardrail_submission_review_writes_status_change_audit_row(
 
     await review("team-gr", AUDIT_ADMIN)
 
-    rows = await _written_audit_rows(audit_prisma)
+    rows: Final = await _written_audit_rows(audit_prisma)
     assert [(r["action"], r["object_id"]) for r in rows] == [("updated", "team-gr")], rows
-    assert _audit_json(rows[0], "before_value")["status"] == "pending_review"
-    assert _audit_json(rows[0], "updated_values")["status"] == new_status
+    assert _audit_snapshot(rows[0], "before_value") == _team_guardrail_snapshot("pending_review")
+    assert _audit_snapshot(rows[0], "updated_values") == _team_guardrail_snapshot(new_status)
     _assert_no_planted_secret(rows[0])
 
 

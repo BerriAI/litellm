@@ -3,16 +3,17 @@ CRUD ENDPOINTS FOR GUARDRAILS
 """
 
 import asyncio
+import copy
 import inspect
 import json
 import os
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType, UnionType
-from typing import TYPE_CHECKING, Annotated, Any, Final, Protocol, TypeAlias, TypeVar, Union, cast, get_args, get_origin
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar, Union, cast, get_args, get_origin
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
@@ -21,7 +22,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import AUDIT_ACTIONS, LitellmTableNames, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.callback_utils import CALLBACK_VAR_ENCRYPTED_PREFIX, is_sensitive_callback_key
+from litellm.proxy.common_utils.callback_utils import CALLBACK_VAR_ENCRYPTED_PREFIX
 from litellm.proxy.common_utils.openai_error_payload import status_typed_proxy_exception
 from litellm.proxy.common_utils.path_utils import is_within, safe_join
 from litellm.proxy.guardrails.content_filter_data import CATEGORIES_DIR, DATA_ROOTS, category_dirs, find_category_file
@@ -113,36 +114,43 @@ def _reject_encrypted_litellm_params(litellm_params: object) -> None:
         )
 
 
-_AUDIT_REDACTED: Final = "REDACTED"
-_LitellmChangedByHeader: TypeAlias = Annotated[
-    str | None,
-    Header(
-        description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
-    ),
-]
 _AUDIT_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
-_AUDIT_JSON_ARRAY: Final = TypeAdapter(list[object])
+_AUDITED_GUARDRAIL_FIELDS: Final = ("guardrail_id", "guardrail_name", "guardrail_info", "status", "team_id")
+_AUDITED_LITELLM_PARAMS: Final = ("guardrail", "mode", "default_on")
 
 
-def _redact_guardrail_secrets(value: object, key: str = "", depth: int = 0) -> object:
-    """Redact exactly the strings the guardrails table encrypts at rest (see _encrypted_param), so none reach the audit log."""
-    if depth > DEFAULT_MAX_RECURSE_DEPTH:
-        return _AUDIT_REDACTED
-    if isinstance(value, BaseModel):
-        return _redact_guardrail_secrets(value.model_dump(exclude_none=True), key, depth)
-    if isinstance(value, Mapping):
-        try:
-            mapping: Final = _AUDIT_JSON_OBJECT.validate_python(value)
-        except ValidationError:
-            return _AUDIT_REDACTED
-        return {k: _redact_guardrail_secrets(v, k, depth + 1) for k, v in mapping.items()}
-    if isinstance(value, (list, tuple)):
-        return [_redact_guardrail_secrets(item, key, depth + 1) for item in _AUDIT_JSON_ARRAY.validate_python(value)]
-    return _AUDIT_REDACTED if isinstance(value, str) and value and is_sensitive_callback_key(key) else value
+def _as_audit_mapping(value: object) -> Mapping[str, object]:
+    return _AUDIT_JSON_OBJECT.validate_python(
+        value.model_dump(exclude_none=True) if isinstance(value, BaseModel) else value or {}
+    )
 
 
-def _guardrail_audit_value(guardrail: object) -> str | None:
-    return None if guardrail is None else safe_dumps(_redact_guardrail_secrets(guardrail))
+def _litellm_params_of(guardrail: object) -> Mapping[str, object]:
+    return _as_audit_mapping(_as_audit_mapping(guardrail).get("litellm_params"))
+
+
+def _guardrail_audit_snapshot(guardrail: object) -> Mapping[str, object]:
+    """A guardrail as written to the audit log. Provider settings can hold credentials under any name, so only the
+    provider, mode and default_on values are kept."""
+    fields: Final = _as_audit_mapping(guardrail)
+    params: Final = _litellm_params_of(guardrail)
+    return {
+        **{key: fields[key] for key in _AUDITED_GUARDRAIL_FIELDS if fields.get(key) is not None},
+        "litellm_params": {key: params[key] for key in _AUDITED_LITELLM_PARAMS if key in params},
+    }
+
+
+def _changed_litellm_param_names(before: object, after: object) -> tuple[str, ...]:
+    """Names, never values, of the provider settings an update changed beyond the ones the snapshot shows."""
+    old: Final = _litellm_params_of(before)
+    new: Final = _litellm_params_of(after)
+    return tuple(
+        sorted(
+            key
+            for key in old.keys() | new.keys()
+            if key not in _AUDITED_LITELLM_PARAMS and old.get(key) != new.get(key)
+        )
+    )
 
 
 async def _audit_guardrail_change(
@@ -150,7 +158,6 @@ async def _audit_guardrail_change(
     guardrail_id: str,
     action: AUDIT_ACTIONS,
     user_api_key_dict: UserAPIKeyAuth,
-    litellm_changed_by: str | None,
     before: object = None,
     after: object = None,
 ) -> None:
@@ -158,15 +165,20 @@ async def _audit_guardrail_change(
 
     if not is_audit_logging_enabled():
         return
+    changed: Final = _changed_litellm_param_names(before, after) if before is not None and after is not None else ()
     await create_object_audit_log(
         object_id=guardrail_id,
         action=action,
-        litellm_changed_by=litellm_changed_by,
+        litellm_changed_by=None,
         user_api_key_dict=user_api_key_dict,
         litellm_proxy_admin_name=litellm_proxy_admin_name,
         table_name=LitellmTableNames.GUARDRAILS_TABLE_NAME,
-        before_value=_guardrail_audit_value(before),
-        after_value=_guardrail_audit_value(after),
+        before_value=None if before is None else safe_dumps(_guardrail_audit_snapshot(before)),
+        after_value=None
+        if after is None
+        else safe_dumps(
+            {**_guardrail_audit_snapshot(after), **({"changed_litellm_params": list(changed)} if changed else {})}
+        ),
     )
 
 
@@ -441,7 +453,6 @@ class CreateGuardrailRequest(LiteLLMBaseModel):
 async def create_guardrail(
     request: CreateGuardrailRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    litellm_changed_by: _LitellmChangedByHeader = None,
 ):
     """
     Create a new guardrail
@@ -543,7 +554,6 @@ async def create_guardrail(
             action="created",
             user_api_key_dict=user_api_key_dict,
             after=result,
-            litellm_changed_by=litellm_changed_by,
         )
         return result
     except HTTPException:
@@ -565,7 +575,6 @@ async def update_guardrail(
     guardrail_id: str,
     request: UpdateGuardrailRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    litellm_changed_by: _LitellmChangedByHeader = None,
 ):
     """
     Update an existing guardrail
@@ -646,6 +655,7 @@ async def update_guardrail(
         )
 
         guardrail_name: Final = result.get("guardrail_name", "Unknown")
+        saved_guardrail: Final = copy.deepcopy(dict(result))
 
         try:
             IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(
@@ -683,9 +693,8 @@ async def update_guardrail(
             guardrail_id=guardrail_id,
             action="updated",
             user_api_key_dict=user_api_key_dict,
-            litellm_changed_by=litellm_changed_by,
             before=existing_guardrail,
-            after=result,
+            after=saved_guardrail,
         )
         return result
     except HTTPException as e:
@@ -701,7 +710,6 @@ async def update_guardrail(
 async def delete_guardrail(
     guardrail_id: str,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    litellm_changed_by: _LitellmChangedByHeader = None,
 ):
     """
     Delete a guardrail
@@ -768,7 +776,6 @@ async def delete_guardrail(
             action="deleted",
             user_api_key_dict=user_api_key_dict,
             before=existing_guardrail,
-            litellm_changed_by=litellm_changed_by,
         )
         return result
     except HTTPException as e:
@@ -839,7 +846,6 @@ class ListGuardrailSubmissionsResponse(LiteLLMBaseModel):
 async def register_guardrail(
     request: RegisterGuardrailRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    litellm_changed_by: _LitellmChangedByHeader = None,
 ):
     """
     Register a guardrail for onboarding (team submission).
@@ -941,7 +947,6 @@ async def register_guardrail(
             guardrail_id=created.guardrail_id,
             action="created",
             user_api_key_dict=user_api_key_dict,
-            litellm_changed_by=litellm_changed_by,
             after=created,
         )
         return RegisterGuardrailResponse(
@@ -1155,7 +1160,6 @@ async def get_guardrail_submission(
 async def approve_guardrail_submission(
     guardrail_id: str,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    litellm_changed_by: _LitellmChangedByHeader = None,
 ):
     """Approve a pending guardrail submission: set status to active and initialize in memory (admin only)."""
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
@@ -1195,7 +1199,6 @@ async def approve_guardrail_submission(
             guardrail_id=guardrail_id,
             action="updated",
             user_api_key_dict=user_api_key_dict,
-            litellm_changed_by=litellm_changed_by,
             before=row,
             after=approved,
         )
@@ -1253,7 +1256,6 @@ async def approve_guardrail_submission(
 async def reject_guardrail_submission(
     guardrail_id: str,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    litellm_changed_by: _LitellmChangedByHeader = None,
 ):
     """Reject a guardrail submission (admin only)."""
     from litellm.proxy.proxy_server import prisma_client
@@ -1283,7 +1285,6 @@ async def reject_guardrail_submission(
             guardrail_id=guardrail_id,
             action="updated",
             user_api_key_dict=user_api_key_dict,
-            litellm_changed_by=litellm_changed_by,
             before=row,
             after=rejected,
         )
@@ -1307,7 +1308,6 @@ async def patch_guardrail(
     guardrail_id: str,
     request: PatchGuardrailRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    litellm_changed_by: _LitellmChangedByHeader = None,
 ):
     """
     Partially update an existing guardrail
@@ -1492,7 +1492,6 @@ async def patch_guardrail(
             guardrail_id=guardrail_id,
             action="updated",
             user_api_key_dict=user_api_key_dict,
-            litellm_changed_by=litellm_changed_by,
             before=existing_guardrail,
             after=result,
         )
