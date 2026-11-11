@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import datetime
 import errno
+import functools
 import inspect
 import ipaddress
 import os
 import socket
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from typing import Final, TypeAlias, cast  # noqa: TID251  # narrows native payloads to public TypedDicts
 
@@ -42,6 +43,7 @@ from litellm.llms.anthropic.messages.native.handler import (
 from litellm.llms.anthropic.messages.native.handler import (
     _with_deployment_output_effort as _deployment_output_effort,  # pyright: ignore[reportPrivateUsage]  # the handler's own effort rounding
 )
+from litellm.llms.anthropic.messages.native.interceptors import get_messages_interceptors
 from litellm.llms.anthropic.messages.native.utils import prepare_native_messages
 from litellm.llms.anthropic.messages.utils import is_reasoning_auto_summary_enabled
 from litellm.llms.anthropic.wif import get_anthropic_wif_token
@@ -51,6 +53,7 @@ from litellm.llms.custom_httpx.llm_http_handler import (
     _merge_messages_header_sources as _merged_headers,  # pyright: ignore[reportPrivateUsage]  # the handler's own header merge
 )
 from litellm.rust_bridge import detectors, failures
+from litellm.rust_bridge.catalog import Feature
 from litellm.rust_bridge.host import cache, callbacks_legacy_python, http_transport
 from litellm.rust_bridge.public_call import NativeCall, known_params, optional_str
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
@@ -138,11 +141,11 @@ def _body_fields(request: Mapping[str, object]) -> Mapping[str, object]:
     return _with_deployment_effort(params, request)
 
 
-def body_params(request: Mapping[str, object], asynchronous: bool) -> Mapping[str, object]:
+def body_params(request: Mapping[str, object], asynchronous: bool, hooked: bool = False) -> Mapping[str, object]:
     fields: Final = _body_fields(request)
     if not detectors.cache_control_injection(NativeCall(args=(), kwargs=request, base={})):
-        return fields
-    messages, system, tools = _prompt_cached(request, asynchronous)
+        return {**fields, "messages": request["messages"]} if hooked else fields
+    messages, system, tools = _prompt_cached(request, asynchronous, hooked)
     return {
         **fields,
         "messages": messages,
@@ -191,7 +194,7 @@ _JsonBlocks: TypeAlias = list[dict[str, JsonValue]]
 _Prepared: TypeAlias = tuple[_JsonBlocks, str | _JsonBlocks | None, Sequence[object] | None]
 
 
-def _prompt_cached(request: Mapping[str, object], asynchronous: bool) -> _Prepared:
+def _prompt_cached(request: Mapping[str, object], asynchronous: bool, hooked: bool) -> _Prepared:
     model: Final = str(request["model"])
     provider: Final = optional_str(request.get("custom_llm_provider"))
     api_base: Final = optional_str(request.get("api_base"))
@@ -212,6 +215,17 @@ def _prompt_cached(request: Mapping[str, object], asynchronous: bool) -> _Prepar
             presanitized=False,
         )
     entry_kwargs: Final = {name: value for name, value in request.items() if name not in _ENTRY_PARAMS}
+    if hooked:
+        return _handler_prepared(
+            entry_kwargs,
+            messages,
+            system,
+            model=model,
+            provider=handler.provider_after_pre_request_hooks(model, provider, entry_kwargs),
+            tools=tools,
+            api_base=api_base,
+            presanitized=True,
+        )
     entry_messages, entry_system = prepare_native_messages(
         messages, system, entry_kwargs, model=model, custom_llm_provider=provider, tools=tools, api_base=api_base
     )
@@ -250,6 +264,85 @@ def _handler_prepared(
         presanitized=presanitized,
     )
     return prepared_messages, prepared_system, handler.tools_marked_for_cache_points(tools, handler_kwargs)
+
+
+_execute_pre_request_hooks: Final = cast(  # cast-ok: the handler's untyped pre-request hook loop
+    Callable[..., Awaitable[dict[str, object]]],
+    handler._execute_pre_request_hooks,  # pyright: ignore[reportPrivateUsage]  # the handler's own pre-request hook loop
+)
+_HOOKED_PARAMS: Final = (
+    "tools",
+    "stream",
+    "metadata",
+    "stop_sequences",
+    "system",
+    "temperature",
+    "thinking",
+    "tool_choice",
+    "top_k",
+    "top_p",
+)
+
+
+def runs_pre_request_hooks() -> bool:
+    return detectors.overridden("async_pre_request_hook", litellm.callbacks)
+
+
+def _unsupported(provider: str | None, model: str, unsupported: str) -> litellm.UnsupportedParamsError:
+    return litellm.UnsupportedParamsError(
+        message=(
+            f"provider {provider} on /v1/messages runs only on the Rust path, which does not support {unsupported}"
+        ),
+        llm_provider=provider,
+        model=model,
+    )
+
+
+async def pre_request_hooks(request: Mapping[str, object]) -> Mapping[str, object]:
+    model: Final = str(request["model"])
+    provider: Final = optional_str(request.get("custom_llm_provider"))
+    tools: Final = cast(_JsonBlocks | None, request.get("tools"))  # cast-ok: handed on unchecked, as the handler does
+    kwargs: Final = {name: value for name, value in request.items() if name not in _ENTRY_PARAMS}
+    messages, system = prepare_native_messages(
+        cast(_JsonBlocks, request["messages"]),  # cast-ok: handed on unchecked, as the handler does
+        cast(str | _JsonBlocks | None, request.get("system")),  # cast-ok: handed on unchecked, as the handler does
+        kwargs,
+        model=model,
+        custom_llm_provider=provider,
+        tools=tools,
+        api_base=optional_str(request.get("api_base")),
+    )
+    named: Final = {**{name: request.get(name) for name in _ENTRY_PARAMS}, "messages": messages, "system": system}
+    hooked: Final = await _execute_pre_request_hooks(
+        model=model,
+        messages=messages,
+        tools=tools,
+        stream=cast(bool | None, named["stream"]),  # cast-ok: handed on unchecked, as the handler does
+        custom_llm_provider=provider,
+        tool_choice=named["tool_choice"],
+        **kwargs,
+    )
+    for name in _HOOKED_PARAMS:
+        named[name] = hooked.pop(name, named[name])
+    hooked_provider: Final = handler.provider_after_pre_request_hooks(model, provider, hooked)
+    hooked.pop("litellm_params", None)
+    kwargs.update(hooked)
+    requested_provider: Final = handler.provider_after_pre_request_hooks(model, provider, {})
+    hooked_tools: Final = cast(  # cast-ok: the handler hands the hooked tools on unchecked
+        Sequence[Mapping[str, object]] | None, named["tools"]
+    )
+    if any(interceptor.can_handle(hooked_tools, hooked_provider) for interceptor in get_messages_interceptors()):
+        raise _unsupported(requested_provider, model, Feature.MESSAGES_INTERCEPTOR.value)
+    functools.partial(
+        _HANDLER,
+        **{name: value for name, value in named.items() if name in _HANDLER_PARAMS - {"custom_llm_provider"}},
+        custom_llm_provider=hooked_provider,
+        _litellm_messages_presanitized=True,
+        **kwargs,
+    )
+    if hooked_provider != requested_provider:
+        raise _unsupported(requested_provider, model, f"a pre-request hook routing the call to {hooked_provider}")
+    return {**named, **kwargs}
 
 
 def stream_hidden_params(headers: Sequence[tuple[str, str]]) -> Mapping[str, object]:

@@ -711,7 +711,6 @@ async def test_modify_params_stays_native(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 ASYNC_ONLY_FEATURES: Final = (
-    pytest.param(Feature.PRE_REQUEST_HOOK, {}, {"callbacks": [_Rewrite()]}, id="pre-request-hook"),
     pytest.param(
         Feature.WEBSEARCH_INTERCEPTION, {}, {"callbacks": [WebSearchInterceptionLogger()]}, id="websearch-interception"
     ),
@@ -911,7 +910,6 @@ async def test_anthropic_runs_on_rust_without_the_opt_in(
         pytest.param(False, {"mock_response": "hi"}, [], Feature.MOCK_RESPONSE, id="sync-mock"),
         pytest.param(True, {"mock_response": "hi", "stream": True}, [], Feature.MOCK_RESPONSE, id="streamed-mock"),
         pytest.param(True, {"client": object()}, [], Feature.CALLER_CLIENT, id="caller-client"),
-        pytest.param(True, {}, [_Rewrite()], Feature.PRE_REQUEST_HOOK, id="pre-request-hook"),
         pytest.param(True, {}, [WebSearchInterceptionLogger()], Feature.WEBSEARCH_INTERCEPTION, id="websearch"),
         pytest.param(False, {}, [_Agentic()], Feature.AGENTIC_LOOP_HOOK, id="agentic-loop"),
     ),
@@ -939,6 +937,18 @@ async def test_anthropic_refuses_what_rust_does_not_serve(
     assert refused.value.llm_provider == "anthropic"
     assert refused.value.status_code == 400
     assert shipped_native == []
+
+
+@pytest.mark.asyncio
+async def test_anthropic_runs_pre_request_hooks_on_rust(
+    monkeypatch: pytest.MonkeyPatch, shipped_native: list[str]
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_Rewrite()])
+
+    result: Final = await _public(True, "anthropic/claude-sonnet-4-5", {})
+
+    assert isinstance(result, dict)
+    assert shipped_native == ["async"]
 
 
 @pytest.mark.asyncio

@@ -1,11 +1,12 @@
-use crate::cache::{CacheCall, Cached, PythonCache, Selection};
+use crate::cache::{PythonCache, Selection};
 use litellm_host_python::{PythonHostCalls, PythonOwned};
 
 use bytes::Bytes;
+use litellm_host::protocol::Reply;
 use litellm_host_python::{InvokeError, PythonBinding, effective_py_args, from_py, to_py};
 use litellm_inference_messages::{
     Error, MessagesCall, MessagesSettings, MessagesShaping, litellm_params, messages_body,
-    route::{Messages, MessagesStreamHead},
+    route::MessagesStreamHead,
 };
 use litellm_llms::base_llm::messages::context::MessagesModelCapabilities;
 use litellm_llms_types::headers::ProviderSpecificHeaders;
@@ -19,6 +20,7 @@ use pyo3::{
 };
 use serde_json::{Map, Value};
 
+use super::pre_request::{HostedMessages, MessagesHostCall};
 use crate::{
     errors::{RequestMarker, route_failure},
     marshal::{
@@ -98,6 +100,9 @@ pub(super) struct MessagesPythonHost {
     cache: PythonCache,
     stream_cost_model: Option<String>,
     asynchronous: bool,
+    pre_request: Option<Reply<Result<MessagesCall, Error>>>,
+    hooked: bool,
+    requested_stream: bool,
 }
 
 impl MessagesPythonHost {
@@ -107,6 +112,9 @@ impl MessagesPythonHost {
             cache: PythonCache::new(asynchronous),
             stream_cost_model: None,
             asynchronous,
+            pre_request: None,
+            hooked: false,
+            requested_stream: false,
         }
     }
 
@@ -131,7 +139,7 @@ impl MessagesPythonHost {
         from_py(
             &py.import(ROUTE_HOST_MODULE)?
                 .getattr("body_params")?
-                .call1((request, self.asynchronous))?,
+                .call1((request, self.asynchronous, self.hooked))?,
         )
     }
 
@@ -285,8 +293,60 @@ impl MessagesPythonHost {
     }
 }
 
+impl MessagesPythonHost {
+    fn decode_call(
+        &mut self,
+        py: Python<'_>,
+        arguments: &Bound<'_, PyDict>,
+    ) -> Result<MessagesCall, InvokeError<Error>> {
+        let settings = self
+            .host_settings(py, arguments)
+            .map_err(InvokeError::Python)?;
+        self.stream_cost_model = settings.stream_cost_model.clone();
+        self.projection(py, arguments, settings)
+            .map_err(|error| InvokeError::Python(self.map_failure(py, error)))?
+            .map_err(InvokeError::Native)
+    }
+
+    fn begin_pre_request(
+        &mut self,
+        py: Python<'_>,
+        reply: Reply<Result<MessagesCall, Error>>,
+    ) -> PyResult<Py<PyAny>> {
+        let hooks = py
+            .import(ROUTE_HOST_MODULE)?
+            .getattr("pre_request_hooks")?
+            .call1((self.view.request(py)?,))?;
+        self.pre_request = Some(reply);
+        Ok(hooks.unbind())
+    }
+
+    fn resume_pre_request(
+        &mut self,
+        py: Python<'_>,
+        reply: Reply<Result<MessagesCall, Error>>,
+        result: PyResult<Py<PyAny>>,
+    ) -> Result<(), InvokeError<Error>> {
+        let hooked = result?;
+        let arguments = hooked
+            .bind(py)
+            .cast::<PyDict>()
+            .map_err(|error| InvokeError::Python(error.into()))?;
+        self.view
+            .resolve(py, arguments)
+            .map_err(InvokeError::Python)?;
+        self.hooked = true;
+        match self.decode_call(py, arguments) {
+            Ok(call) => reply.send(Ok(call)),
+            Err(InvokeError::Native(error)) => reply.send(Err(error)),
+            Err(error) => return Err(error),
+        }
+        Ok(())
+    }
+}
+
 impl PythonBinding for MessagesPythonHost {
-    type Protocol = Cached<Messages>;
+    type Protocol = HostedMessages;
     type Failure = PyErr;
 
     fn decode_request(
@@ -303,13 +363,11 @@ impl PythonBinding for MessagesPythonHost {
             .map_err(InvokeError::Python)?;
         let selection = crate::cache::configure(&mut self.cache, py, arguments, &function)
             .map_err(InvokeError::Python)?;
-        let settings = self
-            .host_settings(py, arguments)
-            .map_err(InvokeError::Python)?;
-        self.stream_cost_model = settings.stream_cost_model.clone();
-        self.projection(py, arguments, settings)
-            .map_err(|error| InvokeError::Python(self.map_failure(py, error)))?
-            .map_err(InvokeError::Native)
+        self.requested_stream = arguments
+            .get_item("stream")
+            .map_err(InvokeError::Python)?
+            .is_some_and(|stream| stream.is(pyo3::types::PyBool::new(py, true)));
+        self.decode_call(py, arguments)
             .map(|request| (request, selection))
     }
 
@@ -322,6 +380,9 @@ impl PythonBinding for MessagesPythonHost {
     }
 
     fn deliver_response(&mut self, py: Python<'_>, response: &Bound<'_, PyAny>) -> PyResult<()> {
+        if self.requested_stream {
+            return Ok(());
+        }
         self.cache.store_response(py, response)
     }
 
@@ -358,24 +419,25 @@ impl PythonBinding for MessagesPythonHost {
     }
 }
 
-impl PythonHostCalls<Cached<Messages>> for MessagesPythonHost {
+impl PythonHostCalls<HostedMessages> for MessagesPythonHost {
     fn handle_host_call(
         &mut self,
         py: Python<'_>,
-        op: CacheCall,
+        op: MessagesHostCall,
     ) -> Result<(), InvokeError<Error>> {
-        self.cache
-            .begin(py, op)
-            .map(|_| ())
-            .map_err(InvokeError::Python)
+        self.begin_host_call(py, op).map(|_| ())
     }
 
     fn begin_host_call(
         &mut self,
         py: Python<'_>,
-        op: CacheCall,
+        op: MessagesHostCall,
     ) -> Result<Option<Py<PyAny>>, InvokeError<Error>> {
-        self.cache.begin(py, op).map_err(InvokeError::Python)
+        match op {
+            MessagesHostCall::Cache(op) => self.cache.begin(py, op),
+            MessagesHostCall::PreRequest(reply) => self.begin_pre_request(py, reply).map(Some),
+        }
+        .map_err(InvokeError::Python)
     }
 
     fn resume_host_call(
@@ -383,6 +445,9 @@ impl PythonHostCalls<Cached<Messages>> for MessagesPythonHost {
         py: Python<'_>,
         result: PyResult<Py<PyAny>>,
     ) -> Result<Option<Py<PyAny>>, InvokeError<Error>> {
+        if let Some(reply) = self.pre_request.take() {
+            return self.resume_pre_request(py, reply, result).map(|()| None);
+        }
         self.cache.resume(py, result).map_err(InvokeError::Python)
     }
 }
@@ -391,6 +456,7 @@ impl PythonOwned for MessagesPythonHost {
     fn close(&mut self, _: Python<'_>) {
         self.view.close();
         self.cache.close();
+        self.pre_request = None;
     }
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
         self.view.traverse(visit)?;

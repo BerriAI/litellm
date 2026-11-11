@@ -14,7 +14,7 @@ use pyo3::{
     exceptions::{PyBaseException, PyException},
     gc::{PyTraverseError, PyVisit},
     prelude::*,
-    types::{PyDateTime, PyDict, PyList, PyString},
+    types::{PyBool, PyDateTime, PyDict, PyList, PyString},
 };
 use serde_json::Value;
 
@@ -59,6 +59,7 @@ pub struct LegacyLogging {
     cache_key: Option<String>,
     /// When the provider request went out, until its window is recorded (Messages only).
     api_started: Option<f64>,
+    unlogged: bool,
 }
 
 fn retry_reason(reason: &RetryReason) -> Value {
@@ -99,6 +100,7 @@ impl LegacyLogging {
             internal: false,
             cache_key: None,
             api_started: None,
+            unlogged: false,
         }
     }
 
@@ -279,6 +281,18 @@ impl LegacyLogging {
             .as_ref()
             .map(|response| HookStep::Ready(response.clone_ref(py)))
             .ok_or_else(|| HostError::MissingState.into())
+    }
+
+    fn requested_stream(&self, py: Python<'_>) -> PyResult<bool> {
+        if self.operation != LoggingOperation::Messages || !self.asynchronous {
+            return Ok(false);
+        }
+        Ok(self
+            .call
+            .kwargs()
+            .bind(py)
+            .get_item("stream")?
+            .is_some_and(|stream| stream.is(PyBool::new(py, true))))
     }
 
     fn messages_cache_hit(&self) -> bool {
@@ -596,6 +610,15 @@ impl LegacyLogging {
     ) -> PyResult<HookStep<Self, Py<PyAny>>> {
         self.end = Some(datetime(py, timing.end_time)?);
         self.response = Some(response);
+        if !self.messages_cache_hit() && self.requested_stream(py)? {
+            self.unlogged = true;
+            let logger = self.logger()?.object(py);
+            logger.setattr("stream", true)?;
+            logger
+                .getattr("model_call_details")?
+                .set_item("stream", true)?;
+            return self.finalize(py);
+        }
         if self.runs_deployment_hooks() && !self.messages_cache_hit() {
             return Ok(HookStep::Await(
                 DeploymentHooks::after_success(
@@ -743,6 +766,7 @@ impl LegacyLogging {
         self.response = Some(response.clone_ref(py));
         match &self.stream {
             Some(stream) => self.stream_success(py, stream, false)?,
+            None if self.unlogged => {}
             None if self.messages_cache_hit() => self.dispatch_cache_hit(py)?,
             None => self.dispatch_success(py)?,
         }
