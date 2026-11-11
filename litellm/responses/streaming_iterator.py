@@ -299,7 +299,7 @@ def _error_event_fields(error_obj: object) -> tuple[str, str | None, str | None]
         raw_message = None
         raw_type = None
         raw_code = None
-    message: Final = str(raw_message) if raw_message is not None else "The provider reported a failed response"
+    message: Final = str(raw_message) if raw_message is not None else "Response API in-stream error"
     error_type: Final = raw_type if isinstance(raw_type, str) else None
     code: Final = str(raw_code) if isinstance(raw_code, (str, int)) and not isinstance(raw_code, bool) else None
     return message, error_type, code
@@ -356,8 +356,13 @@ def failed_response_exception(
     usage_and_cost: Final = _failed_response_usage_and_cost(response, logging_obj)
     if usage_and_cost is not None:
         logging_obj.record_partial_usage_for_failure(*usage_and_cost)
+    error: Final = _event_field(response, "error")
     return map_stream_error_to_exception(
-        _event_field(response, "error"), model, custom_llm_provider, headers=headers, logging_obj=logging_obj
+        error if error is not None else {"message": "The provider reported a failed response"},
+        model,
+        custom_llm_provider,
+        headers=headers,
+        logging_obj=logging_obj,
     )
 
 
@@ -813,10 +818,12 @@ class BaseResponsesAPIStreamingIterator:
         usage_and_cost: Final = _failed_response_usage_and_cost(response_obj, self.logging_obj)
         if usage_and_cost is None:
             return
+        failed_usage, failed_cost = usage_and_cost
         if self._earlier_rounds_spend is None:
-            self.logging_obj.record_partial_usage_for_failure(*usage_and_cost)
+            self.logging_obj.model_call_details["combined_usage_object"] = failed_usage
+            self.logging_obj.model_call_details["response_cost"] = failed_cost
             return
-        self.logging_obj.record_failure_after_earlier_rounds(self._earlier_rounds_spend, *usage_and_cost)
+        self.logging_obj.record_failure_after_earlier_rounds(self._earlier_rounds_spend, failed_usage, failed_cost)
 
     def bill_failure_after_earlier_rounds(self, earlier: BilledRoundsSpend) -> None:
         self._earlier_rounds_spend = earlier

@@ -3180,26 +3180,23 @@ class BaseLLMHTTPHandler:
                     stream=stream,
                     **body_kwargs,
                 )
-                if (
-                    caller_requested_stream
-                    and fake_stream is not True
-                    and not (
+                if fake_stream is not True:
+                    if caller_requested_stream and not (
                         responses_api_provider_config.may_answer_stream_with_json()
                         and _is_sized_json_body(response)
                         and _is_json_document(response.read())
-                    )
-                ):
-                    return SyncResponsesAPIStreamingIterator(
-                        response=response,
-                        model=model,
-                        logging_obj=logging_obj,
-                        responses_api_provider_config=responses_api_provider_config,
-                        litellm_metadata=litellm_metadata,
-                        custom_llm_provider=custom_llm_provider,
-                        request_data=request_context,
-                        call_type=CallTypes.responses.value,
-                    )
-                response.read()
+                    ):
+                        return SyncResponsesAPIStreamingIterator(
+                            response=response,
+                            model=model,
+                            logging_obj=logging_obj,
+                            responses_api_provider_config=responses_api_provider_config,
+                            litellm_metadata=litellm_metadata,
+                            custom_llm_provider=custom_llm_provider,
+                            request_data=request_context,
+                            call_type=CallTypes.responses.value,
+                        )
+                    response.read()
             else:
                 response = sync_httpx_client.post(
                     url=api_base,
@@ -3397,26 +3394,23 @@ class BaseLLMHTTPHandler:
                     **body_kwargs,
                 )
 
-                if (
-                    caller_requested_stream
-                    and fake_stream is not True
-                    and not (
+                if fake_stream is not True:
+                    if caller_requested_stream and not (
                         responses_api_provider_config.may_answer_stream_with_json()
                         and _is_sized_json_body(response)
                         and _is_json_document(await response.aread())
-                    )
-                ):
-                    return ResponsesAPIStreamingIterator(
-                        response=response,
-                        model=model,
-                        logging_obj=logging_obj,
-                        responses_api_provider_config=responses_api_provider_config,
-                        litellm_metadata=litellm_metadata,
-                        custom_llm_provider=custom_llm_provider,
-                        request_data=request_context,
-                        call_type=CallTypes.responses.value,
-                    )
-                await response.aread()
+                    ):
+                        return ResponsesAPIStreamingIterator(
+                            response=response,
+                            model=model,
+                            logging_obj=logging_obj,
+                            responses_api_provider_config=responses_api_provider_config,
+                            litellm_metadata=litellm_metadata,
+                            custom_llm_provider=custom_llm_provider,
+                            request_data=request_context,
+                            call_type=CallTypes.responses.value,
+                        )
+                    await response.aread()
             else:
                 response = await async_httpx_client.post(
                     url=api_base,

@@ -6991,6 +6991,18 @@ async def test_aresponses_raises_for_a_fake_streamed_response_the_provider_faile
         )
 
 
+def test_responses_names_a_failed_response_that_carries_no_error():
+    def answer_failed_without_error(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_responses_body("failed", error=None))
+
+    with pytest.raises(litellm.InternalServerError, match="The provider reported a failed response"):
+        litellm.responses(
+            input="hello",
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(answer_failed_without_error))),
+            **_HOSTED_VLLM_PARAMS,
+        )
+
+
 class _FailureCostRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
