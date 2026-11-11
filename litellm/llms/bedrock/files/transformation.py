@@ -23,6 +23,7 @@ from typing_extensions import ReadOnly
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import BEDROCK_INVOKE_PROVIDERS_LITERAL
+from litellm.exceptions import UnsupportedParamsError
 from litellm.files.utils import FilesAPIUtils
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.cloud_storage_security import (
@@ -42,7 +43,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     text_completion_prompt_to_messages,
 )
 from litellm.llms.base_llm.base_utils import map_developer_role_to_system_role
-from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.base_llm.chat.transformation import REQUEST_PARAMS, BaseLLMException
 from litellm.llms.base_llm.files.batch_records import responses_batch_body_to_chat_body
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
@@ -471,6 +472,25 @@ def _uploaded_object_size(litellm_params: Mapping[str, object], response_headers
         return uploaded_size
     response_content_length: Final = response_headers.get("Content-Length", "0")
     return int(response_content_length) if response_content_length.isdigit() else 0
+
+
+def _check_batch_record_service_tier(value: object, model: str, drop_params: bool) -> None:
+    import litellm
+
+    if value is None or value == "auto":
+        return
+    if not (litellm.drop_params or drop_params):
+        raise UnsupportedParamsError(
+            message=(
+                f"{model} batch records do not support service_tier={value!r}, since a Bedrock batch record is an "
+                "InvokeModel body, which takes no serviceTier. "
+                "To drop unsupported params, set `litellm.drop_params = True`."
+            ),
+            status_code=400,
+        )
+    verbose_logger.warning(
+        "Dropping service_tier=%r from a %s batch record, since it takes no serviceTier.", value, model
+    )
 
 
 class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
@@ -974,6 +994,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         openai_request_body: Mapping[str, Any],
         model: str,
         provider: str | None = None,
+        drop_params: bool = False,
     ) -> dict[str, object]:
         """
         Transform OpenAI request body to Bedrock-compatible modelInput
@@ -1027,12 +1048,16 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 AmazonConverseConfig,
             )
 
+            drop_unsupported_params: Final = drop_params or optional_params.get("drop_params") is True
+            _check_batch_record_service_tier(
+                REQUEST_PARAMS.validate_python(optional_params).get("service_tier"), model, drop_unsupported_params
+            )
             converse_config: Final = AmazonConverseConfig()
             mapped_params = converse_config.map_openai_params(
-                non_default_params=optional_params,
+                non_default_params={k: v for k, v in optional_params.items() if k != "service_tier"},
                 optional_params={},
                 model=model,
-                drop_params=optional_params.get("drop_params") is True,
+                drop_params=drop_unsupported_params,
             )
             return converse_config.transform_request(
                 model=model,
@@ -1063,7 +1088,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         return target_model, target_provider
 
     def _transform_openai_jsonl_content_to_bedrock_jsonl_content(
-        self, openai_jsonl_content: Sequence[_OpenAIBatchRecord], target_model: str = ""
+        self, openai_jsonl_content: Sequence[_OpenAIBatchRecord], target_model: str = "", drop_params: bool = False
     ) -> list[_BedrockBatchRecord]:
         """
         Transforms OpenAI JSONL content to Bedrock batch format
@@ -1112,6 +1137,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                     openai_request_body=self._transform_batch_body_to_chat_body(openai_body, record_kind),
                     model=model_for_transform,
                     provider=provider,
+                    drop_params=drop_params,
                 )
 
             # Create Bedrock batch record
@@ -1159,7 +1185,9 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             litellm_params_model: Final = litellm_params.get("model")
             target_model: Final = model or (litellm_params_model if isinstance(litellm_params_model, str) else "")
             bedrock_jsonl_content = self._transform_openai_jsonl_content_to_bedrock_jsonl_content(
-                openai_jsonl_content, target_model=target_model
+                openai_jsonl_content,
+                target_model=target_model,
+                drop_params=REQUEST_PARAMS.validate_python(litellm_params).get("drop_params") is True,
             )
             file_content = "\n".join(json.dumps(item) for item in bedrock_jsonl_content)
         elif isinstance(extracted_file_data_content, bytes):
