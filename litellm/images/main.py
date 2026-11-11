@@ -1,7 +1,7 @@
 import asyncio
 import contextvars
 import importlib
-from collections.abc import Collection, Coroutine, Mapping
+from collections.abc import Collection, Coroutine, Mapping, Sequence
 from functools import partial
 from typing import TYPE_CHECKING, Final, Literal, cast, get_type_hints, overload
 
@@ -828,6 +828,12 @@ def _listed_drop_params(additional_drop_params: object) -> tuple[str, ...]:
         return ()
 
 
+def _single_mask(mask: FileTypes | Sequence[FileTypes] | str | None) -> FileTypes | Sequence[FileTypes] | str | None:
+    if isinstance(mask, list):
+        return mask[0] if mask else None
+    return mask
+
+
 def _tokenhub_passthrough_edit_params(
     non_default_params: Mapping[str, object],
     extra_body: Mapping[str, object] | None,
@@ -913,6 +919,7 @@ def image_edit(
             custom_llm_provider=custom_llm_provider,
         )
 
+        additional_drop_params: Final = _listed_drop_params(kwargs.get("additional_drop_params"))
         # Check for custom provider
         if custom_llm_provider in litellm._custom_providers:
             custom_handler: Final = ProviderConfigManager.get_custom_llm_handler(custom_llm_provider)
@@ -927,14 +934,14 @@ def image_edit(
                     **{
                         key: value
                         for key, value in {
-                            "mask": mask,
+                            "mask": _single_mask(mask),
                             "n": n,
                             "quality": quality,
                             "response_format": response_format,
                             "size": size,
                             "user": user,
                         }.items()
-                        if value is not None
+                        if value is not None and key not in additional_drop_params
                     },
                 }
             )
@@ -995,7 +1002,6 @@ def image_edit(
             )
         )
         # Get optional parameters for the responses API
-        additional_drop_params: Final = _listed_drop_params(kwargs.get("additional_drop_params"))
         image_edit_request_params: Final[dict] = _get_ImageEditRequestUtils().get_optional_params_image_edit(
             model=model,
             image_edit_provider_config=image_edit_provider_config,
