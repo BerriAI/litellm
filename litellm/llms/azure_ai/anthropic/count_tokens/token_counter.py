@@ -22,7 +22,12 @@ from litellm.llms.anthropic.count_tokens.transformation import (
 from litellm.llms.azure_ai.anthropic.count_tokens.handler import (
     AzureAIAnthropicCountTokensHandler,
 )
-from litellm.llms.base_llm.base_utils import BaseTokenCounter, deployment_timeout
+from litellm.llms.base_llm.base_utils import (
+    BaseTokenCounter,
+    deployment_litellm_params,
+    deployment_timeout,
+    optional_str,
+)
 from litellm.types.utils import CountContextManagement, LlmProviders, TokenCountMessagesFormat, TokenCountResponse
 
 # Global handler instance - reuse across all token counting requests
@@ -87,6 +92,7 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
         from litellm.llms.azure_ai.anthropic.messages_transformation import AzureAnthropicMessagesConfig
         from litellm.llms.azure_ai.anthropic.transformation import AzureAnthropicConfig
 
+        litellm_params: Final = deployment_litellm_params(deployment)
         match translated := await anthropic_count_fields(
             model_to_use, messages, system, tools, messages_format, AzureAnthropicConfig(), chat_params
         ):
@@ -96,7 +102,7 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
                 return await self._count(
                     model_to_use=model_to_use,
                     messages=translated.messages,
-                    deployment=deployment,
+                    litellm_params=litellm_params,
                     request_model=request_model,
                     tools=translated.tools,
                     system=translated.system,
@@ -111,7 +117,7 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
             model_to_use,
             messages,
             count_options,
-            (deployment or {}).get("litellm_params", {}),
+            litellm_params,
         ):
             case ChatCountTranslationError():
                 return options.response(request_model, model_to_use, "azure_ai_anthropic_api")
@@ -119,7 +125,7 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
                 return await self._count(
                     model_to_use=model_to_use,
                     messages=messages,
-                    deployment=deployment,
+                    litellm_params=litellm_params,
                     request_model=request_model,
                     tools=tools,
                     system=system,
@@ -131,7 +137,7 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
         self,
         model_to_use: str,
         messages: Sequence[Mapping[str, JsonValue]],
-        deployment: Mapping[str, Any] | None,
+        litellm_params: Mapping[str, object],
         request_model: str,
         tools: Sequence[Mapping[str, JsonValue]] | None,
         system: object | None,
@@ -140,15 +146,9 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
     ) -> TokenCountResponse | None:
         from litellm.llms.anthropic.common_utils import AnthropicError
 
-        litellm_params: Final = (deployment or {}).get("litellm_params", {})
-
-        # Get Azure AI API key from deployment config or environment
-        api_key = litellm_params.get("api_key")
-        if not api_key:
-            api_key = os.getenv("AZURE_AI_API_KEY")
-
+        api_key: Final = optional_str(litellm_params.get("api_key")) or os.getenv("AZURE_AI_API_KEY")
         api_base: Final = (
-            litellm_params.get("api_base")
+            optional_str(litellm_params.get("api_base"))
             or os.getenv("AZURE_AI_API_BASE")
             or os.getenv("AZURE_API_BASE")
             or litellm.api_base
@@ -163,7 +163,7 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
                 messages=[dict(message) for message in messages],
                 api_key=api_key,
                 api_base=api_base,
-                litellm_params=litellm_params,
+                litellm_params=dict(litellm_params),
                 tools=None if tools is None else [dict(tool) for tool in tools],
                 system=system,
                 optional_params=count_options,

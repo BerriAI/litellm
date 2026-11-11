@@ -10,7 +10,6 @@ from pydantic import JsonValue, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
 from litellm.llms.anthropic.count_tokens.transformation import (
@@ -19,7 +18,12 @@ from litellm.llms.anthropic.count_tokens.transformation import (
     anthropic_count_fields,
     messages_count_options,
 )
-from litellm.llms.base_llm.base_utils import BaseTokenCounter, deployment_timeout
+from litellm.llms.base_llm.base_utils import (
+    BaseTokenCounter,
+    deployment_litellm_params,
+    deployment_timeout,
+    optional_str,
+)
 from litellm.llms.deepseek.chat.transformation import deepseek_reasoning_params
 from litellm.llms.deepseek.common_utils import DeepSeekModelInfo
 from litellm.llms.deepseek.messages.transformation import (
@@ -66,15 +70,6 @@ def _with_chat_reasoning(
     )
 
 
-def _litellm_params(deployment: Mapping[str, object] | None) -> Mapping[str, object]:
-    params: Final = None if deployment is None else as_str_mapping(deployment.get("litellm_params"))
-    return MappingProxyType({}) if params is None else params
-
-
-def _optional_str(value: object) -> str | None:
-    return value if isinstance(value, str) else None
-
-
 class DeepSeekTokenCounter(BaseTokenCounter):
     """Counts with the request DeepSeek bills: an Anthropic Messages body sent to the Anthropic-compatible
     count_tokens route, with thinking and effort mapped the way the deployment's inference maps them."""
@@ -105,7 +100,7 @@ class DeepSeekTokenCounter(BaseTokenCounter):
 
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
-        litellm_params: Final = _litellm_params(deployment)
+        litellm_params: Final = deployment_litellm_params(deployment)
         match translated := await anthropic_count_fields(
             model_to_use,
             messages,
@@ -178,9 +173,9 @@ class DeepSeekTokenCounter(BaseTokenCounter):
                     messages=(),
                     optional_params={},
                     litellm_params=litellm_params,
-                    api_key=_optional_str(litellm_params.get("api_key")),
+                    api_key=optional_str(litellm_params.get("api_key")),
                 ),
-                api_base=model_info.get_api_base(_optional_str(litellm_params.get("api_base"))),
+                api_base=model_info.get_api_base(optional_str(litellm_params.get("api_base"))),
                 tools=None if tools is None else _TOOLS.validate_python(sanitize_tools_for_deepseek(tools)),
                 system=system,
                 optional_params=count_options,

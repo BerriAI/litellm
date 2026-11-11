@@ -52,6 +52,15 @@ def deployment_timeout(litellm_params: Mapping[str, object]) -> float | httpx.Ti
         return None
 
 
+def deployment_litellm_params(deployment: Mapping[str, object] | None) -> Mapping[str, object]:
+    params: Final = None if deployment is None else as_str_mapping(deployment.get("litellm_params"))
+    return MappingProxyType({}) if params is None else params
+
+
+def optional_str(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
 class BaseTokenCounter(ABC):
     @abstractmethod
     async def count_tokens(

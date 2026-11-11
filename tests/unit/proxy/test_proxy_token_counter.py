@@ -5867,19 +5867,11 @@ async def test_messages_count_tokens_on_deepseek_estimates_when_the_count_route_
     assert response["input_tokens"] > 0
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("reasoning", "expected_options"),
-    (
-        ({}, {}),
-        ({"reasoning": {"effort": "none"}}, {"thinking": {"type": "disabled"}}),
-        ({"reasoning": {"effort": "high"}}, {"thinking": {"type": "enabled"}, "output_config": {"effort": "high"}}),
-        ({"reasoning": {"effort": "max"}}, {"thinking": {"type": "enabled"}, "output_config": {"effort": "max"}}),
-    ),
-)
-async def test_responses_count_on_deepseek_maps_reasoning_effort_the_way_deepseek_chat_inference_does(
-    monkeypatch: pytest.MonkeyPatch, reasoning: Mapping[str, JsonValue], expected_options: Mapping[str, JsonValue]
-) -> None:
+async def _count_deepseek_responses(
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_options: Mapping[str, JsonValue],
+    responses_options: Mapping[str, JsonValue],
+) -> tuple[TokenCountResponse, dict[str, JsonValue]]:
     import litellm.proxy.proxy_server as proxy_server
 
     monkeypatch.delenv("DEEPSEEK_API_BASE", raising=False)
@@ -5891,7 +5883,11 @@ async def test_responses_count_on_deepseek_maps_reasoning_effort_the_way_deepsee
             model_list=[
                 {
                     "model_name": "deepseek-counted",
-                    "litellm_params": {"model": "deepseek/deepseek-v4-pro", "api_key": "sk-deepseek-test"},
+                    "litellm_params": {
+                        "model": "deepseek/deepseek-v4-pro",
+                        "api_key": "sk-deepseek-test",
+                        **deployment_options,
+                    },
                 }
             ]
         ),
@@ -5907,11 +5903,77 @@ async def test_responses_count_on_deepseek_maps_reasoning_effort_the_way_deepsee
                 "model": "deepseek-counted",
                 "input": "Say hi.",
                 "tools": [_WEATHER_TOOL],
-                **reasoning,
+                **responses_options,
             },
         )
+    return result, json.loads(route.calls.last.request.content)
 
-    sent: Final = json.loads(route.calls.last.request.content)
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reasoning", "expected_options"),
+    (
+        ({}, {}),
+        ({"reasoning": {"effort": "none"}}, {"thinking": {"type": "disabled"}}),
+        ({"reasoning": {"effort": "high"}}, {"thinking": {"type": "enabled"}, "output_config": {"effort": "high"}}),
+        ({"reasoning": {"effort": "max"}}, {"thinking": {"type": "enabled"}, "output_config": {"effort": "max"}}),
+    ),
+)
+async def test_responses_count_on_deepseek_maps_reasoning_effort_the_way_deepseek_chat_inference_does(
+    monkeypatch: pytest.MonkeyPatch, reasoning: Mapping[str, JsonValue], expected_options: Mapping[str, JsonValue]
+) -> None:
+    result, sent = await _count_deepseek_responses(monkeypatch, {}, reasoning)
+
     assert (result.total_tokens, result.count_source) == (91, "provider")
     assert {field: sent[field] for field in ("thinking", "output_config") if field in sent} == expected_options
     assert all("type" not in tool for tool in sent["tools"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_options", "responses_options", "expected_options"),
+    (
+        ({"thinking": {"type": "disabled"}}, {}, {"thinking": {"type": "disabled"}}),
+        ({"reasoning_effort": "none"}, {}, {"thinking": {"type": "disabled"}}),
+        ({"thinking": {"type": "disabled"}}, {"additional_drop_params": ["thinking"]}, {}),
+    ),
+)
+async def test_responses_count_on_deepseek_counts_the_thinking_the_deployment_sets_unless_the_request_drops_it(
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_options: Mapping[str, JsonValue],
+    responses_options: Mapping[str, JsonValue],
+    expected_options: Mapping[str, JsonValue],
+) -> None:
+    result, sent = await _count_deepseek_responses(monkeypatch, deployment_options, responses_options)
+
+    assert (result.total_tokens, result.count_source) == (91, "provider")
+    assert {field: sent[field] for field in ("thinking", "output_config") if field in sent} == expected_options
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_drops", "sent_options"),
+    (
+        ({}, (True, None)),
+        ({"additional_drop_params": ["tool_choice"]}, (False, "enabled")),
+    ),
+)
+async def test_messages_count_tokens_drops_what_the_deployment_drops_unless_the_request_sends_its_own_list(
+    monkeypatch: pytest.MonkeyPatch, request_drops: Mapping[str, JsonValue], sent_options: tuple[bool, str | None]
+) -> None:
+    _, route = await _count_messages_body(
+        monkeypatch,
+        {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-ant-test", "additional_drop_params": ["thinking"]},
+        {
+            "messages": [{"role": "user", "content": "Read the README"}],
+            "tools": [_READ_FILE_TOOL],
+            "tool_choice": {"type": "auto"},
+            "thinking": {"type": "enabled", "budget_tokens": 2048},
+            **request_drops,
+        },
+        "https://api.anthropic.com/v1/messages/count_tokens",
+        httpx.Response(200, json={"input_tokens": 120}),
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert ("tool_choice" in sent, (sent.get("thinking") or {}).get("type")) == sent_options

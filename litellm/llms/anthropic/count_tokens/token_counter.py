@@ -20,7 +20,12 @@ from litellm.llms.anthropic.count_tokens.transformation import (
     anthropic_count_fields,
     messages_count_options,
 )
-from litellm.llms.base_llm.base_utils import BaseTokenCounter, deployment_timeout
+from litellm.llms.base_llm.base_utils import (
+    BaseTokenCounter,
+    deployment_litellm_params,
+    deployment_timeout,
+    optional_str,
+)
 from litellm.types.utils import CountContextManagement, LlmProviders, TokenCountMessagesFormat, TokenCountResponse
 
 # Global handler instance - reuse across all token counting requests
@@ -73,6 +78,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
         from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
 
+        litellm_params: Final = deployment_litellm_params(deployment)
         match translated := await anthropic_count_fields(
             model_to_use, messages, system, tools, messages_format, AnthropicConfig(), chat_params
         ):
@@ -82,7 +88,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
                 return await self._count(
                     model_to_use=model_to_use,
                     messages=translated.messages,
-                    deployment=deployment,
+                    litellm_params=litellm_params,
                     request_model=request_model,
                     tools=translated.tools,
                     system=translated.system,
@@ -97,7 +103,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
             model_to_use,
             messages,
             count_options,
-            (deployment or {}).get("litellm_params", {}),
+            litellm_params,
         ):
             case ChatCountTranslationError():
                 return options.response(request_model, model_to_use, "anthropic_api")
@@ -105,7 +111,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
                 return await self._count(
                     model_to_use=model_to_use,
                     messages=messages,
-                    deployment=deployment,
+                    litellm_params=litellm_params,
                     request_model=request_model,
                     tools=tools,
                     system=system,
@@ -117,7 +123,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
         self,
         model_to_use: str,
         messages: Sequence[Mapping[str, JsonValue]],
-        deployment: Mapping[str, Any] | None,
+        litellm_params: Mapping[str, object],
         request_model: str,
         tools: Sequence[Mapping[str, JsonValue]] | None,
         system: JsonValue,
@@ -126,12 +132,11 @@ class AnthropicTokenCounter(BaseTokenCounter):
     ) -> TokenCountResponse | None:
         from litellm.llms.anthropic.common_utils import AnthropicError, AnthropicModelInfo
 
-        litellm_params: Final = (deployment or {}).get("litellm_params", {})
-        api_base: Final = litellm_params.get("api_base")
+        api_base: Final = optional_str(litellm_params.get("api_base"))
 
         try:
             configured_auth_header: Final = await AnthropicModelInfo.aget_auth_header(
-                api_key=litellm_params.get("api_key") or litellm.anthropic_key or litellm.api_key,
+                api_key=optional_str(litellm_params.get("api_key")) or litellm.anthropic_key or litellm.api_key,
                 api_base=api_base,
                 litellm_params=litellm_params,
                 allow_workload_identity=True,

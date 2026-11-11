@@ -1,5 +1,6 @@
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final, cast  # noqa: TID251  # input items are forwarded as sent, as inference does
 
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
@@ -24,6 +25,7 @@ from litellm.types.llms.openai import ResponseInputParam
 from litellm.utils import ProviderConfigManager
 
 _COUNTED_CHAT_PARAMS: Final = (
+    "thinking",
     "tool_choice",
     "parallel_tool_calls",
     "response_format",
@@ -158,12 +160,16 @@ async def _with_previous_turns(
 
 
 def _counted_params(
-    chat_body: Mapping[str, object], tools: tuple[Mapping[str, object], ...], policy: DropPolicy
+    chat_body: Mapping[str, object],
+    deployment_params: Mapping[str, object],
+    tools: tuple[Mapping[str, object], ...],
+    policy: DropPolicy,
 ) -> Mapping[str, JsonValue]:
+    inference_params: Final = {**deployment_params, **chat_body}
     sent: Final = {
-        name: chat_body[name]
+        name: inference_params[name]
         for name in _COUNTED_CHAT_PARAMS
-        if chat_body.get(name) is not None and name not in policy.additional_drop_params
+        if inference_params.get(name) is not None and name not in policy.additional_drop_params
     }
     return _JSON_PARAMS.validate_python(
         {**sent, **({"drop_params": True} if policy.drop_params and (sent or tools) else {})}
@@ -177,6 +183,7 @@ async def chat_count_request(
     responses_request: Mapping[str, object],
     policy: DropPolicy,
     session_lookup: Callable[[str], Awaitable[ChatCompletionSession]] | None = None,
+    deployment_params: Mapping[str, object] = MappingProxyType({}),
 ) -> ChatCountRequest | ChatCountBridgeError | None:
     """The chat request Responses inference sends a provider with no native Responses API, or None
     when inference sends this provider the Responses body itself."""
@@ -211,7 +218,7 @@ async def chat_count_request(
         return ChatCountRequest(
             messages=tuple(map(_unmarked, _mappings(chat_body.get("messages")))),
             tools=tools or None,
-            params=_counted_params(chat_body, tools, policy),
+            params=_counted_params(chat_body, deployment_params, tools, policy),
         )
     except BadRequestError as e:
         return ChatCountBridgeError(message=str(e.message))

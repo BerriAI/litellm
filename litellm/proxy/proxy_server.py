@@ -15381,6 +15381,7 @@ async def _with_resolved_credentials(deployment: Mapping[str, object] | None) ->
 
 _DEPLOYMENT_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
 _COUNT_OPTION_DEFAULTS: Final = TypeAdapter(Mapping[str, JsonValue])
+_REQUEST_DROP_SETTINGS: Final = ("drop_params", "additional_drop_params")
 
 
 def _count_options_with_defaults(
@@ -15392,15 +15393,16 @@ def _count_options_with_defaults(
     return MappingProxyType(without_dropped_paths({**default_options, **count_options}, additional_drop_params))
 
 
-def _deployment_with_request_drop_params(
+def _deployment_with_request_drop_settings(
     deployment: dict[str, object] | None,  # mutable-ok: BaseTokenCounter.count_tokens takes a dict deployment
-    drop_params: object,
+    sent_params: Mapping[str, object],
 ) -> dict[str, object] | None:  # mutable-ok: BaseTokenCounter.count_tokens takes a dict deployment
-    if drop_params is None:
+    overrides: Final = {name: sent_params[name] for name in _REQUEST_DROP_SETTINGS if sent_params.get(name) is not None}
+    if not overrides:
         return deployment
     resolved_deployment: Final = deployment or {}
     litellm_params: Final = _DEPLOYMENT_LITELLM_PARAMS.validate_python(resolved_deployment.get("litellm_params") or {})
-    return {**resolved_deployment, "litellm_params": {**litellm_params, "drop_params": drop_params}}
+    return {**resolved_deployment, "litellm_params": {**litellm_params, **overrides}}
 
 
 def _counted_request_messages(
@@ -16211,7 +16213,11 @@ async def _count_request_tokens(
             model_to_use = _model
 
     sent_params: Final[Mapping[str, object]] = {**_router_default_litellm_params(llm_router), **request_litellm_params}
-    count_deployment: Final = _deployment_with_request_drop_params(deployment, sent_params.get("drop_params"))
+    count_deployment: Final = _deployment_with_request_drop_settings(deployment, sent_params)
+    count_litellm_params: Final = _DEPLOYMENT_LITELLM_PARAMS.validate_python(
+        (count_deployment or {}).get("litellm_params") or {}
+    )
+    deployment_defaults: Final = {**count_litellm_params, **_router_default_litellm_params(llm_router)}
     conversation_empty: Final = not messages and not contents
     if prompt and not conversation_empty and not deployment_drops_params(count_deployment):
         raise ProxyException(
@@ -16279,6 +16285,7 @@ async def _count_request_tokens(
             _deployment_api_base(deployment_view, routed_request),
             routed_request,
             _count_drop_policy(routed_deployment, routed_request),
+            deployment_params=deployment_defaults,
         )
     )
     if isinstance(chat_count, ChatCountBridgeError):
@@ -16316,13 +16323,8 @@ async def _count_request_tokens(
                 chat_params=MappingProxyType({}) if chat_count is None else chat_count.params,
                 count_options=_count_options_with_defaults(
                     count_options,
-                    {
-                        **_DEPLOYMENT_LITELLM_PARAMS.validate_python(
-                            (count_deployment or {}).get("litellm_params") or {}
-                        ),
-                        **_router_default_litellm_params(llm_router),
-                    },
-                    sent_params.get("additional_drop_params"),
+                    deployment_defaults,
+                    count_litellm_params.get("additional_drop_params"),
                 ),
             ),
             model_to_use=model_to_use,
