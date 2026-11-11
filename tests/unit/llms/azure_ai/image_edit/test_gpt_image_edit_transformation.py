@@ -132,6 +132,27 @@ def test_gpt_image_edit_keeps_model_on_v1_multipart():
     assert data == {"model": "gpt-image-2.5-flare", "prompt": "Add a hat"}
 
 
+def _edit_through_fake_foundry(model: str, **kwargs: object) -> httpx.Request:
+    captured: Final[list[httpx.Request]] = []  # mutable-ok: the fake Foundry endpoint records what litellm sent
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, json={"created": 1, "data": [{"b64_json": "aW1n"}]})
+
+    response: Final = litellm.image_edit(
+        model=f"azure_ai/{model}",
+        image=b"image",
+        prompt="Add a hat",
+        api_base=FOUNDRY_API_BASE,
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+        **kwargs,
+    )
+
+    assert response.data[0]["b64_json"] == "aW1n"
+    assert len(captured) == 1
+    return captured[0]
+
+
 @pytest.mark.parametrize(
     "model",
     [
@@ -141,34 +162,53 @@ def test_gpt_image_edit_keeps_model_on_v1_multipart():
         "gpt-image-2.5-flare-2026-09-08",
         "gpt-image-2.5-sunburst",
         "gpt-image-2.5-sunburst-2026-09-08",
+        "my-image-editor",
     ],
 )
 def test_gpt_image_edit_end_to_end_posts_multipart_to_deployment_route(monkeypatch: pytest.MonkeyPatch, model: str):
     monkeypatch.delenv("AZURE_AI_API_VERSION", raising=False)
     monkeypatch.setenv("AZURE_API_VERSION", litellm.AZURE_DEFAULT_API_VERSION)
     monkeypatch.setattr(litellm, "api_version", None)
-    captured: Final[list[httpx.Request]] = []  # mutable-ok: the fake Foundry endpoint records what litellm sent
 
-    def respond(request: httpx.Request) -> httpx.Response:
-        captured.append(request)
-        return httpx.Response(200, json={"created": 1, "data": [{"b64_json": "aW1n"}]})
+    request: Final = _edit_through_fake_foundry(model, api_key="test-key")
 
-    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
-    response: Final = litellm.image_edit(
-        model=f"azure_ai/{model}",
-        image=b"image",
-        prompt="Add a hat",
-        api_key="test-key",
-        api_base=FOUNDRY_API_BASE,
-        client=client,
-    )
-
-    assert response.data[0]["b64_json"] == "aW1n"
-    assert len(captured) == 1
-    request: Final = captured[0]
     assert str(request.url) == (
         f"{FOUNDRY_API_BASE}/openai/deployments/{model}/images/edits?api-version=2025-04-01-preview"
     )
     assert request.headers["api-key"] == "test-key"
     assert b'name="prompt"' in request.content
     assert b'name="model"' not in request.content
+
+
+@pytest.mark.parametrize("env_api_key", [None, "env-key"])
+@pytest.mark.parametrize(("auth_header", "other_auth_header"), [("api-key", "Authorization"), ("Authorization", "api-key")])
+def test_gpt_image_edit_sends_only_the_caller_auth_header(
+    monkeypatch: pytest.MonkeyPatch,
+    no_ambient_azure_credentials: None,
+    env_api_key: str | None,
+    auth_header: str,
+    other_auth_header: str,
+):
+    if env_api_key is None:
+        monkeypatch.delenv("AZURE_AI_API_KEY", raising=False)
+    else:
+        monkeypatch.setenv("AZURE_AI_API_KEY", env_api_key)
+    monkeypatch.setattr(litellm, "api_key", None)
+
+    request: Final = _edit_through_fake_foundry("gpt-image-1", extra_headers={auth_header: "caller-credential"})
+
+    assert request.headers[auth_header] == "caller-credential"
+    assert other_auth_header not in request.headers
+
+
+def test_gpt_image_edit_requires_a_foundry_api_base_instead_of_the_azure_openai_one(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("AZURE_AI_API_BASE", raising=False)
+    monkeypatch.setenv("AZURE_API_BASE", "https://other-resource.openai.azure.com")
+    monkeypatch.setattr(litellm, "api_base", None)
+
+    with pytest.raises(ValueError, match="Azure AI API base is required"):
+        AzureFoundryGPTImageEditConfig().get_complete_url(
+            model="gpt-image-2.5-flare",
+            api_base=None,
+            litellm_params={},
+        )
