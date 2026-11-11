@@ -16,9 +16,6 @@ export type BudgetAlertEmails = Readonly<Record<string, readonly string[]>>;
 
 export type BudgetAlertRowIssue = "thresholdRange" | "duplicateThreshold";
 
-const isEmailList = (value: unknown): value is readonly string[] =>
-  Array.isArray(value) && value.every((email) => typeof email === "string");
-
 const splitEmails = (emails: string): readonly string[] =>
   Array.from(
     new Set(
@@ -28,6 +25,12 @@ const splitEmails = (emails: string): readonly string[] =>
         .filter((email) => email.length > 0),
     ),
   );
+
+const storedRecipients = (value: unknown): readonly string[] | null => {
+  if (typeof value === "string") return splitEmails(value);
+  if (Array.isArray(value) && value.every((email) => typeof email === "string")) return value;
+  return null;
+};
 
 const THRESHOLD_MIN = 1;
 const THRESHOLD_MAX = 100;
@@ -47,8 +50,9 @@ export const budgetAlertRowsFromMetadata = (
   return Object.entries(config as Record<string, unknown>)
     .flatMap(([key, emails]) => {
       const threshold = Number(key);
-      return /^\d+$/.test(key) && isValidThreshold(threshold) && isEmailList(emails)
-        ? [{ threshold, emails: emails.join(", ") }]
+      const recipients = storedRecipients(emails);
+      return /^\d+$/.test(key) && isValidThreshold(threshold) && recipients !== null
+        ? [{ threshold, emails: recipients.join(", ") }]
         : [];
     })
     .sort((a, b) => (a.threshold ?? 0) - (b.threshold ?? 0));

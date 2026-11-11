@@ -20,13 +20,28 @@ describe("budgetAlertRowsFromMetadata", () => {
     ]);
   });
 
-  it("drops non-numeric thresholds and non-list recipients instead of crashing", () => {
+  it("drops non-numeric thresholds and non-email recipients instead of crashing", () => {
     const metadata = {
-      team_member_max_budget_alert_emails: { fifty: [], "75": "finance@example.com", "90": [1], "100": ["a@b.c"] },
+      team_member_max_budget_alert_emails: { fifty: [], "90": [1], "95": null, "100": ["a@b.c"] },
     };
     expect(budgetAlertRowsFromMetadata(metadata, TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY)).toEqual([
       { threshold: 100, emails: "a@b.c" },
     ]);
+  });
+
+  it("keeps API-stored comma-separated string recipients, which the backend also accepts", () => {
+    const metadata = {
+      max_budget_alert_emails: { "80": "finance@example.com, cto@example.com", "90": ["ops@example.com"] },
+    };
+    const rows = budgetAlertRowsFromMetadata(metadata, KEY_MAX_BUDGET_ALERT_EMAILS_KEY);
+    expect(rows).toEqual([
+      { threshold: 80, emails: "finance@example.com, cto@example.com" },
+      { threshold: 90, emails: "ops@example.com" },
+    ]);
+    expect(budgetAlertEmailsFromRows(rows)).toEqual({
+      "80": ["finance@example.com", "cto@example.com"],
+      "90": ["ops@example.com"],
+    });
   });
 
   it("drops API-stored thresholds outside 1 to 100 so they never block the form", () => {
