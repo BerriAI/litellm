@@ -1,4 +1,5 @@
 import json
+from types import NoneType
 from typing import Final
 
 import httpx
@@ -7,6 +8,7 @@ import respx
 
 import litellm
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
+from litellm.llms.azure_ai.common_utils import AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY
 from litellm.llms.azure_ai.responses.transformation import AzureAIResponsesAPIConfig
 from litellm.responses.main import _will_bridge_to_chat_completions
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
@@ -103,12 +105,32 @@ def test_other_hosts_keep_chat_bridge(model, api_base):
     assert config is None
 
 
-@pytest.mark.parametrize("model", ["claude-3-5-sonnet", "model_router/gpt-5", "agents/my-agent"])
+@pytest.mark.parametrize("model", ["claude-3-5-sonnet", "agents/my-agent"])
 def test_non_openai_surfaces_keep_chat_bridge(model):
     config = ProviderConfigManager.get_provider_responses_api_config(
         provider="azure_ai", model=model, api_base=FOUNDRY_PROJECT_BASE
     )
     assert config is None
+
+
+@pytest.mark.parametrize(
+    "api_base,expected_config",
+    [
+        (FOUNDRY_PROJECT_BASE, AzureAIResponsesAPIConfig),
+        (f"{FOUNDRY_PROJECT_BASE}/openai/v1", AzureAIResponsesAPIConfig),
+        ("https://res.services.ai.azure.com/openai/v1", NoneType),
+        ("https://res.openai.azure.com/openai/v1", NoneType),
+        ("https://res.cognitiveservices.azure.com/openai/v1", NoneType),
+        ("https://res.cognitiveservices.azure.com/api/projects/proj/openai/v1", NoneType),
+        (SERVERLESS_BASE, NoneType),
+    ],
+)
+@pytest.mark.parametrize("model", ["model_router/model-router", "model-router"])
+def test_model_router_calls_responses_natively_only_on_a_foundry_project(model, api_base, expected_config):
+    config: Final = ProviderConfigManager.get_provider_responses_api_config(
+        provider="azure_ai", model=model, api_base=api_base
+    )
+    assert type(config) is expected_config
 
 
 @pytest.mark.parametrize("api_base,bridged", [(FOUNDRY_PROJECT_BASE, False), (SERVERLESS_BASE, True)])
@@ -244,7 +266,7 @@ async def test_aresponses_sends_reasoning_and_tools_to_native_endpoint(model, ap
         return_value=httpx.Response(200, json=_responses_payload(expected_model))
     )
 
-    await litellm.aresponses(
+    response: Final = await litellm.aresponses(
         model=model,
         input="What is the weather in SF?",
         reasoning_effort="high",
@@ -254,6 +276,7 @@ async def test_aresponses_sends_reasoning_and_tools_to_native_endpoint(model, ap
     )
 
     _assert_native_responses_request(route, expected_url, expected_model)
+    assert AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY not in response._hidden_params
 
 
 @pytest.mark.asyncio
@@ -291,6 +314,68 @@ async def test_router_aresponses_sends_bare_deployment_name(model, api_base, exp
     )
 
     _assert_native_responses_request(route, expected_url, expected_model)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_aresponses_sends_a_model_router_to_the_project_responses_api_by_deployment_name():
+    route: Final = respx.post(url__regex=r".*/responses(\?.*)?$").mock(
+        return_value=httpx.Response(200, json=_responses_payload("FW-GLM-5.3-Flash"))
+    )
+
+    response: Final = await litellm.aresponses(
+        model="azure_ai/model_router/model-router",
+        input="What is the weather in SF?",
+        api_base=f"{FOUNDRY_PROJECT_BASE}/openai/v1",
+        api_key="fake-key",
+    )
+
+    request: Final = route.calls.last.request
+    assert str(request.url) == FOUNDRY_RESPONSES_URL
+    assert request.headers["api-key"] == "fake-key"
+    assert json.loads(request.content) == {"model": "model-router", "input": "What is the weather in SF?"}
+    assert response.model == "FW-GLM-5.3-Flash"
+    assert response._hidden_params[AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY] == "azure_ai/FW-GLM-5.3-Flash"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_aresponses_streams_a_model_router_on_a_project_as_it_answers():
+    completed: Final = _responses_payload("FW-GLM-5.3-Flash")
+    deltas: Final = tuple(
+        {"type": "response.output_text.delta", "item_id": "msg_1", "output_index": 0, "content_index": 0, "delta": d}
+        for d in ("1", "2")
+    )
+    stream_body: Final = "".join(
+        f"event: {event['type']}\ndata: {json.dumps(event)}\n\n"
+        for event in (
+            {"type": "response.created", "response": {**completed, "status": "in_progress"}},
+            *deltas,
+            {"type": "response.completed", "response": completed},
+        )
+    )
+    route: Final = respx.post(url__regex=r".*/responses(\?.*)?$").mock(
+        return_value=httpx.Response(200, text=stream_body, headers={"content-type": "text/event-stream"})
+    )
+
+    stream: Final = await litellm.aresponses(
+        model="azure_ai/model_router/model-router",
+        input="Count to 2",
+        stream=True,
+        api_base=f"{FOUNDRY_PROJECT_BASE}/openai/v1",
+        api_key="fake-key",
+    )
+    events: Final = [event async for event in stream]
+    sent: Final = json.loads(route.calls.last.request.content)
+
+    assert sent == {"model": "model-router", "input": "Count to 2", "stream": True}
+    assert [event.type for event in events] == [
+        "response.created",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.completed",
+    ]
+    assert [events[1].delta, events[2].delta] == ["1", "2"]
 
 
 @pytest.mark.asyncio

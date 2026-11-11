@@ -1973,6 +1973,12 @@ def test_responses_api_bridge_check_azure_ai_foundry_rejected_tools_route_to_res
         pytest.param("gpt-6-astra", "https://myproject.models.ai.azure.com", None, id="serverless-host-stays-chat"),
         pytest.param("Mistral-large-2411", _FOUNDRY_API_BASE, None, id="non-gpt-5-model-stays-chat"),
         pytest.param("claude-opus-4-1", _FOUNDRY_API_BASE, None, id="claude-on-foundry-stays-chat"),
+        pytest.param(
+            "model_router/gpt-6-astra",
+            f"{_FOUNDRY_API_BASE}/api/projects/proj/openai/v1",
+            None,
+            id="model-router-on-a-project-stays-chat",
+        ),
     ],
 )
 def test_responses_api_bridge_check_azure_ai_without_foundry_responses_route_stays_chat(
