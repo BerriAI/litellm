@@ -24,7 +24,6 @@ class Store:
 
     state: SweepState | None = None
     claimable: bool = True
-    pending: bool = False
     index_ready: bool = True
     per_scope: int = 3
     unreadable: frozenset[str] = frozenset()
@@ -33,9 +32,6 @@ class Store:
 
     async def claim(self, interval: timedelta) -> Claim | None:
         return Claim("owner", self.state) if self.claimable else None
-
-    async def accounting_pending(self, day: date) -> bool:
-        return self.pending
 
     async def key_index_ready(self) -> bool:
         return self.index_ready
@@ -87,13 +83,6 @@ async def test_a_fresh_sweep_checks_every_scope_and_completes() -> None:
 @pytest.mark.asyncio
 async def test_no_work_happens_without_the_claim() -> None:
     store: Final = Store(claimable=False)
-    await _run(store)
-    assert store.pages == [] and store.saved == []
-
-
-@pytest.mark.asyncio
-async def test_a_new_day_waits_while_accounting_is_still_pending() -> None:
-    store: Final = Store(pending=True)
     await _run(store)
     assert store.pages == [] and store.saved == []
 

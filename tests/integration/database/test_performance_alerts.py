@@ -215,23 +215,3 @@ async def test_a_timer_firing_just_before_the_run_is_due_still_takes_it(
         ("earlier-worker", f"{seconds_until_due} seconds"),
     )
     assert (await fixture.repository.claim(timedelta(minutes=5)) is not None) is claimed
-
-
-@pytest.mark.parametrize(
-    ("created_at", "blocks"),
-    (("2026-01-08T12:00:00", True), ("2025-06-01T12:00:00", False), ("2026-01-09T00:30:00", False)),
-)
-@pytest.mark.asyncio
-async def test_only_deliveries_from_the_evaluated_day_hold_back_its_sweep(
-    fixture: Fixture, created_at: str, blocks: bool
-) -> None:
-    request_id: Final = f"{fixture.prefix}-delivery"
-    write_rows(
-        'INSERT INTO "LiteLLM_SpendLogDelivery" (request_id, accounting_payload, is_batch, created_at)'
-        " VALUES (%s, '{}'::jsonb, false, %s::timestamp)",
-        (request_id, created_at),
-    )
-    try:
-        assert await fixture.repository.accounting_pending(DAY) is blocks
-    finally:
-        write_rows('DELETE FROM "LiteLLM_SpendLogDelivery" WHERE request_id = %s', (request_id,))

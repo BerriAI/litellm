@@ -2,7 +2,7 @@ import uuid
 from collections.abc import AsyncGenerator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import date, timedelta
 from itertools import chain
 from typing import TYPE_CHECKING, Final, Protocol, cast  # noqa: TID251  # Prisma generates transaction types
 
@@ -160,8 +160,6 @@ _SAVE: Final = """UPDATE "LiteLLM_PerformanceAlertState"
 SET day = $2, scope = $3, resume_after = $4, wrapped = $5, checked = $6, skipped = $7,
     start_scope = $9, start_after = $10, completed_at = CASE WHEN $8 THEN now() AT TIME ZONE 'UTC' END, updated_at = now() AT TIME ZONE 'UTC'
 WHERE id = 1 AND owner = $1"""
-_ACCOUNTING_PENDING: Final = """SELECT 1 AS resource_id FROM "LiteLLM_SpendLogDelivery"
-WHERE state = 'pending' AND created_at >= $1::timestamp AND created_at < $2::timestamp LIMIT 1"""
 _INDEX_READY: Final = """SELECT 1 AS resource_id FROM pg_index WHERE indexrelid = to_regclass($1) AND indisvalid"""
 
 
@@ -196,16 +194,6 @@ class PerformanceAlertRepository:
         if row.day is None or row.scope is None:
             return Claim(owner, None)
         return Claim(owner, SweepState.model_validate(row.model_dump()))
-
-    async def accounting_pending(self, day: date) -> bool:
-        """Whether usage recorded during `day` is still waiting to reach the daily tables."""
-        start: Final = datetime.combine(day, time.min)
-        async with self._transaction() as transaction:
-            return bool(
-                await transaction.query_raw(
-                    _ACCOUNTING_PENDING, start.isoformat(), (start + timedelta(days=1)).isoformat()
-                )
-            )
 
     async def key_index_ready(self) -> bool:
         async with self._transaction() as transaction:

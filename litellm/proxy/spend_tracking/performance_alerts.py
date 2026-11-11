@@ -38,7 +38,7 @@ async def _step(store: PerformanceAlertStore, owner: str, state: SweepState) -> 
     return await store.skip_next(owner, state)
 
 
-async def _start(store: PerformanceAlertStore, claim: Claim, now: datetime) -> SweepState | None:
+def _start(claim: Claim, now: datetime) -> SweepState:
     day: Final = target_day(now)
     if claim.state is not None and claim.state.day == day:
         return claim.state
@@ -50,9 +50,6 @@ async def _start(store: PerformanceAlertStore, claim: Claim, now: datetime) -> S
             claim.state.checked,
             claim.state.skipped,
         )
-    if await store.accounting_pending(day):
-        verbose_proxy_logger.info("Performance alerts waiting for %s usage to finish recording", day)
-        return None
     return new_sweep(day, claim.state)
 
 
@@ -70,8 +67,8 @@ async def run_performance_alerts(
         claim: Final = await store.claim(interval)
         if claim is None:
             return
-        started: Final = await _start(store, claim, now())
-        if started is None or started.completed:
+        started: Final = _start(claim, now())
+        if started.completed:
             return
         deadline: Final = clock() + RUN_BUDGET_SECONDS
         keys_ready: Final = await store.key_index_ready()
