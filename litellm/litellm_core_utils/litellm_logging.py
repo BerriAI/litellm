@@ -2441,7 +2441,10 @@ class Logging(LiteLLMLoggingBaseClass):
             ),
             litellm_logging_obj=self,
         )
-        return pricing is not None and is_explicitly_free_usage(usage, pricing[1])
+        if pricing is None:
+            return False
+        pricing_entry: Final = litellm.model_cost.get(pricing[0])
+        return pricing_entry is not None and is_explicitly_free_usage(usage, pricing_entry)
 
     def spilled_over_ptu_for(self, result: object) -> bool:
         result_hidden_params: Final = getattr(result, HIDDEN_PARAMS_ATTR, None) or MappingProxyType({})
