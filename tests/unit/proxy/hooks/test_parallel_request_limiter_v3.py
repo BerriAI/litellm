@@ -8607,6 +8607,7 @@ def test_rate_limit_error_reports_reset_time_in_utc_on_a_non_utc_proxy(process_t
     assert exc_info.value.headers == {
         "retry-after": str(handler.window_size),
         "rate_limit_type": "requests",
+        "rate_limited_by": "api_key",
         "reset_at": expected_reset,
     }
     assert exc_info.value.detail == (
