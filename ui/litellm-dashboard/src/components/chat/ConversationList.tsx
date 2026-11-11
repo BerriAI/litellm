@@ -19,6 +19,7 @@ import {
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import dayjs from "dayjs";
+import type { ParseKeys } from "i18next";
 import { useTranslation } from "react-i18next";
 import { Conversation } from "./types";
 
@@ -46,6 +47,13 @@ const getDateGroup = (timestamp: number): DateGroup => {
 };
 
 const DATE_GROUP_ORDER: DateGroup[] = ["Recents", "Yesterday", "Last 7 Days", "Older"];
+
+const DATE_GROUP_LABEL_KEYS: Readonly<Record<DateGroup, ParseKeys>> = {
+  Recents: "chat.conversationList.recent",
+  Yesterday: "chat.conversationList.yesterday",
+  "Last 7 Days": "chat.conversationList.lastSevenDays",
+  Older: "chat.conversationList.older",
+};
 
 interface GroupedConversations {
   group: DateGroup;
@@ -350,7 +358,7 @@ const ConversationList: React.FC<Props> = ({
             <div key={group} className="mb-2">
               <div className="moyai-chat-history-heading flex items-center gap-2 px-2 pt-2 pb-1 text-xs font-normal text-sidebar-foreground">
                 <Clock3 className="size-3.5" aria-hidden="true" />
-                {group === "Recents" ? t("chat.conversationList.recent") : group}
+                {t(DATE_GROUP_LABEL_KEYS[group])}
               </div>
               {items.map((conv) => (
                 <ConversationRow

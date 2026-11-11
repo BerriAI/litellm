@@ -7,6 +7,8 @@ from contextlib import suppress
 from threading import Thread
 from typing import Final
 
+from tests.integration._support.ports import allocate_port
+
 Handler = Callable[[asyncio.StreamReader, asyncio.StreamWriter], Awaitable[None]]
 
 
@@ -19,7 +21,7 @@ async def close_writer(writer: asyncio.StreamWriter) -> None:
 class LoopbackServer:
     def __init__(self, port: int, handler: Handler, ssl_context: ssl.SSLContext | None = None) -> None:
         self.loop: Final = asyncio.new_event_loop()
-        self._port: Final = port
+        self._port: Final = port or allocate_port()
         self._handler: Final = handler
         self._ssl_context: Final = ssl_context
         self._server: asyncio.Server | None = None

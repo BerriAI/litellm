@@ -1,3 +1,4 @@
+import type { ParseKeys } from "i18next";
 import type { ReactNode } from "react";
 import { Trans } from "react-i18next";
 import i18n from "@/i18n/i18n";
@@ -12,9 +13,9 @@ export interface DeploymentWarningContent {
   docsUrl?: string;
 }
 
-const STATIC_CONTENT: Readonly<Record<string, DeploymentWarningContent>> = {
+const STATIC_CONTENT: Readonly<Record<string, DeploymentWarningContent & { title: ParseKeys }>> = {
   env_credential_login: {
-    title: "Environment-credential login is enabled",
+    title: "shell.deploymentWarnings.envCredentialLogin.title",
     fix: (
       <Trans
         i18nKey="shell.deploymentWarnings.envCredentialLogin.fix"
@@ -28,12 +29,12 @@ const STATIC_CONTENT: Readonly<Record<string, DeploymentWarningContent>> = {
     docsUrl: "https://docs.litellm.ai/docs/proxy/ui",
   },
   no_redis: {
-    title: "No Redis configured",
+    title: "shell.deploymentWarnings.noRedis.title",
     fix: <Trans i18nKey="shell.deploymentWarnings.noRedis.fix" />,
     docsUrl: "https://docs.litellm.ai/docs/proxy/redis_requirements",
   },
   detailed_debug: {
-    title: "Detailed debug logging is on",
+    title: "shell.deploymentWarnings.detailedDebug.title",
     fix: (
       <Trans
         i18nKey="shell.deploymentWarnings.detailedDebug.fix"
@@ -74,5 +75,9 @@ export const deploymentWarningContent = (warningId: string, now: Date = new Date
   if (warningId.startsWith(LICENSE_EXPIRY_PREFIX)) {
     return licenseExpiryContent(warningId.slice(LICENSE_EXPIRY_PREFIX.length), now);
   }
-  return STATIC_CONTENT[warningId] ?? { title: warningId };
+  if (!Object.hasOwn(STATIC_CONTENT, warningId)) {
+    return { title: warningId };
+  }
+  const content = STATIC_CONTENT[warningId];
+  return { ...content, title: i18n.t(content.title) };
 };

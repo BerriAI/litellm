@@ -433,6 +433,10 @@ impl<'a> Lookup<'a> {
             .collect()
     }
 
+    pub fn has_team_wildcards(&self, team_id: &str) -> bool {
+        self.host.team_patterns.iter().any(|(t, _)| t == team_id)
+    }
+
     /// The deployments `team_id`'s own wildcard pattern routes `name` to
     /// (`_core_team_pattern_routers`, keyed by `team_public_model_name`).
     pub fn team_wildcard(&self, name: &str, team_id: &str) -> Vec<Arc<Deployment>> {

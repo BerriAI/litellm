@@ -5,6 +5,7 @@ from typing import Final
 
 from fastapi import HTTPException
 from starlette._utils import get_route_path
+from starlette.routing import compile_path
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from litellm.proxy.common_utils.anthropic_error_payload import route_error_content
@@ -25,7 +26,20 @@ def effective_max_request_size_mb(
 ) -> float | None:
     global_limit: Final = configured if configured is not None and configured > 0 else None
     method: Final = scope.get("method")
-    route_limit: Final = route_limits.get((method, get_route_path(scope))) if isinstance(method, str) else None
+    path: Final = get_route_path(scope)
+    exact_limit: Final = route_limits.get((method, path)) if isinstance(method, str) else None
+    route_limit: Final = (
+        exact_limit
+        if exact_limit is not None
+        else next(
+            (
+                limit
+                for (route_method, route), limit in route_limits.items()
+                if route_method == method and "{" in route and compile_path(route)[0].fullmatch(path) is not None
+            ),
+            None,
+        )
+    )
     if route_limit is None:
         return global_limit
     return min(route_limit, global_limit) if global_limit is not None else route_limit

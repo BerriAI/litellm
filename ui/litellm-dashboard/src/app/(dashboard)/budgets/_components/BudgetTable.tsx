@@ -2,6 +2,7 @@
 
 import { Inbox, ShieldAlert } from "lucide-react";
 import React, { useMemo, useState } from "react";
+import type { ParseKeys } from "i18next";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -36,14 +37,16 @@ interface BudgetTableProps {
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100];
 
-const FILTER_LABELS: Record<string, string> = {
-  budget_duration: "Reset",
-  max_budget: "Max Budget",
-  created_at: "Created",
+const FILTER_LABELS: Record<string, ParseKeys> = {
+  budget_duration: "budgets.table.filterLabels.reset",
+  max_budget: "budgets.table.filterLabels.maxBudget",
+  created_at: "budgets.table.filterLabels.created",
 };
 
-const durationLabel = (value: string): string =>
-  BUDGET_DURATION_FILTER_OPTIONS.find((option) => option.value === value)?.label ?? value;
+const durationLabel = (value: string): string => {
+  const labelKey = BUDGET_DURATION_FILTER_OPTIONS.find((option) => option.value === value)?.labelKey;
+  return labelKey ? i18n.t(labelKey) : value;
+};
 
 const formatFilterValue = (columnId: string, value: unknown): string => {
   if (columnId === "budget_duration") {
@@ -127,6 +130,7 @@ function ErrorState({ error }: { error: Error }) {
 
 /** "Not set" and the concrete durations are exclusive; see serializeBudgetFilters for why. */
 function DurationFilter({ selected, onChange }: { selected: string[]; onChange: (selected: string[]) => void }) {
+  const { t } = useTranslation();
   const toggle = (value: string, checked: boolean): void => {
     if (!checked) {
       onChange(selected.filter((entry) => entry !== value));
@@ -145,7 +149,7 @@ function DurationFilter({ selected, onChange }: { selected: string[]; onChange: 
             onCheckedChange={(checked) => toggle(option.value, checked === true)}
             data-testid={`budget-filter-duration-${option.value}`}
           />
-          {option.label}
+          {t(option.labelKey)}
         </Label>
       ))}
     </div>
@@ -231,6 +235,7 @@ const BudgetTable: React.FC<BudgetTableProps> = ({ list, canModify, onEditClick,
     [canModify, onEditClick, onDeleteClick, t],
   );
 
+  const filterLabels = Object.fromEntries(Object.entries(FILTER_LABELS).map(([id, labelKey]) => [id, t(labelKey)]));
   const hasQuery = list.searchValue.trim() !== "" || list.columnFilters.length > 0;
   const emptyMessage = list.error === null ? <EmptyState hasQuery={hasQuery} /> : <ErrorState error={list.error} />;
 
@@ -266,7 +271,7 @@ const BudgetTable: React.FC<BudgetTableProps> = ({ list, canModify, onEditClick,
             onOpenFilters={() => setFiltersOpen(true)}
             onRefresh={list.refetch}
             isRefreshing={list.isFetching}
-            filterLabels={FILTER_LABELS}
+            filterLabels={filterLabels}
             formatFilterValue={formatFilterValue}
           />
           <DataTableFilterDrawer

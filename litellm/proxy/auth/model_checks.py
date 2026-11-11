@@ -7,21 +7,27 @@ import functools
 import itertools
 import re
 from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Final, TypeVar
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
 from litellm.litellm_core_utils.pattern_match_deployments import PatternMatchRouter
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
+from litellm.proxy.common_utils.model_listing_utils import CallerAliases, alias_map, dispatched_model
+from litellm.proxy.common_utils.token_count_settings import cost_map_entry
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.responses.main import strip_responses_routing_prefix
 from litellm.router import Router
-from litellm.router_api import fallback_chain
-from litellm.types.router import CredentialLiteLLMParams, LiteLLM_Params
+from litellm.router_api import RouterRegistry, fallback_chain
+from litellm.router_rust.surface.registry import cost_map_backend_model
+from litellm.types.router import CredentialLiteLLMParams, Deployment, LiteLLM_Params
 from litellm.types.utils import LlmProviders
 from litellm.utils import (
     AZURE_MODEL_PLACEHOLDER,
@@ -41,7 +47,7 @@ _CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
 _MODEL_LISTING_POOL: Final = ThreadPoolExecutor(thread_name_prefix="litellm-model-listing")
 
 _PROVIDERS_LISTED_ONLY_THROUGH_A_DEPLOYMENT: Final = frozenset(
-    {LlmProviders.OPENROUTER.value, LlmProviders.HOSTED_VLLM.value}
+    {LlmProviders.OPENROUTER.value, LlmProviders.HOSTED_VLLM.value, LlmProviders.LITELLM_PROXY.value}
 )
 
 _Listed: Final = TypeVar("_Listed")
@@ -83,7 +89,11 @@ def get_provider_models(provider: str, litellm_params: LiteLLM_Params | None = N
         return None
     if ProviderConfigManager.get_provider_model_info(model=None, provider=llm_provider) is None:
         return None
-    return get_valid_models(custom_llm_provider=provider, litellm_params=litellm_params)
+    return get_valid_models(
+        check_provider_endpoint=llm_provider == LlmProviders.LITELLM_PROXY,
+        custom_llm_provider=provider,
+        litellm_params=litellm_params,
+    )
 
 
 def _get_models_from_access_groups(
@@ -188,34 +198,25 @@ def get_team_models(
     - Empty list if no models set
     - If model_access_groups is provided, only return models that are in the access groups
     """
-    all_models_set: Final[set[str]] = set()
-    if len(team_models) > 0:
-        all_models_set.update(team_models)
-        if SpecialModelNames.all_team_models.value in all_models_set:
-            all_models_set.update(team_models)
-            # GH#30619: expand all-team-models sentinel
-            # to the actual proxy model list
-            all_models_set.discard(SpecialModelNames.all_team_models.value)
-            all_models_set.update(proxy_model_list)
-            if include_model_access_groups:
-                all_models_set.update(model_access_groups.keys())
-        if SpecialModelNames.all_proxy_models.value in all_models_set:
-            all_models_set.update(proxy_model_list)
-            if include_model_access_groups:
-                all_models_set.update(model_access_groups.keys())
-
-    all_models = _get_models_from_access_groups(
+    expands_to_proxy_models: Final = (
+        SpecialModelNames.all_team_models.value in team_models
+        or SpecialModelNames.all_proxy_models.value in team_models
+    )
+    expansion: Final = (
+        (*proxy_model_list, *(model_access_groups if include_model_access_groups else ()))
+        if expands_to_proxy_models
+        else ()
+    )
+    named_models: Final = (model for model in team_models if model != SpecialModelNames.all_team_models.value)
+    all_models: Final = _get_models_from_access_groups(
         model_access_groups=model_access_groups,
-        all_models=list(all_models_set),
+        all_models=list(dict.fromkeys((*named_models, *expansion))),
         include_model_access_groups=include_model_access_groups,
         proxy_model_list=proxy_model_list,
     )
 
-    # deduplicate while preserving order
-    all_models = list(dict.fromkeys(all_models))
-
     verbose_proxy_logger.debug("ALL TEAM MODELS - %s", len(all_models))
-    return all_models
+    return list(dict.fromkeys(all_models))
 
 
 def get_complete_model_list(
@@ -687,6 +688,133 @@ def _known_models_without_a_deployment(wildcard_model: str) -> Sequence[str]:
     if wildcard_model.partition("/")[0] in _PROVIDERS_LISTED_ONLY_THROUGH_A_DEPLOYMENT:
         return ()
     return get_known_models_from_wildcard(wildcard_model=wildcard_model, litellm_params=None)
+
+
+def _litellm_model(deployment: Mapping[str, object]) -> object:
+    litellm_params: Final = deployment.get("litellm_params")
+    return litellm_params.get("model") if is_str_keyed_mapping(litellm_params) else None
+
+
+def _router_deployment(registry: RouterRegistry, model_id: str) -> Mapping[str, object] | None:
+    deployment: Final[object] = registry.deployment_dict(model_id)
+    return deployment if is_str_keyed_mapping(deployment) else None
+
+
+GLOBAL_ALIASES_ONLY: Final = CallerAliases(team=None, key=None)
+
+
+@dataclass(frozen=True, slots=True)
+class RoutedElsewhere:
+    pass
+
+
+ROUTED_ELSEWHERE: Final = RoutedElsewhere()
+
+
+@dataclass(frozen=True, slots=True)
+class OtherDeploymentsBill:
+    model: str
+
+
+def wildcard_row_priced_model(
+    row: Mapping[str, object], llm_router: Router | None, caller_aliases: CallerAliases = GLOBAL_ALIASES_ONLY
+) -> str | OtherDeploymentsBill | RoutedElsewhere | None:
+    model_id: Final = _model_info_field(row, "id")
+    listed_name: Final = row.get("model_name")
+    if llm_router is None or not isinstance(model_id, str) or not isinstance(listed_name, str):
+        return None
+    registry: Final = llm_router.registry()
+    source: Final = _router_deployment(registry, model_id)
+    if source is None:
+        return None
+    source_pattern: Final = source.get("model_name")
+    source_model: Final = _litellm_model(source)
+    if not isinstance(source_pattern, str) or not isinstance(source_model, str) or _litellm_model(row) == source_model:
+        return None
+    return wildcard_deployment_priced_model(
+        llm_router,
+        WildcardDeployment(model_id, source_pattern, source_model, _deployment_team_id(row)),
+        listed_name,
+        caller_aliases,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class WildcardDeployment:
+    model_id: str
+    model_name_pattern: str
+    litellm_model: str
+    team_id: str | None
+
+
+def wildcard_deployment_priced_model(
+    llm_router: Router, deployment: WildcardDeployment, listed_name: str, caller_aliases: CallerAliases
+) -> str | OtherDeploymentsBill | RoutedElsewhere | None:
+    served_name: Final = _served_name(llm_router, listed_name, caller_aliases)
+    registry: Final = llm_router.registry()
+    team_id: Final = deployment.team_id or caller_aliases.team_id
+    routed_name: Final = routed_model_name(llm_router, served_name)
+    candidates: Final = registry.names(served_name, kind="route_candidates", team_id=team_id)
+    if deployment.model_id in candidates:
+        return _routed_deployment_model(deployment.model_name_pattern, routed_name, deployment.litellm_model)
+    if not candidates:
+        return None
+    return _model_other_deployments_bill(registry, routed_name, candidates, team_id)
+
+
+def _model_other_deployments_bill(
+    registry: RouterRegistry, routed_name: str, candidates: AbstractSet[str], team_id: str | None
+) -> OtherDeploymentsBill | RoutedElsewhere:
+    rows: Final = registry.deployments(routed_name, team_id=team_id) or ()
+    billed: Final = frozenset(
+        cost_map_backend_model(Deployment.model_validate(row))
+        for row in rows
+        if _model_info_field(row, "id") in candidates
+    )
+    if len(billed) != 1 or any(_declares_its_own_rate(registry, model_id) for model_id in candidates):
+        return ROUTED_ELSEWHERE
+    return OtherDeploymentsBill(next(iter(billed)))
+
+
+def _declares_its_own_rate(registry: RouterRegistry, model_id: str) -> bool:
+    deployment: Final = _router_deployment(registry, model_id)
+    if deployment is None:
+        return False
+    sections: Final = (deployment.get("litellm_params"), deployment.get("model_info"))
+    return any(is_str_keyed_mapping(section) and use_custom_pricing_for_model(dict(section)) for section in sections)
+
+
+def wildcard_row_filled_model(
+    llm_router: Router, name_pattern: str, litellm_model: str, listed_name: str, caller_aliases: CallerAliases
+) -> str:
+    served_name: Final = _served_name(llm_router, listed_name, caller_aliases)
+    return _routed_deployment_model(name_pattern, routed_model_name(llm_router, served_name), litellm_model)
+
+
+def _served_name(llm_router: Router, listed_name: str, caller_aliases: CallerAliases) -> str:
+    return dispatched_model(listed_name, _without_deleted_team_targets(caller_aliases, llm_router.registry()))
+
+
+def _without_deleted_team_targets(caller_aliases: CallerAliases, registry: RouterRegistry) -> CallerAliases:
+    deleted_prefix: Final = f"model_name_{caller_aliases.team_id}_"
+    live_names: Final = registry.index("model_name")
+    return replace(
+        caller_aliases,
+        team={
+            alias: target
+            for alias, target in alias_map(caller_aliases.team).items()
+            if not target.startswith(deleted_prefix) or target in live_names
+        },
+    )
+
+
+def routed_model_name(llm_router: Router, listed_name: str) -> str:
+    return llm_router.registry().resolve(listed_name, kind="alias") or listed_name
+
+
+def model_info_cost_map_entry(model: str) -> Mapping[str, object]:
+    provider, _, _ = model.partition("/")
+    return cost_map_entry(model) or cost_map_entry(model.rsplit("/", 1)[-1], custom_llm_provider=provider)
 
 
 def _get_wildcard_models(

@@ -33,11 +33,11 @@ export interface RequestErrorActivity {
 export const ERROR_ENTITY_KINDS = ["key", "team", "user", "model"] as const;
 export type ErrorEntityKind = (typeof ERROR_ENTITY_KINDS)[number];
 
-export const ERROR_ENTITY_LABEL: Record<ErrorEntityKind, { singular: string; plural: string }> = {
-  key: { singular: "Virtual key", plural: "Virtual keys" },
-  team: { singular: "Team", plural: "Teams" },
-  user: { singular: "User", plural: "Users" },
-  model: { singular: "Model", plural: "Models" },
+export const ERROR_ENTITY_LABEL: Record<ErrorEntityKind, { singular: ParseKeys; plural: ParseKeys }> = {
+  key: { singular: "usage.errors.entityLabels.key.singular", plural: "usage.errors.entityLabels.key.plural" },
+  team: { singular: "usage.errors.entityLabels.team.singular", plural: "usage.errors.entityLabels.team.plural" },
+  user: { singular: "usage.errors.entityLabels.user.singular", plural: "usage.errors.entityLabels.user.plural" },
+  model: { singular: "usage.errors.entityLabels.model.singular", plural: "usage.errors.entityLabels.model.plural" },
 };
 
 const STATUS_LABELS: Record<number, ParseKeys> = {
@@ -153,9 +153,9 @@ export const errorSeries = (activity: RequestErrorActivity): ErrorSeries => {
 
 export type ErrorRateView = "total" | "status";
 
-export const ERROR_RATE_VIEW_OPTIONS: readonly { value: ErrorRateView; label: string }[] = [
-  { value: "total", label: "Total" },
-  { value: "status", label: "By status code" },
+export const ERROR_RATE_VIEW_OPTIONS: readonly { value: ErrorRateView; labelKey: ParseKeys }[] = [
+  { value: "total", labelKey: "usage.errors.rateViews.total" },
+  { value: "status", labelKey: "usage.errors.rateViews.status" },
 ];
 
 export const rateByStatusRows = (series: ErrorSeries): ErrorSeriesRow[] =>

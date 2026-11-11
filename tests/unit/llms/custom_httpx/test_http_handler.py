@@ -26,6 +26,8 @@ from yarl import URL
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
+from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine, default_token_exchange_engine
+from litellm.llms.base_llm.auth.types import MintedToken, TokenExchangeSpec
 from litellm.llms.custom_httpx.http_handler import (
     _CLIENT_REFCOUNT_WHEN_HANDLER_IS_SOLE_REFERRER,
     AsyncHTTPHandler,
@@ -40,7 +42,7 @@ from litellm.types.llms.custom_http import VerifyTypes
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from litellm.exceptions import Timeout as LitellmTimeout
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.utils import _invalidate_model_cost_lowercase_map
+from litellm.litellm_core_utils.model_cost_table import publish
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -1513,9 +1515,14 @@ async def test_finalizer_on_live_loop_disposes_foreign_loop_session_without_sche
 
 
 class _RetryClientHandler(AsyncHTTPHandler):
-    def __init__(self, first: httpx.AsyncClient, retry: httpx.AsyncClient) -> None:
+    def __init__(
+        self,
+        first: httpx.AsyncClient,
+        retry: httpx.AsyncClient,
+        token_exchange_engine: JwtBearerTokenExchangeEngine = default_token_exchange_engine,
+    ) -> None:
         self._retry_client: Final = retry
-        super().__init__()
+        super().__init__(token_exchange_engine=token_exchange_engine)
         self.client = first
 
     def create_client(
@@ -1550,6 +1557,135 @@ async def test_connection_error_retry_forwards_content(method: str):
 
         assert captured == [(method.upper(), body)]
         await handler.close()
+
+
+class _WifClock:
+    def __init__(self) -> None:
+        self.now = 1_000.0  # mutable-ok: fake clock advanced by the test
+
+    def __call__(self) -> float:
+        return self.now
+
+
+class _CountingIssuer:
+    def __init__(self) -> None:
+        self.mints = 0  # mutable-ok: counts tokens minted so each one is distinct
+
+    def post(self, url: str, *, content: bytes, headers: Mapping[str, str], timeout: float) -> httpx.Response:
+        self.mints += 1
+        return httpx.Response(
+            200, json={"access_token": f"wif-token-{self.mints}", "expires_in": 600, "token_type": "Bearer"}
+        )
+
+
+_WIF_SPEC: Final = TokenExchangeSpec(
+    token_url="https://api.anthropic.com/v1/oauth/token",
+    assertion_ref="oidc/env/ANTHROPIC_IDENTITY_TOKEN",
+    assertion_field="assertion",
+    static_body={"grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer", "federation_rule_id": "fdrl_1"},
+    body_encoding="json",
+    request_headers={},
+    cache_key_identity=("fdrl_1", "org-1", "", ""),
+    timeout_seconds=2.0,
+)
+
+
+def _minted_bearer(engine: JwtBearerTokenExchangeEngine) -> str:
+    minted: Final = engine.get_token(_WIF_SPEC)
+    assert isinstance(minted, MintedToken)
+    return minted.access_token.get_secret_value()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["post", "put", "patch", "delete"])
+@pytest.mark.parametrize("refreshed_by_another_request", [False, True])
+async def test_connection_error_retry_sends_current_wif_token(method: str, refreshed_by_another_request: bool) -> None:
+    clock: Final = _WifClock()
+    engine: Final = JwtBearerTokenExchangeEngine(
+        poster=_CountingIssuer(),
+        assertion_reader=lambda ref: "identity-jwt",
+        clock=clock,
+        refresh_executor=ThreadPoolExecutor(max_workers=1),
+    )
+    first_token: Final = _minted_bearer(engine)
+    sent: Final[list[str]] = []  # mutable-ok: async closure capture buffer
+
+    async def expire_then_drop(request: httpx.Request) -> httpx.Response:
+        sent.append(request.headers["authorization"])
+        clock.now += 601
+        if refreshed_by_another_request:
+            _minted_bearer(engine)
+        raise httpx.ConnectError("connection dropped", request=request)
+
+    async def capture_and_succeed(request: httpx.Request) -> httpx.Response:
+        sent.append(request.headers["authorization"])
+        return httpx.Response(200, request=request)
+
+    first: Final = httpx.AsyncClient(transport=httpx.MockTransport(expire_then_drop))
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(capture_and_succeed))
+    async with first, retry:
+        handler: Final = _RetryClientHandler(first=first, retry=retry, token_exchange_engine=engine)
+        await getattr(handler, method)(
+            "https://api.anthropic.com/v1/messages",
+            headers={"authorization": f"Bearer {first_token}", "x-trace": "kept"},
+            content=b"{}",
+        )
+        await handler.close()
+
+    assert sent == [f"Bearer {first_token}", f"Bearer {_minted_bearer(engine)}"]
+    assert first_token != _minted_bearer(engine)
+
+
+@pytest.mark.asyncio
+async def test_connection_error_retry_keeps_bearer_the_engine_did_not_mint() -> None:
+    engine: Final = JwtBearerTokenExchangeEngine(
+        poster=_CountingIssuer(), assertion_reader=lambda ref: "identity-jwt", clock=_WifClock()
+    )
+    _minted_bearer(engine)
+    sent: Final[list[str]] = []  # mutable-ok: async closure capture buffer
+
+    async def raise_connection_error(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection dropped", request=request)
+
+    async def capture_and_succeed(request: httpx.Request) -> httpx.Response:
+        sent.append(request.headers["authorization"])
+        return httpx.Response(200, request=request)
+
+    first: Final = httpx.AsyncClient(transport=httpx.MockTransport(raise_connection_error))
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(capture_and_succeed))
+    async with first, retry:
+        handler: Final = _RetryClientHandler(first=first, retry=retry, token_exchange_engine=engine)
+        await handler.post("https://api.anthropic.com/v1/messages", headers={"Authorization": "Bearer sk-static"})
+        await handler.close()
+
+    assert sent == ["Bearer sk-static"]
+
+
+@pytest.mark.asyncio
+async def test_connection_error_retry_keeps_wif_token_sent_to_another_host() -> None:
+    clock: Final = _WifClock()
+    engine: Final = JwtBearerTokenExchangeEngine(
+        poster=_CountingIssuer(), assertion_reader=lambda ref: "identity-jwt", clock=clock
+    )
+    first_token: Final = _minted_bearer(engine)
+    sent: Final[list[str]] = []  # mutable-ok: async closure capture buffer
+
+    async def expire_then_drop(request: httpx.Request) -> httpx.Response:
+        clock.now += 601
+        raise httpx.ConnectError("connection dropped", request=request)
+
+    async def capture_and_succeed(request: httpx.Request) -> httpx.Response:
+        sent.append(request.headers["authorization"])
+        return httpx.Response(200, request=request)
+
+    first: Final = httpx.AsyncClient(transport=httpx.MockTransport(expire_then_drop))
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(capture_and_succeed))
+    async with first, retry:
+        handler: Final = _RetryClientHandler(first=first, retry=retry, token_exchange_engine=engine)
+        await handler.post("https://elsewhere.example/v1/messages", headers={"authorization": f"Bearer {first_token}"})
+        await handler.close()
+
+    assert sent == [f"Bearer {first_token}"]
 
 
 @pytest.mark.asyncio
@@ -2047,7 +2183,7 @@ def isolate_litellm_state():
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 _SCALAR_DEFAULTS = {

@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 const DEFAULT_PROMPT = `Evaluate whether this guardrail's decision was correct.
 Analyze the user input, the guardrail action taken, and determine if it was appropriate.
@@ -130,7 +131,7 @@ export function EvaluationSettingsModal({
             <label htmlFor="evaluation-schema" className="mb-1.5 block text-sm font-medium text-foreground">
               {t("guardrailsMonitor.evaluationSettings.schema.label")}
             </label>
-            <p className="mb-1 text-xs text-muted-foreground">response_format: json_schema</p>
+            <p className="mb-1 text-xs text-muted-foreground">{codeSamples.guardrails.evaluationResponseFormat}</p>
             <Textarea
               id="evaluation-schema"
               value={schema}

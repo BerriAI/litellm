@@ -116,13 +116,19 @@ export function AgentControlPlaneView() {
 }
 
 const FULL_BLEED_SEGMENTS = new Set(["logs"]);
+const CUSTOMER_PORTAL_SEGMENTS = new Set(["customers", "chargebacks"]);
 
 function DashboardShell({ children }: { children: React.ReactNode }) {
   const { t } = useTranslation();
   const { accessToken } = useAuth();
-  const { mode } = usePluginMode();
+  const { mode, setMode } = usePluginMode();
   const pathname = usePathname();
   const routeSegment = routeSegmentForPathname(pathname);
+  const isPortalRoute = CUSTOMER_PORTAL_SEGMENTS.has(routeSegment);
+  useEffect(() => {
+    if (isPortalRoute && mode !== "customer-portal") setMode("customer-portal");
+    if (!isPortalRoute && mode === "customer-portal") setMode("ai-gateway");
+  }, [isPortalRoute, mode, setMode]);
   useEffect(() => {
     void recordUiEvent({ page: routeSegment || "home", action: "view" });
   }, [routeSegment]);
@@ -142,7 +148,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   const sidebarCollapsed = sidebarOverride?.segment === routeSegment ? sidebarOverride.collapsed : isFullBleed;
   const toggleSidebar = () => setSidebarOverride({ segment: routeSegment, collapsed: !sidebarCollapsed });
 
-  const isGateway = mode === "ai-gateway";
+  const isGateway = mode === "ai-gateway" || mode === "customer-portal";
 
   // Non-gateway (agent control plane) mode keeps the original full-width Navbar,
   // which carries the account menu; the redesigned sidebar + header shell is

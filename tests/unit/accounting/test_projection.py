@@ -23,8 +23,23 @@ _FIELDS: Final = TypeAdapter(dict[str, object])
 @pytest.mark.parametrize("status", ["success", "failure"])
 @pytest.mark.parametrize("origin", [None, "auto_router", "billed_retry"])
 @pytest.mark.parametrize("spend", [0.0, 0.25])
+@pytest.mark.parametrize(
+    ("guardrail_information", "billed_guardrail_cost"),
+    [
+        (None, 0.0),
+        ([{"guardrail_name": "guard", "guardrail_cost": 0.1}], 0.1),
+        ([{"guardrail_name": "guard", "guardrail_cost": 0.5}], 0.5),
+        ([{"guardrail_name": "guard", "guardrail_cost": 0.1, "guardrail_cost_in_spend": False}], 0.0),
+    ],
+)
 @pytest.mark.asyncio
-async def test_daily_projection_matches_legacy_writer(status: str, origin: str | None, spend: float) -> None:
+async def test_daily_projection_matches_legacy_writer(
+    status: str,
+    origin: str | None,
+    spend: float,
+    guardrail_information: list[dict[str, object]] | None,
+    billed_guardrail_cost: float,
+) -> None:
     payload: Final = get_logging_payload(
         kwargs={
             "model": "projection-test",
@@ -43,6 +58,7 @@ async def test_daily_projection_matches_legacy_writer(status: str, origin: str |
         **_FIELDS.validate_json(payload["metadata"]),
         **({BILLED_RETRY_ATTEMPT_METADATA_KEY: True} if origin == "billed_retry" else {}),
         **({INTERNAL_CALL_ORIGIN_METADATA_KEY: origin} if origin not in (None, "billed_retry") else {}),
+        **({"guardrail_information": guardrail_information} if guardrail_information is not None else {}),
     }
     row: Final = {**payload, "spend": spend, "metadata": json.dumps(metadata), "request_duration_ms": 25}
     legacy: Final = await DBSpendUpdateWriter()._common_add_spend_log_transaction_to_daily_transaction(
@@ -60,6 +76,7 @@ async def test_daily_projection_matches_legacy_writer(status: str, origin: str |
     restored: Final = _FIELDS.validate_json(json.dumps(accounting, default=str))
     stored_daily: Final = next(item for item in project(restored) if item.table == "LiteLLM_DailyUserSpend")
     assert dict(stored_daily.increments) == {name: legacy[name] for name, _ in stored_daily.increments}
+    assert dict(stored_daily.increments)["guardrail_spend"] == min(billed_guardrail_cost, spend)
     assert dict(stored_daily.key)["date"] == legacy["date"]
     assert dict(stored_daily.key)["api_key"] == legacy["api_key"]
     assert not {"messages", "response", "proxy_server_request", "requester_ip_address"}.intersection(accounting)
@@ -150,6 +167,7 @@ async def test_entity_projection_matches_real_request_queues(monkeypatch: pytest
     client: Final = PrismaClient(database_url="postgresql://unused", proxy_logging_obj=proxy_logging_obj)
     monkeypatch.setattr(proxy_server, "prisma_client", client)
     monkeypatch.setattr(proxy_server, "disable_spend_logs", False)
+    monkeypatch.setitem(proxy_server.general_settings, "use_spend_logs_ledger", False)
     monkeypatch.setattr(client, "spend_log_transactions", [])
     monkeypatch.setattr(client, "model_usage_transactions", [])
     writer: Final = DBSpendUpdateWriter()
@@ -521,7 +539,9 @@ def test_stored_payload_keeps_guardrail_billing_but_not_guardrail_content() -> N
     assert dict(daily_user.increments)["compression_saved_tokens"] == 7
 
 
-def test_caller_supplied_savings_that_cannot_be_computed_never_drop_the_charge(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_caller_supplied_savings_beyond_json_range_are_clamped_and_never_drop_the_charge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import litellm
 
     monkeypatch.setitem(
@@ -552,6 +572,8 @@ def test_caller_supplied_savings_that_cannot_be_computed_never_drop_the_charge(m
     )
     restored: Final = _FIELDS.validate_json(json.dumps(accounting, default=str))
     assert dict(restored["metadata"])["accounting_savings"]["compression"] == 0.0
-    assert [dict(item.increments)["spend"] for item in project(restored) if item.table == "LiteLLM_VerificationToken"] == [
-        0.5
-    ]
+    assert dict(restored["metadata"])["compression_savings"] == {"tokens_saved": 2**53 - 1}
+    assert dict(restored["metadata"])["compression_savings"] == {"tokens_saved": 2**53 - 1}
+    assert [
+        dict(item.increments)["spend"] for item in project(restored) if item.table == "LiteLLM_VerificationToken"
+    ] == [0.5]

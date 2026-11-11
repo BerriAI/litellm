@@ -1,3 +1,4 @@
+import type { ParseKeys } from "i18next";
 import React, { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { Bot, Users } from "lucide-react";
@@ -25,9 +26,9 @@ type ActivityView = "active-users" | "per-user";
 type ActivePeriod = "dau" | "wau" | "mau";
 
 const VIEW_OPTIONS = [
-  { value: "active-users", label: "Active users" },
-  { value: "per-user", label: "Per user" },
-] as const satisfies readonly { value: ActivityView; label: string }[];
+  { value: "active-users", labelKey: "usage.userAgentActivity.viewOptions.activeUsers" },
+  { value: "per-user", labelKey: "usage.userAgentActivity.viewOptions.perUser" },
+] as const satisfies readonly { value: ActivityView; labelKey: ParseKeys }[];
 
 const PERIOD_OPTIONS = [
   { value: "dau", label: "DAU" },
@@ -576,7 +577,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
             <Segmented
               label={t("usage.userAgentActivity.activity.viewLabel")}
               value={activityView}
-              options={VIEW_OPTIONS}
+              options={VIEW_OPTIONS.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
               onChange={setActivityView}
             />
           </>

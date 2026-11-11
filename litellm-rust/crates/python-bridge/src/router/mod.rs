@@ -28,7 +28,7 @@ use litellm_router_core::{
 use pyo3::{
     exceptions::{PyRuntimeError, PyValueError},
     prelude::*,
-    types::{PyBool, PyDict, PyList, PyString},
+    types::{PyBool, PyDict, PyList, PyString, PyTuple},
 };
 use serde_json::Value;
 
@@ -457,7 +457,7 @@ impl RouterCoreHandle {
     }
 
     /// Record a success a logging callback saw, driven like `report_failure`; it ends with
-    /// `done` (`key`: the success counter's key, or None for an unknown deployment).
+    /// `done` (`key`: the tokens counter's key when usage was added, else None).
     /// `usage_model` is the model its usage is keyed by, and `tracks_usage` the host's answer to
     /// whether it counts any (see `Output::tracks_usage`). `callbacks`: see `report_failure`.
     #[pyo3(signature = (id, total_tokens, requests, usage_model=None, tracks_usage=None, callbacks=None))]
@@ -1181,7 +1181,8 @@ fn host_call_response(
             stage: Stage::CallbackFilters { .. },
             ..
         } => {
-            // The remaining ids, or a failure mapping as an attempt reports one.
+            // The remaining ids, alone or paired with the id a filter prefers, or a failure
+            // mapping as an attempt reports one.
             let outcome = outcome.ok_or_else(missing)?;
             if let Ok(failure) = outcome.cast::<PyDict>() {
                 return match attempt_outcome(failure)? {
@@ -1191,8 +1192,17 @@ fn host_call_response(
                     )),
                 };
             }
-            Ok(HostCallResponse::Filtered(Ok(outcome.extract()?)))
+            if let Ok(answer) = outcome.cast::<PyTuple>() {
+                return Ok(HostCallResponse::Filtered(Ok(answer.extract()?)));
+            }
+            Ok(HostCallResponse::Filtered(Ok((outcome.extract()?, None))))
         }
+        HostCall::Select {
+            stage: Stage::Strategy { records, .. },
+            ..
+        } if !records.is_empty() => Ok(HostCallResponse::Positions(
+            outcome.ok_or_else(missing)?.extract()?,
+        )),
         HostCall::Select { .. } => Ok(HostCallResponse::Select(
             outcome.ok_or_else(missing)?.extract()?,
         )),
@@ -1284,6 +1294,15 @@ fn pre_route_outcome(outcome: Option<Bound<'_, PyAny>>) -> PyResult<Option<PreRo
     };
     if let Ok(model) = outcome.cast::<PyString>() {
         return Ok(Some(PreRouted::Model(model.to_str()?.to_owned())));
+    }
+    // `(model, group)`: the model to resolve, served as the group a session binding stamped.
+    if let Ok(pair) = outcome.cast::<PyTuple>()
+        && pair.len() == 2
+    {
+        return Ok(Some(PreRouted::Bound {
+            model: pair.get_item(0)?.extract()?,
+            group: pair.get_item(1)?.extract()?,
+        }));
     }
     let spec: DeploymentSpec = serde_json::from_value(document(&outcome)?)
         .map_err(|error| PyValueError::new_err(error.to_string()))?;
@@ -1401,7 +1420,7 @@ fn cause_items(dict: &Bound<'_, PyDict>, cause: RetryCause) -> PyResult<()> {
 fn pick_items(dict: &Bound<'_, PyDict>, error: &Error) -> PyResult<()> {
     error_items(dict, error)?;
     match error {
-        Error::NoHealthyDeployments { model } | Error::UnknownModel { model } => {
+        Error::NoHealthyDeployments { model, .. } | Error::UnknownModel { model } => {
             dict.set_item("failed_model", model)
         }
         _ => Ok(()),
@@ -1443,6 +1462,10 @@ fn error_items(dict: &Bound<'_, PyDict>, error: &Error) -> PyResult<()> {
             dict.set_item("error_model", model)?;
             dict.set_item("error_detail", format!("{until} {timezone}"))
         }
+        Error::NoHealthyDeployments {
+            request_ids: Some(ids),
+            ..
+        } => dict.set_item("error_request_ids", PyList::new(dict.py(), ids)?),
         Error::NonNumericWeight { metric } => dict.set_item("error_detail", metric),
         Error::MissingRoutingGroup { group } => dict.set_item("error_model", group),
         Error::ModelInfo { exception, detail } => {
@@ -1637,6 +1660,10 @@ fn events_list(py: Python<'_>, events: Vec<RouterEvent>) -> PyResult<Bound<'_, P
                 dict.set_item("deployment_id", deployment_id)?;
                 dict.set_item("cooldown_time", cooldown.as_secs_f64())?;
             }
+            RouterEvent::PickStarted { model } => {
+                dict.set_item("kind", "pick_started")?;
+                dict.set_item("model", model)?;
+            }
             RouterEvent::Selected {
                 deployment_id,
                 pick,
@@ -1685,6 +1712,7 @@ fn host_call_items(py: Python<'_>, dict: &Bound<'_, PyDict>, call: HostCall) -> 
             deployment,
             model,
             model_group,
+            routed,
             target_order,
             candidate_ids,
             retry,
@@ -1696,6 +1724,7 @@ fn host_call_items(py: Python<'_>, dict: &Bound<'_, PyDict>, call: HostCall) -> 
             max_retries,
             model_group_size,
         } => {
+            dict.set_item("routed", routed)?;
             dict.set_item("scope", scope)?;
             dict.set_item("max_retries", max_retries)?;
             dict.set_item("model_group_size", model_group_size)?;
@@ -1729,7 +1758,12 @@ fn host_call_items(py: Python<'_>, dict: &Bound<'_, PyDict>, call: HostCall) -> 
         } => {
             let (stage, strategy) = match stage {
                 Stage::Plugins => ("plugins", None),
-                Stage::Strategy(strategy) => ("strategy", Some(strategy)),
+                Stage::Strategy { strategy, records } => {
+                    if !records.is_empty() {
+                        dict.set_item("records", to_py(py, &Value::Array(records))?)?;
+                    }
+                    ("strategy", Some(strategy))
+                }
                 Stage::Tags => ("tags", None),
                 Stage::PreCall => ("pre_call", None),
                 Stage::TextOnly => ("text_only", None),
@@ -1738,6 +1772,8 @@ fn host_call_items(py: Python<'_>, dict: &Bound<'_, PyDict>, call: HostCall) -> 
                     ("route_incapable", None)
                 }
                 Stage::MediaRefusing => ("media_refusing", None),
+                Stage::EmbeddingBatch => ("embedding_batch", None),
+                Stage::OverrideCheck(strategy) => ("override_check", Some(strategy)),
                 Stage::ProviderRequest => ("provider_request", None),
                 Stage::CallbackFilters {
                     excluded_ids,

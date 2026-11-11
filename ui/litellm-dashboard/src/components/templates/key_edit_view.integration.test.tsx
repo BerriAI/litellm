@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { chooseSelectOption, renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import { MODEL_MAX_BUDGET_PREMIUM_HINT } from "../key_team_helpers/ModelMaxBudgetEditor";
+import i18n from "@/i18n/i18n";
 import {
   fetchMCPServers,
   getPassThroughEndpointsCall,
@@ -355,6 +356,24 @@ describe("KeyEditView", () => {
     await waitFor(() => {
       expect(screen.getByText("Save Changes")).toBeInTheDocument();
     });
+  });
+
+  it("submits the spend prompt storage restriction in metadata", async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    renderWithProviders(
+      <KeyEditView
+        keyData={MOCK_KEY_DATA}
+        onCancel={() => {}}
+        onSubmit={onSubmit}
+        accessToken=""
+        userID=""
+        userRole="Admin"
+      />,
+    );
+    fireEvent.click(screen.getByRole("switch", { name: "Store prompts in spend logs" }));
+    fireEvent.click(screen.getByText("Save Changes"));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    expect(JSON.parse(onSubmit.mock.calls[0][0].metadata).store_prompts_in_spend_logs).toBe(false);
   });
 
   it("should render tags", async () => {
@@ -1501,14 +1520,14 @@ describe("KeyEditView", () => {
     it("should say why the editor is locked when the proxy has no enterprise license", async () => {
       renderWith(false);
 
-      expect(await screen.findByText(MODEL_MAX_BUDGET_PREMIUM_HINT)).toBeInTheDocument();
+      expect(await screen.findByText(i18n.t(MODEL_MAX_BUDGET_PREMIUM_HINT))).toBeInTheDocument();
     });
 
     it("should leave the editor usable when the proxy has one", async () => {
       renderWith(true);
 
       expect(await screen.findByText(/Cap spend per model over its own window/)).toBeInTheDocument();
-      expect(screen.queryByText(MODEL_MAX_BUDGET_PREMIUM_HINT)).not.toBeInTheDocument();
+      expect(screen.queryByText(i18n.t(MODEL_MAX_BUDGET_PREMIUM_HINT))).not.toBeInTheDocument();
     });
 
     // /key/update validates model_max_budget whenever the field is present and

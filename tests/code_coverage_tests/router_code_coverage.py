@@ -76,6 +76,7 @@ ignored_function_names = [
     "_acreate_batch",
     "_acreate_file",
     "__init__",
+    "_router_init",  # Never run: it carries Router.__init__'s signature and docstring
     "avector_store_create",  # Tested via proxy vector_store_endpoints (files lack "router" in name)
     "_override_vector_store_methods_for_router",  # No-op placeholder, called during Router init
     "_merge_tools_from_deployment",  # Tested indirectly via _update_kwargs_with_deployment (test files lack "router" in name)

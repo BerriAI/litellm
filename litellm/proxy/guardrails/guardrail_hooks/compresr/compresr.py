@@ -37,6 +37,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.prompt_templates.factory import (
     get_attribute_or_key,
     get_tool_calls_from_response,
@@ -73,7 +74,7 @@ if TYPE_CHECKING:
     )
 
 BYPASS_HEADER: Final = "x-compresr-bypass"
-_AGENTIC_LOOP_MODEL: Final = TypeAdapter(object)
+_DECODED_JSON: Final = TypeAdapter(object)
 COMPRESR_RETRIEVE_TOOL_NAME: Final = "compresr_retrieve"
 DEFAULT_API_BASE: Final = "https://api.compresr.ai"
 DEFAULT_COMPRESSION_MODEL: Final = "latte_v2"
@@ -148,6 +149,10 @@ def _validate_api_base(url: str) -> str:
 
 class _JsonResponse(Protocol):
     def json(self) -> object: ...
+
+
+class _SupportsGet(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
 
 
 def _json_body(response: _JsonResponse) -> object:
@@ -1121,8 +1126,13 @@ class CompresrGuardrail(CustomGuardrail):
 
         full_model_name = model
         if logging_obj is not None:
-            agentic_params: Final = getattr(logging_obj, "model_call_details", {}).get("agentic_loop_params", {})
-            candidate: Final = _AGENTIC_LOOP_MODEL.validate_python(agentic_params.get("model", model))
+            model_call_details: Final = require_attributes(
+                _DECODED_JSON.validate_python(getattr(logging_obj, "model_call_details", {})), _SupportsGet, "get"
+            )
+            agentic_params: Final = require_attributes(
+                model_call_details.get("agentic_loop_params", {}), _SupportsGet, "get"
+            )
+            candidate: Final = agentic_params.get("model", model)
             if isinstance(candidate, str) and candidate:
                 full_model_name = candidate
 

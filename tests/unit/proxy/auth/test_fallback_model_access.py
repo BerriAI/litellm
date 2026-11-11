@@ -55,10 +55,9 @@ def _broken_access_group_lookup(*args: object, **kwargs: object) -> NoReturn:
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("python_router_core")  # the Rust core keeps this lookup on its host registry
 async def test_is_model_authorized_for_token_fails_closed_when_the_lookup_breaks(monkeypatch: pytest.MonkeyPatch):
     router = _router()
-    monkeypatch.setattr(router, "_core_get_model_access_groups", _broken_access_group_lookup)
+    monkeypatch.setattr(type(router.registry()), "access_groups", _broken_access_group_lookup)
 
     assert (
         await is_model_authorized_for_token(

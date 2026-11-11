@@ -16,7 +16,6 @@ deterministic stand-ins so the arithmetic under test is the only variable.
 
 import asyncio, json, time
 import logging
-from types import MappingProxyType
 from typing import Final, Literal
 
 import httpx
@@ -1075,6 +1074,28 @@ def respx_interceptable_httpx_client(monkeypatch):
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_bedrock_output_written_to_a_request_bucket_is_read_from_that_bucket(respx_interceptable_httpx_client):
+    route: Final = respx.get(
+        "https://s3.us-west-2.amazonaws.com/team-a-bucket/litellm-batch-outputs/job-1/input.jsonl.out"
+    ).mock(return_value=httpx.Response(200, content=b'{"recordId": "1"}\n'))
+
+    file_content: Final = await bu.fetch_batch_managed_file_content(
+        "s3://team-a-bucket/litellm-batch-outputs/job-1/input.jsonl.out",
+        custom_llm_provider="bedrock",  # pyright: ignore[reportArgumentType]  # the cost job passes bedrock at runtime
+        litellm_params={
+            "s3_bucket_name": "model-bucket",
+            "aws_access_key_id": "AKIAEXAMPLE",
+            "aws_secret_access_key": "secret",
+            "aws_region_name": "us-west-2",
+        },
+    )
+
+    assert route.call_count == 1
+    assert file_content == b'{"recordId": "1"}\n'
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_output_file_content_vertex_managed_uri_accepted_by_real_validation(respx_interceptable_httpx_client):
     managed_output_uri = (
         "gs://litellm-bucket/litellm-vertex-files/publishers/google/models/"
@@ -1692,17 +1713,21 @@ async def test_calculate_batch_cost_and_usage_anthropic_end_to_end():
     assert result.models == ["claude-sonnet-4-5"]
 
 
-def test_extract_credentials_forwards_the_trusted_model_credential_snapshot():
-    """Bedrock resolves a batch's output bucket only from the immutable server-side
-    snapshot, never from a request param, so cost accounting on the retrieve path cannot
-    read the output file unless this key is forwarded. Without it the accounting raises
-    "S3 bucket_name is required" for a bucket the deployment has configured, and the
-    batch's cost is never recorded."""
-    snapshot = MappingProxyType({"s3_bucket_name": "configured-bucket", "aws_region_name": "us-east-1"})
+def test_extract_credentials_forwards_the_deployment_bucket_settings() -> None:
+    """Cost accounting on the retrieve path reads the batch's output file from the
+    deployment's Bedrock buckets. Without these keys the read raises "S3 bucket_name is
+    required" for a bucket the deployment has configured, and the batch's cost is never
+    recorded."""
+    params: Final = {
+        "s3_bucket_name": "configured-bucket",
+        "s3_output_bucket_name": "output-bucket",
+        "allow_legacy_cloud_file_ids": True,
+        "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    }
 
-    credentials = bu._extract_file_access_credentials({"_litellm_internal_model_credentials": snapshot})
+    credentials: Final = bu._extract_file_access_credentials(params)
 
-    assert credentials["_litellm_internal_model_credentials"] is snapshot
+    assert credentials == {key: value for key, value in params.items() if key != "model"}
 
 
 def test_extract_credentials_forwards_the_deployment_aws_credentials():
@@ -1736,8 +1761,6 @@ async def test_output_file_content_bedrock_reads_with_deployment_aws_credentials
         return type("R", (), {"content": b""})()
 
     monkeypatch.setattr(files_main, "afile_content", fake_afile_content)
-    snapshot = MappingProxyType({"s3_bucket_name": "configured-bucket", "aws_region_name": "us-west-2"})
-
     await bu._fetch_batch_output_file_content(
         _batch("s3://configured-bucket/litellm-batch-outputs/job-1/out.jsonl.out"),
         custom_llm_provider="bedrock",
@@ -1746,7 +1769,7 @@ async def test_output_file_content_bedrock_reads_with_deployment_aws_credentials
             "aws_secret_access_key": "secret-deployment",
             "aws_session_token": "token-deployment",
             "aws_region_name": "us-west-2",
-            "_litellm_internal_model_credentials": snapshot,
+            "s3_bucket_name": "configured-bucket",
             "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         },
     )
@@ -1757,7 +1780,7 @@ async def test_output_file_content_bedrock_reads_with_deployment_aws_credentials
     assert captured["aws_secret_access_key"] == "secret-deployment"
     assert captured["aws_session_token"] == "token-deployment"
     assert captured["aws_region_name"] == "us-west-2"
-    assert captured["_litellm_internal_model_credentials"] is snapshot
+    assert captured["s3_bucket_name"] == "configured-bucket"
     assert "model" not in captured
 
 

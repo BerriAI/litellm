@@ -1,7 +1,7 @@
 "use client";
 
 import { ColumnDef } from "@tanstack/react-table";
-import type { TFunction } from "i18next";
+import type { ParseKeys, TFunction } from "i18next";
 import { Copy, MoreHorizontal, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -17,11 +17,11 @@ import { DocumentUpload } from "@/components/vector_store_management/types";
 import { cn } from "@/lib/cva.config";
 import { copyToClipboard } from "@/utils/dataUtils";
 
-const STATUS_CONFIG: Record<DocumentUpload["status"], { tone: StatusTone; label: string }> = {
-  uploading: { tone: "info", label: "Uploading" },
-  done: { tone: "success", label: "Ready" },
-  error: { tone: "error", label: "Error" },
-  removed: { tone: "neutral", label: "Removed" },
+const STATUS_CONFIG: Record<DocumentUpload["status"], { tone: StatusTone; labelKey: ParseKeys }> = {
+  uploading: { tone: "info", labelKey: "vectorStores.documents.statuses.uploading" },
+  done: { tone: "success", labelKey: "vectorStores.documents.statuses.ready" },
+  error: { tone: "error", labelKey: "vectorStores.documents.statuses.error" },
+  removed: { tone: "neutral", labelKey: "vectorStores.documents.statuses.removed" },
 };
 
 function formatFileSize(bytes?: number): string {
@@ -96,8 +96,9 @@ export const getDocumentsTableColumns = (
     size: 150,
     enableSorting: false,
     cell: ({ row }) => {
-      const config = STATUS_CONFIG[row.original.status] ?? { tone: "neutral", label: row.original.status };
-      return <StatusBadge tone={config.tone} label={config.label} />;
+      const { status } = row.original;
+      const config = Object.hasOwn(STATUS_CONFIG, status) ? STATUS_CONFIG[status] : undefined;
+      return <StatusBadge tone={config?.tone ?? "neutral"} label={config ? t(config.labelKey) : status} />;
     },
   },
   {

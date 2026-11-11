@@ -397,3 +397,20 @@ def test_extract_cache_params_is_empty_when_a_backend_attribute_name_is_not_a_st
     _use_redis_backed_cache(monkeypatch, {attribute_name: "redis.internal"})
 
     assert _extract_cache_params() == {}, attribute_name
+
+
+@pytest.fixture
+def mock_redis_delete(mocker):
+    mock_cache = mocker.MagicMock()
+    mock_cache.type = "redis"
+    mock_cache.delete_cache_keys = mocker.AsyncMock()
+    mocker.patch.object(litellm, "cache", mock_cache)
+    return mock_cache
+
+
+def test_cache_delete_removes_the_requested_keys(mock_redis_delete):
+    response = client.post("/cache/delete", headers={"Authorization": "Bearer sk-9876"}, json={"keys": ["k1", "k2"]})
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "success"}
+    mock_redis_delete.delete_cache_keys.assert_awaited_once_with(keys=["k1", "k2"])

@@ -131,9 +131,9 @@ async def test_duplicate_rows_in_one_flush_keep_first_accounting_payload(deliver
         "accounting_log_disabled": mode == "disabled",
     }
     assert await repository.insert_with_deliveries((first, later), write_spend_logs=mode != "url") == 1
-    assert delivery_database.execute(
-        'SELECT accounting_payload FROM "LiteLLM_SpendLogDelivery"'
-    ).fetchone() == (first["accounting_payload"],)
+    assert delivery_database.execute('SELECT accounting_payload FROM "LiteLLM_SpendLogDelivery"').fetchone() == (
+        first["accounting_payload"],
+    )
     assert delivery_database.execute('SELECT spend FROM "LiteLLM_SpendLogs"').fetchall() == (
         [(first["spend"],)] if mode == "local" else []
     )
@@ -373,13 +373,43 @@ async def test_receipt_cleanup_keeps_pending_and_parked_rows_and_reports_lag(
     )
     repository = AccountingDeliveryRepository(delivery_client)
     assert await repository.cleanup_applied() == 1
-    metrics = await repository.metrics()
-    assert metrics.pending_count == 1
-    assert metrics.parked_count == 1
-    assert metrics.oldest_pending_seconds >= 40 * 86400
+    backlog = await repository.backlog()
+    assert backlog.pending_count == 1
+    assert backlog.parked_count == 1
+    assert backlog.oldest_pending_seconds >= 40 * 86400
     assert delivery_database.execute(
         'SELECT request_id FROM "LiteLLM_SpendLogDelivery" ORDER BY request_id'
     ).fetchall() == [("parked",), ("pending",)]
+
+
+@pytest.mark.asyncio
+async def test_backlog_reads_only_unapplied_deliveries_however_many_receipts_are_retained(
+    delivery_database: psycopg.Connection[tuple[object, ...]], delivery_client: Prisma
+) -> None:
+    from litellm.repositories.accounting_delivery_repository import _BACKLOG
+
+    delivery_database.execute(
+        'INSERT INTO "LiteLLM_SpendLogDelivery" (delivery_id, request_id, accounting_payload, is_batch, state, applied_at) '
+        "SELECT 'applied-' || n, 'applied-' || n, jsonb_build_object('payload', repeat(md5(n::text), 32)), "
+        "n % 10 = 0, 'applied', CURRENT_TIMESTAMP FROM generate_series(1, 20000) AS n"
+    )
+    _insert(delivery_database, tuple(_row(state) for state in ("pending", "parked")))
+    delivery_database.execute(
+        'UPDATE "LiteLLM_SpendLogDelivery" SET state = request_id::"AccountingDeliveryState" '
+        "WHERE request_id IN ('pending', 'parked')"
+    )
+    delivery_database.execute('ANALYZE "LiteLLM_SpendLogDelivery"')
+    explained = delivery_database.execute(f"EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {_BACKLOG}").fetchone()
+    assert explained is not None
+    plan = explained[0][0]["Plan"]
+    table_pages = delivery_database.execute(
+        "SELECT relpages FROM pg_class WHERE oid = '\"LiteLLM_SpendLogDelivery\"'::regclass"
+    ).fetchone()
+    assert table_pages is not None and table_pages[0] > 1000
+    assert plan["Shared Hit Blocks"] + plan["Shared Read Blocks"] < table_pages[0] / 20
+
+    backlog = await AccountingDeliveryRepository(delivery_client).backlog()
+    assert (backlog.pending_count, backlog.parked_count) == (1, 1)
 
 
 @pytest.mark.parametrize("delivery_database", ["public", "ledger_tenant"], indirect=True)
@@ -415,11 +445,28 @@ def test_delivery_migration_preserves_unused_old_receipts(state):
         assert connection.execute('SELECT COUNT(*) FROM "LiteLLM_SpendLogDelivery"').fetchone() == (0,)
 
 
+@pytest.mark.parametrize(
+    ("payload", "huge_state"),
+    [
+        (
+            "jsonb_set(accounting_payload, '{metadata}', ('{\"tokens_saved\": ' || repeat('9', 401) || '}')::jsonb)",
+            "applied",
+        ),
+        (
+            "jsonb_set(accounting_payload, '{metadata}', ('{\"tokens_saved\": ' || repeat('9', 5000) || '}')::jsonb)",
+            "parked",
+        ),
+        ("'[]'::jsonb", "parked"),
+    ],
+    ids=["beyond_float", "beyond_python_int_parse", "not_an_object"],
+)
 @pytest.mark.asyncio
-async def test_malformed_payload_is_parked_without_losing_other_deliveries(delivery_database, delivery_client):
-    _insert(delivery_database, (_row("bad"), _row("good")))
+async def test_a_payload_the_engine_cannot_decode_never_blocks_other_deliveries(
+    delivery_database, delivery_client, payload, huge_state
+):
+    _insert(delivery_database, (_row("huge"), _row("good")))
     delivery_database.execute(
-        'UPDATE "LiteLLM_SpendLogDelivery" SET accounting_payload=$$ [] $$::jsonb WHERE request_id=$$bad$$'
+        f'UPDATE "LiteLLM_SpendLogDelivery" SET accounting_payload = {payload} WHERE request_id = $$huge$$'
     )
 
     async def apply(transaction, deliveries):
@@ -428,12 +475,16 @@ async def test_malformed_payload_is_parked_without_losing_other_deliveries(deliv
         )
 
     repository = AccountingDeliveryRepository(delivery_client)
-    assert (await repository.apply_pending(apply, max_attempts=2)).failed == 2
-    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.0,)
-    delivery_database.execute('UPDATE "LiteLLM_SpendLogDelivery" SET next_attempt_at=CURRENT_TIMESTAMP')
-    assert (await repository.apply_pending(apply, max_attempts=2)).parked == ("bad",)
-    assert (await repository.apply_pending(apply, max_attempts=2)).applied == 1
-    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.5,)
+    results = [await repository.apply_pending(apply, max_attempts=1) for _ in range(3)]
+    _insert(delivery_database, (_row("later"),))
+    results.append(await repository.apply_pending(apply, max_attempts=1))
+
+    applied: Final = 3 if huge_state == "applied" else 2
+    assert sum(result.applied for result in results) == applied
+    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.5 * applied,)
+    assert delivery_database.execute(
+        'SELECT request_id, state::text FROM "LiteLLM_SpendLogDelivery" ORDER BY request_id'
+    ).fetchall() == [("good", "applied"), ("huge", huge_state), ("later", "applied")]
 
 
 @pytest.mark.asyncio
@@ -446,9 +497,9 @@ async def test_retention_keeps_batch_receipts_indefinitely(delivery_database, de
     assert await repository.cleanup_applied() == 1
     assert await repository.cleanup_applied() == 0
     assert delivery_database.execute('SELECT request_id FROM "LiteLLM_SpendLogDelivery"').fetchall() == [("batch",)]
-    metrics = await repository.metrics()
-    assert metrics.batch_count == 1
-    assert metrics.table_bytes > 0
+    storage = await repository.storage()
+    assert storage.batch_count == 1
+    assert storage.table_bytes > 0
 
 
 @pytest.mark.parametrize("disabled", [False, True])
@@ -463,19 +514,29 @@ async def test_ledger_batch_retrieves_charge_once_in_every_logging_mode(
     from litellm.proxy.utils import jsonify_object
 
     completed = {
-        **_row("batch_completed"), "call_type": "aretrieve_batch", "status": "success", "spend": 0.5,
+        **_row("batch_completed"),
+        "call_type": "aretrieve_batch",
+        "status": "success",
+        "spend": 0.5,
         "metadata": '{"status":"success","private":"request detail"}',
         "accounting_payload": {
-            "request_id": "batch_completed", "call_type": "aretrieve_batch", "status": "success", "spend": 0.5,
+            "request_id": "batch_completed",
+            "call_type": "aretrieve_batch",
+            "status": "success",
+            "spend": 0.5,
             "metadata": {"accounting_savings": {"compression": 0.2}},
         },
     }
     monkeypatch.setattr(proxy_server, "general_settings", {"spend_logs_metadata_fields": {"include": ["status"]}})
     client = SimpleNamespace(db=delivery_client, writer_db=delivery_client, jsonify_object=jsonify_object)
     writer = DBSpendUpdateWriter()
-    first = await writer._claim_settle_once_cost_row(payload=completed, prisma_client=client, disable_spend_logs=disabled)
+    first = await writer._claim_settle_once_cost_row(
+        payload=completed, prisma_client=client, disable_spend_logs=disabled
+    )
     again = await writer._claim_settle_once_cost_row(
-        payload={**completed, "startTime": "2026-11-05T12:00:00+00:00"}, prisma_client=client, disable_spend_logs=disabled
+        payload={**completed, "startTime": "2026-11-05T12:00:00+00:00"},
+        prisma_client=client,
+        disable_spend_logs=disabled,
     )
     assert (first, again) == (True, False)
     assert delivery_database.execute('SELECT spend, metadata FROM "LiteLLM_SpendLogs"').fetchall() == (

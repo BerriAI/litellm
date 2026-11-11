@@ -249,8 +249,6 @@ export const formatCompactUsd = (value: number): string => {
 export const formatCompact = (value: number): string =>
   Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value);
 
-export const formatLatency = (ms: number): string => (ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`);
-
 export interface OverviewTotals {
   spend: number;
   requests: number;

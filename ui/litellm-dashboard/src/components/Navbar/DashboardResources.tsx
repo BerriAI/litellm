@@ -1,5 +1,6 @@
 "use client";
 
+import type { ParseKeys } from "i18next";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { BookOpen, Github, Newspaper, ScrollText, Slack } from "lucide-react";
@@ -39,11 +40,17 @@ const COMMUNITY = [
     Icon: Github,
   },
 ] as const;
-const DOCS = [
-  { href: "https://docs.litellm.ai/docs/", label: "Docs", Icon: BookOpen },
-  { href: "https://docs.litellm.ai/release_notes", label: "Releases", Icon: ScrollText },
+type ResourceLink = { href: string; label: ParseKeys; Icon: typeof BookOpen };
+
+const DOCS: readonly ResourceLink[] = [
+  { href: "https://docs.litellm.ai/docs/", label: "shell.dashboardResources.links.docs", Icon: BookOpen },
+  { href: "https://docs.litellm.ai/release_notes", label: "shell.dashboardResources.links.releases", Icon: ScrollText },
 ];
-const BLOG = { href: "https://docs.litellm.ai/blog", label: "Blog", Icon: Newspaper };
+const BLOG: ResourceLink = {
+  href: "https://docs.litellm.ai/blog",
+  label: "shell.dashboardResources.links.blog",
+  Icon: Newspaper,
+};
 
 export function DashboardCommunityLinks({ className }: { className?: string }) {
   const { t } = useTranslation();
@@ -81,7 +88,10 @@ export function DashboardResources({ children }: { children?: ReactNode }) {
   const hideBlog = useDisableBlogPosts();
   const hideCommunity = useDisableShowPrompts();
   const { data, isPending, isError, refetch } = useBlogPosts();
-  const links = [...DOCS, ...(hideBlog ? [] : [BLOG]), ...(hideCommunity ? [] : COMMUNITY)];
+  const links = [
+    ...[...DOCS, ...(hideBlog ? [] : [BLOG])].map((link) => ({ ...link, label: t(link.label) })),
+    ...(hideCommunity ? [] : COMMUNITY),
+  ];
   return (
     <>
       {!hideBlog && (
