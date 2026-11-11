@@ -905,6 +905,26 @@ async def test_anthropic_runs_on_rust_without_the_opt_in(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", (False, True), ids=("sync", "async"))
+@pytest.mark.parametrize(
+    "thread",
+    (
+        pytest.param({"type": "create"}, id="create"),
+        pytest.param({"type": "continue", "previous_message_id": "msg_1"}, id="continue"),
+    ),
+)
+async def test_a_message_thread_runs_on_rust(
+    monkeypatch: pytest.MonkeyPatch, shipped_native: list[str], asynchronous: bool, thread: Mapping[str, str]
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    result: Final = await _public(asynchronous, "anthropic/claude-sonnet-4-5", {"thread": dict(thread)})
+
+    assert isinstance(result, dict)
+    assert shipped_native == ["async" if asynchronous else "sync"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("asynchronous", "kwargs", "callbacks", "feature"),
     (

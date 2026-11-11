@@ -15,7 +15,7 @@ import sys
 import traceback
 import uuid
 import weakref
-from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
@@ -290,9 +290,35 @@ def post_call(
     logger.post_call(original_response=original_response, api_key=api_key, additional_args=additional_args)
 
 
-def record_response(logger: Logging, status: int, headers: Sequence[tuple[str, str]], body: str) -> None:
+class _UnreadBody(httpx.SyncByteStream, httpx.AsyncByteStream):
+    def __iter__(self) -> Iterator[bytes]:
+        return iter(())
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for chunk in ():
+            yield chunk
+
+
+def _sent_request(sent: tuple[str, Mapping[str, str], Mapping[str, object]]) -> httpx.Request:
+    url, headers, body = sent
+    return httpx.Request("POST", url, headers=list(headers.items()), content=json.dumps(body, default=str).encode())
+
+
+def record_response(
+    logger: Logging,
+    status: int,
+    headers: Sequence[tuple[str, str]],
+    body: str,
+    sent: tuple[str, Mapping[str, str], Mapping[str, object]] | None,
+) -> None:
     """Stores the provider response the way Python's Messages handler does, for logging to replay."""
-    response: Final = httpx.Response(status_code=status, headers=list(headers), content=body.encode())
+    request: Final = None if sent is None else _sent_request(sent)
+    streamed: Final = sent is not None and sent[2].get("stream") is True
+    response: Final = (
+        httpx.Response(status_code=status, headers=list(headers), stream=_UnreadBody(), request=request)
+        if streamed
+        else httpx.Response(status_code=status, headers=list(headers), content=body.encode(), request=request)
+    )
     details: Final = logger.model_call_details  # the call's own logger: recording on it is the point
     details["httpx_response"] = response
     details["response_headers"] = dict(response.headers)

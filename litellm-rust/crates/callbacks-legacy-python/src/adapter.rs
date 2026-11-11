@@ -19,7 +19,7 @@ use pyo3::{
 use serde_json::Value;
 
 use crate::{
-    DeploymentHooks, LegacyCallbacks, PublicCall, PythonLogger,
+    DeploymentHooks, LegacyCallbacks, PublicCall, PythonLogger, SentRequest,
     deferred::{PendingLogging, PendingSuccess},
     finalize, is_internal_call,
     python::{Logging, Streaming},
@@ -41,6 +41,7 @@ struct DeliveredStream {
 struct LoggedRequest {
     body: Py<PyDict>,
     headers: Py<PyDict>,
+    url: String,
     context: RequestContext,
 }
 
@@ -563,6 +564,7 @@ impl LegacyLogging {
         self.request = Some(LoggedRequest {
             body: body.clone().unbind(),
             headers: headers.clone().unbind(),
+            url: wire.url.clone(),
             context: context.clone(),
         });
         let input = self.logged_input(py, &body)?;
@@ -679,8 +681,13 @@ impl LegacyLogging {
             // response, and logging replays it through `AnthropicConfig.transform_response`.
             self.close_api_window(py, epoch_seconds())?;
             if let Some(head) = &raw.head {
+                let sent = self.request.as_ref().map(|request| SentRequest {
+                    url: &request.url,
+                    headers: &request.headers,
+                    body: &request.body,
+                });
                 self.logger()?
-                    .record_response(py, head.status, &head.headers, &raw.body)?;
+                    .record_response(py, head.status, &head.headers, &raw.body, sent)?;
             }
             return Ok(HookStep::Ready(()));
         }

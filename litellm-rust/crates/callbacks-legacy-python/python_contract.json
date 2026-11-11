@@ -42,7 +42,8 @@
     "logger",
     "status",
     "headers",
-    "body"
+    "body",
+    "sent"
   ],
   "retried_request": [
     "logger",

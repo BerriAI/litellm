@@ -239,6 +239,27 @@ def test_body_params_derive_no_effort_from_a_param_the_deployment_lists(
     assert set(messages_host.body_params(request, asynchronous=True)).difference({"messages", "model"}) == expected_keys
 
 
+@pytest.mark.parametrize(
+    ("thread", "expected"),
+    [
+        ({"type": "create"}, {"type": "create"}),
+        ({"type": "continue", "previous_message_id": "msg_1"}, {"type": "continue", "previous_message_id": "msg_1"}),
+        (None, None),
+    ],
+)
+def test_body_params_forward_the_thread_like_the_python_handler(
+    thread: dict[str, str] | None, expected: dict[str, str] | None
+) -> None:
+    request: Final[dict[str, object]] = {
+        "model": "claude-sonnet-4-5",
+        "messages": [],
+        "max_tokens": 8,
+        "thread": thread,
+    }
+
+    assert messages_host.body_params(request, asynchronous=True).get("thread") == expected
+
+
 def _marked(phase: str | None = None, *args: object) -> ValueError:
     error: Final = ValueError(*args)
     if phase is not None:

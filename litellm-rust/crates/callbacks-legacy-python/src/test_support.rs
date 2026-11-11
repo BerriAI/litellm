@@ -66,7 +66,7 @@ FAKES = {
     'post_call': lambda logger, original_response, api_key, additional_args: logger.post_call(
         original_response, api_key, additional_args
     ),
-    'record_response': lambda logger, status, headers, body: logger.model_call_details.update(
+    'record_response': lambda logger, status, headers, body, sent: logger.model_call_details.update(
         response_headers=dict(headers)
     ),
     'retried_request': lambda logger, logged_body, body, reasons: (
