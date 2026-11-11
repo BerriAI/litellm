@@ -8,7 +8,14 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from itertools import chain
 from types import MappingProxyType
-from typing import Final, Generic, Literal, Protocol, TypeVar
+from typing import (
+    Final,
+    Generic,
+    Literal,
+    Protocol,
+    TypeVar,
+    cast,  # noqa: TID251  # get_data returns validated rows selected by table_name
+)
 
 from typing_extensions import assert_never
 
@@ -48,6 +55,7 @@ from litellm.proxy.db.budget_window_spend_writer import roll_window_spend_row
 from litellm.proxy.db.db_span import db_span, db_spanned
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import POD_LOCK_TARGET, PodLockManager
 from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
+from litellm.proxy.spend_tracking.committed_spend import committed_spend_keys
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.redis.stores.spend_counters import (
     SPEND_COUNTERS_TARGET,
@@ -93,6 +101,7 @@ _RowT = TypeVar("_RowT")
 class _RowReset(Generic[_RowT]):
     row: _RowT
     spend_decrement: float
+    expected_reset_at: datetime | None
 
 
 _LINKED_KEYS_WHERE: Final[Mapping[str, object]] = MappingProxyType({"budget_duration": None, "spend": {"gt": 0}})
@@ -621,7 +630,7 @@ class ResetBudgetJob:
         from litellm.proxy.proxy_server import spend_counter_store
 
         try:
-            await spend_counter_store.delete((counter_key,))
+            await spend_counter_store.delete((counter_key, *committed_spend_keys((counter_key,))))
         except Exception as e:
             verbose_proxy_logger.warning(
                 "Failed to reset spend counter %s in Redis: %s. Budget may be over-enforced until counter expires.",
@@ -680,7 +689,7 @@ class ResetBudgetJob:
 
             match cache:
                 case "spend counter":
-                    await spend_counter_store.delete(keys)
+                    await spend_counter_store.delete((*keys, *committed_spend_keys(keys)))
                 case "user_api_key_cache":
                     await user_api_key_cache.async_delete_cache_keys(keys)
                 case _:
@@ -1049,6 +1058,8 @@ class ResetBudgetJob:
                     token=k.row.token,
                     budget_reset_at=k.row.budget_reset_at,
                     spend_decrement=k.spend_decrement,
+                    expected_reset_at=k.expected_reset_at,
+                    spend_after_reset=float(k.row.spend or 0.0),
                 )
 
     async def _write_user_reset_updates(self, updated_users: Sequence[_RowReset[LiteLLM_UserTable]]) -> None:
@@ -1074,6 +1085,8 @@ class ResetBudgetJob:
                     user_id=u.row.user_id,
                     budget_reset_at=u.row.budget_reset_at,
                     spend_decrement=u.spend_decrement,
+                    expected_reset_at=u.expected_reset_at,
+                    spend_after_reset=float(u.row.spend or 0.0),
                 )
 
     async def _write_team_reset_updates(self, updated_teams: Sequence[_RowReset[LiteLLM_TeamTable]]) -> None:
@@ -1099,6 +1112,8 @@ class ResetBudgetJob:
                     team_id=t.row.team_id,
                     budget_reset_at=t.row.budget_reset_at,
                     spend_decrement=t.spend_decrement,
+                    expected_reset_at=t.expected_reset_at,
+                    spend_after_reset=float(t.row.spend or 0.0),
                 )
 
     def _emit_phase_failure(
@@ -1155,7 +1170,12 @@ class ResetBudgetJob:
             if keys_to_reset is not None and len(keys_to_reset) > 0:
                 for key in keys_to_reset:
                     try:
-                        pre_reset_spend = float(key.spend or 0.0)
+                        pre_reset_spend, expected_reset_at = (
+                            float(key.spend or 0.0),
+                            cast(  # cast-ok: get_data's key branch returns validated key rows
+                                LiteLLM_VerificationToken, key
+                            ).budget_reset_at,
+                        )
                         updated_key = await ResetBudgetJob._reset_budget_for_key(
                             key=key,
                             current_time=now,
@@ -1166,6 +1186,7 @@ class ResetBudgetJob:
                                 _RowReset(
                                     row=updated_key,
                                     spend_decrement=pre_reset_spend - float(updated_key.spend or 0.0),
+                                    expected_reset_at=expected_reset_at,
                                 )
                             )
                         else:
@@ -1262,7 +1283,12 @@ class ResetBudgetJob:
             if users_to_reset is not None and len(users_to_reset) > 0:
                 for user in users_to_reset:
                     try:
-                        pre_reset_spend = float(user.spend or 0.0)
+                        pre_reset_spend, expected_reset_at = (
+                            float(user.spend or 0.0),
+                            cast(  # cast-ok: get_data's user branch returns validated user rows
+                                LiteLLM_UserTable, user
+                            ).budget_reset_at,
+                        )
                         updated_user = await ResetBudgetJob._reset_budget_for_user(
                             user=user,
                             current_time=now,
@@ -1273,6 +1299,7 @@ class ResetBudgetJob:
                                 _RowReset(
                                     row=updated_user,
                                     spend_decrement=pre_reset_spend - float(updated_user.spend or 0.0),
+                                    expected_reset_at=expected_reset_at,
                                 )
                             )
                         else:
@@ -1377,7 +1404,12 @@ class ResetBudgetJob:
             if teams_to_reset is not None and len(teams_to_reset) > 0:
                 for team in teams_to_reset:
                     try:
-                        pre_reset_spend = float(team.spend or 0.0)
+                        pre_reset_spend, expected_reset_at = (
+                            float(team.spend or 0.0),
+                            cast(  # cast-ok: get_data's team branch returns validated team rows
+                                LiteLLM_TeamTable, team
+                            ).budget_reset_at,
+                        )
                         updated_team = await ResetBudgetJob._reset_budget_for_team(
                             team=team,
                             current_time=now,
@@ -1388,6 +1420,7 @@ class ResetBudgetJob:
                                 _RowReset(
                                     row=updated_team,
                                     spend_decrement=pre_reset_spend - float(updated_team.spend or 0.0),
+                                    expected_reset_at=expected_reset_at,
                                 )
                             )
                         else:

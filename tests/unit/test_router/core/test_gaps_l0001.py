@@ -331,6 +331,25 @@ def test_search_tool_support_comes_from_model_info_else_an_anthropic_request_sha
     assert registry.resolve("zzz", kind="search_tool_support") == ()  # pyright: ignore[reportCallIssue, reportArgumentType]
 
 
+def test_upstreams_name_every_routable_deployments_model_and_the_provider_it_declares(make_core: MakeCore) -> None:
+    core: Final = make_core(
+        model_list=[
+            deployment("g", "o1"),
+            deployment("g", "br", model="us.openai.gpt-6.1-sol", custom_llm_provider="bedrock"),
+            deployment("g", "mt", model="bedrock_mantle/openai.gpt-6.1-sol"),
+            deployment("g", "bare", model="gpt-6.1-sol"),
+        ]
+    )
+    registry: Final = core.registry()
+    assert registry.resolve("g", kind="upstreams") == (  # pyright: ignore[reportCallIssue, reportArgumentType]
+        ("openai/o1", "openai"),
+        ("us.openai.gpt-6.1-sol", "bedrock"),
+        ("bedrock_mantle/openai.gpt-6.1-sol", "bedrock_mantle"),
+        ("gpt-6.1-sol", None),
+    )
+    assert registry.resolve("zzz", kind="upstreams") == ()  # pyright: ignore[reportCallIssue, reportArgumentType]
+
+
 # --- per-request strategy overrides ---------------------------------------------------------------
 
 

@@ -82,6 +82,8 @@ FUNCTION_CALL_ATTRIBUTE: Final = "function_call"
 
 _SYNC_ITER_EXHAUSTED: Final = object()
 
+_STREAMING_CHOICE_KEYS: Final = frozenset({"finish_reason", "index", "delta", "logprobs", "message"})
+
 _GCHUNK_FIELDS: Final[frozenset] = frozenset(GChunk.__annotations__)
 _CompleteStreamingResponse = ModelResponse | TextCompletionResponse | ModelResponseStream | None
 _USAGE_COST_HEADER_PROVIDERS: Final[frozenset[str]] = frozenset(
@@ -139,11 +141,18 @@ def _entry_len(entries: Mapping[str, object], key: str) -> int:
 
 
 def _prepend_upstream_choice_extras(
-    choice: StreamingChoices, upstream_choice: ChunkChoice, extra_keys: frozenset[str]
+    choice: StreamingChoices, upstream_choice: ChunkChoice | StreamingChoices, extra_keys: frozenset[str]
 ) -> None:
     if not extra_keys:
         return
-    upstream_extras: Final[Mapping[str, object]] = upstream_choice.model_dump(include=set(extra_keys))
+    stored_extras: Final = {
+        key: value for key, value in (upstream_choice.__pydantic_extra__ or {}).items() if key in extra_keys
+    }
+    upstream_extras: Final[Mapping[str, object]] = (
+        stored_extras
+        if _holds_only_scalars(stored_extras.items())
+        else upstream_choice.model_dump(include=set(extra_keys))
+    )
     choice.__pydantic_extra__ = {**upstream_extras, **(choice.__pydantic_extra__ or {})}  # rebind-ok: reuse choice
     choice.__pydantic_fields_set__.update(upstream_extras)
 
@@ -439,7 +448,7 @@ class CustomStreamWrapper:
         self.completion_stream = completion_stream
         self.sent_first_chunk = False
         self.sent_last_chunk = False
-        self._openai_handler_receives_chat_chunks = False
+        self._openai_handler_receives_chunk_objects = False
         self._failure_logging: asyncio.Task[None] | None = None
         self._closed = False
         self._stream_created_time: float = time.time()
@@ -1162,13 +1171,13 @@ class CustomStreamWrapper:
 
     def _prebuilt_plain_delta(self, chunk: object) -> Delta | None:
         if (
-            not self._openai_handler_receives_chat_chunks
-            or not isinstance(chunk, ChatCompletionChunk)
+            not self._openai_handler_receives_chunk_objects
+            or not isinstance(chunk, (ChatCompletionChunk, ModelResponseStream))
             or not chunk.choices
         ):
             return None
         upstream_delta: Final = cast(  # cast-ok: [LIT006] runtime delta may be absent
-            ChoiceDelta | None,
+            ChoiceDelta | Delta | None,
             chunk.choices[0].delta,
         )
         if (
@@ -1296,22 +1305,23 @@ class CustomStreamWrapper:
                         upstream_choice: Final = (
                             original_chunk_for_reuse.choices[0]
                             if plain_delta_created
-                            and isinstance(original_chunk_for_reuse, ChatCompletionChunk)
+                            and isinstance(original_chunk_for_reuse, (ChatCompletionChunk, ModelResponseStream))
                             and len(original_chunk_for_reuse.choices) == 1
                             else None
                         )
                         upstream_delta: Final = cast(  # cast-ok: [LIT006] runtime delta may be absent
-                            ChoiceDelta | None,
+                            ChoiceDelta | Delta | None,
                             getattr(upstream_choice, "delta", None),
                         )
                         upstream_choice_extra_keys: Final = frozenset(
                             (upstream_choice.__pydantic_extra__ or {}) if upstream_choice is not None else ()
                         )
+                        upstream_logprobs: Final[object] = getattr(upstream_choice, "logprobs", None)
                         can_reuse_choice: Final = (
                             upstream_choice is not None
                             and upstream_delta is not None
                             and "enhancements" not in upstream_choice_extra_keys
-                            and upstream_choice.logprobs is None
+                            and upstream_logprobs is None
                             and _holds_only_scalars(upstream_delta)
                         )
                         if can_reuse_choice and upstream_choice is not None:
@@ -1320,7 +1330,7 @@ class CustomStreamWrapper:
                             _prepend_upstream_choice_extras(
                                 model_response.choices[0],
                                 upstream_choice,
-                                upstream_choice_extra_keys - {"message"},
+                                upstream_choice_extra_keys - _STREAMING_CHOICE_KEYS,
                             )
                         else:
                             choices: Final = []
@@ -1737,14 +1747,16 @@ class CustomStreamWrapper:
                 self._record_finish_choice_fields(cached_chunk)
         else:  # openai / azure chat model
             self.uses_openai_chat_stream = True
-            if isinstance(chunk, ChatCompletionChunk):
-                self._openai_handler_receives_chat_chunks = True
-                if any(str(choice.finish_reason) == "abort" for choice in chunk.choices or ()):
-                    raise litellm.InternalServerError(
-                        message="Upstream generation aborted (finish_reason=abort)",
-                        model=chunk.model,
-                        llm_provider=self.custom_llm_provider,
-                    )
+            if isinstance(chunk, (ChatCompletionChunk, ModelResponseStream)):
+                self._openai_handler_receives_chunk_objects = True
+            if isinstance(chunk, ChatCompletionChunk) and any(
+                str(choice.finish_reason) == "abort" for choice in chunk.choices or ()
+            ):
+                raise litellm.InternalServerError(
+                    message="Upstream generation aborted (finish_reason=abort)",
+                    model=chunk.model,
+                    llm_provider=self.custom_llm_provider,
+                )
             if self.custom_llm_provider in [
                 LlmProviders.AZURE.value,
                 LlmProviders.AZURE_AI.value,
