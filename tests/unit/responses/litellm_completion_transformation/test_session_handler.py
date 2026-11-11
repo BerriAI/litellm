@@ -18,7 +18,10 @@ from litellm.responses.litellm_completion_transformation.session_handler import 
     ResponsesSessionHandler,
     _normalize_redacted_tool_call_arguments,
 )
-from litellm.responses.litellm_completion_transformation.transformation import ChatCompletionSession
+from litellm.responses.litellm_completion_transformation.transformation import (
+    ChatCompletionSession,
+    LiteLLMCompletionResponsesConfig,
+)
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.utils import Message
 
@@ -899,6 +902,57 @@ async def test_a_stored_blank_user_turn_replays_as_sent_when_its_model_accepts_a
     replay: Final = await _replay_of_a_blank_follow_up(_ROUTE_THAT_ACCEPTS_A_PREFILL, [{"role": "user", "content": "   "}])
 
     assert replay == [("user", "What is 2+2?"), ("assistant", "Four."), ("user", "   "), ("assistant", "Eight.")]
+
+
+@pytest.mark.parametrize(
+    ("follow_up_route", "replayed_blank"),
+    (
+        ({"model": "gemini-2.5-flash", "custom_llm_provider": "gemini"}, "   "),
+        (_ROUTE_THAT_FILLS, EMPTY_TEXT_PLACEHOLDER),
+        (_ROUTE_THAT_ACCEPTS_A_PREFILL, EMPTY_TEXT_PLACEHOLDER),
+        (
+            {"model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0", "custom_llm_provider": "bedrock"},
+            EMPTY_TEXT_PLACEHOLDER,
+        ),
+    ),
+    ids=(
+        "follow_up_route_takes_blank_text",
+        "follow_up_route_fills_blank_turns",
+        "anthropic_follow_up_accepts_a_prefill",
+        "converse_follow_up_accepts_a_prefill",
+    ),
+)
+@pytest.mark.asyncio
+async def test_a_stored_blank_user_turn_is_filled_only_when_the_follow_up_route_refuses_blank_text(
+    follow_up_route: Mapping[str, str], replayed_blank: str
+) -> None:
+    first_turn: Final = _spend_log("chatcmpl-first", "session-blank-turn", "What is 2+2?", "Four.")
+    follow_up: Final = {
+        **_spend_log("chatcmpl-follow-up", "session-blank-turn", "", "Eight."),
+        **_ROUTE_THAT_FILLS,
+        "proxy_server_request": {"input": [{"role": "user", "content": "   "}], "model": "claude-bridge"},
+    }
+
+    with patch.object(
+        ResponsesSessionHandler,
+        "get_all_spend_logs_for_previous_response_id",
+        new_callable=AsyncMock,
+        return_value=[first_turn, follow_up],
+    ):
+        request: Final = await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+            previous_response_id="chatcmpl-follow-up",
+            litellm_completion_request={**follow_up_route, "messages": [{"role": "user", "content": "Double it."}]},
+            instructions=None,
+            request_input="Double it.",
+        )
+
+    assert _replayed_turns(ChatCompletionSession(messages=request["messages"], litellm_session_id=None)) == [
+        ("user", "What is 2+2?"),
+        ("assistant", "Four."),
+        ("user", replayed_blank),
+        ("assistant", "Eight."),
+        ("user", "Double it."),
+    ]
 
 
 @pytest.mark.asyncio
