@@ -517,6 +517,48 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
               </MountedFormField>
             )}
             <MountedFormField
+              name="weight"
+              label={labelWithHint(
+                t("addModel.advancedSettings.weightLabel"),
+                t("addModel.advancedSettings.weightHint"),
+              )}
+              className="mb-4"
+            >
+              {(control) => (
+                <Input
+                  id={control.id}
+                  type="number"
+                  step="any"
+                  min={0}
+                  value={(control.value as string | undefined) ?? ""}
+                  onChange={control.onChange}
+                  onBlur={control.onBlur}
+                  placeholder={t("addModel.advancedSettings.weightPlaceholder")}
+                />
+              )}
+            </MountedFormField>
+            <MountedFormField
+              name="order"
+              label={labelWithHint(
+                t("addModel.advancedSettings.orderLabel"),
+                t("addModel.advancedSettings.orderHint"),
+              )}
+              className="mb-4"
+            >
+              {(control) => (
+                <Input
+                  id={control.id}
+                  type="number"
+                  step={1}
+                  min={0}
+                  value={(control.value as string | undefined) ?? ""}
+                  onChange={control.onChange}
+                  onBlur={control.onBlur}
+                  placeholder={t("addModel.advancedSettings.orderPlaceholder")}
+                />
+              )}
+            </MountedFormField>
+            <MountedFormField
               name="litellm_extra_params"
               label={labelWithHint(
                 t("addModel.advancedSettings.litellmParams"),

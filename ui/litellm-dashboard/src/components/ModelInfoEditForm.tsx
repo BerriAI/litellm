@@ -117,6 +117,8 @@ const modelEditShape = {
   max_retries: scalar,
   timeout: scalar,
   stream_timeout: scalar,
+  weight: scalar,
+  order: scalar,
   input_cost: perMillionToPerToken,
   output_cost: perMillionToPerToken,
   cache_read_cost: perMillionToPerToken,
@@ -215,6 +217,8 @@ export const toModelEditFormValues = (localModelData: any, isWildcardModel: bool
   max_retries: localModelData.litellm_params.max_retries,
   timeout: localModelData.litellm_params.timeout,
   stream_timeout: localModelData.litellm_params.stream_timeout,
+  weight: localModelData.litellm_params.weight,
+  order: localModelData.litellm_params.order,
   input_cost: perMillionTokens(
     localModelData.litellm_params.input_cost_per_token,
     localModelData.model_info?.input_cost_per_token,
@@ -585,6 +589,18 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
               t("modelInfoEditForm.fields.streamTimeout.label"),
               t("modelInfoEditForm.fields.streamTimeout.placeholder"),
               localModelData.litellm_params?.stream_timeout,
+            )}
+            {numberField(
+              "weight",
+              t("modelInfoEditForm.fields.weight.label"),
+              t("modelInfoEditForm.fields.weight.placeholder"),
+              localModelData.litellm_params?.weight,
+            )}
+            {numberField(
+              "order",
+              t("modelInfoEditForm.fields.order.label"),
+              t("modelInfoEditForm.fields.order.placeholder"),
+              localModelData.litellm_params?.order,
             )}
 
             <div>
