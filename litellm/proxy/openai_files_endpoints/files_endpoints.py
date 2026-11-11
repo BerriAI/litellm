@@ -639,6 +639,7 @@ async def create_file(
             general_settings=general_settings_view(),
             llm_router=llm_router,
             team_metadata=user_api_key_dict.team_metadata,
+            team_id=user_api_key_dict.team_id,
         )
         file_params: Final = await extract_file_creation_params(
             request=request,

@@ -1350,11 +1350,23 @@ async def test_mistral_passthrough_accepts_multipart_without_json_parsing():
     assert captured_kwargs["custom_headers"] == {"Authorization": "Bearer mistral-test-key"}
 
 
+BEDROCK_PROXY_MODEL: Final = "anthropic.claude-sonnet-5-5"
+BEDROCK_PROXY_CALLER_BEARER: Final = "sk-caller-virtual-key"
+BEDROCK_PROXY_ROUTES: Final = pytest.mark.parametrize(
+    ("path_model", "uses_router"),
+    [
+        pytest.param("bedrock-sonnet", True, id="router_model"),
+        pytest.param(BEDROCK_PROXY_MODEL, False, id="direct_model"),
+    ],
+)
+
+
 class TestBedrockLLMProxyRoute:
     @pytest.mark.asyncio
     async def test_bedrock_llm_proxy_route_application_inference_profile(self):
         mock_request = Mock()
         mock_request.method = "POST"
+        mock_request.headers = {}
         mock_response = Mock()
         mock_user_api_key_dict = Mock()
         mock_request_body = {"messages": [{"role": "user", "content": "test"}]}
@@ -1397,6 +1409,7 @@ class TestBedrockLLMProxyRoute:
     async def test_bedrock_llm_proxy_route_regular_model(self):
         mock_request = Mock()
         mock_request.method = "POST"
+        mock_request.headers = {}
         mock_response = Mock()
         mock_user_api_key_dict = Mock()
         mock_request_body = {"messages": [{"role": "user", "content": "test"}]}
@@ -1444,6 +1457,7 @@ class TestBedrockLLMProxyRoute:
     ) -> None:
         mock_request: Final = Mock()
         mock_request.method = "POST"
+        mock_request.headers = {}
         mock_processor: Final = Mock()
         mock_processor.base_passthrough_process_llm_request = AsyncMock(return_value="success")
         request_body: Final = {"messages": [{"role": "user", "content": "test"}]}
@@ -1484,6 +1498,7 @@ class TestBedrockLLMProxyRoute:
     ) -> None:
         mock_request: Final = Mock()
         mock_request.method = "POST"
+        mock_request.headers = {}
         mock_processor: Final = Mock()
         mock_processor.base_passthrough_process_llm_request = AsyncMock(return_value="success")
         request_body: Final = {"messages": [{"role": "user", "content": "test"}]}
@@ -1515,6 +1530,91 @@ class TestBedrockLLMProxyRoute:
         processing_data: Final = processor_constructor.call_args.kwargs["data"]
         _assert_bedrock_processing_data_classification(processing_data, is_streaming)
 
+    @BEDROCK_PROXY_ROUTES
+    def test_invoke_signs_the_caller_x_pass_header_and_sends_no_caller_credential(
+        self, monkeypatch: pytest.MonkeyPatch, httpx_transport: None, path_model: str, uses_router: bool
+    ) -> None:
+        caller_cookie: Final = "proxy_session=caller-secret"
+
+        sent, _ = _bedrock_invoke_through_proxy(
+            monkeypatch,
+            path_model,
+            uses_router,
+            {
+                "x-pass-X-Amzn-Bedrock-Service-Tier": "priority",
+                "Authorization": f"Bearer {BEDROCK_PROXY_CALLER_BEARER}",
+                "Cookie": caller_cookie,
+            },
+        )
+
+        signed_headers: Final = sent.headers["authorization"].split("SignedHeaders=")[1].split(",")[0].split(";")
+        assert sent.headers["x-amzn-bedrock-service-tier"] == "priority"
+        assert "x-amzn-bedrock-service-tier" in signed_headers
+        assert [name for name in sent.headers if name.startswith("x-pass-") or name == "cookie"] == []
+        assert [
+            value for value in sent.headers.values() if BEDROCK_PROXY_CALLER_BEARER in value or caller_cookie in value
+        ] == []
+
+    @BEDROCK_PROXY_ROUTES
+    @pytest.mark.parametrize("caller_trace", [None, "DISABLED", "enabled"])
+    def test_invoke_sends_the_caller_guardrail_trace_exactly_as_sent(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        httpx_transport: None,
+        path_model: str,
+        uses_router: bool,
+        caller_trace: str | None,
+    ) -> None:
+        trace_header: Final = {} if caller_trace is None else {"x-pass-X-Amzn-Bedrock-Trace": caller_trace}
+
+        sent, _ = _bedrock_invoke_through_proxy(
+            monkeypatch,
+            path_model,
+            uses_router,
+            {
+                "x-pass-X-Amzn-Bedrock-GuardrailIdentifier": "caller-guardrail",
+                "x-pass-X-Amzn-Bedrock-GuardrailVersion": "9",
+                **trace_header,
+            },
+        )
+
+        assert (
+            sent.headers["x-amzn-bedrock-guardrailidentifier"],
+            sent.headers["x-amzn-bedrock-guardrailversion"],
+            sent.headers.get("x-amzn-bedrock-trace"),
+        ) == ("caller-guardrail", "9", caller_trace)
+
+    @BEDROCK_PROXY_ROUTES
+    def test_invoke_keeps_protected_x_pass_values_from_bedrock_guardrails_and_the_logged_body(
+        self, monkeypatch: pytest.MonkeyPatch, httpx_transport: None, path_model: str, uses_router: bool
+    ) -> None:
+        protected_values: Final = (
+            "Bearer upstream-secret",
+            "upstream-api-key",
+            "forged-session-token",
+            "session=upstream-cookie",
+            "Basic upstream-proxy-secret",
+        )
+
+        sent, guardrail_data = _bedrock_invoke_through_proxy(
+            monkeypatch,
+            path_model,
+            uses_router,
+            {
+                "x-pass-authorization": protected_values[0],
+                "x-pass-x-api-key": protected_values[1],
+                "x-pass-X-Amz-Security-Token": protected_values[2],
+                "x-pass-cookie": protected_values[3],
+                "x-pass-proxy-authorization": protected_values[4],
+                "x-pass-X-Amzn-Bedrock-GuardrailIdentifier": "caller-guardrail",
+            },
+        )
+
+        logged_body: Final = json.dumps(guardrail_data["proxy_server_request"]["body"], default=str)
+        assert sent.headers["x-amzn-bedrock-guardrailidentifier"] == "caller-guardrail"
+        assert guardrail_data["request_headers"] == {"x-pass-x-amzn-bedrock-guardrailidentifier": "caller-guardrail"}
+        assert [value for value in protected_values if value in str(sent.headers.raw) or value in logged_body] == []
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("model_id", "action"),
@@ -1526,6 +1626,7 @@ class TestBedrockLLMProxyRoute:
     async def test_bedrock_direct_model_id_does_not_imply_streaming(self, model_id: str, action: str) -> None:
         mock_request: Final = Mock()
         mock_request.method = "POST"
+        mock_request.headers = {}
         mock_processor: Final = Mock()
         mock_processor.base_passthrough_process_llm_request = AsyncMock(return_value="success")
         request_body: Final = {"messages": [{"role": "user", "content": "test"}]}
@@ -1562,6 +1663,7 @@ class TestBedrockLLMProxyRoute:
     async def test_bedrock_router_model_id_does_not_imply_streaming(self, model_id: str, action: str) -> None:
         mock_request: Final = Mock()
         mock_request.method = "POST"
+        mock_request.headers = {}
         mock_processor: Final = Mock()
         mock_processor.base_passthrough_process_llm_request = AsyncMock(return_value="success")
         request_body: Final = {"messages": [{"role": "user", "content": "test"}]}
@@ -1863,6 +1965,84 @@ class TestBedrockLLMProxyRoute:
 
         assert exc_info.value.status_code == 400
         assert "Blocked by guardrail" in str(exc_info.value.detail)
+
+
+class _RequestDataCaptureGuardrail(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="request-data-capture", default_on=True, event_hook="pre_call")
+        self.data: dict[str, object] = {}
+
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict[str, object],
+        call_type: CallTypesLiteral,
+    ) -> dict[str, object]:
+        self.data = data
+        return data
+
+
+def _bedrock_invoke_through_proxy(
+    monkeypatch: pytest.MonkeyPatch, path_model: str, uses_router: bool, headers: Mapping[str, str]
+) -> tuple[httpx.Request, dict[str, object]]:
+    from litellm.proxy import proxy_server
+
+    for ambient in (*TestBedrockAgentRuntimePassthroughVirtualKeyLeak.AMBIENT_AWS_ENV, "AWS_BEDROCK_RUNTIME_ENDPOINT"):
+        monkeypatch.delenv(ambient, raising=False)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIATESTACCESSKEY")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-secret")
+    monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+    router: Final = (
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "bedrock-sonnet",
+                    "litellm_params": {"model": f"bedrock/{BEDROCK_PROXY_MODEL}", "aws_region_name": "us-east-1"},
+                }
+            ]
+        )
+        if uses_router
+        else None
+    )
+    guardrail: Final = _RequestDataCaptureGuardrail()
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    monkeypatch.setitem(
+        proxy_server.app.dependency_overrides,
+        user_api_key_auth,
+        lambda: UserAPIKeyAuth(api_key=BEDROCK_PROXY_CALLER_BEARER),
+    )
+
+    with respx.mock(assert_all_called=True) as upstream:
+        invoke: Final = upstream.post(
+            f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{BEDROCK_PROXY_MODEL}/invoke"
+        ).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "msg_bedrock",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": BEDROCK_PROXY_MODEL,
+                    "content": [{"type": "text", "text": "ok"}],
+                    "stop_reason": "end_turn",
+                    "usage": {"input_tokens": 5, "output_tokens": 1},
+                },
+            )
+        )
+        response: Final = TestClient(proxy_server.app).post(
+            f"/bedrock/model/{path_model}/invoke",
+            json={
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+            headers=dict(headers),
+        )
+
+    assert response.status_code == 200, response.text
+    return invoke.calls.last.request, guardrail.data
 
 
 _THROTTLE_TYPE: Final = "ThrottlingException:http://internal.amazon.com/coral/com.amazon.bedrock/"
@@ -6399,7 +6579,11 @@ class TestVertexAILiveWebsocketPassthrough:
             ),
             (
                 "projects/other/locations/us-central1/publishers/google/models/gemini-2.0-flash",
-                "projects/other/locations/us-central1/publishers/google/models/gemini-2.0-flash",
+                "projects/proj-db/locations/global/publishers/google/models/gemini-2.0-flash",
+            ),
+            (
+                "projects/other/locations/us-central1/endpoints/1234",
+                "projects/proj-db/locations/global/endpoints/1234",
             ),
         ],
     )
@@ -6425,7 +6609,9 @@ class TestVertexAILiveWebsocketPassthrough:
         rewriter = passthrough_module._build_vertex_live_setup_model_rewriter(
             vertex_project="proj-db",
             vertex_location="global",
+            configured_location="global",
             llm_router=llm_router,
+            keeps_caller_resource_path=False,
         )
 
         assert rewriter is not None
@@ -6516,6 +6702,402 @@ class TestVertexAILiveWebsocketPassthrough:
         assert "use_in_pass_through" in close_kwargs["reason"]
         assert "default_vertex_config" in close_kwargs["reason"]
         assert len(close_kwargs["reason"].encode("utf-8")) <= 123
+
+    def _pinned_live_router(self, extra_params: Mapping[str, object]) -> litellm.Router:
+        return litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gemini-live",
+                    "litellm_params": {
+                        "model": "vertex_ai/gemini-live-2.5-flash",
+                        "use_in_pass_through": True,
+                        "vertex_project": "proj-db",
+                        "vertex_location": "global",
+                        "vertex_credentials": '{"type": "service_account"}',
+                        **extra_params,
+                    },
+                }
+            ]
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "query, field",
+        [
+            ({"vertex_location": "us-central1"}, "vertex_location"),
+            ({"vertex_project": "caller-project"}, "vertex_project"),
+            ({"vertex_project": "proj-db", "vertex_location": "us-central1"}, "vertex_location"),
+        ],
+    )
+    async def test_query_overriding_a_pinned_deployment_closes_before_minting_a_token(
+        self, monkeypatch, query: Mapping[str, str], field: str
+    ):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", self._pinned_live_router({}))
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+        monkeypatch.setattr(passthrough_module.passthrough_endpoint_router, "default_vertex_config", None)
+        self._clear_vertex_env(monkeypatch)
+        websocket = self._websocket()
+        ensure_token = AsyncMock(return_value=("token-abc", "proj-db"))
+        ws_passthrough = AsyncMock()
+
+        with (
+            patch.object(passthrough_module.vertex_llm_base, "ensure_access_token_async", ensure_token),
+            patch.object(passthrough_module, "websocket_passthrough_request", ws_passthrough),
+        ):
+            await passthrough_module.vertex_ai_live_websocket_passthrough(
+                websocket=websocket,
+                user_api_key_dict=UserAPIKeyAuth(),
+                **query,
+            )
+
+        close_kwargs = websocket.close.await_args.kwargs
+        assert close_kwargs["code"] == 1008
+        assert field in close_kwargs["reason"]
+        assert len(close_kwargs["reason"].encode("utf-8")) <= 123
+        ensure_token.assert_not_awaited()
+        ws_passthrough.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "extra_params, general_settings, query, expected_location",
+        [
+            ({}, {}, {"vertex_project": "proj-db", "vertex_location": "global"}, "global"),
+            (
+                {"configurable_clientside_auth_params": ["vertex_location"]},
+                {},
+                {"vertex_location": "us-central1"},
+                "us-central1",
+            ),
+            ({}, {"allow_client_side_credentials": True}, {"vertex_location": "us-central1"}, "us-central1"),
+        ],
+        ids=["matches_the_pin", "deployment_opt_in", "proxy_wide_opt_in"],
+    )
+    async def test_query_the_admin_allows_reaches_vertex(
+        self,
+        monkeypatch,
+        extra_params: Mapping[str, object],
+        general_settings: Mapping[str, object],
+        query: Mapping[str, str],
+        expected_location: str,
+    ):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", self._pinned_live_router(extra_params))
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", dict(general_settings))
+        monkeypatch.setattr(passthrough_module.passthrough_endpoint_router, "default_vertex_config", None)
+        self._clear_vertex_env(monkeypatch)
+        websocket = self._websocket()
+        ensure_token = AsyncMock(return_value=("token-abc", "proj-db"))
+        ws_passthrough = AsyncMock()
+
+        with (
+            patch.object(passthrough_module.vertex_llm_base, "ensure_access_token_async", ensure_token),
+            patch.object(passthrough_module, "websocket_passthrough_request", ws_passthrough),
+        ):
+            await passthrough_module.vertex_ai_live_websocket_passthrough(
+                websocket=websocket,
+                user_api_key_dict=UserAPIKeyAuth(),
+                **query,
+            )
+
+        websocket.close.assert_not_awaited()
+        rewriter = ws_passthrough.await_args.kwargs["setup_model_rewriter"]
+        assert rewriter("gemini-live") == (
+            f"projects/proj-db/locations/{expected_location}/publishers/google/models/gemini-live-2.5-flash"
+        )
+
+    def _use_default_vertex_config(self, monkeypatch, general_settings: Mapping[str, object], vertex_location):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+        from litellm.types.passthrough_endpoints.vertex_ai import (
+            VertexPassThroughCredentials,
+        )
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", dict(general_settings))
+        monkeypatch.setattr(
+            passthrough_module.passthrough_endpoint_router,
+            "default_vertex_config",
+            VertexPassThroughCredentials(
+                vertex_project="proj-env",
+                vertex_location=vertex_location,
+                vertex_credentials='{"type": "env_account"}',
+            ),
+        )
+        monkeypatch.setattr(passthrough_module.passthrough_endpoint_router, "deployment_key_to_vertex_credentials", {})
+        self._clear_vertex_env(monkeypatch)
+
+    async def _open_live(self, query: Mapping[str, str]):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+
+        websocket = self._websocket()
+        ensure_token = AsyncMock(
+            side_effect=lambda credentials, project_id, custom_llm_provider: ("token-abc", project_id or "proj-env")
+        )
+        ws_passthrough = AsyncMock()
+        with (
+            patch.object(passthrough_module.vertex_llm_base, "ensure_access_token_async", ensure_token),
+            patch.object(passthrough_module, "websocket_passthrough_request", ws_passthrough),
+        ):
+            await passthrough_module.vertex_ai_live_websocket_passthrough(
+                websocket=websocket,
+                user_api_key_dict=UserAPIKeyAuth(),
+                **query,
+            )
+        return websocket, ensure_token, ws_passthrough
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "query, field",
+        [
+            ({"vertex_project": "caller-project"}, "vertex_project"),
+            ({"vertex_location": "us-central1"}, "vertex_location"),
+            ({"vertex_project": "proj-env", "vertex_location": "us-central1"}, "vertex_location"),
+        ],
+    )
+    async def test_query_moving_default_vertex_config_closes_before_minting_a_token(
+        self, monkeypatch, query: Mapping[str, str], field: str
+    ):
+        self._use_default_vertex_config(monkeypatch, {}, vertex_location="europe-west4")
+
+        websocket, ensure_token, ws_passthrough = await self._open_live(query)
+
+        close_kwargs = websocket.close.await_args.kwargs
+        assert close_kwargs["code"] == 1008
+        assert f"{field} is pinned by default_vertex_config" in close_kwargs["reason"]
+        assert len(close_kwargs["reason"].encode("utf-8")) <= 123
+        ensure_token.assert_not_awaited()
+        ws_passthrough.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "general_settings, default_location, query, expected_project, expected_location",
+        [
+            (
+                {},
+                "europe-west4",
+                {"vertex_project": "proj-env", "vertex_location": "europe-west4"},
+                "proj-env",
+                "europe-west4",
+            ),
+            ({}, None, {"vertex_location": "us-central1"}, "proj-env", "us-central1"),
+            (
+                {"allow_client_side_credentials": True},
+                "europe-west4",
+                {"vertex_project": "caller-project", "vertex_location": "us-central1"},
+                "caller-project",
+                "us-central1",
+            ),
+        ],
+        ids=["matches_the_pin", "location_left_unset", "proxy_wide_opt_in"],
+    )
+    async def test_default_vertex_config_serves_the_queries_it_allows(
+        self,
+        monkeypatch,
+        general_settings: Mapping[str, object],
+        default_location,
+        query: Mapping[str, str],
+        expected_project: str,
+        expected_location: str,
+    ):
+        self._use_default_vertex_config(monkeypatch, general_settings, vertex_location=default_location)
+
+        websocket, ensure_token, ws_passthrough = await self._open_live(query)
+
+        websocket.close.assert_not_awaited()
+        assert ensure_token.await_args.kwargs["project_id"] == expected_project
+        rewriter = ws_passthrough.await_args.kwargs["setup_model_rewriter"]
+        assert rewriter("gemini-live-2.5-flash") == (
+            f"projects/{expected_project}/locations/{expected_location}/publishers/google/models/gemini-live-2.5-flash"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_registered_project_and_location_pair_still_serves_its_query(self, monkeypatch):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+        from litellm.types.passthrough_endpoints.vertex_ai import (
+            VertexPassThroughCredentials,
+        )
+
+        self._use_default_vertex_config(monkeypatch, {}, vertex_location="europe-west4")
+        monkeypatch.setattr(
+            passthrough_module.passthrough_endpoint_router,
+            "deployment_key_to_vertex_credentials",
+            {
+                "caller-project-us-central1": VertexPassThroughCredentials(
+                    vertex_project="caller-project",
+                    vertex_location="us-central1",
+                    vertex_credentials='{"type": "registered_account"}',
+                )
+            },
+        )
+
+        websocket, ensure_token, _ = await self._open_live(
+            {"vertex_project": "caller-project", "vertex_location": "us-central1"}
+        )
+
+        websocket.close.assert_not_awaited()
+        ensure_token.assert_awaited_once_with(
+            credentials='{"type": "registered_account"}',
+            project_id="caller-project",
+            custom_llm_provider="vertex_ai_beta",
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "general_settings, expected",
+        [
+            ({}, "projects/proj-env/locations/europe-west4/publishers/google/models/gemini-2.0-flash"),
+            (
+                {"allow_client_side_credentials": True},
+                "projects/caller-project/locations/us-central1/publishers/google/models/gemini-2.0-flash",
+            ),
+        ],
+        ids=["pinned", "proxy_wide_opt_in"],
+    )
+    async def test_setup_frame_resource_path_cannot_move_the_session_to_another_project(
+        self, monkeypatch, general_settings: Mapping[str, object], expected: str
+    ):
+        self._use_default_vertex_config(monkeypatch, general_settings, vertex_location="europe-west4")
+
+        _, _, ws_passthrough = await self._open_live({})
+
+        rewriter = ws_passthrough.await_args.kwargs["setup_model_rewriter"]
+        assert (
+            rewriter("projects/caller-project/locations/us-central1/publishers/google/models/gemini-2.0-flash")
+            == expected
+        )
+
+    def _pin_no_vertex_project(
+        self,
+        monkeypatch,
+        general_settings: Mapping[str, object],
+        default_vertex_config: VertexPassThroughCredentials | None,
+    ):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", dict(general_settings))
+        monkeypatch.setattr(
+            passthrough_module.passthrough_endpoint_router, "default_vertex_config", default_vertex_config
+        )
+        monkeypatch.setattr(passthrough_module.passthrough_endpoint_router, "deployment_key_to_vertex_credentials", {})
+        self._clear_vertex_env(monkeypatch)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "default_vertex_config",
+        [None, VertexPassThroughCredentials(vertex_location="europe-west4")],
+        ids=["no_default_vertex_config", "default_vertex_config_without_a_project"],
+    )
+    async def test_caller_named_project_closes_before_any_upstream_connect_when_nothing_pins_one(
+        self, monkeypatch, default_vertex_config: VertexPassThroughCredentials | None
+    ):
+        self._pin_no_vertex_project(monkeypatch, {}, default_vertex_config)
+
+        websocket, ensure_token, ws_passthrough = await self._open_live({"vertex_project": "other-project"})
+
+        ws_passthrough.assert_not_awaited()
+        ensure_token.assert_not_awaited()
+        close_kwargs = websocket.close.await_args.kwargs
+        assert close_kwargs["code"] == 1008
+        assert "vertex_project" in close_kwargs["reason"]
+        assert len(close_kwargs["reason"].encode("utf-8")) <= 123
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "configured_by, default_vertex_config",
+        [
+            ("VERTEXAI_PROJECT", None),
+            ("DEFAULT_VERTEXAI_PROJECT", VertexPassThroughCredentials(vertex_location="europe-west4")),
+        ],
+        ids=["vertexai_project_env", "default_vertexai_project_env"],
+    )
+    async def test_with_nothing_pinned_the_caller_may_name_the_project_the_admin_configured(
+        self, monkeypatch, configured_by: str, default_vertex_config: VertexPassThroughCredentials | None
+    ):
+        self._pin_no_vertex_project(monkeypatch, {}, default_vertex_config)
+        monkeypatch.setattr(litellm, "vertex_project", None)
+        monkeypatch.delenv("VERTEXAI_PROJECT", raising=False)
+        monkeypatch.setenv(configured_by, "proj-configured")
+
+        websocket, _, ws_passthrough = await self._open_live(
+            {"vertex_project": "proj-configured", "vertex_location": "europe-west4"}
+        )
+
+        websocket.close.assert_not_awaited()
+        assert ws_passthrough.await_args.kwargs["custom_headers"]["x-goog-user-project"] == "proj-configured"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "general_settings, query, expected_project, expected_location",
+        [
+            ({}, {"vertex_location": "europe-west4"}, "proj-env", "europe-west4"),
+            (
+                {"allow_client_side_credentials": True},
+                {"vertex_project": "other-project", "vertex_location": "europe-west4"},
+                "other-project",
+                "europe-west4",
+            ),
+        ],
+        ids=["caller_region", "proxy_wide_opt_in"],
+    )
+    async def test_with_nothing_pinned_the_caller_keeps_the_region_and_the_opt_in_keeps_the_project(
+        self,
+        monkeypatch,
+        general_settings: Mapping[str, object],
+        query: Mapping[str, str],
+        expected_project: str,
+        expected_location: str,
+    ):
+        self._pin_no_vertex_project(monkeypatch, general_settings, None)
+
+        websocket, _, ws_passthrough = await self._open_live(query)
+
+        websocket.close.assert_not_awaited()
+        passthrough_kwargs = ws_passthrough.await_args.kwargs
+        assert passthrough_kwargs["custom_headers"]["x-goog-user-project"] == expected_project
+        assert passthrough_kwargs["setup_model_rewriter"]("gemini-2.0-flash") == (
+            f"projects/{expected_project}/locations/{expected_location}/publishers/google/models/gemini-2.0-flash"
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "setup_model, expected",
+        [
+            (
+                "projects/proj-env/locations/europe-west4/publishers/google/models/gemini-2.0-flash",
+                "projects/proj-env/locations/europe-west4/publishers/google/models/gemini-2.0-flash",
+            ),
+            (
+                "projects/caller-project/locations/europe-west4/publishers/google/models/gemini-2.0-flash",
+                "projects/proj-env/locations/europe-west4/publishers/google/models/gemini-2.0-flash",
+            ),
+        ],
+        ids=["own_project", "other_project"],
+    )
+    async def test_setup_frame_keeps_its_region_when_no_region_is_pinned(
+        self, monkeypatch, setup_model: str, expected: str
+    ):
+        self._use_default_vertex_config(monkeypatch, {}, vertex_location=None)
+
+        websocket, _, ws_passthrough = await self._open_live({})
+
+        websocket.close.assert_not_awaited()
+        rewriter = ws_passthrough.await_args.kwargs["setup_model_rewriter"]
+        assert rewriter(setup_model) == expected
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("model, expected_model", [("gemini-3.8-live", "gemini-3.8-live"), (None, "")])

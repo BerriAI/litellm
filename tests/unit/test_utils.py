@@ -1453,6 +1453,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         "fal_ai/bytedance/seedance-2.0/text-to-video",
         "fal_ai/bytedance/seedance-2.0/image-to-video",
         "fal_ai/bytedance/seedance-2.0/reference-to-video",
+        "fal_ai/bytedance/seedance-2.5/us/draft/complete",  # 1080p is $1.164/second per fal.ai
+        "fal_ai/bytedance/seedance-2.5/us/image-to-video",  # 1080p is $1.164/second per fal.ai
+        "fal_ai/bytedance/seedance-2.5/us/text-to-video",  # 1080p is $1.164/second per fal.ai
     ]
 
     is_valid, violations = validate_model_cost_values(actual_json, exceptions)
@@ -5706,20 +5709,17 @@ async def test_wrapper_async_logs_converted_responses_stream_with_standard_loggi
 
 
 @pytest.mark.parametrize(
-    "kwargs, is_async, expected",
+    "kwargs, expected",
     [
-        ({"metadata": {"model_group": "g"}}, False, True),
-        ({"metadata": {"model_group": "g"}}, True, True),
-        ({"litellm_metadata": {"model_group": "g"}}, False, False),
-        ({"litellm_metadata": {"model_group": "g"}}, True, True),
-        ({}, False, False),
-        ({}, True, False),
-        ({"metadata": None}, False, False),
-        ({"metadata": None}, True, False),
+        ({"metadata": {"model_group": "g"}}, True),
+        ({"litellm_metadata": {"model_group": "g"}}, True),
+        ({"metadata": {"user": "u"}, "litellm_metadata": {"user": "u"}}, False),
+        ({}, False),
+        ({"metadata": None}, False),
     ],
 )
-def test_is_litellm_router_call_is_async_aware(kwargs: Mapping[str, object], is_async: bool, expected: bool) -> None:
-    assert _is_litellm_router_call(kwargs, is_async=is_async) is expected
+def test_is_litellm_router_call_reads_both_metadata_buckets(kwargs: Mapping[str, object], expected: bool) -> None:
+    assert _is_litellm_router_call(kwargs) is expected
 
 
 @pytest.mark.asyncio
@@ -5758,11 +5758,24 @@ async def test_router_aresponses_does_not_run_sdk_retries(monkeypatch: pytest.Mo
         litellm.in_memory_llm_clients_cache.flush_cache()
 
 
-def test_router_responses_keeps_sdk_retries_for_sync_router_call(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+SYNC_ROUTER_RETRIED_CALLS: Final[dict[str, tuple[str, Callable[[litellm.Router], object]]]] = {
+    "responses": ("/v1/responses", lambda router: router.responses(model="responses-retry", input="hi")),
+    "generate_content": (
+        "/v1/chat/completions",
+        lambda router: router.generate_content(
+            model="responses-retry", contents=[{"role": "user", "parts": [{"text": "hi"}]}]
+        ),
+    ),
+}
+
+
+def _count_sync_router_attempts(
+    monkeypatch: pytest.MonkeyPatch, endpoint: str, router_num_retries: int, deployment_num_retries: int | None
+) -> int:
+    path, call = SYNC_ROUTER_RETRIED_CALLS[endpoint]
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
+    retries: Final = {} if deployment_num_retries is None else {"num_retries": deployment_num_retries}
     model_list: Final = [
         {
             "model_name": "responses-retry",
@@ -5770,15 +5783,16 @@ def test_router_responses_keeps_sdk_retries_for_sync_router_call(
                 "model": "openai/gpt-4o-mini",
                 "api_key": "sk-test",
                 "api_base": "https://responses-retry.local/v1",
-                "num_retries": 2,
+                **retries,
             },
         }
     ]
-    router: Final = litellm.Router(model_list=model_list, num_retries=0, retry_after=0, disable_cooldowns=True)
-
+    router: Final = litellm.Router(
+        model_list=model_list, num_retries=router_num_retries, retry_after=0, disable_cooldowns=True
+    )
     try:
         with respx.mock(assert_all_called=True) as respx_mock:
-            upstream: Final = respx_mock.post("https://responses-retry.local/v1/responses").mock(
+            upstream: Final = respx_mock.post(f"https://responses-retry.local{path}").mock(
                 return_value=httpx.Response(
                     503,
                     headers={"retry-after": "0"},
@@ -5786,12 +5800,27 @@ def test_router_responses_keeps_sdk_retries_for_sync_router_call(
                 )
             )
             with pytest.raises(litellm.ServiceUnavailableError):
-                router.responses(model="responses-retry", input="hi")
-
-        assert upstream.call_count == 3
+                call(router)
+        return upstream.call_count
     finally:
         router.discard()
         litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+@pytest.mark.parametrize("router_num_retries", [0, 1])
+@pytest.mark.parametrize("endpoint", sorted(SYNC_ROUTER_RETRIED_CALLS))
+def test_sync_router_call_retries_as_often_as_the_deployment_num_retries(
+    monkeypatch: pytest.MonkeyPatch, router_num_retries: int, endpoint: str
+) -> None:
+    assert _count_sync_router_attempts(monkeypatch, endpoint, router_num_retries, deployment_num_retries=2) == 3
+
+
+@pytest.mark.parametrize("endpoint", sorted(SYNC_ROUTER_RETRIED_CALLS))
+def test_sync_router_call_does_not_nest_the_global_num_retries_under_router_retries(
+    monkeypatch: pytest.MonkeyPatch, endpoint: str
+) -> None:
+    monkeypatch.setattr(litellm, "num_retries", 2)
+    assert _count_sync_router_attempts(monkeypatch, endpoint, router_num_retries=1, deployment_num_retries=None) == 2
 
 
 @pytest.mark.asyncio
@@ -8838,22 +8867,29 @@ def test_validate_tool_choice_forcing_a_hosted_tool_passes_through(tool_choice: 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.parametrize("mode", ["auto", "required"])
-def test_validate_tool_choice_allowed_tools_chat_layout_passes_through(mode: str):
-    tool_choice: Final = {
+def test_validate_tool_choice_allowed_tools_either_layout_comes_back_in_the_chat_layout(mode: str):
+    chat_layout: Final = {
         "type": "allowed_tools",
         "allowed_tools": {
             "mode": mode,
             "tools": [{"type": "function", "function": {"name": "get_time"}}, {"type": "mcp", "server_label": "docs"}],
         },
     }
-    assert validate_chat_completion_tool_choice(tool_choice, model=MODEL) is tool_choice
+    responses_layout: Final = {
+        "type": "allowed_tools",
+        "mode": mode,
+        "tools": [{"type": "function", "name": "get_time"}, {"type": "mcp", "server_label": "docs"}],
+    }
+    assert validate_chat_completion_tool_choice(chat_layout, model=MODEL) == chat_layout
+    assert validate_chat_completion_tool_choice(responses_layout, model=MODEL) == chat_layout
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.parametrize(
     "tool_choice",
     [
-        {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "get_time"}]},
+        {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function"}]},
+        {"type": "allowed_tools", "mode": "required", "tools": []},
         {"type": "allowed_tools"},
         {"type": "allowed_tools", "allowed_tools": {"mode": "required"}},
         {"type": "allowed_tools", "allowed_tools": {"mode": "required", "tools": []}},
@@ -8868,6 +8904,18 @@ def test_validate_tool_choice_allowed_tools_malformed_is_a_400(tool_choice: dict
     assert exc_info.value.status_code == 400
     assert exc_info.value.model == MODEL
     assert '"mode": "auto" | "required"' in str(exc_info.value)
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        {"type": "allowed_tools", "mode": "required", "tools": []},
+        {"type": "allowed_tools", "allowed_tools": {"mode": "none", "tools": [{"type": "function"}]}},
+    ],
+)
+def test_validate_tool_choice_allowed_tools_malformed_is_dropped_under_drop_params(tool_choice: dict[str, object]):
+    assert validate_chat_completion_tool_choice(tool_choice, model=MODEL, drop_params=True) is None
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
