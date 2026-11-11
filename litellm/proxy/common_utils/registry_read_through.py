@@ -321,7 +321,7 @@ async def _reconcile_model_router_with_db() -> "Router | None | ModelRoutesUncon
     outcome: Final = await proxy_server.proxy_config.add_deployment(
         prisma_client=prisma_client, proxy_logging_obj=proxy_server.proxy_logging_obj
     )
-    if router_before is not None and outcome.still_desired is None:
+    if router_before is not None and not outcome.routes_current:
         return ModelRoutesUnconfirmed()
     return proxy_server.llm_router
 

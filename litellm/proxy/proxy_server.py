@@ -162,6 +162,7 @@ from litellm.proxy._types import (
     ProxyErrorTypes,
     ProxyException,
     ProxyLifespanState,
+    RouterUpdateOutcome,
     SpecialModelNames,
     SSOUserDefinedValues,
     SupportedDBObjectType,
@@ -7927,13 +7928,11 @@ class ProxyConfig:
             echoed_pricing: Final = echoed_cost_map_pricing_fields(model.model_info)
             if echoed_pricing:
                 _log_ignored_cost_map_copy(str(model.model_info["id"]), echoed_pricing)
-            _model_info = RouterModelInfo(
+            return RouterModelInfo(
                 **MappingProxyType({k: v for k, v in model.model_info.items() if k not in echoed_pricing})
             )
 
-        else:
-            _model_info = RouterModelInfo(id=model.model_id, db_model=db_model)
-        return _model_info
+        return RouterModelInfo(id=model.model_id, db_model=db_model)
 
     async def _delete_deployment(self, db_models: list) -> frozenset[str] | None:
         """
@@ -8111,10 +8110,10 @@ class ProxyConfig:
         self,
         new_models: Json | None,
         proxy_logging_obj: ProxyLogging,
-    ) -> frozenset[str] | None:
+    ) -> RouterUpdateOutcome:
         global llm_router, llm_model_list, master_key, general_settings
 
-        still_desired_ids: frozenset[str] | None = None
+        router_update: RouterUpdateOutcome = RouterUpdateOutcome(still_desired=None, routes_current=False)
 
         # Load config separately so a timeout here doesn't block model loading
         config_data: dict | None = None
@@ -8137,7 +8136,7 @@ class ProxyConfig:
                     "_update_llm_router: DB model fetch returned None (transient failure). "
                     "Skipping router update to preserve existing deployments."
                 )
-                return
+                return router_update
 
             models_list: Final[list] = new_models if isinstance(new_models, list) else []
             if llm_router is None and master_key is not None:
@@ -8171,11 +8170,12 @@ class ProxyConfig:
                 verbose_proxy_logger.debug("len new_models: %s", len(models_list))
                 if search_tools is not None and llm_router is not None:
                     llm_router.apply(ChangeSet(assign={"search_tools": search_tools}))
-                ## DELETE MODEL LOGIC
-                still_desired_ids = await self._delete_deployment(db_models=models_list)
-
-                ## ADD MODEL LOGIC
+                still_desired_ids: Final = await self._delete_deployment(db_models=models_list)
+                router_update = RouterUpdateOutcome(still_desired=still_desired_ids, routes_current=False)
                 self._add_deployment(db_models=models_list)
+                router_update = RouterUpdateOutcome(
+                    still_desired=still_desired_ids, routes_current=still_desired_ids is not None
+                )
 
         except Exception as e:
             verbose_proxy_logger.exception("Error adding/deleting model to llm_router: %s", e)
@@ -8189,7 +8189,7 @@ class ProxyConfig:
         # router settings
         await self._add_router_settings_from_db_config(llm_router=llm_router, prisma_client=prisma_client)
 
-        return still_desired_ids
+        return router_update
 
     def _add_callback_from_db_to_in_memory_litellm_callbacks(
         self,
@@ -9017,7 +9017,7 @@ class ProxyConfig:
         and would deadlock on a re-acquire."""
         global llm_router, llm_model_list, master_key, general_settings
 
-        still_desired_ids: frozenset[str] | None = None
+        router_update: RouterUpdateOutcome = RouterUpdateOutcome(still_desired=None, routes_current=False)
 
         try:
             # warm the config cache so the per-param reads below all hit
@@ -9036,7 +9036,7 @@ class ProxyConfig:
             new_models: Final = await self.get_models_from_db(prisma_client=prisma_client) if load_models else None
             await self.get_credentials(prisma_client=prisma_client)
             if load_models:
-                still_desired_ids = await self._update_llm_router(
+                router_update = await self._update_llm_router(
                     new_models=new_models, proxy_logging_obj=proxy_logging_obj
                 )
 
@@ -9062,8 +9062,9 @@ class ProxyConfig:
         # Read while the lock is still held: once it is released the next reconcile can
         # begin, and clear_cache's leading wipe would make this look like a mass drop.
         return ReconcileOutcome(
-            still_desired=still_desired_ids,
-            live_after=None if still_desired_ids is None else live_model_ids_snapshot(),
+            still_desired=router_update.still_desired,
+            live_after=None if router_update.still_desired is None else live_model_ids_snapshot(),
+            routes_current=router_update.routes_current,
         )
 
     _add_deployment_locked = add_deployment_locked

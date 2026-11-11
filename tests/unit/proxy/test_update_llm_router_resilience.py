@@ -11,6 +11,7 @@ catch-all handler in _update_llm_router.
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from litellm.proxy._types import RouterUpdateOutcome
 from litellm.proxy.proxy_server import ProxyConfig
 from tests._master_key import MASTER_KEY
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
@@ -111,6 +112,48 @@ class TestUpdateLlmRouterResilience:
             )
 
             mock_add.assert_called_once_with(db_models=db_models)
+
+
+class TestUpdateLlmRouterReportsWhetherRoutesAreCurrent:
+    async def _reload(self, monkeypatch: pytest.MonkeyPatch, db_models: list) -> RouterUpdateOutcome:
+        monkeypatch.delenv("QA_UNSET_OIDC_TOKEN", raising=False)
+        proxy_config = ProxyConfig()
+        with (
+            patch.object(proxy_config, "get_config", new_callable=AsyncMock, return_value={"model_list": []}),
+            patch.object(
+                proxy_config,
+                "_delete_deployment",
+                new_callable=AsyncMock,
+                return_value=frozenset(record.model_id for record in db_models),
+            ),
+            patch("litellm.proxy.proxy_server.llm_router", route_entry_points_to_stubs(MagicMock())),
+            patch("litellm.proxy.proxy_server.master_key", MASTER_KEY),
+            patch("litellm.proxy.proxy_server.llm_model_list", []),
+            patch("litellm.proxy.proxy_server.general_settings", {}),
+        ):
+            return await proxy_config._update_llm_router(new_models=db_models, proxy_logging_obj=MagicMock())
+
+    @pytest.mark.asyncio
+    async def test_routes_are_not_current_when_a_secret_lookup_fails_before_a_moved_model_re_adds(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        broken = _make_db_model("clip-token", "db-id-broken")
+        broken.litellm_params = {"model": "runwayml/gen4.5", "api_key": "os.environ/oidc/env/QA_UNSET_OIDC_TOKEN"}
+        moved = _make_db_model("vertex_ai/gemini-3.8-flash", "db-id-moved")
+
+        outcome = await self._reload(monkeypatch, [broken, moved])
+
+        assert outcome == RouterUpdateOutcome(
+            still_desired=frozenset({"db-id-broken", "db-id-moved"}), routes_current=False
+        )
+
+    @pytest.mark.asyncio
+    async def test_routes_are_current_when_every_model_re_adds(self, monkeypatch: pytest.MonkeyPatch):
+        moved = _make_db_model("vertex_ai/gemini-3.8-flash", "db-id-moved")
+
+        outcome = await self._reload(monkeypatch, [moved])
+
+        assert outcome == RouterUpdateOutcome(still_desired=frozenset({"db-id-moved"}), routes_current=True)
 
 
 class TestDeleteDeploymentResilience:

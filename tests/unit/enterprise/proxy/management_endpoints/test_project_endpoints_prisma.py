@@ -2140,7 +2140,7 @@ async def test_project_quota_check_reads_the_route_another_worker_just_wrote(
 
     async def load_models_from_db(prisma_client: object, proxy_logging_obj: object) -> ReconcileOutcome:
         monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", route_in_db)
-        return ReconcileOutcome(still_desired=frozenset(), live_after=frozenset())
+        return ReconcileOutcome(still_desired=frozenset(), live_after=frozenset(), routes_current=True)
 
     monkeypatch.setattr(litellm.proxy.proxy_server, "store_model_in_db", True)
     monkeypatch.setattr(litellm.proxy.proxy_server.proxy_config, "add_deployment", load_models_from_db)
@@ -2158,11 +2158,21 @@ async def test_project_quota_check_reads_the_route_another_worker_just_wrote(
     [_create_clip_studio_project, _add_clip_studio_to_project],
     ids=["create", "update"],
 )
+@pytest.mark.parametrize(
+    "failed_reload",
+    [
+        ReconcileOutcome(still_desired=None, live_after=None),
+        ReconcileOutcome(still_desired=frozenset({"clip-studio"}), live_after=frozenset({"clip-studio"})),
+    ],
+    ids=["models-not-read", "re-add-failed-partway"],
+)
 async def test_project_quota_check_refuses_stale_routes_when_the_model_reload_fails(
-    monkeypatch: pytest.MonkeyPatch, write_project: Callable[[pytest.MonkeyPatch], Awaitable[None]]
+    monkeypatch: pytest.MonkeyPatch,
+    write_project: Callable[[pytest.MonkeyPatch], Awaitable[None]],
+    failed_reload: ReconcileOutcome,
 ) -> None:
     async def fail_to_read_models(prisma_client: object, proxy_logging_obj: object) -> ReconcileOutcome:
-        return ReconcileOutcome(still_desired=None, live_after=None)
+        return failed_reload
 
     monkeypatch.setattr(litellm.proxy.proxy_server, "store_model_in_db", True)
     monkeypatch.setattr(litellm.proxy.proxy_server.proxy_config, "add_deployment", fail_to_read_models)

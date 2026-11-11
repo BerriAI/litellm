@@ -156,10 +156,19 @@ class ReconcileOutcome(NamedTuple):
       when no reconcile ran and the desired set is therefore unknown.
     - ``live_after``: the ids the router served immediately after the reconcile, or
       None when no reconcile ran.
+    - ``routes_current``: True only when the reconcile both evicted and re-added the db
+      models, so every served route matches its db row. A re-add that failed partway
+      leaves it False even though ``still_desired`` is set.
     """
 
     still_desired: frozenset[str] | None
     live_after: frozenset[str] | None
+    routes_current: bool = False
+
+
+class RouterUpdateOutcome(NamedTuple):
+    still_desired: frozenset[str] | None
+    routes_current: bool
 
 
 class SupportedDBObjectType(str, enum.Enum):

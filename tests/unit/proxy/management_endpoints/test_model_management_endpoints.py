@@ -8305,7 +8305,7 @@ def _use_db_backed_quota_proxy(monkeypatch: pytest.MonkeyPatch, prisma: MagicMoc
 
     async def reload_finds_the_router_current(prisma_client: object, proxy_logging_obj: object) -> ReconcileOutcome:
         model_ids: Final = frozenset(router.registry().names(kind="ids"))
-        return ReconcileOutcome(still_desired=model_ids, live_after=model_ids)
+        return ReconcileOutcome(still_desired=model_ids, live_after=model_ids, routes_current=True)
 
     _use_quota_proxy(monkeypatch, prisma, router)
     monkeypatch.setattr(proxy_server, "store_model_in_db", True)
