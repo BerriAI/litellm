@@ -129,20 +129,26 @@ def _children(argv: tuple[str, ...]) -> MappingProxyType[Child, ChildSpec]:
     return MappingProxyType({Child.PYTHON: spec, Child.RUST: spec})
 
 
-SLOW_TO_STOP: Final = (
-    sys.executable,
-    "-c",
-    "import signal, time; signal.signal(signal.SIGTERM, lambda *_: (time.sleep(0.5), exit(0))); time.sleep(30)",
-)
+SLOW_TO_STOP: Final = """
+import pathlib, signal, sys, time
+signal.signal(signal.SIGTERM, lambda *_: (time.sleep(0.5), exit(0)))
+pathlib.Path(sys.argv[1]).touch()
+time.sleep(30)
+"""
 
 
 @POSIX_ONLY
-async def test_a_cancelled_supervisor_still_waits_for_the_child_it_stops() -> None:
+async def test_a_cancelled_supervisor_still_waits_for_the_child_it_stops(tmp_path: Path) -> None:
+    ready: Final = tmp_path / "sigterm_handler_installed"
     with anyio.CancelScope() as scope:
-        async with open_children(current_platform(), _children(SLOW_TO_STOP), 1) as children:
+        async with open_children(
+            current_platform(), _children((sys.executable, "-c", SLOW_TO_STOP, str(ready))), 1
+        ) as children:
             assert await children.spawn(Child.RUST) is None
             process: Final = children.processes[Child.RUST]
-            await anyio.sleep(0.3)
+            with anyio.fail_after(30):
+                while not ready.exists():
+                    await anyio.sleep(0.01)
             scope.cancel()
             await anyio.sleep(1)
     assert process.returncode == 0
