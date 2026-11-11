@@ -863,6 +863,7 @@ ANTHROPIC_TOOL_SEARCH_TOOL_TYPES: Final = frozenset(
 )
 ANTHROPIC_TOOL_SEARCH_TOOL_NAMES: Final = frozenset({"tool_search_tool_regex", "tool_search_tool_bm25"})
 ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX: Final = "srvtoolu_"
+ANTHROPIC_MCP_TOOL_USE_ID_PREFIX: Final = "mcptoolu_"
 
 
 def claude_hosted_web_tool_call(search: ResponseFunctionWebSearch) -> tuple[str, str, str] | None:

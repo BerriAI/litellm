@@ -28,8 +28,14 @@ import pytest
 import respx
 
 import litellm
-from litellm.llms.anthropic.common_utils import ToolsWithoutStrict, is_claude_tool_target, tools_without_strict
+from litellm.llms.anthropic.common_utils import (
+    ToolsWithoutStrict,
+    is_claude_tool_target,
+    message_dict_with_server_tool_calls_split_out,
+    tools_without_strict,
+)
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.types.llms.openai import ChatCompletionAssistantToolCall
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
 
@@ -4907,3 +4913,29 @@ def test_a_masked_replayed_hosted_web_call_serializes_before_its_openai_model_wa
     assert [call["action"] for call in hosted] == [
         {"type": "search", "query": "deploy token [REDACTED]", "queries": ["deploy token [REDACTED]"]}
     ]
+
+
+def _mcp_tool_call(query: str) -> ChatCompletionAssistantToolCall:
+    return {
+        "id": "mcptoolu_01",
+        "type": "function",
+        "function": {"name": "lookup", "arguments": json.dumps({"query": query})},
+    }
+
+
+def test_split_out_moves_a_rewritten_mcp_tool_call_back_to_server_tool_calls() -> None:
+    """A guardrail that masks a flattened mcp_tool_use call must not leave it in client tool_calls."""
+    masked: Final = _mcp_tool_call("<EMAIL>")
+    message: Final = {
+        "role": "assistant",
+        "content": "Done",
+        "tool_calls": [masked],
+        "provider_specific_fields": {"server_tool_calls": [_mcp_tool_call("alice@example.com")]},
+    }
+
+    assert message_dict_with_server_tool_calls_split_out(message) == {
+        "role": "assistant",
+        "content": "Done",
+        "tool_calls": None,
+        "provider_specific_fields": {"server_tool_calls": [masked]},
+    }
