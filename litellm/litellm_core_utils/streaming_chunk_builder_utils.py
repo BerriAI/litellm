@@ -82,6 +82,11 @@ if TYPE_CHECKING:
     )
 
 
+class _FallbackChainUsageFields(TypedDict, total=False):
+    iterations: ReadOnly[object]
+    fallback_refusal_categories: ReadOnly[object]
+
+
 class _ThinkingBlockFragment(TypedDict, total=False):
     type: str | None
     data: str | None
@@ -1099,6 +1104,24 @@ class ChunkProcessor:
         ]
         return values[-1] if values else None
 
+    def _last_fallback_chain_fields(
+        self, chunks: Sequence["_UsageBearingChunk | ModelResponse"]
+    ) -> _FallbackChainUsageFields:
+        """Anthropic's ``usage.iterations`` and litellm's ``fallback_refusal_categories`` from the last chunk that
+        reports a fallback chain, which the Anthropic cost calculator needs to price each attempt."""
+        chain_usages: Final = [
+            usage_chunk
+            for chunk in chunks
+            if (usage_chunk := self.extract_usage_chunk(chunk)) is not None
+            and getattr(usage_chunk, "fallback_refusal_categories", None) is not None
+        ]
+        if not chain_usages:
+            return _FallbackChainUsageFields()
+        return _FallbackChainUsageFields(
+            iterations=getattr(chain_usages[-1], "iterations", None),
+            fallback_refusal_categories=getattr(chain_usages[-1], "fallback_refusal_categories", None),
+        )
+
     @staticmethod
     def _finish_reason_of_choice(choice: object) -> str | None:
         match choice:
@@ -1275,7 +1298,9 @@ class ChunkProcessor:
             if value is not None
         }
 
-        returned_usage = Usage(**returned_usage.model_dump(), **provider_pricing_fields)
+        returned_usage = Usage(
+            **returned_usage.model_dump(), **provider_pricing_fields, **self._last_fallback_chain_fields(chunks)
+        )
 
         return returned_usage
 
