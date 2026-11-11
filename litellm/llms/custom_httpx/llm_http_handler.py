@@ -133,7 +133,7 @@ from litellm.llms.custom_httpx.container_handler import raise_for_error_status
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _anchor_handler_to,
+    anchor_handler_to,
     get_async_httpx_client,
     get_httpx_client,
     header_value,
@@ -5891,7 +5891,7 @@ class BaseLLMHTTPHandler:
         except Exception as e:  # noqa: BLE001  # _handle_error maps every failure kind, like the buffered fetch
             raise self._handle_error(e=e, provider_config=provider_config)
 
-        _anchor_handler_to(response, async_httpx_client)
+        anchor_handler_to(response, async_httpx_client)
         if response.status_code >= 400:
             error_body: Final = await response.aread()
             await response.aclose()
