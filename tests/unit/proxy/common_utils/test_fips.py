@@ -10,7 +10,7 @@ import pytest
 from cryptography.exceptions import InternalError
 from cryptography.hazmat.bindings._rust import openssl as rust_openssl
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
 from jwt.utils import base64url_encode
 
 from litellm.proxy.auth.login_utils import encode_ui_session_jwt
@@ -319,4 +319,72 @@ def test_turning_fips_mode_off_gives_jwt_its_own_rsa_back(
 
     assert jwt.decode(token, _RSA_KEY.public_key(), algorithms=[algorithm]) == {"sub": "u"}
     sign.assert_not_called()
+    verify.assert_not_called()
+
+
+_EC_KEYS: Final = {
+    "ES256": ec.generate_private_key(ec.SECP256R1()),
+    "ES384": ec.generate_private_key(ec.SECP384R1()),
+    "ES521": ec.generate_private_key(ec.SECP521R1()),
+    "ES512": ec.generate_private_key(ec.SECP521R1()),
+}
+_EC_ALGORITHMS: Final = [("ES256", "sha256"), ("ES384", "sha384"), ("ES521", "sha512"), ("ES512", "sha512")]
+
+
+@_needs_shared_openssl
+@pytest.mark.parametrize("algorithm, digest_name", _EC_ALGORITHMS)
+def test_fips_mode_hands_openssl_the_whole_message_to_verify_every_ecdsa_jwt(
+    fips_mode: None, message_signatures: tuple[MagicMock, MagicMock], algorithm: str, digest_name: str
+) -> None:
+    sign, verify = message_signatures
+    key: Final = _EC_KEYS[algorithm]
+    token: Final = jwt.encode({"sub": "u"}, key, algorithm=algorithm)
+    stock_token: Final = jwt.PyJWT().encode({"sub": "u"}, key, algorithm=algorithm)
+
+    assert jwt.PyJWT().decode(token, key.public_key(), algorithms=[algorithm]) == {"sub": "u"}
+    assert jwt.decode(stock_token, key.public_key(), algorithms=[algorithm]) == {"sub": "u"}
+    assert jwt.decode(stock_token, key, algorithms=[algorithm]) == {"sub": "u"}
+    assert [(call.args[1], call.args[3]) for call in verify.call_args_list] == [
+        (stock_token.rsplit(".", 1)[0].encode(), digest_name)
+    ] * 2
+    sign.assert_not_called()
+
+
+@_needs_shared_openssl
+def test_fips_mode_rejects_an_ecdsa_jwt_whose_payload_was_changed(fips_mode: None) -> None:
+    key: Final = _EC_KEYS["ES256"]
+    header, _, signature = jwt.PyJWT().encode({"sub": "u"}, key, algorithm="ES256").split(".")
+    forged: Final = ".".join((header, base64url_encode(b'{"sub":"admin"}').decode(), signature))
+
+    with pytest.raises(jwt.InvalidSignatureError):
+        jwt.decode(forged, key.public_key(), algorithms=["ES256"])
+
+
+def test_fips_mode_rejects_an_ecdsa_signature_of_the_wrong_length_before_calling_openssl(
+    fips_mode: None, message_signatures: tuple[MagicMock, MagicMock]
+) -> None:
+    _, verify = message_signatures
+    key: Final = _EC_KEYS["ES256"]
+    signing_input: Final = jwt.PyJWT().encode({"sub": "u"}, key, algorithm="ES256").rsplit(".", 1)[0]
+
+    with pytest.raises(jwt.InvalidSignatureError):
+        jwt.decode(f"{signing_input}.{base64url_encode(bytes(63)).decode()}", key.public_key(), algorithms=["ES256"])
+    verify.assert_not_called()
+
+
+def test_fips_mode_keeps_the_curve_each_ecdsa_algorithm_expects(fips_mode: None) -> None:
+    with pytest.raises(jwt.InvalidKeyError, match="curve"):
+        jwt.encode({"sub": "u"}, _EC_KEYS["ES384"], algorithm="ES256")
+
+
+def test_turning_fips_mode_off_gives_jwt_its_own_ecdsa_back(
+    fips_mode: None, message_signatures: tuple[MagicMock, MagicMock]
+) -> None:
+    _, verify = message_signatures
+    enforce_fips_mode({})
+    key: Final = _EC_KEYS["ES256"]
+
+    token: Final = jwt.encode({"sub": "u"}, key, algorithm="ES256")
+
+    assert jwt.decode(token, key.public_key(), algorithms=["ES256"]) == {"sub": "u"}
     verify.assert_not_called()
