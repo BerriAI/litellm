@@ -35,6 +35,7 @@ from litellm.llms.azure_ai.common_utils import (
     foundry_v1_root,
     is_foundry_model_inference_base,
     with_foundry_project_scope,
+    without_api_version,
 )
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
@@ -312,8 +313,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         if v1_root is not None:
             v1_chat_path: Final = "/" + "/".join((*v1_root, *CHAT_COMPLETIONS_PATH))
             if foundry_project_root(original_url):
-                project_params: Final = {key: value for key, value in query_params.items() if key != "api-version"}
-                return str(original_url.copy_with(path=v1_chat_path, params=project_params))
+                return str(original_url.copy_with(path=v1_chat_path, params=without_api_version(original_url)))
             return str(original_url.copy_with(path=v1_chat_path, params=query_params))
 
         # Add the path to the base URL

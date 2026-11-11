@@ -65,11 +65,18 @@ def _path_segments(base_url: httpx.URL) -> tuple[str, ...]:
 
 def foundry_project_root(base_url: httpx.URL) -> tuple[str, ...]:
     segments: Final = _path_segments(base_url)
-    prefix_starts: Final = (
-        index for index in range(len(segments) - 2) if segments[index : index + 2] == FOUNDRY_PROJECT_PATH_PREFIX
+    project_ends: Final = (
+        index + 3
+        for index in range(len(segments) - 2)
+        if segments[index : index + 2] == FOUNDRY_PROJECT_PATH_PREFIX
+        and segments[index + 3 : index + 4] in ((), OPENAI_V1_PATH[:1])
     )
-    project_start: Final = next(prefix_starts, None)
-    return () if project_start is None else segments[: project_start + 3]
+    project_end: Final = next(project_ends, None)
+    return () if project_end is None else segments[:project_end]
+
+
+def without_api_version(base_url: httpx.URL) -> httpx.QueryParams:
+    return base_url.params.remove("api-version")
 
 
 def foundry_v1_root(base_url: httpx.URL) -> tuple[str, ...] | None:

@@ -345,6 +345,23 @@ async def test_aresponses_keeps_previous_response_id_on_gateway_and_cognitiveser
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_aresponses_on_gateway_project_base_keeps_its_query_without_api_version():
+    route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
+        return_value=httpx.Response(200, json=_responses_payload("gpt-4.1"))
+    )
+
+    await litellm.aresponses(
+        model="azure_ai/gpt-4.1",
+        input="What is 2+2?",
+        api_base=f"{GATEWAY_PROJECT_BASE}?subscription-key=gateway-key&api-version=preview",
+        api_key="fake-key",
+    )
+
+    assert str(route.calls.last.request.url) == f"{GATEWAY_RESPONSES_URL}?subscription-key=gateway-key"
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_aresponses_serverless_host_stays_on_chat_bridge():
     chat_route = respx.post(url__regex=r".*/chat/completions$").mock(
         return_value=httpx.Response(200, json=_chat_completion_payload("gpt-5.6-luna"))

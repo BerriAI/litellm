@@ -535,6 +535,14 @@ def get_azure_ad_token_from_oidc(
     )
 
 
+AZURE_V1_API_VERSION: Final = "v1"
+
+
+def default_azure_api_version(api_base: str | None) -> str:
+    on_v1_base: Final = api_base is not None and httpx.URL(api_base).path.rstrip("/").endswith("/openai/v1")
+    return AZURE_V1_API_VERSION if on_v1_base else litellm.AZURE_DEFAULT_API_VERSION
+
+
 def select_azure_base_url_or_endpoint(azure_client_params: dict):
     azure_endpoint: Final = azure_client_params.get("azure_endpoint", None)
     if azure_endpoint is not None:

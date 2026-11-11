@@ -65,6 +65,8 @@ async def test_get_openai_compatible_provider_info():
         ("azure_ai/gpt-4o", "https://my-resource.services.ai.azure.com/openai/v1", "azure_ai"),
         ("azure_ai/gpt-4o", "https://apim.example.com/api/projects/p", "azure_ai"),
         ("azure_ai/gpt-4o", "https://apim.example.com/foundry/api/projects/p", "azure_ai"),
+        ("azure_ai/gpt-4o", "https://apim.example.com/foundry/api/projects/p/openai/v1", "azure_ai"),
+        ("azure_ai/gpt-4o", "https://gw.example.com/api/projects/team-x/azure-openai", "azure"),
         ("azure_ai/gpt-4o", "https://gateway.example.com/v1", "azure"),
         ("azure_ai/gpt-4o", "https://my-resource.openai.azure.com/openai/v1/extra", "azure"),
     ],
@@ -225,6 +227,13 @@ CHAT_COMPLETION_PAYLOAD: Final = {
             id="prefixed-openai-v1-chat-url",
         ),
         pytest.param(
+            f"{FOUNDRY_RESOURCE_BASE}/gateway/api/projects/team-x/azure-openai",
+            None,
+            "/gateway/api/projects/team-x/azure-openai/models/chat/completions",
+            b"",
+            id="projects-segment-in-a-non-project-path",
+        ),
+        pytest.param(
             f"{FOUNDRY_RESOURCE_BASE}/openai/v1/tenant-x",
             None,
             "/openai/v1/tenant-x/models/chat/completions",
@@ -288,9 +297,10 @@ def test_azure_ai_completion_sends_the_key_in_the_header_the_base_accepts(
     }
 
 
+@pytest.mark.parametrize("api_version", ["preview", None])
 @pytest.mark.parametrize("host", ["example-resource.openai.azure.com", "example-resource.cognitiveservices.azure.com"])
 def test_azure_ai_openai_model_on_resource_v1_base_is_served_and_billed_as_azure(
-    respx_mock: respx.MockRouter, host: str
+    respx_mock: respx.MockRouter, host: str, api_version: str | None
 ) -> None:
     route: Final = respx_mock.post(host=host, path="/openai/v1/chat/completions").mock(
         return_value=Response(200, json=CHAT_COMPLETION_PAYLOAD)
@@ -299,7 +309,7 @@ def test_azure_ai_openai_model_on_resource_v1_base_is_served_and_billed_as_azure
     response: Final = litellm.completion(
         model="azure_ai/gpt-4.1-mini",
         api_base=f"https://{host}/openai/v1",
-        api_version="preview",
+        api_version=api_version,
         api_key="azure-ai-test-key",
         messages=[{"role": "user", "content": "What is the meaning of life?"}],
     )
