@@ -8,7 +8,7 @@ import logging
 import os
 import threading
 import urllib.parse
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
@@ -11808,3 +11808,103 @@ def test_an_o_series_responses_model_still_answers_a_developer_message_without_c
     )
 
     assert response.choices[0].message.content == "Paris"
+
+
+class _TemplatePromptManager(CustomPromptManagement):
+    def __init__(self, template: Sequence[AllMessageValues], keeps_caller_messages: bool) -> None:
+        super().__init__()
+        self.template: Final = template
+        self.keeps_caller_messages: Final = keeps_caller_messages
+
+    def _apply(self, messages: list[AllMessageValues]) -> list[AllMessageValues]:
+        return [*self.template, *messages] if self.keeps_caller_messages else list(self.template)
+
+    def get_chat_completion_prompt(
+        self,
+        model: str,
+        messages: list[AllMessageValues],
+        non_default_params: dict,
+        prompt_id: str | None,
+        prompt_variables: dict | None,
+        dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_spec: PromptSpec | None = None,
+        prompt_label: str | None = None,
+        prompt_version: int | None = None,
+        ignore_prompt_manager_model: bool | None = False,
+        ignore_prompt_manager_optional_params: bool | None = False,
+    ) -> tuple[str, list[AllMessageValues], dict]:
+        return model, self._apply(messages), non_default_params
+
+    async def async_get_chat_completion_prompt(
+        self,
+        model: str,
+        messages: list[AllMessageValues],
+        non_default_params: dict,
+        prompt_id: str | None,
+        prompt_variables: dict | None,
+        dynamic_callback_params: StandardCallbackDynamicParams,
+        litellm_logging_obj: LiteLLMLogging,
+        prompt_spec: PromptSpec | None = None,
+        tools: list[dict] | None = None,
+        prompt_label: str | None = None,
+        prompt_version: int | None = None,
+        ignore_prompt_manager_model: bool | None = False,
+        ignore_prompt_manager_optional_params: bool | None = False,
+    ) -> tuple[str, list[AllMessageValues], dict]:
+        return model, self._apply(messages), non_default_params
+
+
+_ONE_WORD_CAPITAL_TEMPLATE: Final[tuple[AllMessageValues, ...]] = (
+    {"role": "system", "content": "Answer in one word."},
+    {"role": "user", "content": "What is the capital of France?"},
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True], ids=["completion", "acompletion"])
+async def test_a_prompt_template_that_replaces_the_messages_sends_without_the_developer_message(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, is_async: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(
+        litellm, "callbacks", [_TemplatePromptManager(_ONE_WORD_CAPITAL_TEMPLATE, keeps_caller_messages=False)]
+    )
+    route: Final = respx_mock.post("https://api.fireworks.ai/inference/v1/chat/completions").respond(
+        json={
+            "id": "chatcmpl-capital",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "accounts/fireworks/models/kimi-k3p1-pro",
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "Paris"}}],
+            "usage": {"prompt_tokens": 12, "completion_tokens": 1, "total_tokens": 13},
+        }
+    )
+
+    await _call_completion(
+        is_async,
+        model="fireworks_ai/accounts/fireworks/models/kimi-k3p1-pro",
+        messages=list(_CONVERSATION_ENDING_IN_A_DEVELOPER_MESSAGE_WITHOUT_CONTENT),
+        prompt_id="one_word_capital",
+        api_key="fake-key",
+    )
+
+    assert json.loads(route.calls.last.request.content)["messages"] == list(_ONE_WORD_CAPITAL_TEMPLATE)
+
+
+def test_the_400_counts_the_messages_a_prompt_template_puts_ahead_of_the_callers(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(
+        litellm, "callbacks", [_TemplatePromptManager(_ONE_WORD_CAPITAL_TEMPLATE, keeps_caller_messages=True)]
+    )
+
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        litellm.completion(
+            model="fireworks_ai/accounts/fireworks/models/kimi-k3p1-pro",
+            messages=list(_CONVERSATION_ENDING_IN_A_DEVELOPER_MESSAGE_WITHOUT_CONTENT),
+            prompt_id="one_word_capital",
+            api_key="fake-key",
+        )
+
+    assert rejected.value.param == "messages[4].content"
+    assert not respx_mock.calls

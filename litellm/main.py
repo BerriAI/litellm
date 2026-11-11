@@ -5794,16 +5794,20 @@ def completion(
         model_info=routed_model_info(cast(object, model_info)),  # cast-ok: untyped kwargs
     )
 
-    if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
-        litellm_logging_obj.should_run_prompt_management_hooks(
+    prompt_logging_obj: Final = (
+        litellm_logging_obj
+        if isinstance(litellm_logging_obj, LiteLLMLoggingObj)
+        and litellm_logging_obj.should_run_prompt_management_hooks(
             prompt_id=prompt_id, non_default_params=non_default_params
         )
-    ):
+        else None
+    )
+    if prompt_logging_obj is not None:
         (
             model,
             messages,
             optional_params,
-        ) = litellm_logging_obj.get_chat_completion_prompt(
+        ) = prompt_logging_obj.get_chat_completion_prompt(
             model=model,
             messages=messages,
             non_default_params=non_default_params,
@@ -5813,6 +5817,11 @@ def completion(
             prompt_version=kwargs.get("prompt_version", None),
             request_kwargs=kwargs,
         )
+    requested_messages: Final = (
+        client_messages
+        if prompt_logging_obj is None
+        else cast(Sequence[AllMessageValues], messages)  # cast-ok: completion types messages as a bare List
+    )
 
     ### LITELLM SYSTEM PROMPT ###
     if litellm_system_prompt:
@@ -5978,7 +5987,7 @@ def completion(
             )
 
         if provider_config is not None and not provider_config.keeps_developer_role():
-            reject_developer_message_without_content(client_messages, model=model, llm_provider=custom_llm_provider)
+            reject_developer_message_without_content(requested_messages, model=model, llm_provider=custom_llm_provider)
 
         if provider_config is not None:
             translated_messages: Final = list(
