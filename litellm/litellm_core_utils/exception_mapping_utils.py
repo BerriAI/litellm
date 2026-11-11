@@ -2521,6 +2521,7 @@ def with_deployment_api_base(litellm_params: object) -> Mapping[str, object]:
 
 _DEBUG_INFO_ATTRIBUTE: Final = "litellm_debug_info"
 _DEBUG_INFO_CALL_ID_ATTRIBUTE: Final = "_litellm_debug_info_call_id"
+_RAISED_BY_SEVERAL_CALLS: Final = object()
 
 
 @dataclass(frozen=True, slots=True)
@@ -2565,13 +2566,18 @@ def _request_debug_info(model: object, extra_kwargs: object, completion_kwargs: 
 
 def _attach_debug_info(exception: Exception, request_debug_info: _RequestDebugInfo) -> None:
     attached_call_id: Final = getattr(exception, _DEBUG_INFO_CALL_ID_ATTRIBUTE, None)
-    unset: Final = getattr(exception, _DEBUG_INFO_ATTRIBUTE, None) is None
-    from_another_call: Final = (
+    if attached_call_id is _RAISED_BY_SEVERAL_CALLS:
+        return
+    if (
         isinstance(attached_call_id, str)
-        and bool(request_debug_info.call_id)
+        and attached_call_id
+        and request_debug_info.call_id
         and attached_call_id != request_debug_info.call_id
-    )
-    if request_debug_info.without_prompt and (unset or from_another_call):
+    ):
+        setattr(exception, _DEBUG_INFO_ATTRIBUTE, None)
+        setattr(exception, _DEBUG_INFO_CALL_ID_ATTRIBUTE, _RAISED_BY_SEVERAL_CALLS)
+        return
+    if request_debug_info.without_prompt and getattr(exception, _DEBUG_INFO_ATTRIBUTE, None) is None:
         setattr(exception, _DEBUG_INFO_ATTRIBUTE, request_debug_info.without_prompt)
         setattr(exception, _DEBUG_INFO_CALL_ID_ATTRIBUTE, request_debug_info.call_id)
 

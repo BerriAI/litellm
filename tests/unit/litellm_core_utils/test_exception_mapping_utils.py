@@ -337,7 +337,7 @@ def test_already_mapped_error_gains_the_deployment_debug_info(already_mapped: Ex
     assert "CONFIDENTIAL" not in debug_info
 
 
-def test_reused_error_instance_names_the_request_that_raised_it() -> None:
+def test_error_instance_raised_by_several_requests_names_none_of_them() -> None:
     shared: Final = litellm.RateLimitError(message="mock rate limit", llm_provider="openai", model="gpt-5.4-mini")
 
     def debug_info_for(alias: str) -> object:
@@ -352,15 +352,28 @@ def test_reused_error_instance_names_the_request_that_raised_it() -> None:
         return caught.value.litellm_debug_info
 
     first: Final = debug_info_for("alias-a")
-    second: Final = debug_info_for("alias-b")
     assert isinstance(first, str) and "Key Name: `alias-a`" in first
-    assert isinstance(second, str)
-    assert "Key Name: `alias-b`" in second
-    assert "model_group: `group-alias-b`" in second
-    assert "alias-a" not in second
+    assert debug_info_for("alias-b") is None
+    assert debug_info_for("alias-c") is None
 
 
-def test_remapping_without_the_request_keeps_the_deployment_already_named() -> None:
+_RELAY_DEPLOYMENT_KWARGS: Final = {
+    "api_base": "https://relay.example/v1",
+    "metadata": {"deployment": "openai/gpt-5.4-mini"},
+}
+
+
+@pytest.mark.parametrize(
+    ("first_kwargs", "second_kwargs"),
+    [
+        ({"litellm_call_id": "call-1", **_RELAY_DEPLOYMENT_KWARGS}, {}),
+        (_RELAY_DEPLOYMENT_KWARGS, {"litellm_call_id": "call-1"}),
+    ],
+    ids=["second-mapping-has-no-request", "first-mapping-had-no-call-id"],
+)
+def test_mapping_again_for_the_same_request_keeps_the_deployment_already_named(
+    first_kwargs: dict[str, object], second_kwargs: dict[str, object]
+) -> None:
     already_mapped: Final = litellm.InternalServerError(
         message="Upstream generation aborted (finish_reason=abort)", model="gpt-5.4-mini", llm_provider="openai"
     )
@@ -368,18 +381,14 @@ def test_remapping_without_the_request_keeps_the_deployment_already_named() -> N
         model="gpt-5.4-mini",
         original_exception=already_mapped,
         custom_llm_provider="openai",
-        extra_kwargs={
-            "litellm_call_id": "call-1",
-            "api_base": "https://relay.example/v1",
-            "metadata": {"deployment": "openai/gpt-5.4-mini"},
-        },
+        extra_kwargs=first_kwargs,
     )
     exception_type(
         model="gpt-5.4-mini",
         original_exception=already_mapped,
         custom_llm_provider="openai",
         completion_kwargs={},
-        extra_kwargs={},
+        extra_kwargs=second_kwargs,
     )
     debug_info: Final = already_mapped.litellm_debug_info
     assert isinstance(debug_info, str)
