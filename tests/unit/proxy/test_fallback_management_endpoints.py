@@ -536,58 +536,6 @@ class TestFallbackWritesSeeTheLatestStoredRules:
         assert stored.row is not None
         assert stored.row.param_value == {**settings, "fallbacks": [TEAM_RULE, GATEWAY_RULE]}
 
-
-class TestFallbackRoutesResolveTheirRepository:
-    @pytest.fixture
-    def stored(self) -> Iterator[_StoredRouterSettings]:
-        stored: Final = _StoredRouterSettings(None)
-        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
-        with (
-            patch("litellm.proxy.proxy_server.llm_router", _team_router()),
-            patch("litellm.proxy.proxy_server.proxy_config", stored.proxy_config),
-            patch("litellm.proxy.proxy_server.store_model_in_db", True),
-        ):
-            yield stored
-        app.dependency_overrides.pop(user_api_key_auth, None)
-        app.dependency_overrides.pop(get_database, None)
-
-    def test_a_create_stores_the_rule_through_the_request_database(self, stored: _StoredRouterSettings) -> None:
-        app.dependency_overrides[get_database] = lambda: Database(prisma=stored.prisma_client, native=NATIVE)
-
-        response: Final = TestClient(app).post(
-            "/fallback", json={"model": "team-primary", "fallback_models": ["team-fallback"]}
-        )
-
-        assert response.status_code == 200, response.text
-        assert stored.stored_fallbacks() == [TEAM_RULE]
-
-    @pytest.mark.parametrize(
-        ("method", "path", "body"),
-        [
-            ("POST", "/fallback", {"model": "team-primary", "fallback_models": ["team-fallback"]}),
-            ("DELETE", "/fallback/team-primary", None),
-        ],
-    )
-    def test_writes_without_a_database_are_refused(
-        self, stored: _StoredRouterSettings, method: str, path: str, body: Mapping[str, JsonValue] | None
-    ) -> None:
-        app.dependency_overrides[get_database] = lambda: None
-
-        response: Final = TestClient(app).request(method, path, json=body)
-
-        assert response.status_code == 400, response.text
-        assert "Database storage not enabled" in response.text
-        assert stored.row is None
-
-    def test_an_unknown_model_is_refused_before_the_missing_database(self, stored: _StoredRouterSettings) -> None:
-        app.dependency_overrides[get_database] = lambda: None
-
-        response: Final = TestClient(app).post(
-            "/fallback", json={"model": "team-missing", "fallback_models": ["team-fallback"]}
-        )
-
-        assert response.status_code == 404, response.text
-
     async def test_a_create_reads_the_rules_from_the_writer_while_the_replica_lags(self) -> None:
         stored: Final = _StoredRouterSettings({"fallbacks": [TEAM_RULE]}, lagging_replica=True)
 
@@ -754,6 +702,58 @@ class TestFallbackRoutesResolveTheirRepository:
         await self._create(FallbackCreateRequest(model="gpt-5.4-mini", fallback_models=["team-fallback"]), stored)
 
         assert stored.row.param_value == {"fallbacks": [GATEWAY_RULE]}
+
+
+class TestFallbackRoutesResolveTheirRepository:
+    @pytest.fixture
+    def stored(self) -> Iterator[_StoredRouterSettings]:
+        stored: Final = _StoredRouterSettings(None)
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", _team_router()),
+            patch("litellm.proxy.proxy_server.proxy_config", stored.proxy_config),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+        ):
+            yield stored
+        app.dependency_overrides.pop(user_api_key_auth, None)
+        app.dependency_overrides.pop(get_database, None)
+
+    def test_a_create_stores_the_rule_through_the_request_database(self, stored: _StoredRouterSettings) -> None:
+        app.dependency_overrides[get_database] = lambda: Database(prisma=stored.prisma_client, native=NATIVE)
+
+        response: Final = TestClient(app).post(
+            "/fallback", json={"model": "team-primary", "fallback_models": ["team-fallback"]}
+        )
+
+        assert response.status_code == 200, response.text
+        assert stored.stored_fallbacks() == [TEAM_RULE]
+
+    @pytest.mark.parametrize(
+        ("method", "path", "body"),
+        [
+            ("POST", "/fallback", {"model": "team-primary", "fallback_models": ["team-fallback"]}),
+            ("DELETE", "/fallback/team-primary", None),
+        ],
+    )
+    def test_writes_without_a_database_are_refused(
+        self, stored: _StoredRouterSettings, method: str, path: str, body: Mapping[str, JsonValue] | None
+    ) -> None:
+        app.dependency_overrides[get_database] = lambda: None
+
+        response: Final = TestClient(app).request(method, path, json=body)
+
+        assert response.status_code == 400, response.text
+        assert "Database storage not enabled" in response.text
+        assert stored.row is None
+
+    def test_an_unknown_model_is_refused_before_the_missing_database(self, stored: _StoredRouterSettings) -> None:
+        app.dependency_overrides[get_database] = lambda: None
+
+        response: Final = TestClient(app).post(
+            "/fallback", json={"model": "team-missing", "fallback_models": ["team-fallback"]}
+        )
+
+        assert response.status_code == 404, response.text
 
 
 CONFIG_RULE: Final = {"gpt-5.4-mini": ["team-fallback"]}
