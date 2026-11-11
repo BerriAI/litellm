@@ -1422,6 +1422,7 @@ async def _get_tools_from_mcp_servers(
                 _prefetched_oauth_creds,
                 record_listing=record_listing,
                 enforce_rate_limits=enforce_rate_limits,
+                use_tool_list_cache=use_tool_list_cache,
             )
         all_tools: Final = aggregated.tools
         server_outcomes: Final = aggregated.outcomes

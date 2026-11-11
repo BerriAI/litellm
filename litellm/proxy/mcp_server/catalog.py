@@ -1004,6 +1004,7 @@ async def aggregate_gateway_tools(
     *,
     record_listing: bool = False,
     enforce_rate_limits: bool = True,
+    use_tool_list_cache: bool = True,
 ) -> AggregateToolListing:
     import time
 
@@ -1053,6 +1054,7 @@ async def aggregate_gateway_tools(
                 params=PaginatedRequestParams(cursor=cursor),
                 record_listing=record_listing,
                 listing_updates=listing_updates,
+                use_tool_list_cache=use_tool_list_cache,
             )
             if cursor is not None and outcome.tag != "ok":
                 from mcp.shared.exceptions import MCPError

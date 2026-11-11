@@ -265,6 +265,13 @@ def enable_eager_mcp_oauth_discovery(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_jwt_signer_left_by_another_test(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer import mcp_jwt_signer
+
+    monkeypatch.setattr(mcp_jwt_signer, "_mcp_jwt_signer_instance", None)
+
+
+@pytest.fixture(autouse=True)
 def restore_mcp_manager_singleton():
     """``_reload_mcp_manager_module`` rebinds ``global_mcp_server_manager`` in every MCP module, so
     without this the next test file inherits a manager that has none of its servers registered."""
@@ -17056,7 +17063,9 @@ async def test_tools_list_signed_by_the_gateway_jwt_signer_is_fetched_every_time
     from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer import mcp_jwt_signer
 
     class _Signer:
-        async def async_pre_call_hook(self, **kwargs: object) -> dict[str, object]:
+        async def async_pre_call_hook(
+            self, user_api_key_dict: UserAPIKeyAuth | None, cache: object, data: object, call_type: str
+        ) -> Mapping[str, object]:
             return {"extra_headers": {"Authorization": f"Bearer signed-{len(upstream.requests)}"}}
 
     monkeypatch.setattr(mcp_jwt_signer, "_mcp_jwt_signer_instance", _Signer(), raising=False)
@@ -17168,6 +17177,44 @@ async def test_proxy_tool_lookup_for_a_tool_call_asks_the_upstream_each_time(mon
         ]
     assert [tool.name if tool is not None else None for tool in lookups] == ["discovery-example", "discovery-example"]
     assert sum(method == "tools/list" for method, _auth in upstream.requests) == 3
+
+
+@pytest.mark.asyncio
+async def test_paged_gateway_listing_asks_the_upstream_each_time_when_told_to_skip_the_tool_list_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mcp.types import PaginatedRequestParams
+
+    from litellm.proxy.mcp_server import catalog, operations
+    from litellm.proxy.mcp_server.contracts import OperationContext
+
+    manager: Final = MCPServerManager(discovery_clock=_DiscoveryClock())
+    server: Final = _server_with_tools_list_ttl(300)
+    manager.registry = {server.server_id: server}
+    manager.config_mcp_servers = dict(manager.registry)
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", manager)
+    context: Final = OperationContext(
+        _caller=UserAPIKeyAuth(api_key="hashed-admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    )
+    upstream: Final = _DiscoveryUpstream()
+
+    async def upstream_lists_after_two_listings(*, use_tool_list_cache: bool) -> int:
+        for _ in range(2):
+            await catalog.aggregate_gateway_tools(
+                context,
+                PaginatedRequestParams(),
+                [server],
+                {},
+                enforce_rate_limits=False,
+                use_tool_list_cache=use_tool_list_cache,
+            )
+        return sum(method == "tools/list" for method, _auth in upstream.requests)
+
+    with _mcp_upstream(upstream.respond):
+        fresh: Final = await upstream_lists_after_two_listings(use_tool_list_cache=False)
+        cached: Final = await upstream_lists_after_two_listings(use_tool_list_cache=True)
+    assert (fresh, cached) == (2, 3)
 
 
 @pytest.mark.asyncio
