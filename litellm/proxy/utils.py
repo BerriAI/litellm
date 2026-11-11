@@ -1819,7 +1819,9 @@ def _failure_fields_to_lift(
     )
     _billed: Final = provider_billed and not (_success_already_logged or _stream_success_bills_this_attempt)
     _usage_to_lift: Final = (
-        (Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0), 0.0)
+        _billed_across_attempts(
+            _FAILED_ATTEMPTS_USAGE.validate_python(_model_call_details.get("failed_attempts_usage", ())), None, None
+        )
         if _stream_success_bills_this_attempt
         else _failure_usage_to_lift(
             model_call_details=_model_call_details,
