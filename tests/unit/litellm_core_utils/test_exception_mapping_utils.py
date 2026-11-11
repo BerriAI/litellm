@@ -237,6 +237,52 @@ def test_router_metadata_under_litellm_metadata_names_the_deployment(
     assert "deployment: `anthropic/claude-haiku-5-5`" in debug_info
 
 
+_KEY_METADATA: Final = {"user_api_key_alias": "alias-key", "user_api_key_team_alias": "team-a"}
+
+
+@pytest.mark.parametrize(
+    "extra_kwargs",
+    [
+        {"metadata": _ROUTER_METADATA, "litellm_metadata": _KEY_METADATA},
+        {"metadata": _KEY_METADATA, "litellm_metadata": _ROUTER_METADATA},
+    ],
+    ids=["chat_with_guardrail_litellm_metadata", "generic_route_with_key_fields_in_metadata"],
+)
+def test_debug_info_reads_lines_from_both_metadata_buckets(extra_kwargs: dict[str, object]) -> None:
+    with pytest.raises(litellm.InternalServerError) as caught:
+        exception_type(
+            model="claude-haiku-5-5",
+            original_exception=AnthropicError(status_code=529, message="Overloaded"),
+            custom_llm_provider="anthropic",
+            extra_kwargs=extra_kwargs,
+        )
+    debug_info: Final = caught.value.litellm_debug_info
+    assert isinstance(debug_info, str)
+    assert "Key Name: `alias-key`" in debug_info
+    assert "Team: `team-a`" in debug_info
+    assert "API Base: `https://relay.example/v1`" in debug_info
+    assert "model_group: `claude-alias`" in debug_info
+    assert "deployment: `anthropic/claude-haiku-5-5`" in debug_info
+
+
+def test_litellm_metadata_wins_over_caller_metadata_for_the_same_key() -> None:
+    with pytest.raises(litellm.InternalServerError) as caught:
+        exception_type(
+            model="claude-haiku-5-5",
+            original_exception=AnthropicError(status_code=529, message="Overloaded"),
+            custom_llm_provider="anthropic",
+            extra_kwargs={
+                "metadata": {"deployment": "set by the caller", "api_base": "https://caller.example"},
+                "litellm_metadata": _ROUTER_METADATA,
+            },
+        )
+    debug_info: Final = caught.value.litellm_debug_info
+    assert isinstance(debug_info, str)
+    assert "deployment: `anthropic/claude-haiku-5-5`" in debug_info
+    assert "API Base: `https://relay.example/v1`" in debug_info
+    assert "caller" not in debug_info
+
+
 def test_mapper_that_passes_its_debug_info_keeps_the_prompt_line() -> None:
     request: Final = httpx.Request("POST", "https://gateway.example/v1/chat/completions")
     original: Final = OpenAIError(

@@ -2501,9 +2501,9 @@ _HOST_WITH_OPTIONAL_PORT: Final = re.compile(
 
 
 def _router_metadata(params: Mapping[str, object]) -> Mapping[str, object]:
-    return (
-        as_str_mapping(params.get("litellm_metadata")) or as_str_mapping(params.get("metadata")) or _NO_LITELLM_PARAMS
-    )
+    metadata: Final = as_str_mapping(params.get("metadata")) or _NO_LITELLM_PARAMS
+    litellm_metadata: Final = as_str_mapping(params.get("litellm_metadata")) or _NO_LITELLM_PARAMS
+    return MappingProxyType({**metadata, **litellm_metadata})
 
 
 def _deployment_api_base(metadata: Mapping[str, object]) -> str | None:
