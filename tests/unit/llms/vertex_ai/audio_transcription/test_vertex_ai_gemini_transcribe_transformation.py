@@ -2,7 +2,7 @@ import base64
 import json
 import os
 from types import MappingProxyType
-from typing import Final, cast
+from typing import Final, Literal, cast
 
 import httpx
 import pytest
@@ -16,6 +16,7 @@ from litellm.llms.vertex_ai.audio_transcription.transformation import (
     VertexAIAudioTranscriptionConfig,
 )
 from litellm.llms.vertex_ai.common_utils import VertexAIError
+from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from litellm.types.utils import LlmProviders, TranscriptionUsageTokensObject
 from litellm.utils import ProviderConfigManager, get_optional_params_transcription
 
@@ -363,7 +364,12 @@ def test_gemini_transcription_carries_identity_labels_only_while_the_setting_is_
 
 
 class _TokenStubbedConfig(VertexGeminiAudioTranscriptionConfig):
-    def _ensure_access_token(self, credentials, project_id, custom_llm_provider):
+    def _ensure_access_token(
+        self,
+        credentials: VERTEX_CREDENTIALS_TYPES | None,
+        project_id: str | None,
+        custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+    ) -> tuple[str, str]:
         return "fake-token", "resolved-project"
 
 
