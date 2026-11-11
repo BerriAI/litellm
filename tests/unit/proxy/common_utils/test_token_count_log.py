@@ -66,6 +66,21 @@ async def test_an_http_error_answers_its_status_and_detail_with_the_call_id_besi
     )
 
 
+class _CountTooLarge(HTTPException):
+    pass
+
+
+@pytest.mark.asyncio
+async def test_an_http_error_reaches_its_handler_as_the_same_error_with_the_call_id() -> None:
+    too_large: Final = _CountTooLarge(status_code=413, detail="count body too large")
+
+    with pytest.raises(_CountTooLarge) as answered:
+        await answered_with_litellm_call_id(_count_ending_in(too_large), "count-echo-same", _count_request(), Response())
+
+    assert answered.value is too_large
+    assert dict(answered.value.headers or {}) == {LITELLM_CALL_ID_HEADER: "count-echo-same"}
+
+
 @pytest.mark.asyncio
 async def test_a_cancelled_answer_stays_cancelled_and_names_no_call_id() -> None:
     cancelled: Final = asyncio.CancelledError()

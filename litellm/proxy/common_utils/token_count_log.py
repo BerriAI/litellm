@@ -148,11 +148,8 @@ async def answered_with_litellm_call_id(
     except ProxyException as e:
         raise with_litellm_call_id(e, litellm_call_id)
     except HTTPException as e:
-        raise HTTPException(
-            status_code=e.status_code,
-            detail=e.detail,
-            headers=headers_with_litellm_call_id(e.headers, litellm_call_id),
-        ) from e
+        e.headers = headers_with_litellm_call_id(e.headers, litellm_call_id)
+        raise
     except Exception:
         request.state.litellm_call_id = litellm_call_id  # rebind-ok: the crash handler reads the id from request.state
         raise
