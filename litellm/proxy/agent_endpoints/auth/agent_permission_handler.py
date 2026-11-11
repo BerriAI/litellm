@@ -294,7 +294,11 @@ class AgentRequestHandler:
 
         agent: Final = await get_agent_with_read_through(agent_name)
         if agent is None:
-            return
+            # Fail closed: an unknown A2A name must not silently fall through to
+            # wildcard model routing (e.g. `model_name: "*"`) and bypass the
+            # model allowlist entirely.  Raise 404 so the caller gets a clear
+            # signal and cannot exploit the prefix to reach arbitrary backends.
+            raise HTTPException(status_code=404, detail="Agent not found")
 
         if not _is_proxy_admin(user_api_key_auth) or agent.identity_managed:
             is_allowed: Final = await AgentRequestHandler.is_agent_allowed(
