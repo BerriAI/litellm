@@ -76,7 +76,7 @@ def _make_onboarding_token(
     invitation_link: str = "invite-abc",
     user_id: str = "user-123",
     token_type: str = "litellm_onboarding",
-    master_key: str = "sk-test",
+    master_key: str = "sk-test-master-key",
 ) -> str:
     return jwt.encode(
         {
@@ -116,7 +116,7 @@ async def test_get_token_rejects_already_used_link():
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", prisma),
-        patch("litellm.proxy.proxy_server.master_key", "sk-test"),
+        patch("litellm.proxy.proxy_server.master_key", "sk-test-master-key"),
     ):
         with pytest.raises(HTTPException) as exc_info:
             await onboarding(invite_link="invite-abc", request=request)
@@ -138,7 +138,7 @@ async def test_get_token_rejects_expired_link():
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", prisma),
-        patch("litellm.proxy.proxy_server.master_key", "sk-test"),
+        patch("litellm.proxy.proxy_server.master_key", "sk-test-master-key"),
     ):
         with pytest.raises(HTTPException) as exc_info:
             await onboarding(invite_link="invite-abc", request=request)
@@ -157,7 +157,7 @@ async def test_get_token_rejects_missing_link():
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", prisma),
-        patch("litellm.proxy.proxy_server.master_key", "sk-test"),
+        patch("litellm.proxy.proxy_server.master_key", "sk-test-master-key"),
     ):
         with pytest.raises(HTTPException) as exc_info:
             await onboarding(invite_link="nonexistent", request=request)
@@ -182,7 +182,7 @@ async def test_get_token_returns_onboarding_token_without_minting_ui_key():
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", prisma),
-        patch("litellm.proxy.proxy_server.master_key", "sk-test"),
+        patch("litellm.proxy.proxy_server.master_key", "sk-test-master-key"),
         patch("litellm.proxy.proxy_server.general_settings", {}),
         patch("litellm.proxy.proxy_server.premium_user", False),
         patch(
@@ -205,9 +205,9 @@ async def test_get_token_returns_onboarding_token_without_minting_ui_key():
     assert "token" in result
     assert "login_url" in result
 
-    outer_claims = jwt.decode(result["token"], "sk-test", algorithms=["HS256"])
+    outer_claims = jwt.decode(result["token"], "sk-test-master-key", algorithms=["HS256"])
     onboarding_token = outer_claims["key"]
-    onboarding_claims = jwt.decode(onboarding_token, "sk-test", algorithms=["HS256"])
+    onboarding_claims = jwt.decode(onboarding_token, "sk-test-master-key", algorithms=["HS256"])
     assert onboarding_claims["token_type"] == "litellm_onboarding"
     assert onboarding_claims["invitation_link"] == "invite-abc"
     assert onboarding_claims["user_id"] == "user-123"
@@ -306,7 +306,7 @@ async def test_claim_token_rejects_missing_onboarding_token():
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", prisma),
-        patch("litellm.proxy.proxy_server.master_key", "sk-test"),
+        patch("litellm.proxy.proxy_server.master_key", "sk-test-master-key"),
         patch("litellm.proxy.proxy_server.general_settings", {}),
     ):
         with pytest.raises(HTTPException) as exc_info:
@@ -335,7 +335,7 @@ async def test_claim_token_rejects_wrong_onboarding_session():
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", prisma),
-        patch("litellm.proxy.proxy_server.master_key", "sk-test"),
+        patch("litellm.proxy.proxy_server.master_key", "sk-test-master-key"),
         patch("litellm.proxy.proxy_server.general_settings", {}),
     ):
         with pytest.raises(HTTPException) as exc_info:
@@ -362,7 +362,7 @@ async def test_claim_token_rejects_invalid_bearer_token():
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", prisma),
-        patch("litellm.proxy.proxy_server.master_key", "sk-test"),
+        patch("litellm.proxy.proxy_server.master_key", "sk-test-master-key"),
         patch("litellm.proxy.proxy_server.general_settings", {}),
     ):
         with pytest.raises(HTTPException) as exc_info:
@@ -390,7 +390,7 @@ async def test_claim_token_rejects_concurrent_reuse_before_password_write():
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", prisma),
-        patch("litellm.proxy.proxy_server.master_key", "sk-test"),
+        patch("litellm.proxy.proxy_server.master_key", "sk-test-master-key"),
         patch(  # test-quality-ok: claim_onboarding_link reads proxy_server module globals; no injection seam
             "litellm.proxy.proxy_server.general_settings", _POLICY_NO_BREACH_CHECK
         ),
@@ -432,7 +432,7 @@ async def test_claim_token_sets_accepted_at_after_password_written():
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", prisma),
-        patch("litellm.proxy.proxy_server.master_key", "sk-test"),
+        patch("litellm.proxy.proxy_server.master_key", "sk-test-master-key"),
         patch(  # test-quality-ok: claim_onboarding_link reads proxy_server module globals; no injection seam
             "litellm.proxy.proxy_server.general_settings", _POLICY_NO_BREACH_CHECK
         ),
@@ -473,7 +473,7 @@ async def test_claim_token_sets_accepted_at_after_password_written():
     link_update_data = prisma.db.litellm_invitationlink.update.call_args.kwargs["data"]
     assert "is_accepted" not in link_update_data
     assert link_update_data["accepted_at"] is not None
-    outer_claims = jwt.decode(result["token"], "sk-test", algorithms=["HS256"])
+    outer_claims = jwt.decode(result["token"], "sk-test-master-key", algorithms=["HS256"])
     assert outer_claims["key"] == "sk-generated-key"
 
 
@@ -518,7 +518,7 @@ async def test_claim_token_revokes_existing_ui_sessions():
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", prisma),
-        patch("litellm.proxy.proxy_server.master_key", "sk-test"),
+        patch("litellm.proxy.proxy_server.master_key", "sk-test-master-key"),
         patch(  # test-quality-ok: claim_onboarding_link reads proxy_server module globals; no injection seam
             "litellm.proxy.proxy_server.general_settings", _POLICY_NO_BREACH_CHECK
         ),
@@ -568,7 +568,7 @@ async def test_claim_token_rolls_back_invite_when_session_key_mint_fails():
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", prisma),
-        patch("litellm.proxy.proxy_server.master_key", "sk-test"),
+        patch("litellm.proxy.proxy_server.master_key", "sk-test-master-key"),
         patch(  # test-quality-ok: claim_onboarding_link reads proxy_server module globals; no injection seam
             "litellm.proxy.proxy_server.general_settings", _POLICY_NO_BREACH_CHECK
         ),
@@ -625,7 +625,7 @@ async def test_claim_token_rejects_short_password_before_consuming_invite():
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", prisma),  # test-quality-ok: claim_onboarding_link reads proxy_server module globals; no injection seam
-        patch("litellm.proxy.proxy_server.master_key", "sk-test"),  # test-quality-ok: same as above
+        patch("litellm.proxy.proxy_server.master_key", "sk-test-master-key"),  # test-quality-ok: same as above
         patch("litellm.proxy.proxy_server.general_settings", {}),  # test-quality-ok: same as above
     ):
         with pytest.raises(ProxyException) as exc_info:
@@ -659,7 +659,7 @@ async def test_claim_token_rejects_breached_password_before_consuming_invite(htt
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", prisma),  # test-quality-ok: claim_onboarding_link reads proxy_server module globals; no injection seam
-        patch("litellm.proxy.proxy_server.master_key", "sk-test"),  # test-quality-ok: same as above
+        patch("litellm.proxy.proxy_server.master_key", "sk-test-master-key"),  # test-quality-ok: same as above
         patch("litellm.proxy.proxy_server.general_settings", {}),  # test-quality-ok: same as above
     ):
         with pytest.raises(ProxyException) as exc_info:
@@ -692,7 +692,7 @@ async def test_claim_token_fails_open_when_hibp_unreachable(httpx_transport):
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", prisma),  # test-quality-ok: claim_onboarding_link reads proxy_server module globals; no injection seam
-        patch("litellm.proxy.proxy_server.master_key", "sk-test"),  # test-quality-ok: same as above
+        patch("litellm.proxy.proxy_server.master_key", "sk-test-master-key"),  # test-quality-ok: same as above
         patch("litellm.proxy.proxy_server.general_settings", {}),  # test-quality-ok: same as above
         patch("litellm.proxy.proxy_server.premium_user", False),  # test-quality-ok: same as above
         patch(  # test-quality-ok: same as above

@@ -111,7 +111,7 @@ def _sign_connect_code(master_key: str, moyai_url: str, user_id: str | None) -> 
         separators=(",", ":"),
         sort_keys=True,
     ).encode()
-    signature: Final = hmac.new(_master_key_hmac_key(master_key), payload, hashlib.sha256).digest()
+    signature: Final = hmac.digest(_master_key_hmac_key(master_key), payload, "sha256")
     return f"{_b64url(payload)}.{_b64url(signature)}"
 
 
@@ -125,7 +125,7 @@ def _decode_connect_code(master_key: str, code: str) -> _MoyaiConnectCode:
         signature: Final = _b64url_decode(signature_b64)
     except (ValueError, TypeError):
         raise HTTPException(status_code=400, detail="Invalid Moyai connect code")
-    expected: Final = hmac.new(_master_key_hmac_key(master_key), payload_raw, hashlib.sha256).digest()
+    expected: Final = hmac.digest(_master_key_hmac_key(master_key), payload_raw, "sha256")
     if not hmac.compare_digest(signature, expected):
         raise HTTPException(status_code=400, detail="Invalid Moyai connect code")
     try:

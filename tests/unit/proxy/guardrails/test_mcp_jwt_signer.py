@@ -10,14 +10,19 @@ Tests cover:
 """
 
 import base64
+import json
 import time
-from typing import Any, Dict, Optional
+from collections.abc import Mapping
+from typing import Any, Dict, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import jwt
 import pytest
+import respx
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric import ed25519, rsa
+
+import litellm
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1053,6 +1058,90 @@ async def test_verify_incoming_jwt_returns_payload_on_valid_token():
             payload = await signer._verify_incoming_jwt(incoming_token)
 
     assert payload["sub"] == "idp-user-42"
+
+
+_IDP: Final = "https://idp.example.com"
+_FAR_FUTURE_EXP: Final = 4_000_000_000
+_HMAC_SECRET: Final = b"a-shared-secret-of-32-bytes-or-so"
+_HMAC_JWK: Final[Mapping[str, str]] = {
+    "kty": "oct",
+    "kid": "h",
+    "k": base64.urlsafe_b64encode(_HMAC_SECRET).rstrip(b"=").decode(),
+}
+_SHORT_HMAC_SECRET: Final = b"thirteen-byte"
+_SHORT_HMAC_JWK: Final[Mapping[str, str]] = {
+    "kty": "oct",
+    "kid": "s",
+    "k": base64.urlsafe_b64encode(_SHORT_HMAC_SECRET).rstrip(b"=").decode(),
+}
+
+
+@pytest.fixture
+def respx_idp(monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter) -> respx.MockRouter:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    _signer_mod._jwks_cache.clear()
+    return respx_mock
+
+
+async def _verify_against_idp(
+    respx_mock: respx.MockRouter, key: bytes | ed25519.Ed25519PrivateKey, algorithm: str, jwk: Mapping[str, str]
+) -> dict[str, object]:
+    """Verify a token signed with `key` against an IdP whose JWKS publishes `jwk`, served over HTTP."""
+    respx_mock.get(f"{_IDP}/.well-known/openid-configuration").respond(json={"jwks_uri": f"{_IDP}/jwks"})
+    respx_mock.get(f"{_IDP}/jwks").respond(json={"keys": [jwk]})
+    signer: Final = _make_signer(access_token_discovery_uri=f"{_IDP}/.well-known/openid-configuration")
+    token: Final = jwt.encode(
+        {"sub": "idp-user", "exp": _FAR_FUTURE_EXP}, key, algorithm=algorithm, headers={"kid": jwk["kid"]}
+    )
+    return await signer._verify_incoming_jwt(token)
+
+
+@pytest.mark.asyncio
+async def test_verify_incoming_jwt_accepts_an_hmac_jwks_key_outside_fips_mode(respx_idp: respx.MockRouter) -> None:
+    payload: Final = await _verify_against_idp(respx_idp, _HMAC_SECRET, "HS256", _HMAC_JWK)
+    assert payload["sub"] == "idp-user"
+
+
+@pytest.mark.asyncio
+async def test_verify_incoming_jwt_accepts_an_hmac_jwks_key_in_fips_mode(
+    fips_mode: None, respx_idp: respx.MockRouter
+) -> None:
+    payload: Final = await _verify_against_idp(respx_idp, _HMAC_SECRET, "HS256", _HMAC_JWK)
+    assert payload["sub"] == "idp-user"
+
+
+@pytest.mark.asyncio
+async def test_verify_incoming_jwt_rejects_a_forged_hmac_token_in_fips_mode(
+    fips_mode: None, respx_idp: respx.MockRouter
+) -> None:
+    with pytest.raises(jwt.InvalidSignatureError):
+        await _verify_against_idp(respx_idp, b"another-shared-secret-of-32-bytes", "HS256", _HMAC_JWK)
+
+
+@pytest.mark.asyncio
+async def test_verify_incoming_jwt_refuses_an_hmac_jwks_key_under_112_bits_in_fips_mode(
+    fips_mode: None, respx_idp: respx.MockRouter
+) -> None:
+    with pytest.raises(jwt.InvalidKeyError, match="at least 112 bits"):
+        await _verify_against_idp(respx_idp, _SHORT_HMAC_SECRET, "HS256", _SHORT_HMAC_JWK)
+
+
+@pytest.mark.asyncio
+async def test_verify_incoming_jwt_accepts_an_hmac_jwks_key_under_112_bits_outside_fips_mode(
+    respx_idp: respx.MockRouter,
+) -> None:
+    payload: Final = await _verify_against_idp(respx_idp, _SHORT_HMAC_SECRET, "HS256", _SHORT_HMAC_JWK)
+    assert payload["sub"] == "idp-user"
+
+
+@pytest.mark.asyncio
+async def test_verify_incoming_jwt_accepts_an_ed25519_jwks_key_in_fips_mode(
+    fips_mode: None, respx_idp: respx.MockRouter
+) -> None:
+    key: Final = ed25519.Ed25519PrivateKey.generate()
+    jwk: Final[Mapping[str, str]] = {**json.loads(jwt.algorithms.OKPAlgorithm.to_jwk(key.public_key())), "kid": "e"}
+    payload: Final = await _verify_against_idp(respx_idp, key, "EdDSA", jwk)
+    assert payload["sub"] == "idp-user"
 
 
 @pytest.mark.asyncio
