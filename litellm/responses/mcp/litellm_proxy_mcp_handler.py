@@ -2,6 +2,7 @@ import traceback
 from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, TypedDict, overload
 
@@ -272,13 +273,10 @@ class LiteLLM_Proxy_MCP_Handler:
             held_server_ids: Final = frozenset(
                 await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
             )
-            named_server_ids: Final = frozenset(
-                [
-                    server_id
-                    for name in resolved_mcp_servers
-                    for server_id in await LiteLLM_Proxy_MCP_Handler._server_ids_named(name)
-                ]
-            )
+            named_server_groups: Final = [
+                await LiteLLM_Proxy_MCP_Handler._server_ids_named(name) for name in resolved_mcp_servers
+            ]
+            named_server_ids: Final = frozenset(chain.from_iterable(named_server_groups))
             all_server_ids: Final = list(set(tool_permissions.keys()) | (named_server_ids & held_server_ids))
             existing_op: Final = user_api_key_auth.object_permission
             if existing_op is not None:
