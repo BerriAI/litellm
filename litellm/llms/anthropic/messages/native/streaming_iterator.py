@@ -33,6 +33,7 @@ from litellm.llms.anthropic.messages.utils import anthropic_sse_frame
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
+from litellm.responses.mcp.parked_stream_dispatch import DeferredStreamRelease
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
@@ -698,8 +699,12 @@ class BaseAnthropicMessagesStreamingIterator:
         disconnect (GeneratorExit / CancelledError) re-raises past it. Without
         this dispatch that window loses the spend row entirely.
         """
-        deferred_cb: Final = getattr(self.litellm_logging_obj, "_on_deferred_stream_complete", None)
-        deferred_args: Final = getattr(self.litellm_logging_obj, "_deferred_stream_complete_args", None)
+        deferred_cb: Final[DeferredStreamRelease | None] = getattr(
+            self.litellm_logging_obj, "_on_deferred_stream_complete", None
+        )
+        deferred_args: Final[tuple[object, ...] | None] = getattr(
+            self.litellm_logging_obj, "_deferred_stream_complete_args", None
+        )
         if deferred_cb is None or deferred_args is None:
             return
         self.litellm_logging_obj._on_deferred_stream_complete = None

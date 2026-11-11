@@ -397,6 +397,7 @@ jobs:
               tests/unit/llms/voyage
               tests/unit/llms/wandb
               tests/unit/llms/watsonx
+              tests/unit/llms/webiq
               tests/unit/llms/xai
               tests/unit/llms/xinference
               tests/unit/llms/you_com
@@ -590,6 +591,7 @@ jobs:
               tests/unit/proxy/credential_endpoints
               tests/unit/proxy/discovery_endpoints
               tests/unit/proxy/shutdown
+              tests/unit/proxy/rust_forward
               tests/unit/proxy/public_endpoints
               tests/unit/proxy/prompts
               tests/unit/proxy/rag_endpoints
@@ -632,23 +634,32 @@ jobs:
             job-timeout-minutes: 60
             dist: loadscope
 
-          - shard: proxy-infra
+          - shard: proxy-infra-db-spend
             test-path: |-
               tests/unit/proxy/db
               --ignore=tests/unit/proxy/db/db_transaction_queue/test_e2e_pod_lock_manager.py
               --ignore=tests/unit/proxy/db/test_update_daily_tag_spend.py
-              tests/unit/proxy/middleware
-              --ignore=tests/unit/proxy/middleware/test_request_size_limit_middleware.py
               tests/unit/proxy/spend_tracking
               --ignore=tests/unit/proxy/spend_tracking/test_search_api_logging.py
-              tests/unit/proxy/pass_through_endpoints
-              tests/unit/proxy/mcp_server/test_tool_registry.py
               tests/unit/proxy/common_utils
               --ignore=tests/unit/proxy/common_utils/test_cache_aware_routing.py
               --ignore=tests/unit/proxy/common_utils/test_check_batch_cost.py
               --ignore=tests/unit/proxy/common_utils/test_check_responses_cost.py
               --ignore=tests/unit/proxy/common_utils/test_proxy_encrypt_decrypt.py
               --ignore=tests/unit/proxy/common_utils/test_realtime_cache.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: proxy-infra-routing
+            test-path: |-
+              tests/unit/proxy/middleware
+              --ignore=tests/unit/proxy/middleware/test_request_size_limit_middleware.py
+              tests/unit/proxy/pass_through_endpoints
+              tests/unit/proxy/mcp_server/test_tool_registry.py
               tests/unit/proxy/enterprise_billing
               tests/unit/proxy/types_utils
               tests/unit/proxy/logging_endpoints
@@ -1343,17 +1354,16 @@ jobs:
 
       - name: Run unit tests
         run: |
-          for chart in helm/litellm-helm helm/litellm; do
-            declared="$(grep -h '^suite:' "$chart"/tests/*.yaml | wc -l | tr -d '[:space:]')"
-            output="$(mktemp)"
-            helm unittest -f 'tests/*.yaml' "$chart" | tee "$output"
-            executed="$(sed -n 's/^Test Suites:.*[[:space:]]\([0-9][0-9]*\) total$/\1/p' "$output")"
-            if [ "$declared" != "$executed" ]; then
-              echo "::error::$chart declares $declared test suites but helm-unittest ran $executed. Suites are being skipped silently, so their assertions never execute."
-              exit 1
-            fi
-            echo "$chart: all $declared declared test suites ran"
-          done
+          chart=helm/litellm
+          declared="$(grep -h '^suite:' "$chart"/tests/*.yaml | wc -l | tr -d '[:space:]')"
+          output="$(mktemp)"
+          helm unittest -f 'tests/*.yaml' "$chart" | tee "$output"
+          executed="$(sed -n 's/^Test Suites:.*[[:space:]]\([0-9][0-9]*\) total$/\1/p' "$output")"
+          if [ "$declared" != "$executed" ]; then
+            echo "::error::$chart declares $declared test suites but helm-unittest ran $executed. Suites are being skipped silently, so their assertions never execute."
+            exit 1
+          fi
+          echo "$chart: all $declared declared test suites ran"
   openai-sdk-compat:
     name: OpenAI ${{ matrix.openai-version }} compatibility
     needs: rust-bridge

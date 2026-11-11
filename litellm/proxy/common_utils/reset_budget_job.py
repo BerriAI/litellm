@@ -1200,7 +1200,7 @@ class ResetBudgetJob:
                 if updated_keys:
                     await self._write_key_reset_updates(updated_keys=updated_keys)
                     for k in updated_keys:
-                        token = getattr(k.row, "token", None)
+                        token = k.row.token
                         if token:
                             await self._invalidate_spend_counter(key_counter(str(token)))
 
@@ -1317,7 +1317,7 @@ class ResetBudgetJob:
                 if updated_users:
                     await self._write_user_reset_updates(updated_users=updated_users)
                     for u in updated_users:
-                        user_id = getattr(u.row, "user_id", None)
+                        user_id = u.row.user_id
                         if user_id:
                             await self._invalidate_spend_counter(user_counter(str(user_id)))
                         if user_id == LITELLM_PROXY_BUDGET_NAME:
@@ -1438,7 +1438,7 @@ class ResetBudgetJob:
                 if updated_teams:
                     await self._write_team_reset_updates(updated_teams=updated_teams)
                     for t in updated_teams:
-                        team_id = getattr(t.row, "team_id", None)
+                        team_id = t.row.team_id
                         if team_id:
                             await self._invalidate_spend_counter(team_counter(str(team_id)))
 
