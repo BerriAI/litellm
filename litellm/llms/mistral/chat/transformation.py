@@ -606,7 +606,6 @@ class MistralConfig(OpenAIGPTConfig):
 
         Args:
             tools: List of tool definitions
-            max_depth: Maximum recursion depth for schema cleaning (default: 10)
 
         Returns:
             Cleaned tools list

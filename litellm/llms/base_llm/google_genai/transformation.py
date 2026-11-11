@@ -85,7 +85,7 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         Map Google GenAI parameters to provider-specific format.
 
         Args:
-            generate_content_optional_params: Optional parameters for generate content
+            generate_content_config_dict: The generate-content config to map
             model: The model name
 
         Returns:
