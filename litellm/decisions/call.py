@@ -662,19 +662,23 @@ def _remaining_image_bytes(call: DecisionsCall) -> int | None:
 def _bounded_remote_images(
     urls: tuple[str, ...], remaining: int, timeout: float | httpx.Timeout | None
 ) -> tuple[str, ...]:
-    if not urls:
-        return ()
-    image: Final = convert_url_to_base64(urls[0], timeout=timeout, max_bytes=remaining)
-    return (image, *_bounded_remote_images(urls[1:], remaining - _decoded_image_bytes(image), timeout))
+    state: tuple[int, tuple[str, ...]] = (remaining, ())  # rebind-ok: sequential budget without recursion
+    for url in urls:
+        available, images = state
+        image: Final = convert_url_to_base64(url, timeout=timeout, max_bytes=available)
+        state = (available - _decoded_image_bytes(image), (*images, image))
+    return state[1]
 
 
 async def _async_bounded_remote_images(
     urls: tuple[str, ...], remaining: int, timeout: float | httpx.Timeout | None
 ) -> tuple[str, ...]:
-    if not urls:
-        return ()
-    image: Final = await async_convert_url_to_base64(urls[0], timeout=timeout, max_bytes=remaining)
-    return (image, *await _async_bounded_remote_images(urls[1:], remaining - _decoded_image_bytes(image), timeout))
+    state: tuple[int, tuple[str, ...]] = (remaining, ())  # rebind-ok: sequential budget without recursion
+    for url in urls:
+        available, images = state
+        image: Final = await async_convert_url_to_base64(url, timeout=timeout, max_bytes=available)
+        state = (available - _decoded_image_bytes(image), (*images, image))
+    return state[1]
 
 
 def _with_remote_images_inlined(call: DecisionsCall) -> DecisionsCall:
