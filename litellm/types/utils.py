@@ -4817,6 +4817,7 @@ class LlmProviders(str, Enum):
     HOSTINGER_ROUTER = "hostinger_router"
     ZEROGPU = "zerogpu"
     DARKBLOOM = "darkbloom"
+    TSUBASA = "tsubasa"
     META = "meta"
     SAIL = "sail"
     REKA = "reka"

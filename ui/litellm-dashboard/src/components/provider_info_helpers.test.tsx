@@ -11,16 +11,33 @@ import {
   resolveLitellmProviderSlug,
 } from "./provider_info_helpers";
 
-const PROVIDER_CREATE_FIELDS: { provider: string; provider_display_name: string; litellm_provider: string }[] =
-  JSON.parse(
-    readFileSync(resolve(__dirname, "../../../../litellm/proxy/public_endpoints/provider_create_fields.json"), "utf8"),
-  );
+const PROVIDER_CREATE_FIELDS: {
+  provider: string;
+  litellm_provider: string;
+  default_model_placeholder: string;
+  provider_display_name: string;
+}[] = JSON.parse(
+  readFileSync(resolve(__dirname, "../../../../litellm/proxy/public_endpoints/provider_create_fields.json"), "utf8"),
+);
 
 const BUNDLED_MODEL_MAP: Record<string, { litellm_provider?: string }> = JSON.parse(
   readFileSync(resolve(__dirname, "../../../../model_prices_and_context_window.json"), "utf8"),
 );
 
 describe("provider_info_helpers", () => {
+  it("resolves the Tsubasa dashboard selection to its models and placeholder", () => {
+    const provider = PROVIDER_CREATE_FIELDS.find((entry) => entry.litellm_provider === "tsubasa")!;
+    const models = {
+      "tsubasa/tsubasa-fast": { litellm_provider: provider.litellm_provider },
+      "tsubasa/tsubasa-pro": { litellm_provider: provider.litellm_provider },
+      "openai/gpt-4o": { litellm_provider: "openai" },
+    };
+
+    expect(getProviderModels(provider.provider, models)).toEqual(["tsubasa/tsubasa-fast", "tsubasa/tsubasa-pro"]);
+    expect(getPlaceholder(provider.provider)).toBe(provider.default_model_placeholder);
+    expect(getProviderLogoAndName(provider.litellm_provider).displayName).toBe(provider.provider_display_name);
+  });
+
   it("should identify the upstream LiteLLM Gateway consistently with provider metadata", () => {
     const metadata = PROVIDER_CREATE_FIELDS.find((provider) => provider.provider === "LITELLM_PROXY");
     expect(resolveLitellmProviderSlug("LITELLM_PROXY")).toBe(metadata?.litellm_provider);
@@ -282,6 +299,7 @@ describe("provider_info_helpers", () => {
         Providers.PREDIBASE,
         Providers.Sail,
         Providers.StreamLake,
+        Providers.Tsubasa,
         Providers.WANDB,
         Providers.ZAI,
         Providers.ZeroGPU,
