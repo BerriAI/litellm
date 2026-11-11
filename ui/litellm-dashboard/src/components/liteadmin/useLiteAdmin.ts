@@ -1,7 +1,9 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import type { ParseKeys } from "i18next";
 import type { ChatMessage } from "@/components/chat/types";
 import { getProxyBaseUrl } from "@/components/networking";
+import i18n from "@/i18n/i18n";
 import { extractProxyErrorMessage } from "@/lib/http/client";
 import { toast } from "@/lib/toast";
 import { getCookie } from "@/utils/cookieUtils";
@@ -17,6 +19,7 @@ export type ConversationEntry =
   | ActionEntry
   | { kind: "error"; id: string; text: string };
 export interface LiteAdminSession {
+  userId: string;
   access: AriaAccess;
   token: string;
   accessToken: string;
@@ -31,7 +34,7 @@ type ActiveTurn = {
   approval?: { id: string; resolve: (approved: boolean) => void };
   chart?: UsageChart;
 };
-const INTERRUPTED_WRITE = "A submitted change may have completed. Check the relevant page before trying again.";
+const INTERRUPTED_WRITE: ParseKeys = "aria.session.interruptedWrite";
 const RESOURCE_QUERIES = new Set([
   "keys",
   "infiniteKeys",
@@ -58,7 +61,7 @@ export function useLiteAdmin(session: LiteAdminSession) {
     () => () => {
       const turn = active.current;
       active.current = null;
-      if (turn?.outcome === "submitted") toast.warning(INTERRUPTED_WRITE);
+      if (turn?.outcome === "submitted") toast.warning(i18n.t(INTERRUPTED_WRITE));
       turn?.controller.abort();
       turn?.approval?.resolve(false);
     },
@@ -167,10 +170,10 @@ export function useLiteAdmin(session: LiteAdminSession) {
     } catch (error) {
       if (active.current !== turn) return;
       if (!sameSession()) {
-        if (turn.outcome === "submitted") toast.warning(INTERRUPTED_WRITE);
+        if (turn.outcome === "submitted") toast.warning(i18n.t(INTERRUPTED_WRITE));
         setEntries([]);
       } else if (!turn.controller.signal.aborted && turn.outcome !== "unknown") {
-        const context = turn.outcome === "completed" ? "Completed changes are shown above. " : "";
+        const context = turn.outcome === "completed" ? `${i18n.t("aria.session.completedChangesShown")} ` : "";
         setEntries((current) => [
           ...current,
           { kind: "error", id: crypto.randomUUID(), text: context + extractProxyErrorMessage(error) },

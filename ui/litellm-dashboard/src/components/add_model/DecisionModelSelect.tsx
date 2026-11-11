@@ -1,4 +1,5 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { Label } from "@/components/ui/label";
 import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
@@ -19,6 +20,7 @@ export default function DecisionModelSelect({
   modelInfo: ModelGroup[];
   deployments: AutoRouterDeployment[] | undefined;
 }) {
+  const { t } = useTranslation();
   const id = React.useId();
   const { data: modelCostMapData } = useModelCostMap(true, true);
   const decisionCatalog = React.useMemo(() => buildDecisionCatalog(modelCostMapData), [modelCostMapData]);
@@ -38,13 +40,13 @@ export default function DecisionModelSelect({
 
   return (
     <div className="space-y-2">
-      <Label htmlFor={id}>Decision model</Label>
+      <Label htmlFor={id}>{t("addModel.decisionModelSelect.label")}</Label>
       <SearchSelect
         inputId={id}
-        aria-label="Decision model"
+        aria-label={t("addModel.decisionModelSelect.label")}
         options={decisionModels.map((model) => ({ value: model.model_group, label: model.model_group }))}
         value={value.jev_classifier_config?.deployment_name ?? ""}
-        placeholder="Select the decision model"
+        placeholder={t("addModel.decisionModelSelect.placeholder")}
         allowClear={false}
         onValueChange={(deploymentName) => {
           if (!deploymentName) return;

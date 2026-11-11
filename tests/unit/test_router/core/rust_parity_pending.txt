@@ -1,0 +1,2 @@
+# Characterization tests the Rust core does not match yet, one node id per line (`file.py::test[rust]`).
+# conftest.py marks each one xfail(strict=True), so a test that starts passing must leave the list.

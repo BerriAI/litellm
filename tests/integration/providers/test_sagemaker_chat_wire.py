@@ -243,7 +243,7 @@ def test_sagemaker_chat_signs_the_inference_component_header_and_sends_hf_model_
     )
     assert "x-amzn-sagemaker-inference-component" in signed_headers.removeprefix("SignedHeaders=").split(";")
     assert JSON_OBJECT.validate_json(request.body) == {
-        **container_body(wire.url, PROMPT, stream=False, model_id=_INFERENCE_COMPONENT),
+        **container_body(wire.url, PROMPT, stream=False),
         "model": SERVED_MODEL,
     }, request.body
 

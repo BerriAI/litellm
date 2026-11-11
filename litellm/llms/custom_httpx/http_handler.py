@@ -44,6 +44,9 @@ from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
+from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine, default_token_exchange_engine
+from litellm.llms.base_llm.auth.types import MintedToken
+from litellm.llms.custom_httpx.aiohttp_pool_diagnostics import build_pool_wait_trace_config
 from litellm.llms.custom_httpx.http2_connection_spread import AsyncHTTP2ConnectionSpread
 from litellm.types.llms.custom_http import *
 
@@ -585,6 +588,28 @@ def _raise_masked_sync_error(e: httpx.HTTPStatusError, stream: bool) -> NoReturn
     raise MaskedHTTPStatusError(e, message=_text, text=_text) from None
 
 
+def _same_origin(first: httpx.URL, second: httpx.URL) -> bool:
+    return (first.scheme, first.host, first.port) == (second.scheme, second.host, second.port)
+
+
+async def _with_current_bearer(
+    headers: Mapping[str, str] | None, url: str, engine: JwtBearerTokenExchangeEngine
+) -> Mapping[str, str] | None:
+    auth_key: Final = next((key for key in headers or () if key.lower() == "authorization"), None)
+    if headers is None or auth_key is None:
+        return headers
+    auth_value: Final = headers[auth_key]
+    if not auth_value.startswith("Bearer "):
+        return headers
+    spec: Final = engine.spec_for_access_token(auth_value.removeprefix("Bearer "))
+    if spec is None or not _same_origin(httpx.URL(spec.token_url), httpx.URL(url)):
+        return headers
+    current: Final = await engine.aget_token(spec)
+    if not isinstance(current, MintedToken):
+        return headers
+    return MappingProxyType({**headers, auth_key: f"Bearer {current.access_token.get_secret_value()}"})
+
+
 async def _raise_masked_async_error(e: httpx.HTTPStatusError, stream: bool) -> NoReturn:
     """Raise a MaskedHTTPStatusError for async HTTP handlers."""
     if stream:
@@ -638,7 +663,9 @@ class HTTPResponseLimitError(ValueError):
 
 
 class MaskedHTTPStatusError(httpx.HTTPStatusError):
-    def __init__(self, original_error, message: str | None = None, text: str | None = None):
+    def __init__(
+        self, original_error: httpx.HTTPStatusError, message: str | None = None, text: str | None = None
+    ) -> None:
         # Create a new error with the masked URL
         masked_url: Final = mask_sensitive_info(str(original_error.request.url))
         # Mask the original exception message too (it contains the full URL)
@@ -701,12 +728,14 @@ class AsyncHTTPHandler:
         transport: httpx.AsyncBaseTransport | None = None,
         follow_redirects: bool = True,
         http2: bool = False,
+        token_exchange_engine: JwtBearerTokenExchangeEngine = default_token_exchange_engine,
     ):
         self.timeout = timeout
         self.event_hooks = event_hooks
         self.ssl_verify = ssl_verify
         self.shared_session = shared_session
         self.transport = transport
+        self.token_exchange_engine = token_exchange_engine
         self.follow_redirects = follow_redirects
         self.http2 = http2
         self._owns_client = True
@@ -1036,7 +1065,7 @@ class AsyncHTTPHandler:
                     data=retry_data,
                     json=json,
                     params=params,
-                    headers=headers,
+                    headers=await _with_current_bearer(headers, url, self.token_exchange_engine),
                     timeout=timeout,
                     content=retry_content,
                 )
@@ -1192,7 +1221,7 @@ class AsyncHTTPHandler:
             data=request_data,
             json=json,
             params=params,
-            headers=headers,
+            headers=await _with_current_bearer(headers, url, self.token_exchange_engine),
             content=request_content,
         )
         response: Final = await client.send(req, stream=stream)
@@ -1204,6 +1233,17 @@ class AsyncHTTPHandler:
     # the underlying aiohttp session unclosed ("Unclosed client session").
     # Mirrors LiteLLMAiohttpTransport._background_close_tasks.
     _finalizer_close_tasks: ClassVar[set["asyncio.Task[None]"]] = set()  # mutable-ok: strong refs for pending closes
+
+    @classmethod
+    async def _close_client_at_finalization(cls, client: httpx.AsyncClient) -> None:
+        try:
+            await client.aclose()
+        except (OSError, RuntimeError) as exc:
+            verbose_logger.debug("Error closing client at finalization: %s", exc)
+        finally:
+            task: Final = asyncio.current_task()
+            if task is not None:
+                cls._finalizer_close_tasks.discard(task)
 
     @classmethod
     def _on_finalizer_close_done(cls, task: "asyncio.Task[None]") -> None:
@@ -1272,8 +1312,8 @@ class AsyncHTTPHandler:
                 # here is the cross-loop path the transport refuses.
                 self._dispose_wrapped_aiohttp_session()
                 return
-            task: Final = loop.create_task(self._client.aclose())
             cls: Final = type(self)
+            task: Final = loop.create_task(cls._close_client_at_finalization(self._client))
             cls._finalizer_close_tasks.add(task)
             task.add_done_callback(cls._on_finalizer_close_done)
         except Exception:
@@ -1445,6 +1485,7 @@ class AsyncHTTPHandler:
                 connector=TCPConnector(**transport_connector_kwargs),
                 cookie_jar=DummyCookieJar(),
                 trust_env=trust_env,
+                trace_configs=[build_pool_wait_trace_config()],
             )
 
         # Use shared session if provided and valid
@@ -1973,7 +2014,7 @@ def get_httpx_client(params: dict | None = None) -> HTTPHandler:
         cache = LLMClientCache()
         setattr(litellm, "in_memory_llm_clients_cache", cache)
 
-    _cached_client: Final = cache.get_cache(_cache_key_name)
+    _cached_client: Final = cache.get_cache(_cache_key_name, loop_bound=False)
     if _cached_client:
         return _cached_client
 
@@ -1989,6 +2030,7 @@ def get_httpx_client(params: dict | None = None) -> HTTPHandler:
         value=_new_client,
         ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
         litellm_owned_client=True,
+        loop_bound=False,
     )
     return _new_client
 

@@ -121,6 +121,53 @@ def _override_dependencies(client: _ByUrl, cache: InMemoryCache, role: LitellmUs
     app.dependency_overrides[_default_fetch_lock] = lambda: asyncio.Lock()
 
 
+class _AsgiGet:
+    """One GET sent straight to the ASGI app, so the response body is readable while the app call is still running."""
+
+    def __init__(self, path: str) -> None:
+        self._chunks: list[bytes] = []
+        self._sent = asyncio.Event()
+        self.task = asyncio.create_task(
+            app(
+                {
+                    "type": "http",
+                    "asgi": {"version": "3.0"},
+                    "http_version": "1.1",
+                    "method": "GET",
+                    "scheme": "http",
+                    "path": path,
+                    "raw_path": path.encode(),
+                    "query_string": b"",
+                    "headers": [(b"host", b"proxy")],
+                    "client": ("127.0.0.1", 1),
+                    "server": ("proxy", 80),
+                },
+                self._receive,
+                self._send,
+            )
+        )
+
+    async def _receive(self) -> dict[str, object]:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def _send(self, message: dict[str, object]) -> None:
+        if message["type"] != "http.response.body":
+            return
+        body = message.get("body", b"")
+        assert isinstance(body, bytes)
+        self._chunks.append(body)
+        if not message.get("more_body", False):
+            self._sent.set()
+
+    @property
+    def finished(self) -> bool:
+        return self.task.done()
+
+    async def body(self) -> bytes:
+        await self._sent.wait()
+        return b"".join(self._chunks)
+
+
 @pytest.fixture
 def http_client():
     yield TestClient(app)
@@ -151,6 +198,18 @@ class TestCountReleaseBullets:
             )
             == 0
         )
+
+    def test_buckets_area_labelled_bullets_by_their_leading_verb(self):
+        counts = count_release_bullets(
+            "### Changes\n\n"
+            "- **OpenAI:** Fixed empty `api_key` sending the admin key (#1)\n"
+            "- **AWS Bedrock:** fixed Converse `service_tier` (#2)\n"
+            "- **MCP:** Added per-server timeouts (#3)\n"
+            "- **Routing and fallbacks:** Changed the default cooldown (#4)\n"
+            "- **UI:** Moved the upgrade notice into the bell (#5)\n"
+            "- plain dash line that is not a change entry\n"
+        )
+        assert (counts["new_features"], counts["bug_fixes"], counts["other_updates"]) == (1, 2, 2)
 
     def test_empty_body_yields_zero_counts(self):
         counts = count_release_bullets("")
@@ -387,19 +446,62 @@ class TestPatchReleaseAggregatesMinorLine:
 
 
 class TestLatestReleaseInfoEndpoint:
-    def test_returns_release_stats_for_authenticated_user(self, http_client):
+    def test_first_request_returns_null_and_the_next_returns_the_fetched_release(self, http_client):
         _override_dependencies(_minor_release(), _fresh_cache(), LitellmUserRoles.INTERNAL_USER)
-        response = http_client.get("/get/latest_release_info")
-        assert response.status_code == 200
-        assert response.json() == EXPECTED_INFO
+        first = http_client.get("/get/latest_release_info")
+        assert (first.status_code, first.json()) == (202, None)
+        second = http_client.get("/get/latest_release_info")
+        assert (second.status_code, second.json()) == (200, EXPECTED_INFO)
 
-    def test_returns_null_when_the_changelog_is_unreachable(self, http_client):
+    @pytest.mark.asyncio
+    async def test_responds_while_the_changelog_fetch_is_still_hanging(self):
+        release = asyncio.Event()
+
+        class _HangingClient(_ByUrl):
+            async def get(self, url: str, *, timeout: float | None = None) -> httpx.Response:
+                self.calls.append((url, timeout))
+                await release.wait()
+                raise httpx.ConnectTimeout("blackholed")
+
+        client: Final = _HangingClient({})
+        _override_dependencies(client, _fresh_cache(), LitellmUserRoles.PROXY_ADMIN)
+        lock: Final = asyncio.Lock()
+        app.dependency_overrides[_default_fetch_lock] = lambda: lock
+        try:
+            requests: Final = [_AsgiGet("/get/latest_release_info") for _ in range(3)]
+            bodies: Final = [await asyncio.wait_for(request.body(), timeout=5) for request in requests]
+            still_fetching: Final = [request for request in requests if not request.finished]
+            release.set()
+            await asyncio.gather(*(request.task for request in requests))
+        finally:
+            release.set()
+            for dependency in (user_api_key_auth, _default_client, _default_cache, _default_fetch_lock):
+                app.dependency_overrides.pop(dependency, None)
+        assert bodies == [b"null", b"null", b"null"]
+        assert len(still_fetching) == 1, "exactly one request should still be running the hanging fetch"
+        assert client.urls == [CHANGELOG_FEED_URL]
+
+    def test_responds_502_once_the_changelog_fetch_has_failed(self, http_client):
+        client: Final = _ByUrl({CHANGELOG_FEED_URL: httpx.ConnectError("boom")})
+        _override_dependencies(client, _fresh_cache(), LitellmUserRoles.PROXY_ADMIN)
+        first: Final = http_client.get("/get/latest_release_info")
+        assert (first.status_code, first.json()) == (202, None)
+        later: Final = [http_client.get("/get/latest_release_info") for _ in range(2)]
+        assert [response.status_code for response in later] == [502, 502]
+        assert later[0].json() == {"detail": "Latest release info unavailable"}
+        assert len(client.calls) == 1
+
+    def test_release_with_no_countable_notes_is_still_announced_with_zero_counts(self, http_client):
+        uncountable: Final = _github_response(payload=_release("v1.102.0", "## Changes\n\n1. Reworked the router\n"))
         _override_dependencies(
-            _ByUrl({CHANGELOG_FEED_URL: httpx.ConnectError("boom")}), _fresh_cache(), LitellmUserRoles.PROXY_ADMIN
+            _minor_release(**{_tag_url("v1.102.0"): uncountable}), _fresh_cache(), LitellmUserRoles.PROXY_ADMIN
         )
-        response = http_client.get("/get/latest_release_info")
-        assert response.status_code == 200
-        assert response.json() is None
+        http_client.get("/get/latest_release_info")
+        response: Final = http_client.get("/get/latest_release_info")
+        assert (response.status_code, response.json()) == (
+            200,
+            {**EXPECTED_INFO, "new_features": 0, "bug_fixes": 0, "other_updates": 0},
+        )
 
     @pytest.mark.parametrize("name", ["LITELLM_DISABLE_LATEST_RELEASE_CHECK", "LITELLM_OFFLINE_MODE"])
     @pytest.mark.parametrize(
@@ -416,6 +518,8 @@ class TestLatestReleaseInfoEndpoint:
         monkeypatch.setenv(name, flag)
         client = _minor_release()
         _override_dependencies(client, _fresh_cache(), LitellmUserRoles.PROXY_ADMIN)
+        first = http_client.get("/get/latest_release_info")
+        assert first.status_code == (200 if expected_body is None else 202)
         response = http_client.get("/get/latest_release_info")
         assert response.status_code == 200
         assert response.json() == expected_body
@@ -424,8 +528,8 @@ class TestLatestReleaseInfoEndpoint:
     def test_repeated_requests_reuse_cache(self, http_client):
         client = _minor_release()
         _override_dependencies(client, _fresh_cache(), LitellmUserRoles.PROXY_ADMIN)
-        assert http_client.get("/get/latest_release_info").json() == EXPECTED_INFO
-        assert http_client.get("/get/latest_release_info").json() == EXPECTED_INFO
+        bodies = [http_client.get("/get/latest_release_info").json() for _ in range(3)]
+        assert bodies == [None, EXPECTED_INFO, EXPECTED_INFO]
         assert len(client.calls) == 2
 
     def test_rejects_unauthenticated_requests(self, monkeypatch):

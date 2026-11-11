@@ -516,7 +516,7 @@ def test_responses_max_output_tokens_is_forwarded_natively_on_both_legs(gateway:
         for attempt in attempts:
             assert attempt.body["max_output_tokens"] == 1000 and _limits(attempt.body) == (None, None), attempt.body
         _assert_logged(issued, model, "success")
-        _assert_logged(_managed_response_id(streamed_issued), model, "success")
+        _assert_logged(streamed_issued, model, "success")
 
 
 def test_region_prefixed_deployment_on_a_v1_base_sends_the_bare_model_with_max_completion_tokens(
