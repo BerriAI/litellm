@@ -74,7 +74,6 @@ from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.get_llm_provider_logic import get_provider_affinity_header
 from litellm.litellm_core_utils.llm_request_utils import serialize_multipart_form_fields
-from litellm.litellm_core_utils.llm_response_utils.get_headers import provider_request_id_headers
 from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
 from litellm.litellm_core_utils.realtime_errors import (
     close_after_upstream_handshake_refusal,
@@ -147,7 +146,7 @@ from litellm.responses.streaming_iterator import (
     ResponsesWebSocketStreaming,
     SyncResponsesAPIStreamingIterator,
     TokenLimitCallback,
-    failed_response_exception,
+    checked_responses_api_response,
     with_token_limit_checks,
 )
 from litellm.types.containers.main import (
@@ -3210,16 +3209,9 @@ class BaseLLMHTTPHandler:
                 provider_config=responses_api_provider_config,
             )
 
-        initial_response: Final = responses_api_provider_config.transform_response_api_response(
-            model=model,
-            raw_response=response,
-            logging_obj=logging_obj,
+        initial_response: Final = checked_responses_api_response(
+            responses_api_provider_config, model, response, custom_llm_provider, logging_obj
         )
-        failure: Final = failed_response_exception(
-            initial_response, model, custom_llm_provider, provider_request_id_headers(response.headers), logging_obj
-        )
-        if failure is not None:
-            raise failure
 
         if is_stream_request and caller_requested_stream:
             return replay_as_stream(transformed=initial_response)
@@ -3426,16 +3418,9 @@ class BaseLLMHTTPHandler:
                 provider_config=responses_api_provider_config,
             )
 
-        initial_response: Final = responses_api_provider_config.transform_response_api_response(
-            model=model,
-            raw_response=response,
-            logging_obj=logging_obj,
+        initial_response: Final = checked_responses_api_response(
+            responses_api_provider_config, model, response, custom_llm_provider, logging_obj
         )
-        failure: Final = failed_response_exception(
-            initial_response, model, custom_llm_provider, provider_request_id_headers(response.headers), logging_obj
-        )
-        if failure is not None:
-            raise failure
 
         if is_stream_request and caller_requested_stream:
             return replay_as_stream(transformed=initial_response)

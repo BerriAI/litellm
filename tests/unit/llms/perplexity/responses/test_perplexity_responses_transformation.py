@@ -643,3 +643,35 @@ async def test_a_failed_perplexity_response_raises_the_shared_failure_with_its_r
     assert isinstance(response_headers, httpx.Headers)
     assert response_headers.get("x-request-id") == "req_perplexity_failed"
     assert await asyncio.wait_for(recorder.failure_costs.get(), timeout=5) == pytest.approx(5 * 0.001 + 3 * 0.002)
+
+
+@pytest.mark.asyncio
+async def test_a_failed_perplexity_response_the_responses_model_cannot_parse_raises_the_providers_message(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    recorder: Final = _FailureCostRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    respx_mock.post("https://api.perplexity.ai/v1/responses").mock(
+        return_value=httpx.Response(
+            200,
+            json={"status": "failed", "error": {"message": "Model quota exceeded"}},
+            headers={"x-request-id": "req_perplexity_unparsed"},
+        )
+    )
+
+    with pytest.raises(litellm.InternalServerError) as raised:
+        await litellm.aresponses(
+            model="perplexity/openai/gpt-5.2",
+            api_base="https://api.perplexity.ai",
+            api_key="fake-api-key",
+            input="hi",
+        )
+
+    assert "Model quota exceeded" in str(raised.value)
+    assert '"status"' not in str(raised.value)
+    response_headers: Final[object] = getattr(raised.value, "litellm_response_headers", None)
+    assert isinstance(response_headers, httpx.Headers)
+    assert response_headers.get("x-request-id") == "req_perplexity_unparsed"
+    assert not await asyncio.wait_for(recorder.failure_costs.get(), timeout=5)

@@ -224,7 +224,7 @@ def _bill_every_round_on_failure(
     )
     failed: Final = _spend_the_failed_round_recorded(_failure_spend(logging_obj), before)
     if failed is None:
-        logging_obj.record_partial_usage_for_failure(first_spend.usage, first_spend.cost)
+        logging_obj.record_served_rounds_for_failure(((first_spend.usage, first_spend.cost),))
         return
     logging_obj.record_billed_rounds_for_failure(_spend_of_both_rounds(first_spend, failed))
 

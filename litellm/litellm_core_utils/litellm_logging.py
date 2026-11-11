@@ -2712,7 +2712,8 @@ class Logging(LiteLLMLoggingBaseClass):
         self.cost_breakdown = breakdown_less_repeated_fixed_margin(failed_breakdown, repeated_fixed_margin)
 
     def record_billed_rounds_for_failure(self, spend: BilledRoundsSpend) -> None:
-        """Bill every round of a fully streamed request on the failure log when a post-call hook rejects it."""
+        """Bill the rounds the provider billed on the failure log, or on the success log of a retry that answers."""
+        self._stash_owed_on_success = True
         self.record_partial_usage_for_failure(spend.usage, spend.cost)
         self.cost_breakdown = spend.cost_breakdown
 

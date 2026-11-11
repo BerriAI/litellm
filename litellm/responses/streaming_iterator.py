@@ -355,7 +355,7 @@ def failed_response_exception(
         return None
     usage_and_cost: Final = _failed_response_usage_and_cost(response, logging_obj)
     if usage_and_cost is not None:
-        logging_obj.record_partial_usage_for_failure(*usage_and_cost)
+        logging_obj.record_served_rounds_for_failure((usage_and_cost,))
     error: Final = _event_field(response, "error")
     return map_stream_error_to_exception(
         error if error is not None else {"message": "The provider reported a failed response"},
@@ -363,6 +363,49 @@ def failed_response_exception(
         custom_llm_provider,
         headers=headers,
         logging_obj=logging_obj,
+    )
+
+
+def checked_responses_api_response(
+    responses_api_provider_config: BaseResponsesAPIConfig,
+    model: str,
+    raw_response: httpx.Response,
+    custom_llm_provider: str,
+    logging_obj: LiteLLMLoggingObj,
+) -> ResponsesAPIResponse:
+    headers: Final = provider_request_id_headers(raw_response.headers)
+    try:
+        transformed: Final = responses_api_provider_config.transform_response_api_response(
+            model=model, raw_response=raw_response, logging_obj=logging_obj
+        )
+    except Exception as parse_error:
+        unparsed_failure: Final = _unparsed_failed_body_exception(
+            raw_response, model, custom_llm_provider, headers, logging_obj
+        )
+        if unparsed_failure is None:
+            raise
+        raise unparsed_failure from parse_error
+    failure: Final = failed_response_exception(transformed, model, custom_llm_provider, headers, logging_obj)
+    if failure is not None:
+        raise failure
+    return transformed
+
+
+def _unparsed_failed_body_exception(
+    raw_response: httpx.Response,
+    model: str,
+    custom_llm_provider: str,
+    headers: httpx.Headers | None,
+    logging_obj: LiteLLMLoggingObj,
+) -> Exception | None:
+    try:
+        body: Final = _DECODED_JSON.validate_python(raw_response.json())
+    except ValueError:
+        return None
+    if not _is_json_object(body) or body.get("status") != "failed":
+        return None
+    return failed_response_exception(
+        ResponsesAPIResponse.model_construct(None, **body), model, custom_llm_provider, headers, logging_obj
     )
 
 

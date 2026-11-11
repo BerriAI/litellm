@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import datetime
 import inspect
 import json
 import logging
@@ -26,6 +27,7 @@ from litellm.integrations.code_interpreter_interception.handler import (
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.websearch_interception.handler import WebSearchInterceptionLogger
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.azure.vector_stores.transformation import AzureOpenAIVectorStoreConfig
 from litellm.llms.base_llm.audio_transcription.transformation import (
@@ -64,6 +66,7 @@ from litellm.llms.openai.vector_store_files.transformation import OpenAIVectorSt
 from litellm.llms.openai.vector_stores.transformation import OpenAIVectorStoreConfig
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 from litellm.llms.tinyfish.search.transformation import TinyfishSearchConfig
+from litellm.proxy.utils import _failure_fields_to_lift
 from litellm.responses.streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
     MockResponsesAPIStreamingIterator,
@@ -6943,7 +6946,9 @@ def test_responses_raises_context_window_error_when_the_provider_answers_status_
 
 def test_responses_returns_an_incomplete_response_without_raising():
     def answer_incomplete(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=_responses_body("incomplete", incomplete_details={"reason": "max_output_tokens"}))
+        return httpx.Response(
+            200, json=_responses_body("incomplete", incomplete_details={"reason": "max_output_tokens"})
+        )
 
     response: Final = litellm.responses(
         input="hello",
@@ -6991,6 +6996,28 @@ async def test_aresponses_raises_for_a_fake_streamed_response_the_provider_faile
         )
 
 
+@pytest.mark.parametrize(
+    "unparseable_body",
+    [
+        pytest.param(b"<html>502 Bad Gateway</html>", id="a body that is not JSON"),
+        pytest.param(b'{"status": "completed", "note": "Bad Gateway"}', id="a JSON body that did not fail"),
+    ],
+)
+def test_responses_keeps_the_parse_error_for_an_unparseable_body_that_did_not_fail(unparseable_body: bytes):
+    def answer_unparseable(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=unparseable_body, headers={"x-request-id": "req_unparseable"})
+
+    with pytest.raises(litellm.APIError) as raised:
+        litellm.responses(
+            input="hello",
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(answer_unparseable))),
+            **_HOSTED_VLLM_PARAMS,
+        )
+
+    assert unparseable_body.decode() in str(raised.value)
+    assert getattr(raised.value, "litellm_response_headers", None) is None
+
+
 def test_responses_names_a_failed_response_that_carries_no_error():
     def answer_failed_without_error(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=_responses_body("failed", error=None))
@@ -7008,7 +7035,9 @@ class _FailureCostRecorder(CustomLogger):
         super().__init__()
         self.failure_costs: Final[asyncio.Queue[object]] = asyncio.Queue()
 
-    async def async_log_failure_event(self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object) -> None:
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
         self.failure_costs.put_nowait(kwargs.get("response_cost"))
 
 
@@ -7072,3 +7101,132 @@ async def test_router_retries_a_response_the_provider_failed_with_a_server_error
         await router.aresponses(model="served-model", input="hello")  # pyright: ignore[reportUnknownMemberType]  # Router.aresponses kwargs are untyped
 
     assert vllm.call_count == 3
+
+
+_FAILED_ATTEMPT_USAGE: Final = MappingProxyType({"input_tokens": 1000, "output_tokens": 500, "total_tokens": 1500})
+_ANSWER_USAGE: Final = MappingProxyType({"input_tokens": 10, "output_tokens": 5, "total_tokens": 15})
+_ATTEMPT_PRICES: Final = MappingProxyType({"input_cost_per_token": 0.001, "output_cost_per_token": 0.002})
+_FALLBACK_VLLM_PARAMS: Final = MappingProxyType(
+    {**_HOSTED_VLLM_PARAMS, "api_base": "https://fake-vllm-fallback.test/v1"}
+)
+
+
+def _attempt_cost(usage: Mapping[str, int]) -> float:
+    return (
+        usage["input_tokens"] * _ATTEMPT_PRICES["input_cost_per_token"]
+        + usage["output_tokens"] * _ATTEMPT_PRICES["output_cost_per_token"]
+    )
+
+
+def _failed_attempt(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json=_responses_body(
+            "failed",
+            error={"type": "server_error", "code": "server_error", "message": "upstream crashed"},
+            usage=dict(_FAILED_ATTEMPT_USAGE),
+        ),
+    )
+
+
+def _answered_attempt(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(200, json=_responses_body("completed", usage=dict(_ANSWER_USAGE)))
+
+
+class _SuccessRowRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.success_rows: Final[asyncio.Queue[tuple[object, object]]] = asyncio.Queue()
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        row: Final = kwargs.get("standard_logging_object")
+        assert isinstance(row, dict)
+        self.success_rows.put_nowait((row.get("response_cost"), row.get("total_tokens")))
+
+
+def _request_logging_obj(recorder: CustomLogger, call_id: str) -> Logging:
+    return Logging(
+        model="hosted_vllm/served-model",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=False,
+        call_type="aresponses",
+        start_time=datetime.datetime(2026, 1, 1),
+        litellm_call_id=call_id,
+        function_id=call_id,
+        dynamic_async_success_callbacks=[recorder],
+    )
+
+
+def _router_retrying_once() -> litellm.Router:
+    return litellm.Router(
+        model_list=[{"model_name": "served-model", "litellm_params": {**_HOSTED_VLLM_PARAMS, **_ATTEMPT_PRICES}}],
+        num_retries=1,
+        retry_after=0,
+    )
+
+
+def _router_falling_back() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {"model_name": "served-model", "litellm_params": {**_HOSTED_VLLM_PARAMS, **_ATTEMPT_PRICES}},
+            {"model_name": "fallback-model", "litellm_params": {**_FALLBACK_VLLM_PARAMS, **_ATTEMPT_PRICES}},
+        ],
+        fallbacks=[{"served-model": ["fallback-model"]}],
+        num_retries=0,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("router", "retry_answers"),
+    [
+        pytest.param(_router_retrying_once, True, id="a same-group retry answers"),
+        pytest.param(_router_falling_back, False, id="a fallback answers"),
+    ],
+)
+async def test_the_attempt_that_answers_bills_a_failed_response_the_provider_charged_for(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    router: Callable[[], litellm.Router],
+    retry_answers: bool,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _SuccessRowRecorder()
+    respx_mock.route(host="fake-vllm.test").mock(
+        side_effect=(_failed_attempt, _answered_attempt) if retry_answers else _failed_attempt
+    )
+    respx_mock.route(host="fake-vllm-fallback.test").mock(side_effect=_answered_attempt)
+
+    response: Final = await router().aresponses(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # Router.aresponses kwargs are untyped
+        model="served-model", input="hello", litellm_logging_obj=_request_logging_obj(recorder, "recovered-failed-body")
+    )
+
+    assert isinstance(response, ResponsesAPIResponse)
+    assert response.status == "completed"
+    response_cost, total_tokens = await asyncio.wait_for(recorder.success_rows.get(), timeout=5)
+    assert response_cost == pytest.approx(_attempt_cost(_FAILED_ATTEMPT_USAGE) + _attempt_cost(_ANSWER_USAGE))
+    assert total_tokens == _FAILED_ATTEMPT_USAGE["total_tokens"] + _ANSWER_USAGE["total_tokens"]
+
+
+@pytest.mark.asyncio
+async def test_a_request_whose_every_attempt_answers_a_failed_response_bills_each_one_once(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _SuccessRowRecorder()
+    logging_obj: Final = _request_logging_obj(recorder, "every-attempt-failed")
+    respx_mock.route(host="fake-vllm.test").mock(side_effect=_failed_attempt)
+
+    with pytest.raises(litellm.InternalServerError, match="upstream crashed"):
+        await _router_retrying_once().aresponses(  # pyright: ignore[reportUnknownMemberType]  # Router.aresponses kwargs are untyped
+            model="served-model", input="hello", litellm_logging_obj=logging_obj
+        )
+
+    failure_row: Final = _failure_fields_to_lift(MappingProxyType({"litellm_logging_obj": logging_obj}))
+    billed_usage: Final = failure_row["combined_usage_object"]
+    assert isinstance(billed_usage, litellm.Usage)
+    assert billed_usage.total_tokens == 2 * _FAILED_ATTEMPT_USAGE["total_tokens"]
+    assert failure_row["response_cost"] == pytest.approx(2 * _attempt_cost(_FAILED_ATTEMPT_USAGE))
+    assert recorder.success_rows.empty()

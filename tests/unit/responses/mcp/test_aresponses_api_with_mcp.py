@@ -2296,8 +2296,24 @@ def _router_retrying_once() -> litellm.Router:
     )
 
 
+def _router_falling_back_once() -> litellm.Router:
+    deployment: Final = {
+        "model": "openai/gpt-5.6",
+        "api_key": "sk-mcp-rounds",
+        "api_base": "https://mcp-rounds.example.com/v1",
+    }
+    return litellm.Router(
+        model_list=[
+            {"model_name": "gpt-5.6", "litellm_params": dict(deployment)},
+            {"model_name": "gpt-5.6-fallback", "litellm_params": dict(deployment)},
+        ],
+        fallbacks=[{"gpt-5.6": ["gpt-5.6-fallback"]}],
+        num_retries=0,
+    )
+
+
 @pytest.mark.asyncio
-async def test_non_stream_auto_execute_retried_after_a_failed_follow_up_bills_each_attempt_its_own_rounds(
+async def test_non_stream_auto_execute_retried_after_a_failed_follow_up_bills_the_paid_first_round_on_the_retry(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):
     _serve_responses(
@@ -2317,16 +2333,50 @@ async def test_non_stream_auto_execute_retried_after_a_failed_follow_up_bills_ea
     await _settle(lambda: len(recorder.logged) > 0)
 
     assert isinstance(response, ResponsesAPIResponse)
-    assert response.usage is not None
-    assert len(recorder.failed) == 1
-    assert (recorder.failed[0]["prompt_tokens"], recorder.failed[0]["completion_tokens"]) == (71, 19)
-    assert recorder.failed[0]["response_cost"] == pytest.approx(_round_cost(_ROUND_ONE_BODY))
     assert len(recorder.logged) == 1
     row: Final = recorder.logged[0]
     assert row["id"] == response.id
-    assert (row["prompt_tokens"], row["completion_tokens"]) == (500 + 149, 40 + 5)
-    assert (row["prompt_tokens"], row["completion_tokens"]) == (response.usage.input_tokens, response.usage.output_tokens)
-    assert row["response_cost"] == pytest.approx(_round_cost(_RETRIED_ROUND_ONE) + _round_cost(_ROUND_TWO_BODY))
+    assert (row["prompt_tokens"], row["completion_tokens"]) == (71 + 500 + 149, 19 + 40 + 5)
+    assert row["response_cost"] == pytest.approx(
+        _round_cost(_ROUND_ONE_BODY) + _round_cost(_RETRIED_ROUND_ONE) + _round_cost(_ROUND_TWO_BODY)
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "router",
+    [
+        pytest.param(_router_retrying_once, id="a same-group retry answers"),
+        pytest.param(_router_falling_back_once, id="a fallback answers"),
+    ],
+)
+async def test_non_stream_auto_execute_recovered_after_a_status_failed_follow_up_bills_its_rounds_on_the_success_row(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, router: Callable[[], litellm.Router]
+):
+    _serve_rounds(
+        respx_mock, monkeypatch, (_ROUND_ONE_BODY, _FAILED_ROUND_TWO_BODY, _RETRIED_ROUND_ONE, _ROUND_TWO_BODY)
+    )
+    recorder: Final = _RoundRecorder()
+
+    with _echo_tool_served("PING"):
+        response: Final = await router().aresponses(
+            model="gpt-5.6",
+            input="Call echo with PING",
+            tools=[dict(_ECHO_MCP_TOOL)],
+            litellm_logging_obj=_rounds_logging_obj(recorder, "mcp-rounds-recovered-after-status-failed"),
+        )
+    await _settle(lambda: len(recorder.logged) > 0)
+
+    assert isinstance(response, ResponsesAPIResponse)
+    assert len(recorder.logged) == 1
+    row: Final = recorder.logged[0]
+    assert (row["prompt_tokens"], row["completion_tokens"]) == (71 + 149 + 500 + 149, 19 + 5 + 40 + 5)
+    assert row["response_cost"] == pytest.approx(
+        _round_cost(_ROUND_ONE_BODY)
+        + _round_cost(_FAILED_ROUND_TWO_BODY)
+        + _round_cost(_RETRIED_ROUND_ONE)
+        + _round_cost(_ROUND_TWO_BODY)
+    )
 
 
 @pytest.mark.asyncio
