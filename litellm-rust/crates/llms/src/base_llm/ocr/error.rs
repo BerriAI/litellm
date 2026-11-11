@@ -126,6 +126,8 @@ pub enum Error {
 pub enum PagesFault {
     #[error("page index is out of range")]
     OutOfRange,
+    #[error("page numbers start at 1")]
+    BelowFirstPage,
     #[error("negative page index")]
     Negative,
     #[error("expected only integers or only strings")]

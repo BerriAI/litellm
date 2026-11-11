@@ -74,8 +74,13 @@ async fn pages_features_and_extra_options_map_to_the_analyze_call() {
 #[case(json!({"outputContentFormat": "html"}), Error::OutputContentFormat)]
 #[case(json!({"extra_body": {"outputContentFormat": "html"}}), Error::OutputContentFormat)]
 #[case(json!({"extra_body": {"pages": [-1]}}), Error::Pages(PagesFault::Negative))]
-#[case(json!({"extra_body": {"pages": [0]}}), Error::Pages(PagesFault::OutOfRange))]
+#[case(json!({"extra_body": {"pages": [0]}}), Error::Pages(PagesFault::BelowFirstPage))]
 #[case(json!({"extra_body": {"features": 5}}), Error::Features)]
+#[case(json!({"pages": "abc", "extra_body": {"pages": "2"}}), Error::Pages(PagesFault::Range))]
+#[case(
+    json!({"extra_body": {"queryFields": 5}}),
+    Error::RequestField { path: "extra_body.queryFields".into(), cause: None }
+)]
 #[tokio::test]
 async fn invalid_pages_features_and_format_are_rejected_before_sending(
     #[case] options: Value,
@@ -327,6 +332,40 @@ async fn azure_query_params_in_extra_body_reach_the_analyze_query(
         ]
         .map(|name| sent.query(name)),
         expected.map(|value| value.map(String::from))
+    );
+}
+
+#[tokio::test]
+async fn other_azure_query_options_in_extra_body_reach_the_analyze_query() {
+    let upstream = upstream([json_response(json!({
+        "status": "succeeded",
+        "analyzeResult": {"pages": [{"pageNumber": 1, "lines": [{"content": "hello"}]}]}
+    }))])
+    .await;
+
+    perform(ocr_request(
+        LAYOUT_MODEL,
+        &upstream.uri(),
+        json!({"extra_body": {
+            "features": ["queryFields"],
+            "queryFields": ["Total", "Vendor"],
+            "locale": "en-US",
+            "output": "figures"
+        }}),
+    ))
+    .await
+    .unwrap();
+
+    let sent = only_request(&upstream).await;
+    assert_eq!(
+        ["features", "queryFields", "locale", "output"].map(|name| sent.query(name)),
+        [
+            Some("queryFields"),
+            Some("Total,Vendor"),
+            Some("en-US"),
+            Some("figures")
+        ]
+        .map(|value| value.map(String::from))
     );
 }
 

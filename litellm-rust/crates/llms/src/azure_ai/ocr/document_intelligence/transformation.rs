@@ -40,6 +40,9 @@ const OUTPUT_CONTENT_FORMAT_PARAM: &str = "outputContentFormat";
 const OUTPUT_CONTENT_FORMAT_ALIAS: &str = "output_content_format";
 const PAGES_PARAM: &str = "pages";
 const FEATURES_PARAM: &str = "features";
+const LOCALE_PARAM: &str = "locale";
+const QUERY_FIELDS_PARAM: &str = "queryFields";
+const OUTPUT_PARAM: &str = "output";
 const EXTRA_BODY_PARAM: &str = "extra_body";
 const CODE_POINT_STRING_INDEX: &str = "unicodeCodePoint";
 const STRING_INDEX_TYPE_FIELD: &str = "stringIndexType";
@@ -77,6 +80,12 @@ pub struct DocumentIntelligenceParams {
     pub output_content_format: Option<OutputContentFormat>,
     #[serde(rename = "stringIndexType", skip_serializing_if = "Option::is_none")]
     pub string_index_type: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locale: Option<String>,
+    #[serde(rename = "queryFields", skip_serializing_if = "Option::is_none")]
+    pub query_fields: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -224,7 +233,7 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
             non_default_params,
             OUTPUT_CONTENT_FORMAT_PARAM,
             parse_optional_output_content_format,
-            || requested_output_content_format(non_default_params),
+            requested_output_content_format(non_default_params)?,
         )?;
         let slices_markdown_pages = output_content_format == Some(OutputContentFormat::Markdown)
             && response_format(non_default_params)? != OcrResponseFormat::Native
@@ -234,21 +243,22 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
                 non_default_params,
                 PAGES_PARAM,
                 |pages| normalize_pages_param(pages, PageNumbering::Azure),
-                || {
-                    normalize_pages_param(
-                        non_default_params.get(PAGES_PARAM),
-                        PageNumbering::ZeroBasedIndex,
-                    )
-                },
+                normalize_pages_param(
+                    non_default_params.get(PAGES_PARAM),
+                    PageNumbering::ZeroBasedIndex,
+                )?,
             )?,
             features: resolve_query_option(
                 non_default_params,
                 FEATURES_PARAM,
                 normalize_features_param,
-                || normalize_features_param(non_default_params.get(FEATURES_PARAM)),
+                normalize_features_param(non_default_params.get(FEATURES_PARAM))?,
             )?,
             output_content_format,
             string_index_type: slices_markdown_pages.then_some(CODE_POINT_STRING_INDEX),
+            locale: extra_body_query_list(non_default_params, LOCALE_PARAM)?,
+            query_fields: extra_body_query_list(non_default_params, QUERY_FIELDS_PARAM)?,
+            output: extra_body_query_list(non_default_params, OUTPUT_PARAM)?,
         })
     }
 
@@ -355,7 +365,7 @@ impl PageNumbering {
             Self::ZeroBasedIndex => page
                 .checked_add(1)
                 .ok_or(Error::Pages(PagesFault::OutOfRange)),
-            Self::Azure if page == 0 => Err(Error::Pages(PagesFault::OutOfRange)),
+            Self::Azure if page == 0 => Err(Error::Pages(PagesFault::BelowFirstPage)),
             Self::Azure => Ok(page),
         }
     }
@@ -450,25 +460,62 @@ fn resolve_query_option<T>(
     arguments: &CallArguments,
     name: &str,
     parse_extra_body_value: impl FnOnce(Option<&Value>) -> Result<Option<T>, Error>,
-    top_level_value: impl FnOnce() -> Result<Option<T>, Error>,
+    top_level_value: Option<T>,
 ) -> Result<Option<T>, Error> {
     let requested = arguments
         .get(EXTRA_BODY_PARAM)
-        .and_then(|extra_body| extra_body.get(name));
+        .and_then(|extra_body| extra_body.get(name))
+        .filter(|value| !is_unset(value));
     match parse_extra_body_value(requested) {
-        Ok(None) => top_level_value(),
-        Err(_) if drops_unsupported_params(arguments) => top_level_value(),
+        Ok(None) => Ok(top_level_value),
+        Err(_) if drops_unsupported_params(arguments) => Ok(top_level_value),
         resolved => resolved,
     }
+}
+
+fn extra_body_query_list(
+    arguments: &CallArguments,
+    name: &'static str,
+) -> Result<Option<String>, Error> {
+    resolve_query_option(
+        arguments,
+        name,
+        |value| normalize_query_list(value, name),
+        None,
+    )
+}
+
+fn normalize_query_list(
+    value: Option<&Value>,
+    name: &'static str,
+) -> Result<Option<String>, Error> {
+    let invalid = || Error::RequestField {
+        path: format!("{EXTRA_BODY_PARAM}.{name}"),
+        cause: None,
+    };
+    let tokens = match value {
+        None => return Ok(None),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|item| item.as_str().ok_or_else(invalid))
+            .collect::<Result<Vec<_>, _>>()?,
+        Some(Value::String(items)) => items.split(',').collect(),
+        Some(_) => return Err(invalid()),
+    };
+    if tokens.is_empty() {
+        return Ok(None);
+    }
+    let normalized = tokens.iter().map(|token| token.trim()).collect::<Vec<_>>();
+    if normalized.iter().any(|token| token.is_empty()) {
+        return Err(invalid());
+    }
+    Ok(Some(normalized.join(",")))
 }
 
 fn parse_optional_output_content_format(
     format: Option<&Value>,
 ) -> Result<Option<OutputContentFormat>, Error> {
-    format
-        .filter(|format| !is_unset(format))
-        .map(parse_output_content_format)
-        .transpose()
+    format.map(parse_output_content_format).transpose()
 }
 
 fn requested_output_content_format(
@@ -484,10 +531,10 @@ fn requested_output_content_format(
     }
 }
 
-fn is_unset(format: &Value) -> bool {
-    match format {
+fn is_unset(value: &Value) -> bool {
+    match value {
         Value::Null => true,
-        Value::String(format) => format.trim().is_empty(),
+        Value::String(value) => value.trim().is_empty(),
         _ => false,
     }
 }
@@ -823,6 +870,15 @@ impl AzureDocumentIntelligenceOcrConfig {
                             params
                                 .string_index_type
                                 .map(|index_type| ("stringIndexType", index_type)),
+                        )
+                        .chain(
+                            [
+                                (LOCALE_PARAM, params.locale.as_deref()),
+                                (QUERY_FIELDS_PARAM, params.query_fields.as_deref()),
+                                (OUTPUT_PARAM, params.output.as_deref()),
+                            ]
+                            .into_iter()
+                            .filter_map(|(name, value)| value.map(|value| (name, value))),
                         ),
                 )
                 .into_string()
@@ -1212,11 +1268,15 @@ mod tests {
     }
 
     #[rstest]
-    #[case::zero_page(json!({"pages": [0]}), Error::Pages(PagesFault::OutOfRange))]
+    #[case::zero_page(json!({"pages": [0]}), Error::Pages(PagesFault::BelowFirstPage))]
     #[case::negative_page(json!({"pages": [-1]}), Error::Pages(PagesFault::Negative))]
     #[case::bad_range(json!({"pages": "abc"}), Error::Pages(PagesFault::Range))]
     #[case::bad_features(json!({"features": 5}), Error::Features)]
     #[case::bad_format(json!({"outputContentFormat": "html"}), Error::OutputContentFormat)]
+    #[case::bad_locale(json!({"locale": 5}), extra_body_field_error("locale"))]
+    #[case::bad_query_fields(json!({"queryFields": ["Total", 7]}), extra_body_field_error("queryFields"))]
+    #[case::blank_query_field(json!({"queryFields": "Total,,Vendor"}), extra_body_field_error("queryFields"))]
+    #[case::bad_output(json!({"output": {"pdf": true}}), extra_body_field_error("output"))]
     fn invalid_extra_body_query_option_is_a_request_error(
         #[case] extra_body: Value,
         #[case] expected: Error,
@@ -1232,6 +1292,9 @@ mod tests {
     #[case::zero_page(json!({"pages": [0]}))]
     #[case::bad_features(json!({"features": 5}))]
     #[case::bad_format(json!({"outputContentFormat": "html"}))]
+    #[case::bad_locale(json!({"locale": 5}))]
+    #[case::bad_query_fields(json!({"queryFields": "Total,,Vendor"}))]
+    #[case::bad_output(json!({"output": {"pdf": true}}))]
     fn drop_params_drops_an_invalid_extra_body_query_option(#[case] extra_body: Value) {
         let mapped = map(json!({"drop_params": true, "extra_body": extra_body})).unwrap();
 
@@ -1268,11 +1331,63 @@ mod tests {
         json!({"outputContentFormat": "text", "extra_body": {"outputContentFormat": " "}}),
         json!({"outputContentFormat": "text"})
     )]
+    #[case::blank_pages(json!({"pages": [0], "extra_body": {"pages": ""}}), json!({"pages": "1"}))]
+    #[case::blank_features(
+        json!({"features": "languages", "extra_body": {"features": " "}}),
+        json!({"features": "languages"})
+    )]
+    #[case::blank_locale(json!({"extra_body": {"locale": ""}}), json!({}))]
     fn unset_or_dropped_extra_body_option_falls_back_to_the_top_level_value(
         #[case] options: Value,
         #[case] expected: Value,
     ) {
         let mapped = map(options).unwrap();
+
+        assert_eq!(serde_json::to_value(mapped).unwrap(), expected);
+    }
+
+    fn extra_body_field_error(name: &str) -> Error {
+        Error::RequestField {
+            path: format!("extra_body.{name}"),
+            cause: None,
+        }
+    }
+
+    #[rstest]
+    #[case::bad_pages(json!({"pages": "abc", "extra_body": {"pages": "2"}}), Error::Pages(PagesFault::Range))]
+    #[case::bad_features(
+        json!({"features": 5, "extra_body": {"features": "languages"}}),
+        Error::Features
+    )]
+    #[case::bad_format(
+        json!({"outputContentFormat": "html", "extra_body": {"outputContentFormat": "markdown"}}),
+        Error::OutputContentFormat
+    )]
+    fn invalid_top_level_option_is_a_request_error_when_extra_body_sets_it(
+        #[case] options: Value,
+        #[case] expected: Error,
+    ) {
+        let error = map(options).unwrap_err();
+
+        assert_eq!(format!("{error:?}"), format!("{expected:?}"));
+        assert_eq!(error.http_status_code(), Some(400));
+    }
+
+    #[rstest]
+    #[case::strings(
+        json!({"locale": " en-US ", "queryFields": "Total, Vendor", "output": "figures"}),
+        json!({"locale": "en-US", "queryFields": "Total,Vendor", "output": "figures"})
+    )]
+    #[case::lists(
+        json!({"locale": "fr", "queryFields": ["Total", "Vendor"], "output": ["pdf", "figures"]}),
+        json!({"locale": "fr", "queryFields": "Total,Vendor", "output": "pdf,figures"})
+    )]
+    #[case::empty_lists(json!({"queryFields": [], "output": []}), json!({}))]
+    fn other_extra_body_query_options_are_mapped(
+        #[case] extra_body: Value,
+        #[case] expected: Value,
+    ) {
+        let mapped = map(json!({"extra_body": extra_body})).unwrap();
 
         assert_eq!(serde_json::to_value(mapped).unwrap(), expected);
     }
