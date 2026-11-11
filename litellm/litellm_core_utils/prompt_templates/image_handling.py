@@ -23,6 +23,7 @@ from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     REMOTE_URL_PREFIXES,
     infer_content_type_from_url_and_content,
+    is_pdf_file_part,
 )
 from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get, safe_get
 from litellm.types.llms.openai import AllMessageValues
@@ -213,6 +214,19 @@ def inline_remote_image_urls(media: RemoteMedia) -> bool:
 
 def inline_remote_files(media: RemoteMedia) -> bool:
     return media.part_type == "file"
+
+
+def is_unformatted_pdf_link(url: str, image_format: str | None) -> bool:
+    lowered: Final = url.lower()
+    return not image_format and (urlparse(lowered).path.endswith(".pdf") or lowered.endswith(".pdf"))
+
+
+def inline_remote_pdf_files(media: RemoteMedia) -> bool:
+    file_format: Final = media.fields.get("format")
+    return inline_remote_files(media) and (
+        is_pdf_file_part({"type": "file", "file": media.fields})
+        or is_unformatted_pdf_link(media.url, file_format if isinstance(file_format, str) else None)
+    )
 
 
 def _parse_remote_image(fields: Mapping[str, object]) -> _RemoteImage | None:

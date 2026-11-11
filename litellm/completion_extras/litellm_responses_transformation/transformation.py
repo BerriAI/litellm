@@ -37,6 +37,7 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, get_or_create_hidden_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    REMOTE_URL_PREFIXES,
     responses_reasoning_items_from_thinking_blocks,
     thinking_blocks_from_reasoning_items,
     with_prompt_cache_breakpoint,
@@ -687,13 +688,21 @@ def _prompt_cache_breakpoint_for_wire(marker: object, drop_params: bool) -> obje
         return None
 
 
+def _is_remote_file_id(key: str, value: object) -> bool:
+    return key == "file_id" and isinstance(value, str) and value.startswith(REMOTE_URL_PREFIXES)
+
+
 def _input_file_from_file_value(file_value: object) -> dict[str, object]:
     if not isinstance(file_value, dict):
         return {"type": "input_file"}
     file_dict: Final = cast("dict[str, object]", file_value)  # cast-ok: runtime dict checked
     return {
         "type": "input_file",
-        **{key: file_dict[key] for key in ("file_id", "file_data", "filename") if key in file_dict},
+        **{
+            ("file_url" if _is_remote_file_id(key, file_dict[key]) else key): file_dict[key]
+            for key in ("file_id", "file_data", "filename")
+            if key in file_dict
+        },
     }
 
 

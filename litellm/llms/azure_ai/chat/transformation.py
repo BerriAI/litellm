@@ -20,7 +20,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     is_pdf_file_part,
     message_without_file_formats,
 )
-from litellm.litellm_core_utils.prompt_templates.image_handling import inline_remote_files, inline_remote_media
+from litellm.litellm_core_utils.prompt_templates.image_handling import inline_remote_media, inline_remote_pdf_files
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.azure_ai.common_utils import (
     api_key_header_for_base,
@@ -419,7 +419,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         optional_params.pop("max_retries", None)
         deployment_params: Final = as_str_mapping(litellm_params)
         base_model: Final = deployment_params.get("base_model") if deployment_params is not None else None
-        inlined_messages: Final = inline_remote_media(messages, should_inline=inline_remote_files)
+        inlined_messages: Final = inline_remote_media(messages, should_inline=inline_remote_pdf_files)
         return {
             "model": model,
             "messages": self._transform_messages(
