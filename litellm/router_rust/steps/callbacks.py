@@ -27,6 +27,8 @@ from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import PROMPT_CACHE_PIN_CACHE_MAX_SIZE
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger_v2.enums import Hook
+from litellm.integrations.custom_logger_v2.host import has_natives, run_legacy_hook
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.routing_common_utils import get_request_team_id
 from litellm.router_strategy.base_routing_strategy import BaseRoutingStrategy
@@ -457,6 +459,19 @@ class OptionalChecks:
         return any(filters_deployments(callback) for callback in self.routing_callbacks())
 
     async def filter_deployments(
+        self,
+        model: str,
+        deployments: list[dict[str, object]],  # mutable-ok: CustomLogger deployment-list contract
+        messages: object,
+        request: Mapping[str, object],
+    ) -> tuple[list[object], str | None]:  # mutable-ok: as the filters return it
+        if not has_natives(Hook.filter_deployments):
+            return await self._filter_deployments(model, deployments, messages, request)
+        return await run_legacy_hook(
+            Hook.filter_deployments, lambda _: self._filter_deployments(model, deployments, messages, request)
+        )
+
+    async def _filter_deployments(
         self,
         model: str,
         deployments: list[dict[str, object]],  # mutable-ok: CustomLogger deployment-list contract

@@ -13,6 +13,8 @@ from pydantic import TypeAdapter
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger_v2.enums import Hook
+from litellm.integrations.custom_logger_v2.host import run_legacy_hook
 from litellm.litellm_core_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
     get_fallback_error_info,
@@ -976,6 +978,12 @@ async def run_async_fallback(
 
 
 async def log_success_fallback_event(original_model_group: str, kwargs: dict, original_exception: Exception):
+    return await run_legacy_hook(
+        Hook.router_event, lambda _: _log_success_fallback_event(original_model_group, kwargs, original_exception)
+    )
+
+
+async def _log_success_fallback_event(original_model_group: str, kwargs: dict, original_exception: Exception):
     """
     Log a successful fallback event to all registered callbacks.
 
@@ -1004,6 +1012,12 @@ async def log_success_fallback_event(original_model_group: str, kwargs: dict, or
 
 
 async def log_failure_fallback_event(original_model_group: str, kwargs: dict, original_exception: Exception):
+    return await run_legacy_hook(
+        Hook.router_event, lambda _: _log_failure_fallback_event(original_model_group, kwargs, original_exception)
+    )
+
+
+async def _log_failure_fallback_event(original_model_group: str, kwargs: dict, original_exception: Exception):
     """
     Log a failed fallback event to all registered callbacks.
 
