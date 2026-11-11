@@ -46,8 +46,10 @@ def store_response(
     /,
     **kwargs: object,  # kwargs-ok: the cache call's own arguments
 ) -> None:
-    from litellm.caching.caching_handler import create_cache_write_task
+    from litellm.caching.caching_handler import create_cache_write_task, is_response_without_output
 
+    if is_response_without_output(response):
+        return
     create_cache_write_task(
         lambda: cache.async_add_cache(  # pyright: ignore[reportUnknownMemberType]  # Cache.async_add_cache leaves its result untyped
             _python_entry(response),
@@ -62,8 +64,10 @@ def store_verbatim(
     /,
     **kwargs: object,  # kwargs-ok: the cache call's own arguments
 ) -> None:
-    from litellm.caching.caching_handler import create_cache_write_task
+    from litellm.caching.caching_handler import create_cache_write_task, is_response_without_output
 
+    if is_response_without_output(response):
+        return
     create_cache_write_task(
         lambda: cache.async_add_cache(  # pyright: ignore[reportUnknownMemberType]  # Cache.async_add_cache leaves its result untyped
             response,
@@ -78,24 +82,45 @@ async def store_stream(
     /,
     **kwargs: object,  # kwargs-ok: the cache call's own arguments
 ) -> None:
-    from litellm.caching.caching_handler import LLMCachingHandler
+    from litellm._logging import verbose_logger
+    from litellm.caching.caching_handler import LLMCachingHandler, create_cache_write_task
     from litellm.types.caching import CACHED_STREAM_EVENTS_KEY
 
     events: Final = entry.get(CACHED_STREAM_EVENTS_KEY)
     handler: Final = getattr(kwargs.get("litellm_logging_obj"), "llm_caching_handler", None)
-    await cache.async_add_cache(  # pyright: ignore[reportUnknownMemberType]  # Cache.async_add_cache leaves its result untyped
-        {**entry, CACHED_STREAM_EVENTS_KEY: tuple(_EVENTS.validate_python(events))}
-        if isinstance(events, list)
-        else entry,
-        dynamic_cache_object=handler.dual_cache if isinstance(handler, LLMCachingHandler) else None,
-        **kwargs,  # pyright: ignore[reportArgumentType]  # the cache call's own keyword arguments, as Python passes them
-    )
+
+    async def write() -> None:
+        try:
+            await cache.async_add_cache(  # pyright: ignore[reportUnknownMemberType]  # Cache.async_add_cache leaves its result untyped
+                {**entry, CACHED_STREAM_EVENTS_KEY: tuple(_EVENTS.validate_python(events))}
+                if isinstance(events, list)
+                else entry,
+                dynamic_cache_object=handler.dual_cache if isinstance(handler, LLMCachingHandler) else None,
+                **kwargs,  # pyright: ignore[reportArgumentType]  # the cache call's own keyword arguments, as Python passes them
+            )
+        except Exception as e:  # noqa: BLE001  # a cache write must never surface as a client-visible stream error
+            verbose_logger.exception("Anthropic Messages stream cache write failed: %s", e)
+
+    create_cache_write_task(write)
+
+
+def caching_handler(
+    **kwargs: object,  # kwargs-ok: the cache call's own arguments
+) -> object | None:
+    from litellm.caching.caching_handler import LLMCachingHandler
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj: Final = kwargs.get("litellm_logging_obj")
+    if not isinstance(logging_obj, Logging) or not isinstance(logging_obj.llm_caching_handler, LLMCachingHandler):
+        return None
+    return logging_obj.llm_caching_handler
 
 
 def wrap_stream(
     _cache: Cache,
     original_function: Callable[..., object],
     stream: object,
+    read_handler: object | None,
     /,
     **kwargs: object,  # kwargs-ok: the cache call's own arguments
 ) -> object:
@@ -106,8 +131,8 @@ def wrap_stream(
     if not isinstance(logging_obj, Logging):
         return stream
     handler: Final = (
-        logging_obj.llm_caching_handler
-        if isinstance(logging_obj.llm_caching_handler, LLMCachingHandler)
+        read_handler
+        if isinstance(read_handler, LLMCachingHandler)
         else LLMCachingHandler(
             original_function=original_function, request_kwargs=dict(kwargs), start_time=logging_obj.start_time
         )

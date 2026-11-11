@@ -216,9 +216,12 @@ async def test_python_fallback_does_not_claim_rust_execution(missing: bool) -> N
 @pytest.mark.parametrize("shape", ("model", "dict"))
 @pytest.mark.parametrize("asynchronous", (False, True))
 @pytest.mark.parametrize("cache_key", (None, "test-cache-key"))
+@pytest.mark.parametrize("route", (Route.MESSAGES, Route.OCR))
 async def test_native_response_marker_reaches_caller_with_existing_metadata(
-    shape: str, asynchronous: bool, cache_key: str | None
+    shape: str, asynchronous: bool, cache_key: str | None, route: Route
 ) -> None:
+    context: Final = RouteContext(route, provider="anthropic", model="model")
+    required: Final = (RouteRule(route, Rollout.RUST_REQUIRED, providers=frozenset({"anthropic"})),)
     hidden: Final = {
         "additional_headers": {"x-request-id": "upstream"},
         "response_cost": 0.01,
@@ -242,11 +245,9 @@ async def test_native_response_marker_reaches_caller_with_existing_metadata(
         return python()
 
     result: Final = (
-        await runtime.arun(CONTEXT, binding=bound, native=anative, python=apython, rules=rules(Rollout.RUST_REQUIRED))
+        await runtime.arun(context, binding=bound, native=anative, python=apython, rules=required)
         if asynchronous
-        else runtime.run(
-            CONTEXT, binding=bound, native=lambda fn: fn(), python=python, rules=rules(Rollout.RUST_REQUIRED)
-        )
+        else runtime.run(context, binding=bound, native=lambda fn: fn(), python=python, rules=required)
     )
     assert result is response
     assert get_hidden_params_dict(result) == (
@@ -261,7 +262,7 @@ async def test_native_response_marker_reaches_caller_with_existing_metadata(
             "additional_headers": {
                 "x-request-id": "upstream",
                 "x-litellm-rust": "true",
-                **({"x-litellm-cache-key": cache_key} if cache_key is not None else {}),
+                **({"x-litellm-cache-key": cache_key} if cache_key is not None and route is not Route.MESSAGES else {}),
             },
             **({"cache_key": cache_key} if cache_key is not None else {}),
         }

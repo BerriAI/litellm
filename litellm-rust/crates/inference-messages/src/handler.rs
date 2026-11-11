@@ -170,6 +170,7 @@ pub(super) async fn execute(
     model: String,
     call: MessagesCall,
     secrets: Secrets,
+    requested_stream: bool,
     context: &CallContext<'_, impl Interceptors<Error>>,
 ) -> Result<MessagesCallResponse, Error> {
     let caller_keyed = caller_keyed(route).is_some();
@@ -214,6 +215,9 @@ pub(super) async fn execute(
         }
         ResultSource::Cache { .. } | ResultSource::Host => output,
     };
+    if !requested_stream && matches!(output, MessagesCallResponse::Stream { .. }) {
+        return Ok(output);
+    }
     Ok(cache.finish(output, &source).await)
 }
 

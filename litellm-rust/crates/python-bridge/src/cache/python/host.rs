@@ -20,6 +20,7 @@ pub(crate) struct PythonCache {
     cache: Option<Py<PyAny>>,
     function: Option<Py<PyAny>>,
     arguments: Option<Py<PyDict>>,
+    read_handler: Option<Py<PyAny>>,
     pending: Option<Pending>,
     asynchronous: bool,
     deferred: bool,
@@ -31,6 +32,7 @@ impl PythonCache {
             cache: None,
             function: None,
             arguments: None,
+            read_handler: None,
             pending: None,
             asynchronous,
             deferred: false,
@@ -147,7 +149,10 @@ impl PythonCache {
         };
         py.import(CACHE_HOST_MODULE)?
             .getattr("wrap_stream")?
-            .call((cache, function, stream), Some(&arguments.bind(py).copy()?))
+            .call(
+                (cache, function, stream, &self.read_handler),
+                Some(&arguments.bind(py).copy()?),
+            )
             .map(Bound::unbind)
     }
 
@@ -165,6 +170,9 @@ impl PythonCache {
         };
         match self.pending.take() {
             Some(Pending::Lookup(reply)) => {
+                if self.asynchronous {
+                    self.read_handler = self.caching_handler(py).ok().flatten();
+                }
                 let value = result.map_err(Error::unavailable).and_then(|value| {
                     if value.bind(py).is_none() {
                         Ok(None)
@@ -184,8 +192,20 @@ impl PythonCache {
         Ok(None)
     }
 
+    fn caching_handler(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        let Some(arguments) = self.arguments.as_ref() else {
+            return Ok(None);
+        };
+        let handler = py
+            .import(CACHE_HOST_MODULE)?
+            .getattr("caching_handler")?
+            .call((), Some(arguments.bind(py)))?;
+        Ok((!handler.is_none()).then(|| handler.unbind()))
+    }
+
     pub fn close(&mut self) {
         self.pending = None;
+        self.read_handler = None;
         self.deferred = false;
         self.cache = None;
         self.function = None;
@@ -195,6 +215,7 @@ impl PythonCache {
     pub fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
         visit.call(&self.cache)?;
         visit.call(&self.function)?;
-        visit.call(&self.arguments)
+        visit.call(&self.arguments)?;
+        visit.call(&self.read_handler)
     }
 }

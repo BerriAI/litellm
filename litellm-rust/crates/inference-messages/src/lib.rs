@@ -178,9 +178,17 @@ impl MessagesRoute {
                 return handler::answered(self, host_answer, config, model, stream, &context).await;
             }
             let secrets = self.secrets.resolve(config.config().secret_names()).await?;
-            handler::execute(self, config, model, call, secrets, &context)
-                .boxed()
-                .await
+            handler::execute(
+                self,
+                config,
+                model,
+                call,
+                secrets,
+                requested_stream,
+                &context,
+            )
+            .boxed()
+            .await
         })
         .await
     }

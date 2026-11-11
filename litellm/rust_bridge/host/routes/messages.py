@@ -18,6 +18,7 @@ from aiohttp.http_exceptions import ContentLengthError, TransferEncodingError
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
+from litellm.caching.caching_handler import LLMCachingHandler
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import exception_mapping_utils
 from litellm.litellm_core_utils.core_helpers import (
@@ -67,6 +68,7 @@ from litellm.llms.anthropic.messages.native.streaming_iterator import (
     _SSE_TERMINATOR_OVERLAP,  # pyright: ignore[reportPrivateUsage]  # the handler's own SSE framing
     _ends_a_frame,  # pyright: ignore[reportPrivateUsage]  # the handler's own SSE framing
     _stamped_sse_frame,  # pyright: ignore[reportPrivateUsage]  # the handler's own SSE framing
+    aclose_if_supported,
 )
 from litellm.llms.anthropic.messages.native.utils import normalize_native_messages, prepare_native_messages
 from litellm.llms.anthropic.messages.safeguards import (
@@ -448,6 +450,40 @@ def stream_hidden_params(headers: Sequence[tuple[str, str]]) -> Mapping[str, obj
     )
 
     return MessagesStreamHead(anthropic_messages_stream_hidden_params(httpx.Headers(list(headers))))
+
+
+async def _unrequested_stream_delivered(
+    stream: object,
+    kwargs: dict[str, object],  # mutable-ok: the call's own kwargs, as `@client` hands them on
+) -> object:
+    try:
+        delivered: Final = await callbacks_legacy_python.after_deployment_success(
+            kwargs, stream, CallTypes.anthropic_messages.value
+        )
+        function: Final = cached_function()
+        caching: Final = LLMCachingHandler(
+            original_function=function,
+            request_kwargs=kwargs,
+            start_time=datetime.datetime.now(),  # noqa: DTZ005  # @client's naive start time
+        )
+        store: Final = cast(  # cast-ok: the handler leaves its original_function untyped
+            Callable[..., Awaitable[None]], caching.async_set_cache
+        )
+        await store(result=delivered, original_function=function, kwargs=kwargs)
+    except BaseException:
+        await aclose_if_supported(stream)
+        raise
+    return delivered
+
+
+def unrequested_stream(
+    head: object,
+    kwargs: dict[str, object],  # mutable-ok: the call's own kwargs, as `@client` hands them on
+) -> None:
+    if not isinstance(head, MessagesStreamHead):
+        return
+    deliver: Final = functools.partial(_unrequested_stream_delivered, kwargs=kwargs)
+    head.deliver = deliver  # rebind-ok: the head carries the delivery back
 
 
 _UPSTREAM_ARGS: Final = TypeAdapter(tuple[int, str])
