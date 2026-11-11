@@ -2318,6 +2318,7 @@ async def test_anthropic_messages_marks_litellm_params_async():
 
     import litellm
     from litellm.integrations.custom_logger import CustomLogger
+    from litellm.llms.anthropic.messages.native import handler as python_messages
 
     captured = {}
     logged = asyncio.Event()
@@ -2332,7 +2333,7 @@ async def test_anthropic_messages_marks_litellm_params_async():
     original_callbacks = getattr(litellm, "callbacks", [])
     try:
         litellm.callbacks = [logger]
-        await litellm.anthropic_messages(
+        await python_messages.anthropic_messages(
             max_tokens=100,
             messages=[{"role": "user", "content": "Hey"}],
             model="anthropic/claude-sonnet-4-5",

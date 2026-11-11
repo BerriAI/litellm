@@ -526,6 +526,19 @@ def test_settings_add_only_the_affinity_header_the_caller_did_not_send(
     assert settings["extra_headers"] == expected
 
 
+@pytest.mark.parametrize("variable", ["ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"])
+def test_settings_add_the_affinity_header_for_an_anthropic_base_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch, variable: str
+) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    monkeypatch.setenv(variable, _OPENCODE)
+
+    settings: Final = messages_host.settings({}, {**_CALL, "model": "anthropic/claude-sonnet-4-5", "session_id": "s-1"})
+
+    assert settings["extra_headers"] == {"x-opencode-session": "s-1"}
+
+
 @pytest.mark.parametrize(
     ("extra", "expected"),
     [

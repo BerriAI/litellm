@@ -2611,3 +2611,19 @@ async def test_run_async_fallback_never_re_reserves_the_requested_model_group() 
     with pytest.raises(Exception, match="model group 'primary' failed"):
         await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
     assert checked == ["fallback"]
+
+
+@pytest.fixture(autouse=True)
+def _python_messages(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.rust_bridge import catalog
+    from litellm.rust_bridge.configuration import Rollout
+
+    monkeypatch.setattr(
+        catalog,
+        "RULES",
+        tuple(
+            rule
+            for rule in catalog.RULES
+            if not (rule.route is catalog.Route.MESSAGES and rule.rollout is Rollout.RUST_REQUIRED)
+        ),
+    )

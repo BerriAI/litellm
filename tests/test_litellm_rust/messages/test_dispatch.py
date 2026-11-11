@@ -1,5 +1,5 @@
 import inspect
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from typing import Final, cast  # noqa: TID251  # narrows legacy callable signatures for inspect
 
 import httpx
@@ -8,6 +8,7 @@ import pytest
 import litellm
 from litellm.caching.caching import Cache
 from litellm.constants import COMPLETION_HTTP_FALLBACK_SECONDS
+from litellm.exceptions import UnsupportedParamsError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.websearch_interception.handler import WebSearchInterceptionLogger
 from litellm.llms.anthropic.messages.native import handler as python_messages
@@ -25,6 +26,8 @@ from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES, NATIVE_ME
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.llms.anthropic import ANTHROPIC_ADVISOR_TOOL_TYPE
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
+from tests.test_litellm_rust.support.isolation import rebound
+from tests.test_litellm_rust.support.routing import routed
 
 MESSAGES: Final = [{"role": "user", "content": "hi"}]
 PYTHON_RULES: Final[Rules] = ()
@@ -855,3 +858,156 @@ def test_a_federated_request_stays_native(monkeypatch: pytest.MonkeyPatch) -> No
         rules=rules,
     )
     assert served is native_result
+
+
+def _shipped_native(calls: list[str]) -> None:  # mutable-ok: records which native entry ran
+    def native(request: NativeCall) -> AnthropicMessagesResponse:
+        calls.append("sync")
+        return response()
+
+    async def anative(request: NativeCall) -> AnthropicMessagesResponse:
+        calls.append("async")
+        return response()
+
+    NATIVE_MESSAGES.override(native)
+    NATIVE_AMESSAGES.override(anative)
+
+
+@pytest.fixture
+def shipped_native() -> Iterator[list[str]]:
+    calls: Final[list[str]] = []
+    _shipped_native(calls)
+    with routed(*RULES):
+        yield calls
+    NATIVE_MESSAGES.reset()
+    NATIVE_AMESSAGES.reset()
+
+
+async def _public(asynchronous: bool, model: str, kwargs: Mapping[str, object]) -> object:
+    call: Final = {"max_tokens": 16, "messages": MESSAGES, "model": model, "api_key": "sk-test", **kwargs}
+    if asynchronous:
+        return await dispatch.anthropic_messages(**call)
+    return dispatch.anthropic_messages_handler(**call)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", (False, True), ids=("sync", "async"))
+async def test_anthropic_runs_on_rust_without_the_opt_in(
+    monkeypatch: pytest.MonkeyPatch, shipped_native: list[str], asynchronous: bool
+) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "0")
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    result: Final = await _public(asynchronous, "anthropic/claude-sonnet-4-5", {})
+
+    assert isinstance(result, dict)
+    assert shipped_native == ["async" if asynchronous else "sync"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("asynchronous", "kwargs", "callbacks", "feature"),
+    (
+        pytest.param(False, {"mock_response": "hi"}, [], Feature.MOCK_RESPONSE, id="sync-mock"),
+        pytest.param(True, {"mock_response": "hi", "stream": True}, [], Feature.MOCK_RESPONSE, id="streamed-mock"),
+        pytest.param(True, {"client": object()}, [], Feature.CALLER_CLIENT, id="caller-client"),
+        pytest.param(True, {}, [_Rewrite()], Feature.PRE_REQUEST_HOOK, id="pre-request-hook"),
+        pytest.param(True, {}, [WebSearchInterceptionLogger()], Feature.WEBSEARCH_INTERCEPTION, id="websearch"),
+        pytest.param(False, {}, [_Agentic()], Feature.AGENTIC_LOOP_HOOK, id="agentic-loop"),
+    ),
+)
+async def test_anthropic_refuses_what_rust_does_not_serve(
+    monkeypatch: pytest.MonkeyPatch,
+    shipped_native: list[str],
+    asynchronous: bool,
+    kwargs: Mapping[str, object],
+    callbacks: list[object],
+    feature: Feature,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", callbacks)
+
+    def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: rejected fallback
+        pytest.fail("anthropic has no Python Messages path")
+
+    with (
+        rebound(dispatch, "_PYTHON_MESSAGES", python),
+        rebound(dispatch, "_PYTHON_AMESSAGES", python),
+        pytest.raises(UnsupportedParamsError, match=feature.value) as refused,
+    ):
+        await _public(asynchronous, "anthropic/claude-sonnet-4-5", kwargs)
+
+    assert refused.value.llm_provider == "anthropic"
+    assert refused.value.status_code == 400
+    assert shipped_native == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", (False, True), ids=("sync", "async"))
+async def test_other_providers_keep_python_for_the_same_features(
+    monkeypatch: pytest.MonkeyPatch, shipped_native: list[str], asynchronous: bool
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    python_result: Final = response("deepseek/deepseek-v4-flash")
+
+    def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: stub
+        return python_result
+
+    async def apython(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: stub
+        return python_result
+
+    with rebound(dispatch, "_PYTHON_MESSAGES", python), rebound(dispatch, "_PYTHON_AMESSAGES", apython):
+        result: Final = await _public(asynchronous, "deepseek/deepseek-v4-flash", {"client": object()})
+
+    assert result is python_result
+    assert shipped_native == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "refused"),
+    (
+        pytest.param("anthropic/claude-sonnet-4-5", True, id="anthropic"),
+        pytest.param("deepseek/deepseek-v4-flash", False, id="deepseek"),
+    ),
+)
+async def test_a_failing_detector_refuses_only_the_rust_only_provider(
+    monkeypatch: pytest.MonkeyPatch, shipped_native: list[str], model: str, refused: bool
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    python_result: Final = response(model)
+
+    def failing(request: NativeCall) -> bool:
+        raise RuntimeError("detector failed")
+
+    async def apython(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: stub
+        return python_result
+
+    with (
+        rebound(dispatch, "_ASYNC_FEATURES", {Feature.MOCK_RESPONSE: failing}),
+        rebound(dispatch, "_PYTHON_AMESSAGES", apython),
+    ):
+        if not refused:
+            assert await _public(True, model, {}) is python_result
+            return
+        with pytest.raises(UnsupportedParamsError, match="does not support this call"):
+            await _public(True, model, {})
+    assert shipped_native == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", (False, True), ids=("sync", "async"))
+async def test_an_anthropic_call_its_signature_rejects_keeps_python_s_type_error(
+    monkeypatch: pytest.MonkeyPatch, shipped_native: list[str], asynchronous: bool
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    call: Final = {"messages": MESSAGES, "model": "anthropic/claude-sonnet-4-5", "api_key": "sk-test"}
+
+    async def attempt() -> object:
+        if asynchronous:
+            return await dispatch.anthropic_messages(**call)
+        return dispatch.anthropic_messages_handler(**call)
+
+    with pytest.raises(TypeError, match="max_tokens"):
+        await attempt()
+
+    assert shipped_native == []

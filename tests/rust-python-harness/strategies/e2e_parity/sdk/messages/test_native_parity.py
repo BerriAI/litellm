@@ -39,11 +39,9 @@ from litellm.caching.caching_handler import (
     _PENDING_CACHE_WRITES,  # pyright: ignore[reportPrivateUsage]  # a primed entry must land before the measured call reads it
 )
 from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
-from litellm.llms.base_llm.auth.token_exchange import default_token_exchange_engine
 from litellm.messages import dispatch
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.rust_bridge import catalog
-from litellm.rust_bridge.catalog import Route, RouteRule
 from litellm.rust_bridge.configuration import Rollout
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
 from tests.test_litellm_rust.support.isolation import isolated_callback_registries, rebound
@@ -351,21 +349,11 @@ S15_COMPLETE_DEADLINE: Final = (
     "S15: by design, native bounds a complete response by one overall deadline where Python bounds each read, "
     "so a body trickling in slower than the timeout succeeds in Python and times out natively"
 )
-F_STREAMED_MOCK: Final = (
-    "F: a mock with stream=True returns the mock dict and logs no success in Python (detector streamed_mock_response)"
-)
 
 KNOWN_GAPS: Final[Mapping[str, Mapping[str, str | None]]] = MappingProxyType(
     {
         "response_private_keys": _gaps(outcome=S6_PRIVATE_KEYS),
         "missing_max_tokens": _gaps(dispatch=A10_NO_MAX_TOKENS),
-        "mock_response_streamed": _gaps(
-            logged=F_STREAMED_MOCK,
-            logged_metadata=F_STREAMED_MOCK,
-            logged_response_headers=F_STREAMED_MOCK,
-            logged_call=F_STREAMED_MOCK,
-            logged_request=F_STREAMED_MOCK,
-        ),
     }
 )
 
@@ -904,7 +892,6 @@ SERVED_NATIVELY_CASES: Final = (
 )
 
 FALLBACK_CASES: Final = (
-    Case("mock_response_streamed", _kw(stream=True, mock_response="Hi from the mock"), upstream=()),
     Case("modify_params", _kw(max_tokens=1), settings=_MODIFY_PARAMS),
     Case("modify_params_clamps_max_tokens", _kw(max_tokens=200_000), settings=_MODIFY_PARAMS),
     Case(
@@ -1083,76 +1070,6 @@ CACHE_CASES: Final = (
     Case("cache_sync", sync=True, upstream=(_ok(), _ok()), cache=Cache),
 )
 
-FEDERATION_ENV: Final[Mapping[str, str]] = MappingProxyType(
-    {"ANTHROPIC_IDENTITY_TOKEN": "eyJ.parity-identity.jwt", "LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS": "127.0.0.1"}
-)
-FEDERATION_IDS: Final[Mapping[str, str]] = MappingProxyType(
-    {"anthropic_federation_rule_id": "fdrl_parity", "anthropic_organization_id": "org-parity"}
-)
-MINTED: Final = ResponseSpec(
-    body={"access_token": "sk-ant-oat01-parity-minted", "token_type": "Bearer", "expires_in": 3600}
-)
-
-WORKLOAD_IDENTITY_CASES: Final = (
-    Case(
-        "workload_identity_from_params",
-        _kw(api_key=None, **FEDERATION_IDS),
-        upstream=(MINTED, _ok()),
-        env=FEDERATION_ENV,
-    ),
-    Case(
-        "workload_identity_from_environment",
-        _kw(api_key=None),
-        upstream=(MINTED, _ok()),
-        env=MappingProxyType(
-            {**FEDERATION_ENV, "ANTHROPIC_FEDERATION_RULE_ID": "fdrl_env", "ANTHROPIC_ORGANIZATION_ID": "org-env"}
-        ),
-    ),
-    Case(
-        "workload_identity_with_workspace_and_caller_beta",
-        _kw(
-            api_key=None,
-            anthropic_federation_workspace_id="wrkspc_parity",
-            anthropic_service_account_id="svac_parity",
-            extra_headers={"anthropic-beta": "files-api-2025-04-14", "x-trace-id": "trace-1"},
-            **FEDERATION_IDS,
-        ),
-        upstream=(MINTED, _ok()),
-        env=FEDERATION_ENV,
-    ),
-    Case(
-        "workload_identity_streamed",
-        _kw(api_key=None, stream=True, **FEDERATION_IDS),
-        upstream=(MINTED, _stream(TEXT_STREAM)),
-        env=FEDERATION_ENV,
-    ),
-    Case(
-        "workload_identity_exchange_denied",
-        _kw(api_key=None, **FEDERATION_IDS),
-        upstream=(_failure(401, "authentication_error", "invalid assertion"),),
-        env=FEDERATION_ENV,
-    ),
-    Case(
-        "workload_identity_untrusted_exchange_host",
-        _kw(api_key=None, **FEDERATION_IDS),
-        upstream=(),
-        env=MappingProxyType({"ANTHROPIC_IDENTITY_TOKEN": "eyJ.parity-identity.jwt"}),
-    ),
-    Case(
-        "workload_identity_requested_without_ids",
-        _kw(api_key=None, anthropic_identity_token="oidc/env/ANTHROPIC_IDENTITY_TOKEN"),
-        upstream=(),
-        env=FEDERATION_ENV,
-    ),
-    Case(
-        "workload_identity_disabled",
-        _kw(api_key=None, anthropic_disable_workload_identity_federation=True, **FEDERATION_IDS),
-        upstream=(),
-        env=FEDERATION_ENV,
-    ),
-    Case("workload_identity_shadowed_by_a_static_key", _kw(**FEDERATION_IDS), env=FEDERATION_ENV),
-)
-
 STRICT_REJECTION: Final = "Too many strict tools (21). The maximum number of strict tools is 20."
 STRICT_TOOLS: Final[tuple[JsonValue, ...]] = (
     {**WEATHER_TOOL, "strict": True},
@@ -1257,7 +1174,6 @@ CASES: Final = (
     *STRICT_TOOLS_RETRY_CASES,
     *FALLBACK_CASES,
     *CACHE_CASES,
-    *WORKLOAD_IDENTITY_CASES,
 )
 
 
@@ -1296,7 +1212,6 @@ def native_messages() -> Iterator[FallbackProbe]:
         return _PYTHON_MESSAGES(*args, **kwargs)
 
     with (
-        rebound(catalog, "RULES", (RouteRule(Route.MESSAGES, Rollout.RUST_OPT_OUT), *catalog.RULES)),
         rebound(dispatch, "_PYTHON_AMESSAGES", python_afallback),
         rebound(dispatch, "_PYTHON_MESSAGES", python_fallback),
     ):
@@ -1345,16 +1260,6 @@ def _cache(cache: Callable[[], Cache] | None) -> Generator[None]:
         yield
         return
     with rebound(litellm, "cache", cache()):
-        yield
-
-
-@contextmanager
-def _fresh_token_exchange() -> Generator[None]:
-    # The federation token cache and its on-disk store would hand the second leg the first leg's token.
-    with (
-        rebound(default_token_exchange_engine, "_entries", {}),
-        rebound(default_token_exchange_engine, "_shared_store", None),
-    ):
         yield
 
 
@@ -1541,7 +1446,6 @@ async def _leg(case: Case, server: RecordingServer, probe: FallbackProbe | None)
         _environment(case.env),
         _settings(case.settings),
         _cache(case.cache),
-        _fresh_token_exchange(),
     ):
         for spec in case.upstream:
             server.enqueue(replace(spec))
@@ -1630,7 +1534,7 @@ def test_catalog_serves_the_case_natively(case: Case, parity_server: RecordingSe
         request: Final = dispatch._public_request(dispatch._AMESSAGES, (), _kwargs(case, parity_server))  # pyright: ignore[reportPrivateUsage]  # the public binding the async entry routes by
         assert request is not None
         context: Final = dispatch._context(request, dispatch._ASYNC_FEATURES)  # pyright: ignore[reportPrivateUsage]  # the async entry's own route context
-        assert catalog.rollout(context) is Rollout.RUST_OPT_IN, context.features
+        assert catalog.rollout(context) is Rollout.RUST_REQUIRED, context.features
 
 
 _COST_CASES: Final = tuple(
