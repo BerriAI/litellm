@@ -19885,13 +19885,13 @@ export interface paths {
         put?: never;
         /**
          * Token Counter
-         * @description Args:
+         * @description Returns:
+         *         TokenCountResponse
+         *
+         *     Args:
          *         request: TokenCountRequest
          *         call_endpoint: bool - When set to "True" it will call the token counting endpoint - e.g Anthropic or Google AI Studio Token Counting APIs.
          *         litellm_call_id: the x-litellm-call-id header, logged with the count so it joins the inference call's logs
-         *
-         *     Returns:
-         *         TokenCountResponse
          */
         post: operations["token_counter_utils_token_counter_post"];
         delete?: never;
