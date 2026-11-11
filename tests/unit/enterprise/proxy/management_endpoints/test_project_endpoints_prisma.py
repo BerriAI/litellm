@@ -1241,6 +1241,34 @@ async def test_new_project_flag_on_missing_rpm_tpm_returns_400(monkeypatch):
     assert "rpm/tpm quota" in str(exc_info.value)
 
 
+@pytest.mark.asyncio
+async def test_new_project_does_not_expose_database_errors(monkeypatch):
+    internal_detail = "db-internal-marker"
+    mock_prisma_client = mock.MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = mock.AsyncMock(side_effect=RuntimeError(internal_detail))
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma_client)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_new_project(NewProjectRequest(team_id="test-team"))
+
+    assert exc_info.value.code == "500"
+    assert exc_info.value.message
+    assert internal_detail not in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_new_project_keeps_license_error(monkeypatch):
+    monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", False)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_new_project(NewProjectRequest(team_id="test-team"))
+
+    assert exc_info.value.code == "403"
+    assert "enterprise feature" in exc_info.value.message
+
+
 def _project_update_mocks(monkeypatch, stored_metadata: dict) -> mock.MagicMock:
     existing_row = mock.MagicMock(
         team_id=None, budget_id=None, object_permission_id=None, metadata=stored_metadata
@@ -2104,7 +2132,9 @@ async def test_new_project_quota_policy_reads_providers_from_router_deployments(
 
 
 @pytest.mark.asyncio
-async def test_new_project_rejects_malformed_quota_setting_instead_of_skipping_it(monkeypatch: pytest.MonkeyPatch):
+async def test_new_project_rejects_malformed_quota_setting_instead_of_skipping_it(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
     _enforced_new_project_mocks(
         monkeypatch,
         team_models=["runway-gen4-turbo"],
@@ -2116,7 +2146,8 @@ async def test_new_project_rejects_malformed_quota_setting_instead_of_skipping_i
         await _run_new_project(NewProjectRequest(team_id="test-team", models=["runway-gen4-turbo"]))
 
     assert exc_info.value.code == "500"
-    assert "general_settings.enforce_project_model_quota is invalid" in str(exc_info.value.message)
+    assert exc_info.value.message == "Internal server error"
+    assert "general_settings.enforce_project_model_quota is invalid" in caplog.text
 
 
 @pytest.mark.asyncio
