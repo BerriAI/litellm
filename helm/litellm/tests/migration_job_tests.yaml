@@ -76,6 +76,8 @@ tests:
           value: false
 
   - it: renders no hardening fields by default
+    chart:
+      version: 1.0.0
     asserts:
       - isNull:
           path: spec.template.spec.securityContext

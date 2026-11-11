@@ -67,6 +67,54 @@ backend:
   gatewayUrl: https://gateway.example.com
 ```
 
+## Authenticated Prometheus scraping
+
+The proxy's `/metrics/` endpoint requires authentication by default when proxy authentication is configured. This option is for `gateway.metricsServer.enabled: false`, the default. The separate metrics server does not use virtual-key authentication
+
+Authenticated scraping requires `gateway.serviceMonitor.scheme: https`. The chart rejects authenticated HTTP scrapes. Configure TLS on the pod's scrape port, either on the proxy or a TLS sidecar, before enabling authentication. Ingress TLS does not protect this direct scrape path. Use `gateway.serviceMonitor.tlsConfig` for the Prometheus Operator's [TLS settings](https://prometheus-operator.dev/docs/api-reference/api/#monitoring.coreos.com/v1.SafeTLSConfig), including a trusted CA and the certificate's server name. Keep certificate verification enabled
+
+As a proxy administrator, create a dedicated internal user and a key restricted to the metrics routes. Set `LITELLM_URL` to your management API URL, the backend URL in componentized mode or the proxy URL in monolith mode and `LITELLM_MASTER_KEY` to its administrator credential, then run:
+
+```bash
+curl --fail --silent --show-error "$LITELLM_URL/user/new" \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"user_id":"prometheus-metrics","user_role":"internal_user","auto_create_key":false}'
+
+METRICS_KEY="$(curl --fail --silent --show-error "$LITELLM_URL/key/generate" \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"user_id":"prometheus-metrics","key_alias":"prometheus","allowed_routes":["/metrics","/metrics/"]}' \
+  | jq --exit-status --raw-output .key)"
+
+printf '%s' "$METRICS_KEY" | kubectl --namespace YOUR_RELEASE_NAMESPACE \
+  create secret generic litellm-prometheus-key --from-file=token=/dev/stdin
+unset METRICS_KEY
+```
+
+The Secret must be in the ServiceMonitor namespace and contain the raw key, without a `Bearer ` prefix. The Prometheus Operator must have permission to read it. Reference that Secret in the chart:
+
+```
+gateway:
+  serviceMonitor:
+    enabled: true
+    scheme: https
+    tlsConfig:
+      serverName: litellm.monitoring.svc
+      ca:
+        secret:
+          name: litellm-metrics-ca
+          key: ca.crt
+    authSecret:
+      enabled: true
+      name: litellm-prometheus-key
+      key: token
+```
+
+Replace the server name with the name in your scrape endpoint's certificate and create `litellm-metrics-ca` in the ServiceMonitor namespace with the issuing CA certificate in `ca.crt`. Omit `tlsConfig` when the endpoint's certificate is already trusted and matches the scrape target's name. Setting the scheme does not enable a TLS listener on the proxy
+
+The chart does not generate or rotate the LiteLLM key. Keep the key valid and update the Secret when rotating it. For unauthenticated scrapes, enable `gateway.metricsServer.enabled` and leave `gateway.serviceMonitor.authSecret.enabled` set to `false`
+
 ## Testing
 
 ```bash
@@ -119,7 +167,7 @@ The `litellm-helm` chart (`oci://ghcr.io/berriai/litellm-helm`) is retired; its 
 | `numWorkers` | `gateway.numWorkers` |
 | `pdb.*` | `gateway.pdb.*`, except `labels` and `annotations` are no longer supported. To retain custom PDB metadata, set `gateway.pdb.enabled: false` and define the PDB through `extraResources` |
 | `metricsServer.*` | `gateway.metricsServer.*` |
-| `serviceMonitor.*` | `gateway.serviceMonitor.*` (`labels`, `annotations`, `interval`, `scrapeTimeout`, `relabelings`, `namespaceSelector.matchNames`); it now requires `gateway.metricsServer.enabled` |
+| `serviceMonitor.*` | `gateway.serviceMonitor.*` including `authSecret`, `scheme` and `tlsConfig`; requires either `gateway.metricsServer.enabled` or HTTPS with `gateway.serviceMonitor.authSecret.enabled` |
 | `collector.*` | `gateway.collector.*`, except `command` is no longer supported and `scaleOnProxyContainerCpu` becomes `scaleOnGatewayContainerCpu`. Its default changes from `false` to `true`. Set `gateway.collector.scaleOnGatewayContainerCpu: false` to keep pod-wide CPU scaling. For a custom collector command, disable the built-in sidecar with `gateway.collector.enabled: false` and define it through `gateway.extraContainers`, with its environment, volumes and volume mounts configured explicitly |
 | `billingMetrics.*` | `billingMetrics.*` |
 | `migrationJob.*` | `migrationJob.*` |

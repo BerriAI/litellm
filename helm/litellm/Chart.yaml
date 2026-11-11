@@ -2,7 +2,7 @@ apiVersion: v2
 name: litellm
 description: Deploys LiteLLM from one image, either componentized (gateway, UI backend, and UI as separate Deployments) or as a single monolith Deployment
 type: application
-version: 1.0.0
+version: 1.0.1
 appVersion: "1.104.0"
 annotations:
   org.opencontainers.image.source: "https://github.com/BerriAI/litellm"

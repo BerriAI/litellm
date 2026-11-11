@@ -399,6 +399,12 @@ gateway:
   # queries below group by.
   serviceMonitor:
     enabled: false
+    scheme: http
+    tlsConfig: {}
+    authSecret:
+      enabled: false
+      name: ""
+      key: ""
     labels: {}
     annotations: {}
     interval: 15s

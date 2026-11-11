@@ -474,8 +474,11 @@ spec:
 
 {{- define "litellm.workload.serviceMonitor" -}}
 {{- $component := include "litellm.workload.componentName" . -}}
-{{- if not .Values.gateway.metricsServer.enabled }}
-{{- fail "gateway.serviceMonitor.enabled requires gateway.metricsServer.enabled: the http port serves /metrics/ behind virtual-key auth, so an unauthenticated scrape gets 401" }}
+{{- if and (not .Values.gateway.metricsServer.enabled) (not .Values.gateway.serviceMonitor.authSecret.enabled) }}
+{{- fail "gateway.serviceMonitor.enabled requires gateway.metricsServer.enabled or gateway.serviceMonitor.authSecret.enabled" }}
+{{- end }}
+{{- if and .Values.gateway.serviceMonitor.authSecret.enabled (ne .Values.gateway.serviceMonitor.scheme "https") }}
+{{- fail "gateway.serviceMonitor.scheme must be https when gateway.serviceMonitor.authSecret.enabled is true" }}
 {{- end }}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
@@ -503,11 +506,21 @@ spec:
       - {{ .Release.Namespace | quote }}
       {{- end }}
   endpoints:
-    - port: metrics
+    - port: {{ ternary "metrics" "http" .Values.gateway.metricsServer.enabled }}
       path: /metrics/
       interval: {{ .Values.gateway.serviceMonitor.interval }}
       scrapeTimeout: {{ .Values.gateway.serviceMonitor.scrapeTimeout }}
-      scheme: http
+      scheme: {{ .Values.gateway.serviceMonitor.scheme }}
+      {{- with .Values.gateway.serviceMonitor.tlsConfig }}
+      tlsConfig:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.gateway.serviceMonitor.authSecret.enabled }}
+      authorization:
+        credentials:
+          name: {{ required "gateway.serviceMonitor.authSecret.name is required when gateway.serviceMonitor.authSecret.enabled is true" .Values.gateway.serviceMonitor.authSecret.name | quote }}
+          key: {{ required "gateway.serviceMonitor.authSecret.key is required when gateway.serviceMonitor.authSecret.enabled is true" .Values.gateway.serviceMonitor.authSecret.key | quote }}
+      {{- end }}
       {{- with .Values.gateway.serviceMonitor.relabelings }}
       relabelings:
         {{- toYaml . | nindent 8 }}

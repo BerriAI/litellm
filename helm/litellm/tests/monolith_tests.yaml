@@ -427,6 +427,42 @@ tests:
           value: metrics
         template: monolith/deployment.yaml
 
+  - it: monolith scrapes the authenticated proxy over HTTPS without a metrics sidecar
+    set:
+      monolith.enabled: true
+      gateway.serviceMonitor.enabled: true
+      gateway.serviceMonitor.scheme: https
+      gateway.serviceMonitor.authSecret.enabled: true
+      gateway.serviceMonitor.authSecret.name: metrics-key
+      gateway.serviceMonitor.authSecret.key: token
+      gateway.serviceMonitor.tlsConfig.serverName: litellm.monitoring.svc
+    templates:
+      - monolith/servicemonitor.yaml
+      - gateway/servicemonitor.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: gateway/servicemonitor.yaml
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/component"]
+          value: proxy
+        template: monolith/servicemonitor.yaml
+      - equal:
+          path: spec.endpoints[0]
+          value:
+            port: http
+            path: /metrics/
+            interval: 15s
+            scrapeTimeout: 10s
+            scheme: https
+            tlsConfig:
+              serverName: litellm.monitoring.svc
+            authorization:
+              credentials:
+                name: metrics-key
+                key: token
+        template: monolith/servicemonitor.yaml
+
   - it: monolith collector sidecar runs the collector dispatcher from the same image
     set:
       monolith.enabled: true
