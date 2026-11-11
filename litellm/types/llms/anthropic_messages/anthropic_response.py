@@ -69,6 +69,7 @@ class AnthropicUsage(TypedDict, total=False):
     Input and output tokens used in the request
     """
 
+    cost: ReadOnly[NotRequired[float]]
     input_tokens: int
     output_tokens: int
     iterations: ReadOnly[Sequence[UsageIteration]]

@@ -10,6 +10,7 @@ from litellm.caching.caching_handler import create_cache_write_task, is_response
 from litellm.llms.anthropic.messages.native.streaming_iterator import (
     AnthropicMessagesStreamingResponse,
     BaseAnthropicMessagesStreamingIterator,
+    UsageCostMessagesStream,
     aclose_if_supported,
     is_message_stop_chunk,
     is_provider_error_chunk,
@@ -171,12 +172,15 @@ def convert_cached_anthropic_messages_result(
     cached_result: Mapping[str, object],
     logging_obj: "LiteLLMLoggingObj",
     kwargs: Mapping[str, object],
-) -> Mapping[str, object] | CachedAnthropicMessagesStreamIterator:
+) -> Mapping[str, object] | UsageCostMessagesStream:
     events: Final = get_cached_stream_events(cached_result)
     if events is None:
         return cached_result
-    return CachedAnthropicMessagesStreamIterator(
-        events=events,
-        litellm_logging_obj=logging_obj,
-        request_body=kwargs,
+    return UsageCostMessagesStream(
+        CachedAnthropicMessagesStreamIterator(
+            events=events,
+            litellm_logging_obj=logging_obj,
+            request_body=kwargs,
+        ),
+        logging_obj,
     )

@@ -5,6 +5,7 @@ import os
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Final, List
 
@@ -22,6 +23,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import litellm
 from litellm.anthropic_interface import messages
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -34,6 +36,157 @@ from litellm.types.utils import (
 )
 from litellm.litellm_core_utils.model_cost_table import publish
 import unittest.mock
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "adapter,is_async", [("native", True), ("chat", True), ("responses", True), ("chat", False), ("responses", False)]
+)
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("input_tokens,output_tokens", [(3, 4), (0, 0)])
+async def test_messages_usage_cost_matches_the_logged_bill(
+    monkeypatch: pytest.MonkeyPatch, adapter: str, is_async: bool, stream: bool, input_tokens: int, output_tokens: int
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", adapter == "chat")
+    model: Final = "anthropic/claude-sonnet-5-5" if adapter == "native" else "openai/gpt-6.1-sol"
+    served_model: Final = model.split("/", 1)[1]
+    prices: Final = {**litellm.model_cost[served_model], "input_cost_per_token": 0.01, "output_cost_per_token": 0.02}
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, model: prices, served_model: prices})
+    native_body: Final = {
+        "id": "msg_cost",
+        "type": "message",
+        "role": "assistant",
+        "model": served_model,
+        "content": [{"type": "text", "text": "hi"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
+    }
+    chat_body: Final = {
+        "id": "chatcmpl-cost",
+        "object": "chat.completion",
+        "created": 1,
+        "model": served_model,
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        "usage": {
+            "prompt_tokens": input_tokens,
+            "completion_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
+        },
+    }
+    responses_body: Final = {
+        "id": "resp_cost",
+        "object": "response",
+        "created_at": 0,
+        "model": served_model,
+        "status": "completed",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_cost",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "hi"}],
+            }
+        ],
+        "usage": {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
+        },
+    }
+    native_events: Final = (
+        {
+            "type": "message_start",
+            "message": {**native_body, "content": [], "usage": {"input_tokens": input_tokens, "output_tokens": 0}},
+        },
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hi"}},
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {"output_tokens": output_tokens},
+        },
+        {"type": "message_stop"},
+    )
+    chat_events: Final = (
+        {
+            **chat_body,
+            "object": "chat.completion.chunk",
+            "usage": None,
+            "choices": [{"index": 0, "delta": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        },
+        {**chat_body, "object": "chat.completion.chunk", "choices": []},
+    )
+    responses_events: Final = (
+        {
+            "type": "response.created",
+            "response": {**responses_body, "status": "in_progress", "output": [], "usage": None},
+        },
+        {
+            "type": "response.output_text.delta",
+            "item_id": "msg_cost",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "hi",
+        },
+        {"type": "response.completed", "response": responses_body},
+    )
+    events: Final = {"native": native_events, "chat": chat_events, "responses": responses_events}[adapter]
+    upstream_body: Final = {"native": native_body, "chat": chat_body, "responses": responses_body}[adapter]
+    wire: Final = "".join("data: " + json.dumps(event) + "\n\n" for event in events)
+    logging_obj: Final = Logging(
+        model=served_model,
+        messages=[{"role": "user", "content": "hi"}],
+        stream=stream,
+        call_type="anthropic_messages",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="messages-cost",
+        function_id="messages-cost",
+    )
+    logging_obj.custom_cost_per_token = {"input_cost_per_token": 0.01, "output_cost_per_token": 0.02}
+    with respx.mock as upstream:
+        upstream.post(
+            {
+                "native": "https://api.anthropic.com/v1/messages",
+                "chat": "https://api.openai.com/v1/chat/completions",
+                "responses": "https://api.openai.com/v1/responses",
+            }[adapter]
+        ).mock(
+            return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, text=wire)
+            if stream
+            else httpx.Response(200, json=upstream_body)
+        )
+        create: Final = litellm.anthropic.messages.acreate if is_async else litellm.anthropic.messages.create
+        pending: Final = create(
+            model=model,
+            max_tokens=64,
+            messages=[{"role": "user", "content": "hi"}],
+            stream=stream,
+            api_key="test-key",
+            input_cost_per_token=0.01,
+            output_cost_per_token=0.02,
+            litellm_logging_obj=logging_obj,
+        )
+        response: Final = await pending if is_async else pending
+        if stream:
+            chunks: Final = [chunk async for chunk in response] if is_async or adapter == "responses" else list(response)
+            payloads: Final = tuple(
+                json.loads(line[5:].strip())
+                for line in b"".join(chunks).decode().splitlines()
+                if line.startswith("data:")
+            )
+            terminal: Final = next(event for event in payloads if event.get("type") == "message_delta")
+        terminal_usage: Final = terminal["usage"] if stream else response["usage"]
+    cost: Final = terminal_usage["cost"]
+    assert isinstance(cost, float)
+    assert cost == pytest.approx(input_tokens * 0.01 + output_tokens * 0.02)
+    billed: Final = logging_obj.bridged_model_response
+    assert billed is not None
+    assert billed._hidden_params["response_cost"] == pytest.approx(cost)
+    assert logging_obj.response_cost_calculator(result=billed) == pytest.approx(cost)
 
 
 @pytest.mark.asyncio
@@ -1306,7 +1459,9 @@ async def test_bridged_messages_keep_the_deployments_entra_credential_over_the_e
     api_base: Final = {} if api_base_from_env else {"api_base": "https://example-resource.cognitiveservices.azure.com"}
 
     with (
-        patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id", return_value=lambda: "entra-token"),  # test-quality-ok: stands in for the Entra token fetch so the test can see which credential reaches Azure
+        patch(
+            "litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id", return_value=lambda: "entra-token"
+        ),  # test-quality-ok: stands in for the Entra token fetch so the test can see which credential reaches Azure
         patch(
             "litellm.llms.azure.common_utils.get_azure_ad_token_from_username_password",
             return_value=lambda: "entra-token",
@@ -1353,7 +1508,9 @@ async def test_bridged_messages_keep_the_azure_env_credential_when_the_deploymen
     litellm.in_memory_llm_clients_cache.flush_cache()
 
     with (
-        patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id", return_value=lambda: "entra-token"),  # test-quality-ok: stands in for the Entra token fetch so the test can see which credential reaches Azure
+        patch(
+            "litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id", return_value=lambda: "entra-token"
+        ),  # test-quality-ok: stands in for the Entra token fetch so the test can see which credential reaches Azure
         respx.mock(assert_all_called=True) as respx_mock,
     ):
         upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
@@ -2475,7 +2632,13 @@ async def test_anthropic_messages_with_extra_headers():
         assert headers[key] == value
 
     # Verify the response was processed correctly
-    assert response == mock_response.json.return_value
+    assert response == {
+        **mock_response.json.return_value,
+        "usage": {
+            **mock_response.json.return_value["usage"],
+            "cost": sum(litellm.cost_per_token(model=response["model"], prompt_tokens=10, completion_tokens=20)),
+        },
+    }
 
     return response
 
@@ -2538,7 +2701,13 @@ async def test_anthropic_messages_with_thinking():
     assert request_body["thinking"] == {"budget_tokens": 100}
 
     # Verify the response was processed correctly
-    assert response == mock_response.json.return_value
+    assert response == {
+        **mock_response.json.return_value,
+        "usage": {
+            **mock_response.json.return_value["usage"],
+            "cost": sum(litellm.cost_per_token(model=response["model"], prompt_tokens=10, completion_tokens=20)),
+        },
+    }
 
     return response
 
@@ -2654,7 +2823,17 @@ async def test_anthropic_messages_bedrock_dynamic_region():
         )
 
         # Verify response
-        assert response == mock_response.json.return_value
+        assert response == {
+            **mock_response.json.return_value,
+            "usage": {
+                **mock_response.json.return_value["usage"],
+                "cost": sum(
+                    litellm.cost_per_token(
+                        model=response["model"], prompt_tokens=10, completion_tokens=20, region_name=test_region
+                    )
+                ),
+            },
+        }
 
         # Verify the post method was called with the correct URL containing the region
         mock_client.post.assert_called_once()

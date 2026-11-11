@@ -9,8 +9,8 @@ import asyncio
 import contextvars
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from functools import partial
-from typing import Final, cast
+from functools import partial, wraps
+from typing import Final, ParamSpec, TypeAlias, cast
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -74,9 +74,30 @@ __all__ = ("anthropic_messages", "anthropic_messages_handler")
 # Providers that are routed directly to the OpenAI Responses API instead of
 # going through chat/completions.
 _RESPONSES_API_PROVIDERS: Final = frozenset({"openai"})
-_SAFEGUARD_KWARGS: Final = TypeAdapter(Mapping[str, object])
+_REQUEST_KWARGS: Final = TypeAdapter(Mapping[str, object])
 _SAFEGUARD_MESSAGES: Final = TypeAdapter(Sequence[Mapping[str, object]])
 _DROP_PATHS: Final = TypeAdapter(list[object])
+_MessagesParams: Final = ParamSpec("_MessagesParams")
+_MessagesResult: TypeAlias = AnthropicMessagesResponse | Iterator[bytes] | AsyncIterator[object]
+
+
+def _with_usage_cost(
+    function: Callable[_MessagesParams, Awaitable[_MessagesResult]],
+) -> Callable[_MessagesParams, Awaitable[_MessagesResult]]:
+    @wraps(function)
+    async def wrapped(
+        *args: _MessagesParams.args,
+        **kwargs: _MessagesParams.kwargs,  # kwargs-ok: preserve the Messages entry point's public signature
+    ) -> _MessagesResult:
+        response: Final = await function(*args, **kwargs)
+        logging_obj: Final = _REQUEST_KWARGS.validate_python(kwargs).get("litellm_logging_obj")
+        if isinstance(response, (Iterator, AsyncIterator)) and isinstance(logging_obj, LiteLLMLoggingObj):
+            from .streaming_iterator import UsageCostMessagesStream
+
+            return UsageCostMessagesStream(response, logging_obj)
+        return response
+
+    return wrapped
 
 
 def additional_drop_paths(kwargs: Mapping[str, object]) -> tuple[str, ...]:
@@ -444,7 +465,7 @@ async def _try_websearch_short_circuit(
             anthropic_response = await with_safeguard_results(
                 cast(AnthropicMessagesResponse, response),
                 _short_circuit_safeguards_evaluator(
-                    _SAFEGUARD_KWARGS.validate_python(kwargs) if kwargs is not None else None,
+                    _REQUEST_KWARGS.validate_python(kwargs) if kwargs is not None else None,
                     _SAFEGUARD_MESSAGES.validate_python(messages),
                 ),
             )
@@ -468,6 +489,7 @@ def _short_circuit_safeguards_evaluator(
 
 
 @client
+@_with_usage_cost
 async def anthropic_messages(
     max_tokens: int,
     messages: list[dict],
@@ -890,7 +912,7 @@ def anthropic_messages_handler(
         else api_base
     )
     safeguard_kwargs: Final = (
-        _SAFEGUARD_KWARGS.validate_python(kwargs) if is_async is True and "safeguards" in kwargs else None
+        _REQUEST_KWARGS.validate_python(kwargs) if is_async is True and "safeguards" in kwargs else None
     )
     native_response: Final = base_llm_http_handler.anthropic_messages_handler(
         model=model,

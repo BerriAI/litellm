@@ -7,9 +7,11 @@ import httpx
 from pydantic import TypeAdapter, ValidationError
 
 from litellm.constants import LITELLM_DETAILED_TIMING
+from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs, process_response_headers
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
 from litellm.litellm_core_utils.logging_utils import LiteLLMLoggingObject
+from litellm.litellm_core_utils.usage_cost import MessagesUsageCostStamper, stamp_usage_cost, validated_usage_cost
 from litellm.types.utils import (
     EmbeddingResponse,
     HiddenParams,
@@ -270,13 +272,15 @@ class ResponseMetadata:
         """Apply metadata to the response object"""
         if hasattr(self.result, "_hidden_params"):
             self.result._hidden_params = self._hidden_params
+            hidden: Final = get_hidden_params_dict(self.result)
+            stamp_usage_cost(self.result, validated_usage_cost(hidden.get("response_cost")))
 
 
 def update_response_metadata(
     result: object,
     logging_obj: LiteLLMLoggingObject,
     model: str | None,
-    kwargs: dict,
+    kwargs: Mapping[str, object],
     start_time: datetime.datetime,
     end_time: datetime.datetime,
     include_overhead: bool = True,
@@ -295,17 +299,17 @@ def update_response_metadata(
     if result is None:
         return
     if not hasattr(result, "_hidden_params"):
-        # /v1/messages returns a plain dict and the Anthropic / Responses bridge stream wrappers
-        # cannot hold ``_hidden_params``: keep only the timing on the logging object (no cost
-        # recompute) so the proxy headers and the standard logging payload can still read it.
         logging_obj.set_response_timing_metrics(
             _logging_obj_timing_metrics(start_time, end_time, logging_obj, include_overhead)
         )
+        stamper: Final = MessagesUsageCostStamper.for_response(result)
+        if stamper is not None and logging_obj.stream is not True and kwargs.get("stream") is not True:
+            stamper.stamp_calculated(logging_obj, cache_hit=cache_hit)
         return
 
     metadata: Final = ResponseMetadata(result)
     metadata.set_timing_metrics(start_time, end_time, logging_obj, include_overhead)
-    metadata.set_hidden_params(logging_obj, model, kwargs, cache_hit=cache_hit)
+    metadata.set_hidden_params(logging_obj, model, dict(kwargs), cache_hit=cache_hit)
     metadata.apply()
     if logging_obj.stream is True:
         # the response assembled from the chunks never inherits the stream wrapper's

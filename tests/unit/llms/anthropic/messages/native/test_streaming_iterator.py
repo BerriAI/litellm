@@ -2,12 +2,12 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
 from datetime import datetime
+from io import BytesIO
 from typing import Final, Literal
 from unittest.mock import patch
 
 import httpx
 import pytest
-
 
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -18,6 +18,7 @@ from litellm.llms.anthropic.messages.native.streaming_iterator import (
     AnthropicMessagesStreamingResponse,
     BaseAnthropicMessagesStreamingIterator,
     SafeguardedAnthropicSSEStream,
+    UsageCostMessagesStream,
     _incomplete_stream_error_sse_event,
     anthropic_messages_response_as_sse_events,
     is_anthropic_content_delta_chunk,
@@ -30,6 +31,60 @@ from litellm.llms.anthropic.messages.native.transformation import AnthropicMessa
 from litellm.llms.anthropic.messages.safeguards import SafeguardsEvaluator
 from litellm.llms.openai_like.messages.transformation import OpenAILikeAnthropicMessagesConfig
 from litellm.types.utils import Choices, Message, ModelResponse
+
+
+def _usage_cost_logging_obj() -> LiteLLMLoggingObj:
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="claude-sonnet-5-5",
+        messages=[],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="stream-cost",
+        function_id="stream-cost",
+    )
+    logging_obj.update_environment_variables(
+        model="claude-sonnet-5-5",
+        litellm_params={},
+        optional_params={},
+        custom_llm_provider="anthropic",
+    )
+    return logging_obj
+
+
+@pytest.mark.parametrize("failure", ["normalize_endpoint_logging_result", "response_cost_calculator"])
+def test_usage_cost_preserves_completed_stream_frames_when_billing_fails(failure: str) -> None:
+    frames: Final = (
+        b'data: {"type":"message_start","message":{"id":"msg_cost","type":"message",'
+        b'"model":"claude-sonnet-5-5","role":"assistant","content":[],"stop_reason":null,'
+        b'"stop_sequence":null,"usage":{"input_tokens":3}}}\n\n',
+        b'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}\n\n',
+        b'data: {"type":"message_stop"}\n\n',
+    )
+    logging_obj: Final = _usage_cost_logging_obj()
+    with patch.object(logging_obj, failure, side_effect=RuntimeError("billing unavailable")) as unavailable:
+        observed: Final = tuple(UsageCostMessagesStream(iter(frames), logging_obj))
+    assert observed == frames
+    assert unavailable.call_count == 1
+
+
+def test_usage_cost_does_not_add_frames_to_an_empty_messages_stream() -> None:
+    assert tuple(UsageCostMessagesStream(iter(()), _usage_cost_logging_obj())) == ()
+
+
+def test_usage_cost_stream_close_closes_the_upstream() -> None:
+    upstream: Final = BytesIO()
+    stream: Final = UsageCostMessagesStream(upstream, _usage_cost_logging_obj())
+    stream.close()
+    assert upstream.closed
+
+
+def test_usage_cost_preserves_oversized_frames_and_stops_stamping() -> None:
+    frame: Final = b":" + b"x" * (2 * 1024 * 1024) + b"\n\n"
+    terminal: Final = b'data: {"type":"message_delta","usage":{"output_tokens":4}}\n\n'
+    chunks: Final = (frame[index : index + 1024] for index in range(0, len(frame), 1024))
+    stream: Final = UsageCostMessagesStream(iter((*chunks, terminal)), _usage_cost_logging_obj())
+    assert b"".join(stream) == frame + terminal
 
 
 class _RecordingLoggingIterator(BaseAnthropicMessagesStreamingIterator):
@@ -434,7 +489,7 @@ def _output_tokens_from_logged_chunks(chunks: list[bytes]) -> int | None:
         for line in raw.decode().splitlines():
             if not line.startswith("data:"):
                 continue
-            data = json.loads(line[len("data:"):].strip())
+            data = json.loads(line[len("data:") :].strip())
             usage = data.get("usage") if isinstance(data, dict) else None
             if isinstance(usage, dict) and usage.get("output_tokens") is not None:
                 latest = usage["output_tokens"]
@@ -802,7 +857,9 @@ async def test_async_sse_wrapper_bills_partial_when_detached_drain_cap_reached(m
             await asyncio.sleep(0)
 
         assert iterator.logged_chunks, "capped pump never billed"
-        assert len(iterator.logged_chunks) <= 2 + streaming_iterator_module.ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE
+        assert (
+            len(iterator.logged_chunks) <= 2 + streaming_iterator_module.ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE
+        )
         assert len(iterator.logged_chunks) < 100
         assert not any(c.startswith(b"event: message_stop\n") for c in iterator.logged_chunks)
         assert tail_reached is False, "pump kept draining past the cap instead of stopping"
@@ -1036,7 +1093,10 @@ async def test_proxy_disconnect_closing_upstream_prices_recovered_tokens():
         (
             {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 29, "output_tokens": 1}}},
             {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
-            *({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": sentence}} for _ in range(6)),
+            *(
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": sentence}}
+                for _ in range(6)
+            ),
         )
     )
     enqueued: list = []
@@ -1113,7 +1173,9 @@ async def test_async_sse_wrapper_aborts_upstream_when_detached_drain_cap_reached
             self.aclose_called = True
 
     stream = _AbortableStream()
-    iterator = _RecordingLoggingIterator(litellm_logging_obj=_make_logging_obj("abort_upstream_at_cap"), request_body={})
+    iterator = _RecordingLoggingIterator(
+        litellm_logging_obj=_make_logging_obj("abort_upstream_at_cap"), request_body={}
+    )
     try:
         gen = iterator.async_sse_wrapper(stream)
         await gen.__anext__()
@@ -1347,13 +1409,15 @@ def test_anthropic_messages_streaming_response_reports_withheld_output_of_its_st
 
     hidden_params: AnthropicMessagesStreamHiddenParams = {"additional_headers": {}}
     assert (
-        AnthropicMessagesStreamingResponse(completion_stream=_HoldingBack(), hidden_params=hidden_params)
-        .has_buffered_provider_output
+        AnthropicMessagesStreamingResponse(
+            completion_stream=_HoldingBack(), hidden_params=hidden_params
+        ).has_buffered_provider_output
         is True
     )
     assert (
-        AnthropicMessagesStreamingResponse(completion_stream=_bare_stream(), hidden_params=hidden_params)
-        .has_buffered_provider_output
+        AnthropicMessagesStreamingResponse(
+            completion_stream=_bare_stream(), hidden_params=hidden_params
+        ).has_buffered_provider_output
         is False
     )
 
@@ -1780,7 +1844,10 @@ async def test_native_stream_preserves_nullable_stop_fields_across_chunk_boundar
 
 def _data_events(frames: Sequence[bytes]) -> list[Mapping[str, object]]:
     return [
-        json.loads(line[len(b"data:") :]) for frame in frames for line in frame.splitlines() if line.startswith(b"data:")
+        json.loads(line[len(b"data:") :])
+        for frame in frames
+        for line in frame.splitlines()
+        if line.startswith(b"data:")
     ]
 
 
@@ -1788,9 +1855,13 @@ def _data_events(frames: Sequence[bytes]) -> list[Mapping[str, object]]:
 @pytest.mark.parametrize("separator", [b"\n", b"\r\n"])
 @pytest.mark.parametrize("chunk_size", [1, 7, 4096])
 async def test_safeguarded_sse_stream_stamps_the_final_delta_across_chunk_boundaries(separator: bytes, chunk_size: int):
-    classifier: Final = _OneVerdictClassifier('{"verdicts": {"call_curl": {"flagged": true, "explanation": "fetched"}}}')
+    classifier: Final = _OneVerdictClassifier(
+        '{"verdicts": {"call_curl": {"flagged": true, "explanation": "fetched"}}}'
+    )
     frames: Final = _sse_frames(separator)
-    stream: Final = SafeguardedAnthropicSSEStream(_chunked(b"".join(frames), chunk_size), _safeguards_evaluator(classifier))
+    stream: Final = SafeguardedAnthropicSSEStream(
+        _chunked(b"".join(frames), chunk_size), _safeguards_evaluator(classifier)
+    )
     emitted: Final = await _drained(stream)
     assert len(emitted) == len(frames)
     assert [emitted[i] for i in (0, 1, 2, 3, 5)] == [frames[i] for i in (0, 1, 2, 3, 5)]
@@ -1857,6 +1928,9 @@ async def test_safeguarded_sse_stream_reports_upstream_buffering_and_closes_the_
     assert stream.has_buffered_provider_output is True
     await stream.aclose()
     assert upstream.closed is True
-    assert SafeguardedAnthropicSSEStream(
-        _chunked(b"", 1), _safeguards_evaluator(_OneVerdictClassifier("{}"))
-    ).has_buffered_provider_output is False
+    assert (
+        SafeguardedAnthropicSSEStream(
+            _chunked(b"", 1), _safeguards_evaluator(_OneVerdictClassifier("{}"))
+        ).has_buffered_provider_output
+        is False
+    )

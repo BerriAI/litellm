@@ -4527,7 +4527,7 @@ async def test_native_compaction_wire_roundtrip(
     if messages_api:
         assert response["stop_reason"] == "compaction"
         if not chat_wire:
-            assert response["usage"] == usage
+            assert {key: value for key, value in response["usage"].items() if key != "cost"} == usage
     if not gateway:
         replay: Final = {"role": "assistant", "content": blocks} if messages_api else message
         await call(messages=[replay, {"role": "user", "content": "Continue"}], **params)

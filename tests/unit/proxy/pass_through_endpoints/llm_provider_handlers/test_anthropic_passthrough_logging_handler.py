@@ -11,11 +11,49 @@ from pydantic import ValidationError
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.llm_response_utils.response_metadata import update_response_metadata
 from litellm.llms.anthropic.messages.stream_assembly import extract_sse_data
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
 )
+from litellm.types.utils import ModelResponse, Usage
 from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
+
+
+def test_messages_stream_logging_reuses_the_recorded_bill(monkeypatch: pytest.MonkeyPatch) -> None:
+    pricing: Final = {"input_cost_per_token": 0.01, "output_cost_per_token": 0.02, "litellm_provider": "anthropic"}
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {**litellm.model_cost, "claude-sonnet-5-5": pricing, "anthropic/claude-sonnet-5-5": pricing},
+    )
+    start: Final = datetime(2026, 1, 1)
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="claude-sonnet-5-5",
+        messages=[],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=start,
+        litellm_call_id="recorded-bill",
+        function_id="recorded-bill",
+    )
+    logging_obj.custom_cost_per_token = {"input_cost_per_token": 0.01, "output_cost_per_token": 0.02}
+    logging_obj.update_environment_variables(
+        model="claude-sonnet-5-5",
+        optional_params={},
+        custom_llm_provider="anthropic",
+        litellm_params={"input_cost_per_token": 0.01, "output_cost_per_token": 0.02},
+    )
+    billed: Final = ModelResponse(model="claude-sonnet-5-5", usage=Usage(prompt_tokens=3, completion_tokens=4))
+    update_response_metadata(billed, logging_obj, "claude-sonnet-5-5", {}, start, start)
+    logging_obj.record_bridged_model_response(billed)
+    with patch.object(litellm, "completion_cost", wraps=litellm.completion_cost) as calculator:
+        logged_bill: Final = AnthropicPassthroughLoggingHandler._compute_response_cost(
+            billed, "claude-sonnet-5-5", logging_obj
+        )
+    assert logged_bill == pytest.approx(3 * 0.01 + 4 * 0.02)
+    assert logged_bill == billed.usage.cost
+    assert calculator.call_count == 0
 
 
 async def _drain_tasks():
@@ -2553,7 +2591,6 @@ def test_stream_was_interrupted_skips_data_lines_that_are_not_json_objects(
     assert AnthropicPassthroughLoggingHandler._stream_was_interrupted(all_chunks) is interrupted
 
 
-
 def test_stream_was_interrupted_reads_a_message_delta_whose_json_holds_unicode_line_separators() -> None:
     message_delta: Final = {
         "type": "message_delta",
@@ -2579,6 +2616,7 @@ def test_extract_model_reads_a_message_start_whose_json_holds_unicode_line_separ
     chunk: Final = f"event: message_start\ndata: {json.dumps(message_start, ensure_ascii=False)}\n\n"
 
     assert AnthropicPassthroughLoggingHandler._extract_model_from_anthropic_chunks([chunk]) == "claude-sonnet-5"
+
 
 @pytest.mark.asyncio
 async def test_anthropic_passthrough_handler(mock_httpx_response, mock_response, mock_logging_obj):

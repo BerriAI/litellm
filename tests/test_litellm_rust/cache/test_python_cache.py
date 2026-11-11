@@ -441,5 +441,5 @@ async def test_legacy_cache_keeps_public_messages_responses_compatible(
     await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
     second: Final = await invoke("messages", recording_server, options, native=not rust_first)
     second_payload: Final = await collect(second) if stream else payload(second)
-    assert second_payload == first_payload
+    assert payload(second_payload) == payload(first_payload)
     assert len(recording_server.requests) == 1

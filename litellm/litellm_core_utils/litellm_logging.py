@@ -3005,10 +3005,10 @@ class Logging(LiteLLMLoggingBaseClass):
 
     _update_completion_start_time = update_completion_start_time
 
-    def normalize_endpoint_logging_result(self, result: object) -> object:
+    def normalize_endpoint_logging_result(self, result: object, *, for_billing: bool = False) -> object:
         call_type: Final[object] = self.call_type
         if call_type == CallTypes.anthropic_messages.value:
-            return self._anthropic_messages_logged_response(result=result)
+            return self._anthropic_messages_logged_response(result=result, for_billing=for_billing)
         if call_type in (CallTypes.generate_content.value, CallTypes.agenerate_content.value):
             return self._handle_non_streaming_google_genai_generate_content_response_logging(result=result)
         if call_type in (CallTypes.asend_message.value, CallTypes.send_message.value):
@@ -5351,7 +5351,7 @@ class Logging(LiteLLMLoggingBaseClass):
             return result
         return {**body, "usage": {**reported, "speed": requested}}
 
-    def _anthropic_messages_logged_response(self, result: object) -> ModelResponse:
+    def _anthropic_messages_logged_response(self, result: object, *, for_billing: bool = False) -> ModelResponse:
         """
         The ModelResponse a /v1/messages spend_logs row is built from.
 
@@ -5359,18 +5359,21 @@ class Logging(LiteLLMLoggingBaseClass):
         caller was served is minted locally rather than issued upstream, so it is absent from the
         response the row would otherwise be keyed on and has to be carried over here.
         """
-        logged: Final = self._handle_anthropic_messages_response_logging(result=result)
+        logged: Final = self._handle_anthropic_messages_response_logging(result=result, for_billing=for_billing)
         streamed_message_id: Final = self.streamed_anthropic_message_id
         if streamed_message_id is None:
             return logged
         return logged.model_copy(update={"id": streamed_message_id})
 
-    def _handle_anthropic_messages_response_logging(self, result: object) -> ModelResponse:
+    def _handle_anthropic_messages_response_logging(
+        self, result: object, *, for_billing: bool = False
+    ) -> ModelResponse:
         """
         Handles logging for Anthropic messages responses.
 
         Args:
             result: The response object from the model call
+            for_billing: Convert the served body without replaying provider callbacks
 
         Returns:
             The the response object from the model call
@@ -5402,10 +5405,14 @@ class Logging(LiteLLMLoggingBaseClass):
         )
         provider_response_id: Final = _provider_response_id(raw_body)
         bridged: Final = self.bridged_model_response
-        if bridged is not None and isinstance(result, dict):
-            return bridged if provider_response_id is None else bridged.model_copy(update={"id": provider_response_id})
         httpx_response: Final = self.model_call_details.get("httpx_response", None)
-        if httpx_response and isinstance(httpx_response, httpx.Response):
+        if (
+            bridged is not None
+            and isinstance(result, dict)
+            and (for_billing or self.stream or not isinstance(httpx_response, httpx.Response))
+        ):
+            return bridged if provider_response_id is None else bridged.model_copy(update={"id": provider_response_id})
+        if not for_billing and not self.stream and httpx_response and isinstance(httpx_response, httpx.Response):
             result = litellm.AnthropicConfig().transform_response(
                 raw_response=httpx_response,
                 model_response=litellm.ModelResponse(id=provider_response_id),
@@ -5419,22 +5426,32 @@ class Logging(LiteLLMLoggingBaseClass):
                 json_mode=False,
                 litellm_params={},
             )
+            if bridged is not None and served_body is not None:
+                return (
+                    bridged if provider_response_id is None else bridged.model_copy(update={"id": provider_response_id})
+                )
         elif result is None:
             verbose_logger.warning("LiteLLM: the anthropic_messages stream assembled no response, logging an empty one")
             return litellm.ModelResponse(model=self.model)
         else:
+            billing_body: Final = (
+                _SERVED_ANTHROPIC_BODY.validate_json(httpx_response.content)
+                if for_billing and not self.stream and isinstance(httpx_response, httpx.Response)
+                else served_body
+            )
             anthropic_body: Final = (
-                served_body
-                if served_body is not None
+                billing_body
+                if billing_body is not None
                 else _SERVED_ANTHROPIC_BODY.validate_python(
                     result.model_dump() if isinstance(result, BaseModel) else result
                 )
             )
             result = litellm.AnthropicConfig().transform_parsed_response(
                 completion_response={"stop_sequence": None, **anthropic_body},
-                raw_response=httpx.Response(
-                    status_code=200,
-                    headers={},
+                raw_response=(
+                    httpx_response
+                    if not self.stream and isinstance(httpx_response, httpx.Response)
+                    else httpx.Response(status_code=200, headers={})
                 ),
                 model_response=litellm.ModelResponse(id=provider_response_id),
                 json_mode=None,

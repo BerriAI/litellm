@@ -10,6 +10,7 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import ANTHROPIC_BATCHES_ROUTE
+from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.litellm_core_utils.core_helpers import (
     native_messages_reported_cost,
     override_stamped_response_cost,
@@ -20,6 +21,7 @@ from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_mo
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,
 )
+from litellm.litellm_core_utils.usage_cost import validated_usage_cost
 from litellm.llms.anthropic import get_anthropic_config
 from litellm.llms.anthropic.messages.stream_assembly import (
     build_complete_streaming_response,
@@ -332,6 +334,11 @@ class AnthropicPassthroughLoggingHandler:
     ) -> float:
         if logging_obj.model_call_details.get("cache_hit") is True:
             return 0.0
+        bridged: Final = getattr(logging_obj, "bridged_model_response", None)
+        if getattr(logging_obj, "call_type", None) == "anthropic_messages" and isinstance(bridged, ModelResponse):
+            bill: Final = validated_usage_cost(get_hidden_params_dict(bridged).get("response_cost"))
+            if bill is not None:
+                return bill
         custom_llm_provider: Final = logging_obj.model_call_details.get("custom_llm_provider")
         model_for_cost: Final = (
             f"{custom_llm_provider}/{model}"

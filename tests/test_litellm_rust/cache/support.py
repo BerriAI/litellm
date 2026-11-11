@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator, Mapping
 from types import MappingProxyType
 from typing import Final, Literal
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 import litellm
 from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
@@ -20,13 +20,32 @@ from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_EVENTS, MES
 from tests.test_litellm_rust.responses.data import RESPONSES_MODEL, RESPONSES_RESPONSE
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 
+_WIRE_EVENT: Final = TypeAdapter(dict[str, object])
+
+
+def _wire_payload(line: bytes) -> object:
+    if not line.startswith(b"data:"):
+        return line
+    try:
+        event: Final = _WIRE_EVENT.validate_json(line[5:])
+    except ValidationError:
+        return line
+    return payload(event)
+
 
 def payload(value: object) -> object:
+    if isinstance(value, bytes):
+        return tuple(_wire_payload(line) for line in value.splitlines())
     if isinstance(value, ModelResponse):
         return value.model_dump_json(exclude=MappingProxyType({"id": True, "created": True}))
     if isinstance(value, dict):
         fields: Final = TypeAdapter(dict[str, object]).validate_python(value)
-        return {name: field for name, field in fields.items() if name != "_hidden_params"}
+        public: Final = {name: field for name, field in fields.items() if name != "_hidden_params"}
+        usage: Final = public.get("usage")
+        if isinstance(usage, dict):
+            normalized: Final = TypeAdapter(dict[str, object]).validate_python(usage)
+            return {**public, "usage": {name: field for name, field in normalized.items() if name != "cost"}}
+        return public
     return value.model_dump_json() if isinstance(value, BaseModel) else value
 
 

@@ -1,3 +1,6 @@
+`usage_cost.py` is the one place `usage.cost` is stamped. Reuse its dispatcher and adapters.
+Never inline usage-cost stamping elsewhere. Never delete `usage_cost.py`.
+
 ## get_model_cost_map.py
 
 - This module decides when to fetch and install. Fetching, parsing, integrity checks and alias expansion run in Rust

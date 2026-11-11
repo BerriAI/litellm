@@ -10,9 +10,10 @@ import datetime
 import time
 from collections.abc import Iterator
 from typing import Final
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
+import httpx
 
 import litellm
 import litellm.litellm_core_utils.llm_response_utils.response_metadata as response_metadata_mod
@@ -27,7 +28,159 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.types.utils import ModelResponse, Usage
+from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+from litellm.types.utils import EmbeddingResponse, HiddenParams, ModelResponse, TextCompletionResponse, Usage
+
+
+@pytest.mark.parametrize("response_type", [EmbeddingResponse, TextCompletionResponse])
+def test_metadata_apply_preserves_model_hidden_params(
+    response_type: type[EmbeddingResponse] | type[TextCompletionResponse],
+) -> None:
+    response: Final = response_type()
+    hidden: Final = HiddenParams(response_cost=0.125)
+    response._hidden_params = hidden
+    before: Final = response.model_dump()
+
+    ResponseMetadata(response).apply()
+
+    assert response._hidden_params is hidden
+    assert response.model_dump() == before
+
+
+@pytest.mark.parametrize("shape", ["chat", "responses", "messages", "messages_httpx"])
+@pytest.mark.parametrize("input_tokens,output_tokens", [(3, 4), (0, 0)])
+def test_nonstream_usage_cost_matches_the_bill(shape: str, input_tokens: int, output_tokens: int) -> None:
+    start: Final = datetime.datetime(2026, 1, 1)
+    messages_response: Final = shape.startswith("messages")
+    logging_obj: Final = Logging(
+        model="gpt-6.1-sol",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="anthropic_messages" if messages_response else "completion",
+        start_time=start,
+        litellm_call_id="usage-cost-" + shape,
+        function_id="usage-cost",
+    )
+    logging_obj.custom_cost_per_token = {"input_cost_per_token": 0.01, "output_cost_per_token": 0.02}
+    logging_obj.update_environment_variables(
+        model="gpt-6.1-sol",
+        litellm_params={"input_cost_per_token": 0.01, "output_cost_per_token": 0.02},
+        optional_params={},
+        custom_llm_provider="openai",
+    )
+    response: Final = (
+        {
+            "id": "msg_cost",
+            "type": "message",
+            "model": "gpt-6.1-sol",
+            "role": "assistant",
+            "content": [],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
+        }
+        if messages_response
+        else ResponsesAPIResponse(
+            id="resp_cost",
+            created_at=0,
+            model="gpt-6.1-sol",
+            object="response",
+            output=[],
+            status="completed",
+            usage=ResponseAPIUsage(
+                input_tokens=input_tokens, output_tokens=output_tokens, total_tokens=input_tokens + output_tokens
+            ),
+        )
+        if shape == "responses"
+        else ModelResponse(
+            model="gpt-6.1-sol", usage=Usage(prompt_tokens=input_tokens, completion_tokens=output_tokens)
+        )
+    )
+    if shape == "messages_httpx" and isinstance(response, dict):
+        logging_obj.model_call_details["httpx_response"] = httpx.Response(200, json=response)
+        response["usage"] = {"input_tokens": 0, "output_tokens": 0}
+    with patch.object(litellm, "response_cost_calculator", wraps=litellm.response_cost_calculator) as calculator:
+        update_response_metadata(response, logging_obj, "gpt-6.1-sol", {}, start, start)
+        logging_obj.prepare_success_logging(
+            response,
+            start,
+            start,
+            cache_hit=False,
+            standard_logging_object=None,
+            build_logging_payload=False,
+            publish_logging_payload=False,
+        )
+        assert calculator.call_count == 1
+    cost: Final = response["usage"]["cost"] if isinstance(response, dict) else response.usage.cost
+    assert isinstance(cost, float)
+    assert cost == pytest.approx(input_tokens * 0.01 + output_tokens * 0.02)
+    priced: Final = logging_obj.normalize_endpoint_logging_result(response)
+    assert logging_obj.response_cost_calculator(result=priced) == pytest.approx(cost)
+    hidden_response: Final = logging_obj.bridged_model_response if messages_response else response
+    assert hidden_response is not None
+    assert hidden_response._hidden_params["response_cost"] == pytest.approx(cost)
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(cost)
+
+
+@pytest.mark.parametrize("failure", ["normalize_endpoint_logging_result", "response_cost_calculator"])
+def test_messages_billing_failure_keeps_the_completed_response(failure: str) -> None:
+    start: Final = datetime.datetime(2026, 1, 1)
+    logging_obj: Final = Logging(
+        model="gpt-6.1-sol",
+        messages=[],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=start,
+        litellm_call_id="billing-failure",
+        function_id="billing-failure",
+    )
+    response: Final = {
+        "id": "msg_cost",
+        "type": "message",
+        "model": "gpt-6.1-sol",
+        "role": "assistant",
+        "content": [],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 3, "output_tokens": 4},
+    }
+    with patch.object(logging_obj, failure, side_effect=RuntimeError("billing unavailable")):
+        update_response_metadata(response, logging_obj, "gpt-6.1-sol", {}, start, start)
+    assert response["usage"] == {"input_tokens": 3, "output_tokens": 4}
+    assert response["stop_reason"] == "end_turn"
+
+
+@pytest.mark.parametrize("shape", ["chat", "responses"])
+def test_nonstream_usage_cost_preserves_the_upstream_charge(shape: str) -> None:
+    start: Final = datetime.datetime(2026, 1, 1)
+    logging_obj: Final = Logging(
+        model="gpt-6.1-sol",
+        messages=[],
+        stream=False,
+        call_type="completion",
+        start_time=start,
+        litellm_call_id="upstream-cost",
+        function_id="upstream-cost",
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-6.1-sol", litellm_params={}, optional_params={}, custom_llm_provider="openai"
+    )
+    response: Final = (
+        ModelResponse(model="gpt-6.1-sol", usage=Usage(prompt_tokens=3, completion_tokens=4, cost=0.375))
+        if shape == "chat"
+        else ResponsesAPIResponse(
+            id="resp_upstream",
+            created_at=0,
+            model="gpt-6.1-sol",
+            object="response",
+            output=[],
+            usage=ResponseAPIUsage(input_tokens=3, output_tokens=4, total_tokens=7, cost=0.375),
+        )
+    )
+    update_response_metadata(response, logging_obj, "gpt-6.1-sol", {}, start, start)
+    assert response._hidden_params["upstream_usage_cost"] == 0.375
+    assert response.usage.cost == response._hidden_params["response_cost"]
+    assert logging_obj.response_cost_calculator(result=response) == response.usage.cost
 
 
 class TestCallbackDurationMs:
@@ -107,7 +260,7 @@ class TestDictResultsSkipMetadataUpdate:
     effect was overwriting the logging object's already-correct cost breakdown with a
     service-tier-less, reasoning-less recompute on the adapted response."""
 
-    def test_update_response_metadata_skips_cost_recompute_for_dict_results(self):
+    def test_update_response_metadata_stamps_cost_for_dict_results(self):
         anthropic_response = {
             "id": "msg_123",
             "type": "message",
@@ -119,6 +272,7 @@ class TestDictResultsSkipMetadataUpdate:
         logging_obj.model_call_details = {}
         logging_obj.caching_details = None
         logging_obj.litellm_call_id = "test-call-id"
+        logging_obj.response_cost_calculator.return_value = 0.125
 
         update_response_metadata(
             result=anthropic_response,
@@ -129,7 +283,7 @@ class TestDictResultsSkipMetadataUpdate:
             end_time=datetime.datetime(2025, 1, 1, 0, 0, 1),
         )
 
-        logging_obj.response_cost_calculator.assert_not_called()
+        assert anthropic_response["usage"]["cost"] == 0.125
         assert "_hidden_params" not in anthropic_response
 
     def test_update_response_metadata_keeps_timing_on_logging_obj_for_dict_results(self):
