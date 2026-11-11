@@ -2121,6 +2121,7 @@ class MCPServerManager:
         self._listed_tools_by_server_id: dict[str, _ListedToolsByCaller] = {}  # mutable-ok: refreshed per tools/list
         self._listed_tools_generations: dict[str, int] = {}  # mutable-ok: bumped per server save
         self._upstream_initialize_instructions_by_server_id: dict[str, str] = {}
+        self._listing_instructions_by_server_id: Mapping[str, str] = MappingProxyType({})
         # Per-server monotonic timestamp of last upstream prefetch attempt (success,
         # empty result, or failure). Used to throttle re-probes for servers that do
         # not return instructions, and to apply a short cooldown after failures.
@@ -2606,7 +2607,8 @@ class MCPServerManager:
             mcp_aliases: Optional dictionary mapping aliases to server names from litellm_settings
         """
         verbose_logger.debug("Loading MCP Servers from config-----")
-        self.clear_initialize_instructions()
+        self._upstream_initialize_instructions_by_server_id.clear()
+        self._upstream_initialize_instructions_probed_at.clear()
 
         # Track which aliases have been used to ensure only first occurrence is used
         used_aliases: Final = set()
@@ -4558,6 +4560,7 @@ class MCPServerManager:
             # upstream API key or a user's OAuth token (MCPClient._get_auth_headers
             # applies extra_headers after writing Authorization from auth_value, so
             # an injected JWT would otherwise clobber the per-user token).
+            headers_before_signing: Final = extra_headers
             if user_api_key_auth is not None and not server.spec_path:
                 from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import (
                     get_mcp_jwt_signer,
@@ -4647,7 +4650,7 @@ class MCPServerManager:
                         raw_headers=raw_headers,
                         page_cursor=_tool_page_cursor(params),
                     ),
-                    use_cache=use_tool_list_cache,
+                    use_cache=use_tool_list_cache and extra_headers is headers_before_signing,
                 )
                 tools = page.tools
                 self._remember_upstream_initialize_instructions(server, client)
@@ -4735,7 +4738,47 @@ class MCPServerManager:
         *,
         use_cache: bool,
     ) -> ListToolsResult:
-        fetch: Final = self._tools_fetch(client, server, params)
+        fetch_upstream: Final = self._tools_fetch(client, server, params)
+        fetched: Final = asyncio.Event()
+
+        async def fetch() -> ListToolsResult:
+            fetched.set()
+            return await fetch_upstream()
+
+        page: Final = await self._cached_or_upstream_tools(server, client, params, key_for_credential, fetch, use_cache)
+        if fetched.is_set():
+            self._note_listing_instructions(server, client)
+        else:
+            self._restore_listing_instructions(server)
+        return page
+
+    def _note_listing_instructions(self, server: MCPServer, client: MCPClient) -> None:
+        raw: Final[str | None] = getattr(client, "_last_initialize_instructions", None)
+        self._forget_listing_instructions(server.server_id)
+        if raw and raw.strip():
+            self._listing_instructions_by_server_id = MappingProxyType(
+                {**self._listing_instructions_by_server_id, server.server_id: raw.strip()}
+            )
+
+    def _forget_listing_instructions(self, server_id: str) -> None:
+        self._listing_instructions_by_server_id = MappingProxyType(
+            {known: text for known, text in self._listing_instructions_by_server_id.items() if known != server_id}
+        )
+
+    def _restore_listing_instructions(self, server: MCPServer) -> None:
+        seen: Final = self._listing_instructions_by_server_id.get(server.server_id)
+        if seen and not self._upstream_initialize_instructions_by_server_id.get(server.server_id):
+            self._upstream_initialize_instructions_by_server_id[server.server_id] = seen
+
+    async def _cached_or_upstream_tools(
+        self,
+        server: MCPServer,
+        client: MCPClient,
+        params: PaginatedRequestParams | None,
+        key_for_credential: Callable[[str], _DiscoveryKey],
+        fetch: Callable[[], Awaitable[ListToolsResult]],
+        use_cache: bool,
+    ) -> ListToolsResult:
         if not use_cache or (params is not None and params.cursor is not None):
             return await fetch()
 
@@ -4774,9 +4817,9 @@ class MCPServerManager:
     def clear_initialize_instructions(self) -> None:
         self._upstream_initialize_instructions_by_server_id.clear()
         self._upstream_initialize_instructions_probed_at.clear()
-        self._tool_discovery_cache.clear()
 
     def invalidate_discovery_lists(self, server_id: str) -> None:
+        self._forget_listing_instructions(server_id)
         self._upstream_initialize_instructions_by_server_id.pop(server_id, None)
         self._upstream_initialize_instructions_probed_at.pop(server_id, None)
         self._prompt_discovery_cache.invalidate(server_id)

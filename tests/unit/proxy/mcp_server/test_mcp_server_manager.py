@@ -17023,17 +17023,52 @@ async def test_tools_list_page_of_a_longer_listing_is_fetched_every_time_under_a
 
 
 @pytest.mark.asyncio
-async def test_tools_list_is_fetched_again_once_server_instructions_are_cleared() -> None:
+async def test_tools_list_cache_outlives_an_instructions_clear_and_a_hit_puts_the_instructions_back() -> None:
     manager: Final = MCPServerManager(discovery_clock=_DiscoveryClock())
     upstream: Final = _DiscoveryUpstream()
     server: Final = _server_with_tools_list_ttl(300)
-    with _mcp_upstream(upstream.respond):
+
+    async def respond_with_instructions(request: httpx2.Request) -> httpx2.Response:
+        response: Final = await upstream.respond(request)
+        body: Final = json.loads(response.content or b"null")
+        if not isinstance(body, dict) or "supportedVersions" not in body.get("result", {}):
+            return response
+        return httpx2.Response(200, json={**body, "result": {**body["result"], "instructions": "use with care"}})
+
+    with _mcp_upstream(respond_with_instructions):
         await _list_discovery_tools(manager, server=server)
-        await _list_discovery_tools(manager, server=server)
-        assert upstream.initializes == 1
+        remembered: Final = manager._upstream_initialize_instructions_by_server_id.get(server.server_id)
         manager.clear_initialize_instructions()
+        cleared: Final = manager._upstream_initialize_instructions_by_server_id.get(server.server_id)
         await _list_discovery_tools(manager, server=server)
-        assert upstream.initializes == 2
+        restored: Final = manager._upstream_initialize_instructions_by_server_id.get(server.server_id)
+        manager._upstream_initialize_instructions_by_server_id[server.server_id] = "newer text from a tool call"
+        await _list_discovery_tools(manager, server=server)
+    assert (remembered, cleared, restored) == ("use with care", None, "use with care")
+    assert manager._upstream_initialize_instructions_by_server_id.get(server.server_id) == "newer text from a tool call"
+    assert upstream.initializes == 1
+
+
+@pytest.mark.asyncio
+async def test_tools_list_signed_by_the_gateway_jwt_signer_is_fetched_every_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer import mcp_jwt_signer
+
+    class _Signer:
+        async def async_pre_call_hook(self, **kwargs: object) -> dict[str, object]:
+            return {"extra_headers": {"Authorization": f"Bearer signed-{len(upstream.requests)}"}}
+
+    monkeypatch.setattr(mcp_jwt_signer, "_mcp_jwt_signer_instance", _Signer(), raising=False)
+    manager: Final = MCPServerManager(discovery_clock=_DiscoveryClock())
+    upstream: Final = _DiscoveryUpstream()
+    server: Final = _server_with_tools_list_ttl(300)
+    caller: Final = UserAPIKeyAuth(api_key="hashed-caller", user_id="caller")
+    with _mcp_upstream(upstream.respond):
+        for _ in range(2):
+            assert len((await _list_discovery_tools(manager, server=server, user_api_key_auth=caller)).tools) == 1
+    assert sum(method == "tools/list" for method, _auth in upstream.requests) == 2
+    assert manager._tool_discovery_cache.holds(server.server_id) is False
 
 
 @pytest.mark.asyncio
@@ -17191,18 +17226,14 @@ async def test_tool_search_asks_the_upstream_on_every_call_under_a_server_ttl(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("invalidation", ("invalidate_discovery_lists", "clear_initialize_instructions"))
-async def test_tools_list_fetched_across_an_invalidation_is_not_stored(invalidation: str) -> None:
+async def test_tools_list_fetched_across_an_invalidation_is_not_stored() -> None:
     manager: Final = MCPServerManager(discovery_clock=_DiscoveryClock())
     upstream: Final = _DiscoveryUpstream()
     upstream.release.clear()
     with _mcp_upstream(upstream.respond):
         listing: Final = asyncio.create_task(_list_discovery_tools(manager))
         await upstream.entered.wait()
-        if invalidation == "invalidate_discovery_lists":
-            manager.invalidate_discovery_lists("discovery")
-        else:
-            manager.clear_initialize_instructions()
+        manager.invalidate_discovery_lists("discovery")
         upstream.release.set()
         assert len((await listing).tools) == 1
         assert len((await _list_discovery_tools(manager)).tools) == 1

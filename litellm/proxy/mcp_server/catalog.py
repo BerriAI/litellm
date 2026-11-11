@@ -1377,12 +1377,6 @@ class _DiscoveryCache(Generic[_DiscoveryPage]):
     def holds(self, server_id: str) -> bool:
         return bool(self._entry_keys(server_id))
 
-    def clear(self) -> None:
-        self.invalidations += 1
-        self._entries.flush_cache()
-        self._pending.clear()
-        self._oversized_server_ids = frozenset()
-
     def invalidate(self, server_id: str) -> None:
         self.invalidations += 1
         self._oversized_server_ids = self._oversized_server_ids - {server_id}
