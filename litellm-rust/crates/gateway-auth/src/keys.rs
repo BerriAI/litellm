@@ -108,7 +108,7 @@ impl From<ModelAccess> for KeyModels {
 }
 
 /// The gateway's routes in the proxy's `openai_routes` preset.
-const OPENAI_ROUTES: [&str; 20] = [
+const OPENAI_ROUTES: [&str; 22] = [
     "/chat/completions",
     "/v1/chat/completions",
     "/engines/{model}/chat/completions",
@@ -127,6 +127,8 @@ const OPENAI_ROUTES: [&str; 20] = [
     "/v1/responses",
     "/ocr",
     "/v1/ocr",
+    "/decisions",
+    "/v1/decisions",
     "/models",
     "/v1/models",
 ];
@@ -575,6 +577,8 @@ mod tests {
     )]
     #[case::llm_api_routes_not_mcp(&["llm_api_routes"], "/mcp/sse", false)]
     #[case::openai_routes_chat(&["openai_routes"], "/v1/chat/completions", true)]
+    #[case::openai_routes_decisions(&["openai_routes"], "/v1/decisions", true)]
+    #[case::llm_api_routes_decisions(&["llm_api_routes"], "/decisions", true)]
     #[case::openai_routes_responses(&["openai_routes"], "/v1/responses", true)]
     #[case::openai_routes_models(&["openai_routes"], "/v1/models", true)]
     #[case::openai_routes_not_model_retrieval(&["openai_routes"], "/v1/models/{model_id}", false)]

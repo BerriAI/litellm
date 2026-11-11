@@ -67,6 +67,17 @@ impl Usage {
         OpenAiUsage::deserialize(value).ok().map(OpenAiUsage::usage)
     }
 
+    pub fn from_decisions(value: &Value) -> Option<Self> {
+        let usage = DecisionsUsage::deserialize(value).ok()?;
+        let details = usage.input_tokens_details.unwrap_or_default();
+        Some(Self::from_prompt_counts(
+            usage.input_tokens,
+            usage.output_tokens,
+            details.cached_tokens.unwrap_or_default(),
+            details.cache_write_tokens.unwrap_or_default(),
+        ))
+    }
+
     /// Usage from counts in the proxy's convention: `prompt_tokens` includes `cached_tokens`
     /// and `cache_creation_tokens`.
     pub fn from_prompt_counts(
@@ -85,6 +96,19 @@ impl Usage {
             ..Self::default()
         }
     }
+}
+
+#[derive(Deserialize)]
+struct DecisionsUsage {
+    input_tokens: u64,
+    output_tokens: u64,
+    input_tokens_details: Option<DecisionsInputDetails>,
+}
+
+#[derive(Deserialize, Default)]
+struct DecisionsInputDetails {
+    cached_tokens: Option<u64>,
+    cache_write_tokens: Option<u64>,
 }
 
 #[derive(Deserialize, Default)]
@@ -531,6 +555,32 @@ mod tests {
             "server_tool_use": {"web_search_requests": 2},
         }));
         assert_eq!(usage, Some(anthropic_usage()));
+    }
+
+    #[rstest]
+    #[case::plain(json!({"input_tokens": 2000, "output_tokens": 20, "total_tokens": 2020}), 2000, 0, 0)]
+    #[case::cached(
+        json!({"input_tokens": 2000, "input_tokens_details": {"cached_tokens": 1500, "cache_write_tokens": 100}, "output_tokens": 20}),
+        400,
+        1500,
+        100
+    )]
+    fn decisions_usage_counts_cached_input_inside_the_input(
+        #[case] value: Value,
+        #[case] input: u64,
+        #[case] cache_read: u64,
+        #[case] cache_write: u64,
+    ) {
+        assert_eq!(
+            Usage::from_decisions(&value),
+            Some(Usage {
+                input_tokens: input,
+                output_tokens: 20,
+                cache_read_tokens: cache_read,
+                cache_write_tokens: cache_write,
+                ..Usage::default()
+            })
+        );
     }
 
     #[rstest]

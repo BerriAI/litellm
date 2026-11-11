@@ -45,6 +45,39 @@ func (p textPool) slice(r *rand.Rand, n int) []byte {
 	return p[off : off+n]
 }
 
+const maxQuestions = 128
+
+var decisionQuestions = []string{
+	`{"type":"predicate","name":"q%d","instructions":"Is the customer asking for a refund?"}`,
+	`{"type":"choice","name":"q%d","instructions":"How urgent is this?","choices":[{"value":"low","description":"can wait a week"},{"value":"high","description":"needs action today"}]}`,
+	`{"type":"score","name":"q%d","instructions":"How frustrated is the customer?","levels":[{"label":"calm"},{"label":"mildly annoyed"},{"label":"angry"}]}`,
+}
+
+func buildDecisionsBody(pool textPool, r *rand.Rand, res result, outTokens, questions int, nonce string) []byte {
+	if questions == 0 {
+		questions = len(decisionQuestions)
+	}
+	text := res.CtxTokens * bytesPerToken
+	var b bytes.Buffer
+	b.Grow(text + questions*256 + 256)
+	b.WriteString(`{"model":`)
+	b.WriteString(strconv.Quote(res.Model))
+	b.WriteString(`,"questions":[`)
+	for i := range questions {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		fmt.Fprintf(&b, decisionQuestions[i%len(decisionQuestions)], i)
+	}
+	b.WriteString(`],"input":"case `)
+	b.WriteString(nonce)
+	b.WriteByte(' ')
+	b.Write(pool.slice(r, text))
+	fmt.Fprintf(&b, " [[mock ttft_ms=%d dur_ms=%d out=%d in=%d]]", res.TTFTPlanMs, res.DurPlanMs, outTokens, res.CtxTokens)
+	b.WriteString(`"}`)
+	return b.Bytes()
+}
+
 func buildBody(pool textPool, r *rand.Rand, res result, outTokens int, nonce string) []byte {
 	total := res.CtxTokens * bytesPerToken
 	var b bytes.Buffer

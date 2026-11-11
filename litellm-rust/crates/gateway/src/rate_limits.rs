@@ -1164,7 +1164,7 @@ pub(crate) fn throttled(
 ) -> Refusal {
     match route {
         Route::Messages => Refusal::new(429, "rate_limit_error", message).anthropic(),
-        Route::ChatCompletions => {
+        Route::ChatCompletions | Route::Decisions => {
             let mut refusal = Refusal::new(429, "throttling_error", message).without_param();
             for (name, value) in headers {
                 if let Ok(value) = HeaderValue::from_str(&value) {
@@ -1180,7 +1180,7 @@ pub(crate) fn throttled(
 pub(crate) fn unavailable(route: Route) -> Refusal {
     match route {
         Route::Messages => Refusal::new(503, "api_error", FAIL_CLOSED).anthropic(),
-        Route::ChatCompletions => {
+        Route::ChatCompletions | Route::Decisions => {
             Refusal::new(503, "internal_server_error", FAIL_CLOSED).without_param()
         }
     }

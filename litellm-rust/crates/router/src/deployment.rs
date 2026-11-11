@@ -27,6 +27,7 @@ pub struct Deployment {
     /// `model_info.discoverable: false`: the deployment still serves requests, but only the
     /// master key sees it in model listings.
     pub undiscoverable: bool,
+    pub supports_box_questions: Option<bool>,
 }
 
 impl Deployment {
@@ -53,6 +54,7 @@ impl Deployment {
             team_id: None,
             id: None,
             undiscoverable: false,
+            supports_box_questions: None,
             base_model: params
                 .extra
                 .get("base_model")

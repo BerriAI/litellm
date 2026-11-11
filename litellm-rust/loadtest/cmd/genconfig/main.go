@@ -38,6 +38,9 @@ func main() {
 	bedrockFraction := flag.Float64("bedrock-fraction", 0.5, "share of each messages group's deployments served through Bedrock invoke (SigV4-signed, AWS event-stream responses) instead of the Anthropic API; 0 for Anthropic only")
 	chatGroups := flag.Int("chat-groups", 4, "chat model groups")
 	messagesGroups := flag.Int("messages-groups", 4, "messages model groups")
+	decisionsModel := flag.String("decisions-model", "gpt-6-luna", "upstream model for decisions deployments; groups are named <model>-0, <model>-1, ...")
+	decisionsGroups := flag.Int("decisions-groups", 0, "decisions model groups (the gateway's /v1/decisions; Bifrost gets none)")
+	decisionsProvider := flag.String("decisions-provider", "openai", "provider prefix for decisions deployments: openai or azure")
 	deployments := flag.Int("deployments", 4, "deployments per model group")
 	chatProvider := flag.String("chat-provider", "openai", "provider prefix for chat deployments (openai is served natively, streaming included; openai_like is non-streaming only)")
 	keys := flag.Int("keys", 1000, "virtual keys to generate")
@@ -51,6 +54,9 @@ func main() {
 	bifrostBedrock := flag.String("bifrost-bedrock-tls", "127.0.0.1:9443", "host:port of mockllm -tls-addr, where Bifrost's Bedrock deployments go")
 	bifrostPricing := flag.String("bifrost-pricing-file", "/config/bifrost-pricing.json", "where the Bifrost gateway finds bifrost-pricing.json")
 	flag.Parse()
+	if *decisionsProvider != "openai" && *decisionsProvider != "azure" {
+		log.Fatalf("-decisions-provider must be openai or azure, got %q", *decisionsProvider)
+	}
 	var full bool
 	switch *features {
 	case "basic":
@@ -113,6 +119,22 @@ func main() {
 			deployment(group, id, "anthropic/"+*messagesModel, fmt.Sprintf("%s/d/%s", base, id))
 		}
 	}
+	for g := range *decisionsGroups {
+		for i := range *deployments {
+			base := strings.TrimRight(bases[n%len(bases)], "/")
+			id := fmt.Sprintf("dec-%d-%d", g, i)
+			apiBase := fmt.Sprintf("%s/d/%s", base, id)
+			if *decisionsProvider == "openai" {
+				apiBase += "/v1"
+			}
+			fmt.Fprintf(&cfg, "  - model_name: %s-%d\n    litellm_params:\n      model: %s/%s\n      api_base: %s\n      api_key: sk-mock\n",
+				*decisionsModel, g, *decisionsProvider, *decisionsModel, apiBase)
+			if full {
+				cfg.WriteString(deploymentCapacity)
+			}
+			n++
+		}
+	}
 	fmt.Fprintf(&cfg, `router_settings:
   routing_strategy: simple-shuffle
   num_retries: 2
@@ -166,7 +188,7 @@ general_settings:
 	sw.Flush()
 	sf.Close()
 	log.Printf("wrote %d deployments in %d groups, %d keys in each of %d sets (%s features) to %s",
-		n, *chatGroups+*messagesGroups, *keys, len(sets), *features, *outDir)
+		n, *chatGroups+*messagesGroups+*decisionsGroups, *keys, len(sets), *features, *outDir)
 }
 
 func write(path, content string) {

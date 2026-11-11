@@ -241,7 +241,8 @@ func main() {
 		bedrockStream := converseStream || strings.HasSuffix(path, "/invoke-with-response-stream")
 		bedrock := bedrockStream || converse || strings.HasSuffix(path, "/invoke")
 		anthropic := bedrock || strings.HasSuffix(path, "/messages")
-		if !anthropic && !strings.HasSuffix(path, "/chat/completions") {
+		decisions := strings.HasSuffix(path, "/decisions")
+		if !anthropic && !decisions && !strings.HasSuffix(path, "/chat/completions") {
 			http.Error(w, "unknown path "+path, http.StatusNotFound)
 			return
 		}
@@ -266,6 +267,27 @@ func main() {
 		}
 		// Echo the model like a provider does: Bifrost prices a response by the model it names.
 		model := requestModel(body)
+
+		if decisions {
+			answers, err := decisionAnswers(body)
+			if err != nil {
+				http.Error(w, "decisions: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+			if !sleep(r, d.dur) {
+				return
+			}
+			w.Header().Set("content-type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{
+				"model": model, "answers": answers,
+				"usage": map[string]any{
+					"input_tokens": inputTokens, "input_tokens_details": map[string]any{"cached_tokens": 0},
+					"output_tokens": d.out, "output_tokens_details": map[string]any{"reasoning_tokens": 0},
+					"total_tokens": inputTokens + d.out,
+				},
+			})
+			return
+		}
 
 		if !stream {
 			if !sleep(r, d.dur) {
