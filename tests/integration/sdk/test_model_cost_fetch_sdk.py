@@ -540,16 +540,14 @@ _GCS_TOKEN: Final = "ya29.lit-scripted-gcs-token"
 
 @pytest.fixture
 def gcs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Callable[[_Reply], AbstractContextManager[_Server]]:
-    """Serves a Google token endpoint and a Cloud Storage emulator that answer ``_GCS_URL`` with ``reply``."""
-
     @contextmanager
     def serving(reply: _Reply) -> Generator[_Server]:
-        received: Final[list[Request]] = []  # mutable-ok: respond records each object request the peer answers
+        received: Final[list[Request]] = []  # mutable-ok: respond records every request the peer answers
 
         def respond(request: Request) -> Reply:
+            received.append(request)
             if request.target == "/_oauth/token":
                 return Reply(body=json.dumps({"access_token": _GCS_TOKEN, "expires_in": 3600}).encode())
-            received.append(request)
             return Reply(status=reply.status, body=reply.body, headers=reply.headers)
 
         with wire_server(respond) as wire:
@@ -564,7 +562,7 @@ def gcs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Callable[[_Reply], A
 
 @pytest.mark.usefixtures("remote_source", "own_model_cost")
 @pytest.mark.parametrize("load", ["boot", "reload", "register_model"])
-def test_every_load_reads_a_gs_url_with_the_application_default_token(
+def test_every_load_reads_a_gs_url_from_the_emulator_without_credentials(
     gcs: Callable[[_Reply], AbstractContextManager[_Server]], load: Literal["boot", "reload", "register_model"]
 ):
     body: Final = _document_with(**{"lit-gcs-model": {"litellm_provider": "openai", "mode": "chat"}})
@@ -572,7 +570,7 @@ def test_every_load_reads_a_gs_url_with_the_application_default_token(
         rows: Final = _rows_loaded_through(load, server.url)
 
     assert server.targets == [_GCS_OBJECT_TARGET]
-    assert server.authorizations == [f"Bearer {_GCS_TOKEN}"]
+    assert server.authorizations == [""]
     assert "lit-gcs-model" in rows
 
 

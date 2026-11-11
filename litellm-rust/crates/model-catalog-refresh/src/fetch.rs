@@ -22,10 +22,8 @@ pub enum S3Access {
     Config(Box<litellm_s3::sdk::Config>),
 }
 
-/// How a `gs://` fetch reaches Cloud Storage
 #[derive(Clone)]
 pub enum GcsAccess {
-    /// Google application default credentials, against `STORAGE_EMULATOR_HOST` when it is set
     Environment,
     Config {
         endpoint: String,

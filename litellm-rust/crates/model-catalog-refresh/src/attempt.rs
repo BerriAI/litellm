@@ -157,27 +157,31 @@ pub(crate) async fn gcs(
     timeout: Duration,
 ) -> Result<Fetched, Rejected> {
     let (endpoint, token) = match gcs {
-        GcsAccess::Environment => (
-            emulator_endpoint(std::env::var("STORAGE_EMULATOR_HOST").ok()),
-            tokio::time::timeout(
-                timeout,
-                GcpAuth::default().access_token(CredentialSource::application_default(&|name| {
-                    std::env::var(name).ok()
-                })),
-            )
-            .await,
-        ),
+        GcsAccess::Environment => {
+            match emulator_endpoint(std::env::var("STORAGE_EMULATOR_HOST").ok()) {
+                Some(emulator) => (emulator, None),
+                None => (
+                    GCS_ENDPOINT.to_owned(),
+                    Some(
+                        bounded_token(
+                            timeout,
+                            GcpAuth::default().access_token(CredentialSource::application_default(
+                                &|name| std::env::var(name).ok(),
+                            )),
+                        )
+                        .await?,
+                    ),
+                ),
+            }
+        }
         GcsAccess::Config {
             endpoint,
             token_source,
         } => (
             endpoint.clone(),
-            tokio::time::timeout(timeout, token_source.token()).await,
+            Some(bounded_token(timeout, token_source.token()).await?),
         ),
     };
-    let token = token
-        .map_err(|elapsed| Rejected::fatal(Error::gcs_token_timeout(elapsed)))?
-        .map_err(|error| Rejected::fatal(Error::gcs_token(error)))?;
     let url = Url::parse(&format!(
         "{}/storage/v1/b/{}/o/{}?alt=media",
         endpoint.trim_end_matches('/'),
@@ -185,14 +189,35 @@ pub(crate) async fn gcs(
         utf8_percent_encode(&object.object, OBJECT_NAME_ENCODE_SET),
     ))
     .map_err(|error| Rejected::fatal(Error::from(error)))?;
-    http(client, url, Some(token.expose()), timeout).await
+    http(
+        client,
+        url,
+        token.as_ref().map(|token| token.expose()),
+        timeout,
+    )
+    .await
 }
 
-fn emulator_endpoint(host: Option<String>) -> String {
+async fn bounded_token<T>(
+    timeout: Duration,
+    token: impl Future<Output = Result<T, litellm_auth_types::Error>>,
+) -> Result<T, Rejected> {
+    let retryable = |error| Rejected {
+        cause: Cause::Transport(error),
+        retryable: true,
+        retry_after: None,
+    };
+    tokio::time::timeout(timeout, token)
+        .await
+        .map_err(|elapsed| retryable(Error::gcs_token_timeout(elapsed)))?
+        .map_err(|error| retryable(Error::gcs_token(error)))
+}
+
+fn emulator_endpoint(host: Option<String>) -> Option<String> {
     match host {
-        Some(host) if host.contains("://") => host,
-        Some(host) if !host.is_empty() => format!("http://{host}"),
-        _ => GCS_ENDPOINT.to_owned(),
+        Some(host) if host.contains("://") => Some(host),
+        Some(host) if !host.is_empty() => Some(format!("http://{host}")),
+        _ => None,
     }
 }
 
