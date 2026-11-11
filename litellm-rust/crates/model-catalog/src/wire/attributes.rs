@@ -55,6 +55,8 @@ attributes! {
     bedrock_converse_supports_strict_tools: bool,
     /// Highest reasoning effort the Bedrock output_config accepts for this model.
     bedrock_output_config_effort_ceiling: EffortLevel,
+    /// USD per token per hour to keep an explicitly created context cache stored.
+    cache_storage_cost_per_token_per_hour: UnitPrice,
     comment: String,
     /// Reasoning effort the provider applies when the request omits reasoning_effort. Gates whether a non-default temperature or the top_p/logprobs sampling params are accepted, which hold only when the effort resolves to 'none'.
     default_reasoning_effort: EffortLevel,
@@ -315,6 +317,8 @@ mod tests {
     #[case::deprecation_source_not_a_url_string("deprecation_source", json!(7), false)]
     #[case::thinking_on_by_default("thinking_on_by_default", json!(true), true)]
     #[case::thinking_on_by_default_not_a_flag("thinking_on_by_default", json!("yes"), false)]
+    #[case::cache_storage_rate("cache_storage_cost_per_token_per_hour", json!(4.5e-6), true)]
+    #[case::negative_cache_storage_rate("cache_storage_cost_per_token_per_hour", json!(-1), false)]
     #[case::reasoning_contexts("reasoning_contexts", json!(["reasoning", "non_reasoning"]), true)]
     #[case::reasoning_modes("reasoning_modes", json!(["none", "adaptive"]), true)]
     #[case::reasoning_context_not_a_list("reasoning_contexts", json!("reasoning"), false)]

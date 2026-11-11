@@ -59,6 +59,7 @@ pub struct ModelInfoFields {
     pub cache_creation_input_token_cost_above_12hr_ultrafast: Option<f64>,
     pub cache_creation_input_token_cost_above_12hr_above_272k_tokens_batches: Option<f64>,
     pub cache_creation_input_token_cost_above_12hr_above_272k_tokens_ultrafast: Option<f64>,
+    pub cache_storage_cost_per_token_per_hour: Option<f64>,
     pub off_peak_pricing: Option<Value>,
     pub input_cost_per_character: Option<f64>,
     pub input_cost_per_token_above_128k_tokens: Option<f64>,

@@ -332,6 +332,7 @@ class ModelInfo(MirroredPricingParams):
     ptu_effective_from: datetime.datetime | None = None
     ptu_effective_to: datetime.datetime | None = None
     ptu_shares: Mapping[str, Annotated[StrictInt, BeforeValidator(_whole_float_as_int)]] | None = None
+    cache_storage_cost_per_token_per_hour: float | None = None
 
     # when tag-based routing's "!" or "&" constraints eliminate every deployment
     # in this model group, fall back to the default-tagged pool instead of
