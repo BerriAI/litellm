@@ -557,7 +557,9 @@ class AmazonConverseConfig(BaseConfig):
             }
         }
 
-    def _handle_reasoning_effort_parameter(self, model: str, reasoning_effort: str, optional_params: dict) -> None:
+    def _handle_reasoning_effort_parameter(
+        self, model: str, reasoning_effort: str, optional_params: dict, drop_params: bool = False
+    ) -> None:
         """
         Handle the reasoning_effort parameter based on the model type.
 
@@ -582,15 +584,17 @@ class AmazonConverseConfig(BaseConfig):
                 model=model,
                 custom_llm_provider="bedrock",
                 llm_provider="bedrock_converse",
+                drop_params=drop_params,
             )
-            if mapped_thinking is None or mapped_thinking.get("type") == "disabled":
+            if mapped_thinking is None or mapped_thinking.get("type") in ("disabled", "between_tools"):
                 optional_params.pop("thinking", None)
                 optional_params.pop("output_config", None)
             if mapped_thinking is not None:
                 optional_params["thinking"] = mapped_thinking
-                if mapped_thinking.get("type") != "disabled" and AnthropicConfig.is_adaptive_thinking_model(
-                    model, "bedrock"
-                ):
+                if mapped_thinking.get("type") not in (
+                    "disabled",
+                    "between_tools",
+                ) and AnthropicConfig.is_adaptive_thinking_model(model, "bedrock"):
                     mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(reasoning_effort)
                     if mapped_effort is None:
                         AnthropicConfig.raise_invalid_reasoning_effort(
@@ -1243,7 +1247,7 @@ class AmazonConverseConfig(BaseConfig):
                 verbose_logger.warning(DROP_DISABLED_REASONING_EFFORT_WARNING, "reasoning_effort", value, model)
             elif param == "reasoning_effort" and isinstance(value, str):
                 self._handle_reasoning_effort_parameter(
-                    model=model, reasoning_effort=value, optional_params=optional_params
+                    model=model, reasoning_effort=value, optional_params=optional_params, drop_params=drop_params
                 )
             elif param == "output_config" and isinstance(value, dict):
                 mapped_output_config = dict(value)
@@ -2168,7 +2172,7 @@ class AmazonConverseConfig(BaseConfig):
         # If any message has thinking_blocks, we must keep thinking enabled, otherwise
         # Related issues: https://github.com/BerriAI/litellm/issues/14194
         if (
-            optional_params.get("thinking") is not None
+            optional_params.get("thinking") not in (None, {"type": "between_tools"})
             and messages is not None
             and last_assistant_with_tool_calls_has_no_thinking_blocks(messages)
             and not any_assistant_message_has_thinking_blocks(messages)

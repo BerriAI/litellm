@@ -153,6 +153,7 @@ mod tests {
                 supports_reasoning: true,
                 supports_adaptive_thinking: true,
                 thinking_always_on: false,
+                supports_between_tools_thinking: false,
                 thinking_on_by_default: false,
                 supports_legacy_thinking: false,
                 supports_output_config: true,

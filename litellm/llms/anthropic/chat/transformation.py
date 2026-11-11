@@ -1766,11 +1766,24 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         model: str,
         custom_llm_provider: str,
         llm_provider: str = "anthropic",
+        drop_params: bool = False,
     ) -> AnthropicThinkingParam | None:
         """Capability probes read the cost map under ``custom_llm_provider``; ``llm_provider`` only tags raised exceptions."""
         if reasoning_effort is None:
             return None
         if reasoning_effort == "none":
+            if AnthropicModelInfo._is_always_on_thinking_model(model, custom_llm_provider):
+                if AnthropicModelInfo.supports_model_capability(
+                    model, "supports_between_tools_thinking", custom_llm_provider
+                ):
+                    return AnthropicThinkingParam(type="between_tools")
+                if not (drop_params or litellm.drop_params):
+                    raise litellm.exceptions.BadRequestError(
+                        message=f"Model {model} cannot disable thinking. Set drop_params=True to omit reasoning_effort='none'.",
+                        model=model,
+                        llm_provider=llm_provider,
+                    )
+                return None
             if AnthropicModelInfo.thinks_by_default(
                 model, custom_llm_provider
             ) and not AnthropicModelInfo._is_always_on_thinking_model(model, custom_llm_provider):
@@ -1834,8 +1847,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         model: str,
         custom_llm_provider: str,
         llm_provider: str = "anthropic",
+        drop_params: bool = False,
     ) -> AnthropicThinkingParam | None:
-        return cls._map_reasoning_effort(reasoning_effort, model, custom_llm_provider, llm_provider)
+        return cls._map_reasoning_effort(reasoning_effort, model, custom_llm_provider, llm_provider, drop_params)
 
     @staticmethod
     def cap_thinking_budget_to_max_tokens(
@@ -2181,15 +2195,17 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     model=model,
                     custom_llm_provider=self._resolved_provider,
                     llm_provider=self._resolved_provider,
+                    drop_params=drop_params,
                 )
-                if mapped_thinking is None or mapped_thinking.get("type") == "disabled":
+                if mapped_thinking is None or mapped_thinking.get("type") in ("disabled", "between_tools"):
                     optional_params.pop("thinking", None)
                     optional_params.pop("output_config", None)
                 if mapped_thinking is not None:
                     optional_params["thinking"] = mapped_thinking
-                    if mapped_thinking.get("type") != "disabled" and AnthropicConfig._is_adaptive_thinking_model(
-                        model, self._resolved_provider
-                    ):
+                    if mapped_thinking.get("type") not in (
+                        "disabled",
+                        "between_tools",
+                    ) and AnthropicConfig._is_adaptive_thinking_model(model, self._resolved_provider):
                         mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(effort_value)
                         if mapped_effort is None:
                             AnthropicConfig._raise_invalid_reasoning_effort(
@@ -2552,7 +2568,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # Anthropic errors with: "When thinking is disabled, an assistant message cannot contain thinking"
         # Related issue: https://github.com/BerriAI/litellm/issues/18926
         if (
-            optional_params.get("thinking") is not None
+            optional_params.get("thinking") not in (None, {"type": "between_tools"})
             and last_assistant_with_tool_calls_has_no_thinking_blocks(capped_messages)
             and not any_assistant_message_has_thinking_blocks(capped_messages)
         ):

@@ -1250,6 +1250,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
                 "enum": ["none", "minimal", "low", "medium", "high", "xhigh"],
             },
             "supports_adaptive_thinking": {"type": "boolean"},
+            "supports_between_tools_thinking": {"type": "boolean"},
             "supports_anthropic_thinking_payload": {"type": "boolean"},
             "supports_legacy_thinking": {"type": "boolean"},
             "thinking_always_on": {"type": "boolean"},
@@ -1468,6 +1469,12 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         error_message = "Cost validation failed:\n" + "\n".join(violations)
         error_message += "\n\nTo add exceptions, add the model ID to the 'exceptions' list in the test function."
         raise AssertionError(error_message)
+
+
+@pytest.mark.parametrize("value, valid", [(True, True), (False, True), ("true", False), (None, False)])
+def test_cost_map_schema_requires_boolean_between_tools_capability(value: object, valid: bool) -> None:
+    row: Final = {"supports_between_tools_thinking": value}
+    assert Draft7Validator(_COST_MAP_ROW_SCHEMA).is_valid({"synthetic-thinking-model": row}) is valid
 
 
 def test_cost_map_schema_accepts_vertex_modality_and_context_tiers() -> None:

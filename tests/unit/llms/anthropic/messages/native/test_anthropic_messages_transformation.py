@@ -8,11 +8,15 @@ from unittest.mock import patch
 import httpx
 import pytest
 import respx
+from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
+    VertexAIPartnerModelsAnthropicMessagesConfig,
+)
 from pydantic import JsonValue
 
 import litellm
 from litellm import anthropic_beta_headers_manager
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
@@ -22,9 +26,6 @@ from litellm.llms.deepseek.messages.transformation import DeepSeekAnthropicMessa
 from litellm.llms.minimax.messages.transformation import MinimaxMessagesConfig
 from litellm.llms.openai_like.messages.transformation import OpenAILikeAnthropicMessagesConfig
 from litellm.llms.tencent.messages.transformation import TencentAnthropicMessagesConfig
-from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
-    VertexAIPartnerModelsAnthropicMessagesConfig,
-)
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, AnthropicFinishReason
 from litellm.types.router import GenericLiteLLMParams
 from tests.unit.llms.anthropic.test_anthropic_wif import (
@@ -858,10 +859,27 @@ def test_a_request_without_a_thread_still_strips_advisor_blocks_when_the_tool_is
     [
         ("claude-sonnet-5", {"type": "disabled"}),
         ("claude-haiku-4-5", None),
-        ("claude-sonnet-5-5", None),
+        ("claude-sonnet-5-5", {"type": "between_tools"}),
     ],
 )
-def test_none_disables_only_optional_default_thinking(model: str, expected: dict[str, str] | None) -> None:
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_none_disables_only_optional_default_thinking(model: str, expected: dict[str, str] | None, drop_params: bool) -> None:
     params: Final[dict[str, object]] = {"reasoning_effort": "none", "output_config": {"effort": "high"}}
-    AnthropicMessagesConfig._translate_reasoning_effort_to_anthropic(model, params, 1024, "anthropic")
+    AnthropicMessagesConfig._translate_reasoning_effort_to_anthropic(model, params, 1024, "anthropic", drop_params)
     assert params == ({"thinking": expected} if expected is not None else {})
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_always_on_none_requires_drop_params(drop_params: bool) -> None:
+    params: Final[dict[str, object]] = {"reasoning_effort": "none"}
+    if not drop_params:
+        with pytest.raises(AnthropicError, match=r"cannot disable thinking.*drop_params") as error:
+            AnthropicMessagesConfig._translate_reasoning_effort_to_anthropic(
+                "claude-fable-5-1", params, 1024, "anthropic", drop_params
+            )
+        assert error.value.status_code == 400
+        return
+    AnthropicMessagesConfig._translate_reasoning_effort_to_anthropic(
+        "claude-fable-5-1", params, 1024, "anthropic", drop_params
+    )
+    assert params == {}

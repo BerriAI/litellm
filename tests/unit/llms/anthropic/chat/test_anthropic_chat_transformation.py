@@ -2106,6 +2106,35 @@ def test_input_examples_empty_list_not_added():
 # ============ Effort Parameter Tests ============
 
 
+@pytest.mark.parametrize("modify_params", [False, True])
+def test_between_tools_survives_tool_results_without_thinking_blocks(
+    monkeypatch: pytest.MonkeyPatch, modify_params: bool
+) -> None:
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
+    config: Final = AnthropicConfig()
+    optional_params: Final = config.map_openai_params(
+        {"reasoning_effort": "none"}, {}, "claude-sonnet-5-5", False
+    )
+    result: Final = config.transform_request(
+        model="claude-sonnet-5-5",
+        messages=[
+            {"role": "user", "content": "Get the weather"},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "call_weather", "type": "function", "function": {"name": "weather", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_weather", "content": "Sunny"},
+        ],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    assert result["thinking"] == {"type": "between_tools"}
+    assert "output_config" not in result
+
+
 def test_effort_output_config_preservation():
     """Test that output_config with effort is preserved in transformation."""
     config = AnthropicConfig()
@@ -7348,7 +7377,7 @@ def test_response_format_tool_is_forced_only_when_the_model_will_not_think(
         },
         optional_params={},
         model=model,
-        drop_params=False,
+        drop_params=True,
     )
 
     request: Final = config.transform_request(

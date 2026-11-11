@@ -16,6 +16,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm import ModelResponse, Router, completion
 from litellm.constants import RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION
+from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_converse_messages_pt,
     _bedrock_tools_pt,
@@ -34,6 +35,35 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.bedrock import ContentBlock, ConverseTokenUsageBlock, RequestObject
 from litellm.types.llms.openai import AllMessageValues
 from tests.unit.conftest import NativeStructuredOutputKey
+
+
+@pytest.mark.parametrize("modify_params", [False, True])
+def test_between_tools_survives_tool_results_without_thinking_blocks(
+    monkeypatch: pytest.MonkeyPatch, modify_params: bool
+) -> None:
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
+    config: Final = AmazonConverseConfig()
+    optional_params: Final = config.map_openai_params(
+        {"reasoning_effort": "none"}, {}, "us.anthropic.claude-sonnet-5-5", False
+    )
+    result: Final = config._transform_request(
+        model="us.anthropic.claude-sonnet-5-5",
+        messages=[
+            {"role": "user", "content": "Get the weather"},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "call_weather", "type": "function", "function": {"name": "weather", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_weather", "content": "Sunny"},
+        ],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    assert result["additionalModelRequestFields"]["thinking"] == {"type": "between_tools"}
+    assert "output_config" not in result["additionalModelRequestFields"]
 
 
 def test_transform_usage():
@@ -5092,7 +5122,7 @@ def test_json_tool_is_forced_only_when_the_model_will_not_think(
         non_default_params={"response_format": response_format, **thinking_params},
         optional_params={},
         model=model,
-        drop_params=False,
+        drop_params=True,
         model_info=model_info,
     )
     request: Final = config._transform_request(
@@ -12208,14 +12238,30 @@ def test_converse_claude_request_over_the_cache_control_cap_drops_the_oldest_hin
     [
         ("us.anthropic.claude-sonnet-5", {"type": "disabled"}),
         ("us.anthropic.claude-haiku-4-5", None),
-        ("us.anthropic.claude-sonnet-5-5", None),
+        ("us.anthropic.claude-sonnet-5-5", {"type": "between_tools"}),
     ],
 )
-def test_none_disables_only_optional_default_thinking(model: str, expected: dict[str, str] | None) -> None:
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_none_disables_only_optional_default_thinking(model: str, expected: dict[str, str] | None, drop_params: bool) -> None:
     params: Final[dict[str, object]] = {}
-    AmazonConverseConfig()._handle_reasoning_effort_parameter(model, "none", params)
+    AmazonConverseConfig()._handle_reasoning_effort_parameter(model, "none", params, drop_params)
     assert params.get("thinking") == expected
     assert "output_config" not in params
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_always_on_none_requires_drop_params(drop_params: bool) -> None:
+    if not drop_params:
+        with pytest.raises(BadRequestError, match=r"cannot disable thinking.*drop_params") as error:
+            AmazonConverseConfig().map_openai_params(
+                {"reasoning_effort": "none"}, {}, "us.anthropic.claude-fable-5-1", drop_params
+            )
+        assert error.value.status_code == 400
+        return
+    params: Final = AmazonConverseConfig().map_openai_params(
+        {"reasoning_effort": "none"}, {}, "us.anthropic.claude-fable-5-1", drop_params
+    )
+    assert "thinking" not in params
 
 
 def test_converse_claude_tool_message_with_several_marked_blocks_counts_as_one_cache_point_against_the_cap(

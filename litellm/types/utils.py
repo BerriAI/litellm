@@ -225,6 +225,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_adaptive_thinking: bool | None
     supports_legacy_thinking: ReadOnly[bool | None]
     thinking_always_on: ReadOnly[bool | None]
+    supports_between_tools_thinking: ReadOnly[bool | None]
     thinking_on_by_default: ReadOnly[bool | None]
     supports_tool_search: bool | None
     supports_per_turn_control: ReadOnly[bool | None]

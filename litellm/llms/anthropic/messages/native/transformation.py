@@ -473,7 +473,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
     @staticmethod
     def _translate_reasoning_effort_to_anthropic(
-        model: str, optional_params: dict, max_tokens: int | None, custom_llm_provider: str
+        model: str, optional_params: dict, max_tokens: int | None, custom_llm_provider: str, drop_params: bool = False
     ) -> None:
         """Map OpenAI-style ``reasoning_effort`` to native Anthropic params.
 
@@ -501,6 +501,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 reasoning_effort=reasoning_effort,
                 model=model,
                 custom_llm_provider=custom_llm_provider,
+                drop_params=drop_params,
             )
         except _BadRequestError as e:
             raise AnthropicError(message=str(e.message), status_code=400)
@@ -514,9 +515,10 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             return
 
         optional_params.setdefault("thinking", fitted_thinking)
-        if fitted_thinking.get("type") != "disabled" and AnthropicModelInfo.is_adaptive_thinking_model(
-            model, custom_llm_provider
-        ):
+        if fitted_thinking.get("type") not in (
+            "disabled",
+            "between_tools",
+        ) and AnthropicModelInfo.is_adaptive_thinking_model(model, custom_llm_provider):
             mapped_effort: Final = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(reasoning_effort)
             if mapped_effort is None:
                 raise AnthropicError(
@@ -717,6 +719,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             optional_params=anthropic_messages_optional_request_params,
             max_tokens=max_tokens,
             custom_llm_provider=self._resolved_provider,
+            drop_params=getattr(litellm_params, "drop_params", None) is True,
         )
         if self._report_reasoning_drops:
             warn_non_string_reasoning_effort(requested_reasoning_effort, model)

@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from pydantic import BaseModel, ConfigDict
 
 import litellm
+from litellm.exceptions import BadRequestError
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
@@ -3227,11 +3228,27 @@ def test_databricks_claude_cache_control_cap_keeps_room_for_a_top_level_cache_co
     [
         ("databricks-claude-sonnet-5", {"type": "disabled"}),
         ("databricks-claude-haiku-4-5", None),
-        ("databricks-claude-sonnet-5-5", None),
+        ("databricks-claude-sonnet-5-5", {"type": "between_tools"}),
     ],
 )
-def test_none_disables_only_optional_default_thinking(model: str, expected: dict[str, str] | None) -> None:
-    params: Final = _map_reasoning_effort(model, "none")
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_none_disables_only_optional_default_thinking(model: str, expected: dict[str, str] | None, drop_params: bool) -> None:
+    params: Final = DatabricksConfig().map_openai_params({"reasoning_effort": "none"}, {}, model, drop_params)
     assert params.get("thinking") == expected
     assert "output_config" not in params
     assert "reasoning_effort" not in params
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_always_on_none_requires_drop_params(drop_params: bool) -> None:
+    if not drop_params:
+        with pytest.raises(BadRequestError, match=r"cannot disable thinking.*drop_params") as error:
+            DatabricksConfig().map_openai_params(
+                {"reasoning_effort": "none"}, {}, "databricks-claude-fable-5-1", drop_params
+            )
+        assert error.value.status_code == 400
+        return
+    params: Final = DatabricksConfig().map_openai_params(
+        {"reasoning_effort": "none"}, {}, "databricks-claude-fable-5-1", drop_params
+    )
+    assert "thinking" not in params
