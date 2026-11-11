@@ -181,6 +181,19 @@ def test_an_opted_out_callback_gets_a_text_completion_with_its_answer_redacted()
     assert response.choices[0].text == SECRET, "the caller's own response is not redacted"
 
 
+def test_an_opted_out_callback_gets_neither_the_prompt_nor_the_answer_of_a_stream_chunk() -> None:
+    prompt_fields: Final = {"prompt_token_ids": [151644, 872], "prompt_text": f"<|im_start|>user\n{SECRET}"}
+    chunk: Final = ModelResponseStream(
+        choices=[litellm.utils.StreamingChoices(delta=litellm.utils.Delta(content=SECRET))], **prompt_fields
+    )
+
+    redacted: Final = redacted_response_obj_for_custom_logger(chunk, CustomLogger(message_logging=False))
+
+    assert SECRET not in str(redacted)
+    assert "151644" not in str(redacted)
+    assert chunk.model_dump(include=set(prompt_fields)) == prompt_fields, "the caller's own chunk is not redacted"
+
+
 def test_redaction_redacts_reasoning_copied_into_hidden_params_in_place() -> None:
     hidden_params: Final = {"model_id": "deployment", "provider_specific_fields": _provider_fields()}
     original_hidden_params: Final = copy.deepcopy(hidden_params)

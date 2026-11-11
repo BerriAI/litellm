@@ -145,6 +145,7 @@ from litellm.litellm_core_utils.logging_utils import (
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.litellm_core_utils.ptu_pricing import is_spilled_over_ptu_request
 from litellm.litellm_core_utils.redact_messages import (
+    logs_without_prompt_derived_fields,
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
     redacted_model_call_details_for_custom_logger,
@@ -3809,10 +3810,12 @@ class Logging(LiteLLMLoggingBaseClass):
                         continue
 
                     self.shadow_eval_request_snapshot = None
-                    call_details, result = callback.logging_hook(  # pyright: ignore[reportUnknownVariableType]  # logging_hook is typed with a bare dict
-                        kwargs=call_details,
-                        result=result,
-                        call_type=self.call_type,
+                    call_details, result = logs_without_prompt_derived_fields(  # pyright: ignore[reportUnknownVariableType]  # logging_hook is typed with a bare dict
+                        *callback.logging_hook(  # pyright: ignore[reportUnknownArgumentType]  # logging_hook is typed with a bare dict
+                            kwargs=call_details,
+                            result=result,
+                            call_type=self.call_type,
+                        )
                     )
                 elif isinstance(callback, CustomLogger):
                     call_details, result = callback.logging_hook(  # pyright: ignore[reportUnknownVariableType]  # logging_hook is typed with a bare dict
@@ -4406,10 +4409,12 @@ class Logging(LiteLLMLoggingBaseClass):
                         continue
 
                     self.shadow_eval_request_snapshot = None
-                    self.model_call_details, result = await callback.async_logging_hook(
-                        kwargs=self.model_call_details,
-                        result=result,
-                        call_type=self.call_type,
+                    self.model_call_details, result = logs_without_prompt_derived_fields(
+                        *await callback.async_logging_hook(
+                            kwargs=self.model_call_details,
+                            result=result,
+                            call_type=self.call_type,
+                        )
                     )
                 elif isinstance(callback, CustomLogger):
                     result = redact_message_input_output_from_custom_logger(

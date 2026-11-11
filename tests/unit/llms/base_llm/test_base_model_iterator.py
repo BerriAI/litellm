@@ -342,6 +342,26 @@ def test_fake_stream_chunk_indexes_thinking_blocks_by_position_without_touching_
     assert [block.get("index") for block in response.choices[0].message.thinking_blocks] == [None, None, None]
 
 
+def test_a_rebuilt_stream_keeps_the_vllm_prompt_fields_of_the_response_it_replays():
+    """A guardrail that buffers a stream replays it through this converter, so the client must still get the prompt
+    fields a non-streamed response carries"""
+    response: Final = ModelResponse(
+        choices=[Choices(message=Message(content="Hi"), finish_reason="stop")],
+        prompt_token_ids=[151644, 872],
+        prompt_text="<|im_start|>user\nSay hi.<|im_end|>",
+    )
+
+    chunk: Final = json.loads(convert_model_response_to_streaming(response).model_dump_json())
+
+    assert chunk["prompt_token_ids"] == [151644, 872]
+    assert chunk["prompt_text"] == "<|im_start|>user\nSay hi.<|im_end|>"
+    assert "prompt_token_ids" not in json.loads(
+        convert_model_response_to_streaming(
+            ModelResponse(choices=[Choices(message=Message(content="Hi"), finish_reason="stop")])
+        ).model_dump_json()
+    )
+
+
 def _sse_chunk(delta: Mapping[str, object], finish_reason: str | None = None) -> str:
     return "data: " + json.dumps(
         {

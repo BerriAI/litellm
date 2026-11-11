@@ -3,7 +3,8 @@ from abc import abstractmethod
 from typing import TYPE_CHECKING, Final, cast
 
 import litellm
-from litellm.constants import STREAM_SSE_DONE_STRING
+from litellm.constants import STREAM_SSE_DONE_STRING, VLLM_STREAM_PROMPT_FIELDS
+from litellm.litellm_core_utils.core_helpers import attribute_or_none
 
 if TYPE_CHECKING:
     import httpx
@@ -73,6 +74,12 @@ def convert_model_response_to_streaming(
             created=model_response.created,
             model=model_response.model,
             choices=streaming_choices,
+        ).model_copy(
+            update={
+                field: value
+                for field in VLLM_STREAM_PROMPT_FIELDS
+                if (value := attribute_or_none(model_response, field)) is not None
+            }
         )
         # Carry usage onto the streaming chunk so fake-streamed responses
         # (e.g. Vertex AI Gemma :predict) still report token counts.

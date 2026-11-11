@@ -506,6 +506,25 @@ def test_cache_key_tells_apart_requests_that_ask_for_token_ids() -> None:
     assert cache.get_cache_key(**request, return_token_ids=None) == plain_key
 
 
+def test_cache_key_tells_apart_requests_that_ask_for_the_prompt_text() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    request: Final = {"model": "hosted_vllm/qwen3", "messages": [{"role": "user", "content": "count"}]}
+
+    token_ids_only: Final = cache.get_cache_key(**request, extra_body={"return_token_ids": True})
+    with_prompt_text: Final = cache.get_cache_key(
+        **request, extra_body={"return_token_ids": True, "return_prompt_text": True}
+    )
+
+    assert with_prompt_text != token_ids_only
+    assert cache.get_cache_key(**request, return_token_ids=True, return_prompt_text=True) != cache.get_cache_key(
+        **request, return_token_ids=True
+    )
+    assert (
+        cache.get_cache_key(**request, extra_body={"return_token_ids": True, "return_prompt_text": False})
+        == token_ids_only
+    )
+
+
 def test_cache_key_tells_apart_requests_that_ask_for_token_ids_through_extra_body() -> None:
     cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
     request: Final = {"model": "hosted_vllm/qwen3", "messages": [{"role": "user", "content": "count"}]}

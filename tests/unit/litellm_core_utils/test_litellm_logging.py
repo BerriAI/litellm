@@ -3681,6 +3681,74 @@ async def test_shadow_snapshot_stays_private_and_is_invalidated_before_logging_g
     assert "snapshot-only" not in json.dumps(logging_obj.model_call_details, default=str)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("stream", [False, True])
+async def test_a_logging_only_guardrail_keeps_vllm_prompt_fields_out_of_the_logs(is_async: bool, stream: bool) -> None:
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    phone: Final = "555-123-4567"
+    masked_messages: Final = [{"role": "user", "content": "My phone is [PHONE]"}]
+    prompt_fields: Final = {
+        "prompt_token_ids": [151644, 872],
+        "prompt_text": f"<|im_start|>user\nMy phone is {phone}",
+        "prompt_logprobs": [None, {"872": {"logprob": -1.5, "rank": 1, "decoded_token": phone}}],
+    }
+    logged: Final[list[tuple[Mapping[str, object], object]]] = []
+
+    class RecordingLogger(CustomLogger):
+        def log_success_event(self, kwargs: Mapping[str, object], response_obj: object, start_time, end_time) -> None:
+            logged.append((kwargs, response_obj))
+
+        async def async_log_success_event(
+            self, kwargs: Mapping[str, object], response_obj: object, start_time, end_time
+        ) -> None:
+            logged.append((kwargs, response_obj))
+
+    class MaskingGuardrail(CustomGuardrail):
+        def logging_hook(self, kwargs: dict[str, object], result: object, call_type: str) -> tuple[dict, object]:
+            return {**kwargs, "messages": masked_messages}, result
+
+        async def async_logging_hook(
+            self, kwargs: dict[str, object], result: object, call_type: str
+        ) -> tuple[dict[str, object], object]:
+            return self.logging_hook(kwargs, result, call_type)
+
+    callbacks: Final[list[str | Callable[..., object] | CustomLogger]] = [
+        MaskingGuardrail(guardrail_name="mask", default_on=True, event_hook=GuardrailEventHooks.logging_only),
+        RecordingLogger(),
+    ]
+    client_response: Final = ModelResponse(
+        choices=[{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop", "index": 0}],
+        **prompt_fields,
+    )
+    logging_obj: Final = LitellmLogging(
+        model="hosted_vllm/Qwen/Qwen3-0.6B",
+        messages=[{"role": "user", "content": f"My phone is {phone}"}],
+        stream=stream,
+        call_type="acompletion" if is_async else "completion",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="vllm-prompt-fields",
+        function_id="vllm-prompt-fields",
+        dynamic_success_callbacks=None if is_async else callbacks,
+        dynamic_async_success_callbacks=callbacks if is_async else None,
+    )
+    logging_obj.update_environment_variables(litellm_params={"acompletion": is_async}, optional_params={})
+
+    if is_async:
+        await logging_obj.async_success_handler(result=client_response)
+    else:
+        logging_obj.success_handler(result=client_response, cache_hit=False)
+
+    assert len(logged) == 1
+    logged_kwargs, logged_response = logged[0]
+    assert logged_kwargs["messages"] == masked_messages
+    assert phone not in json.dumps(logged_response, default=str)
+    assert phone not in json.dumps(logged_kwargs["standard_logging_object"]["response"], default=str)
+    assert client_response.model_dump(include=set(prompt_fields)) == prompt_fields
+
+
 def test_get_user_agent_tags():
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 

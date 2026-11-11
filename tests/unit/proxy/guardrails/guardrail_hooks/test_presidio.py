@@ -635,41 +635,6 @@ async def test_logging_hook_masks_the_response_too(presidio_guardrail):
 
 
 @pytest.mark.asyncio
-async def test_logging_hook_drops_the_vllm_prompt_fields_that_carry_the_unmasked_prompt(presidio_guardrail):
-    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
-        return text.replace("555-123-4567", "[PHONE]")
-
-    presidio_guardrail.check_pii = mock_check_pii
-    prompt_fields = {
-        "prompt_token_ids": [151644, 872],
-        "prompt_text": "<|im_start|>user\nMy phone is 555-123-4567",
-        "prompt_logprobs": [None, {"872": {"logprob": -1.5, "rank": 1, "decoded_token": "555"}}],
-    }
-    client_response = ModelResponse(
-        choices=[Choices(message=Message(role="assistant", content="ok"), index=0, finish_reason="stop")],
-        **prompt_fields,
-    )
-    kwargs = {
-        "messages": [{"role": "user", "content": "My phone is 555-123-4567"}],
-        "model": "hosted_vllm/Qwen/Qwen3-0.6B",
-        "stream": True,
-        "async_complete_streaming_response": client_response,
-        "standard_logging_object": {"response": {"choices": [], **prompt_fields}},
-    }
-
-    logged_kwargs, logged_response = await presidio_guardrail.async_logging_hook(
-        kwargs=kwargs, result=client_response, call_type="acompletion"
-    )
-
-    assert logged_response.model_dump(include=set(prompt_fields)) == dict.fromkeys(prompt_fields)
-    assert logged_kwargs["async_complete_streaming_response"].model_dump(include=set(prompt_fields)) == dict.fromkeys(
-        prompt_fields
-    )
-    assert prompt_fields.keys().isdisjoint(logged_kwargs["standard_logging_object"]["response"])
-    assert client_response.model_dump(include=set(prompt_fields)) == prompt_fields
-
-
-@pytest.mark.asyncio
 async def test_logging_only_does_not_mask_pre_call_request(mock_user_api_key, mock_cache):
     """
     A guardrail configured with `logging_only` must only mask PII for logs/traces,

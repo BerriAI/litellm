@@ -12,7 +12,7 @@ import copy
 import inspect
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar
 
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
@@ -107,7 +107,10 @@ def _redacted_entries_for_opted_out_logger(model_call_details: Mapping[str, obje
 
 
 def redacted_response_obj_for_custom_logger(response_obj: object, custom_logger: CustomLogger) -> object:
-    if not _opted_out_of_message_logging(custom_logger) or not _is_redactable_response(response_obj):
+    is_redactable: Final = _is_redactable_response(response_obj) or isinstance(
+        response_obj, litellm.ModelResponseStream
+    )
+    if not _opted_out_of_message_logging(custom_logger) or not is_redactable:
         return response_obj
     return perform_redaction({}, response_obj)
 
@@ -383,7 +386,20 @@ def _drop_prompt_derived_fields(response: object) -> None:
             _drop_field_when_present(response, field)
 
 
-def without_prompt_derived_fields(response: object) -> object:
+def _carries_prompt_derived_fields(response: object) -> bool:
+    mapping: Final = _as_mapping(response)
+    return any(
+        (mapping.get(field) if mapping is not None else attribute_or_none(response, field)) is not None
+        for field in VLLM_PROMPT_DERIVED_FIELDS
+    )
+
+
+_CallDetails: Final = TypeVar("_CallDetails", bound=Mapping[str, object])
+
+
+def _without_prompt_derived_fields(response: object) -> object:
+    if not _carries_prompt_derived_fields(response):
+        return response
     if (mapping := _as_mapping(response)) is not None:
         return {key: value for key, value in mapping.items() if key not in VLLM_PROMPT_DERIVED_FIELDS}
     if not isinstance(response, BaseModel):
@@ -393,22 +409,32 @@ def without_prompt_derived_fields(response: object) -> object:
     return logged_copy
 
 
-def logged_entries_without_prompt_derived_fields(model_call_details: Mapping[str, object]) -> Mapping[str, object]:
+def logs_without_prompt_derived_fields(
+    model_call_details: _CallDetails, result: object
+) -> tuple[_CallDetails | dict[str, object], object]:  # mutable-ok: logging hooks hand every logger a plain dict
+    logged_entries: Final = _logged_entries_without_prompt_derived_fields(model_call_details)
+    if not logged_entries and not _carries_prompt_derived_fields(result):
+        return model_call_details, result
+    return {**model_call_details, **logged_entries}, _without_prompt_derived_fields(result)
+
+
+def _logged_entries_without_prompt_derived_fields(model_call_details: Mapping[str, object]) -> Mapping[str, object]:
     standard_logging_object: Final = _as_mapping(model_call_details.get("standard_logging_object"))
+    logged_response: Final = standard_logging_object.get("response") if standard_logging_object is not None else None
     return {
         **{
-            streaming_key: without_prompt_derived_fields(model_call_details[streaming_key])
+            streaming_key: _without_prompt_derived_fields(model_call_details[streaming_key])
             for streaming_key in ("complete_streaming_response", "async_complete_streaming_response")
-            if model_call_details.get(streaming_key) is not None
+            if _carries_prompt_derived_fields(model_call_details.get(streaming_key))
         },
         **(
             {
                 "standard_logging_object": {
                     **standard_logging_object,
-                    "response": without_prompt_derived_fields(standard_logging_object["response"]),
+                    "response": _without_prompt_derived_fields(logged_response),
                 }
             }
-            if standard_logging_object is not None and "response" in standard_logging_object
+            if standard_logging_object is not None and _carries_prompt_derived_fields(logged_response)
             else {}
         ),
     }
