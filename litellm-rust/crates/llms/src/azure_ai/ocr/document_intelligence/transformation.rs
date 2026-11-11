@@ -363,19 +363,22 @@ fn normalize_pages_param(pages: Option<&Value>) -> Result<Option<String>, Error>
             return Err(Error::Pages(PagesFault::Shape));
         }
     };
-    if !normalized.split(',').all(valid_page_token) {
-        return Err(Error::Pages(PagesFault::Range));
-    }
-    Ok(Some(normalized))
+    normalized
+        .split(',')
+        .map(normalize_page_token)
+        .collect::<Option<Vec<_>>>()
+        .map(|tokens| Some(tokens.join(",")))
+        .ok_or(Error::Pages(PagesFault::Range))
 }
 
-fn valid_page_token(token: &str) -> bool {
-    let mut parts = token.split('-');
-    let start = parts.next().unwrap_or_default();
-    match parts.next() {
-        None => is_page_number(start),
-        Some(end) => is_page_number(start) && is_page_number(end) && parts.next().is_none(),
-    }
+fn normalize_page_token(token: &str) -> Option<String> {
+    let Some((start, end)) = token.split_once('-') else {
+        return is_page_number(token).then(|| token.to_owned());
+    };
+    let (start, end) = (start.trim(), end.trim());
+    let bound = |part: &str| part.is_empty() || is_page_number(part);
+    (!(start.is_empty() && end.is_empty()) && bound(start) && bound(end))
+        .then(|| format!("{start}-{end}"))
 }
 
 fn is_page_number(part: &str) -> bool {
@@ -1141,10 +1144,12 @@ mod tests {
     #[case::single_page(json!({"pages": "10"}), "10")]
     #[case::range(json!({"pages": "1-10"}), "1-10")]
     #[case::list(json!({"pages": ["2", "10-20"]}), "2,10-20")]
-    fn native_page_ranges_from_page_one_are_sent_as_given(
-        #[case] options: Value,
-        #[case] expected: &str,
-    ) {
+    #[case::open_end(json!({"pages": "27-"}), "27-")]
+    #[case::open_start(json!({"pages": "2,-1"}), "2,-1")]
+    #[case::spaced_range(json!({"pages": "1 - 3"}), "1-3")]
+    #[case::spaced_open_end(json!({"pages": ["28 -"]}), "28-")]
+    #[case::leading_zero(json!({"pages": "01-03"}), "01-03")]
+    fn native_page_ranges_azure_accepts_are_sent(#[case] options: Value, #[case] expected: &str) {
         let mapped = map(options).unwrap();
 
         assert_eq!(
@@ -1168,6 +1173,26 @@ mod tests {
     )]
     #[case::page_zero_token(
         json!({"pages": ["2", "00"], "features": "languages", "drop_params": true}),
+        json!({"features": "languages"})
+    )]
+    #[case::page_zero_open_end(
+        json!({"pages": "0-", "features": "languages", "drop_params": true}),
+        json!({"features": "languages"})
+    )]
+    #[case::bare_hyphen(
+        json!({"pages": "-", "features": "languages", "drop_params": true}),
+        json!({"features": "languages"})
+    )]
+    #[case::double_range(
+        json!({"pages": "1-2-3", "features": "languages", "drop_params": true}),
+        json!({"features": "languages"})
+    )]
+    #[case::empty_token(
+        json!({"pages": "1,,2", "features": "languages", "drop_params": true}),
+        json!({"features": "languages"})
+    )]
+    #[case::space_inside_number(
+        json!({"pages": "1 2", "features": "languages", "drop_params": true}),
         json!({"features": "languages"})
     )]
     #[case::feature_number(

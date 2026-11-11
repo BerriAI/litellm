@@ -71,6 +71,8 @@ async fn pages_features_and_extra_options_map_to_the_analyze_call() {
 #[case(json!({"pages": "1&&features=bad"}), Error::Pages(PagesFault::Range))]
 #[case(json!({"pages": "0-1"}), Error::Pages(PagesFault::Range))]
 #[case(json!({"pages": "3-0"}), Error::Pages(PagesFault::Range))]
+#[case(json!({"pages": "0-"}), Error::Pages(PagesFault::Range))]
+#[case(json!({"pages": "-"}), Error::Pages(PagesFault::Range))]
 #[case(json!({"features": "languages&pages=1"}), Error::Features)]
 #[case(json!({"req_format": "azure"}), Error::RequestFormat)]
 #[case(json!({"outputContentFormat": "html"}), Error::OutputContentFormat)]
