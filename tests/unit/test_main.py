@@ -5653,7 +5653,7 @@ def _priced_at(prompt_tokens, completion_tokens):
 def local_cost_map(monkeypatch):
     """The prices these tests assert are the checked-in ones. Setting the environment
     variable alone does not reload the map, so pin the map itself."""
-    from litellm.rust_bridge.host.model_cost import publish
+    from litellm.litellm_core_utils.model_cost_table import publish
 
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))

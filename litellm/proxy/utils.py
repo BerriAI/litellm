@@ -65,6 +65,7 @@ from litellm.constants import (
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     MAX_TEAM_LIST_LIMIT,
+    MESSAGE_THREAD_MAX_TRACKED_OWNERS,
     PROXY_REJECTED_BEFORE_ROUTING_KEY,
     REDACTED_BY_LITELLM,
     REDIS_SPEND_LOGS_BUFFER_DEQUEUE_COUNT,
@@ -1963,6 +1964,9 @@ class ProxyLogging:
         self.file_usage_cache: Final = InternalUsageCache(
             dual_cache=DualCache(in_memory_cache=InMemoryCache(max_size_in_memory=FILE_USAGE_MAX_TRACKED_COUNTERS))
         )
+        self.message_thread_owner_cache: Final = InternalUsageCache(
+            dual_cache=DualCache(in_memory_cache=InMemoryCache(max_size_in_memory=MESSAGE_THREAD_MAX_TRACKED_OWNERS))
+        )
         self.max_parallel_request_limiter = PROXY_MaxParallelRequestsHandler(self.internal_usage_cache)
         self.cache_control_check = PROXY_CacheControlCheck()
         self.alerting: list[str] | None = None
@@ -2122,6 +2126,7 @@ class ProxyLogging:
         if redis_cache is not None:
             self.internal_usage_cache.dual_cache.redis_cache = redis_cache
             self.file_usage_cache.dual_cache.redis_cache = redis_cache
+            self.message_thread_owner_cache.dual_cache.redis_cache = redis_cache
             self.db_spend_update_writer.redis_update_buffer.redis_cache = redis_cache
             self.db_spend_update_writer.pod_lock_manager.redis_cache = redis_cache
 
@@ -2141,6 +2146,7 @@ class ProxyLogging:
                 continue
             available_args: Mapping[str, object] = {
                 "internal_usage_cache": self.internal_usage_cache,
+                "message_thread_owner_cache": self.message_thread_owner_cache,
                 "prisma_client": prisma_client,
             }
             passed_in_args = {name: value for name, value in available_args.items() if name in expected_args}
