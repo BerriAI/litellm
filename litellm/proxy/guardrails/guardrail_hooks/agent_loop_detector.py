@@ -28,22 +28,25 @@ Usage — Proxy config.yaml (recommended)
 
 Usage — SDK
 -----------
-SDK dispatch calls ``async_pre_call_deployment_hook`` (not ``async_pre_call_hook``)
-unless the request carries an explicit ``guardrails`` list. Register the detector
-by name and pass ``guardrails=[...]`` on every ``acompletion`` call::
+SDK dispatch only runs a guardrail for requests that carry a ``guardrails`` list.
+Register the detector as a callback and pass ``guardrails=[...]`` on every
+``acompletion`` call that should be checked::
 
     import litellm
     from litellm.proxy.guardrails.guardrail_hooks.agent_loop_detector import (
         AgentLoopDetector,
     )
 
-    litellm.add_guardrail(
-        guardrail_name="agent-loop-detector",
-        guardrail=AgentLoopDetector(fingerprint_threshold=3, window_size=20),
-    )
+    litellm.callbacks = [
+        AgentLoopDetector(
+            guardrail_name="agent-loop-detector",
+            fingerprint_threshold=3,
+            window_size=20,
+        )
+    ]
 
     response = await litellm.acompletion(
-        model="claude-sonnet-4-6",
+        model="claude-sonnet-5-5",
         messages=messages,
         guardrails=["agent-loop-detector"],
     )
@@ -53,7 +56,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException
@@ -113,9 +116,7 @@ class AgentLoopDetector(CustomGuardrail):
         digest = hashlib.sha256(f"{tool_name}:{args_str}".encode()).hexdigest()
         return digest[:16]
 
-    def _extract_tool_fingerprints(
-        self, messages: list[dict[str, Any]]
-    ) -> list[tuple[str, str]]:
+    def _extract_tool_fingerprints(self, messages: list[dict[str, Any]]) -> list[tuple[str, str]]:
         """Extract ``(tool_name, fingerprint)`` pairs from recent assistant turns.
 
         Handles:
@@ -124,7 +125,7 @@ class AgentLoopDetector(CustomGuardrail):
         """
         pairs: list[tuple[str, str]] = []
         assistant_turns = [m for m in messages if m.get("role") == "assistant"]
-        for turn in assistant_turns[-self.window_size:]:
+        for turn in assistant_turns[-self.window_size :]:
             # OpenAI shape -----------------------------------------------
             tool_calls = turn.get("tool_calls")
             if tool_calls and isinstance(tool_calls, list):
@@ -156,9 +157,7 @@ class AgentLoopDetector(CustomGuardrail):
 
         return pairs
 
-    def _check_fingerprint_repetition(
-        self, pairs: list[tuple[str, str]]
-    ) -> Optional[str]:
+    def _check_fingerprint_repetition(self, pairs: list[tuple[str, str]]) -> str | None:
         """Return a human-readable reason if any fingerprint repeats too often."""
         counts: dict[str, tuple[str, int]] = {}  # fp -> (name, count)
         for name, fp in pairs:
@@ -172,9 +171,7 @@ class AgentLoopDetector(CustomGuardrail):
                 )
         return None
 
-    def _check_sequence_repetition(
-        self, pairs: list[tuple[str, str]]
-    ) -> Optional[str]:
+    def _check_sequence_repetition(self, pairs: list[tuple[str, str]]) -> str | None:
         """Return a reason if any tool-name sub-sequence repeats consecutively."""
         names = [name for name, _ in pairs]
         n = len(names)
@@ -187,32 +184,27 @@ class AgentLoopDetector(CustomGuardrail):
                 # Count consecutive repetitions of *seq* from position 0 in window
                 reps, idx = 0, 0
                 while idx + seq_len <= len(window):
-                    if tuple(window[idx: idx + seq_len]) == seq:
+                    if tuple(window[idx : idx + seq_len]) == seq:
                         reps += 1
                         idx += seq_len
                     else:
                         break
                 if reps >= 2:
                     readable = " -> ".join(self._sanitize(s) for s in seq)
-                    return (
-                        f"tool sequence [{readable}] repeated "
-                        f"{reps} times consecutively in the last {n} turns"
-                    )
+                    return f"tool sequence [{readable}] repeated {reps} times consecutively in the last {n} turns"
         return None
 
     # ------------------------------------------------------------------
     # Guardrail interface
     # ------------------------------------------------------------------
 
-    def should_run_guardrail(
-        self, data: dict[str, Any], event_type: GuardrailEventHooks
-    ) -> bool:
+    def should_run_guardrail(self, data: dict[str, Any], event_type: GuardrailEventHooks) -> bool:
         return event_type == GuardrailEventHooks.pre_call
 
     async def async_pre_call_hook(
         self,
-        user_api_key_dict: "UserAPIKeyAuth",
-        cache: "DualCache",
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
         data: dict[str, Any],
         call_type: str,
     ) -> dict[str, Any]:
@@ -225,14 +217,10 @@ class AgentLoopDetector(CustomGuardrail):
         if len(pairs) < 2:
             return data  # not enough tool-call history to make a judgement
 
-        reason = self._check_fingerprint_repetition(
-            pairs
-        ) or self._check_sequence_repetition(pairs)
+        reason = self._check_fingerprint_repetition(pairs) or self._check_sequence_repetition(pairs)
 
         if reason is not None:
-            verbose_proxy_logger.warning(
-                "AgentLoopDetector: loop detected — %s. Halting session.", reason
-            )
+            verbose_proxy_logger.warning("AgentLoopDetector: loop detected — %s. Halting session.", reason)
             raise GuardrailRaisedException(
                 guardrail_name="AgentLoopDetector",
                 message=(

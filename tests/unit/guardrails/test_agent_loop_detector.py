@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+import itertools
+import json
+from typing import Final
+
 import pytest
 
+import litellm
+from litellm.exceptions import GuardrailRaisedException
 from litellm.proxy.guardrails.guardrail_hooks.agent_loop_detector import (
     AgentLoopDetector,
 )
@@ -47,7 +53,7 @@ def _anthropic_turn(tool_calls: list[tuple[str, dict]]) -> dict:
 
 
 async def _run(detector: AgentLoopDetector, messages: list[dict]) -> None:
-    """Run the guardrail; propagates ValueError on loop detection."""
+    """Run the guardrail; propagates GuardrailRaisedException on loop detection."""
     await detector.async_pre_call_hook(
         user_api_key_dict=None,  # type: ignore[arg-type]
         cache=None,  # type: ignore[arg-type]
@@ -69,7 +75,7 @@ async def test_fingerprint_loop_detected_openai() -> None:
         _openai_turn([("read_file", '{"path": "/tmp/foo.txt"}')]),
         _openai_turn([("read_file", '{"path": "/tmp/foo.txt"}')]),
     ]
-    with pytest.raises(ValueError, match="AgentLoopDetector"):
+    with pytest.raises(GuardrailRaisedException, match="AgentLoopDetector"):
         await _run(detector, messages)
 
 
@@ -109,7 +115,7 @@ async def test_fingerprint_loop_detected_anthropic() -> None:
         _anthropic_turn([("bash", {"command": "ls -la"})]),
         _anthropic_turn([("bash", {"command": "ls -la"})]),
     ]
-    with pytest.raises(ValueError, match="AgentLoopDetector"):
+    with pytest.raises(GuardrailRaisedException, match="AgentLoopDetector"):
         await _run(detector, messages)
 
 
@@ -142,7 +148,7 @@ async def test_sequence_loop_detected() -> None:
         _openai_turn([("read_file", '{"path": "/tmp/c.txt"}')]),
         _openai_turn([("write_file", '{"path": "/tmp/d.txt"}')]),
     ]
-    with pytest.raises(ValueError, match="AgentLoopDetector"):
+    with pytest.raises(GuardrailRaisedException, match="AgentLoopDetector"):
         await _run(detector, messages)
 
 
@@ -190,12 +196,12 @@ async def test_single_tool_call_no_error() -> None:
 
 @pytest.mark.asyncio
 async def test_configurable_threshold() -> None:
-    detector = AgentLoopDetector(fingerprint_threshold=5)
+    detector = AgentLoopDetector(fingerprint_threshold=5, sequence_min_len=6, sequence_max_len=6)
     turn = _openai_turn([("read_file", '{"path": "/tmp/foo.txt"}')])
     # 4 repetitions — should not trigger with threshold=5
     await _run(detector, [turn] * 4)
     # 5 repetitions — should trigger
-    with pytest.raises(ValueError, match="AgentLoopDetector"):
+    with pytest.raises(GuardrailRaisedException, match="AgentLoopDetector"):
         await _run(detector, [turn] * 5)
 
 
@@ -236,3 +242,43 @@ async def test_fingerprint_extraction_anthropic() -> None:
     pairs = detector._extract_tool_fingerprints(messages)
     names = [n for n, _ in pairs]
     assert names == ["bash", "read_file"]
+
+
+def _tool_exchange(path: str) -> list[dict[str, object]]:
+    return [
+        _openai_turn([("read_file", json.dumps({"path": path}))]),
+        {"role": "tool", "tool_call_id": "call_0", "content": f"contents of {path}"},
+    ]
+
+
+def _sdk_request(paths: tuple[str, ...]) -> dict[str, object]:
+    messages: Final = [
+        {"role": "user", "content": "Fix this bug."},
+        *itertools.chain.from_iterable(_tool_exchange(path) for path in paths),
+    ]
+    return {
+        "model": "gpt-4o-mini",
+        "messages": messages,
+        "mock_response": "ok",
+        "guardrails": ["agent-loop-detector"],
+    }
+
+
+@pytest.fixture
+def registered_detector(monkeypatch: pytest.MonkeyPatch) -> None:
+    detector: Final = AgentLoopDetector(guardrail_name="agent-loop-detector", fingerprint_threshold=3)
+    monkeypatch.setattr(litellm, "callbacks", [detector])
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("registered_detector")
+async def test_acompletion_halts_a_tool_call_loop_when_a_guardrails_list_is_passed() -> None:
+    with pytest.raises(GuardrailRaisedException, match="loop detected"):
+        await litellm.acompletion(**_sdk_request(("/tmp/foo.txt",) * 3))
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("registered_detector")
+async def test_acompletion_lets_varied_tool_calls_through_when_a_guardrails_list_is_passed() -> None:
+    response: Final = await litellm.acompletion(**_sdk_request(("/tmp/a.txt", "/tmp/b.txt", "/tmp/c.txt")))
+    assert response.choices[0].message.content == "ok", response
