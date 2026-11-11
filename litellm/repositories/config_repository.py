@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from contextlib import AbstractAsyncContextManager
 from datetime import datetime
-from typing import TYPE_CHECKING, Final, Protocol, cast
+from typing import TYPE_CHECKING, Final, Protocol, TypeVar, cast
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -39,8 +40,19 @@ class _ConfigTable(Protocol):
     async def delete_many(self, *, where: Mapping[str, object]) -> int: ...
 
 
-class _ConfigDatabase(Protocol):
+class _ConfigTransaction(Protocol):
+    @property
+    def litellm_config(self) -> _ConfigTable: ...
+
     async def query_raw(self, query: str, *args: object) -> object: ...
+
+
+class _ConfigWriter(_ConfigTransaction, Protocol):
+    def tx(self) -> AbstractAsyncContextManager[_ConfigTransaction]: ...
+
+
+CONFIG_PARAM_LOCK_SQL: Final = "SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtext($1))"
+ResultT: Final = TypeVar("ResultT")
 
 
 class ConfigParam:
@@ -73,6 +85,12 @@ class ConfigRepository:
     def table(self) -> _ConfigTable:
         return self._config_table
 
+    @property
+    def _writer(self) -> _ConfigWriter:
+        return cast(  # cast-ok: Prisma delegates database methods and transactions dynamically
+            _ConfigWriter, self.prisma_client.writer_db
+        )
+
     async def get_param(self, param_name: str) -> ConfigParam | None:
         """Get a config parameter from the database."""
         record: Final = await self._config_table.find_unique(where={"param_name": param_name})
@@ -96,9 +114,7 @@ class ConfigRepository:
         return ConfigParam(param_name=param_name, param_value=param_value)
 
     async def set_param_if_revision(self, param_name: str, param_value: object, revision: int) -> bool:
-        delegate: Final = self.prisma_client.writer_db
-        database: Final = cast(_ConfigDatabase, delegate)  # cast-ok: Prisma delegates database methods dynamically
-        rows: Final = await database.query_raw(
+        rows: Final = await self._writer.query_raw(
             """INSERT INTO "LiteLLM_Config" (param_name, param_value, last_run_at)
                SELECT $1, $2::jsonb, NOW() WHERE $3::int = 0
                ON CONFLICT (param_name) DO UPDATE
@@ -114,6 +130,24 @@ class ConfigRepository:
             revision,
         )
         return bool(rows)
+
+    async def update_param_locked(
+        self, param_name: str, update: Callable[[object], tuple[Mapping[str, object], ResultT]]
+    ) -> ResultT:
+        """Read-modify-write a param under the advisory lock the config section writer also takes; raising rolls back."""
+        async with self._writer.tx() as transaction:
+            await transaction.query_raw(CONFIG_PARAM_LOCK_SQL, param_name)
+            row: Final = await transaction.litellm_config.find_unique(where={"param_name": param_name})
+            value, result = update(None if row is None else row.param_value)
+            value_json: Final = json.dumps(dict(value))
+            await transaction.litellm_config.upsert(
+                where={"param_name": param_name},
+                data={
+                    "create": {"param_name": param_name, "param_value": value_json},
+                    "update": {"param_value": value_json},
+                },
+            )
+        return result
 
     async def delete_param(self, param_name: str) -> bool:
         """Delete a config parameter from the database."""

@@ -1,11 +1,16 @@
 package litellm
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
@@ -58,8 +63,8 @@ func TestResourceLiteLLMFallbackCreate(t *testing.T) {
 	client := NewClient(srv.URL, "test-key", true)
 	d := newFallbackTestResourceData(t, "gpt-4", []interface{}{"claude-3", "gpt-3.5-turbo"}, "general")
 
-	if err := resourceLiteLLMFallbackCreate(d, client); err != nil {
-		t.Fatalf("expected nil error, got: %v", err)
+	if diags := resourceLiteLLMFallbackCreate(context.Background(), d, client); diags.HasError() {
+		t.Fatalf("expected no error, got: %v", diags)
 	}
 	if d.Id() != "gpt-4" {
 		t.Fatalf("expected ID 'gpt-4', got %q", d.Id())
@@ -144,8 +149,8 @@ func TestResourceLiteLLMFallbackUpdate_SendsChangedModels(t *testing.T) {
 	d := newFallbackTestResourceData(t, "gpt-4", []interface{}{"new-model"}, "general")
 	d.SetId("gpt-4")
 
-	if err := resourceLiteLLMFallbackUpdate(d, client); err != nil {
-		t.Fatalf("expected nil error, got: %v", err)
+	if diags := resourceLiteLLMFallbackUpdate(context.Background(), d, client); diags.HasError() {
+		t.Fatalf("expected no error, got: %v", diags)
 	}
 	if !reflect.DeepEqual(updatePayload["fallback_models"], []interface{}{"new-model"}) {
 		t.Fatalf("expected updated fallback_models [new-model], got %+v", updatePayload["fallback_models"])
@@ -176,5 +181,176 @@ func TestResourceLiteLLMFallbackDelete(t *testing.T) {
 	}
 	if d.Id() != "" {
 		t.Fatalf("expected ID cleared after delete, got %q", d.Id())
+	}
+}
+
+type fallbackRead struct {
+	status int
+	models []string
+}
+
+func fallbackServer(t *testing.T, reads []fallbackRead) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	served := &atomic.Int32{}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/fallback", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"message":"ok"}`))
+	})
+	mux.HandleFunc("/fallback/gpt-4", func(w http.ResponseWriter, r *http.Request) {
+		index := int(served.Add(1)) - 1
+		if index >= len(reads) {
+			t.Errorf("unexpected read %d after the proxy served the fallback", index+1)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		read := reads[index]
+		if read.status != http.StatusOK {
+			w.WriteHeader(read.status)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(FallbackGetResponse{Model: "gpt-4", FallbackModels: read.models, FallbackType: "general"})
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv, served
+}
+
+type recordedWaits struct {
+	delays []time.Duration
+	failAt int
+}
+
+func (w *recordedWaits) wait(ctx context.Context, delay time.Duration) error {
+	w.delays = append(w.delays, delay)
+	if w.failAt > 0 && len(w.delays) >= w.failAt {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+
+func TestFallbackWriteWaitsForTheProxyToServeIt(t *testing.T) {
+	cases := []struct {
+		name   string
+		action string
+		reads  []fallbackRead
+	}{
+		{
+			name:   "create answered by a replica without the new rule",
+			action: "creating",
+			reads: []fallbackRead{
+				{status: http.StatusNotFound},
+				{status: http.StatusNotFound},
+				{status: http.StatusOK, models: []string{"claude-3", "gpt-3.5-turbo"}},
+			},
+		},
+		{
+			name:   "update answered by a replica with the previous list",
+			action: "updating",
+			reads: []fallbackRead{
+				{status: http.StatusOK, models: []string{"gpt-3.5-turbo", "claude-3"}},
+				{status: http.StatusOK, models: []string{"claude-3"}},
+				{status: http.StatusOK, models: []string{"claude-3", "gpt-3.5-turbo"}},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, served := fallbackServer(t, tc.reads)
+			waits := &recordedWaits{}
+			d := newFallbackTestResourceData(t, "gpt-4", []interface{}{"claude-3", "gpt-3.5-turbo"}, "general")
+
+			err := upsertLiteLLMFallback(context.Background(), d, NewClient(srv.URL, "test-key", true), tc.action, waits.wait)
+
+			if err != nil {
+				t.Fatalf("expected the write to succeed once the proxy serves it, got: %v", err)
+			}
+			if d.Id() != "gpt-4" {
+				t.Fatalf("expected ID gpt-4, got %q", d.Id())
+			}
+			if got := d.Get("fallback_models"); !reflect.DeepEqual(got, []interface{}{"claude-3", "gpt-3.5-turbo"}) {
+				t.Fatalf("expected state to hold the written list, got %v", got)
+			}
+			if served.Load() != int32(len(tc.reads)) || len(waits.delays) != len(tc.reads)-1 {
+				t.Fatalf("expected %d reads with a wait between each, got %d reads and waits %v", len(tc.reads), served.Load(), waits.delays)
+			}
+		})
+	}
+}
+
+func TestFallbackReadBackBacksOffUpToTheMaxDelay(t *testing.T) {
+	reads := make([]fallbackRead, 7)
+	for i := range reads {
+		reads[i] = fallbackRead{status: http.StatusNotFound}
+	}
+	srv, _ := fallbackServer(t, append(reads, fallbackRead{status: http.StatusOK, models: []string{"claude-3"}}))
+	waits := &recordedWaits{}
+	d := newFallbackTestResourceData(t, "gpt-4", []interface{}{"claude-3"}, "general")
+
+	if err := upsertLiteLLMFallback(context.Background(), d, NewClient(srv.URL, "test-key", true), "creating", waits.wait); err != nil {
+		t.Fatalf("expected success, got: %v", err)
+	}
+
+	want := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 10 * time.Second, 10 * time.Second, 10 * time.Second}
+	if !reflect.DeepEqual(waits.delays, want) {
+		t.Fatalf("expected waits %v, got %v", want, waits.delays)
+	}
+}
+
+func TestFallbackWriteThatNeverConvergesKeepsTheIDAndNamesTheModel(t *testing.T) {
+	srv, _ := fallbackServer(t, []fallbackRead{
+		{status: http.StatusNotFound},
+		{status: http.StatusOK, models: []string{"stale"}},
+		{status: http.StatusNotFound},
+	})
+	waits := &recordedWaits{failAt: 3}
+	d := newFallbackTestResourceData(t, "gpt-4", []interface{}{"claude-3"}, "general")
+
+	err := upsertLiteLLMFallback(context.Background(), d, NewClient(srv.URL, "test-key", true), "creating", waits.wait)
+
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "gpt-4") {
+		t.Fatalf("expected a deadline error naming the model, got: %v", err)
+	}
+	if d.Id() != "gpt-4" {
+		t.Fatalf("expected the ID to stay so the saved fallback is not orphaned, got %q", d.Id())
+	}
+}
+
+func TestFallbackReadBackDoesNotRetryAnErrorResponse(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusBadRequest, http.StatusInternalServerError} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			srv, served := fallbackServer(t, []fallbackRead{{status: status}})
+			waits := &recordedWaits{}
+			d := newFallbackTestResourceData(t, "gpt-4", []interface{}{"claude-3"}, "general")
+
+			err := upsertLiteLLMFallback(context.Background(), d, NewClient(srv.URL, "test-key", true), "creating", waits.wait)
+
+			if err == nil || !strings.Contains(err.Error(), http.StatusText(status)) {
+				t.Fatalf("expected the %d to surface as an error, got: %v", status, err)
+			}
+			if served.Load() != 1 || len(waits.delays) != 0 {
+				t.Fatalf("expected one read and no retry, got %d reads and waits %v", served.Load(), waits.delays)
+			}
+			if d.Id() != "gpt-4" {
+				t.Fatalf("expected the ID to stay, got %q", d.Id())
+			}
+		})
+	}
+}
+
+func TestFallbackReadBackStopsWhenApplyIsCancelled(t *testing.T) {
+	srv, served := fallbackServer(t, []fallbackRead{{status: http.StatusNotFound}})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	d := newFallbackTestResourceData(t, "gpt-4", []interface{}{"claude-3"}, "general")
+
+	diags := resourceLiteLLMFallbackCreate(ctx, d, NewClient(srv.URL, "test-key", true))
+
+	if !diags.HasError() || !strings.Contains(diags[0].Summary, context.Canceled.Error()) {
+		t.Fatalf("expected a cancellation error, got: %v", diags)
+	}
+	if served.Load() != 1 || d.Id() != "gpt-4" {
+		t.Fatalf("expected one read and the ID kept, got %d reads and ID %q", served.Load(), d.Id())
 	}
 }

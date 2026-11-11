@@ -37,6 +37,24 @@ In addition to the arguments above, the following attribute is exported:
 
 * `id` - The primary model name.
 
+## Timeouts
+
+After a create or update the provider reads the fallback back until the proxy serves the list it wrote, since a proxy running several replicas can answer from one that has not reloaded the change yet (every 30 seconds by default, `proxy_config_reload_interval_seconds`). Both waits default to 2 minutes:
+
+```hcl
+resource "litellm_fallback" "gpt4_fallbacks" {
+  model           = "gpt-4"
+  fallback_models = ["claude-3-sonnet", "gpt-3.5-turbo"]
+
+  timeouts {
+    create = "5m"
+    update = "5m"
+  }
+}
+```
+
+If the wait runs out the apply fails with an error naming the model, and the fallback stays in state, since the proxy has saved it.
+
 ## Import
 
 Fallback configurations can be imported using the primary model name:
