@@ -1,4 +1,6 @@
+import type { TFunction } from "i18next";
 import { z } from "zod";
+import i18n from "@/i18n/i18n";
 import { issueLabel } from "./issueLabel";
 import { openAIDecisionsRequestSchema, type OpenAIDecisionsRequest } from "./openAIDecisions";
 import {
@@ -28,21 +30,21 @@ export type SystemOnePayloadValidation = PayloadValidation<PlaygroundRequest>;
 export const errorCount = (validation: PayloadValidation<unknown>): number =>
   validation.issues.filter((issue) => issue.severity === "error").length;
 
-const error = (path: readonly PropertyKey[], message: string): SystemOnePayloadIssue => ({
+const error = (path: readonly PropertyKey[], message: string, t: TFunction): SystemOnePayloadIssue => ({
   path: path.length > 0 ? path.join(".") : "root",
-  label: issueLabel(path),
+  label: issueLabel(path, t),
   message,
   severity: "error",
 });
 
-const toIssue = (path: PropertyKey[], message: string): SystemOnePayloadIssue =>
+const toIssue = (path: PropertyKey[], message: string, t: TFunction): SystemOnePayloadIssue =>
   path[0] === "questions" && path[1] === ""
-    ? error(["questions"], "Give every question a name.")
-    : error(path, message);
+    ? error(["questions"], t("playground.systemOne.validatePayload.nameEveryQuestion"), t)
+    : error(path, message, t);
 
-const invalid = (path: string, message: string) => ({
+const invalid = (path: string, message: string, t: TFunction) => ({
   isValid: false,
-  issues: [error([path], message)],
+  issues: [error([path], message, t)],
 });
 
 export function parseJson(raw: string): { ok: true; value: unknown } | { ok: false; message: string } {
@@ -53,31 +55,31 @@ export function parseJson(raw: string): { ok: true; value: unknown } | { ok: fal
   }
 }
 
-const scoreLevelWarnings = (payload: PlaygroundRequest): SystemOnePayloadIssue[] =>
+const scoreLevelWarnings = (payload: PlaygroundRequest, t: TFunction): SystemOnePayloadIssue[] =>
   Object.entries(payload.questions)
     .filter(([, question]) => question.type === "score" && question.criteria.length > RECOMMENDED_MAX_SCORE_LEVELS)
     .map(([id]) => ({
       path: `questions.${id}.criteria`,
-      label: issueLabel(["questions", id, "criteria"]),
-      message: `More than ${RECOMMENDED_MAX_SCORE_LEVELS} score levels may reduce result quality.`,
+      label: issueLabel(["questions", id, "criteria"], t),
+      message: t("playground.systemOne.validatePayload.tooManyLevels", { max: RECOMMENDED_MAX_SCORE_LEVELS }),
       severity: "warning",
     }));
 
-function validatePayload<T>(raw: string, schema: z.ZodType<T>): PayloadValidation<T> {
+function validatePayload<T>(raw: string, schema: z.ZodType<T>, t: TFunction): PayloadValidation<T> {
   if (!raw.trim()) {
-    return invalid("root", "Payload cannot be empty.");
+    return invalid("root", t("playground.systemOne.validatePayload.empty"), t);
   }
 
   const json = parseJson(raw);
   if (!json.ok) {
-    return invalid("syntax", `Invalid JSON syntax: ${json.message}`);
+    return invalid("syntax", t("playground.systemOne.validatePayload.invalidJson", { message: json.message }), t);
   }
 
   const result = schema.safeParse(json.value);
   if (!result.success) {
     return {
       isValid: false,
-      issues: result.error.issues.map((issue) => toIssue(issue.path, issue.message)),
+      issues: result.error.issues.map((issue) => toIssue(issue.path, issue.message, t)),
     };
   }
 
@@ -95,29 +97,39 @@ const isMissingContext = (raw: string, path: "state" | "input"): boolean => {
   return isBlankContext((json.value as Record<string, unknown>)[path]);
 };
 
-const requireContext = <T>(raw: string, path: "state" | "input", result: PayloadValidation<T>): PayloadValidation<T> =>
+const requireContext = <T>(
+  raw: string,
+  path: "state" | "input",
+  result: PayloadValidation<T>,
+  t: TFunction,
+): PayloadValidation<T> =>
   isMissingContext(raw, path)
     ? {
         ...result,
         isValid: false,
-        issues: [error([path], "Add the text the model should decide about.")],
+        issues: [error([path], t("playground.systemOne.validatePayload.missingContext"), t)],
       }
     : result;
 
 export function validateSystemOnePayload(
   raw: string,
   endpoint: DecisionEndpoint = "/typesafe/v1/systemone",
+  t: TFunction = i18n.t.bind(i18n),
 ): SystemOnePayloadValidation {
   const schema = endpoint === "/v1/systemone" ? decisionsRequestSchema : systemOneRequestSchema;
-  const result = validatePayload<PlaygroundRequest>(raw, schema);
+  const result = validatePayload<PlaygroundRequest>(raw, schema, t);
   return requireContext(
     raw,
     "state",
-    result.payload ? { ...result, issues: scoreLevelWarnings(result.payload) } : result,
+    result.payload ? { ...result, issues: scoreLevelWarnings(result.payload, t) } : result,
+    t,
   );
 }
 
-export function validateOpenAIDecisionsPayload(raw: string): PayloadValidation<OpenAIDecisionsRequest> {
-  const result = validatePayload<OpenAIDecisionsRequest>(raw, openAIDecisionsRequestSchema);
-  return requireContext(raw, "input", result);
+export function validateOpenAIDecisionsPayload(
+  raw: string,
+  t: TFunction = i18n.t.bind(i18n),
+): PayloadValidation<OpenAIDecisionsRequest> {
+  const result = validatePayload<OpenAIDecisionsRequest>(raw, openAIDecisionsRequestSchema, t);
+  return requireContext(raw, "input", result, t);
 }

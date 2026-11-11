@@ -14,11 +14,11 @@ from typing import Any, Dict
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.reasoning_effort_capability import (
+    resolve_supported_reasoning_efforts,
+)
 from litellm.llms.anthropic.messages.utils import (
     normalize_reasoning_effort_value,
-)
-from litellm.router_utils.reasoning_effort_capability import (
-    resolve_supported_reasoning_efforts,
 )
 from litellm.utils import get_model_info
 
@@ -162,7 +162,8 @@ class TestAdapterAdaptiveThinking:
 
         adapter = LiteLLMAnthropicMessagesAdapter()
         result = adapter.translate_anthropic_thinking_to_reasoning_effort(
-            {"type": "adaptive"}
+            {"type": "adaptive"},
+            model="openai/gpt-6.1-sol",
         )
         assert result == "medium"
 
@@ -198,6 +199,7 @@ class TestAdapterAdaptiveThinking:
         result = LiteLLMAnthropicToResponsesAPIAdapter.translate_thinking_to_reasoning(
             thinking={"type": "adaptive"},
             output_config={"effort": "xhigh"},
+            model="openai/gpt-6.1-sol",
         )
         assert result is not None
         assert result["effort"] == "xhigh"
@@ -210,6 +212,7 @@ class TestAdapterAdaptiveThinking:
 
         result = LiteLLMAnthropicToResponsesAPIAdapter.translate_thinking_to_reasoning(
             thinking={"type": "adaptive"},
+            model="openai/gpt-6.1-sol",
         )
         assert result is not None
         assert result["effort"] == "medium"

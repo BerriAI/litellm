@@ -142,10 +142,10 @@ class PrometheusServicesLogger:
         return metrics
 
     def _refresh_redis_breaker_gauge(self) -> None:
-        from litellm.caching.redis_cache import RedisCircuitBreaker, redis_breaker_state_counts
+        from litellm.caching.redis_cache import redis_breaker_state_counts
 
         counts: Final = redis_breaker_state_counts()
-        for state in (RedisCircuitBreaker.CLOSED, RedisCircuitBreaker.OPEN, RedisCircuitBreaker.HALF_OPEN):
+        for state in ("closed", "open", "half_open"):
             self.redis_breaker_state.labels(state).set(counts.get(state, 0))
 
     def redis_breaker_hook(self, transitions_to: str | None, failure_class: str | None) -> None:

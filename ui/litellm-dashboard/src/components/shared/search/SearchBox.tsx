@@ -3,12 +3,14 @@
 import "prosemirror-view/style/prosemirror.css";
 
 import { useDebouncer } from "@tanstack/react-pacer/debouncer";
+import type { ParseKeys } from "i18next";
 import { ProseMirror, ProseMirrorDoc, reactKeys, useEditorEventCallback } from "@handlewithcare/react-prosemirror";
 import { Check, Copy, CornerDownLeft, Loader2, type LucideIcon, Search } from "lucide-react";
 import { Schema } from "prosemirror-model";
 import { EditorState, Plugin, TextSelection, type Transaction } from "prosemirror-state";
 import { Decoration, DecorationSet, type EditorView } from "prosemirror-view";
 import { type ComponentProps, createContext, useContext, useId, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
@@ -19,16 +21,18 @@ import { type SearchQuery, toSearchQuery } from "./searchQuery";
 import { completingField, completingPrefix, suggest, type Suggestion, type SuggestionMenu } from "./suggestions";
 import { NO_VALUES, type ValueSource } from "./valueSource";
 
+const ARIA_AUTOCOMPLETE_LIST = "list";
+
 const schema = new Schema({ nodes: { doc: { content: "text*" }, text: {} } });
 
 const EMIT_WAIT_MS = 150;
 const KEEP_MENU_CLOSED = "searchBoxKeepMenuClosed";
 
-const OPERATORS: readonly { readonly op: FilterOp; readonly label: string; readonly example: string }[] = [
-  { op: "eq", label: "equals", example: "foo:bar" },
-  { op: "neq", label: "not equals", example: "-foo:bar" },
-  { op: "glob", label: "wildcard match", example: "foo:*bar*" },
-  { op: "nglob", label: "does not contain", example: "-foo:*bar*" },
+const OPERATORS: readonly { readonly op: FilterOp; readonly label: ParseKeys; readonly example: string }[] = [
+  { op: "eq", label: "shared.searchBox.operators.equals", example: "foo:bar" },
+  { op: "neq", label: "shared.searchBox.operators.notEquals", example: "-foo:bar" },
+  { op: "glob", label: "shared.searchBox.operators.wildcardMatch", example: "foo:*bar*" },
+  { op: "nglob", label: "shared.searchBox.operators.doesNotContain", example: "-foo:*bar*" },
 ];
 
 /** Colours each `key:` so the filters stand out from free text. */
@@ -212,7 +216,7 @@ function Root<F extends string>({
       attributes={{
         role: "combobox",
         "aria-label": label,
-        "aria-autocomplete": "list",
+        "aria-autocomplete": ARIA_AUTOCOMPLETE_LIST,
         "aria-expanded": String(visible),
         "aria-controls": listId,
         ...(activeItem && {
@@ -239,6 +243,7 @@ export type SearchBoxInputProps = ComponentProps<"div"> & {
 
 /** The bordered field holding the editor; shows `placeholder` while the query is empty. */
 function Input({ placeholder, busy = false, className, ...props }: SearchBoxInputProps) {
+  const { t } = useTranslation();
   const { text } = useSearchBox();
   return (
     <div
@@ -252,7 +257,7 @@ function Input({ placeholder, busy = false, className, ...props }: SearchBoxInpu
       {busy ? (
         <Loader2
           role="status"
-          aria-label="Loading results"
+          aria-label={t("shared.searchBox.loadingResults")}
           className="size-3.5 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none"
         />
       ) : (
@@ -277,6 +282,7 @@ export type SearchBoxSuggestionsProps = ComponentProps<"div">;
  * `children` render in the footer beside the key hints, e.g. a `CopyCommand`.
  */
 function Suggestions({ className, children, ...props }: SearchBoxSuggestionsProps) {
+  const { t } = useTranslation();
   const { listId, menu, activeId, icon, ops } = useSearchBox();
   const pick = useEditorEventCallback((view, item: Suggestion<string>) => applySuggestion(view, item));
   if (!menu) return null;
@@ -289,7 +295,12 @@ function Suggestions({ className, children, ...props }: SearchBoxSuggestionsProp
       )}
       {...props}
     >
-      <div id={listId} role="listbox" aria-label="Search suggestions" className="max-h-80 overflow-y-auto p-1">
+      <div
+        id={listId}
+        role="listbox"
+        aria-label={t("shared.searchBox.suggestions")}
+        className="max-h-80 overflow-y-auto p-1"
+      >
         {menu.groups.map((group) => (
           <div key={group.heading} role="group" aria-label={group.heading}>
             <div className="px-2 pt-2 pb-1 text-xs text-muted-foreground">{group.heading}</div>
@@ -314,7 +325,7 @@ function Suggestions({ className, children, ...props }: SearchBoxSuggestionsProp
         ))}
         {menu.loading && (
           <div role="status" className="px-2 py-1.5 font-mono text-xs text-muted-foreground">
-            Loading values…
+            {t("shared.searchBox.loadingValues")}
           </div>
         )}
         {menu.showOperators && <OperatorHints ops={ops} />}
@@ -323,13 +334,13 @@ function Suggestions({ className, children, ...props }: SearchBoxSuggestionsProp
         <span className="flex items-center gap-1">
           <Kbd>↑</Kbd>
           <Kbd>↓</Kbd>
-          Navigate
+          {t("shared.searchBox.navigate")}
         </span>
         <span className="flex items-center gap-1">
           <Kbd>
             <CornerDownLeft />
           </Kbd>
-          Select
+          {t("shared.searchBox.select")}
         </span>
         {children}
       </div>
@@ -346,13 +357,14 @@ export type SearchBoxCopyCommandProps<F extends string> = {
 
 type CopyOutcome = { readonly command: string; readonly outcome: "copied" | "failed" } | null;
 
-const copyLabel = (last: CopyOutcome, command: string): string => {
-  if (last?.command !== command) return "Copy as curl";
-  return last.outcome === "copied" ? "Copied" : "Copy failed";
+const copyLabel = (last: CopyOutcome, command: string): ParseKeys => {
+  if (last?.command !== command) return "shared.searchBox.copyCommand.copy";
+  return last.outcome === "copied" ? "shared.searchBox.copyCommand.copied" : "shared.searchBox.copyCommand.failed";
 };
 
 /** Puts the current query on the clipboard as an API call, from the suggestions footer. */
 function CopyCommand<F extends string>({ title, command }: SearchBoxCopyCommandProps<F>) {
+  const { t } = useTranslation();
   const { clauses } = useSearchBox();
   const [last, setLast] = useState<CopyOutcome>(null);
   const current = useMemo(() => command(toSearchQuery(clauses as readonly QueryClause<F>[])), [command, clauses]);
@@ -373,19 +385,20 @@ function CopyCommand<F extends string>({ title, command }: SearchBoxCopyCommandP
       onMouseDown={(event) => event.preventDefault()}
       onClick={() => void copy()}
     >
-      {label === "Copied" ? <Check /> : <Copy />}
-      {label}
+      {label === "shared.searchBox.copyCommand.copied" ? <Check /> : <Copy />}
+      {t(label)}
     </Button>
   );
 }
 
 function OperatorHints({ ops }: { ops: readonly FilterOp[] }) {
+  const { t } = useTranslation();
   return (
     <div className="pb-1">
-      <div className="px-2 pt-2 pb-1 text-xs text-muted-foreground">Comparison operators</div>
+      <div className="px-2 pt-2 pb-1 text-xs text-muted-foreground">{t("shared.searchBox.comparisonOperators")}</div>
       {OPERATORS.filter((op) => ops.includes(op.op)).map((op) => (
         <div key={op.label} className="flex items-center justify-between px-2 py-1 font-mono text-xs">
-          <span className="text-warning">{op.label}</span>
+          <span className="text-warning">{t(op.label)}</span>
           <code className="rounded bg-muted px-1.5 text-muted-foreground">{op.example}</code>
         </div>
       ))}
