@@ -934,12 +934,12 @@ _LEGACY_DEFS_KEYS: Final = ("definitions",)
 _LEGACY_REF_PREFIXES: Final = ("#/definitions/", "#/components/schemas/")
 
 
-def _defs_block(value: object) -> Mapping[str, object]:
+def _mapping_or_empty(value: object) -> Mapping[str, object]:
     return value if isinstance(value, dict) else {}
 
 
 def _local_defs(node: Mapping[str, object], defs_keys: tuple[str, ...]) -> Mapping[str, object]:
-    return dict(chain.from_iterable(_defs_block(node.get(key)).items() for key in defs_keys))
+    return dict(chain.from_iterable(_mapping_or_empty(node.get(key)).items() for key in defs_keys))
 
 
 def _scope_with_local_defs(scope: _DefsScope, local_defs: Mapping[str, object]) -> _DefsScope:
@@ -1003,10 +1003,8 @@ def unpack_defs(
         # ----------------------------- dict -----------------------------
         if isinstance(node, dict):
             # --- Case 1: this node *is* a reference ---
-            if "$ref" in node:
-                ref = node["$ref"]
-                if not isinstance(ref, str) or (legacy_only and not ref.startswith(_LEGACY_REF_PREFIXES)):
-                    continue
+            ref = node.get("$ref")
+            if isinstance(ref, str) and (not legacy_only or ref.startswith(_LEGACY_REF_PREFIXES)):
                 ref_name = ref.split("/")[-1]
 
                 # Check for circular reference in the resolution chain
@@ -1073,11 +1071,16 @@ def unpack_defs(
     return inlined_bytes
 
 
-def _has_legacy_defs(schema: object) -> bool:
-    if not isinstance(schema, dict):
-        return False
-    components: Final = schema.get("components")
-    return "definitions" in schema or (isinstance(components, dict) and isinstance(components.get("schemas"), dict))
+def _legacy_defs(schema: object) -> Mapping[str, object] | None:
+    node: Final = _mapping_or_empty(schema)
+    components: Final = _mapping_or_empty(node.get("components"))
+    if "definitions" not in node and not isinstance(components.get("schemas"), dict):
+        return None
+    # On key collision, ``definitions`` wins over ``components.schemas`` --
+    # ``unpack_defs`` keys refs by last path segment so a single name can only
+    # resolve to one body, and ``definitions`` is the JSON-Schema-native
+    # namespace.
+    return {**_mapping_or_empty(components.get("schemas")), **_mapping_or_empty(node.get("definitions"))}
 
 
 # Schema-bomb budget for ``$ref`` inlining: cap the cumulative JSON-byte
@@ -1111,7 +1114,7 @@ def unpack_legacy_defs(
     schemas cannot expand into a schema-bomb before reaching the upstream
     provider -- raises ``ValueError`` on overflow.
     """
-    if not _has_legacy_defs(schema):
+    if _legacy_defs(schema) is None:
         return schema
     if copy:
         import copy as _copy
@@ -1122,15 +1125,12 @@ def unpack_legacy_defs(
 
 
 def inline_legacy_defs(schema: dict, max_inlined_bytes: int) -> int:
-    if not _has_legacy_defs(schema):
+    defs: Final = _legacy_defs(schema)
+    if defs is None:
         return 0
-    # On key collision, ``definitions`` wins over ``components.schemas`` --
-    # ``unpack_defs`` keys refs by last path segment so a single name can only
-    # resolve to one body, and ``definitions`` is the JSON-Schema-native
-    # namespace.
-    defs: Final = schema.pop("components", {}).get("schemas") or {}
-    defs.update(schema.pop("definitions", None) or {})
-    return unpack_defs(schema, defs, max_inlined_bytes=max_inlined_bytes, legacy_only=True)
+    schema.pop("components", None)
+    schema.pop("definitions", None)
+    return unpack_defs(schema, dict(defs), max_inlined_bytes=max_inlined_bytes, legacy_only=True)
 
 
 def sanitize_input_schema_for_anthropic(input_schema: dict) -> "AnthropicInputSchema":

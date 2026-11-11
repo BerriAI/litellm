@@ -2780,6 +2780,20 @@ def test_bedrock_tools_pt_inlines_legacy_definitions_for_claude(legacy_defs: dic
     assert sent == {"type": "object", "properties": {"home": _ADDRESS_SCHEMA}, "required": ["home"]}
 
 
+@pytest.mark.parametrize(
+    "legacy_defs",
+    [{"definitions": 5}, {"components": "openapi", "definitions": {"Address": _ADDRESS_SCHEMA}}],
+    ids=["definitions_not_a_map", "components_not_a_map"],
+)
+def test_bedrock_tools_pt_drops_a_malformed_legacy_defs_block_for_claude(legacy_defs: dict[str, object]) -> None:
+    parameters: Final = {"type": "object", "properties": {"name": {"type": "string"}}, **legacy_defs}
+    tools: Final = [{"type": "function", "function": {"name": "save_name", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {"type": "object", "properties": {"name": {"type": "string"}}, "required": []}
+
+
 def test_bedrock_tools_pt_sends_strict_claude_tools_with_their_defs() -> None:
     parameters: Final = {
         "type": "object",
@@ -2825,6 +2839,19 @@ def test_bedrock_tools_pt_follows_a_chain_of_root_refs_for_claude() -> None:
     sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
 
     assert sent == {**_ADDRESS_SCHEMA, "$defs": defs}
+
+
+def test_bedrock_tools_pt_inlines_legacy_refs_under_a_root_defs_ref_for_claude() -> None:
+    defs: Final = {
+        "Home": {"type": "object", "properties": {"address": {"$ref": "#/definitions/Address"}}, "required": ["address"]}
+    }
+    parameters: Final = {"$ref": "#/$defs/Home", "$defs": defs, "definitions": {"Address": _ADDRESS_SCHEMA}}
+    tools: Final = [{"type": "function", "function": {"name": "save_home", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    home: Final = {"type": "object", "properties": {"address": _ADDRESS_SCHEMA}, "required": ["address"]}
+    assert sent == {**home, "$defs": {"Home": home}}
 
 
 def test_bedrock_tools_pt_inlines_only_legacy_refs_for_claude() -> None:
