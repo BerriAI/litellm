@@ -7189,6 +7189,7 @@ def get_model_info_helper(
                 supports_tool_choice=None,
                 supports_assistant_prefill=None,
                 supports_prompt_caching=None,
+                supports_explicit_prompt_caching=None,
                 supports_prompt_cache_breakpoint=None,
                 supports_thinking_cache_preservation=None,
                 supports_computer_use=None,
@@ -7518,6 +7519,7 @@ def get_model_info_helper(
                 supports_tool_choice=_model_info.get("supports_tool_choice", None),
                 supports_assistant_prefill=_model_info.get("supports_assistant_prefill", None),
                 supports_prompt_caching=_model_info.get("supports_prompt_caching", None),
+                supports_explicit_prompt_caching=_model_info.get("supports_explicit_prompt_caching", None),
                 supports_prompt_cache_breakpoint=_model_info.get("supports_prompt_cache_breakpoint", None),
                 supports_thinking_cache_preservation=_model_info.get("supports_thinking_cache_preservation", None),
                 supports_audio_input=_model_info.get("supports_audio_input", None),
@@ -7690,6 +7692,7 @@ def get_model_info(
             supports_function_calling: Optional[bool]
             supports_tool_choice: Optional[bool]
             supports_prompt_caching: Optional[bool]
+            supports_explicit_prompt_caching: Optional[bool]
             supports_prompt_cache_breakpoint: Optional[bool]
             supports_audio_input: Optional[bool]
             supports_video_input: Optional[bool]

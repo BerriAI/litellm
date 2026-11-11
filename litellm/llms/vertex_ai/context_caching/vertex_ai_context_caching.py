@@ -132,9 +132,9 @@ def _context_caching_skip_reason(
 ) -> str | None:
     from litellm.utils import is_explicitly_disabled_factory
 
-    if is_explicitly_disabled_factory(deployment_model, custom_llm_provider, "supports_prompt_caching") or (
+    if is_explicitly_disabled_factory(deployment_model, custom_llm_provider, "supports_explicit_prompt_caching") or (
         cache_model != deployment_model
-        and is_explicitly_disabled_factory(cache_model, custom_llm_provider, "supports_prompt_caching")
+        and is_explicitly_disabled_factory(cache_model, custom_llm_provider, "supports_explicit_prompt_caching")
     ):
         return f"Vertex AI context caching: model {deployment_model} does not support explicit context caching."
 

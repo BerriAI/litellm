@@ -1274,7 +1274,7 @@ def sync_transform_request_body(
 
     if context_caching:
         model_info = litellm_params.get("model_info") or {}
-        if model_info.get("supports_prompt_caching") is False:
+        if model_info.get("supports_explicit_prompt_caching") is False:
             context_caching = False
 
     (
@@ -1415,7 +1415,7 @@ async def async_transform_request_body(
 
     if context_caching:
         model_info = litellm_params.get("model_info") or {}
-        if model_info.get("supports_prompt_caching") is False:
+        if model_info.get("supports_explicit_prompt_caching") is False:
             context_caching = False
 
     (

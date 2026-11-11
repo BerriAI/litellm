@@ -16,18 +16,22 @@ from litellm.llms.vertex_ai.gemini.transformation import (
 )
 
 
-def test_target_consumes_cache_control_skips_when_model_disables_prompt_caching(local_model_cost_map):
-    """LiteLLMAnthropicMessagesAdapter should not consume cache_control for models explicitly disabling prompt caching."""
+def test_target_consumes_cache_control_skips_when_model_disables_explicit_caching(local_model_cost_map):
+    """LiteLLMAnthropicMessagesAdapter should not consume cache_control for gemini-4 models that disable explicit caching."""
     assert LiteLLMAnthropicMessagesAdapter.target_consumes_cache_control("claude-3-5-sonnet-20241022") is True
     assert LiteLLMAnthropicMessagesAdapter.target_consumes_cache_control("gemini/gemini-2.5-flash") is True
     assert LiteLLMAnthropicMessagesAdapter.target_consumes_cache_control("gemini/gemini-4-argon") is False
     assert LiteLLMAnthropicMessagesAdapter.target_consumes_cache_control("vertex_ai/gemini-4-argon") is False
+    assert LiteLLMAnthropicMessagesAdapter.target_consumes_cache_control("gemini/gemini-4-carbon") is False
+    assert LiteLLMAnthropicMessagesAdapter.target_consumes_cache_control("vertex_ai/gemini-4-carbon") is False
+    assert LiteLLMAnthropicMessagesAdapter.target_consumes_cache_control("vertex_ai/gemini-4-carbon-cyber-permissive") is False
     # Bare model name without provider prefix should also be recognized
     assert LiteLLMAnthropicMessagesAdapter.target_consumes_cache_control("gemini-4-argon") is False
+    assert LiteLLMAnthropicMessagesAdapter.target_consumes_cache_control("gemini-4-carbon") is False
 
 
-def test_check_and_create_cache_skips_when_model_disables_prompt_caching(local_model_cost_map):
-    """ContextCachingEndpoints should skip explicit cache creation when model has supports_prompt_caching: false."""
+def test_check_and_create_cache_skips_when_model_disables_explicit_caching(local_model_cost_map):
+    """ContextCachingEndpoints should skip explicit cache creation when model has supports_explicit_prompt_caching: false."""
     endpoints = ContextCachingEndpoints()
     messages = [
         {
@@ -184,7 +188,7 @@ def test_sync_transform_request_body_skips_caching_on_model_info_override(monkey
         messages=messages,
         model="gemini-2.5-flash",
         custom_llm_provider="gemini",
-        litellm_params={"model_info": {"supports_prompt_caching": False}},
+        litellm_params={"model_info": {"supports_explicit_prompt_caching": False}},
         optional_params={},
         gemini_api_key="test-key",
         api_base=None,
@@ -200,3 +204,20 @@ def test_sync_transform_request_body_skips_caching_on_model_info_override(monkey
     assert mock_endpoints.check_and_create_cache.called
     _, kwargs = mock_endpoints.check_and_create_cache.call_args
     assert kwargs.get("context_caching") is False
+
+
+def test_gemini_4_rows_keep_implicit_prompt_caching(local_model_cost_map):
+    """supports_prompt_caching must stay true (implicit caching) while explicit caching is disabled."""
+    import litellm
+
+    for model in (
+        "gemini/gemini-4-argon",
+        "vertex_ai/gemini-4-argon",
+        "vertex_ai/gemini-4-argon-cyber-permissive",
+        "gemini/gemini-4-carbon",
+        "vertex_ai/gemini-4-carbon",
+        "vertex_ai/gemini-4-carbon-cyber-permissive",
+    ):
+        info = litellm.get_model_info(model)
+        assert info.get("supports_prompt_caching") is True, model
+        assert info.get("supports_explicit_prompt_caching") is False, model
