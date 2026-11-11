@@ -100780,5 +100780,21 @@
         "metadata": {"comment":"5 credits per 1,000 characters @ $0.01 per credit = $0.00005 per character; 1 credit minimum not modeled"},
         "mode": "audio_speech",
         "source": "https://docs.dev.runwayml.com/guides/pricing/"
+    },
+    "nodecode/nodecode-cyber-v1": {
+        "cache_read_input_token_cost": 9e-09,
+        "input_cost_per_token": 3.3e-07,
+        "litellm_provider": "nodecode",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 1.32e-06,
+        "source": "https://nodecode.ai/docs/pricing",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
     }
 }

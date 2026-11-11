@@ -4810,6 +4810,7 @@ class LlmProviders(str, Enum):
     COGNITION = "cognition"
     CORALBRICKS = "coralbricks"
     CORTECS = "cortecs"
+    NODECODE = "nodecode"
     SCX_AI = "scx-ai"
     PRISM = "prism"
     OPENINFER = "openinfer"
