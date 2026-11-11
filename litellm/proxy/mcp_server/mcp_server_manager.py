@@ -367,7 +367,7 @@ _UpstreamSessionKey: TypeAlias = tuple[
     str,
     str,
     str,
-    tuple[MCPTransport, MCPUpstreamProtocol, float, bool, bool, bool],
+    tuple[MCPTransport, MCPUpstreamProtocol, float, bool, bool, bool, bool],
 ]
 
 
@@ -1196,16 +1196,27 @@ def should_strip_caller_authorization(
       pass-through cold-start case (RFC 9728) the bearer in
       ``Authorization`` is the upstream OAuth token and must be
       forwarded, so we keep it.
-    - **Delegated OAuth servers**: admission always runs and there is no
-      anonymous path, so the caller's separate ``Authorization`` is
+    - **Legacy delegate servers**: forward when MCP admission marked the
+      caller's ``Authorization`` as the upstream token
+      (``mcp_forwards_caller_authorization``); otherwise follow the
+      delegated OAuth rule below.
+    - **Delegated OAuth servers**: the caller's separate ``Authorization`` is
       forwarded only when a distinct ``x-litellm-api-key`` carried
       admission. Without that header the ``Authorization`` *was* the
       admission credential — a virtual key, an IdP JWT, or an SSO / OIDC /
       session token whose ``api_key`` is ``None`` — and must never reach
       the upstream, so it is stripped regardless of the ``api_key`` value.
-    - **Every other auth-enabled mode**: strip when ``Authorization`` is the
-      credential admission validated.
+    - **true_passthrough**: strip when ``Authorization`` is the credential
+      admission validated.
+    - **Every other mode**: forward. The caller's ``Authorization`` only reaches
+      the upstream because the admin listed it in ``extra_headers``.
     """
+    if (
+        user_api_key_auth is not None
+        and user_api_key_auth.mcp_forwards_caller_authorization
+        and is_legacy_upstream_delegate(mcp_server)
+    ):
+        return False
     if _authorization_is_admission_jwt(raw_headers, user_api_key_auth):
         return True
     if mcp_server.auth_type == MCPAuth.oauth2_token_exchange:
@@ -1224,6 +1235,8 @@ def should_strip_caller_authorization(
         mcp_server.auth_type == MCPAuth.oauth2 and mcp_server.delegate_auth_to_upstream
     )
     if not (mcp_server.is_oauth_passthrough or is_delegated_oauth):
+        if not mcp_server.is_client_forwarded_token:
+            return False
         from litellm.proxy.auth.user_api_key_auth import is_no_auth_dev_mode
         from litellm.proxy.proxy_server import (
             general_settings,  # pyright: ignore[reportUnknownVariableType]  # legacy global is declared as a bare dict
@@ -1394,7 +1407,7 @@ def _openapi_forwarded_extra_headers(
     )
     forwarded: Final[dict[str, str]] = {}
     for header_name in mcp_server.extra_headers:
-        if not isinstance(header_name, str) or header_name.lower() == "x-litellm-api-key":
+        if not isinstance(header_name, str):
             continue
         if skip_caller_authorization and header_name.lower() == "authorization":
             continue
@@ -1555,6 +1568,18 @@ async def _materialize_auth_headers(auth: httpx2.Auth | None) -> dict[str, str] 
         await flow.aclose()
     header_value: Final = first_request.headers.get(header_name)
     return {header_name: header_value} if header_value else None
+
+
+def is_legacy_upstream_delegate(server: MCPServer) -> bool:
+    """True for an interactive ``auth_type=oauth2`` server with ``delegate_auth_to_upstream=true``, whose
+    caller ``Authorization`` is the upstream token. The flow is resolved, not read from the column, so an
+    unstamped M2M-shaped row stays excluded: its stored client credentials drive egress, and admitting it
+    anonymously would let any caller act as LiteLLM's service account."""
+    return (
+        server.auth_type == MCPAuth.oauth2
+        and server.delegate_auth_to_upstream is True
+        and MCPServerManager.effective_oauth2_flow(server) != "client_credentials"
+    )
 
 
 def _consumes_caller_authorization(server: MCPServer) -> bool:
@@ -1726,18 +1751,15 @@ def _warn_overlapping_tool_policies(server: MCPServer) -> None:
 
 
 def _warn_legacy_delegate_auth_if_applicable(server: MCPServer, *, source: str) -> None:
-    """Direct legacy delegated OAuth configurations to the admitted replacement."""
-    if server.auth_type != MCPAuth.oauth2:
-        return
-    if getattr(server, "delegate_auth_to_upstream", False) is not True:
-        return
-    if server.has_client_credentials:
+    """Point legacy delegated OAuth configurations at the client-forwarded replacements."""
+    if not is_legacy_upstream_delegate(server):
         return
     label: Final = get_server_prefix(server)
     verbose_logger.warning(
         "MCP server %r (id=%s, source=%s) uses deprecated auth_type=oauth2 with "
-        "delegate_auth_to_upstream=true. LiteLLM admission is now required; migrate to "
-        "auth_type=oauth_delegate for client-forwarded OAuth.",
+        "delegate_auth_to_upstream=true. It still works: a caller without a LiteLLM credential is "
+        "admitted anonymously and its upstream token is forwarded. Migrate to auth_type=true_passthrough "
+        "or auth_type=oauth_delegate.",
         label,
         server.server_id,
         source,
@@ -3687,7 +3709,7 @@ class MCPServerManager:
 
         Priority:
         1. If object_permission.mcp_servers is explicitly set, use it (even for admins)
-        2. If admin and no object_permission, return all servers
+        2. If admin, not bound to a real team, and no object_permission, return all servers
         3. Otherwise, use standard permission checks
         """
         if managed_agent_policy(user_api_key_auth) is not None:
@@ -3766,12 +3788,12 @@ class MCPServerManager:
                 )
             )
             if is_anonymous:
-                passthrough_server_ids: Final = [
+                anonymous_server_ids: Final = [
                     server.server_id
                     for server in self.get_registry().values()
-                    if server.auth_type == MCPAuth.true_passthrough
+                    if server.auth_type == MCPAuth.true_passthrough or is_legacy_upstream_delegate(server)
                 ]
-                combined_servers.update(passthrough_server_ids)
+                combined_servers.update(anonymous_server_ids)
 
             restrict_allow_all: Final = (
                 resolved_general_settings.get("mcp_allow_all_keys_respects_mcp_scope", False)
@@ -6223,7 +6245,7 @@ class MCPServerManager:
         )
 
         caller_bearer: Final = (
-            MCPRequestHandler.get_incoming_bearer_token(raw_headers or {})
+            MCPRequestHandler.guardrail_bearer_from_raw_headers(raw_headers, user_api_key_auth)
             if incoming_bearer_token is ...
             else incoming_bearer_token
         )
@@ -6235,9 +6257,9 @@ class MCPServerManager:
             "server_name": server_name,
             "mcp_rate_limit_server_name": server.alias or server.server_name or server.name,
             "user_api_key_auth": checked_auth,
-            "user_api_key_user_id": (getattr(checked_auth, "user_id", None) if checked_auth else None),
-            "user_api_key_team_id": (getattr(checked_auth, "team_id", None) if checked_auth else None),
-            "user_api_key_end_user_id": (getattr(checked_auth, "end_user_id", None) if checked_auth else None),
+            "user_api_key_user_id": checked_auth.user_id if checked_auth else None,
+            "user_api_key_team_id": checked_auth.team_id if checked_auth else None,
+            "user_api_key_end_user_id": checked_auth.end_user_id if checked_auth else None,
             "user_api_key_hash": (getattr(checked_auth, "api_key_hash", None) if checked_auth else None),
             "incoming_bearer_token": caller_bearer.get_secret_value() if caller_bearer is not None else None,
             "headers": logging_safe_mcp_headers(raw_headers),
@@ -6622,7 +6644,7 @@ class MCPServerManager:
                 # For M2M OAuth servers, Authorization must come from token fetch.
                 extra_headers = None
             else:
-                extra_headers = oauth2_headers
+                extra_headers = dict(oauth2_headers) if oauth2_headers else None
                 # Migrated authorization_code: the v2 resolver injects the stored per-user
                 # token, so drop the caller-forwarded Authorization (apply-if-absent would
                 # otherwise let it shadow the resolved token). Delegate keeps it. Centralized
@@ -6655,7 +6677,7 @@ class MCPServerManager:
             )
 
             for header in mcp_server.extra_headers:
-                if not isinstance(header, str) or header.lower() == "x-litellm-api-key":
+                if not isinstance(header, str):
                     continue
                 if header.lower() == "authorization" and strip_caller_authorization:
                     continue

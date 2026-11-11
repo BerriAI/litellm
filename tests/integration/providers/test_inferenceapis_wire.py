@@ -30,6 +30,7 @@ _WEATHER_TOOL: Final[JsonValue] = {
     },
 }
 _COST_MAP_PATH: Final = Path(__file__).resolve().parents[3] / "model_prices_and_context_window.json"
+_ENDPOINT_SUPPORT_PATH: Final = Path(__file__).resolve().parents[3] / "litellm/provider_endpoints_support_backup.json"
 _COST_MAP: Final = TypeAdapter(dict[str, dict[str, JsonValue]])
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _JSON_LIST: Final = TypeAdapter(list[JsonValue])
@@ -512,6 +513,12 @@ def _lists_inferenceapis(endpoint: Mapping[str, JsonValue]) -> bool:
     return any(object_value(provider)["slug"] == "inferenceapis" for provider in providers)
 
 
+def _bundled_inferenceapis_endpoints() -> frozenset[str]:
+    providers: Final = object_value(_JSON_OBJECT.validate_json(_ENDPOINT_SUPPORT_PATH.read_bytes())["providers"])
+    flags: Final = object_value(object_value(providers["inferenceapis"])["endpoints"])
+    return frozenset(key for key, supported in flags.items() if supported)
+
+
 def test_public_routes_list_the_provider_with_its_endpoints_and_fields(gateway: Gateway) -> None:
     providers: Final = gateway.request("GET", "/public/providers")
     assert providers.status_code == 200, providers.text
@@ -538,7 +545,8 @@ def test_public_routes_list_the_provider_with_its_endpoints_and_fields(gateway: 
         for endpoint in _JSON_LIST.validate_python(_JSON_OBJECT.validate_json(endpoints_response.content)["endpoints"])
     )
     listed: Final = frozenset(str(endpoint["key"]) for endpoint in endpoints if _lists_inferenceapis(endpoint))
-    assert listed == {"chat_completions", "messages", "responses"}
+    assert {"chat_completions", "messages", "responses"} <= listed, listed
+    assert listed == _bundled_inferenceapis_endpoints()
 
 
 def test_openai_and_anthropic_sdk_clients_reach_the_vendor(gateway: Gateway) -> None:

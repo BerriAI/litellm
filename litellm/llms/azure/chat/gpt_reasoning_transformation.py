@@ -1,9 +1,10 @@
 """Support for Azure OpenAI gpt-5 model family."""
 
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from typing import ClassVar, Final
 
 import litellm
+from litellm._logging import WarningLogger, verbose_logger
 from litellm.llms.openai.chat.gpt_reasoning_transformation import (
     OpenAIGPT5Config,
     is_gpt_reasoning_series_name,
@@ -24,6 +25,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
 
     GPT5_SERIES_ROUTE = "gpt5_series/"
     OPT_IN_REASONING_EFFORTS: ClassVar[frozenset[str]] = frozenset(("xhigh", "none"))
+    LOOKS_UP_BASE_MODEL: ClassVar[bool] = True
 
     @classmethod
     def _model_map_lookup_name(cls, model: str) -> str:
@@ -88,7 +90,8 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         drop_params: bool,
         api_version: str = "",
         *,
-        declared_reasoning_efforts: Collection[str] = (),
+        declared_reasoning_efforts: Collection[str] | None = None,
+        reasoning_drop_logger: WarningLogger = verbose_logger,
     ) -> dict:
         return OpenAIGPT5Config.map_openai_params(
             self,
@@ -97,6 +100,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
             model=model,
             drop_params=drop_params,
             declared_reasoning_efforts=declared_reasoning_efforts,
+            reasoning_drop_logger=reasoning_drop_logger,
         )
 
     def transform_request(
@@ -104,7 +108,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
         headers: dict,
     ) -> dict:
         model = model.replace(self.GPT5_SERIES_ROUTE, "")

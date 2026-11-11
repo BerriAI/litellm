@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import respx
 from openai import AsyncOpenAI, OpenAI
 from openai._legacy_response import LegacyAPIResponse
 from openai.types import CreateEmbeddingResponse, Embedding
@@ -25,6 +26,31 @@ _GATEWAY_EMBEDDING_RESPONSE: Final = CreateEmbeddingResponse(
     model="my-vllm-model",
     usage=Usage(prompt_tokens=2, total_tokens=2),
 )
+
+
+@pytest.mark.parametrize(
+    ("base_path", "models_path"),
+    [
+        ("", "/v1/models"),
+        ("/", "/v1/models"),
+        ("/v1", "/v1/models"),
+        ("/v1/", "/v1/models"),
+        ("/gateway/v1", "/gateway/v1/models"),
+        ("/gateway/v1/", "/gateway/v1/models"),
+    ],
+)
+@respx.mock
+def test_proxy_model_discovery_preserves_the_api_base_path_and_upstream_namespaces(
+    base_path: str, models_path: str
+) -> None:
+    respx.get(
+        f"http://upstream-listing.test:4000{models_path}",
+        headers={"Authorization": "Bearer test-proxy-key"},
+    ).mock(return_value=httpx.Response(200, json={"data": [{"id": "chat-model"}, {"id": "vendor/chat-model"}]}))
+
+    assert LiteLLMProxyChatConfig().get_models(
+        api_base=f"http://upstream-listing.test:4000{base_path}", api_key="test-proxy-key"
+    ) == ["litellm_proxy/chat-model", "litellm_proxy/vendor/chat-model"]
 
 
 async def _gateway_embedding_via_injected_client(
@@ -639,3 +665,25 @@ def test_litellm_gateway_from_sdk_with_thinking_param(respx_mock):
         )
     e = exc_info.value
     assert "Connection error." in str(e)
+
+
+def test_translate_developer_role_leaves_a_later_developer_message_in_place_for_the_downstream_proxy() -> None:
+    translated: Final = LiteLLMProxyChatConfig().translate_developer_role_to_system_role(
+        messages=[
+            {"role": "system", "content": "You are terse."},
+            {"role": "user", "content": "Hi there"},
+            {"role": "developer", "content": "Answer with exactly one word."},
+            {"role": "user", "content": "What is the capital of France?"},
+        ],
+        model="fireworks-qwen",
+        custom_llm_provider="litellm_proxy",
+        api_base="http://inner-proxy:4000",
+        model_info=None,
+    )
+
+    assert list(translated) == [
+        {"role": "system", "content": "You are terse."},
+        {"role": "user", "content": "Hi there"},
+        {"role": "system", "content": "Answer with exactly one word."},
+        {"role": "user", "content": "What is the capital of France?"},
+    ]

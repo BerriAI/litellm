@@ -3,9 +3,12 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import struct
+import time
 import uuid
-from collections.abc import AsyncIterable, Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Mapping
+from datetime import datetime
 from typing import Final
 from zlib import crc32
 
@@ -445,6 +448,135 @@ async def test_router_aanthropic_messages_streaming_logs_usage_model_and_cost(
     assert payload["completion_tokens"] == max(usage.get("output_tokens", 0) for usage in usages) == 20
 
 
+_PER_SECOND_RATE: Final = 0.5
+_UPSTREAM_PAUSE_SECONDS: Final = 0.3
+
+
+def _priced_router(**pricing: float) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": _ALIAS,
+                "litellm_params": {"model": _ANTHROPIC_MODEL, "api_key": "fake-key", **pricing},
+            }
+        ]
+    )
+
+
+def _per_second_router() -> Router:
+    return _priced_router(input_cost_per_second=_PER_SECOND_RATE, output_cost_per_second=_PER_SECOND_RATE)
+
+
+def _anthropic_sse_event(event: Mapping[str, object]) -> bytes:
+    return f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode()
+
+
+async def _route_like_the_proxy(router: Router, **request: object) -> object:
+    logging_obj, routed_request = litellm.utils.function_setup(
+        original_function="aanthropic_messages",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        litellm_call_id=str(uuid.uuid4()),
+        model=_ALIAS,
+        max_tokens=100,
+        **request,
+    )
+    return await router.aanthropic_messages(**routed_request, litellm_logging_obj=logging_obj)
+
+
+async def _sse_pausing_after_the_first_event() -> AsyncIterator[bytes]:
+    yield _anthropic_sse_event(_STREAM_EVENTS[0])
+    await asyncio.sleep(_UPSTREAM_PAUSE_SECONDS)
+    for event in _STREAM_EVENTS[1:]:
+        yield _anthropic_sse_event(event)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "pricing",
+    [
+        {"input_cost_per_second": _PER_SECOND_RATE, "output_cost_per_second": _PER_SECOND_RATE},
+        {"cost_per_second": _PER_SECOND_RATE},
+    ],
+)
+async def test_router_aanthropic_messages_bills_a_per_second_deployment_for_the_call_duration(
+    respx_mock, monkeypatch, pricing: Mapping[str, float]
+):
+    messages: Final = _unique_messages()
+    recorder: Final = _RecordingLogger(messages)
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+
+    async def slow_upstream(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(_UPSTREAM_PAUSE_SECONDS)
+        return httpx.Response(200, json=_anthropic_body())
+
+    respx_mock.post(url__regex=_ANTHROPIC_URL).mock(side_effect=slow_upstream)
+    started: Final = time.monotonic()
+    await _route_like_the_proxy(_priced_router(**pricing), messages=messages)
+    await _wait_for_payload(recorder)
+    elapsed: Final = time.monotonic() - started
+
+    assert (
+        _PER_SECOND_RATE * _UPSTREAM_PAUSE_SECONDS
+        <= recorder.payloads[0]["response_cost"]
+        <= _PER_SECOND_RATE * elapsed
+    )
+
+
+@pytest.mark.asyncio
+async def test_router_aanthropic_messages_bills_a_per_second_deployment_for_the_whole_stream(respx_mock, monkeypatch):
+    messages: Final = _unique_messages()
+    recorder: Final = _RecordingLogger(messages)
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    respx_mock.post(url__regex=_ANTHROPIC_URL).mock(
+        side_effect=lambda request: httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=_sse_pausing_after_the_first_event()
+        )
+    )
+    started: Final = time.monotonic()
+    stream: Final = await _route_like_the_proxy(_per_second_router(), messages=messages, stream=True)
+    await _stream_events(stream)
+    await _wait_for_payload(recorder)
+    elapsed: Final = time.monotonic() - started
+
+    assert (
+        _PER_SECOND_RATE * _UPSTREAM_PAUSE_SECONDS
+        <= recorder.payloads[0]["response_cost"]
+        <= _PER_SECOND_RATE * elapsed
+    )
+
+
+async def _wait_for_payloads(recorder: _RecordingLogger, count: int) -> None:
+    async def arrived() -> None:
+        while len(recorder.payloads) < count:
+            await asyncio.sleep(0.05)
+
+    await asyncio.wait_for(arrived(), timeout=30.0)
+
+
+@pytest.mark.asyncio
+async def test_router_aanthropic_messages_bills_a_short_call_on_a_long_context_rate_like_a_deployment_without_one(
+    respx_mock, monkeypatch
+):
+    messages: Final = _unique_messages()
+    recorder: Final = _RecordingLogger(messages)
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    respx_mock.post(url__regex=_ANTHROPIC_URL).mock(
+        side_effect=lambda request: httpx.Response(200, json=_anthropic_body())
+    )
+
+    await _route_like_the_proxy(_priced_router(), messages=messages)
+    await _route_like_the_proxy(
+        _priced_router(input_cost_per_token_above_200k_tokens=1.0, output_cost_per_token_above_200k_tokens=1.0),
+        messages=messages,
+    )
+    await _wait_for_payloads(recorder, 2)
+
+    costs: Final = {payload["response_cost"] for payload in recorder.payloads}
+    assert len(costs) == 1, costs
+    assert costs.pop() > 0
+
+
 _LARGE_SYSTEM_PROMPT: Final = "This is a comprehensive legal agreement between Party A and Party B. " * 100
 
 
@@ -760,24 +892,32 @@ async def test_native_messages_send_no_effort_for_a_default_effort_beside_a_thin
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model_info", [None, _DECLARING_LOW_AND_HIGH])
 @pytest.mark.parametrize("drop_globally", [False, True])
-async def test_native_messages_drop_params_drops_a_non_numeric_thinking_budget_on_adaptive_claude(
+async def test_native_messages_drop_params_drops_a_non_numeric_thinking_budget_on_adaptive_claude_with_one_warning(
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
     model_info: Mapping[str, object] | None,
     drop_globally: bool,
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", drop_globally)
     request_drop: Final = {} if drop_globally else {"drop_params": True}
 
-    dropped: Final = await _native_opus_body_sent(
-        respx_mock, model_info, thinking={"type": "enabled", "budget_tokens": "lots"}, **request_drop
-    )
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        dropped: Final = await _native_opus_body_sent(
+            respx_mock, model_info, thinking={"type": "enabled", "budget_tokens": "lots"}, **request_drop
+        )
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
     adaptive_alone: Final = await _native_opus_body_sent(
         respx_mock, model_info, thinking={"type": "adaptive"}, **request_drop
     )
 
     assert "output_config" not in adaptive_alone
     assert dropped == adaptive_alone
+    assert len(drop_warnings) == 1
+    assert all(
+        fragment in drop_warnings[0]
+        for fragment in ("thinking.budget_tokens='lots'", "claude-opus-5-5", "(drop_params=True)")
+    )
 
 
 _MIXED_GROUP: Final = "gpt-5.6-mixed"

@@ -1,6 +1,8 @@
+import type { ParseKeys } from "i18next";
+
 export interface ErrorPattern {
   pattern: RegExp;
-  replacement: string;
+  replacement: ParseKeys;
 }
 
 // Centralised list of common error patterns.
@@ -9,45 +11,45 @@ export const errorPatterns: ErrorPattern[] = [
   // Generic missing API key (covers OpenAI, Anthropic, etc.)
   {
     pattern: /Missing .* API Key/i,
-    replacement: "Missing API Key",
+    replacement: "errorPatterns.missingApiKey",
   },
   // Network / connectivity issues
   {
     pattern: /Connection timeout/i,
-    replacement: "Connection timeout",
+    replacement: "errorPatterns.connectionTimeout",
   },
   {
     pattern: /Network.*not.*ok/i,
-    replacement: "Network connection failed",
+    replacement: "errorPatterns.networkFailed",
   },
   // HTTP status based errors
   {
     pattern: /403.*Forbidden/i,
-    replacement: "Access forbidden - check API key permissions",
+    replacement: "errorPatterns.forbidden",
   },
   {
     pattern: /401.*Unauthorized/i,
-    replacement: "Unauthorized - invalid API key",
+    replacement: "errorPatterns.unauthorized",
   },
   {
     pattern: /429.*rate limit/i,
-    replacement: "Rate limit exceeded",
+    replacement: "errorPatterns.rateLimitExceeded",
   },
   {
     pattern: /500.*Internal Server Error/i,
-    replacement: "Provider internal server error",
+    replacement: "errorPatterns.providerServerError",
   },
   // LiteLLM specific wrapped errors
   {
     pattern: /litellm\.AuthenticationError/i,
-    replacement: "Authentication failed",
+    replacement: "errorPatterns.authenticationFailed",
   },
   {
     pattern: /litellm\.RateLimitError/i,
-    replacement: "Rate limit exceeded",
+    replacement: "errorPatterns.rateLimitExceeded",
   },
   {
     pattern: /litellm\.APIError/i,
-    replacement: "API error",
+    replacement: "errorPatterns.apiError",
   },
 ];

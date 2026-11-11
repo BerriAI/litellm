@@ -1,12 +1,16 @@
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # the base signature leaves the params bag untyped
 from urllib.parse import unquote
 
 import httpx
-from openai.types.responses import EasyInputMessageParam, ResponseInputContentParam, ResponseInputItemParam
 
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.base_llm.responses.transformation import (
+    STANDARD_MODE_WITHOUT_CONTEXT_REASONING_FIELD_VALUES,
+    ReasoningFieldValues,
+)
 from litellm.llms.fireworks_ai.common_utils import (
     FIREWORKS_FORWARD_USER_ID_PARAM,
     get_fireworks_forwarded_user_id,
@@ -15,12 +19,20 @@ from litellm.llms.fireworks_ai.common_utils import (
     with_fireworks_session_affinity,
     without_caller_user,
 )
+from litellm.llms.openai.responses.instruction_items import developer_items_as_system, instruction_items_folded
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.responses.additional_tools import HoistedAdditionalTools, hoist_additional_tools
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import ResponseInputParam
+from litellm.types.llms.openai import ALL_RESPONSES_API_TOOL_PARAMS, ResponseInputParam
 from litellm.types.responses.main import DeleteResponseResult
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
+from litellm.utils import (
+    declared_mid_conversation_system_support,
+    deployment_declared_mid_conversation_system_support,
+    deployment_model_info,
+    get_bundled_model_cost_map,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -45,87 +57,12 @@ def _forwarded_user_params(litellm_params: GenericLiteLLMParams) -> Mapping[str,
     )
 
 
-_INSTRUCTION_ROLES: Final = frozenset({"system", "developer"})
-
-
-def _role(item: ResponseInputItemParam) -> str | None:
-    match item:
-        case {"role": str(role)}:
-            return role
-        case _:
-            return None
-
-
-def _developer_item_as_system(item: ResponseInputItemParam) -> ResponseInputItemParam:
-    if "role" not in item or item["role"] != "developer":
-        return item
-    return EasyInputMessageParam(role="system", content=item["content"], type="message")
-
-
-def _developer_items_as_system(input: str | ResponseInputParam) -> str | ResponseInputParam:
-    if isinstance(input, str):
-        return input
-    return [_developer_item_as_system(item) for item in input]
-
-
-def _text_part(part: ResponseInputContentParam) -> str | None:
-    match part:
-        case {"type": "input_text", "text": str(text)}:
-            return text
-        case _:
-            return None
-
-
-def _text_only_content(item: ResponseInputItemParam) -> str | None:
-    match item:
-        case {"role": "system" | "developer", "content": str(text)}:
-            return text
-        case {"role": "system" | "developer", "content": [*parts]}:
-            texts: Final = tuple(map(_text_part, parts))
-            return None if any(text is None for text in texts) else "\n\n".join(text for text in texts if text)
-        case _:
-            return None
-
-
-def _leading_instruction_block_length(roles: Sequence[str | None]) -> int:
-    return next((index for index, role in enumerate(roles) if role not in _INSTRUCTION_ROLES), len(roles))
-
-
-def _closing_instruction_block_start(roles: Sequence[str | None], leading_length: int) -> int:
-    last_conversation_index: Final = next(
-        (index for index in range(len(roles) - 1, leading_length - 1, -1) if roles[index] not in _INSTRUCTION_ROLES),
-        None,
-    )
-    if last_conversation_index is None or roles[last_conversation_index] != "assistant":
-        return len(roles)
-    return last_conversation_index + 1
-
-
-def _hoisted_indices(roles: Sequence[str | None]) -> tuple[int, ...]:
-    leading_length: Final = _leading_instruction_block_length(roles)
-    closing_start: Final = _closing_instruction_block_start(roles, leading_length)
-    return tuple(
-        index for index, role in enumerate(roles[:closing_start]) if index < leading_length or role == "developer"
-    )
-
-
-def _with_instruction_items_folded(
-    input: str | ResponseInputParam, instructions: str | None
-) -> tuple[str | None, str | ResponseInputParam]:
-    if isinstance(input, str):
-        return instructions, input
-    items: Final = tuple(input)
-    folded: Final = MappingProxyType(
-        {
-            index: text
-            for index in _hoisted_indices(tuple(map(_role, items)))
-            if (text := _text_only_content(items[index])) is not None
-        }
-    )
-    joined: Final = "\n\n".join(chunk for chunk in (instructions, *folded.values()) if chunk)
-    return (
-        instructions if not folded else joined or None,
-        [_developer_item_as_system(item) for index, item in enumerate(items) if index not in folded],
+def _bundled_cost_map_declares_mid_conversation_system(model: str) -> bool:
+    bundled_cost_map: Final[Mapping[str, object]] = get_bundled_model_cost_map()
+    names: Final = (model.removeprefix("fireworks_ai/"), resolve_fireworks_resource_name(model))
+    return any(
+        deployment_declared_mid_conversation_system_support(bundled_cost_map.get(f"fireworks_ai/{name}")) is True
+        for name in names
     )
 
 
@@ -158,29 +95,44 @@ class FireworksAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         self,
         model: str,
         input: str | ResponseInputParam,
-        response_api_optional_request_params: dict,  # mutable-ok: overrides the base class signature
+        response_api_optional_request_params: dict[str, object],  # mutable-ok: overrides the base class signature
         litellm_params: GenericLiteLLMParams,
-        headers: dict,  # mutable-ok: overrides the base class signature
-    ) -> dict:  # mutable-ok: overrides the base class signature
-        instructions_param: Final[object] = response_api_optional_request_params.get("instructions")
+        headers: dict[str, str],  # mutable-ok: overrides the base class signature
+    ) -> dict[str, object]:  # mutable-ok: overrides the base class signature
         validated_input: Final = self._validate_input_param(input)
-        instructions, folded_input = (
-            _with_instruction_items_folded(validated_input, instructions_param)
-            if isinstance(instructions_param, str | None)
-            else (instructions_param, _developer_items_as_system(validated_input))
-        )
-        instruction_entries: Final = () if instructions is None else (("instructions", instructions),)
-        folded_params: Final = {
-            key: value
-            for key, value in (
-                *((key, value) for key, value in response_api_optional_request_params.items() if key != "instructions"),
-                *instruction_entries,
+        tools_param: Final = response_api_optional_request_params.get("tools")
+        hoisted: Final = (
+            hoist_additional_tools(
+                validated_input,
+                cast(  # cast-ok: the base signature leaves the params bag untyped
+                    "Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None", tools_param
+                ),
+                drop_params=drops_unsupported_params(litellm_params.drop_params),
             )
-        }
+            if tools_param is None or isinstance(tools_param, (list, tuple))
+            else HoistedAdditionalTools(input=validated_input, tools=(), hoisted=())
+        )
+        hoisted_params: Final = (
+            {**response_api_optional_request_params, "tools": list(hoisted.tools)}
+            if hoisted.hoisted
+            else response_api_optional_request_params
+        )
+        model_info: Final = deployment_model_info(litellm_params)
+        declared: Final = declared_mid_conversation_system_support(model, self.custom_llm_provider.value, model_info)
+        keeps_developer_items_in_place: Final = declared is True and (
+            deployment_declared_mid_conversation_system_support(model_info) is True
+            or _bundled_cost_map_declares_mid_conversation_system(model)
+        )
+        folded: Final = (
+            None
+            if keeps_developer_items_in_place
+            else instruction_items_folded(hoisted.input, hoisted_params, "user" if declared is False else "system")
+        )
+        placed_input, placed_params = folded or (developer_items_as_system(hoisted.input), hoisted_params)
         request: Final = super().transform_responses_api_request(
             model=resolve_fireworks_resource_name(model),
-            input=folded_input,
-            response_api_optional_request_params=folded_params,
+            input=placed_input,
+            response_api_optional_request_params=dict(placed_params),
             litellm_params=litellm_params,
             headers=headers,
         )
@@ -209,3 +161,9 @@ class FireworksAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def supports_native_file_search(self) -> bool:
         return False
+
+    def reasoning_field_values(self) -> ReasoningFieldValues:
+        return STANDARD_MODE_WITHOUT_CONTEXT_REASONING_FIELD_VALUES
+
+    def ignores_unsupported_reasoning_fields(self) -> bool:
+        return True
