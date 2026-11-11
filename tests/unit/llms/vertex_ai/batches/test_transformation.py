@@ -21,6 +21,8 @@ import pytest
 
 from litellm.llms.vertex_ai.batches.transformation import (  # noqa: E402
     VertexAIBatchTransformation,
+    is_vertex_anthropic_batch_model,
+    native_vertex_batch_row_stats,
 )
 from litellm.llms.vertex_ai.common_utils import VertexAIError  # noqa: E402
 from litellm.types.utils import LiteLLMBatch  # noqa: E402
@@ -493,3 +495,61 @@ def test_get_gcs_uri_prefix_keeps_passthrough_segment_so_output_lands_beside_inp
         T._get_gcs_uri_prefix_from_file(PASSTHROUGH_INPUT_FILE)
         == "gs://litellm-testing-bucket/litellm-vertex-files/passthrough/publishers/google/models/gemini-2.5-flash"
     )
+
+
+CLAUDE_INPUT_FILE = (
+    "gs://litellm-testing-bucket/litellm-vertex-files/publishers/anthropic/models/claude-sonnet-4-6/uuid-1"
+)
+
+
+def test_claude_batch_job_targets_the_anthropic_publisher_model():
+    job: Final = T.transform_openai_batch_request_to_vertex_ai_batch_request(
+        {"input_file_id": CLAUDE_INPUT_FILE}, vertex_project="p", vertex_location="us-east5"
+    )
+    assert job["model"] == "publishers/anthropic/models/claude-sonnet-4-6"
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        ("claude-sonnet-4-6", True),
+        ("vertex_ai/claude-opus-4-1@20250805", True),
+        ("publishers/anthropic/models/claude-haiku-4-5", True),
+        ("gemini-2.5-flash", False),
+        ("publishers/google/models/gemini-2.5-flash", False),
+    ],
+)
+def test_is_vertex_anthropic_batch_model(model: str, expected: bool):
+    assert is_vertex_anthropic_batch_model(model) is expected
+
+
+def test_claude_output_row_is_costed_from_anthropic_usage_and_its_own_model():
+    def cost_calculator(usage, model, custom_llm_provider=None, model_info=None, vertex_location=None) -> tuple[float, float]:
+        if model != "claude-sonnet-4-6":
+            return 0.0, 0.0
+        return usage.prompt_tokens * 0.001, usage.completion_tokens * 0.002
+
+    stats: Final = native_vertex_batch_row_stats(
+        {
+            "custom_id": "r1",
+            "request": {"messages": [{"role": "user", "content": "hi"}], "anthropic_version": "vertex-2023-10-16"},
+            "response": {
+                "id": "msg_vrtx_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-6",
+                "content": [{"type": "text", "text": "hello"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 12, "output_tokens": 5},
+            },
+        },
+        None,
+        model_info=None,
+        calculate_usage=lambda _: pytest.fail("Claude rows must not go through the Gemini usage parser"),
+        cost_calculator=cost_calculator,
+    )
+
+    assert stats is not None, "a successful Claude row must be costed, not counted as failed"
+    assert (stats.usage.prompt_tokens, stats.usage.completion_tokens, stats.total_tokens) == (12, 5, 17)
+    assert (stats.prompt_cost, stats.completion_cost) == pytest.approx((0.012, 0.010))
+    assert (stats.prompt_cost, stats.completion_cost) == pytest.approx((12 * 0.001, 5 * 0.002))

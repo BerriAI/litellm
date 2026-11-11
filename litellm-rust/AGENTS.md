@@ -1,10 +1,16 @@
 # Rust workspace rules
 
+For keeping secrets out of Debug output, follow [.agents/skills/rust-redaction/SKILL.md](.agents/skills/rust-redaction/SKILL.md)
+
 For diagnostic tracing changes, follow [.agents/skills/rust-tracing/SKILL.md](.agents/skills/rust-tracing/SKILL.md)
 
 For string-valued enums and their Serde conversions, follow [.agents/skills/rust-string-enums/SKILL.md](.agents/skills/rust-string-enums/SKILL.md)
 
 For error types, error variants and conversions between crate errors, follow [.agents/skills/rust-error/SKILL.md](.agents/skills/rust-error/SKILL.md)
+
+For where config.yaml values, environment layering and kwargs from Python become typed Rust, follow [.agents/skills/rust-python-boundary/SKILL.md](.agents/skills/rust-python-boundary/SKILL.md)
+
+The process-wide rustls `CryptoProvider` (ring) is installed once by the host. rust-proxy does it at the top of `main` through `litellm_gateway::install_crypto_provider`, and python-bridge must do the same in its module init before it builds any rustls config. Library crates never install it. The AWS SDK links aws-lc-rs next to ring, so without an installed default the first rustls config a library builds, such as redis-rs TLS, panics
 
 For fieldless enums, derive `strum::VariantArray` and use `VARIANTS` instead of a hand-listed `ALL` array. Derive Strum string conversions instead of hand-written variant-to-string matches
 

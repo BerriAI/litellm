@@ -8,6 +8,8 @@ pub(crate) struct LaxI64;
 
 pub(crate) struct Count;
 
+pub(crate) struct NumericCount;
+
 impl<'de> DeserializeAs<'de, i64> for LaxI64 {
     fn deserialize_as<D: Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
         deserializer.deserialize_any(Self)
@@ -49,6 +51,34 @@ impl<'de> DeserializeAs<'de, u64> for Count {
         u64::try_from(count).map_err(|_| {
             de::Error::invalid_value(de::Unexpected::Signed(count), &"a count of zero or more")
         })
+    }
+}
+
+impl<'de> DeserializeAs<'de, u64> for NumericCount {
+    fn deserialize_as<D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+        deserializer.deserialize_any(Self)
+    }
+}
+
+impl Visitor<'_> for NumericCount {
+    type Value = u64;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a whole number of zero or more")
+    }
+
+    fn visit_u64<E: de::Error>(self, value: u64) -> Result<u64, E> {
+        Ok(value)
+    }
+
+    fn visit_i64<E: de::Error>(self, value: i64) -> Result<u64, E> {
+        u64::try_from(value).map_err(|_| E::invalid_value(de::Unexpected::Signed(value), &self))
+    }
+
+    fn visit_f64<E: de::Error>(self, value: f64) -> Result<u64, E> {
+        integral_float(value)
+            .and_then(|whole| u64::try_from(whole).ok())
+            .ok_or_else(|| E::invalid_value(de::Unexpected::Float(value), &self))
     }
 }
 
@@ -99,6 +129,12 @@ mod tests {
             .map(DeserializeAsWrap::into_inner)
     }
 
+    fn numeric_count(value: Value) -> Option<u64> {
+        DeserializeAsWrap::<u64, NumericCount>::deserialize(value)
+            .ok()
+            .map(DeserializeAsWrap::into_inner)
+    }
+
     use serde::Deserialize;
 
     #[rstest]
@@ -124,5 +160,24 @@ mod tests {
         #[case] expected: Option<u64>,
     ) {
         assert_eq!(count(written), expected);
+    }
+
+    #[rstest]
+    #[case::integer(json!(214), Some(214))]
+    #[case::zero(json!(0), Some(0))]
+    #[case::whole_float(json!(214.0), Some(214))]
+    #[case::negative_zero(json!(-0.0), Some(0))]
+    #[case::above_i64(json!(u64::MAX), Some(u64::MAX))]
+    #[case::negative(json!(-1), None)]
+    #[case::negative_whole_float(json!(-1.0), None)]
+    #[case::fraction(json!(1.5), None)]
+    #[case::string(json!("214"), None)]
+    #[case::boolean(json!(true), None)]
+    #[case::list(json!([214]), None)]
+    fn numeric_counts_accept_only_whole_json_numbers(
+        #[case] written: Value,
+        #[case] expected: Option<u64>,
+    ) {
+        assert_eq!(numeric_count(written), expected);
     }
 }

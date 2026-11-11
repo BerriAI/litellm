@@ -1,7 +1,9 @@
 import { CircleCheck, ChevronDown, MinusCircle, TriangleAlert, X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
+import type { ParseKeys } from "i18next";
 import moment from "moment";
 import React, { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { uiSpendLogsCall } from "@/components/networking";
@@ -11,36 +13,43 @@ import type { LogEntry } from "./mockData";
 
 const actionConfig: Record<
   "blocked" | "passed" | "flagged" | "not_run",
-  { icon: React.ElementType; color: string; bg: string; border: string; label: string }
+  { icon: React.ElementType; color: string; bg: string; border: string; labelKey: ParseKeys }
 > = {
   not_run: {
     icon: MinusCircle,
     color: "text-muted-foreground",
     bg: "bg-muted",
     border: "border-border",
-    label: "Not run",
+    labelKey: "guardrailsMonitor.logViewer.actions.notRun",
   },
   blocked: {
     icon: X,
     color: "text-destructive",
     bg: "bg-destructive/10",
     border: "border-destructive/20",
-    label: "Blocked",
+    labelKey: "guardrailsMonitor.logViewer.actions.blocked",
   },
   passed: {
     icon: CircleCheck,
     color: "text-success",
     bg: "bg-success/10",
     border: "border-success/20",
-    label: "Passed",
+    labelKey: "guardrailsMonitor.logViewer.actions.passed",
   },
   flagged: {
     icon: TriangleAlert,
     color: "text-warning",
     bg: "bg-warning/10",
     border: "border-warning/20",
-    label: "Flagged",
+    labelKey: "guardrailsMonitor.logViewer.actions.flagged",
   },
+};
+
+const FILTER_LABEL_KEYS: Record<"all" | "blocked" | "flagged" | "passed", ParseKeys> = {
+  all: "guardrailsMonitor.logViewer.filters.all",
+  blocked: "guardrailsMonitor.logViewer.filters.blocked",
+  flagged: "guardrailsMonitor.logViewer.filters.flagged",
+  passed: "guardrailsMonitor.logViewer.filters.passed",
 };
 
 interface LogViewerProps {
@@ -64,6 +73,7 @@ export function LogViewer({
   startDate = "",
   endDate = "",
 }: LogViewerProps) {
+  const { t } = useTranslation();
   const [sampleSize, setSampleSize] = useState(10);
   const [activeFilter, setActiveFilter] = useState<string>(filterAction);
   const [selectedRequestId, setSelectedRequestId] = useState<string | null>(null);
@@ -118,14 +128,16 @@ export function LogViewer({
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
             <h3 className="text-base font-semibold text-foreground">
-              {guardrailName ? `Logs — ${guardrailName}` : "Request Logs"}
+              {guardrailName
+                ? t("guardrailsMonitor.logViewer.titleWithName", { name: guardrailName })
+                : t("guardrailsMonitor.logViewer.title")}
             </h3>
             <p className="text-xs text-muted-foreground mt-0.5">
               {logsLoading
-                ? "Loading…"
+                ? t("guardrailsMonitor.logViewer.loading")
                 : logs.length > 0
-                  ? `Showing ${displayLogs.length} of ${total} entries`
-                  : "No logs for this period. Select a guardrail and date range."}
+                  ? t("guardrailsMonitor.logViewer.summary", { shown: displayLogs.length, total })
+                  : t("guardrailsMonitor.logViewer.empty")}
             </p>
           </div>
           {logs.length > 0 && (
@@ -138,13 +150,13 @@ export function LogViewer({
                     size="sm"
                     onClick={() => setActiveFilter(f)}
                   >
-                    {f.charAt(0).toUpperCase() + f.slice(1)}
+                    {t(FILTER_LABEL_KEYS[f])}
                   </Button>
                 ))}
               </div>
               <div className="h-4 w-px bg-border" />
               <div className="flex items-center gap-1">
-                <span className="text-xs text-muted-foreground mr-1">Sample:</span>
+                <span className="text-xs text-muted-foreground mr-1">{t("guardrailsMonitor.logViewer.sample")}</span>
                 {sampleSizes.map((size) => (
                   <Button
                     key={size}
@@ -168,7 +180,7 @@ export function LogViewer({
       )}
       {!logsLoading && displayLogs.length === 0 && (
         <div className="py-12 text-center text-sm text-muted-foreground">
-          No logs to display. Adjust filters or date range.
+          {t("guardrailsMonitor.logViewer.noMatches")}
         </div>
       )}
       {!logsLoading && displayLogs.length > 0 && (
@@ -189,7 +201,7 @@ export function LogViewer({
                     <span
                       className={`inline-flex items-center px-2 py-0.5 text-xs font-medium rounded-sm border ${config.bg} ${config.color} ${config.border}`}
                     >
-                      {config.label}
+                      {t(config.labelKey)}
                     </span>
                     <span className="text-xs text-muted-foreground">{log.timestamp}</span>
                     <span className="text-xs text-muted-foreground">·</span>

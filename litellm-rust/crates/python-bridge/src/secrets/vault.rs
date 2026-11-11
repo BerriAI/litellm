@@ -134,31 +134,21 @@ fn timeout_message(
             String::new()
         });
     }
-    let kwargs = pyo3::types::PyDict::new(py);
-    kwargs.set_item(
-        "message",
-        transport_timeout_message(
-            TimeoutPhase::Read,
-            context.timeout,
-            Some(elapsed.as_secs_f64()),
-        ),
-    )?;
-    kwargs.set_item("model", "default-model-name")?;
-    kwargs.set_item("llm_provider", "litellm-httpx-handler")?;
-    py.import("litellm.exceptions")?
-        .getattr("Timeout")?
-        .call((), Some(&kwargs))?
-        .str()?
+    let message = transport_timeout_message(
+        TimeoutPhase::Read,
+        context.timeout,
+        Some(elapsed.as_secs_f64()),
+    );
+    py.import(super::SECRET_MANAGER_MODULE)?
+        .getattr("timeout_message")?
+        .call1((message,))?
         .extract()
 }
 
 fn response_text(py: Python<'_>, body: &[u8]) -> PyResult<String> {
-    let kwargs = pyo3::types::PyDict::new(py);
-    kwargs.set_item("content", pyo3::types::PyBytes::new(py, body))?;
-    py.import("httpx")?
-        .getattr("Response")?
-        .call((200,), Some(&kwargs))?
-        .getattr("text")?
+    py.import(super::SECRET_MANAGER_MODULE)?
+        .getattr("response_text")?
+        .call1((pyo3::types::PyBytes::new(py, body),))?
         .extract()
 }
 

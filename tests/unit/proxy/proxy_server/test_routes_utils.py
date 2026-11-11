@@ -17,6 +17,7 @@ import pytest
 import respx
 
 import litellm
+from litellm.litellm_core_utils.model_cost_table import publish
 from litellm.litellm_core_utils import get_llm_provider_logic
 from litellm.proxy import proxy_server
 
@@ -256,10 +257,10 @@ def lookup_fixture_model(monkeypatch):
     monkeypatch.setattr(proxy_server, "llm_router", None)
     monkeypatch.setitem(litellm.model_cost, "lookup-fixture-model", entry)
     litellm.get_model_info.cache_clear()
-    litellm.utils.cached_get_model_info_helper.cache_clear()
+    publish(litellm.model_cost)
     yield entry
     litellm.get_model_info.cache_clear()
-    litellm.utils.cached_get_model_info_helper.cache_clear()
+    publish(litellm.model_cost)
 
 
 def test_model_info_lookup_returns_full_cost_map_entry_for_unregistered_model(client, auth_as, lookup_fixture_model):

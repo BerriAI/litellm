@@ -679,7 +679,7 @@ def _expected_scim_write_denial(route: str, user_id: str, user_role: str) -> dic
                 f"keys/users/teams. Route={route}. Your role={user_role}. Your user_id={masked_user_id}"
             ),
             "type": "auth_error",
-            "param": "None",
+            "param": None,
             "code": "401",
         }
     }

@@ -260,7 +260,8 @@ describe("chat image workflows", () => {
     await user.type(screen.getByRole("textbox", { name: "Edit message" }), "Explain the findings");
     await user.click(screen.getByRole("button", { name: "Save & Send" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Choose a chat model before resending this message.");
-    expect(screen.getByRole("heading", { name: "Explain the experiment" })).toBeInTheDocument();
+    expect(screen.getByText("Explain the experiment", { exact: true })).toBeInTheDocument();
+    expect(screen.queryByText("Explain the findings", { exact: true })).not.toBeInTheDocument();
     expect(screen.getByText("I can see the uploaded image.")).toBeInTheDocument();
     expect(requests).toHaveLength(1);
   });

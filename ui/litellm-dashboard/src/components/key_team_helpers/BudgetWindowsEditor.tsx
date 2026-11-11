@@ -2,17 +2,35 @@ import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "@/components/ui/input-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import React from "react";
+import type { ParseKeys } from "i18next";
+import { useTranslation } from "react-i18next";
 
 export interface BudgetWindowEntry {
   budget_duration: string;
   max_budget: number | null;
 }
 
-export const BUDGET_WINDOW_OPTIONS = [
-  { value: "1h", label: "Hourly", resetHint: "Resets every hour" },
-  { value: "24h", label: "Daily", resetHint: "Resets daily at midnight UTC" },
-  { value: "7d", label: "Weekly", resetHint: "Resets every Sunday at midnight UTC" },
-  { value: "30d", label: "Monthly", resetHint: "Resets on the 1st of every month at midnight UTC" },
+export const BUDGET_WINDOW_OPTIONS: readonly { value: string; labelKey: ParseKeys; resetHintKey: ParseKeys }[] = [
+  {
+    value: "1h",
+    labelKey: "keyTeamHelpers.budgetWindowsEditor.options.hourly.label",
+    resetHintKey: "keyTeamHelpers.budgetWindowsEditor.options.hourly.resetHint",
+  },
+  {
+    value: "24h",
+    labelKey: "keyTeamHelpers.budgetWindowsEditor.options.daily.label",
+    resetHintKey: "keyTeamHelpers.budgetWindowsEditor.options.daily.resetHint",
+  },
+  {
+    value: "7d",
+    labelKey: "keyTeamHelpers.budgetWindowsEditor.options.weekly.label",
+    resetHintKey: "keyTeamHelpers.budgetWindowsEditor.options.weekly.resetHint",
+  },
+  {
+    value: "30d",
+    labelKey: "keyTeamHelpers.budgetWindowsEditor.options.monthly.label",
+    resetHintKey: "keyTeamHelpers.budgetWindowsEditor.options.monthly.resetHint",
+  },
 ];
 
 interface BudgetWindowsEditorProps {
@@ -21,6 +39,8 @@ interface BudgetWindowsEditorProps {
 }
 
 export function BudgetWindowsEditor({ value, onChange }: BudgetWindowsEditorProps) {
+  const { t } = useTranslation();
+  const windowItems = BUDGET_WINDOW_OPTIONS.map(({ value, labelKey }) => ({ value, label: t(labelKey) }));
   const addWindow = () => {
     onChange([...value, { budget_duration: "24h", max_budget: null }]);
   };
@@ -37,12 +57,12 @@ export function BudgetWindowsEditor({ value, onChange }: BudgetWindowsEditorProp
   return (
     <div>
       {value.map((window, idx) => {
-        const hint = BUDGET_WINDOW_OPTIONS.find((o) => o.value === window.budget_duration)?.resetHint;
+        const hintKey = BUDGET_WINDOW_OPTIONS.find((o) => o.value === window.budget_duration)?.resetHintKey;
         return (
           <div key={idx} style={{ marginBottom: 12 }}>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <Select
-                items={BUDGET_WINDOW_OPTIONS}
+                items={windowItems}
                 value={window.budget_duration}
                 onValueChange={(v: string | null) => v && updateWindow(idx, "budget_duration", v)}
               >
@@ -50,7 +70,7 @@ export function BudgetWindowsEditor({ value, onChange }: BudgetWindowsEditorProp
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {BUDGET_WINDOW_OPTIONS.map((option) => (
+                  {windowItems.map((option) => (
                     <SelectItem key={option.value} value={option.value}>
                       {option.label}
                     </SelectItem>
@@ -76,7 +96,7 @@ export function BudgetWindowsEditor({ value, onChange }: BudgetWindowsEditorProp
                       updateWindow(idx, "max_budget", Number(typed.toFixed(2)));
                     }
                   }}
-                  placeholder="Max spend ($)"
+                  placeholder={t("keyTeamHelpers.budgetWindowsEditor.maxSpend")}
                 />
               </InputGroup>
               <Button
@@ -88,7 +108,7 @@ export function BudgetWindowsEditor({ value, onChange }: BudgetWindowsEditorProp
                 ✕
               </Button>
             </div>
-            {hint && <div style={{ fontSize: 11, color: "#888", marginTop: 3, marginLeft: 2 }}>↻ {hint}</div>}
+            {hintKey && <div style={{ fontSize: 11, color: "#888", marginTop: 3, marginLeft: 2 }}>↻ {t(hintKey)}</div>}
           </div>
         );
       })}
@@ -100,7 +120,7 @@ export function BudgetWindowsEditor({ value, onChange }: BudgetWindowsEditorProp
           addWindow();
         }}
       >
-        + Add Budget Window
+        {t("keyTeamHelpers.budgetWindowsEditor.addWindow")}
       </Button>
     </div>
   );

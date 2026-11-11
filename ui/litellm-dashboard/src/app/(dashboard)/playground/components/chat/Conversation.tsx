@@ -16,6 +16,9 @@ import {
   Timer,
   Wrench,
 } from "lucide-react";
+import type { TFunction } from "i18next";
+import { Trans, useTranslation } from "react-i18next";
+import i18n from "@/i18n/i18n";
 import { EndpointType } from "@/components/chat_ui/mode_endpoint_mapping";
 import MCPEventsDisplay from "@/components/chat_ui/MCPEventsDisplay";
 import ReasoningContent from "@/components/chat_ui/ReasoningContent";
@@ -68,11 +71,20 @@ const fellBack = (message: MessageType): boolean => (message.trace?.attemptedFal
 export const servedModel = (message: MessageType): string | undefined =>
   message.trace?.modelGroup ?? (message.isError ? undefined : message.model ?? message.trace?.requestedModel);
 
-const replyModel = (message: MessageType): Readonly<{ value: string; detail: string }> | null => {
+const replyModel = (
+  message: MessageType,
+  t: TFunction = i18n.t.bind(i18n),
+): Readonly<{ value: string; detail: string }> | null => {
   const served = servedModel(message);
-  if (served) return { value: served, detail: fellBack(message) ? "Served by, after a fallback" : "Served by" };
+  if (served)
+    return {
+      value: served,
+      detail: fellBack(message)
+        ? t("playground.chat.conversation.servedByAfterFallback")
+        : t("playground.chat.conversation.servedBy"),
+    };
   const requested = message.trace?.requestedModel ?? message.model;
-  return requested ? { value: requested, detail: "Requested model" } : null;
+  return requested ? { value: requested, detail: t("playground.chat.conversation.requestedModel") } : null;
 };
 
 function Metric({ icon, value, label }: { icon: ReactNode; value: string; label?: string }) {
@@ -86,35 +98,60 @@ function Metric({ icon, value, label }: { icon: ReactNode; value: string; label?
 }
 
 function ReplyMetrics({ message }: { message: MessageType }) {
+  const { t } = useTranslation();
   const usage = message.usage;
   const cost = usage?.cost ?? message.trace?.cost;
   const cached = usage?.servedFromResponseCache || message.trace?.cacheHit;
   return (
     <div
-      aria-label="Request metrics"
+      aria-label={t("playground.chat.conversation.metrics.label")}
       className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground tabular-nums"
     >
       {message.timeToFirstToken !== undefined && (
-        <Metric icon={<Timer />} value={formatSeconds(message.timeToFirstToken)} label="to first token" />
+        <Metric
+          icon={<Timer />}
+          value={formatSeconds(message.timeToFirstToken)}
+          label={t("playground.chat.conversation.metrics.firstToken")}
+        />
       )}
       {message.totalLatency !== undefined && (
-        <Metric icon={<Clock />} value={formatSeconds(message.totalLatency)} label="total" />
+        <Metric
+          icon={<Clock />}
+          value={formatSeconds(message.totalLatency)}
+          label={t("playground.chat.conversation.metrics.total")}
+        />
       )}
       {usage?.promptTokens !== undefined && (
-        <Metric icon={<ArrowDownToLine />} value={String(usage.promptTokens)} label="in" />
+        <Metric
+          icon={<ArrowDownToLine />}
+          value={String(usage.promptTokens)}
+          label={t("playground.chat.conversation.metrics.in")}
+        />
       )}
       {usage?.completionTokens !== undefined && (
-        <Metric icon={<ArrowUpFromLine />} value={String(usage.completionTokens)} label="out" />
+        <Metric
+          icon={<ArrowUpFromLine />}
+          value={String(usage.completionTokens)}
+          label={t("playground.chat.conversation.metrics.out")}
+        />
       )}
       {usage?.reasoningTokens ? (
-        <Metric icon={<Brain />} value={String(usage.reasoningTokens)} label="reasoning" />
+        <Metric
+          icon={<Brain />}
+          value={String(usage.reasoningTokens)}
+          label={t("playground.chat.conversation.metrics.reasoning")}
+        />
       ) : null}
       {usage?.cacheReadTokens ? (
-        <Metric icon={<DatabaseZap />} value={String(usage.cacheReadTokens)} label="cached" />
+        <Metric
+          icon={<DatabaseZap />}
+          value={String(usage.cacheReadTokens)}
+          label={t("playground.chat.conversation.metrics.cached")}
+        />
       ) : null}
       {cost !== undefined && <Metric icon={<Coins />} value={formatCost(cost)} />}
       {message.toolName && <Metric icon={<Wrench />} value={message.toolName} />}
-      {cached && <Badge variant="secondary">Cached response</Badge>}
+      {cached && <Badge variant="secondary">{t("playground.chat.conversation.metrics.cachedResponse")}</Badge>}
     </div>
   );
 }
@@ -152,7 +189,10 @@ function UserTurn({ message }: { message: MessageType }) {
             <BubbleContent className="flex flex-col gap-1">
               <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <Wrench className="size-3.5" />
-                Called <span className="font-mono text-foreground">{message.mcpToolCall.tool}</span>
+                <Trans
+                  i18nKey="playground.chat.conversation.calledTool"
+                  components={{ tool: <span className="font-mono text-foreground">{message.mcpToolCall.tool}</span> }}
+                />
               </span>
               <pre className="font-mono text-xs whitespace-pre-wrap">
                 {JSON.stringify(message.mcpToolCall.arguments, null, 2)}
@@ -190,7 +230,8 @@ function AssistantReply({
   inspected: boolean;
   onInspect: () => void;
 }) {
-  const model = replyModel(message);
+  const { t } = useTranslation();
+  const model = replyModel(message, t);
   const showMcpEvents = isLast && extras.mcpEvents.length > 0 && MCP_EVENT_ENDPOINTS.includes(extras.endpoint);
   const showCode = isLast && extras.codeInterpreter && extras.endpoint === EndpointType.RESPONSES;
   return (
@@ -201,7 +242,7 @@ function AssistantReply({
             <LongValue
               value={model.value}
               detail={model.detail}
-              copyLabel="model name"
+              copyLabel={t("playground.chat.conversation.modelNameCopy")}
               className="max-w-96 text-xs text-muted-foreground"
             />
             {fellBack(message) && <FallbackBadge />}
@@ -220,7 +261,7 @@ function AssistantReply({
         )}
         {message.isError ? (
           <Alert variant="destructive">
-            <AlertTitle>The request failed</AlertTitle>
+            <AlertTitle>{t("playground.chat.conversation.requestFailed")}</AlertTitle>
             <AlertDescription className="font-mono text-xs wrap-anywhere">{textOf(message)}</AlertDescription>
           </Alert>
         ) : (
@@ -239,17 +280,19 @@ function AssistantReply({
             )}
           </div>
           <span className="flex shrink-0 items-center gap-0.5">
-            {!message.isImage && !message.isAudio && <CopyIconButton value={textOf(message)} label="reply" />}
+            {!message.isImage && !message.isAudio && (
+              <CopyIconButton value={textOf(message)} label={t("playground.chat.conversation.replyCopy")} />
+            )}
             {message.trace && (
               <Toggle
                 size="sm"
                 pressed={inspected}
                 onPressedChange={onInspect}
-                aria-label="Inspect this request"
+                aria-label={t("playground.chat.conversation.inspectLabel")}
                 className="h-6 gap-1 px-1.5 text-xs"
               >
                 <ScanSearch />
-                Inspect
+                {t("playground.chat.conversation.inspect")}
               </Toggle>
             )}
           </span>
@@ -260,12 +303,17 @@ function AssistantReply({
 }
 
 function WaitingTurn({ target }: { target: string | undefined }) {
+  const { t } = useTranslation();
   return (
     <Message>
       <MessageContent className="text-sm">
         <div className="flex items-center gap-2 text-muted-foreground">
           <Spinner className="size-3.5" />
-          <span className="shimmer">{target ? `Waiting for ${target}` : "Waiting for a reply"}</span>
+          <span className="shimmer">
+            {target
+              ? t("playground.chat.conversation.waitingFor", { target })
+              : t("playground.chat.conversation.waitingForReply")}
+          </span>
         </div>
       </MessageContent>
     </Message>
@@ -273,12 +321,13 @@ function WaitingTurn({ target }: { target: string | undefined }) {
 }
 
 function SwitchMarker({ model }: { model: string }) {
+  const { t } = useTranslation();
   return (
     <Marker variant="separator">
       <MarkerIcon>
         <Repeat />
       </MarkerIcon>
-      <MarkerContent>Switched to {model}</MarkerContent>
+      <MarkerContent>{t("playground.chat.conversation.switchedTo", { model })}</MarkerContent>
     </Marker>
   );
 }
@@ -290,16 +339,15 @@ function EmptyConversation({
   suggestions: readonly string[];
   onPick: (text: string) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <Empty className="flex-1">
       <EmptyHeader>
         <EmptyMedia variant="icon">
           <PlayCircle />
         </EmptyMedia>
-        <EmptyTitle>Send a test request</EmptyTitle>
-        <EmptyDescription>
-          Pick a model and anything the request should go through, then inspect what the gateway did with it
-        </EmptyDescription>
+        <EmptyTitle>{t("playground.chat.conversation.empty.title")}</EmptyTitle>
+        <EmptyDescription>{t("playground.chat.conversation.empty.description")}</EmptyDescription>
       </EmptyHeader>
       {suggestions.length > 0 && (
         <EmptyContent className="max-w-xl flex-row flex-wrap justify-center gap-2">
@@ -340,13 +388,14 @@ export function Conversation({
   suggestions: readonly string[];
   onPickSuggestion: (text: string) => void;
 }) {
+  const { t } = useTranslation();
   if (messages.length === 0) return <EmptyConversation suggestions={suggestions} onPick={onPickSuggestion} />;
   const lastIndex = messages.length - 1;
   const waiting = isLoading && messages[lastIndex]?.role === "user";
   return (
     <MessageScrollerProvider autoScroll defaultScrollPosition="end">
       <MessageScroller className="min-h-0 flex-1">
-        <MessageScrollerViewport aria-label="Conversation" className="scroll-fade-b">
+        <MessageScrollerViewport aria-label={t("playground.chat.conversation.label")} className="scroll-fade-b">
           <MessageScrollerContent className="mx-auto w-full max-w-3xl gap-6 px-6 py-6">
             {messages.flatMap((message, index) => {
               const switched = switchedModel(messages, index);

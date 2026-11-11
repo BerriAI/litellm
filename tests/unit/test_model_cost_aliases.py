@@ -1,14 +1,32 @@
 """
 Tests for the ``aliases`` feature in the model cost map.
 
-The ``_expand_model_aliases`` function processes ``aliases`` lists from model
-entries, creating shared dict references for alias entries at load time.
+An entry's ``aliases`` list serves the entry under every alias name, all of them
+one shared ``AliasedCostEntry`` object, when a document is installed.
 """
 
-from unittest.mock import patch
+import json
+import logging
+from typing import Final
 
-from litellm import verbose_logger
-from litellm.litellm_core_utils.get_model_cost_map import _expand_model_aliases
+import pytest
+
+from litellm.rust_bridge._native import NativeInstalled, NativeModelCostMap, NativeRejected
+from litellm.litellm_core_utils.model_cost_table import AliasedCostEntry
+
+
+def _install(document: dict[str, dict[str, object]]) -> NativeInstalled:
+    installed: Final = NativeModelCostMap.bundled(0, 0.0).install(json.dumps(document).encode())
+    assert isinstance(installed, NativeInstalled)
+    return installed
+
+
+def _installed(document: dict[str, dict[str, object]]) -> dict[str, dict[str, object]]:
+    return _install(document).rows
+
+
+def _row(**fields: object) -> dict[str, object]:
+    return {"litellm_provider": "test", "mode": "chat", **fields}
 
 
 # ---------------------------------------------------------------------------
@@ -17,97 +35,48 @@ from litellm.litellm_core_utils.get_model_cost_map import _expand_model_aliases
 
 
 class TestExpandModelAliases:
-    """Unit tests for _expand_model_aliases."""
-
     def test_basic_expansion(self):
         """Aliases are added as top-level entries in model_cost."""
-        model_cost = {
-            "my-model-latest": {
-                "aliases": ["my-model-20250101"],
-                "input_cost_per_token": 1e-06,
-                "litellm_provider": "test",
-                "mode": "chat",
-            },
-        }
-        result = _expand_model_aliases(model_cost)
+        result = _installed({"my-model-latest": _row(aliases=["my-model-20250101"], input_cost_per_token=1e-06)})
 
-        assert "my-model-20250101" in result
         assert result["my-model-20250101"]["input_cost_per_token"] == 1e-06
         assert result["my-model-20250101"]["litellm_provider"] == "test"
 
     def test_multiple_aliases(self):
         """A single entry can declare multiple aliases."""
-        model_cost = {
-            "provider/model-latest": {
-                "aliases": ["provider/model-v1", "provider/model-v2"],
-                "input_cost_per_token": 5e-06,
-                "litellm_provider": "provider",
-                "mode": "chat",
-            },
-        }
-        result = _expand_model_aliases(model_cost)
+        result = _installed({"provider/model-latest": _row(aliases=["provider/model-v1", "provider/model-v2"])})
 
-        assert "provider/model-v1" in result
-        assert "provider/model-v2" in result
+        assert list(result) == ["provider/model-latest", "provider/model-v1", "provider/model-v2"]
 
-    def test_shared_dict_reference(self):
-        """Alias entries share the same dict object as the canonical entry (no copy)."""
-        model_cost = {
-            "canonical-model": {
-                "aliases": ["alias-model"],
-                "input_cost_per_token": 2e-06,
-                "litellm_provider": "test",
-                "mode": "chat",
-            },
-        }
-        result = _expand_model_aliases(model_cost)
+    def test_shared_entry_object(self):
+        """Alias entries are the same object as the canonical entry, which knows every name it is served under."""
+        result = _installed({"canonical-model": _row(aliases=["alias-model"], input_cost_per_token=2e-06)})
 
-        assert result["alias-model"] is result["canonical-model"]
+        entry: Final = result["canonical-model"]
+        assert result["alias-model"] is entry
+        assert isinstance(entry, AliasedCostEntry)
+        assert entry.names == ("canonical-model", "alias-model")
+        assert entry.registered_fields == frozenset()
 
     def test_aliases_key_removed(self):
         """The ``aliases`` key is removed from the entry after expansion."""
-        model_cost = {
-            "my-model": {
-                "aliases": ["my-model-alias"],
-                "input_cost_per_token": 1e-06,
-                "litellm_provider": "test",
-                "mode": "chat",
-            },
-        }
-        result = _expand_model_aliases(model_cost)
+        result = _installed({"my-model": _row(aliases=["my-model-alias"])})
 
         assert "aliases" not in result["my-model"]
         assert "aliases" not in result["my-model-alias"]
 
-    def test_entries_without_aliases_unchanged(self):
-        """Entries with no ``aliases`` key are left untouched."""
-        model_cost = {
-            "plain-model": {
-                "input_cost_per_token": 3e-06,
-                "litellm_provider": "test",
-                "mode": "chat",
-            },
-        }
-        result = _expand_model_aliases(model_cost)
+    def test_entries_without_aliases_stay_plain_dicts(self):
+        """Entries with no ``aliases`` key are served as written, as plain dicts."""
+        result = _installed({"plain-model": _row(input_cost_per_token=3e-06)})
 
-        assert "plain-model" in result
-        assert result["plain-model"]["input_cost_per_token"] == 3e-06
-        assert len(result) == 1
+        assert result == {"plain-model": _row(input_cost_per_token=3e-06)}
+        assert type(result["plain-model"]) is dict
 
     def test_empty_aliases_list(self):
         """An empty ``aliases`` list is treated the same as no aliases."""
-        model_cost = {
-            "model-a": {
-                "aliases": [],
-                "input_cost_per_token": 1e-06,
-                "litellm_provider": "test",
-                "mode": "chat",
-            },
-        }
-        result = _expand_model_aliases(model_cost)
+        result = _installed({"model-a": _row(aliases=[])})
 
-        assert len(result) == 1
-        assert "model-a" in result
+        assert list(result) == ["model-a"]
         assert "aliases" not in result["model-a"]
 
 
@@ -116,81 +85,119 @@ class TestExpandModelAliases:
 # ---------------------------------------------------------------------------
 
 
-class TestAliasConflicts:
-    """Tests for alias conflict detection and handling."""
-
-    def test_alias_conflicts_with_canonical_entry(self):
-        """Alias that matches an existing canonical entry is skipped with a warning."""
-        model_cost = {
-            "model-latest": {
-                "aliases": ["model-dated"],
-                "input_cost_per_token": 1e-06,
-                "litellm_provider": "test",
-                "mode": "chat",
+@pytest.mark.parametrize(
+    ("document", "name", "row", "other", "shared"),
+    [
+        pytest.param(
+            {
+                "model-latest": _row(aliases=["model-dated"], input_cost_per_token=1e-06),
+                "model-dated": _row(input_cost_per_token=5e-06),
             },
-            "model-dated": {
-                "input_cost_per_token": 1e-06,
-                "litellm_provider": "test",
-                "mode": "chat",
+            "model-dated",
+            _row(input_cost_per_token=5e-06),
+            "model-latest",
+            False,
+            id="alias-names-a-later-entry",
+        ),
+        pytest.param(
+            {
+                "existing-model": _row(input_cost_per_token=9.99e-06),
+                "other-model": _row(aliases=["existing-model"], input_cost_per_token=1e-06),
             },
-        }
-        with patch.object(verbose_logger, "warning") as mock_warn:
-            result = _expand_model_aliases(model_cost)
-
-        # The canonical "model-dated" entry is preserved, not overwritten
-        assert "model-dated" in result
-        # Verify a warning about the alias conflict was logged
-        mock_warn.assert_called()
-        warning_messages = " ".join(str(c) for c in mock_warn.call_args_list)
-        assert "alias conflict" in warning_messages.lower()
-
-    def test_duplicate_alias_across_entries(self):
-        """Same alias claimed by two different entries: second one is skipped."""
-        model_cost = {
-            "model-a": {
-                "aliases": ["shared-alias"],
-                "input_cost_per_token": 1e-06,
-                "litellm_provider": "test",
-                "mode": "chat",
+            "existing-model",
+            _row(input_cost_per_token=9.99e-06),
+            "other-model",
+            False,
+            id="alias-names-an-earlier-entry",
+        ),
+        pytest.param(
+            {
+                "model-a": _row(aliases=["shared-alias"], input_cost_per_token=1e-06),
+                "model-b": _row(aliases=["shared-alias"], input_cost_per_token=2e-06),
             },
-            "model-b": {
-                "aliases": ["shared-alias"],
-                "input_cost_per_token": 2e-06,
-                "litellm_provider": "test",
-                "mode": "chat",
-            },
-        }
-        with patch.object(verbose_logger, "warning") as mock_warn:
-            result = _expand_model_aliases(model_cost)
+            "shared-alias",
+            _row(input_cost_per_token=1e-06),
+            "model-a",
+            True,
+            id="two-entries-claim-one-alias",
+        ),
+    ],
+)
+def test_an_alias_never_replaces_a_model_name_and_the_first_claim_wins(
+    document: dict[str, dict[str, object]], name: str, row: dict[str, object], other: str, shared: bool
+):
+    result: Final = _installed(document)
 
-        # "shared-alias" should point to model-a (first one wins)
-        assert "shared-alias" in result
-        assert result["shared-alias"]["input_cost_per_token"] == 1e-06
-        # Verify a warning about the alias conflict was logged
-        mock_warn.assert_called()
-        warning_messages = " ".join(str(c) for c in mock_warn.call_args_list)
-        assert "alias conflict" in warning_messages.lower()
+    assert result[name] == row
+    assert (result[name] is result[other]) is shared
 
-    def test_canonical_entry_not_overwritten_by_alias(self):
-        """An alias must never overwrite an existing canonical entry's data."""
-        original_cost = 9.99e-06
-        model_cost = {
-            "existing-model": {
-                "input_cost_per_token": original_cost,
-                "litellm_provider": "test",
-                "mode": "chat",
-            },
-            "other-model": {
-                "aliases": ["existing-model"],
-                "input_cost_per_token": 1e-06,
-                "litellm_provider": "test",
-                "mode": "chat",
-            },
-        }
-        result = _expand_model_aliases(model_cost)
 
-        # Original entry must be preserved
-        assert result["existing-model"]["input_cost_per_token"] == original_cost
+class TestAliasOfRows:
+    def test_an_alias_of_row_is_served_as_its_target_where_the_document_put_it(self):
+        """An ``alias_of`` row is its target's object, even when written before the target."""
+        result = _installed(
+            {
+                "model-latest": {"alias_of": "model"},
+                "model": _row(input_cost_per_token=1e-06),
+            }
+        )
+
+        assert list(result) == ["model-latest", "model"]
+        assert result["model-latest"] is result["model"]
+        assert result["model"] == _row(input_cost_per_token=1e-06)
+
+    @pytest.mark.parametrize(
+        "pointer", [{"alias_of": "ghost"}, {"alias_of": "model", "mode": "chat"}], ids=["no-target", "other-fields"]
+    )
+    def test_an_alias_of_row_the_catalog_cannot_serve_is_dropped(self, pointer: dict[str, object]):
+        result = _installed({"model": _row(), "model-latest": pointer})
+
+        assert list(result) == ["model"]
+
+    def test_the_model_count_is_every_key_the_document_serves(self):
+        installed: Final = _install(
+            {
+                "model": _row(aliases=["model-dated"]),
+                "model-latest": {"alias_of": "model"},
+                "ghost-latest": {"alias_of": "ghost"},
+                "sample_spec": {"mode": "chat"},
+            }
+        )
+
+        assert list(installed.rows) == ["model", "model-latest", "sample_spec", "model-dated"]
+        assert installed.model_count == 4
+
+
+class TestAliasWarnings:
+    @pytest.mark.parametrize(
+        ("document", "warned"),
+        [
+            ({"model": _row(), "other": _row(aliases=["model"])}, 'alias "model" is already a model name'),
+            (
+                {"a": _row(aliases=["shared"]), "b": _row(aliases=["shared"])},
+                'alias "shared" already belongs to a',
+            ),
+            ({"model": _row(), "ghost-latest": {"alias_of": "ghost"}}, 'alias_of "ghost" is not a model name'),
+            (
+                {"model": _row(), "model-latest": {"alias_of": "model", "mode": "chat"}},
+                "model-latest.mode: an alias_of row carries no other field",
+            ),
+            ({"model": _row(aliases="model-dated")}, "model.aliases: invalid value"),
+        ],
+    )
+    def test_an_alias_the_document_cannot_serve_is_logged(
+        self, caplog: pytest.LogCaptureFixture, document: dict[str, dict[str, object]], warned: str
+    ):
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            _installed(document)
+
+        assert any(warned in record.getMessage() for record in caplog.records), caplog.text
+
+    def test_a_document_with_servable_aliases_logs_nothing(self, caplog: pytest.LogCaptureFixture):
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            _installed({"model": _row(aliases=["model-dated"]), "model-latest": {"alias_of": "model"}})
+
+        assert caplog.records == []
 
 
 # ---------------------------------------------------------------------------
@@ -199,47 +206,24 @@ class TestAliasConflicts:
 
 
 class TestAliasIntegration:
-    """Higher-level tests verifying aliases work with the model_cost dict."""
-
     def test_mutation_through_alias_visible_on_canonical(self):
         """Since alias is a shared reference, mutations are visible on both."""
-        model_cost = {
-            "canonical": {
-                "aliases": ["alias"],
-                "input_cost_per_token": 1e-06,
-                "litellm_provider": "test",
-                "mode": "chat",
-            },
-        }
-        result = _expand_model_aliases(model_cost)
+        result = _installed({"canonical": _row(aliases=["alias"], input_cost_per_token=1e-06)})
 
-        # Mutate via alias
         result["alias"]["input_cost_per_token"] = 999
         assert result["canonical"]["input_cost_per_token"] == 999
 
     def test_mixed_entries_with_and_without_aliases(self):
-        """A model_cost dict with a mix of aliased and plain entries."""
-        model_cost = {
-            "model-with-alias": {
-                "aliases": ["alias-1", "alias-2"],
-                "input_cost_per_token": 1e-06,
-                "litellm_provider": "test",
-                "mode": "chat",
-            },
-            "plain-model": {
-                "input_cost_per_token": 2e-06,
-                "litellm_provider": "test",
-                "mode": "chat",
-            },
-        }
-        result = _expand_model_aliases(model_cost)
+        """Aliases follow every document key, grouped by owner."""
+        result = _installed(
+            {
+                "model-with-alias": _row(aliases=["alias-1", "alias-2"]),
+                "plain-model": _row(),
+            }
+        )
 
-        assert len(result) == 4  # 2 canonical + 2 aliases
-        assert "alias-1" in result
-        assert "alias-2" in result
-        assert "plain-model" in result
-        assert "model-with-alias" in result
+        assert list(result) == ["model-with-alias", "plain-model", "alias-1", "alias-2"]
 
-    def test_expand_on_empty_dict(self):
-        """Expanding an empty dict returns an empty dict."""
-        assert _expand_model_aliases({}) == {}
+    def test_an_empty_document_is_rejected(self):
+        """An empty document is never installed."""
+        assert isinstance(NativeModelCostMap.bundled(0, 0.0).install(b"{}"), NativeRejected)
