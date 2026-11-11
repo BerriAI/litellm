@@ -143,13 +143,9 @@ def is_chat_latest_name(model: str) -> bool:
     return normalized == OPENAI_CHAT_LATEST_ALIAS or GPT_CHAT_LATEST_DEPLOYMENT_MARKER in normalized
 
 
-def is_gpt_series_family_name(model: str) -> bool:
-    return any(marker in model for marker in GPT_REASONING_SERIES_MARKERS) or is_chat_latest_name(model)
-
-
 def is_gpt_reasoning_series_name(model: str) -> bool:
     normalized: Final = model.split("/")[-1]
-    return is_gpt_series_family_name(model) and "gpt-5-chat" not in normalized
+    return any(marker in model for marker in GPT_REASONING_SERIES_MARKERS) and "gpt-5-chat" not in normalized
 
 
 class OpenAIGPT5Config(OpenAIGPTConfig):
@@ -168,7 +164,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
 
     @classmethod
     def is_model_gpt_5_model(cls, model: str) -> bool:
-        return is_gpt_reasoning_series_name(model)
+        return is_gpt_reasoning_series_name(model) or is_chat_latest_name(model)
 
     @classmethod
     def is_model_gpt_5_search_model(cls, model: str) -> bool:

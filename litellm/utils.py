@@ -5451,6 +5451,7 @@ def _map_params_with_provider_config(
     drop_params: bool,
     model_info: Mapping[str, object] | None,
     reasoning_drop_logger: WarningLogger,
+    base_model: str | None,
 ) -> dict[str, object]:  # mutable-ok: get_optional_params keeps building on the mapped params
     if custom_llm_provider == "azure_ai" and isinstance(provider_config, litellm.AzureAIStudioConfig):
         return provider_config.map_openai_params(
@@ -5460,6 +5461,7 @@ def _map_params_with_provider_config(
             drop_params=drop_params,
             declared_reasoning_efforts=_declared_reasoning_efforts(model_info),
             reasoning_drop_logger=reasoning_drop_logger,
+            base_model=base_model,
         )
     if isinstance(provider_config, (litellm.ChatGPTConfig, litellm.GithubCopilotConfig)):
         return provider_config.map_openai_params(
@@ -5657,7 +5659,8 @@ def get_optional_params(
         else get_supported_openai_params(model=model, custom_llm_provider=custom_llm_provider, base_model=base_model)
     )
     if supported_params is None:
-        supported_params = get_supported_openai_params(model=model, custom_llm_provider="openai")
+        fallback_config: Final = litellm.OpenAIConfig().config_for_openai_compatible_provider(model=model)
+        supported_params = fallback_config.get_supported_openai_params(model=model)
 
     supported_params = supported_params or []
     allowed_openai_params = allowed_openai_params or []
@@ -6137,6 +6140,7 @@ def get_optional_params(
             drop_params=bool(drop_params),
             model_info=model_info,
             reasoning_drop_logger=_litellm_reasoning_drop_logger,
+            base_model=base_model,
         )
     else:  # assume passing in params for openai-like api
         optional_params = litellm.OpenAILikeChatConfig().map_openai_params(

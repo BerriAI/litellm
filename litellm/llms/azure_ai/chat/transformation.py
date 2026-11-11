@@ -204,8 +204,10 @@ class AzureAIStudioConfig(OpenAIConfig):
         *,
         declared_reasoning_efforts: Collection[str] | None = None,
         reasoning_drop_logger: WarningLogger = verbose_logger,
+        base_model: str | None = None,
     ) -> dict[str, object]:  # mutable-ok: OpenAIConfig.map_openai_params signature
-        if not azureAIGPT5Config.is_model_gpt_5_model(model):
+        detection_model: Final = base_model or model
+        if not azureAIGPT5Config.is_model_gpt_5_model(detection_model):
             return super().map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
@@ -215,7 +217,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         return azureAIGPT5Config.map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
-            model=model,
+            model=detection_model,
             drop_params=drop_params,
             declared_reasoning_efforts=declared_reasoning_efforts,
             reasoning_drop_logger=reasoning_drop_logger,

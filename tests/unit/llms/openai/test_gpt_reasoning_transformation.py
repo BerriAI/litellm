@@ -173,6 +173,34 @@ def test_gpt_chat_latest_keeps_tool_choice_on_providers_without_a_row_that_flags
     assert params["tool_choice"] == "required"
 
 
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "model"),
+    [
+        ("aiml", "openai/gpt-chat-latest"),
+        ("crusoe", "gpt-chat-latest"),
+        ("github_copilot", "chat-latest"),
+        ("chatgpt", "gpt-chat-latest"),
+        ("ragflow", "chat/assistant-1/gpt-chat-latest"),
+    ],
+)
+def test_chat_latest_names_off_openai_azure_and_foundry_keep_the_params_they_forwarded(
+    custom_llm_provider: str, model: str
+):
+    params: Final = litellm.get_optional_params(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        max_tokens=50,
+        stop=["END"],
+        top_p=0.5,
+        presence_penalty=0.1,
+        drop_params=False,
+    )
+    assert params["max_tokens"] == 50
+    assert params["stop"] == ["END"]
+    assert params["top_p"] == 0.5
+    assert params["presence_penalty"] == 0.1
+
+
 def test_a_deployments_declared_levels_do_not_gate_its_sibling_deployments():
     level: Final = next(
         level

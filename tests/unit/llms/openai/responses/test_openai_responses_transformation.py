@@ -20,6 +20,7 @@ from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfi
 from litellm.llms.bedrock.responses.transformation import BedrockOpenAIResponsesConfig
 from litellm.llms.bedrock_mantle.responses.transformation import BedrockMantleResponsesAPIConfig
 from litellm.llms.hosted_vllm.responses.transformation import HostedVLLMResponsesAPIConfig
+from litellm.llms.litellm_proxy.responses.transformation import LiteLLMProxyResponsesAPIConfig
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.llms.xai.responses.transformation import XAIResponsesAPIConfig
 from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
@@ -2556,6 +2557,16 @@ class TestResponsesSurfaceSharesTheEffortRule:
                 model=model,
                 drop_params=False,
             )
+
+    def test_chat_latest_on_another_openai_shaped_provider_forwards_the_effort_it_was_sent(
+        self, local_model_cost_map: None
+    ):
+        mapped: Final = LiteLLMProxyResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": "high"}},
+            model="chat-latest",
+            drop_params=False,
+        )
+        assert mapped["reasoning"] == {"effort": "high"}
 
     @pytest.mark.parametrize(
         ("declared_reasoning_efforts", "suggests_declared_levels"),

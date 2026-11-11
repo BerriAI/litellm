@@ -16,6 +16,7 @@ from .gpt_transformation import AzureOpenAIConfig
 
 AZURE_GPT5_DEPLOYMENT_PARAMS: Final = ("tool_choice",)
 AZURE_CHAT_LATEST_DEPLOYMENT_PARAMS: Final = ("tool_choice", "user")
+AZURE_LOGPROB_PARAMS: Final = ("logprobs", "top_logprobs")
 
 
 class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
@@ -55,7 +56,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
 
     @classmethod
     def is_model_gpt_5_model(cls, model: str) -> bool:
-        return is_gpt_reasoning_series_name(model) or "gpt5_series" in model
+        return is_gpt_reasoning_series_name(model) or is_chat_latest_name(model) or "gpt5_series" in model
 
     def get_supported_openai_params(self, model: str) -> list[str]:
         """Get supported parameters for Azure OpenAI GPT-5 models.
@@ -75,17 +76,16 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         deployment_params: Final = (
             AZURE_CHAT_LATEST_DEPLOYMENT_PARAMS if is_chat_latest_name(model) else AZURE_GPT5_DEPLOYMENT_PARAMS
         )
-        dropped_deployment_params: Final = tuple(param for param in deployment_params if param not in params)
-        params.extend(dropped_deployment_params)
 
         # Only gpt-5.2+ has been verified to support logprobs on Azure.
         # The base OpenAI class includes logprobs for gpt-5.1+, but Azure
         # hasn't verified support for gpt-5.1, so remove them unless gpt-5.2/5.4+.
-        if self._supports_reasoning_effort_level(model, "none") and not self.is_model_gpt_5_2_model(model):
-            params = [p for p in params if p not in ["logprobs", "top_logprobs"]]
-        elif self.is_model_gpt_5_2_model(model):
-            azure_supported_params: Final = ["logprobs", "top_logprobs"]
-            params.extend(azure_supported_params)
+        supports_logprobs: Final = self.is_model_gpt_5_2_model(model)
+        if self._supports_reasoning_effort_level(model, "none") and not supports_logprobs:
+            params = [p for p in params if p not in AZURE_LOGPROB_PARAMS]
+        azure_params: Final = (*deployment_params, *AZURE_LOGPROB_PARAMS) if supports_logprobs else deployment_params
+        missing_azure_params: Final = tuple(param for param in azure_params if param not in params)
+        params.extend(missing_azure_params)
 
         return params
 

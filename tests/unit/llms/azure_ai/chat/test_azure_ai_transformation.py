@@ -1596,3 +1596,20 @@ def test_translate_developer_role_hoists_a_later_developer_message_for_a_model_t
 
     assert [message["role"] for message in messages] == ["system", "user", "assistant", "user"]
     assert messages[0]["content"] == "You are terse.\n\nAnswer with exactly one word."
+
+
+@pytest.mark.parametrize("base_model", ["azure_ai/gpt-chat-latest", "gpt-chat-latest"])
+def test_a_custom_named_foundry_deployment_takes_its_base_models_request_shape(
+    local_model_cost_map: None, base_model: str
+) -> None:
+    params: Final = litellm.get_optional_params(
+        model="prod-chat",
+        custom_llm_provider="azure_ai",
+        base_model=base_model,
+        max_tokens=50,
+        reasoning_effort="high",
+        drop_params=True,
+    )
+    assert params["max_completion_tokens"] == 50
+    assert "max_tokens" not in params
+    assert "reasoning_effort" not in params
