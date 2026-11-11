@@ -119,14 +119,22 @@ def _plain_text(value: object) -> str:
 
 
 _BARE_LOGFMT_VALUE: Final = re.compile(r"[\w.:/@+-]+", re.ASCII)
+_BRACES: Final = re.compile(r"[{}]")
 _JSON_ESCAPED_BRACES: Final = str.maketrans({"{": "\\u007b", "}": "\\u007d"})
 
 
-def logfmt_value(value: object) -> str:
-    text: Final = _plain_text(value)
-    if _BARE_LOGFMT_VALUE.fullmatch(text):
-        return text
+def _escaped(text: str) -> str:
     return json.dumps(text).translate(_JSON_ESCAPED_BRACES)
+
+
+def logfmt_value(value: object) -> str:
+    text: Final = redact_string(_plain_text(value))
+    return text if _BARE_LOGFMT_VALUE.fullmatch(text) else _escaped(text)
+
+
+def log_text_value(value: object) -> str:
+    text: Final = redact_string(_plain_text(value))
+    return text if text.isprintable() and not _BRACES.search(text) else _escaped(text)
 
 
 def redact_secrets(value: str) -> str:

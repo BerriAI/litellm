@@ -54,6 +54,7 @@ from litellm.proxy.common_request_processing import (
     _buffer_first_chunk_honoring_disconnect,
     _cancel_llm_call_on_client_disconnect,
     _ClientDisconnectedBeforeFirstChunk,
+    _record_streaming_client_disconnect_if_needed,
     attach_guardrail_information,
     _extract_error_from_sse_chunk,
     FirstChunkSseFraming,
@@ -9136,6 +9137,43 @@ class TestStreamingClientDisconnectBilling:
         assert "litellm_call_id" not in line
         assert "injected" not in line
 
+    async def test_dict_shaped_call_id_cannot_forge_fields_on_the_partial_chunks_billing_log(
+        self, proxy_json_log_lines: Callable[[], tuple[dict[str, object], ...]]
+    ) -> None:
+        logging_obj: Final = LiteLLMLoggingObj(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "tell me a story"}],
+            stream=True,
+            call_type="acompletion",
+            start_time=datetime.datetime.now(),
+            litellm_call_id="call-from-logging-obj",
+            function_id="test-function-id",
+        )
+
+        await _bill_partial_streamed_spend_on_disconnect(
+            {"litellm_logging_obj": logging_obj, "litellm_call_id": _DICT_SHAPED_CALL_ID},
+            SimpleNamespace(chunks=["not-a-chunk"]),
+        )
+
+        (line,) = (line for line in proxy_json_log_lines() if "chunks after client disconnect" in str(line["message"]))
+        assert line["component"] == verbose_proxy_logger.name
+        assert "litellm_call_id" not in line
+        assert "injected" not in line
+
+    async def test_dict_shaped_call_id_cannot_forge_fields_on_the_recorded_disconnect_log(
+        self, proxy_json_log_lines: Callable[[], tuple[dict[str, object], ...]]
+    ) -> None:
+        assert await _record_streaming_client_disconnect_if_needed(
+            None, {"litellm_call_id": _DICT_SHAPED_CALL_ID}, client_disconnected=True
+        )
+
+        (line,) = (
+            line for line in proxy_json_log_lines() if "Recorded streaming client disconnect" in str(line["message"])
+        )
+        assert line["component"] == verbose_proxy_logger.name
+        assert "litellm_call_id" not in line
+        assert "injected" not in line
+
     @pytest.mark.asyncio
     async def test_disconnect_bills_partial_streamed_spend(self):
         recorder = _RecordingSuccessLogger()
@@ -12662,6 +12700,19 @@ class TestErrorLogCarriesCallId:
 
         (line,) = proxy_json_log_lines()
         assert line["error"] == provider_error
+
+    def test_credential_shaped_call_id_is_redacted_in_the_error_message_text(
+        self, proxy_json_log_lines: Callable[[], tuple[dict[str, object], ...]]
+    ) -> None:
+        credential: Final = "sample-credential-123456"
+
+        log_llm_api_exception(
+            HTTPException(status_code=400, detail={"error": "Invalid model name"}), json.dumps({"api_key": credential})
+        )
+
+        (line,) = proxy_json_log_lines()
+        assert "_handle_llm_api_exception(): Exception occured" in str(line["message"])
+        assert credential not in json.dumps(line)
 
 
 class TestAnthropicMessagesStreamErrorFrame:

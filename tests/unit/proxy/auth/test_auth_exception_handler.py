@@ -980,8 +980,23 @@ async def test_auth_failure_keeps_existing_requester_ip_address():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("transformed_exception", "expected_lines"),
+    [
+        pytest.param(None, 1, id="401_line"),
+        pytest.param(
+            ProxyException(
+                message="Bad request", type=ProxyErrorTypes.auth_error, param=None, code=status.HTTP_400_BAD_REQUEST
+            ),
+            2,
+            id="callback_turns_401_into_400",
+        ),
+    ],
+)
 async def test_a_dict_shaped_x_forwarded_for_cannot_forge_fields_on_the_auth_failure_json_log(
     proxy_json_log_lines: Callable[[], tuple[dict[str, object], ...]],
+    transformed_exception: ProxyException | None,
+    expected_lines: int,
 ) -> None:
     forwarded_for: Final = "{'requester_ip':'forged-ip','component':'forged-comp','logger':'forged','injected':'yes'}"
     with (
@@ -989,7 +1004,7 @@ async def test_a_dict_shaped_x_forwarded_for_cannot_forge_fields_on_the_auth_fai
         patch(
             "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
             new_callable=AsyncMock,
-            return_value=None,
+            return_value=transformed_exception,
         ),
         patch(
             "litellm.proxy.proxy_server.general_settings",
@@ -1011,11 +1026,13 @@ async def test_a_dict_shaped_x_forwarded_for_cannot_forge_fields_on_the_auth_fai
                 "sk-bad-key",
             )
 
-    (line,) = (line for line in proxy_json_log_lines() if "user_api_key_auth()" in str(line["message"]))
-    assert str(line["component"]).startswith(verbose_proxy_logger.name)
-    assert str(line["logger"]).startswith("auth_exception_handler.py:")
-    assert line["requester_ip"] == forwarded_for
-    assert "injected" not in line
+    lines: Final = tuple(line for line in proxy_json_log_lines() if "user_api_key_auth()" in str(line["message"]))
+    assert len(lines) == expected_lines
+    for line in lines:
+        assert str(line["component"]).startswith(verbose_proxy_logger.name)
+        assert str(line["logger"]).startswith("auth_exception_handler.py:")
+        assert line["requester_ip"] == forwarded_for
+        assert "injected" not in line
 
 
 @pytest.mark.asyncio

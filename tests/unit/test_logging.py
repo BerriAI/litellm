@@ -38,6 +38,7 @@ from litellm._logging import (
     print_startup_warning,
     turn_on_json,
     format_base64_size,
+    log_text_value,
     session_id_var,
     set_session_id,
     set_trace_id,
@@ -583,6 +584,26 @@ def test_message_dict_keys_never_override_fields_the_logger_sets():
     assert record["litellm_call_id"] == "real-call-id"
     assert "stacktrace" not in record
     assert record["model_name"] == "gpt-x"
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["203.0.113.5, 10.0.0.1", "cav-b64==", "call id with spaces", "100%", "café", "", "None"],
+)
+def test_log_text_value_prints_plain_values_unchanged(value: str) -> None:
+    assert log_text_value(value) == value
+
+
+@pytest.mark.parametrize("value", ["{'component': 'forged', 'injected': 1}", "}{", "line one\nline two", "a\rb"])
+def test_log_text_value_escapes_braces_and_line_breaks_into_a_json_string(value: str) -> None:
+    escaped: Final = log_text_value(value)
+    assert not re.search(r"[{}\r\n]", escaped)
+    assert json.loads(escaped) == value
+
+
+def test_log_text_value_redacts_a_credential_before_escaping_it() -> None:
+    credential: Final = "sample-credential-123456"
+    assert credential not in log_text_value(json.dumps({"api_key": credential}))
 
 
 def test_trace_id_and_session_id_are_redacted_when_credential_shaped(monkeypatch):
