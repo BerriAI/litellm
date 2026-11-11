@@ -14,6 +14,10 @@ from typing import Final
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.reasoning_effort_capability import (
+    REASONING_EFFORT_ADVERTISEMENT_ORDER,
+    declared_reasoning_efforts_for_map_key,
+)
 from litellm.router_core import RouterCore
 from tests.unit.test_router.core.endpoints_helpers import EndpointHost
 from tests.unit.test_router.core.scripted_host import ScriptedHost, deployment, timeout
@@ -485,6 +489,42 @@ async def test_classifier_call_keeps_reasoning_effort_on_a_deployment_with_suppo
         model="g", messages=MESSAGES, reasoning_effort="low", litellm_metadata=dict(CLASSIFIER_METADATA)
     )
     assert _sent(host)["reasoning_effort"] == "low"
+
+
+CHAT_LATEST_DEPLOYMENTS: Final = (
+    ("openai/chat-latest", "chat-latest", {}),
+    ("azure_ai/gpt-chat-latest", "azure_ai/gpt-chat-latest", {"api_base": "https://qa.services.ai.azure.com"}),
+    (
+        "azure_ai/qa-prod-chat",
+        "azure_ai/gpt-chat-latest",
+        {"api_base": "https://qa.services.ai.azure.com", "base_model": "azure_ai/gpt-chat-latest"},
+    ),
+    ("azure/gpt-chat-latest", "azure/gpt-chat-latest", {"api_base": "https://qa.openai.azure.com"}),
+)
+
+
+@pytest.mark.parametrize("level", REASONING_EFFORT_ADVERTISEMENT_ORDER)
+@pytest.mark.parametrize(("model", "row", "params"), CHAT_LATEST_DEPLOYMENTS, ids=[d[0] for d in CHAT_LATEST_DEPLOYMENTS])
+async def test_classifier_call_keeps_only_the_efforts_the_chat_latest_row_lists(
+    make_core: MakeCore, host: EndpointHost, model: str, row: str, params: dict[str, object], level: str
+):
+    declared: Final = declared_reasoning_efforts_for_map_key(row)
+    assert declared
+    core: Final = make_core(model_list=[deployment("g", "d1", model=model, **params)])
+    await core.acompletion(model="g", messages=MESSAGES, reasoning_effort=level, metadata=dict(CLASSIFIER_METADATA))
+    assert _sent(host).get("reasoning_effort") == (level if level in declared else None)
+
+
+async def test_classifier_call_keeps_an_effort_the_deployment_itself_lists(make_core: MakeCore, host: EndpointHost):
+    core: Final = make_core(
+        model_list=[
+            deployment(
+                "g", "d1", model="openai/chat-latest", model_info={"reasoning_effort_levels": list(REASONING_EFFORT_ADVERTISEMENT_ORDER)}
+            )
+        ]
+    )
+    await core.acompletion(model="g", messages=MESSAGES, reasoning_effort={"effort": "low"}, metadata=dict(CLASSIFIER_METADATA))
+    assert _sent(host)["reasoning_effort"] == {"effort": "low"}
 
 
 # --- silent experiments ---------------------------------------------------------------------

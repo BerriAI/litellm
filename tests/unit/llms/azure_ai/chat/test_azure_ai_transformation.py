@@ -1621,33 +1621,75 @@ _GET_WEATHER_TOOL: Final = {
 }
 
 
-@pytest.mark.parametrize("base_model", ["azure_ai/gpt-5.5", "gpt-5.5", "azure_ai/gpt-chat-latest"])
-@pytest.mark.parametrize(
-    "request_params",
-    [
-        MappingProxyType({"stop": ["END"]}),
-        MappingProxyType({"presence_penalty": 0.5}),
-        MappingProxyType({"top_p": 0.5}),
-        MappingProxyType({"temperature": 0.2}),
-        MappingProxyType({"user": "u-1"}),
-        MappingProxyType({"tools": [_GET_WEATHER_TOOL], "tool_choice": "auto"}),
-        MappingProxyType({"max_tokens": 50, "reasoning_effort": "high"}),
-    ],
+_FOUNDRY_REQUEST_PARAMS: Final = (
+    MappingProxyType({"stop": ["END"]}),
+    MappingProxyType({"presence_penalty": 0.5}),
+    MappingProxyType({"top_p": 0.5}),
+    MappingProxyType({"temperature": 0.2}),
+    MappingProxyType({"user": "u-1"}),
+    MappingProxyType({"tools": [_GET_WEATHER_TOOL], "tool_choice": "auto"}),
+    MappingProxyType({"max_tokens": 50, "reasoning_effort": "high"}),
 )
+
+
+def _foundry_optional_params(
+    model: str, base_model: str | None, request_params: MappingProxyType[str, object], drop_params: bool
+) -> dict[str, object] | None:
+    try:
+        return litellm.get_optional_params(
+            model=model,
+            custom_llm_provider="azure_ai",
+            base_model=base_model,
+            drop_params=drop_params,
+            **request_params,
+        )
+    except litellm.UnsupportedParamsError:
+        return None
+
+
+@pytest.mark.parametrize(
+    "base_model", ["azure_ai/gpt-5.5", "gpt-5.5", "openai/gpt-5.5", "azure/gpt-5.5", "azure_ai/gpt-chat-latest"]
+)
+@pytest.mark.parametrize("request_params", _FOUNDRY_REQUEST_PARAMS)
 @pytest.mark.parametrize("drop_params", [False, True])
 def test_a_custom_named_foundry_deployment_answers_like_the_deployment_its_base_model_names(
     local_model_cost_map: None, base_model: str, request_params: MappingProxyType[str, object], drop_params: bool
 ) -> None:
-    def optional_params(model: str, deployment_base_model: str | None) -> dict[str, object] | None:
-        try:
-            return litellm.get_optional_params(
-                model=model,
-                custom_llm_provider="azure_ai",
-                base_model=deployment_base_model,
-                drop_params=drop_params,
-                **request_params,
-            )
-        except litellm.UnsupportedParamsError:
-            return None
+    assert _foundry_optional_params("prod-deployment", base_model, request_params, drop_params) == (
+        _foundry_optional_params(base_model.rsplit("/", 1)[-1], None, request_params, drop_params)
+    )
 
-    assert optional_params("prod-deployment", base_model) == optional_params(base_model.removeprefix("azure_ai/"), None)
+
+_KNOWN_NAME_WITH_GPT_5_BASE_MODEL: Final = (
+    ("gpt-5.5", "openai/gpt-5.5"),
+    ("gpt-5.5", "azure/gpt-5.5"),
+    ("model-router", "azure_ai/gpt-5.5"),
+    ("Phi-4", "gpt-5.5"),
+)
+
+
+@pytest.mark.parametrize(("model", "base_model"), _KNOWN_NAME_WITH_GPT_5_BASE_MODEL)
+@pytest.mark.parametrize("request_params", _FOUNDRY_REQUEST_PARAMS)
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_a_gpt_5_base_model_keeps_what_a_known_foundry_deployment_name_accepts(
+    local_model_cost_map: None,
+    model: str,
+    base_model: str,
+    request_params: MappingProxyType[str, object],
+    drop_params: bool,
+) -> None:
+    by_name: Final = _foundry_optional_params(model, None, request_params, drop_params)
+    with_base_model: Final = _foundry_optional_params(model, base_model, request_params, drop_params) or {}
+    assert by_name is None or by_name.items() <= with_base_model.items()
+
+
+@pytest.mark.parametrize(("model", "base_model"), _KNOWN_NAME_WITH_GPT_5_BASE_MODEL)
+def test_a_gpt_5_base_model_keeps_the_params_a_known_foundry_deployment_name_lists(
+    local_model_cost_map: None, model: str, base_model: str
+) -> None:
+    by_name: Final = litellm.get_supported_openai_params(model=model, custom_llm_provider="azure_ai")
+    with_base_model: Final = litellm.get_supported_openai_params(
+        model=model, custom_llm_provider="azure_ai", base_model=base_model
+    )
+    assert by_name is not None and with_base_model is not None
+    assert set(by_name) <= set(with_base_model)

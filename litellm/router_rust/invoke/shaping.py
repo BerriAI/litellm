@@ -249,7 +249,9 @@ def _declared_param_allowlist(params: Mapping[str, object]) -> frozenset[str]:
     return frozenset(entry for entry in entries if isinstance(entry, str))
 
 
-def _deployment_supports_param(deployment: Mapping[str, object], group: str, param: str, host: "PythonHost") -> bool:
+def _deployment_supports_param(
+    deployment: Mapping[str, object], group: str, param: str, value: object, host: "PythonHost"
+) -> bool:
     params: Final = as_dict(deployment.get("litellm_params"))
     if not params:
         return True
@@ -276,12 +278,24 @@ def _deployment_supports_param(deployment: Mapping[str, object], group: str, par
             custom_llm_provider=custom_llm_provider,
             base_model=base_model if isinstance(base_model, str) else None,
         )
+        if supported is not None and param not in supported:
+            return False
+        return param != "reasoning_effort" or not host.invoke(
+            "litellm_core_utils.reasoning_effort_capability.gpt_5_row_refuses_reasoning_effort"
+        )(
+            value,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            base_model=base_model if isinstance(base_model, str) else None,
+            deployment_model_info=model_info,
+        )
     except Exception:  # noqa: BLE001  # best-effort filter: an unresolvable provider must not narrow the request
         return True
-    return supported is None or param in supported
 
 
-def deployment_accepts_param(deployment: Mapping[str, object], group: str, param: str, host: "PythonHost") -> bool:
+def deployment_accepts_param(
+    deployment: Mapping[str, object], group: str, param: str, value: object, host: "PythonHost"
+) -> bool:
     params: Final = as_dict(deployment.get("litellm_params"))
     if not params:
         return True
@@ -292,7 +306,7 @@ def deployment_accepts_param(deployment: Mapping[str, object], group: str, param
         str(params.get("model") or ""), provider_param if isinstance(provider_param, str) else None
     ):
         return True
-    return _deployment_supports_param(deployment, group, param, host)
+    return _deployment_supports_param(deployment, group, param, value, host)
 
 
 def drop_unsupported_classifier_reasoning_effort(
@@ -304,7 +318,7 @@ def drop_unsupported_classifier_reasoning_effort(
     """``_drop_unsupported_classifier_reasoning_effort``."""
     if kwargs.get("reasoning_effort") is None or not _is_classifier_internal_call(kwargs):
         return
-    if deployment_accepts_param(deployment, model, "reasoning_effort", host):
+    if deployment_accepts_param(deployment, model, "reasoning_effort", kwargs.get("reasoning_effort"), host):
         return
     kwargs.pop("reasoning_effort", None)
     proxy_server_request: Final = kwargs.get("proxy_server_request")

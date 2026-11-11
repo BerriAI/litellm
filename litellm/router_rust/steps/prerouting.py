@@ -1096,7 +1096,10 @@ class PreRouter:
         unsupported: Final = frozenset(
             param
             for param in candidates
-            if not any(deployment_accepts_param(deployment, model, param, self._host) for deployment in deployments)
+            if not any(
+                deployment_accepts_param(deployment, model, param, tier_params.get(param), self._host)
+                for deployment in deployments
+            )
         )
         if not unsupported:
             return tier_params

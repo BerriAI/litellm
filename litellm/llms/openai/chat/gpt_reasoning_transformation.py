@@ -307,7 +307,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         return cls.is_reasoning_effort_level_explicitly_disabled(model, level)
 
     @classmethod
-    def _row_declared_reasoning_efforts(cls, model: str) -> tuple[str, ...] | None:
+    def row_declared_reasoning_efforts(cls, model: str) -> tuple[str, ...] | None:
         from litellm.litellm_core_utils.reasoning_effort_capability import declared_reasoning_efforts_for_map_key
 
         own_levels: Final = declared_reasoning_efforts_for_map_key(cls._model_map_lookup_name(model))
@@ -336,7 +336,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         on either route. Chat forwards it for the Responses bridge and a plain chat call gets the
         provider's own 400, exactly as before the gate read every level.
         """
-        declared: Final = cls._row_declared_reasoning_efforts(model)
+        declared: Final = cls.row_declared_reasoning_efforts(model)
         if declared is not None:
             return level not in declared
         if level in cls.ROUTE_SPECIFIC_REASONING_EFFORTS:
@@ -349,7 +349,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
     def row_disables_reasoning_effort_level(cls, model: str, level: str) -> bool:
         """The Responses gate: the row's declared levels when it lists them, else opt-out for
         every level except the route-specific ones."""
-        declared: Final = cls._row_declared_reasoning_efforts(model)
+        declared: Final = cls.row_declared_reasoning_efforts(model)
         if declared is not None:
             return level not in declared
         if level in cls.ROUTE_SPECIFIC_REASONING_EFFORTS:
