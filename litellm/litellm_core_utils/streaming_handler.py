@@ -114,7 +114,12 @@ def _stamp_usage_cost(
     usage: Final[object] = getattr(usage_chunk, "usage", None)
     if usage is None or isinstance(bill, bool) or not isinstance(bill, (int, float)):
         return
-    if bill <= 0 and not isinstance(getattr(usage, "cost", None), (int, float)):
+    complete_usage: Final = getattr(complete_response, "usage", None)
+    if (
+        bill <= 0
+        and not isinstance(getattr(usage, "cost", None), (int, float))
+        and not (bill == 0 and getattr(complete_usage, "cost", None) == 0)
+    ):
         return
     chunk_hidden: Final = get_hidden_params(usage_chunk)
     if chunk_hidden is not None and UPSTREAM_USAGE_COST in complete_hidden:

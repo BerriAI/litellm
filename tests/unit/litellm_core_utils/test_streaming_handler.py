@@ -7649,6 +7649,67 @@ def test_chunk_creator_preserves_hidden_provider_specific_fields_from_parsed_chu
     assert assembled._hidden_params["provider_specific_fields"] == {"traffic_type": "ON_DEMAND_FLEX"}
 
 
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    ("rates", "expected_cost"),
+    [
+        ({"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}, 0.0),
+        ({"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}, 20e-6),
+        ({"input_cost_per_token": 0.0}, None),
+        ({}, None),
+    ],
+)
+async def test_stream_usage_distinguishes_free_from_unpriced_calls(
+    monkeypatch: pytest.MonkeyPatch, sync_mode: bool, rates: dict[str, float], expected_cost: float | None
+) -> None:
+    model: Final = "stream-zero-cost-regression"
+    monkeypatch.setitem(litellm.model_cost, model, {"litellm_provider": "openai", "mode": "chat", **rates})
+    logging_obj: Final = Logging(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="completion" if sync_mode else "acompletion",
+        start_time=1.0,
+        litellm_call_id="free-stream",
+        function_id="test",
+    )
+    logging_obj.optional_params = {}
+    logging_obj.litellm_params = {}
+    logging_obj.stream_options = {"include_usage": True}
+    logging_obj.model_call_details["custom_llm_provider"] = "openai"
+    chunks: Final = [
+        ModelResponseStream(
+            id="free-stream",
+            created=1,
+            model=model,
+            choices=[StreamingChoices(index=0, delta=Delta(content="hi"), finish_reason="stop")],
+        ),
+        ModelResponseStream(
+            id="free-stream",
+            created=1,
+            model=model,
+            choices=[],
+            usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        ),
+    ]
+    stream: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=chunks),
+        model=model,
+        custom_llm_provider="openai",
+        logging_obj=logging_obj,
+        stream_options={"include_usage": True},
+    )
+    emitted: Final = tuple(stream) if sync_mode else tuple([chunk async for chunk in stream])
+    usage_chunks: Final = tuple(chunk for chunk in emitted if getattr(chunk, "usage", None) is not None)
+
+    assert len(usage_chunks) == 1
+    assert usage_chunks[0].usage.prompt_tokens == 10
+    assert usage_chunks[0].usage.completion_tokens == 5
+    assert getattr(usage_chunks[0].usage, "cost", None) == (
+        pytest.approx(expected_cost) if expected_cost is not None else None
+    )
+
+
 def test_the_usage_chunk_carries_the_bill_the_builder_priced_for_the_spend_row() -> None:
     from litellm.litellm_core_utils.streaming_handler import (
         _stamp_usage_cost,  # pyright: ignore[reportPrivateUsage]  # the helper under test

@@ -105,6 +105,11 @@ def _is_explicit_zero(value: object) -> bool:
     return not isinstance(value, bool) and isinstance(value, (int, float)) and value == 0
 
 
+def is_explicitly_free_usage(usage: Usage, pricing_entry: Mapping[str, object]) -> bool:
+    used_keys: Final = tuple(_effective_pricing_key(key, pricing_entry) for key in used_pricing_keys(usage))
+    return bool(used_keys) and all(_is_explicit_zero(pricing_entry.get(key)) for key in used_keys)
+
+
 def diagnose_zero_cost(
     usage: Usage,
     pricing_model: str,

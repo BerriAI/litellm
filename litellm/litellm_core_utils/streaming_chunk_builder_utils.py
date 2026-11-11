@@ -1500,7 +1500,11 @@ def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_o
     computed_cost: Final = logging_obj.response_cost_calculator(result=response)
     if isinstance(computed_cost, bool) or not isinstance(computed_cost, (int, float)) or computed_cost < 0:
         return
-    if computed_cost > 0 or isinstance(getattr(usage, "cost", None), (int, float)):
+    if (
+        computed_cost > 0
+        or isinstance(getattr(usage, "cost", None), (int, float))
+        or logging_obj.is_usage_explicitly_free(response)
+    ):
         stamp_litellm_bill_on_usage(response, usage, float(computed_cost))
 
 
