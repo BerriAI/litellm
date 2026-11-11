@@ -79,6 +79,25 @@ from typing import List, Optional
 from litellm.types.utils import LiteLLMCommonStrings
 
 
+@pytest.mark.parametrize("metadata_key", ("metadata", "litellm_metadata"))
+def test_free_usage_uses_deployment_metadata_prices(metadata_key: str) -> None:
+    obj: Final = Logging(
+        model="metadata-free-deployment",
+        messages=[],
+        stream=True,
+        call_type="completion",
+        start_time=1.0,
+        litellm_call_id="metadata-free",
+        function_id="test",
+    )
+    obj.litellm_params = {metadata_key: {"model_info": {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}}}
+    response: Final = ModelResponse(
+        model="metadata-free-deployment", usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+    )
+
+    assert obj.is_usage_explicitly_free(response) is True
+
+
 @pytest.fixture
 def logging_obj():
     return LitellmLogging(
