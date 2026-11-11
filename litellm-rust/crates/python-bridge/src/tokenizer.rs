@@ -38,16 +38,19 @@ use litellm_token_counter::huggingface::{
 #[cfg(feature = "tiktoken")]
 use litellm_token_counter::tiktoken::{TiktokenTokenizer, Vocabulary};
 
+#[cfg(any(feature = "tiktoken", feature = "huggingface"))]
+const HOST_MODULE: &str = "litellm.rust_bridge.host.tokenizers";
+
 #[cfg(feature = "tiktoken")]
 pub(crate) fn load_tiktoken(py: Python<'_>, encoding: &str) -> PyResult<TiktokenTokenizer> {
     enter_native()?;
-    let resource: std::path::PathBuf =
-        PyModule::import(py, "litellm.litellm_core_utils.tokenizers")?
-            .getattr("__file__")?
-            .extract()?;
+    let resources: std::path::PathBuf = PyModule::import(py, HOST_MODULE)?
+        .getattr("tiktoken_resource_dir")?
+        .call0()?
+        .extract()?;
     release_gil(py, || {
         TiktokenTokenizer::from_cached_ranks(encoding, |file| {
-            std::fs::read_to_string(resource.with_file_name(file))
+            std::fs::read_to_string(resources.join(file))
         })
     })
     .map_err(|error| token_count_error_to_pyerr(error.into()))
@@ -197,14 +200,9 @@ impl Tokenizer {
         #[cfg(feature = "huggingface")]
         {
             enter_native()?;
-            let kwargs = PyDict::new(py);
-            kwargs.set_item("repo_id", identifier)?;
-            kwargs.set_item("filename", "tokenizer.json")?;
-            kwargs.set_item("revision", revision)?;
-            kwargs.set_item("token", token)?;
-            let path: String = PyModule::import(py, "huggingface_hub")?
-                .getattr("hf_hub_download")?
-                .call((), Some(&kwargs))?
+            let path: String = PyModule::import(py, HOST_MODULE)?
+                .getattr("download_tokenizer")?
+                .call1((identifier, revision, token))?
                 .extract()?;
             let json = release_gil(py, || std::fs::read_to_string(path))
                 .map_err(TokenizerError::Download)?;

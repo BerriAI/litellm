@@ -21,7 +21,7 @@ from litellm.constants import (
     request_timeout,
 )
 from litellm.exceptions import BadRequestError
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, keyword_arguments
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.base_llm.realtime.http_transformation import BaseRealtimeHTTPConfig
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
@@ -394,7 +394,7 @@ async def acreate_realtime_client_secret(
 async def acreate_realtime_translation_client_secret(
     model: str | None = None,
     session: Mapping[str, Any] | None = None,
-    expires_after: Mapping[str, Any] | None = None,
+    expires_after: Mapping[str, object] | None = None,
     timeout: float | None = None,
     **kwargs: object,  # kwargs-ok: public API preserves provider-specific request options
 ) -> httpx.Response:
@@ -409,7 +409,11 @@ async def acreate_realtime_translation_client_secret(
     req: Final = RealtimeClientSecretRequest(
         model=requested_model_name,
         session=session_config,
-        expires_after=RealtimeExpiresAfter(**expires_after) if expires_after else None,
+        expires_after=RealtimeExpiresAfter(
+            **_ExpiresAfterFields(**keyword_arguments(expires_after, RealtimeExpiresAfter))
+        )
+        if expires_after
+        else None,
     )
     litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
     if not isinstance(litellm_logging_obj, LiteLLMLogging):
@@ -488,10 +492,18 @@ def _deployment_base_model(kwargs: Mapping[str, object], custom_llm_provider: st
     return None if base_model is None else base_model.removeprefix(f"{custom_llm_provider}/")
 
 
+class _ExpiresAfterFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
+class _TranscriptionSessionFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
 @wrapper_client
 async def acreate_realtime_transcription_session(
     model: str | None = None,
-    transcription_session: dict[str, Any] | None = None,
+    transcription_session: Mapping[str, object] | None = None,
     timeout: float | None = None,
     **kwargs,
 ):
@@ -506,7 +518,9 @@ async def acreate_realtime_transcription_session(
     """
     req: Final = RealtimeTranscriptionSessionRequest(
         model=model,
-        **(transcription_session or {}),
+        **_TranscriptionSessionFields(
+            **keyword_arguments(transcription_session or {}, RealtimeTranscriptionSessionRequest)
+        ),
     )
     model_name = req.resolved_model() or "gpt-realtime-whisper"
     litellm_logging_obj: Final[LiteLLMLogging] = kwargs.get("litellm_logging_obj")
@@ -626,7 +640,7 @@ async def arealtime_translation_calls(
     openai_ephemeral_key: str,
     sdp_body: bytes,
     model: str | None = None,
-    session: Mapping[str, Any] | None = None,
+    session: Mapping[str, object] | None = None,
     timeout: float | None = None,
     **kwargs: object,  # kwargs-ok: public API preserves provider-specific request options
 ) -> httpx.Response:

@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     BEDROCK_MANAGED_S3_OUTPUT_PREFIX,
     BEDROCK_MANAGED_S3_PREFIXES,
     BEDROCK_MANAGED_S3_UPLOAD_PREFIX,
+    STORED_S3_BUCKET_PARAM,
     build_managed_cloud_object_name,
     encode_s3_object_key_for_url,
     sanitize_cloud_object_component,
@@ -313,11 +314,19 @@ def get_configured_s3_bucket_names(litellm_params: Mapping[str, object]) -> tupl
     Resolve the S3 buckets a Bedrock file id may live in.
 
     Bedrock batch outputs land in ``s3_output_bucket_name`` when it differs from
-    the input bucket, so retrieval validates against both.
+    the input bucket, so retrieval validates against both, plus the bucket LiteLLM
+    recorded for a managed file uploaded or written to a request-chosen bucket.
     """
     input_bucket: Final = _input_bucket_name(litellm_params)
     output_bucket: Final = _output_bucket_name(litellm_params)
-    buckets: Final = tuple(dict.fromkeys(bucket for bucket in (input_bucket, output_bucket) if bucket))
+    stored_bucket: Final = litellm_params.get(STORED_S3_BUCKET_PARAM)
+    buckets: Final = tuple(
+        dict.fromkeys(
+            bucket
+            for bucket in (input_bucket, output_bucket, stored_bucket if isinstance(stored_bucket, str) else None)
+            if bucket
+        )
+    )
     if not buckets:
         raise ValueError(_S3_BUCKET_REQUIRED_ERROR)
     return buckets

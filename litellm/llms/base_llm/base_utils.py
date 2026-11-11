@@ -15,8 +15,9 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Final, TypeAlias
 
+import httpx
 from openai.lib import _parsing, _pydantic  # pyright: ignore[reportPrivateUsage]  # SDK parser internals
-from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, JsonValue, PositiveFloat, TypeAdapter, ValidationError
 from typing_extensions import TypeIs  # noqa: TID251  # narrows a message to its system member by the role literal
 
 from litellm._logging import verbose_logger
@@ -38,6 +39,18 @@ from litellm.types.utils import (
     TokenCountMessagesFormat,
     TokenCountResponse,
 )
+
+_SECONDS: Final[TypeAdapter[float]] = TypeAdapter(PositiveFloat)
+
+
+def deployment_timeout(litellm_params: Mapping[str, object]) -> float | httpx.Timeout | None:
+    timeout: Final = litellm_params.get("timeout")
+    if timeout is None or isinstance(timeout, httpx.Timeout):
+        return timeout
+    try:
+        return _SECONDS.validate_python(timeout)
+    except ValidationError:
+        return None
 
 
 class BaseTokenCounter(ABC):
