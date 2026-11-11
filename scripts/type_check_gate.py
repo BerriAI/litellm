@@ -93,7 +93,7 @@ NODE_HEAP_OPTION = "--max-old-space-size=8192"
 # Bucket for a basedpyright diagnostic with no `rule`. Counted so it's gated.
 UNCODED = "<uncoded>"
 
-ANY_CAPS: Final[Mapping[str, int]] = MappingProxyType({"reportAny": 6150, "reportExplicitAny": 1440})
+ANY_CAPS: Final[Mapping[str, int]] = MappingProxyType({"reportAny": 1560, "reportExplicitAny": 480})
 
 
 def _to_relative(raw: str, root: Path) -> str | None:
