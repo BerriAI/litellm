@@ -23,6 +23,8 @@ from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache, RedisTimeoutLogThrottle
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.types.caching import EMBEDDING_CACHE_FORMAT_VERSION, LiteLLMCacheType, SemanticCacheScope
 from litellm.types.utils import Embedding, EmbeddingResponse, Usage
 
@@ -1655,3 +1657,137 @@ def test_cache_key_separates_model_ids_unless_a_model_group_owns_the_key() -> No
     assert key_a != bare
     assert key_a == key_a_again
     assert grouped_a == grouped_b
+
+
+_TENANT_A_IDENTITY: Final = {"user_api_key": "hashed-key-a", "user_api_key_team_id": "team-a"}
+_TENANT_B_IDENTITY: Final = {"user_api_key": "hashed-key-b", "user_api_key_team_id": "team-b"}
+
+
+@pytest.mark.parametrize(
+    "client_cache_options",
+    [
+        pytest.param({}, id="no-client-options"),
+        pytest.param({"cache_key": "client-chosen-key"}, id="same-client-cache-key"),
+        pytest.param({"cache": {"namespace": "shared"}}, id="same-client-namespace"),
+    ],
+)
+def test_exact_cache_is_not_shared_across_tenants(
+    monkeypatch: pytest.MonkeyPatch, client_cache_options: dict[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+
+    def answer(tenant: dict[str, str], content: str) -> object:
+        response: Final = completion(
+            model="gpt-4o-mini",
+            messages=_CACHING_TEST_MESSAGES,
+            caching=True,
+            mock_response=content,
+            metadata=dict(tenant),
+            **client_cache_options,
+        )
+        return response.choices[0].message.content
+
+    assert answer(_TENANT_A_IDENTITY, "tenant a") == "tenant a"
+    assert answer(_TENANT_B_IDENTITY, "tenant b") == "tenant b"
+    assert answer(_TENANT_A_IDENTITY, "tenant a, uncached") == "tenant a"
+
+
+@pytest.mark.parametrize("metadata_field", ["metadata", "litellm_metadata"])
+@pytest.mark.parametrize("forged_key_param", ["cache_key", "preset_cache_key"])
+def test_exact_cache_rejects_another_tenants_cache_key(metadata_field: str, forged_key_param: str) -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    tenant_a_request: Final = {"model": "gpt-4o-mini", "messages": messages, metadata_field: dict(_TENANT_A_IDENTITY)}
+    cache.add_cache('{"answer": "tenant a"}', **tenant_a_request)
+    tenant_a_key: Final = cache.get_cache_key(**tenant_a_request)
+    forged_key: Final = (
+        {"cache_key": tenant_a_key}
+        if forged_key_param == "cache_key"
+        else {"litellm_params": {"preset_cache_key": tenant_a_key}}
+    )
+
+    assert cache.get_cache(**tenant_a_request) is not None
+    assert cache.get_cache(**forged_key, **{metadata_field: dict(_TENANT_B_IDENTITY)}) is None
+
+
+@pytest.mark.parametrize("metadata_field", ("metadata", "litellm_metadata"))
+@pytest.mark.parametrize("identity_field", ("api_key", "team_id", "org_id"))
+@pytest.mark.parametrize("nested", (False, True))
+def test_exact_cache_entries_follow_authenticated_identity(
+    metadata_field: str, identity_field: str, nested: bool
+) -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    identity: Final = {"api_key": "key-a", "team_id": "team-a", "org_id": "org-a"}
+
+    def request(values: dict[str, str]) -> dict[str, object]:
+        data: Final = {
+            "metadata": {"user_api_key": "request-label"},
+            "litellm_metadata": {"trace": "complete"},
+            metadata_field: {},
+        }
+        authenticated: Final = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(**values, is_session_token=True, key_alias="session-label"),
+            _metadata_variable_name=metadata_field,
+        )
+        return (
+            {"metadata": {"user_api_key": "request-label"}, "litellm_params": authenticated}
+            if nested
+            else authenticated
+        )
+
+    first: Final = request(identity)
+    second: Final = request({**identity, identity_field: "different"})
+    cache.add_cache({"answer": "first"}, cache_key="named-entry", **first)
+    assert cache.get_cache(cache_key="named-entry", **second) is None
+    cache.add_cache({"answer": "second"}, cache_key="named-entry", **second)
+    assert cache.get_cache(cache_key="named-entry", **first) == {"answer": "first"}
+    assert cache.get_cache(cache_key="named-entry", **second) == {"answer": "second"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("metadata_field", ("metadata", "litellm_metadata"))
+async def test_exact_async_cache_preserves_scoped_custom_entries(metadata_field: str) -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    first: Final = {metadata_field: _TENANT_A_IDENTITY}
+    second: Final = {metadata_field: _TENANT_B_IDENTITY}
+    await cache.async_add_cache({"answer": "first"}, cache_key="named-entry", **first)
+    assert await cache.async_get_cache(cache_key="named-entry", **second) is None
+    assert await cache.async_get_cache(cache_key="named-entry", **first) == {"answer": "first"}
+
+
+@pytest.mark.parametrize("invalid_key", (None, 1, {}))
+def test_exact_cache_invalid_custom_keys_do_not_fall_back(invalid_key: object) -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    cache.add_cache({"answer": "stored"}, model="test-model", metadata=_TENANT_A_IDENTITY)
+    assert cache.get_cache(model="test-model", cache_key=invalid_key, metadata=_TENANT_A_IDENTITY) is None
+
+
+def test_exact_cache_without_identity_keeps_sdk_entries() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    cache.add_cache({"answer": "stored"}, cache_key="named-entry")
+    assert cache.get_cache(cache_key="named-entry", metadata={"trace": "request"}) == {"answer": "stored"}
+
+
+@pytest.mark.parametrize("metadata_field", ("metadata", "litellm_metadata"))
+@pytest.mark.parametrize("identity_field", ("user_api_key", "user_api_key_team_id", "user_api_key_org_id"))
+@pytest.mark.parametrize("nested", (False, True))
+@pytest.mark.parametrize("hook_fields", ({}, dict.fromkeys((*_TENANT_A_IDENTITY, "user_api_key_org_id"))))
+def test_exact_cache_preserves_flattened_identity_with_hook_metadata(
+    metadata_field: str, identity_field: str, nested: bool, hook_fields: dict[str, None]
+) -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    identity: Final = {**_TENANT_A_IDENTITY, "user_api_key_org_id": "org-a"}
+
+    def request(values: dict[str, str]) -> dict[str, object]:
+        data: Final = {
+            "metadata": {"trace": "complete", **hook_fields},
+            "litellm_metadata": {"trace": "complete", **hook_fields},
+            metadata_field: values,
+        }
+        return {"litellm_params": data} if nested else data
+
+    first: Final = request(identity)
+    second: Final = request({**identity, identity_field: "different"})
+    cache.add_cache({"answer": "first"}, cache_key="named-entry", **first)
+    assert cache.get_cache(cache_key="named-entry", **second) is None
+    assert cache.get_cache(cache_key="named-entry", **first) == {"answer": "first"}

@@ -16,6 +16,7 @@ import traceback
 from collections.abc import Awaitable, Callable, Generator, Mapping
 from contextlib import contextmanager
 from enum import Enum
+from itertools import product
 from typing import Any, Final, Literal, Protocol, cast
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
@@ -47,10 +48,22 @@ from .s3_cache import S3Cache
 
 RESPONSE_CACHE_TARGET: Final = "llm_response"
 _ALWAYS_KEYED_PROVIDER_PARAMS: Final = frozenset({"continuation_token", "return_token_ids"})
+_TENANT_TAG_PREFIX: Final = "tenant-"
+_TENANT_TAG_DIGEST_LENGTH: Final = 32
+_TENANT_METADATA: Final = TypeAdapter(Mapping[str, object])
 _DECODED_LITERAL: Final = TypeAdapter(object)
 _REDIS_STARTUP_NODES_ADAPTER: Final = TypeAdapter(
     list[dict[str, object]], config=ConfigDict(strict=True, hide_input_in_errors=True)
 )
+
+
+class _CacheTenantIdentity(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    api_key: str | None = None
+    team_id: str | None = None
+    org_id: str | None = None
+    end_user_id: str | None = None
 
 
 class _SupportsAsyncPing(Protocol):
@@ -396,16 +409,89 @@ class Cache:
             return (*self._SEMANTIC_CACHE_TENANT_SCOPE_FIELDS, self._SEMANTIC_CACHE_END_USER_SCOPE_FIELD)
         return self._SEMANTIC_CACHE_TENANT_SCOPE_FIELDS
 
-    def _get_semantic_cache_tenant_scope(self, kwargs: dict) -> str:
-        litellm_params: Final[dict] = kwargs.get("litellm_params") or {}
-        metadata_sources: Final[tuple[dict, ...]] = tuple(
-            source.get(key) or {} for source in (kwargs, litellm_params) for key in ("metadata", "litellm_metadata")
+    def _get_semantic_cache_tenant_scope(self, kwargs: Mapping[str, object]) -> str:
+        return self._get_tenant_scope(kwargs, self._semantic_cache_scope_fields())
+
+    @staticmethod
+    def _get_tenant_scope(kwargs: Mapping[str, object], fields: tuple[str, ...]) -> str:
+        litellm_params: Final = kwargs.get("litellm_params")
+        param_sources: Final[tuple[Mapping[str, object], ...]] = (
+            kwargs,
+            _TENANT_METADATA.validate_python(litellm_params) if isinstance(litellm_params, Mapping) else {},
+        )
+        metadata_sources: Final[tuple[Mapping[str, object], ...]] = tuple(
+            _TENANT_METADATA.validate_python(metadata)
+            for source in param_sources
+            for key in ("metadata", "litellm_metadata")
+            if isinstance(metadata := source.get(key), Mapping)
         )
         scope_values: Final = (
             (field, next((source[field] for source in metadata_sources if source.get(field) is not None), None))
-            for field in self._semantic_cache_scope_fields()
+            for field in fields
         )
         return "".join(f"{field}: {value}" for field, value in scope_values if value is not None)
+
+    def _cache_tenant_scope_fields(self) -> tuple[str, ...]:
+        if self._is_semantic_cache():
+            return self._semantic_cache_scope_fields()
+        return self._SEMANTIC_CACHE_TENANT_SCOPE_FIELDS
+
+    def scope_cache_key(self, cache_key: str, kwargs: Mapping[str, object]) -> str:
+        tenant_scope: Final = self._get_cache_key_tenant_scope(kwargs)
+        if not tenant_scope:
+            return cache_key
+        tenant_digest: Final = hashlib.sha256(tenant_scope.encode()).hexdigest()[:_TENANT_TAG_DIGEST_LENGTH]
+        tenant_prefix: Final = f"{_TENANT_TAG_PREFIX}{tenant_digest}:"
+        if cache_key.startswith(tenant_prefix):
+            return cache_key
+        return f"{tenant_prefix}{cache_key}"
+
+    def _get_cache_key_tenant_scope(self, kwargs: Mapping[str, object]) -> str:
+        params: Final = kwargs.get("litellm_params")
+        sources: Final[tuple[Mapping[str, object], ...]] = (
+            kwargs,
+            _TENANT_METADATA.validate_python(params) if isinstance(params, Mapping) else {},
+        )
+        fields: Final = self._cache_tenant_scope_fields()
+        metadata_sources: Final = tuple(
+            _TENANT_METADATA.validate_python(raw)
+            for source, key in product(sources, ("litellm_metadata", "metadata"))
+            if isinstance(raw := source.get(key), Mapping)
+        )
+        auth: Final = next(
+            (source["user_api_key_auth"] for source in metadata_sources if source.get("user_api_key_auth") is not None),
+            None,
+        )
+        flattened: Final = {
+            field: next((source[field] for source in metadata_sources if source.get(field) is not None), None)
+            for field in (*self._SEMANTIC_CACHE_TENANT_SCOPE_FIELDS, self._SEMANTIC_CACHE_END_USER_SCOPE_FIELD)
+        }
+        identity: Final = (
+            _CacheTenantIdentity.model_validate(auth, from_attributes=True)
+            if auth is not None
+            else _CacheTenantIdentity.model_validate(
+                {
+                    "api_key": flattened["user_api_key"],
+                    "team_id": flattened["user_api_key_team_id"],
+                    "org_id": flattened["user_api_key_org_id"],
+                    "end_user_id": flattened["user_api_key_end_user_id"],
+                }
+            )
+        )
+        values: Final = {
+            "user_api_key": identity.api_key,
+            "user_api_key_team_id": identity.team_id,
+            "user_api_key_org_id": identity.org_id,
+            "user_api_key_end_user_id": identity.end_user_id,
+        }
+        scope: Final = tuple((field, values[field]) for field in fields if values[field] is not None)
+        return json.dumps(scope, separators=(",", ":")) if scope else ""
+
+    def resolve_cache_key(self, kwargs: Mapping[str, object]) -> str | None:
+        if "cache_key" not in kwargs:
+            return self.get_cache_key(**kwargs)
+        cache_key: Final = kwargs["cache_key"]
+        return self.scope_cache_key(cache_key, kwargs) if isinstance(cache_key, str) else None
 
     def get_cache_key(self, **kwargs: object) -> str:
         """
@@ -423,7 +509,7 @@ class Cache:
         preset_cache_key: Final = self.get_preset_cache_key_from_kwargs(**kwargs)
         if preset_cache_key is not None:
             verbose_logger.debug("\nReturning preset cache key: %s", preset_cache_key)
-            return preset_cache_key
+            return self.scope_cache_key(preset_cache_key, kwargs)
 
         combined_kwargs: Final = ModelParamHelper.get_all_llm_api_params()
         is_semantic_cache: Final = self._is_semantic_cache()
@@ -460,6 +546,7 @@ class Cache:
             + tool_call_id_shape_material
         )
         hashed_cache_key = self._add_namespace_to_cache_key(hashed_cache_key, **kwargs)
+        hashed_cache_key = self.scope_cache_key(hashed_cache_key, kwargs)
         verbose_logger.debug(
             "\nCreated cache key: %s (source material length: %d)",
             hashed_cache_key,
@@ -711,10 +798,7 @@ class Cache:
             if self.should_use_cache(**kwargs) is not True:
                 return
             with response_cache_phase("get"):
-                if "cache_key" in kwargs:
-                    cache_key = kwargs["cache_key"]
-                else:
-                    cache_key = self.get_cache_key(**kwargs)
+                cache_key = self.resolve_cache_key(kwargs)
                 if cache_key is not None:
                     cache_control_args: Final[DynamicCacheControl] = kwargs.get("cache", {})
                     max_age = cache_control_args.get("s-maxage") or cache_control_args.get("s-max-age") or float("inf")
@@ -744,10 +828,7 @@ class Cache:
                 return
 
             with response_cache_phase("get"):
-                if "cache_key" in kwargs:
-                    cache_key = kwargs["cache_key"]
-                else:
-                    cache_key = self.get_cache_key(**kwargs)
+                cache_key = self.resolve_cache_key(kwargs)
                 if cache_key is not None:
                     cache_control_args: Final = kwargs.get("cache", {})
                     max_age: Final = cache_control_args.get(
@@ -767,10 +848,7 @@ class Cache:
         Common implementation across sync + async add_cache functions
         """
         try:
-            if "cache_key" in kwargs:
-                cache_key = kwargs["cache_key"]
-            else:
-                cache_key = self.get_cache_key(**kwargs)
+            cache_key = self.resolve_cache_key(kwargs)
             if cache_key is not None:
                 if isinstance(result, BaseModel):
                     result = result.model_dump_json(exclude_unset=True)
