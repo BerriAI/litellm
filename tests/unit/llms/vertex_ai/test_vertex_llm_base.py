@@ -7,7 +7,6 @@ import pathlib
 import re
 import time
 import traceback
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from functools import partial
 from threading import Event
@@ -2598,7 +2597,9 @@ def test_get_access_token_reraises_malformed_service_account_credentials_without
     ]
 
 
-def test_expired_credentials_shared_by_an_inferred_and_an_explicit_project_refresh_once() -> None:
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.asyncio
+async def test_expired_credentials_shared_by_an_inferred_and_an_explicit_project_refresh_once(is_async: bool) -> None:
     vertex: Final = VertexBase()
     now: Final = datetime(2025, 1, 1)
     credentials: Final = _authorized_user_cache_credentials("shared")
@@ -2611,8 +2612,8 @@ def test_expired_credentials_shared_by_an_inferred_and_an_explicit_project_refre
         oauth.add_callback(responses.POST, "https://oauth2.googleapis.com/token", callback=token_response)
         assert vertex.get_access_token(credentials, None) == ("token-1", "shared")
         clock.return_value = now + timedelta(seconds=7200)
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            tokens: Final = tuple(pool.map(partial(vertex.get_access_token, credentials), (None, "shared")))
+        fetch: Final = vertex.get_access_token_async if is_async else partial(asyncio.to_thread, vertex.get_access_token)
+        tokens: Final = tuple(await asyncio.gather(*(fetch(credentials, project) for project in (None, "shared"))))
 
         assert tokens == (("token-2", "shared"), ("token-2", "shared"))
         assert len(oauth.calls) == 2
