@@ -6,7 +6,7 @@ pre-routing strategy builders (``RustLegacyMembers``, litellm/router_rust/surfac
 
 import asyncio
 from collections.abc import Mapping
-from typing import Final
+from typing import Final, Literal
 
 import pytest
 
@@ -14,6 +14,8 @@ import litellm
 from litellm.constants import ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.token_counter import served_openai_models
+from litellm.redis.stores.connection import RedisStores
+from litellm.redis.stores.router_usage import RouterUsage, RouterUsageStore
 from litellm.router_api import RoutingContext
 from litellm.router_core import RouterCore
 from litellm.router_strategy.adaptive_router.hooks import AdaptiveRouterPostCallHook
@@ -113,14 +115,24 @@ class RecordingLogging:
         self.dispatched.append(kwargs)
 
 
-def counters(core: RouterCore, deployment_id: str, kind: str) -> list[object]:  # mutable-ok: a fresh list
-    """The per-minute ``kind`` (``tpm``, ``rpm``) counters of ``deployment_id`` in the routing cache."""
-    memory: Final = core.health().store.in_memory_cache
-    return [
-        memory.get_cache(key)
-        for key in tuple(memory.cache_dict)
-        if key.startswith(f"global_router:{deployment_id}:") and f":{kind}:" in key
-    ]
+async def counted(core: RouterCore, kind: Literal["tpm", "rpm"]) -> int | None:
+    """Group ``g``'s ``kind`` usage this minute, as ``health().usage`` reports it."""
+    tpm, rpm = await core.health().usage("g")
+    return tpm if kind == "tpm" else rpm
+
+
+class RefusingUsage(RouterUsageStore):
+    """A usage store that is down: every deployment count it is asked for fails."""
+
+    async def increment_deployment(
+        self, deployment_id: str, model: str | None, minute: str, tokens: float, requests: int
+    ) -> None:
+        raise ConnectionError("the usage store is down")
+
+
+class RefusingUsageHost(ScriptedHost):
+    def router_usage(self, redis: RedisStores) -> RouterUsage:
+        return RefusingUsage(redis.router_usage())
 
 
 def call_metadata(deployment_id: str = "a") -> dict[str, object]:  # mutable-ok: the request's own bucket
@@ -486,7 +498,7 @@ async def test_a_rate_limited_turn_cools_the_deployment_down(make_core: MakeCore
 
 @pytest.mark.asyncio
 async def test_make_call_counts_a_tracked_deployments_usage_and_notes_it_on_the_request(make_core: MakeCore) -> None:
-    core: Final = make_core(model_list=[deployment("g", "a", model="openai/gpt-4o", rpm=5)])
+    core: Final = make_core(model_list=[deployment("g", "a", rpm=5)])
     metadata: Final = call_metadata()
 
     async def endpoint(**kwargs: object) -> object:  # kwargs-ok: the request, as make_call passes it
@@ -494,14 +506,14 @@ async def test_make_call_counts_a_tracked_deployments_usage_and_notes_it_on_the_
 
     await core.make_call(endpoint, model="g", metadata=metadata)  # pyright: ignore[reportAttributeAccessIssue]  # an old public member
 
-    assert counters(core, "a", "tpm") == [10]
-    assert counters(core, "a", "rpm") == [1]
+    assert await counted(core, "tpm") == 10
+    assert await counted(core, "rpm") == 1
     assert metadata[ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY] == 10
 
 
 @pytest.mark.asyncio
 async def test_make_call_runs_a_sync_endpoint_and_stamps_the_response(make_core: MakeCore) -> None:
-    core: Final = make_core(model_list=[deployment("g", "a", model="openai/gpt-4o")])
+    core: Final = make_core(model_list=[deployment("g", "a")])
     answer: Final = completion_response()
 
     def endpoint(**kwargs: object) -> object:  # kwargs-ok: the request, as make_call passes it
@@ -511,12 +523,12 @@ async def test_make_call_runs_a_sync_endpoint_and_stamps_the_response(make_core:
 
     assert response is answer
     assert answer._hidden_params["model_id"] == "a"  # pyright: ignore[reportPrivateUsage]  # what set_response_headers stamps
-    assert counters(core, "a", "tpm") == []
+    assert await counted(core, "tpm") is None
 
 
 @pytest.mark.asyncio
 async def test_make_call_raises_the_endpoints_error(make_core: MakeCore) -> None:
-    core: Final = make_core(model_list=[deployment("g", "a", model="openai/gpt-4o", rpm=5)])
+    core: Final = make_core(model_list=[deployment("g", "a", rpm=5)])
     metadata: Final = call_metadata()
 
     async def endpoint(**kwargs: object) -> object:  # kwargs-ok: the request, as make_call passes it
@@ -525,13 +537,13 @@ async def test_make_call_raises_the_endpoints_error(make_core: MakeCore) -> None
     with pytest.raises(litellm.InternalServerError):
         await core.make_call(endpoint, model="g", metadata=metadata)  # pyright: ignore[reportAttributeAccessIssue]  # an old public member
 
-    assert counters(core, "a", "rpm") == []
+    assert await counted(core, "rpm") is None
     assert ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY not in metadata
 
 
 @pytest.mark.asyncio
 async def test_increment_usage_notes_tokens_even_for_a_deployment_it_does_not_track(make_core: MakeCore) -> None:
-    core: Final = make_core(model_list=[deployment("g", "a", model="openai/gpt-4o")])
+    core: Final = make_core(model_list=[deployment("g", "a")])
     metadata: Final = call_metadata()
 
     await core.increment_deployment_usage_for_response(  # pyright: ignore[reportAttributeAccessIssue]  # an old public member
@@ -539,25 +551,18 @@ async def test_increment_usage_notes_tokens_even_for_a_deployment_it_does_not_tr
     )
 
     assert metadata[ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY] == 7
-    assert counters(core, "a", "rpm") == []
+    assert await counted(core, "rpm") is None
 
 
 @pytest.mark.asyncio
-async def test_increment_usage_takes_the_note_back_when_the_count_fails(
-    make_core: MakeCore, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    core: Final = make_core(model_list=[deployment("g", "a", model="openai/gpt-4o", rpm=5)])
+async def test_increment_usage_takes_the_note_back_when_the_count_fails() -> None:
+    core: Final = rust_core(RefusingUsageHost(), model_list=[deployment("g", "a", rpm=5)])
     metadata: Final = call_metadata()
-
-    async def refused(**kwargs: object) -> None:  # kwargs-ok: the pipeline's arguments
-        raise ConnectionError("the usage store is down")
-
-    monkeypatch.setattr(core.health().store, "async_increment_cache_pipeline", refused)
 
     await core.increment_deployment_usage_for_response(completion_response(), {"model": "g", "metadata": metadata})  # pyright: ignore[reportAttributeAccessIssue]  # an old public member
 
     assert ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY not in metadata
-    assert counters(core, "a", "rpm") == []
+    assert await counted(core, "rpm") is None
 
 
 @pytest.mark.asyncio
@@ -569,16 +574,16 @@ async def test_increment_usage_takes_the_note_back_when_the_count_fails(
 async def test_increment_usage_skips_a_request_with_nothing_to_count_under(
     make_core: MakeCore, request_kwargs: dict[str, object]
 ) -> None:
-    core: Final = make_core(model_list=[deployment("g", "a", model="openai/gpt-4o", rpm=5)])
+    core: Final = make_core(model_list=[deployment("g", "a", rpm=5)])
 
     await core.increment_deployment_usage_for_response(completion_response(), dict(request_kwargs))  # pyright: ignore[reportAttributeAccessIssue]  # an old public member
 
-    assert counters(core, "a", "rpm") == []
+    assert await counted(core, "rpm") is None
 
 
 @pytest.mark.asyncio
 async def test_increment_usage_counts_nothing_for_no_response(make_core: MakeCore) -> None:
-    core: Final = make_core(model_list=[deployment("g", "a", model="openai/gpt-4o", rpm=5)])
+    core: Final = make_core(model_list=[deployment("g", "a", rpm=5)])
     metadata: Final = call_metadata()
 
     await core.increment_deployment_usage_for_response(None, {"model": "g", "metadata": metadata})  # pyright: ignore[reportAttributeAccessIssue]  # an old public member
@@ -593,7 +598,7 @@ async def test_async_deployment_callback_on_failure_counts_one_request(make_core
 
     await core.async_deployment_callback_on_failure(logged, None, None, None)  # pyright: ignore[reportAttributeAccessIssue]  # an old public member
 
-    assert counters(core, "a", "rpm") == [1]
+    assert await counted(core, "rpm") == 1
 
 
 @pytest.mark.asyncio
@@ -611,7 +616,7 @@ async def test_async_deployment_callback_on_failure_skips(make_core: MakeCore, l
 
     await core.async_deployment_callback_on_failure(logged, None, None, None)  # pyright: ignore[reportAttributeAccessIssue]  # an old public member
 
-    assert counters(core, "a", "rpm") == []
+    assert await counted(core, "rpm") is None
 
 
 @pytest.mark.asyncio

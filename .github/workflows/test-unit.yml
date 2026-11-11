@@ -182,6 +182,7 @@ jobs:
               tests/unit/google_genai
               tests/unit/router_strategy
               tests/unit/router_utils
+              tests/unit/redis
               tests/unit/proxy/common_utils/test_cache_aware_routing.py
               tests/unit/enterprise/enterprise_callbacks/send_emails
               tests/unit/enterprise/proxy/test_afile_retrieve_returns_unified_id.py
@@ -396,6 +397,7 @@ jobs:
               tests/unit/llms/voyage
               tests/unit/llms/wandb
               tests/unit/llms/watsonx
+              tests/unit/llms/webiq
               tests/unit/llms/xai
               tests/unit/llms/xinference
               tests/unit/llms/you_com
@@ -1034,9 +1036,9 @@ jobs:
         run: |
           diff -u model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
           if [ -z "$RUST_BRIDGE_ARTIFACT" ]; then
-            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra extra_proxy --extra proxy-runtime --extra utils
+            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra switchyard --extra saml --extra extra_proxy --extra proxy-runtime --extra utils
           else
-            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra extra_proxy --extra proxy-runtime --extra utils --no-install-project --no-install-package litellm-proxy
+            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra switchyard --extra saml --extra extra_proxy --extra proxy-runtime --extra utils --no-install-project --no-install-package litellm-proxy
             uv pip install --no-deps --python .venv/bin/python rust-bridge-dist/*.whl
             cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
             uv run --no-sync python -c "import importlib.metadata; import litellm.rust_bridge._native; print(importlib.metadata.version('litellm'))"
@@ -1293,7 +1295,7 @@ jobs:
       - name: Install dependencies
         if: steps.changes.outputs.decision != 'skip'
         run: |
-          .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router
+          .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra switchyard
 
       - name: Cache Prisma binaries
         if: steps.changes.outputs.decision != 'skip'
@@ -1496,9 +1498,9 @@ jobs:
           RUST_BRIDGE_ARTIFACT: ${{ needs.rust-bridge.outputs.artifact }}
         run: |
           if [ -z "$RUST_BRIDGE_ARTIFACT" ]; then
-            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra extra_proxy --extra proxy-runtime --extra utils
+            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra switchyard --extra saml --extra extra_proxy --extra proxy-runtime --extra utils
           else
-            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra extra_proxy --extra proxy-runtime --extra utils --no-install-project --no-install-package litellm-proxy
+            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra switchyard --extra saml --extra extra_proxy --extra proxy-runtime --extra utils --no-install-project --no-install-package litellm-proxy
             uv pip install --no-deps --python .venv/bin/python rust-bridge-dist/*.whl
             cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
           fi

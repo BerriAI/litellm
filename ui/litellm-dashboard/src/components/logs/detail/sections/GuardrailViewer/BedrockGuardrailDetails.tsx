@@ -218,7 +218,9 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
       <div className="border rounded-lg p-4">
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
-            <KV label={t("logs.detail.bedrock.action")}>{chip(response.action ?? "N/A", actionTone)}</KV>
+            <KV label={t("logs.detail.bedrock.action")}>
+              {chip(response.action ?? t("logs.detail.bedrock.notAvailable"), actionTone)}
+            </KV>
             {response.actionReason && <KV label={t("logs.detail.bedrock.actionReason")}>{response.actionReason}</KV>}
             {response.blockedResponse && (
               <KV label={t("logs.detail.bedrock.blockedResponse")}>
@@ -256,12 +258,15 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
           {response.assessments.map((assess, idx) => {
             const policyBadges = (
               <div className="flex flex-wrap gap-1">
-                {assess.wordPolicy && chip("word", "slate")}
-                {assess.contentPolicy && chip("content", "slate")}
-                {assess.topicPolicy && chip("topic", "slate")}
-                {assess.sensitiveInformationPolicy && chip("sensitive-info", "slate")}
-                {assess.contextualGroundingPolicy && chip("contextual-grounding", "slate")}
-                {assess.automatedReasoningPolicy && chip("automated-reasoning", "slate")}
+                {assess.wordPolicy && chip(t("logs.detail.bedrock.policyChips.word"), "slate")}
+                {assess.contentPolicy && chip(t("logs.detail.bedrock.policyChips.content"), "slate")}
+                {assess.topicPolicy && chip(t("logs.detail.bedrock.policyChips.topic"), "slate")}
+                {assess.sensitiveInformationPolicy &&
+                  chip(t("logs.detail.bedrock.policyChips.sensitiveInformation"), "slate")}
+                {assess.contextualGroundingPolicy &&
+                  chip(t("logs.detail.bedrock.policyChips.contextualGrounding"), "slate")}
+                {assess.automatedReasoningPolicy &&
+                  chip(t("logs.detail.bedrock.policyChips.automatedReasoning"), "slate")}
               </div>
             );
 
@@ -293,7 +298,7 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
                           {assess.wordPolicy.customWords!.map((w, i) => (
                             <div key={i} className="flex justify-between items-center p-2 bg-muted rounded-sm">
                               <div className="flex items-center gap-2">
-                                {chip(w.action ?? "N/A", w.detected ? "red" : "slate")}
+                                {chip(w.action ?? t("logs.detail.bedrock.notAvailable"), w.detected ? "red" : "slate")}
                                 <span className="font-mono text-sm break-all">{w.match}</span>
                               </div>
                               {boolPill(w.detected)}
@@ -308,7 +313,7 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
                           {assess.wordPolicy.managedWordLists!.map((w, i) => (
                             <div key={i} className="flex justify-between items-center p-2 bg-muted rounded-sm">
                               <div className="flex items-center gap-2">
-                                {chip(w.action ?? "N/A", w.detected ? "red" : "slate")}
+                                {chip(w.action ?? t("logs.detail.bedrock.notAvailable"), w.detected ? "red" : "slate")}
                                 <span className="font-mono text-sm break-all">{w.match}</span>
                                 {w.type && chip(w.type, "slate")}
                               </div>
@@ -393,7 +398,7 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
                           {assess.sensitiveInformationPolicy.piiEntities!.map((p, i) => (
                             <div key={i} className="flex justify-between items-center p-2 bg-muted rounded-sm">
                               <div className="flex items-center gap-2">
-                                {chip(p.action ?? "N/A", p.detected ? "red" : "slate")}
+                                {chip(p.action ?? t("logs.detail.bedrock.notAvailable"), p.detected ? "red" : "slate")}
                                 {p.type && chip(p.type, "slate")}
                                 <span className="font-mono text-xs break-all">{p.match}</span>
                               </div>
@@ -412,8 +417,8 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
                               className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-2 bg-muted rounded-sm gap-1"
                             >
                               <div className="flex items-center gap-2">
-                                {chip(r.action ?? "N/A", r.detected ? "red" : "slate")}
-                                <span className="font-medium">{r.name ?? "regex"}</span>
+                                {chip(r.action ?? t("logs.detail.bedrock.notAvailable"), r.detected ? "red" : "slate")}
+                                <span className="font-medium">{r.name ?? t("logs.detail.bedrock.unnamedRegex")}</span>
                                 <span className="font-mono text-xs break-all">{r.regex}</span>
                               </div>
                               <div className="flex items-center gap-2">
@@ -436,8 +441,8 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
                       {assess.topicPolicy.topics!.map((t, i) => (
                         <div key={i} className="px-3 py-1.5 bg-muted rounded-md text-xs">
                           <div className="flex items-center gap-2">
-                            {chip(t.action ?? "N/A", t.detected ? "red" : "slate")}
-                            <span className="font-medium">{t.name ?? "topic"}</span>
+                            {chip(t.action ?? i18n.t("logs.detail.bedrock.notAvailable"), t.detected ? "red" : "slate")}
+                            <span className="font-medium">{t.name ?? i18n.t("logs.detail.bedrock.unnamedTopic")}</span>
                             {t.type && chip(t.type, "slate")}
                             {boolPill(t.detected)}
                           </div>

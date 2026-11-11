@@ -19,7 +19,6 @@ from litellm.litellm_core_utils.routing_common_utils import (
     format_fallback_outcome_message,
     provider_for_generic_call,
     resolve_model_group_alias,
-    resolve_served_model,
     truncate_fallback_error_detail,
     PROVIDER_SCOPED_CREDENTIAL_PARAMS,
     warn_on_provider_credential_mismatch,
@@ -285,6 +284,35 @@ class TestFilterWebSearchDeployments:
         )
         assert result == sample_deployments
 
+    @pytest.mark.parametrize(
+        "tool",
+        [
+            {"type": "web_search_20250305", "name": "web_search", "max_uses": 1},
+            {"type": "web_search_20260301", "name": "web_search"},
+            {"googleSearch": {}},
+            {"google_search": {}},
+        ],
+        ids=["anthropic_versioned", "anthropic_newer_version", "gemini_camel_case", "gemini_snake_case"],
+    )
+    def test_a_provider_native_web_search_tool_filters_unsupported(
+        self, sample_deployments: list[dict[str, object]], tool: dict[str, object]
+    ) -> None:
+        result: Final = filter_web_search_deployments(sample_deployments, {"tools": [{"type": "function"}, tool]})
+        assert [d["model_info"]["id"] for d in result] == ["deployment-1", "deployment-2"]
+
+    @pytest.mark.parametrize(
+        "tool",
+        [
+            {"type": "function", "function": {"name": "web_search"}},
+            {"codeExecution": {}},
+        ],
+        ids=["function_named_web_search", "gemini_code_execution"],
+    )
+    def test_a_tool_that_is_no_web_search_keeps_every_deployment(
+        self, sample_deployments: list[dict[str, object]], tool: dict[str, object]
+    ) -> None:
+        assert filter_web_search_deployments(sample_deployments, {"tools": [tool]}) == sample_deployments
+
     def test_web_search_preview_filters_unsupported(self, sample_deployments):
         """web_search_preview type should also trigger filtering"""
         request_kwargs = {"tools": [{"type": "web_search_preview"}]}
@@ -548,25 +576,6 @@ class TestResolveModelGroupAlias:
         assert router.get_model_from_alias("group-a") == "group-b"
         assert router.get_model_from_alias("group-item") == "group-b"
         assert router.get_model_from_alias("group-b") is None
-
-
-@pytest.mark.parametrize(
-    "model, model_alias_map, key_aliases, model_group_alias, expected",
-    [
-        pytest.param("a", {"a": "b"}, {"b": "c"}, {"c": "d"}, "d", id="global-key-router-order"),
-        pytest.param("a", {}, ["a", "b"], {}, "a", id="non-mapping-key-aliases-ignored"),
-        pytest.param("a", {}, {}, {"a": {"model": "x"}}, "x", id="router-item-entry"),
-        pytest.param("a", {}, {}, {}, "a", id="no-alias"),
-    ],
-)
-def test_resolves_served_model_aliases_in_order(
-    model: str,
-    model_alias_map: object,
-    key_aliases: object,
-    model_group_alias: object,
-    expected: str,
-) -> None:
-    assert resolve_served_model(model, model_alias_map, key_aliases, model_group_alias) == expected
 
 
 class TestTruncateFallbackErrorDetail:

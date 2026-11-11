@@ -15,9 +15,6 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { PROMPT_CACHE_CREATION_TOOLTIP, PROMPT_CACHE_READ_TOOLTIP } from "@/utils/promptCacheUsage";
 
-const RESPONSE_CACHE_TOOLTIP =
-  "This response was replayed from LiteLLM's response cache. The request never reached the provider, so it did not read from or write to the provider's own prompt cache.";
-
 export interface TokenUsage {
   completionTokens?: number;
   promptTokens?: number;
@@ -58,12 +55,13 @@ function MetricItem({ label, tooltip, icon, value }: MetricItemProps) {
 }
 
 function ResponseCacheIndicator() {
+  const { t } = useTranslation();
   return (
     <MetricItem
-      label="Response Cache"
-      tooltip={RESPONSE_CACHE_TOOLTIP}
+      label={t("chatUi.responseMetrics.labels.responseCache")}
+      tooltip={t("chatUi.responseMetrics.tooltips.responseCache")}
       icon={<History className="size-3" aria-hidden="true" />}
-      value="Hit"
+      value={t("chatUi.responseMetrics.labels.responseCacheHit")}
     />
   );
 }
@@ -81,7 +79,7 @@ function PromptCacheChips({ usage }: { usage?: TokenUsage }) {
     <>
       {readTokens > 0 && (
         <MetricItem
-          label="Cache Read"
+          label={t("chatUi.responseMetrics.labels.cacheRead")}
           tooltip={t(PROMPT_CACHE_READ_TOOLTIP)}
           icon={<Database className="size-3" aria-hidden="true" />}
           value={String(readTokens)}
@@ -90,7 +88,7 @@ function PromptCacheChips({ usage }: { usage?: TokenUsage }) {
 
       {creationTokens > 0 && (
         <MetricItem
-          label="Cache Write"
+          label={t("chatUi.responseMetrics.labels.cacheWrite")}
           tooltip={t(PROMPT_CACHE_CREATION_TOOLTIP)}
           icon={<DatabaseBackup className="size-3" aria-hidden="true" />}
           value={String(creationTokens)}
@@ -108,7 +106,7 @@ const ResponseMetrics: React.FC<ResponseMetricsProps> = ({ timeToFirstToken, tot
     <div className="response-metrics mt-2 flex flex-wrap gap-3 border-t border-border pt-2 text-xs text-muted-foreground">
       {timeToFirstToken !== undefined && (
         <MetricItem
-          label="TTFT"
+          label={t("chatUi.responseMetrics.labels.timeToFirstToken")}
           tooltip={t("chatUi.responseMetrics.tooltips.timeToFirstToken")}
           icon={<Clock className="size-3" aria-hidden="true" />}
           value={`${(timeToFirstToken / 1000).toFixed(2)}s`}

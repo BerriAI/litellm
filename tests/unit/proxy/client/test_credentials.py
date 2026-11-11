@@ -316,3 +316,25 @@ def test_list_gives_up_at_the_timeout_instead_of_hanging(hanging_server):
         client.list()
 
     assert time.monotonic() - started < 10
+
+
+@responses.activate
+def test_update_display_name_returns_the_updated_credential(client):
+    updated = {"credential_name": "azure1", "credential_info": {"display_name": "Azure EU"}}
+    responses.add(
+        responses.PATCH,
+        f"{client._base_url}/credentials/azure1",
+        json=updated,
+        status=200,
+        match=[responses.matchers.json_params_matcher({"display_name": "Azure EU", "credential_info": {}})],
+    )
+
+    assert client.update_display_name("azure1", "Azure EU") == updated
+
+
+@responses.activate
+def test_update_display_name_unauthorized_error(client):
+    responses.add(responses.PATCH, f"{client._base_url}/credentials/azure1", status=401, json={"error": "Unauthorized"})
+
+    with pytest.raises(UnauthorizedError):
+        client.update_display_name("azure1", "Azure EU")

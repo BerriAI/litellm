@@ -48,6 +48,7 @@ from litellm.constants import MAX_FILE_LIST_LIMIT, REALTIME_WEBSOCKET_MAX_MESSAG
 from litellm.files.types import FileContentStreamingResult
 from litellm.litellm_core_utils.agentic_followup_kwargs import build_agentic_followup_kwargs
 from litellm.litellm_core_utils.agentic_loop_refusal import (
+    called_tool_names,
     every_claimed_tool_call,
     finalize_refused_responses_turn,
     is_refused_item,
@@ -64,7 +65,9 @@ from litellm.litellm_core_utils.audio_utils.subtitle_utils import (
 )
 from litellm.litellm_core_utils.chat_completion_agentic_loop import (
     bill_first_round_on_failure,
+    holds_a_call_the_choice_excludes,
     run_chat_completion_agentic_hooks,
+    with_caller_tool_choice,
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, set_provider_response_headers_in_hidden_params
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
@@ -153,13 +156,14 @@ from litellm.types.containers.main import (
 )
 from litellm.types.decisions import DecisionsIRRequest, DecisionsIRResponse
 from litellm.types.extraction import ExtractionResponse
-from litellm.types.files import StreamingMediaUploadConfig, TwoStepFileUploadConfig
+from litellm.types.files import StreamingMediaUploadConfig, TwoStepFileUploadConfig, TwoStepFileUploadRequest
 from litellm.types.integrations.custom_logger import (
     NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
     AgenticLoopLimitError,
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
     AgenticLoopSafetyError,
+    AgenticLoopToolChoiceError,
     converted_stream_requested,
     is_interception_internal_key,
 )
@@ -188,6 +192,7 @@ from litellm.types.responses.main import DeleteResponseResult
 from litellm.types.responses.streaming_websocket import ResponsesWebSocketRequestDefaults
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
+    AgenticLoopParams,
     CallTypes,
     EmbeddingResponse,
     FileTypes,
@@ -239,6 +244,10 @@ def _client_request_headers(
     return _merge_headers_case_insensitive(optional_headers or {}, extra_headers)
 
 
+def _requested_stream(response_api_optional_request_params: Mapping[str, object]) -> object:
+    return response_api_optional_request_params.get("stream", False)
+
+
 def _rust_responses_websocket_enabled(
     custom_llm_provider: str | None,
 ) -> bool:
@@ -263,7 +272,11 @@ if TYPE_CHECKING:
         FakeAnthropicMessagesStreamIterator,
     )
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
-    from litellm.responses.streaming_iterator import ResponsesWsFrameGuard, ResponsesWsTurnAdmission
+    from litellm.responses.streaming_iterator import (
+        ResponsesWsFrameGuard,
+        ResponsesWsTurnAdmission,
+        ResponsesWsTurnUsageRecorder,
+    )
     from litellm.types.google_genai.main import GenerateContentResponse
     from litellm.types.llms.openai_evals import (
         CancelEvalResponse,
@@ -386,12 +399,19 @@ class _SignedBodyKwargs(TypedDict, total=False):
     json: ReadOnly[dict[str, object]]
 
 
+class _AgenticLoopParamsView(TypedDict):
+    agentic_loop_params: ReadOnly[AgenticLoopParams]
+
+
 _GOAWAY_RETRY_MESSAGE: Final = "Vector store search connection was closed by an HTTP/2 GOAWAY, retrying once"
 
 
 def _closed_by_http2_goaway(error: httpx.RemoteProtocolError) -> bool:
     cause: Final = error.__cause__
-    return cause is not None and any(isinstance(arg, ConnectionTerminated) for arg in cause.args)
+    if cause is None:
+        return False
+    cause_args: Final[tuple[object, ...]] = cause.args
+    return any(isinstance(arg, ConnectionTerminated) for arg in cause_args)
 
 
 async def _asend_with_goaway_retry(send: Callable[[], Awaitable[httpx.Response]]) -> httpx.Response:
@@ -433,8 +453,12 @@ def _signed_body_kwargs(*, signed_body: bytes | None, data: dict[str, object]) -
     return {"json": data}
 
 
+def _response_content_type(headers: Mapping[str, str]) -> str:
+    return headers.get("content-type", "")
+
+
 def _answered_json(response: httpx.Response) -> bool:
-    return "application/json" in response.headers.get("content-type", "").lower()
+    return "application/json" in _response_content_type(response.headers).lower()
 
 
 def _stream_query_params(stream: bool, starting_after: int | None) -> Mapping[str, object]:
@@ -897,7 +921,7 @@ class BaseLLMHTTPHandler:
 
         fake_stream = (
             fake_stream
-            or optional_params.pop("fake_stream", False)
+            or optional_params.pop("fake_stream", False) is True
             or provider_config.should_fake_stream(model=model, custom_llm_provider=custom_llm_provider, stream=stream)
         )
 
@@ -920,7 +944,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key,
             model=model,
             optional_params=optional_params,
-            stream=stream,
+            stream=False if fake_stream else stream,
             litellm_params=litellm_params,
         )
 
@@ -1056,7 +1080,7 @@ class BaseLLMHTTPHandler:
                 provider_config=provider_config,
                 fake_stream=fake_stream,
             )
-            if provider_config.has_custom_stream_wrapper is True:
+            if provider_config.has_custom_stream_wrapper is True and not fake_stream:
                 return provider_config.get_sync_custom_stream_wrapper(
                     model=model,
                     custom_llm_provider=custom_llm_provider,
@@ -1225,7 +1249,7 @@ class BaseLLMHTTPHandler:
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
     ):
-        if provider_config.has_custom_stream_wrapper is True:
+        if provider_config.has_custom_stream_wrapper is True and not fake_stream:
             return await provider_config.get_async_custom_stream_wrapper(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
@@ -2642,6 +2666,7 @@ class BaseLLMHTTPHandler:
                 provider=custom_llm_provider,
                 api_base=affinity_api_base,
                 unlisted="drop" if provider_filters_betas else "forward",
+                keep=anthropic_messages_provider_config.model_specific_anthropic_betas(model, litellm_params),
             )
 
         from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
@@ -3063,7 +3088,7 @@ class BaseLLMHTTPHandler:
         }
 
         # Check if streaming is requested
-        stream = response_api_optional_request_params.get("stream", False)
+        stream = _requested_stream(response_api_optional_request_params)
         caller_requested_stream: Final = bool(stream or (extra_body or {}).get("stream"))
 
         api_base: Final = responses_api_provider_config.get_complete_url(
@@ -4135,7 +4160,7 @@ class BaseLLMHTTPHandler:
         ):
             # Handle pre-signed requests (e.g., from Bedrock S3 uploads)
             # Type narrowing: this is a plain dict, not TwoStepFileUploadConfig
-            presigned_request: Final = cast(dict[str, Any], transformed_request)
+            presigned_request: Final = cast(TwoStepFileUploadRequest, transformed_request)
             upload_response = getattr(sync_httpx_client, presigned_request["method"].lower())(
                 url=presigned_request["url"],
                 headers=presigned_request["headers"],
@@ -4349,7 +4374,7 @@ class BaseLLMHTTPHandler:
         ):
             # Handle pre-signed requests (e.g., from Bedrock S3 uploads)
             # Type narrowing: this is a plain dict, not TwoStepFileUploadConfig
-            presigned_request: Final = cast(dict[str, Any], transformed_request)
+            presigned_request: Final = cast(TwoStepFileUploadRequest, transformed_request)
             upload_response = await getattr(async_httpx_client, presigned_request["method"].lower())(
                 url=presigned_request["url"],
                 headers=presigned_request["headers"],
@@ -6128,8 +6153,10 @@ class BaseLLMHTTPHandler:
 
         full_model_name = model
         if logging_obj is not None:
-            agentic_params: Final[Mapping[str, object]] = logging_obj.model_call_details.get("agentic_loop_params", {})
-            full_model_name = cast(str, agentic_params.get("model", model))
+            agentic_view: Final[_AgenticLoopParamsView] = {
+                "agentic_loop_params": logging_obj.model_call_details.get("agentic_loop_params", {})
+            }
+            full_model_name = agentic_view["agentic_loop_params"].get("model", model)
 
         optional_params: Final = dict(anthropic_messages_optional_request_params)
         optional_params.update(patch.optional_params)
@@ -6383,7 +6410,13 @@ class BaseLLMHTTPHandler:
         tools: Final = anthropic_messages_optional_request_params.get("tools", [])
         depth, max_loops, fingerprints = self._get_agentic_loop_settings(kwargs=kwargs)
 
-        hook_kwargs: Final = {**kwargs, "_agentic_loop_api_surface": api_surface}
+        hook_kwargs: Final = {
+            **with_caller_tool_choice(
+                _OPTIONAL_PARAMS.validate_python(kwargs),
+                _OPTIONAL_PARAMS.validate_python(anthropic_messages_optional_request_params),
+            ),
+            "_agentic_loop_api_surface": api_surface,
+        }
 
         for callback in callbacks:
             if not isinstance(callback, CustomLogger):
@@ -6422,6 +6455,10 @@ class BaseLLMHTTPHandler:
             # Safety guards must run OUTSIDE the callback try/except — they are
             # bounded-loop / cycle-break rails, not callback bugs.
             try:
+                if holds_a_call_the_choice_excludes(
+                    called_tool_names(response), hook_kwargs, (cb for cb in callbacks if isinstance(cb, CustomLogger))
+                ):
+                    raise AgenticLoopToolChoiceError(model)
                 fingerprint = self._check_agentic_loop_safety(
                     tool_calls=tool_calls,
                     fingerprints=fingerprints,
@@ -7222,6 +7259,7 @@ class BaseLLMHTTPHandler:
         first_message: str | None = None,
         request_defaults: ResponsesWebSocketRequestDefaults | None = None,
         turn_admission: "ResponsesWsTurnAdmission | None" = None,
+        turn_usage_recorder: "ResponsesWsTurnUsageRecorder | None" = None,
         frame_guard: "ResponsesWsFrameGuard | None" = None,
         **kwargs: object,
     ) -> Exception | None:
@@ -7388,6 +7426,7 @@ class BaseLLMHTTPHandler:
                     custom_llm_provider=custom_llm_provider,
                     request_defaults=request_defaults,
                     turn_admission=_ws_turn_admission,
+                    turn_usage_recorder=turn_usage_recorder,
                     frame_guard=frame_guard,
                 )
                 return await streaming.bidirectional_forward()
@@ -11115,7 +11154,7 @@ class BaseLLMHTTPHandler:
         extra_body: dict[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
-    ):
+    ) -> Mapping[str, object]:
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders(custom_llm_provider),
@@ -11406,7 +11445,7 @@ class BaseLLMHTTPHandler:
         extra_body: dict[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
-    ):
+    ) -> Mapping[str, object]:
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders(custom_llm_provider),

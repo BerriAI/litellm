@@ -1,5 +1,6 @@
 import {
   chooseSelectOption,
+  act,
   fireEvent,
   renderHook,
   screen,
@@ -48,6 +49,15 @@ vi.mock("../networking", async () => {
     credentialCreateCall: vi.fn().mockResolvedValue({ success: true }),
     modelCreateCall: vi.fn().mockResolvedValue({ success: true }),
     getProviderCreateMetadata: vi.fn().mockResolvedValue([
+      {
+        provider: "LITELLM_PROXY",
+        provider_display_name: "LiteLLM Gateway",
+        litellm_provider: "litellm_proxy",
+        credential_fields: [
+          { key: "api_base", label: "API Base", field_type: "text" },
+          { key: "api_key", label: "API Key", field_type: "password" },
+        ],
+      },
       {
         provider: "OpenAI",
         provider_display_name: "OpenAI",
@@ -103,6 +113,15 @@ vi.mock("../networking", async () => {
 vi.mock("@/app/(dashboard)/hooks/providers/useProviderFields", () => ({
   useProviderFields: vi.fn().mockReturnValue({
     data: [
+      {
+        provider: "LITELLM_PROXY",
+        provider_display_name: "LiteLLM Gateway",
+        litellm_provider: "litellm_proxy",
+        credential_fields: [
+          { key: "api_base", label: "API Base", field_type: "text" },
+          { key: "api_key", label: "API Key", field_type: "password" },
+        ],
+      },
       {
         provider: "OpenAI",
         provider_display_name: "OpenAI",
@@ -298,6 +317,44 @@ describe("AddModelForm", () => {
     renderWithProviders(<AddModelForm {...props} />);
 
     expect(await screen.findByRole("heading", { name: "Add Model" })).toBeInTheDocument();
+  });
+
+  it("should add a LiteLLM Gateway wildcard with its upstream URL and key when no catalog models are known", async () => {
+    const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
+    mockUseAuthorized.default.mockReturnValue(mockAuthorizedUser("proxy_admin", "user-1", true));
+    vi.mocked(modelCreateCall).mockClear();
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    const props = { ...createTestProps(), selectedProvider: "LITELLM_PROXY", providerModels: [] };
+    props.handleOk.mockImplementation(async () => {
+      await handleAddModelSubmit(props.mountedValues(), "test-access-token", { resetFields: vi.fn() });
+      return true;
+    });
+    renderWithProviders(<AddModelForm {...props} />);
+
+    await pickProvider(user, /LiteLLM Gateway/);
+    await pickModel(user, "All LiteLLM Gateway Models (Wildcard)");
+    act(() => {
+      fireEvent.change(screen.getByLabelText("API Base"), { target: { value: "https://gateway.example.test/v1" } });
+      fireEvent.change(screen.getByLabelText("API Key"), { target: { value: "upstream-test-key" } });
+    });
+    await user.click(screen.getByTestId("add-model-btn"));
+
+    const expectedParams = {
+      model: "litellm_proxy/*",
+      custom_llm_provider: "litellm_proxy",
+      api_base: "https://gateway.example.test/v1",
+      api_key: "upstream-test-key",
+    };
+    await waitFor(() =>
+      expect(modelCreateCall).toHaveBeenCalledWith(
+        "test-access-token",
+        expect.objectContaining({
+          model_name: "litellm_proxy/*",
+          litellm_params: expect.objectContaining(expectedParams),
+        }),
+      ),
+    );
+    expect(modelCreateCall).toHaveBeenCalledOnce();
   });
 
   it("should show proxy admin only (not team admin) - should not see Select Team dropdown unless switch is toggled", async () => {

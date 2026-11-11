@@ -11,6 +11,8 @@ import { DiscoverableMCPServer, DiscoverMCPServersResponse } from "@/components/
 import { mcpLogoImg } from "./CreateMCPServer";
 import { resolveLogoSrc } from "@/lib/assetPaths";
 
+const ALL_CATEGORIES = "All";
+
 interface MCPDiscoveryProps {
   isVisible: boolean;
   onClose: () => void;
@@ -49,7 +51,7 @@ const MCPDiscovery: React.FC<MCPDiscoveryProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState("All");
+  const [selectedCategory, setSelectedCategory] = useState(ALL_CATEGORIES);
 
   useEffect(() => {
     if (isVisible && accessToken) {
@@ -72,13 +74,13 @@ const MCPDiscovery: React.FC<MCPDiscoveryProps> = ({
   useEffect(() => {
     if (isVisible) {
       setSearchQuery("");
-      setSelectedCategory("All");
+      setSelectedCategory(ALL_CATEGORIES);
     }
   }, [isVisible]);
 
   const filteredServers = useMemo(() => {
     let result = servers;
-    if (selectedCategory !== "All") {
+    if (selectedCategory !== ALL_CATEGORIES) {
       result = result.filter((s) => s.category === selectedCategory);
     }
     if (searchQuery.trim()) {
@@ -125,7 +127,7 @@ const MCPDiscovery: React.FC<MCPDiscoveryProps> = ({
         <div className="max-h-[70vh] overflow-y-auto">
           {/* Filter pills */}
           <div className="mb-3 flex flex-wrap gap-1.5">
-            {["All", ...categories].map((cat) => {
+            {[ALL_CATEGORIES, ...categories].map((cat) => {
               const isSelected = selectedCategory === cat;
               return (
                 <Button
@@ -134,7 +136,7 @@ const MCPDiscovery: React.FC<MCPDiscoveryProps> = ({
                   variant={isSelected ? "default" : "outline"}
                   onClick={() => setSelectedCategory(cat)}
                 >
-                  {cat === "All" ? t("mcpServers.discovery.allCategories") : cat}
+                  {cat === ALL_CATEGORIES ? t("mcpServers.discovery.allCategories") : cat}
                 </Button>
               );
             })}

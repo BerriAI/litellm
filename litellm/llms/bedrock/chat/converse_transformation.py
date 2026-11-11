@@ -585,12 +585,14 @@ class AmazonConverseConfig(BaseConfig):
                 custom_llm_provider="bedrock",
                 llm_provider="bedrock_converse",
             )
-            if mapped_thinking is None:
+            if mapped_thinking is None or mapped_thinking.get("type") == "disabled":
                 optional_params.pop("thinking", None)
                 optional_params.pop("output_config", None)
-            else:
+            if mapped_thinking is not None:
                 optional_params["thinking"] = mapped_thinking
-                if AnthropicConfig.is_adaptive_thinking_model(model, "bedrock"):
+                if mapped_thinking.get("type") != "disabled" and AnthropicConfig.is_adaptive_thinking_model(
+                    model, "bedrock"
+                ):
                     mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(reasoning_effort)
                     if mapped_effort is None:
                         AnthropicConfig.raise_invalid_reasoning_effort(
@@ -962,7 +964,8 @@ class AmazonConverseConfig(BaseConfig):
     ) -> bool:
         """Check if the Bedrock model takes native structured outputs (outputConfig.textFormat) for this request.
 
-        ``supports_native_structured_output`` in ``litellm.model_cost`` turns it on for every request, and
+        ``supports_native_structured_output`` or ``supports_bedrock_native_structured_output_by_default`` in
+        ``litellm.model_cost`` turns it on for every request, and
         ``supports_bedrock_native_structured_output`` (the deployment's ``model_info`` first) also when Claude
         will think, which the json tool path would drop. When the request does not ask for thinking, a model
         that cannot force the json tool gets it unless that key is false.

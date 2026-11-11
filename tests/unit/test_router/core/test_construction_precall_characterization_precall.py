@@ -27,6 +27,7 @@ PICKS: Final = 60  # three-way shuffles miss a deployment in 20 picks about once
 SHORT: Final = [{"role": "user", "content": "hi"}]
 LONG_TEXT: Final = " ".join(["word"] * 100)
 LONG: Final = [{"role": "user", "content": LONG_TEXT}]
+OPENAI_EMBEDDER: Final = "text-embedding-3-small"
 EMBEDDING_IMAGE: Final = f"data:image/png;base64,{base64.b64encode(bytes(range(256)) * 1024).decode()}"
 IMAGE: Final = [
     {
@@ -83,6 +84,14 @@ def _small_and_big(
     return make_core(
         model_list=[windowed("g", "small", small), windowed("g", "big", 10000)],
         **{"enable_pre_call_checks": True, **arguments},
+    )
+
+
+def _small_and_big_openai_embedders(make_core: MakeCore, small: int) -> RouterCore:
+    counted_as: Final = {"model_info": {"base_model": OPENAI_EMBEDDER}}
+    return make_core(
+        model_list=[windowed("g", "small", small, **counted_as), windowed("g", "big", 10000, **counted_as)],
+        enable_pre_call_checks=True,
     )
 
 
@@ -277,6 +286,43 @@ async def test_an_embedding_image_stays_out_of_the_context_window_on_a_backend_t
         enable_pre_call_checks=True,
     )
     assert await _picked(core, times=2, input=EMBEDDING_IMAGE) == {"image"}
+
+
+@pytest.mark.asyncio
+async def test_an_embedding_input_over_the_smaller_window_in_bytes_but_not_in_tokens_fits_it(
+    make_core: MakeCore,
+) -> None:
+    short_words: Final = "word " * 8
+    assert litellm.token_counter(model=OPENAI_EMBEDDER, text=short_words) <= 10 < len(short_words.encode())
+    assert await _picked(_small_and_big_openai_embedders(make_core, small=10), input=["hi", short_words]) == {
+        "small",
+        "big",
+    }
+
+
+@pytest.mark.asyncio
+async def test_an_embedding_input_that_fits_the_window_in_characters_but_not_in_tokens_is_counted(
+    make_core: MakeCore,
+) -> None:
+    dense: Final = "\ua66e" * 40
+    assert len(dense) <= 50 < litellm.token_counter(model=OPENAI_EMBEDDER, text=dense)
+    assert await _picked(_small_and_big_openai_embedders(make_core, small=50), times=10, input=["hi", dense]) == {"big"}
+
+
+@pytest.mark.asyncio
+async def test_an_embedding_batch_is_never_refused_on_the_default_tokenizers_count(make_core: MakeCore) -> None:
+    dense: Final = "\ua66e" * 40
+    assert litellm.token_counter(text=dense) > 50
+    assert await _picked(_small_and_big(make_core, small=50), input=["hi", dense]) == {"small", "big"}
+
+
+@pytest.mark.asyncio
+async def test_an_embedding_input_with_a_lone_surrogate_is_counted(make_core: MakeCore) -> None:
+    unpaired: Final = "\ud800" + "word " * 20
+    assert litellm.token_counter(model=OPENAI_EMBEDDER, text=unpaired) > 10
+    assert await _picked(_small_and_big_openai_embedders(make_core, small=10), times=10, input=["hi", unpaired]) == {
+        "big"
+    }
 
 
 @pytest.mark.asyncio

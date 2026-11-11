@@ -274,7 +274,12 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
 
   const userIdField = (
     <>
-      <FormField control={form.control} name="supply_user_id" label="Supply custom User ID" orientation="horizontal">
+      <FormField
+        control={form.control}
+        name="supply_user_id"
+        label={t("users.createUser.fields.supplyUserId")}
+        orientation="horizontal"
+      >
         {({ id, value, onChange, onBlur }) => (
           <Checkbox
             id={id}
@@ -291,8 +296,8 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
         <FormField
           control={form.control}
           name="user_id"
-          label="User ID"
-          description="A unique ID for this user. Leave the checkbox unchecked to generate one automatically."
+          label={t("users.createUser.fields.userId")}
+          description={t("users.createUser.fields.userIdDescription")}
         >
           {({ ref, value, ...control }) => <Input {...control} ref={ref} value={value ?? ""} />}
         </FormField>

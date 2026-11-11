@@ -197,9 +197,13 @@ class PreRoutingStrategies:
     def quality(self) -> StrategyRegistry:
         return self._hosted._core_quality_routers  # pyright: ignore[reportPrivateUsage]  # see above
 
+    @property
+    def switchyard(self) -> StrategyRegistry:
+        return self._hosted._core_switchyard_routers  # pyright: ignore[reportPrivateUsage]  # see above
+
     def all(self) -> tuple[StrategyRegistry, ...]:
         """In the order ``_select_pre_routing_strategy`` searches them."""
-        return (self.auto, self.complexity, self.adaptive, self.quality)
+        return (self.switchyard, self.auto, self.complexity, self.adaptive, self.quality)
 
     def any_registered(self) -> bool:
         return any(self.all())
@@ -211,6 +215,7 @@ class PreRoutingStrategies:
         self._hosted._core_quality_routers = {}  # pyright: ignore[reportPrivateUsage]  # see above
         self._hosted._core_complexity_routers = {}  # pyright: ignore[reportPrivateUsage]  # see above
         self._hosted._core_auto_routers = {}  # pyright: ignore[reportPrivateUsage]  # see above
+        self._hosted._core_switchyard_routers = {}  # pyright: ignore[reportPrivateUsage]  # see above
 
     def register(self, deployment: Deployment) -> None:
         """The end of ``_add_deployment``: an auto, complexity or quality marker registers its router
@@ -222,6 +227,8 @@ class PreRoutingStrategies:
                 self._init_complexity_router(deployment)
             case "quality":
                 self._init_quality_router(deployment)
+            case "switchyard":
+                self._init_switchyard_router(deployment)
             case _:
                 pass
 
@@ -231,7 +238,7 @@ class PreRoutingStrategies:
             return
         model_name: Final = deployment.model_name
         tags: Final = _deployment_tags(deployment)
-        for registry in (self.auto, self.complexity, self.quality):
+        for registry in (self.auto, self.complexity, self.quality, self.switchyard):
             _ = _unregister(registry, model_name, tags)
         if _unregister(self.adaptive, model_name, tags):
             self._sync_adaptive_router_hooks()
@@ -462,6 +469,32 @@ class PreRoutingStrategies:
             quality_router_config=config,
         )
         self._register(self.quality, deployment, router, "Quality-router")
+
+    def _init_switchyard_router(self, deployment: Deployment) -> None:
+        from litellm.router_strategy.switchyard_router.config import SwitchyardRouterConfig, build_algorithm
+        from litellm.router_strategy.switchyard_router.switchyard_router import SwitchyardRouter
+        from litellm.types.decisions import OpenAIDecisionResponse
+        from litellm.types.utils import ModelResponse
+
+        config: Final = SwitchyardRouterConfig.model_validate(deployment.litellm_params.switchyard_router_config)
+        if deployment.model_name in (config.models.capable, config.models.efficient, config.models.judge):
+            raise ValueError("Switchyard cannot route to itself")
+        ctx: Final = self._ctx
+
+        async def complete_judge(request: Mapping[str, object]) -> ModelResponse:
+            result: Final = await ctx.acompletion(**request)  # pyright: ignore[reportAttributeAccessIssue]  # the core's RoutingContext
+            if not isinstance(result, ModelResponse):
+                raise TypeError("Switchyard judge must return a non-streaming completion")
+            return result
+
+        async def decide(request: Mapping[str, object]) -> OpenAIDecisionResponse:
+            result: Final = await ctx.adecisions(**request)  # pyright: ignore[reportAttributeAccessIssue]  # see above
+            if not isinstance(result, OpenAIDecisionResponse):
+                raise TypeError("Switchyard decision judge must return an OpenAI-shaped decision response")
+            return result
+
+        router: Final = SwitchyardRouter(deployment.model_name, config, build_algorithm(config), complete_judge, decide)
+        self._register(self.switchyard, deployment, router, "Switchyard")
 
     def _init_adaptive_router(self, deployment: Deployment) -> None:
         from litellm.router_strategy.adaptive_router.adaptive_router import AdaptiveRouter
@@ -741,6 +774,7 @@ class PreRouter:
         public_router: object,
         run_plugins: Callable[[str], Awaitable[None]] | None = None,
         pass_through: bool = False,
+        call_type: str | None = None,
     ) -> str | None:
         """The start of ``_async_get_available_deployment``: run the hook, record its pick and pin the
         tier's litellm_params. The model group to resolve, or ``None`` to resolve ``model`` itself.
@@ -759,6 +793,7 @@ class PreRouter:
             match_any=match_any,
             public_router=public_router,
             run_plugins=run_plugins,
+            call_type=call_type,
         )
         routed: Final = response.model if response is not None else model
         if response is not None:
@@ -782,6 +817,7 @@ class PreRouter:
         match_any: bool,
         public_router: object,
         run_plugins: Callable[[str], Awaitable[None]] | None,
+        call_type: str | None,
     ) -> "PreRoutingHookResponse | None":
         _restore_client_output_ceiling(request_kwargs)
         _record_routing_decision(request_kwargs, None)
@@ -861,6 +897,7 @@ class PreRouter:
             messages=routing_messages if routing_messages is not None else messages,  # pyright: ignore[reportArgumentType]  # the request's messages, as given
             input=input,  # pyright: ignore[reportArgumentType]  # the request's input, as given
             specific_deployment=False,
+            call_type=call_type,
         )
         hooked: Final[PreRoutingHookResponse | None] = routed
         traced: Final = (
