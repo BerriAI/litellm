@@ -2427,9 +2427,10 @@ class CustomStreamWrapper:
                 error: Final = self._stream_eof_error()
                 eof_traceback: Final = traceback.format_exc()
                 self._record_partial_usage_for_failure()
-                threading.Thread(target=self.logging_obj.failure_handler, args=(error, eof_traceback)).start()
+                public_error: Final = self._public_stream_exception(error)
+                threading.Thread(target=self.logging_obj.failure_handler, args=(public_error, eof_traceback)).start()
                 self.close()
-                self._handle_stream_fallback_error(error)
+                self._handle_stream_fallback_error(error, public_error)
             if self.sent_last_chunk is True:
                 complete_streaming_response: Final = self._build_complete_streaming_response()
                 response = self._new_usage_chunk()
@@ -2521,10 +2522,13 @@ class CustomStreamWrapper:
                 return processed_chunk
         except Exception as e:
             traceback_exception: Final = traceback.format_exc()
+            public_exception: Final = self._public_stream_exception(e)
             # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
-            threading.Thread(target=self.logging_obj.failure_handler, args=(e, traceback_exception)).start()
+            threading.Thread(
+                target=self.logging_obj.failure_handler, args=(public_exception, traceback_exception)
+            ).start()
             self.close()
-            self._handle_stream_fallback_error(e)
+            self._handle_stream_fallback_error(e, public_exception)
 
     def fetch_sync_stream(self):
         if self.completion_stream is None and self.make_call is not None:
@@ -2641,9 +2645,10 @@ class CustomStreamWrapper:
             traceback_exception = traceback.format_exc()
             ## ADD DEBUG INFORMATION - E.G. LITELLM REQUEST TIMEOUT
             traceback_exception += f"\nLiteLLM Default Request Timeout - {litellm.request_timeout}"
-            self._dispatch_stream_failure(e, traceback_exception)
+            public_exception: Final = self._public_stream_exception(e)
+            self._dispatch_stream_failure(public_exception, traceback_exception)
             await self.aclose()
-            self._handle_stream_fallback_error(e)
+            self._handle_stream_fallback_error(e, public_exception)
         except (httpx.ReadError, httpx.RemoteProtocolError) as e:
             if self.received_finish_reason is None:
                 await self.aclose()
@@ -2744,8 +2749,9 @@ class CustomStreamWrapper:
             return processed_chunk
 
     def _log_stream_failure_and_raise(self, e: Exception) -> NoReturn:
-        self._dispatch_stream_failure(e, traceback.format_exc())
-        self._handle_stream_fallback_error(e)
+        public_exception: Final = self._public_stream_exception(e)
+        self._dispatch_stream_failure(public_exception, traceback.format_exc())
+        self._handle_stream_fallback_error(e, public_exception)
 
     def _dispatch_stream_failure(self, e: Exception, traceback_exception: str) -> None:
         self._record_partial_usage_for_failure()
@@ -2867,11 +2873,33 @@ class CustomStreamWrapper:
             extra_kwargs=with_deployment_api_base(self.logging_obj.model_call_details.get("litellm_params")),
         )
 
-    def _handle_stream_fallback_error(self, e: Exception) -> "NoReturn":
+    def _public_stream_exception(self, e: Exception) -> Exception:
+        """
+        The exception class the caller ends up with for a stream failure.
+
+        Failure callbacks receive this same exception, so the error_class they
+        log is the mapped OpenAI-compatible one and never the provider's
+        internal class (e.g. AnthropicError). Some providers' mappers log a
+        debug diagnostic while mapping, so call this before restoring the
+        consumer's correlation context.
+        """
+        from litellm.exceptions import MidStreamFallbackError
+
+        if isinstance(e, MidStreamFallbackError):
+            return e if e.original_exception is None else e.original_exception
+        if isinstance(e, OpenAIError):
+            return e
+        try:
+            return self._map_stream_exception(e)
+        except Exception as mapping_error:
+            return mapping_error
+
+    def _handle_stream_fallback_error(self, e: Exception, public_exception: Exception | None = None) -> "NoReturn":
         """
         Common error handling for both __next__ and __anext__.
 
-        Maps the raw exception to an OpenAI-compatible type, then decides
+        Maps the raw exception to an OpenAI-compatible type (or reuses the
+        already mapped public_exception the failure callbacks got), then decides
         whether to raise it directly (non-retriable 4xx) or wrap it in
         MidStreamFallbackError so the Router can trigger a fallback.
 
@@ -2909,13 +2937,7 @@ class CustomStreamWrapper:
         # restore the consumer's outer context only after this completes, so
         # that diagnostic log line still carries the failing stream's own
         # trace_id/session_id instead of the consumer's (or an empty one).
-        if isinstance(e, OpenAIError):
-            mapped_exception: Exception = e
-        else:
-            try:
-                mapped_exception = self._map_stream_exception(e)
-            except Exception as mapping_error:
-                mapped_exception = mapping_error
+        mapped_exception: Final = self._public_stream_exception(e) if public_exception is None else public_exception
         self._restore_consumer_correlation_context()
 
         def _normalize_status_code(exc: Exception) -> int | None:

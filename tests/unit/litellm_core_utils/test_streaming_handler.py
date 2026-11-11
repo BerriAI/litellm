@@ -9764,3 +9764,84 @@ def test_chunk_creator_usage_only_chunk_with_dict_usage_keeps_details(
     assert usage.prompt_tokens_details.cached_tokens == 80
     assert usage.completion_tokens_details is not None
     assert usage.completion_tokens_details.reasoning_tokens == 5
+
+
+class _RecordingLogging(Logging):
+    """Logging whose failure callbacks record the exception they were handed."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            model="claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "Hey"}],
+            stream=True,
+            call_type="completion",
+            start_time=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
+            litellm_call_id="12345",
+            function_id="1245",
+        )
+        self.logged_failures: list[Exception] = []  # mutable-ok: test double accumulating callback arguments
+        self.failure_logged: Final = threading.Event()
+
+    def failure_handler(self, exception: Exception, traceback_exception: str, *args: object, **kwargs: object) -> None:
+        self.logged_failures.append(exception)
+        self.failure_logged.set()
+
+    async def dispatch_attempt_failure_handlers(self, exception: Exception, traceback_exception: str) -> None:
+        self.logged_failures.append(exception)
+        self.failure_logged.set()
+
+
+def _assert_failure_callback_got_the_public_exception(logging: _RecordingLogging, raised: MidStreamFallbackError) -> None:
+    assert logging.failure_logged.wait(timeout=5), "failure callbacks never ran"
+    assert len(logging.logged_failures) == 1, logging.logged_failures
+    logged: Final = logging.logged_failures[0]
+    assert type(logged) is litellm.InternalServerError, logged
+    assert type(logged) is type(raised.original_exception), (logged, raised.original_exception)
+    assert getattr(logged, "llm_provider", None) == "anthropic", logged
+    assert "Overloaded" in str(logged), logged
+
+
+def test_sync_stream_failure_callback_gets_the_public_exception_class_not_the_provider_one():
+    """Regression test for https://github.com/BerriAI/litellm/issues/49940"""
+    from litellm.llms.anthropic.common_utils import AnthropicError
+
+    def overloaded_mid_stream() -> Iterator[str]:
+        raise AnthropicError(status_code=500, message="Overloaded")
+        yield ""  # pyright: ignore[reportUnreachable]  # makes this a generator
+
+    logging: Final = _RecordingLogging()
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=overloaded_mid_stream(),
+        model="claude-sonnet-4-5",
+        logging_obj=logging,
+        custom_llm_provider="anthropic",
+    )
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        next(wrapper)
+
+    _assert_failure_callback_got_the_public_exception(logging, excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_async_stream_failure_callback_gets_the_public_exception_class_not_the_provider_one():
+    """Regression test for https://github.com/BerriAI/litellm/issues/49940"""
+    from litellm.llms.anthropic.common_utils import AnthropicError
+
+    async def overloaded_mid_stream() -> AsyncIterator[str]:
+        raise AnthropicError(status_code=500, message="Overloaded")
+        yield ""  # pyright: ignore[reportUnreachable]  # makes this an async generator
+
+    logging: Final = _RecordingLogging()
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=overloaded_mid_stream(),
+        model="claude-sonnet-4-5",
+        logging_obj=logging,
+        custom_llm_provider="anthropic",
+    )
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        await wrapper.__anext__()
+    await asyncio.sleep(0)
+
+    _assert_failure_callback_got_the_public_exception(logging, excinfo.value)
