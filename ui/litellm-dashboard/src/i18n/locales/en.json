@@ -5998,6 +5998,18 @@
       "showMore": "Show {{hidden}} more usage tags",
       "showLess": "Show less",
       "more": "+{{hidden}} more"
+    },
+    "monitoring": {
+      "title": "Performance monitoring",
+      "loading": "Loading monitoring settings…",
+      "allowance": "{{used}} of {{limit}} free alerts used.",
+      "enterprise": "On with Enterprise.",
+      "off": "Off. Saved alerts remain available.",
+      "exhausted": "You’ve used all 5 free alerts. New performance alerts are paused.",
+      "disabledByConfig": "Disabled in proxy settings.",
+      "upgrade": "Upgrade to Enterprise",
+      "loadError": "Could not load monitoring settings.",
+      "saveError": "Could not save monitoring settings. Try again."
     }
   },
   "caching": {

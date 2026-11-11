@@ -11971,11 +11971,9 @@ class ProxyStartupEvent:
         from litellm.proxy.spend_tracking.performance_alerts import RUN_INTERVAL, run_performance_alerts
         from litellm.repositories.performance_alert_repository import PerformanceAlertRepository
 
-        performance_alert_repository: Final = PerformanceAlertRepository(prisma_client)
-
         async def run_performance_alerts_job() -> None:
-            if _current_general_settings().get("performance_alerts_enabled") is True:
-                await run_performance_alerts(performance_alert_repository)
+            if _current_general_settings().get("performance_alerts_enabled", True) is True:
+                await run_performance_alerts(PerformanceAlertRepository(prisma_client, enterprise=premium_user is True))
 
         scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # APScheduler does not provide typed job methods
             run_performance_alerts_job,

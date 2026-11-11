@@ -27,6 +27,8 @@ const calls: { path: string; query: URLSearchParams; method: string; body: unkno
 let status = "open";
 let rejectWrite = false;
 let rejectHistory = false;
+let monitoring = { enabled: true, alerts_used: 0, alert_limit: 5 as number | null, disabled_by_config: false };
+let rejectMonitoring = false;
 function response(data: unknown, code = 200) {
   return new Response(JSON.stringify(data), { status: code, headers: { "Content-Type": "application/json" } });
 }
@@ -38,6 +40,8 @@ describe("Alerts", () => {
     status = "open";
     rejectWrite = false;
     rejectHistory = false;
+    rejectMonitoring = false;
+    monitoring = { enabled: true, alerts_used: 0, alert_limit: 5, disabled_by_config: false };
     role = "proxy_admin";
     document.cookie = `token=${btoa(JSON.stringify({ alg: "none" }))}.${btoa(JSON.stringify({ key: "example-session", exp: 4102444800 }))}.example; path=/`;
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
@@ -49,6 +53,14 @@ describe("Alerts", () => {
       if (url.pathname === "/litellm/.well-known/litellm-ui-config") return response({});
       if (url.pathname === "/management/v1/users/me") return response({ user_id: "example-admin", user_role: role });
       if (url.pathname === "/model/deprecations") return response({ deprecated: [], imminent: [] });
+      if (url.pathname === "/alerts/monitoring") {
+        if (rejectMonitoring) return response({ detail: "Unavailable" }, 503);
+        if (request.method === "PATCH") {
+          if (rejectWrite) return response({ detail: "Unavailable" }, 503);
+          monitoring = { ...monitoring, enabled: body.enabled };
+        }
+        return response(monitoring);
+      }
       if (request.method === "PATCH") {
         if (rejectWrite) return response({ detail: "Unavailable" }, 503);
         status = body.status;
@@ -148,5 +160,79 @@ describe("Alerts", () => {
     expect(await screen.findByRole("heading", { name: /Spend on Research agent/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Mark resolved" })).not.toBeInTheDocument();
+  });
+  it("defaults on and persists opting out through the monitoring API", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<Alerts />);
+    const toggle = await screen.findByRole("switch", { name: "Performance monitoring" });
+    expect(toggle).toBeChecked();
+    expect(screen.getByText("0 of 5 free alerts used.")).toBeInTheDocument();
+    await user.click(toggle);
+    expect(await screen.findByText("Off. Saved alerts remain available.")).toBeInTheDocument();
+    expect(toggle).not.toBeChecked();
+    expect(calls.find((call) => call.method === "PATCH")).toMatchObject({
+      path: "/alerts/monitoring",
+      body: { enabled: false },
+    });
+    expect(screen.getByRole("button", { name: /Spend on Research agent/ })).toBeInTheDocument();
+    await user.click(toggle);
+    expect(await screen.findByText("0 of 5 free alerts used.")).toBeInTheDocument();
+  });
+
+  it("explains exhaustion without blocking saved alerts or model deprecations", async () => {
+    monitoring.alerts_used = 5;
+    renderWithProviders(<Alerts />);
+    expect(
+      await screen.findByText("You’ve used all 5 free alerts. New performance alerts are paused."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Upgrade to Enterprise" })).toHaveAttribute(
+      "href",
+      "https://www.litellm.ai/enterprise",
+    );
+    expect(screen.getByRole("button", { name: "Mark resolved" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Set up email reminders" })).toBeInTheDocument();
+  });
+
+  it("shows Enterprise monitoring without a free limit", async () => {
+    monitoring.alert_limit = null;
+    monitoring.alerts_used = 5;
+    renderWithProviders(<Alerts />);
+    expect(await screen.findByText("On with Enterprise.")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Upgrade to Enterprise" })).not.toBeInTheDocument();
+  });
+
+  it("respects config opt-out and view-only permissions", async () => {
+    monitoring.disabled_by_config = true;
+    monitoring.enabled = false;
+    renderWithProviders(<Alerts />);
+    expect(await screen.findByText("Disabled in proxy settings.")).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Performance monitoring" })).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("lets viewers see monitoring status without a toggle", async () => {
+    role = "proxy_admin_viewer";
+    renderWithProviders(<Alerts />);
+    expect(await screen.findByText("0 of 5 free alerts used.")).toBeInTheDocument();
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+  });
+
+  it("keeps the saved preference when a monitoring change fails", async () => {
+    rejectWrite = true;
+    const user = userEvent.setup();
+    renderWithProviders(<Alerts />);
+    await user.click(await screen.findByRole("switch", { name: "Performance monitoring" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not save monitoring settings");
+    expect(screen.getByRole("switch", { name: "Performance monitoring" })).toBeChecked();
+  });
+
+  it("can retry monitoring settings without hiding the inbox", async () => {
+    rejectMonitoring = true;
+    const user = userEvent.setup();
+    renderWithProviders(<Alerts />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not load monitoring settings");
+    expect(screen.getByRole("button", { name: /Spend on Research agent/ })).toBeInTheDocument();
+    rejectMonitoring = false;
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("switch", { name: "Performance monitoring" })).toBeChecked();
   });
 });

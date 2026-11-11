@@ -2204,6 +2204,8 @@ model LiteLLM_Alert {
 }
 
 model LiteLLM_PerformanceAlertState {
+  enabled      Boolean  @default(true)
+  alerts_used  Int?
   id           Int       @id
   owner        String    @client.VarChar(32)
   next_run_at  DateTime  @client.Timestamptz(3)

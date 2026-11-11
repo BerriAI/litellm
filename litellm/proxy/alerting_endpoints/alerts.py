@@ -12,9 +12,10 @@ from litellm.models.alert import (
     AlertView,
     AlertViewPage,
 )
+from litellm.models.performance_alert import AlertMonitoring, AlertMonitoringUpdate
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.deps.repositories import AlertRepositoryDep
+from litellm.proxy.deps.repositories import AlertMonitoringRepositoryDep, AlertRepositoryDep
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
 
 router: Final = APIRouter(tags=["alerts"])
@@ -22,11 +23,15 @@ Auth: TypeAlias = Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
 AlertPath: TypeAlias = Annotated[AlertID, Path(description="Alert ID returned by GET /alerts.")]
 
 
-def _authorized_store(user: UserAPIKeyAuth, repository: AlertStore | None, *, write: bool) -> AlertStore:
+def _authorize(user: UserAPIKeyAuth, *, write: bool) -> None:
     if user.user_role != LitellmUserRoles.PROXY_ADMIN and (
         write or user.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
     ):
         raise HTTPException(status_code=403, detail="Only gateway admins can manage alerts")
+
+
+def _authorized_store(user: UserAPIKeyAuth, repository: AlertStore | None, *, write: bool) -> AlertStore:
+    _authorize(user, write=write)
     if repository is None:
         raise HTTPException(status_code=503, detail="Alerts require a database connection")
     return repository
@@ -53,6 +58,28 @@ async def list_alerts(
     store: Final = _authorized_store(user, repository, write=False)
     page: Final = await store.list(status, limit, int(cursor) if cursor is not None else None, alert_type)
     return AlertViewPage(data=await store.enrich(page.data), next_cursor=page.next_cursor)
+
+
+@router.get("/alerts/monitoring", response_model=AlertMonitoring, summary="Read performance monitoring settings")
+async def get_monitoring(user: Auth, repository: AlertMonitoringRepositoryDep) -> AlertMonitoring:
+    """Read the gateway's opt-out setting and free allowance. Requires a gateway admin or view-only admin."""
+    _authorize(user, write=False)
+    if repository is None:
+        raise HTTPException(status_code=503, detail="Alerts require a database connection")
+    return await repository.monitoring()
+
+
+@router.patch("/alerts/monitoring", response_model=AlertMonitoring, summary="Enable or disable performance monitoring")
+async def update_monitoring(
+    data: AlertMonitoringUpdate, user: Auth, repository: AlertMonitoringRepositoryDep
+) -> AlertMonitoring:
+    """Change monitoring for every worker using this database. Only gateway admins can write. Keeps saved alerts."""
+    _authorize(user, write=True)
+    if repository is None:
+        raise HTTPException(status_code=503, detail="Alerts require a database connection")
+    if data.enabled and (await repository.monitoring()).disabled_by_config:
+        raise HTTPException(status_code=409, detail="Performance monitoring is disabled in proxy settings")
+    return await repository.set_enabled(data.enabled)
 
 
 @router.get("/alerts/{alert_id}", response_model=AlertView, summary="Read an alert")

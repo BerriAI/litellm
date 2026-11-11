@@ -13,11 +13,14 @@ import pytest_asyncio
 from litellm_proxy_extras.request_log_indexes import ensure_request_log_indexes
 from psycopg import sql
 
+from litellm.models.alert import AlertDetection, DeprecationEvidence
+from litellm.models.performance_alert import FREE_ALERT_LIMIT, SweepOwnershipLostError, SweepState
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.spend_tracking.performance_alerts import run_performance_alerts
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.alert_repository import AlertRepository
 from litellm.repositories.performance_alert_repository import PerformanceAlertRepository
+from tests.integration._support.client import Gateway
 from tests.integration._support.database import read_rows, write_rows
 
 DAY: Final = date(2026, 1, 8)
@@ -87,6 +90,7 @@ class Fixture:
     prefix: str
     repository: PerformanceAlertRepository
     alerts: AlertRepository
+    client: PrismaClient
 
     def key(self, name: str) -> str:
         return hashlib.sha256(f"{self.prefix}-{name}".encode()).hexdigest()
@@ -118,7 +122,7 @@ async def fixture() -> AsyncIterator[Fixture]:
     client: Final = PrismaClient(os.environ["DATABASE_URL"], ProxyLogging(UserApiKeyCache()))
     await client.connect()
     write_rows('DELETE FROM "LiteLLM_PerformanceAlertState"', ())
-    built: Final = Fixture(prefix, PerformanceAlertRepository(client), AlertRepository(client))
+    built: Final = Fixture(prefix, PerformanceAlertRepository(client, enterprise=True), AlertRepository(client), client)
     try:
         yield built
     finally:
@@ -215,3 +219,107 @@ async def test_a_timer_firing_just_before_the_run_is_due_still_takes_it(
         ("earlier-worker", f"{seconds_until_due} seconds"),
     )
     assert (await fixture.repository.claim(timedelta(minutes=5)) is not None) is claimed
+
+
+@pytest.mark.asyncio
+async def test_free_allowance_is_atomic_and_enterprise_resumes_the_unfinished_page(fixture: Fixture) -> None:
+    free: Final = PerformanceAlertRepository(fixture.client)
+    for index in range(FREE_ALERT_LIMIT + 3):
+        _seed("team", f"{fixture.prefix}-{index}", Day(spend=10), Day(spend=100))
+    claim: Final = await free.claim(timedelta(0))
+    assert claim is not None
+    state: Final = SweepState(day=DAY, scope="team", cursor=fixture.prefix)
+    await asyncio.gather(
+        free.evaluate_page(claim.owner, state, 4),
+        free.evaluate_page(claim.owner, state.model_copy(update={"cursor": f"{fixture.prefix}-3"}), 4),
+    )
+    assert len(fixture.saved()) == FREE_ALERT_LIMIT
+    assert (await free.monitoring()).alerts_used == FREE_ALERT_LIMIT
+    assert await free.claim(timedelta(0)) is None
+    assert await free.evaluate_page(claim.owner, state, 25) is None
+    upgraded: Final = await fixture.repository.claim(timedelta(0))
+    assert upgraded is not None and upgraded.state is not None
+    assert not upgraded.state.completed
+    await fixture.repository.evaluate_page(upgraded.owner, upgraded.state, 25)
+    assert len(fixture.saved()) == FREE_ALERT_LIMIT + 3
+    assert (await fixture.repository.monitoring()).alert_limit is None
+    assert await free.claim(timedelta(0)) is None
+
+
+@pytest.mark.asyncio
+async def test_retries_status_changes_deletion_and_reconnect_do_not_restore_allowance(fixture: Fixture) -> None:
+    free: Final = PerformanceAlertRepository(fixture.client)
+    _seed("team", f"{fixture.prefix}-a", Day(spend=10), Day(spend=100))
+    claim: Final = await free.claim(timedelta(0))
+    assert claim is not None
+    state: Final = SweepState(day=DAY, scope="team", cursor=fixture.prefix)
+    for _ in range(2):
+        await free.evaluate_page(claim.owner, state, 25)
+    assert (await free.monitoring()).alerts_used == 1
+    (saved,) = read_rows('SELECT id FROM "LiteLLM_Alert" WHERE resource_id = %s', (f"{fixture.prefix}-a",))
+    for status in ("resolved", "dismissed", "open"):
+        response: Final = await fixture.alerts.set_status(int(str(saved["id"])), status, "admin")
+        assert response is not None and response.status == status
+    write_rows('DELETE FROM "LiteLLM_Alert" WHERE id = %s', (saved["id"],))
+    await free.set_enabled(False)
+    await free.set_enabled(True)
+    client: Final = PrismaClient(os.environ["DATABASE_URL"], ProxyLogging(UserApiKeyCache()))
+    await client.connect()
+    try:
+        restarted: Final = PerformanceAlertRepository(client)
+        assert (await restarted.monitoring()).alerts_used == 1
+    finally:
+        await client.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_opt_out_is_shared_and_config_false_cannot_be_overridden(fixture: Fixture, gateway: Gateway) -> None:
+    response: Final = gateway.request("GET", "/alerts/monitoring")
+    assert response.status_code == 200, response.text
+    assert response.json() == {"enabled": True, "alerts_used": 0, "alert_limit": 5, "disabled_by_config": False}
+    claim: Final = await fixture.repository.claim(timedelta(0))
+    assert claim is not None
+    disabled: Final = gateway.request("PATCH", "/alerts/monitoring", {"enabled": False})
+    assert disabled.status_code == 200, disabled.text
+    assert disabled.json()["enabled"] is False
+    assert await fixture.repository.claim(timedelta(0)) is None
+    assert await fixture.repository.evaluate_page(claim.owner, SweepState(day=DAY), 25) is None
+    enabled: Final = gateway.request("PATCH", "/alerts/monitoring", {"enabled": True})
+    assert enabled.status_code == 200, enabled.text
+    assert (await fixture.repository.monitoring()).enabled
+    configured_off: Final = PerformanceAlertRepository(fixture.client, configured=False)
+    assert not (await configured_off.set_enabled(True)).enabled
+    assert await configured_off.claim(timedelta(0)) is None
+
+
+@pytest.mark.asyncio
+async def test_existing_performance_alerts_consume_allowance_but_deprecations_do_not(fixture: Fixture) -> None:
+    start: Final = datetime(2026, 1, 8, tzinfo=timezone.utc)
+    await fixture.alerts.record(
+        AlertDetection(
+            type="model_deprecation",
+            resource_type="model",
+            resource_id=fixture.prefix,
+            window_start=start,
+            window_end=start + timedelta(days=1),
+            evidence=DeprecationEvidence(deprecation_date=DAY + timedelta(days=90)),
+        )
+    )
+    assert (await fixture.repository.monitoring()).alerts_used == 0
+    _seed("team", f"{fixture.prefix}-a", Day(spend=10), Day(spend=100))
+    await fixture.sweep()
+    write_rows('UPDATE "LiteLLM_PerformanceAlertState" SET alerts_used = NULL', ())
+    free: Final = PerformanceAlertRepository(fixture.client)
+    assert (await free.monitoring()).alerts_used == 1
+
+
+@pytest.mark.asyncio
+async def test_losing_ownership_rolls_back_alerts_and_allowance(fixture: Fixture) -> None:
+    free: Final = PerformanceAlertRepository(fixture.client)
+    for index in range(FREE_ALERT_LIMIT):
+        _seed("team", f"{fixture.prefix}-{index}", Day(spend=10), Day(spend=100))
+    assert await free.claim(timedelta(0)) is not None
+    with pytest.raises(SweepOwnershipLostError):
+        await free.evaluate_page("old-owner", SweepState(day=DAY, scope="team", cursor=fixture.prefix), 25)
+    assert fixture.saved() == {}
+    assert (await free.monitoring()).alerts_used == 0
