@@ -47739,6 +47739,7 @@ export interface components {
         };
         /** TokenCountRequest */
         TokenCountRequest: {
+            additional_drop_params?: components["schemas"]["JsonValue"];
             /** Contents */
             contents?: {
                 [key: string]: unknown;

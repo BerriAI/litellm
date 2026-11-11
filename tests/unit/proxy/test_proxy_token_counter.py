@@ -5477,6 +5477,7 @@ _AZURE_GROK_PARAMS: Final = {"api_base": "https://example.services.ai.azure.com"
         ({"litellm_params": {"model": "xai/grok-4-1-fast-reasoning", "api_key": "sk-test"}}, True),
         ({"litellm_params": {"model": "openrouter/x-ai/grok-4.3", "api_key": "sk-test"}}, True),
         ({"litellm_params": {"model": "openai/grok-4.3", "api_base": "https://api.x.ai/v1", "api_key": "sk-test"}}, True),
+        ({"litellm_params": {"model": "openai/grok-4.3", "api_base": "http://[bad", "api_key": "sk-test"}}, False),
         (
             {
                 "litellm_params": {"model": "azure_ai/grok-4-1", **_AZURE_GROK_PARAMS},
@@ -5557,8 +5558,8 @@ async def test_count_routes_count_no_tool_choice_the_deployment_drops(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("route_count", "tool_choice"),
-    [(_messages_route_count, {"type": "none"}), (_responses_route_count, "none")],
-    ids=["messages", "responses"],
+    [(_utils_route_count, "none"), (_messages_route_count, {"type": "none"}), (_responses_route_count, "none")],
+    ids=["utils", "messages", "responses"],
 )
 @pytest.mark.parametrize(
     ("dropped", "counts_choice"),

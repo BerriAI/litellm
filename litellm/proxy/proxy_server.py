@@ -15729,7 +15729,12 @@ def _deployment_served_model(
 
 
 def _is_xai_api_base(api_base: str | None) -> bool:
-    return api_base is not None and urlparse(api_base).hostname == urlparse(XAI_API_BASE).hostname
+    if api_base is None:
+        return False
+    try:
+        return urlparse(api_base).hostname == urlparse(XAI_API_BASE).hostname
+    except ValueError:
+        return False
 
 
 def _deployment_llm_provider(
@@ -15813,7 +15818,14 @@ async def token_counter(
     Returns:
         TokenCountResponse
     """
-    return await count_request_tokens(request=request, call_endpoint=call_endpoint, litellm_call_id=litellm_call_id)
+    return await count_request_tokens(
+        request=request,
+        call_endpoint=call_endpoint,
+        request_litellm_params=MappingProxyType(
+            {} if request.additional_drop_params is None else {"additional_drop_params": request.additional_drop_params}
+        ),
+        litellm_call_id=litellm_call_id,
+    )
 
 
 async def count_request_tokens(
