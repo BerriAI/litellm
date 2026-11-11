@@ -2944,6 +2944,7 @@ class ProxyBaseLLMRequestProcessing:
                 if isinstance(raw_router_settings, Mapping)
                 else None
             )
+            attempted_fallback_models: Final[list[str]] = []
             try:
                 for fallback_model in fallback_models:
                     if fallback_model == original_model:
@@ -2966,6 +2967,7 @@ class ProxyBaseLLMRequestProcessing:
                             user_api_key_dict.team_id,
                         ):
                             continue
+                        attempted_fallback_models.append(fallback_model)
                         admitted: tuple[
                             Mapping[str, object], LiteLLMLoggingObj
                         ] = await self.common_processing_pre_call_logic(
@@ -2999,6 +3001,7 @@ class ProxyBaseLLMRequestProcessing:
                                     RateLimitFallback(
                                         original_model_group=original_model,
                                         descriptor_key=original_exc.descriptor_key or "unknown",
+                                        attempts=len(attempted_fallback_models),
                                     ),
                                 )
                             ),

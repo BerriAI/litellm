@@ -82,14 +82,17 @@ ATTEMPTED_FALLBACKS_HEADER: Final = "x-litellm-attempted-fallbacks"
 
 @dataclass(frozen=True, slots=True)
 class RateLimitFallback:
-    """A proxy-level fallback taken because a local rate limit rejected the requested model group."""
-
     original_model_group: str
     descriptor_key: str
+    attempts: int = 1
 
-    def stamp(self) -> Mapping[str, str]:
+    def stamp(self) -> Mapping[str, object]:
         return MappingProxyType(
-            {"original_model_group": self.original_model_group, "descriptor_key": self.descriptor_key}
+            {
+                "original_model_group": self.original_model_group,
+                "descriptor_key": self.descriptor_key,
+                "attempts": self.attempts,
+            }
         )
 
     @property
@@ -136,7 +139,6 @@ def _metadata_bucket(value: object) -> Mapping[str, object]:
 def with_rate_limit_fallback(
     request_data: Mapping[str, object], bucket_name: str, fallback: RateLimitFallback
 ) -> Mapping[str, object]:
-    """``request_data`` plus a record that a local rate limit moved it off ``fallback.original_model_group``."""
     bucket: Final = _metadata_bucket(request_data.get(bucket_name))
     return MappingProxyType(
         {**request_data, bucket_name: {**bucket, RATE_LIMIT_FALLBACK_METADATA_KEY: dict(fallback.stamp())}}
@@ -144,13 +146,20 @@ def with_rate_limit_fallback(
 
 
 def rate_limit_fallback_headers(fallback: RateLimitFallback, attempted_fallbacks: object) -> Mapping[str, str]:
-    """The response headers for a quota fallback, counting it on top of the router's own fallback hops."""
     try:
         router_hops: Final = _ROUTER_HOPS.validate_python(attempted_fallbacks)
     except ValidationError:
-        return MappingProxyType({ATTEMPTED_FALLBACKS_HEADER: "1", RATE_LIMIT_FALLBACK_REASON_HEADER: fallback.reason})
+        return MappingProxyType(
+            {
+                ATTEMPTED_FALLBACKS_HEADER: str(max(fallback.attempts, 1)),
+                RATE_LIMIT_FALLBACK_REASON_HEADER: fallback.reason,
+            }
+        )
     return MappingProxyType(
-        {ATTEMPTED_FALLBACKS_HEADER: str(max(router_hops, 0) + 1), RATE_LIMIT_FALLBACK_REASON_HEADER: fallback.reason}
+        {
+            ATTEMPTED_FALLBACKS_HEADER: str(max(router_hops, 0) + max(fallback.attempts, 1)),
+            RATE_LIMIT_FALLBACK_REASON_HEADER: fallback.reason,
+        }
     )
 
 

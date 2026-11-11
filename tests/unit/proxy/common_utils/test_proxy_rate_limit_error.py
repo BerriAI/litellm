@@ -43,3 +43,16 @@ def test_rate_limit_fallback_headers_count_the_hop_on_top_of_the_router(router_h
         "x-litellm-attempted-fallbacks": expected,
         "x-litellm-fallback-reason": "rate_limit:model_per_key",
     }
+
+
+@pytest.mark.parametrize(
+    ("attempts", "router_hops", "expected"), ((2, None, "2"), (2, 0, "2"), (3, 1, "4"), (0, 0, "1"))
+)
+def test_rate_limit_fallback_headers_count_every_candidate_a_limit_rejected(
+    attempts: int, router_hops: object, expected: str
+) -> None:
+    headers: Final = rate_limit_fallback_headers(
+        RateLimitFallback(original_model_group="opus", descriptor_key="model_per_key", attempts=attempts), router_hops
+    )
+
+    assert headers["x-litellm-attempted-fallbacks"] == expected
