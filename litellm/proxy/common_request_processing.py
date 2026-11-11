@@ -1662,6 +1662,18 @@ async def _relay_late_response(produced: Response, framing: LateSseFraming) -> A
             await _aclose_late_response(produced)
 
 
+async def _late_block_or_failure(
+    exc: Exception,
+    on_passthrough_block: Callable[[ModifyResponseException], Awaitable[Response]] | None,
+) -> Response | Exception:
+    if not isinstance(exc, ModifyResponseException) or on_passthrough_block is None:
+        return exc
+    try:
+        return await on_passthrough_block(exc)
+    except Exception as block_failure:  # noqa: BLE001  # the client still needs a frame that ends the stream
+        return block_failure
+
+
 async def _sanitized_late_failure(
     exc: Exception,
     on_late_failure: "Callable[[Exception], Awaitable[HTTPException | None]] | None",
@@ -1692,6 +1704,7 @@ async def open_sse_before_first_byte(
     media_type: str = "text/event-stream",
     on_late_failure: Callable[[Exception], Awaitable[HTTPException | None]] | None = None,
     late_framing: LateSseFraming = OPENAI_LATE_SSE_FRAMING,
+    on_passthrough_block: Callable[[ModifyResponseException], Awaitable[Response]] | None = None,
 ) -> _LateResponseT | StreamingResponse:
     """Write SSE keepalive comments while the upstream LLM call is still in flight.
 
@@ -1708,6 +1721,8 @@ async def open_sse_before_first_byte(
     the first ping reaches the client as an SSE error frame under a 200 rather than
     as an HTTP error status, and LiteLLM's own `x-litellm-*` response headers are
     not yet known. Both are why this stays off until an operator sets an interval.
+    A passthrough guardrail block is not a failure: when the route passes
+    `on_passthrough_block`, the stream it builds for the block is relayed.
     """
     interval: Final = coerce_keepalive_interval(ping_interval_seconds)
     if interval is None:
@@ -1730,14 +1745,19 @@ async def open_sse_before_first_byte(
             try:
                 produced: Final = produce_task.result()
             except Exception as exc:  # noqa: BLE001  # the status line is already sent; surface it as a frame
+                late: Final = await _late_block_or_failure(exc, on_passthrough_block)
+                if isinstance(late, Response):
+                    async for chunk in _relay_late_response(late, late_framing):
+                        yield chunk
+                    return
                 verbose_proxy_logger.exception(
-                    "request failed after its SSE keepalive had opened the response: %s", exc
+                    "request failed after its SSE keepalive had opened the response: %s", late
                 )
                 # The caller's own `except` never sees this, so its failure hook
                 # would never fire and the failure would go unaudited. The hook
                 # also gets to sanitize what reaches the client, by returning or
                 # raising a replacement, so its answer decides the frame.
-                for frame in late_framing.failure(await _sanitized_late_failure(exc, on_late_failure)):
+                for frame in late_framing.failure(await _sanitized_late_failure(late, on_late_failure)):
                     yield frame.encode()
                 return
             async for chunk in _relay_late_response(produced, late_framing):
@@ -3156,6 +3176,7 @@ class ProxyBaseLLMRequestProcessing:
         contents: list[object] | None = None,
         skip_pre_call_logic: bool = False,
         sse_framing: SseFraming = OPENAI_SSE_FRAMING,
+        on_passthrough_block: Callable[[ModifyResponseException], Awaitable[Response]] | None = None,
     ) -> object:
         """Run the request, sending SSE keepalives while the upstream is still silent.
 
@@ -3207,6 +3228,7 @@ class ProxyBaseLLMRequestProcessing:
             ping_interval_seconds=ttft_keepalive_interval(self.data, llm_router),
             on_late_failure=_audit_late_failure,
             late_framing=ANTHROPIC_LATE_SSE_FRAMING if answers_as_anthropic else sse_framing.late,
+            on_passthrough_block=on_passthrough_block,
         )
 
     def total_timeout_for(
