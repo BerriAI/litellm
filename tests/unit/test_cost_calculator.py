@@ -3229,6 +3229,37 @@ def test_completion_cost_service_tier_for_bedrock(_local_model_cost_map):
     assert priority_cost > default_cost > flex_cost > 0
 
 
+@pytest.mark.parametrize(
+    ("model", "service_tier", "regional_row"),
+    [
+        pytest.param(
+            "bedrock/moonshotai.kimi-k2.5",
+            "priority",
+            "bedrock/us-west-2/moonshotai.kimi-k2.5",
+            id="kimi-k2.5-priority",
+        ),
+        pytest.param("zai.glm-5", "flex", "bedrock/us-west-2/zai.glm-5", id="glm-5-flex"),
+    ],
+)
+def test_cost_per_token_bedrock_service_tier_without_a_region_matches_the_regional_row(
+    _local_model_cost_map, model: str, service_tier: str, regional_row: str
+) -> None:
+    """Regression for #46880: a Bedrock priority or flex call priced without a region fell back to the
+    standard rate because the region-less row lacked the tier prices its regional rows carry."""
+    regional: Final = litellm.model_cost[regional_row]
+    tier_input: Final = regional[f"input_cost_per_token_{service_tier}"]
+    tier_output: Final = regional[f"output_cost_per_token_{service_tier}"]
+    assert tier_input != regional["input_cost_per_token"]
+
+    usage: Final = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+    prompt_usd, completion_usd = cost_per_token(
+        model=model, custom_llm_provider="bedrock", usage_object=usage, service_tier=service_tier
+    )
+
+    assert prompt_usd == pytest.approx(1000 * tier_input)
+    assert completion_usd == pytest.approx(500 * tier_output)
+
+
 def test_completion_cost_service_tier_for_anthropic(_local_model_cost_map):
     """
     Anthropic priority-tier requests must be priced at the priority rate.
