@@ -88,6 +88,7 @@ from litellm.llms.vllm.common_utils import endpoint_under_api_base
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse, is_provider_error
 from litellm.passthrough.utils import BasePassthroughUtils
 from litellm.proxy._types import *
+from litellm.proxy.auth import rust_jwt
 from litellm.proxy.auth.auth_checks import (
     can_agent_call_model,
     can_key_call_resolved_model,
@@ -95,10 +96,8 @@ from litellm.proxy.auth.auth_checks import (
     team_model_aliases_for_auth_check,
 )
 from litellm.proxy.auth.auth_utils import deployment_clientside_auth_params
-from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401  # legacy module exports
-    _get_bearer_token,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+from litellm.proxy.auth.user_api_key_auth import (  # legacy module exports
     api_key_header,
     custom_litellm_key_header,
     get_bearer_token,
@@ -3000,10 +2999,10 @@ def _normalize_credential_value(value: str) -> str:
     """Reduce a header value to the bare token, matching how ``user_api_key_auth``
     reads a caller's key.
 
-    Reuses the auth module's ``_get_bearer_token`` so the caller-key comparison
+    Reuses the auth module's ``get_bearer_token`` so the caller-key comparison
     strips exactly the schemes authentication accepts (``Bearer`` / ``bearer`` /
     ``Basic`` / ``AWS4-HMAC-SHA256`` credential), rather than re-deriving a
-    narrower normalization here. ``_get_bearer_token`` returns ``""`` for a value
+    narrower normalization here. ``get_bearer_token`` returns ``""`` for a value
     with no recognized scheme prefix, so a bare token (or a real Google
     credential that carries no scheme) falls back to its own value.
     """
@@ -3057,13 +3056,13 @@ def _operator_configured_caller_key_header_names() -> tuple[str, ...]:
 
 def _is_authenticated_caller_jwt(value: str, jwt_claims: Mapping[str, object]) -> bool:
     """Whether a header value is the JWT whose claims ``user_api_key_auth`` stored as ``jwt_claims``."""
-    presented_claims: Final = JWTHandler.get_unverified_claims(value)
+    presented_claims: Final = rust_jwt.unverified_claims(value)
     if presented_claims is None:
         return False
     return all(
         presented_claims.get(name) == claim
         for name, claim in jwt_claims.items()
-        if name not in JWTHandler.LITELLM_INTERNAL_CLAIMS
+        if name not in rust_jwt.LITELLM_INTERNAL_CLAIMS
     )
 
 

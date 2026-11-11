@@ -18,6 +18,6 @@ pub enum Error {
     RedisNotPlainData { setting: String },
     #[error(transparent)]
     RedisConnect(#[from] litellm_redis_connect::Error),
-    #[error("MCP requires working gateway authentication")]
+    #[error("gateway authentication is unavailable")]
     Auth(#[from] litellm_gateway_auth::Error),
 }

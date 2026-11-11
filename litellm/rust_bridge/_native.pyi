@@ -1,14 +1,25 @@
 from asyncio import Future
 from collections.abc import Mapping, Sequence
-from typing import Generic, Literal, Never, NotRequired, Protocol, TypedDict, TypeVar, final
+from enum import Enum
+from typing import ClassVar, Generic, Literal, Never, NotRequired, Protocol, TypedDict, TypeVar, final
 
 import httpx
 from pydantic import JsonValue
 from typing_extensions import disjoint_base
 
+from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
+from litellm.models.team import LiteLLM_TeamTable, LiteLLM_TeamTableCachedObj
+from litellm.models.team_membership import LiteLLM_TeamMembership
+from litellm.models.user import LiteLLM_UserTable
+from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_OrganizationTable, LiteLLM_ProjectTableCachedObj
+from litellm.proxy.auth.host.facts import EndUserRow
+from litellm.proxy.auth.host.steps.authorization import BudgetFacts
+from litellm.proxy.auth.route_checks import RouteFacts
 from litellm.redis.store_settings import RedisBreakerSettings, RedisStoreSettings
 from litellm.rust_bridge.execution import Execution
 from litellm.rust_bridge.public_call import NativeCall
+from litellm.types.proxy.agent_identity import ManagedAgentContext
+from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 _T_co = TypeVar("_T_co", covariant=True)
 
@@ -407,6 +418,1226 @@ class LocalSizes:
     @property
     def key_objects(self) -> int: ...
 
+class _AuthRequest(Protocol):
+    @property
+    def route(self) -> str: ...
+    @property
+    def method(self) -> str | None: ...
+    @property
+    def token(self) -> str | None: ...
+    @property
+    def model(self) -> str | None: ...
+    @property
+    def team_header(self) -> str | None: ...
+    @property
+    def is_llm_api_route(self) -> bool: ...
+    @property
+    def auth_enforced_pass_through(self) -> bool: ...
+    @property
+    def forwarded_routes(self) -> Sequence[str]: ...
+    @property
+    def is_info_route(self) -> bool: ...
+    @property
+    def pass_through_open(self) -> bool: ...
+    @property
+    def from_custom_auth(self) -> bool: ...
+    @property
+    def now(self) -> float: ...
+
+class _BudgetExceeded(Protocol):
+    @property
+    def current_cost(self) -> float: ...
+    @property
+    def max_budget(self) -> float: ...
+    @property
+    def message(self) -> str: ...
+    @property
+    def entity_type(self) -> str | None: ...
+    @property
+    def entity_id(self) -> str | None: ...
+
+class _KeyFacts(Protocol):
+    @property
+    def token(self) -> str | None: ...
+    @property
+    def blocked(self) -> bool: ...
+    @property
+    def expires(self) -> float | None: ...
+    @property
+    def is_proxy_admin(self) -> bool: ...
+    @property
+    def is_session_token(self) -> bool: ...
+    @property
+    def user_id(self) -> str | None: ...
+    @property
+    def team_id(self) -> str | None: ...
+    @property
+    def team_object_permission_id(self) -> str | None: ...
+    @property
+    def project_id(self) -> str | None: ...
+    @property
+    def last_refreshed_at(self) -> float | None: ...
+    @property
+    def team_member_spend(self) -> float | None: ...
+    @property
+    def max_budget(self) -> float | None: ...
+    @property
+    def spend(self) -> float | None: ...
+    @property
+    def soft_budget(self) -> float | None: ...
+    @property
+    def key_alias(self) -> str | None: ...
+    @property
+    def key_name(self) -> str | None: ...
+    @property
+    def alert_email_lowest_percent(self) -> float | None: ...
+    @property
+    def alert_emails_configured(self) -> bool: ...
+    @property
+    def default_warning_share(self) -> float: ...
+    @property
+    def throttle_share(self) -> float | None: ...
+
+class _TeamFacts(Protocol):
+    @property
+    def team_id(self) -> str: ...
+    @property
+    def models(self) -> Sequence[str] | None: ...
+    @property
+    def allowed_passthrough_routes(self) -> Sequence[str] | None: ...
+    @property
+    def denied_passthrough_routes(self) -> Sequence[str]: ...
+    @property
+    def members(self) -> Sequence[str]: ...
+
+class _AuthorizeFacts(Protocol):
+    @property
+    def route(self) -> str: ...
+    @property
+    def method(self) -> str | None: ...
+    @property
+    def is_llm_api_route(self) -> bool: ...
+    @property
+    def dispatched_to_pass_through(self) -> bool: ...
+    @property
+    def has_model(self) -> bool: ...
+    @property
+    def skip_budget_checks(self) -> bool: ...
+    @property
+    def user_id(self) -> str | None: ...
+    @property
+    def agent_id(self) -> str | None: ...
+    @property
+    def team_id(self) -> str | None: ...
+    @property
+    def team_blocked(self) -> bool: ...
+    @property
+    def team_requires_trace_id(self) -> bool: ...
+    @property
+    def enforce_user_param(self) -> bool: ...
+    @property
+    def has_user_param(self) -> bool: ...
+    @property
+    def reject_clientside_metadata_tags(self) -> bool: ...
+    @property
+    def has_client_tags(self) -> bool: ...
+    @property
+    def block_unpriced_models(self) -> bool: ...
+    @property
+    def max_budget(self) -> float: ...
+    @property
+    def global_proxy_spend(self) -> float | None: ...
+    @property
+    def route_access(self) -> RouteFacts: ...
+    @property
+    def budgets(self) -> BudgetFacts: ...
+
+class _UserFacts(Protocol):
+    @property
+    def user_id(self) -> str: ...
+    @property
+    def user_email(self) -> str | None: ...
+    @property
+    def user_role(self) -> str | None: ...
+    @property
+    def teams(self) -> Sequence[str]: ...
+    @property
+    def deactivated(self) -> bool: ...
+
+class _ManagedAgent(Protocol):
+    @property
+    def mode(self) -> str: ...
+    @property
+    def agent_id(self) -> str: ...
+    @property
+    def user_id(self) -> str | None: ...
+
+class _AgentFailure(Protocol):
+    @property
+    def code(self) -> str: ...
+    @property
+    def message(self) -> str: ...
+
+class _RegisteredAgent(Protocol):
+    @property
+    def agent_id(self) -> str: ...
+    @property
+    def identity_managed(self) -> bool: ...
+    @property
+    def has_identity(self) -> bool: ...
+    @property
+    def has_legacy_identity(self) -> bool: ...
+
+@final
+class RustAuthSettings:
+    @staticmethod
+    def from_general_settings(
+        general_settings: Mapping[str, object],
+        litellm_jwtauth: LiteLLM_JWTAuth | None,
+        *,
+        master_key: str | None,
+        premium: bool,
+        has_db: bool,
+        ui_login: bool,
+        proxy_budget: bool,
+        metrics_require_auth: bool,
+    ) -> RustAuthSettings: ...
+
+@final
+class RustPlan(Enum):
+    Public = ...
+    OAuth2Introspection = ...
+    OAuth2Proxy = ...
+    Jwt = ...
+    PassThroughOpen = ...
+    Key = ...
+
+@final
+class RustJwtMapping:
+    Key: ClassVar[RustJwtMapping]
+    Pending: ClassVar[RustJwtMapping]
+    Unmapped: ClassVar[RustJwtMapping]
+
+@final
+class RustClaimIdentity:
+    @property
+    def user_id(self) -> str | None: ...
+    @property
+    def agent_id(self) -> str | None: ...
+    @property
+    def user(self) -> LiteLLM_UserTable | None: ...
+
+@final
+class RustMappedClaims:
+    @property
+    def user_id(self) -> str | None: ...
+    @property
+    def claim_user_id(self) -> str | None: ...
+    @property
+    def user_email(self) -> str | None: ...
+    @property
+    def valid_user_email(self) -> bool | None: ...
+    @property
+    def team_id(self) -> str | None: ...
+    @property
+    def team_ids(self) -> list[str]: ...
+    @property
+    def all_team_ids(self) -> list[str]: ...
+    @property
+    def team_alias(self) -> str | None: ...
+    @property
+    def org_id(self) -> str | None: ...
+    @property
+    def org_alias(self) -> str | None: ...
+    @property
+    def end_user_id(self) -> str | None: ...
+    @property
+    def object_id(self) -> str | None: ...
+    @property
+    def agent_claim(self) -> str | None: ...
+    @property
+    def litellm_role(self) -> str | None: ...
+
+@disjoint_base
+class RustIdentity:
+    @final
+    class NoMasterKey(RustIdentity):
+        __match_args__: tuple[Literal["token"]] = ("token",)
+        @property
+        def token(self) -> str | None: ...
+
+    @final
+    class UserAuthRoute(RustIdentity):
+        __match_args__: tuple[()] = ()
+
+    @final
+    class CachedAdmin(RustIdentity):
+        __match_args__: tuple[Literal["key"], Literal["end_user"]] = ("key", "end_user")
+        @property
+        def key(self) -> UserAPIKeyAuth: ...
+        @property
+        def end_user(self) -> EndUserRow: ...
+
+    @final
+    class MasterKey(RustIdentity):
+        __match_args__: tuple[Literal["hash"], Literal["end_user"]] = ("hash", "end_user")
+        @property
+        def hash(self) -> str: ...
+        @property
+        def end_user(self) -> EndUserRow: ...
+
+    @final
+    class VirtualKey(RustIdentity):
+        __match_args__: tuple[Literal["context"]] = ("context",)
+        @property
+        def context(self) -> RustKeyContext: ...
+
+    @final
+    class MappedJwtKey(RustIdentity):
+        __match_args__: tuple[
+            Literal["claims"],
+            Literal["end_user_id"],
+            Literal["user_email"],
+            Literal["auto_registered"],
+            Literal["minted"],
+            Literal["org_id"],
+            Literal["user"],
+            Literal["context"],
+        ] = ("claims", "end_user_id", "user_email", "auto_registered", "minted", "org_id", "user", "context")
+        @property
+        def claims(self) -> dict[str, object]: ...
+        @property
+        def end_user_id(self) -> str | None: ...
+        @property
+        def user_email(self) -> str | None: ...
+        @property
+        def auto_registered(self) -> bool: ...
+        @property
+        def minted(self) -> bool: ...
+        @property
+        def org_id(self) -> str | None: ...
+        @property
+        def user(self) -> LiteLLM_UserTable | None: ...
+        @property
+        def context(self) -> RustKeyContext: ...
+
+    @final
+    class AutoRegisteredJwtKey(RustIdentity):
+        """Only in `RustAuthStep.FinishJwt`."""
+
+        __match_args__: tuple[
+            Literal["claims"],
+            Literal["end_user_id"],
+            Literal["user_email"],
+            Literal["minted"],
+            Literal["org_id"],
+            Literal["user"],
+            Literal["key"],
+        ] = ("claims", "end_user_id", "user_email", "minted", "org_id", "user", "key")
+        @property
+        def claims(self) -> dict[str, object]: ...
+        @property
+        def end_user_id(self) -> str | None: ...
+        @property
+        def user_email(self) -> str | None: ...
+        @property
+        def minted(self) -> bool: ...
+        @property
+        def org_id(self) -> str | None: ...
+        @property
+        def user(self) -> LiteLLM_UserTable | None: ...
+        @property
+        def key(self) -> UserAPIKeyAuth: ...
+
+    @final
+    class FinishedJwt(RustIdentity):
+        __match_args__: tuple[Literal["token"]] = ("token",)
+        @property
+        def token(self) -> UserAPIKeyAuth: ...
+
+    @final
+    class Jwt(RustIdentity):
+        __match_args__: tuple[
+            Literal["claims"],
+            Literal["is_proxy_admin"],
+            Literal["user_id"],
+            Literal["user_email"],
+            Literal["team_id"],
+            Literal["org_id"],
+            Literal["end_user_id"],
+            Literal["agent_id"],
+            Literal["managed_agent"],
+            Literal["user"],
+            Literal["team"],
+            Literal["membership"],
+            Literal["org"],
+            Literal["end_user"],
+        ] = (
+            "claims",
+            "is_proxy_admin",
+            "user_id",
+            "user_email",
+            "team_id",
+            "org_id",
+            "end_user_id",
+            "agent_id",
+            "managed_agent",
+            "user",
+            "team",
+            "membership",
+            "org",
+            "end_user",
+        )
+        @property
+        def claims(self) -> dict[str, object]: ...
+        @property
+        def is_proxy_admin(self) -> bool: ...
+        @property
+        def user_id(self) -> str | None: ...
+        @property
+        def user_email(self) -> str | None: ...
+        @property
+        def team_id(self) -> str | None: ...
+        @property
+        def org_id(self) -> str | None: ...
+        @property
+        def end_user_id(self) -> str | None: ...
+        @property
+        def agent_id(self) -> str | None: ...
+        @property
+        def managed_agent(self) -> ManagedAgentContext | None: ...
+        @property
+        def user(self) -> LiteLLM_UserTable | None: ...
+        @property
+        def team(self) -> LiteLLM_TeamTable | None: ...
+        @property
+        def membership(self) -> LiteLLM_TeamMembership | None: ...
+        @property
+        def org(self) -> LiteLLM_OrganizationTable | None: ...
+        @property
+        def end_user(self) -> EndUserRow | None: ...
+
+    @final
+    class DbUnavailable(RustIdentity):
+        __match_args__: tuple[Literal["message"]] = ("message",)
+        @property
+        def message(self) -> str: ...
+
+@disjoint_base
+class RustTeamGrant:
+    @final
+    class NoTeam(RustTeamGrant):
+        __match_args__: tuple[()] = ()
+
+    @final
+    class Loaded(RustTeamGrant):
+        __match_args__: tuple[Literal["team"]] = ("team",)
+        @property
+        def team(self) -> LiteLLM_TeamTableCachedObj: ...
+
+    @final
+    class KeyCopy(RustTeamGrant):
+        __match_args__: tuple[Literal["object_permission"]] = ("object_permission",)
+        @property
+        def object_permission(self) -> LiteLLM_ObjectPermissionTable | None: ...
+
+@final
+class RustKeyContext:
+    def __new__(
+        cls,
+        key: UserAPIKeyAuth,
+        end_user: EndUserRow,
+        *,
+        owner: LiteLLM_UserTable | None = None,
+        team: RustTeamGrant,
+        project: LiteLLM_ProjectTableCachedObj | None = None,
+    ) -> RustKeyContext: ...
+    @property
+    def key(self) -> UserAPIKeyAuth: ...
+    @property
+    def end_user(self) -> EndUserRow: ...
+    @property
+    def owner(self) -> LiteLLM_UserTable | None: ...
+    @property
+    def team(self) -> RustTeamGrant: ...
+    @property
+    def project(self) -> LiteLLM_ProjectTableCachedObj | None: ...
+
+@disjoint_base
+class RustDenial:
+    @final
+    class Proxy(RustDenial):
+        __match_args__: tuple[Literal["status"], Literal["message"], Literal["error_type"], Literal["param"]] = (
+            "status",
+            "message",
+            "error_type",
+            "param",
+        )
+        @property
+        def status(self) -> int: ...
+        @property
+        def message(self) -> str: ...
+        @property
+        def error_type(self) -> str: ...
+        @property
+        def param(self) -> str | None: ...
+
+    @final
+    class Http(RustDenial):
+        __match_args__: tuple[Literal["status"], Literal["detail"]] = ("status", "detail")
+        @property
+        def status(self) -> int: ...
+        @property
+        def detail(self) -> str: ...
+
+    @final
+    class InvalidVirtualKey(RustDenial):
+        __match_args__: tuple[Literal["status"], Literal["detail"]] = ("status", "detail")
+        @property
+        def status(self) -> int: ...
+        @property
+        def detail(self) -> str: ...
+
+    @final
+    class ModelAccess(RustDenial):
+        __match_args__: tuple[Literal["status"], Literal["detail"], Literal["internal_message"]] = (
+            "status",
+            "detail",
+            "internal_message",
+        )
+        @property
+        def status(self) -> int: ...
+        @property
+        def detail(self) -> str: ...
+        @property
+        def internal_message(self) -> str: ...
+
+    @final
+    class Plain(RustDenial):
+        __match_args__: tuple[Literal["message"]] = ("message",)
+        @property
+        def message(self) -> str: ...
+
+    @final
+    class BudgetExceeded(RustDenial):
+        __match_args__: tuple[
+            Literal["current_cost"],
+            Literal["max_budget"],
+            Literal["message"],
+            Literal["entity_type"],
+            Literal["entity_id"],
+        ] = ("current_cost", "max_budget", "message", "entity_type", "entity_id")
+        @property
+        def current_cost(self) -> float: ...
+        @property
+        def max_budget(self) -> float: ...
+        @property
+        def message(self) -> str: ...
+        @property
+        def entity_type(self) -> str | None: ...
+        @property
+        def entity_id(self) -> str | None: ...
+
+    @final
+    class TeamNotFound(RustDenial):
+        __match_args__: tuple[Literal["team_id"]] = ("team_id",)
+        @property
+        def team_id(self) -> str: ...
+
+@final
+class RustAuthOutcome:
+    @property
+    def denied(self) -> bool: ...
+    @property
+    def identity(self) -> RustIdentity | None: ...
+    @property
+    def denial(self) -> RustDenial | None: ...
+    @property
+    def claims(self) -> dict[str, object] | None: ...
+    @property
+    def assertion_rejected(self) -> bool: ...
+    @property
+    def claim_identity(self) -> RustClaimIdentity | None: ...
+    @property
+    def mapping(self) -> RustJwtMapping | None: ...
+    @property
+    def mapped_key(self) -> UserAPIKeyAuth | None: ...
+    @property
+    def denied_key(self) -> UserAPIKeyAuth | None: ...
+
+@disjoint_base
+class RustAuthStep:
+    @final
+    class EndUser(RustAuthStep):
+        __match_args__: tuple[Literal["token"], Literal["resolved"]] = ("token", "resolved")
+        @property
+        def token(self) -> str: ...
+        @property
+        def resolved(self) -> UserAPIKeyAuth | None: ...
+
+    @final
+    class CachedKey(RustAuthStep):
+        __match_args__: tuple[Literal["hash"]] = ("hash",)
+        @property
+        def hash(self) -> str: ...
+
+    @final
+    class UiKey(RustAuthStep):
+        __match_args__: tuple[Literal["token"]] = ("token",)
+        @property
+        def token(self) -> str: ...
+
+    @final
+    class WithSessionGrants(RustAuthStep):
+        __match_args__: tuple[Literal["key"], Literal["user"], Literal["team"], Literal["membership"]] = (
+            "key",
+            "user",
+            "team",
+            "membership",
+        )
+        @property
+        def key(self) -> UserAPIKeyAuth: ...
+        @property
+        def user(self) -> LiteLLM_UserTable: ...
+        @property
+        def team(self) -> LiteLLM_TeamTable | None: ...
+        @property
+        def membership(self) -> LiteLLM_TeamMembership | None: ...
+
+    @final
+    class EvictKey(RustAuthStep):
+        __match_args__: tuple[Literal["hash"]] = ("hash",)
+        @property
+        def hash(self) -> str: ...
+
+    @final
+    class CachedTeam(RustAuthStep):
+        __match_args__: tuple[Literal["team_id"]] = ("team_id",)
+        @property
+        def team_id(self) -> str: ...
+
+    @final
+    class WithTeam(RustAuthStep):
+        __match_args__: tuple[Literal["key"], Literal["team"]] = ("key", "team")
+        @property
+        def key(self) -> UserAPIKeyAuth: ...
+        @property
+        def team(self) -> LiteLLM_TeamTableCachedObj: ...
+
+    @final
+    class DbKey(RustAuthStep):
+        __match_args__: tuple[Literal["hash"], Literal["end_user"]] = ("hash", "end_user")
+        @property
+        def hash(self) -> str: ...
+        @property
+        def end_user(self) -> EndUserRow: ...
+
+    @final
+    class WithTempBudget(RustAuthStep):
+        __match_args__: tuple[Literal["key"]] = ("key",)
+        @property
+        def key(self) -> UserAPIKeyAuth: ...
+
+    @final
+    class NormalizeModel(RustAuthStep):
+        __match_args__: tuple[Literal["key"]] = ("key",)
+        @property
+        def key(self) -> UserAPIKeyAuth: ...
+
+    @final
+    class PrefetchAuthObjects(RustAuthStep):
+        __match_args__: tuple[Literal["key"], Literal["end_user"]] = ("key", "end_user")
+        @property
+        def key(self) -> UserAPIKeyAuth: ...
+        @property
+        def end_user(self) -> EndUserRow: ...
+
+    @final
+    class KeyOwner(RustAuthStep):
+        __match_args__: tuple[Literal["user_id"]] = ("user_id",)
+        @property
+        def user_id(self) -> str: ...
+
+    @final
+    class KeySkipsBudgetChecks(RustAuthStep):
+        __match_args__: tuple[Literal["key"]] = ("key",)
+        @property
+        def key(self) -> UserAPIKeyAuth: ...
+
+    @final
+    class TeamMemberMaxBudget(RustAuthStep):
+        __match_args__: tuple[Literal["user_id"], Literal["team_id"]] = ("user_id", "team_id")
+        @property
+        def user_id(self) -> str: ...
+        @property
+        def team_id(self) -> str: ...
+
+    @final
+    class KeyModelBudgets(RustAuthStep):
+        __match_args__: tuple[Literal["key"], Literal["owner"]] = ("key", "owner")
+        @property
+        def key(self) -> UserAPIKeyAuth: ...
+        @property
+        def owner(self) -> LiteLLM_UserTable | None: ...
+
+    @final
+    class ThrottleKey(RustAuthStep):
+        __match_args__: tuple[Literal["key"], Literal["share"]] = ("key", "share")
+        @property
+        def key(self) -> UserAPIKeyAuth: ...
+        @property
+        def share(self) -> float: ...
+
+    @final
+    class KeyTeam(RustAuthStep):
+        __match_args__: tuple[Literal["team_id"]] = ("team_id",)
+        @property
+        def team_id(self) -> str: ...
+
+    @final
+    class ObjectPermission(RustAuthStep):
+        __match_args__: tuple[Literal["id"]] = ("id",)
+        @property
+        def id(self) -> str: ...
+
+    @final
+    class Project(RustAuthStep):
+        __match_args__: tuple[Literal["project_id"]] = ("project_id",)
+        @property
+        def project_id(self) -> str: ...
+
+    @final
+    class GlobalProxySpend(RustAuthStep):
+        __match_args__: tuple[()] = ()
+
+    @final
+    class KeyBudgetAlert(RustAuthStep):
+        __match_args__: tuple[
+            Literal["key"], Literal["owner"], Literal["kind"], Literal["spend"], Literal["max_budget"]
+        ] = ("key", "owner", "kind", "spend", "max_budget")
+        @property
+        def key(self) -> UserAPIKeyAuth: ...
+        @property
+        def owner(self) -> LiteLLM_UserTable | None: ...
+        @property
+        def kind(self) -> Literal["team_member", "proxy", "max_budget_warning", "token_budget", "soft_budget"]: ...
+        @property
+        def spend(self) -> float | None: ...
+        @property
+        def max_budget(self) -> float | None: ...
+
+    @final
+    class FetchJson(RustAuthStep):
+        __match_args__: tuple[Literal["url"]] = ("url",)
+        @property
+        def url(self) -> str: ...
+
+    @final
+    class FetchUserinfo(RustAuthStep):
+        __match_args__: tuple[Literal["endpoint"], Literal["token"]] = ("endpoint", "token")
+        @property
+        def endpoint(self) -> str: ...
+        @property
+        def token(self) -> str: ...
+
+    @final
+    class CachedJson(RustAuthStep):
+        __match_args__: tuple[Literal["key"]] = ("key",)
+        @property
+        def key(self) -> str: ...
+
+    @final
+    class CacheJson(RustAuthStep):
+        __match_args__: tuple[Literal["key"], Literal["value"], Literal["ttl_seconds"]] = (
+            "key",
+            "value",
+            "ttl_seconds",
+        )
+        @property
+        def key(self) -> str: ...
+        @property
+        def value(self) -> object: ...
+        @property
+        def ttl_seconds(self) -> float: ...
+
+    @final
+    class ForgetJson(RustAuthStep):
+        __match_args__: tuple[Literal["key"]] = ("key",)
+        @property
+        def key(self) -> str: ...
+
+    @final
+    class Team(RustAuthStep):
+        __match_args__: tuple[Literal["team_id"], Literal["upsert"]] = ("team_id", "upsert")
+        @property
+        def team_id(self) -> str: ...
+        @property
+        def upsert(self) -> bool: ...
+
+    @final
+    class TeamByAlias(RustAuthStep):
+        __match_args__: tuple[Literal["alias"]] = ("alias",)
+        @property
+        def alias(self) -> str: ...
+
+    @final
+    class GrantingTeam(RustAuthStep):
+        __match_args__: tuple[Literal["team_id"]] = ("team_id",)
+        @property
+        def team_id(self) -> str: ...
+
+    @final
+    class LoadTeamMembership(RustAuthStep):
+        __match_args__: tuple[Literal["user_id"], Literal["team_id"]] = ("user_id", "team_id")
+        @property
+        def user_id(self) -> str: ...
+        @property
+        def team_id(self) -> str: ...
+
+    @final
+    class TeamModelAccess(RustAuthStep):
+        __match_args__: tuple[Literal["team"], Literal["model"]] = ("team", "model")
+        @property
+        def team(self) -> LiteLLM_TeamTable: ...
+        @property
+        def model(self) -> str: ...
+
+    @final
+    class User(RustAuthStep):
+        __match_args__: tuple[Literal["user_id"], Literal["user_email"], Literal["sso_user_id"], Literal["upsert"]] = (
+            "user_id",
+            "user_email",
+            "sso_user_id",
+            "upsert",
+        )
+        @property
+        def user_id(self) -> str: ...
+        @property
+        def user_email(self) -> str | None: ...
+        @property
+        def sso_user_id(self) -> str | None: ...
+        @property
+        def upsert(self) -> bool: ...
+
+    @final
+    class ResolveUserIdentity(RustAuthStep):
+        __match_args__: tuple[
+            Literal["user_id"], Literal["user_email"], Literal["sso_user_id"], Literal["upsert"], Literal["team_id"]
+        ] = ("user_id", "user_email", "sso_user_id", "upsert", "team_id")
+        @property
+        def user_id(self) -> str: ...
+        @property
+        def user_email(self) -> str | None: ...
+        @property
+        def sso_user_id(self) -> str | None: ...
+        @property
+        def upsert(self) -> bool: ...
+        @property
+        def team_id(self) -> str | None: ...
+
+    @final
+    class SetUserRole(RustAuthStep):
+        __match_args__: tuple[Literal["user"], Literal["role"]] = ("user", "role")
+        @property
+        def user(self) -> LiteLLM_UserTable: ...
+        @property
+        def role(self) -> str: ...
+
+    @final
+    class PatchTeamMembership(RustAuthStep):
+        __match_args__: tuple[Literal["user"], Literal["add"], Literal["remove"]] = ("user", "add", "remove")
+        @property
+        def user(self) -> LiteLLM_UserTable: ...
+        @property
+        def add(self) -> list[str]: ...
+        @property
+        def remove(self) -> list[str]: ...
+
+    @final
+    class AddTeamMember(RustAuthStep):
+        __match_args__: tuple[Literal["user_id"], Literal["team_id"]] = ("user_id", "team_id")
+        @property
+        def user_id(self) -> str: ...
+        @property
+        def team_id(self) -> str: ...
+
+    @final
+    class Org(RustAuthStep):
+        __match_args__: tuple[Literal["org_id"]] = ("org_id",)
+        @property
+        def org_id(self) -> str: ...
+
+    @final
+    class OrgByAlias(RustAuthStep):
+        __match_args__: tuple[Literal["alias"]] = ("alias",)
+        @property
+        def alias(self) -> str: ...
+
+    @final
+    class JwtEndUser(RustAuthStep):
+        __match_args__: tuple[Literal["end_user_id"]] = ("end_user_id",)
+        @property
+        def end_user_id(self) -> str: ...
+
+    @final
+    class FinishJwt(RustAuthStep):
+        __match_args__: tuple[Literal["identity"]] = ("identity",)
+        @property
+        def identity(self) -> RustIdentity: ...
+
+    @final
+    class KeyMappingHash(RustAuthStep):
+        __match_args__: tuple[Literal["claim_field"], Literal["claim_value"], Literal["issuer"]] = (
+            "claim_field",
+            "claim_value",
+            "issuer",
+        )
+        @property
+        def claim_field(self) -> str: ...
+        @property
+        def claim_value(self) -> str: ...
+        @property
+        def issuer(self) -> str | None: ...
+
+    @final
+    class KeyByHash(RustAuthStep):
+        __match_args__: tuple[Literal["hash"]] = ("hash",)
+        @property
+        def hash(self) -> str: ...
+
+    @final
+    class ReusableKeyHash(RustAuthStep):
+        __match_args__: tuple[Literal["user_id"], Literal["team_id"]] = ("user_id", "team_id")
+        @property
+        def user_id(self) -> str: ...
+        @property
+        def team_id(self) -> str | None: ...
+
+    @final
+    class CreateKeyMapping(RustAuthStep):
+        __match_args__: tuple[
+            Literal["claim_field"],
+            Literal["claim_value"],
+            Literal["issuer"],
+            Literal["behavior"],
+            Literal["existing_hash"],
+            Literal["team_id"],
+            Literal["user_id"],
+            Literal["org_id"],
+            Literal["agent_id"],
+        ] = (
+            "claim_field",
+            "claim_value",
+            "issuer",
+            "behavior",
+            "existing_hash",
+            "team_id",
+            "user_id",
+            "org_id",
+            "agent_id",
+        )
+        @property
+        def claim_field(self) -> str: ...
+        @property
+        def claim_value(self) -> str: ...
+        @property
+        def issuer(self) -> str | None: ...
+        @property
+        def behavior(self) -> str: ...
+        @property
+        def existing_hash(self) -> str | None: ...
+        @property
+        def team_id(self) -> str | None: ...
+        @property
+        def user_id(self) -> str | None: ...
+        @property
+        def org_id(self) -> str | None: ...
+        @property
+        def agent_id(self) -> str | None: ...
+
+    @final
+    class ManagedAgent(RustAuthStep):
+        __match_args__: tuple[Literal["claims"]] = ("claims",)
+        @property
+        def claims(self) -> dict[str, object]: ...
+
+    @final
+    class RecordAgentAuthentication(RustAuthStep):
+        __match_args__: tuple[Literal["agent"]] = ("agent",)
+        @property
+        def agent(self) -> ManagedAgentContext: ...
+
+    @final
+    class RegisteredAgent(RustAuthStep):
+        __match_args__: tuple[Literal["claim"]] = ("claim",)
+        @property
+        def claim(self) -> str: ...
+
+    @final
+    class DelegatedAgentTeam(RustAuthStep):
+        __match_args__: tuple[
+            Literal["user_id"],
+            Literal["agent_id"],
+            Literal["team_id"],
+            Literal["explicit_team"],
+            Literal["allowed_team_ids"],
+        ] = ("user_id", "agent_id", "team_id", "explicit_team", "allowed_team_ids")
+        @property
+        def user_id(self) -> str | None: ...
+        @property
+        def agent_id(self) -> str: ...
+        @property
+        def team_id(self) -> str | None: ...
+        @property
+        def explicit_team(self) -> bool: ...
+        @property
+        def allowed_team_ids(self) -> list[str] | None: ...
+
+    @final
+    class CustomValidate(RustAuthStep):
+        __match_args__: tuple[Literal["claims"]] = ("claims",)
+        @property
+        def claims(self) -> dict[str, object]: ...
+
+    @final
+    class UnpricedModels(RustAuthStep):
+        __match_args__: tuple[()] = ()
+
+    @final
+    class AgentRequiresTraceId(RustAuthStep):
+        __match_args__: tuple[Literal["agent_id"]] = ("agent_id",)
+        @property
+        def agent_id(self) -> str: ...
+
+    @final
+    class HasTraceId(RustAuthStep):
+        __match_args__: tuple[Literal["headers_only"]] = ("headers_only",)
+        @property
+        def headers_only(self) -> bool: ...
+
+    @final
+    class MergeBudgetTags(RustAuthStep):
+        __match_args__: tuple[()] = ()
+
+    @final
+    class CheckTeamModelAccess(RustAuthStep):
+        __match_args__: tuple[Literal["membership_read"], Literal["membership"]] = ("membership_read", "membership")
+        @property
+        def membership_read(self) -> bool: ...
+        @property
+        def membership(self) -> LiteLLM_TeamMembership | None: ...
+
+    @final
+    class CheckModelGrants(RustAuthStep):
+        __match_args__: tuple[()] = ()
+
+    @final
+    class CheckProject(RustAuthStep):
+        __match_args__: tuple[()] = ()
+
+    @final
+    class StampAccessGroups(RustAuthStep):
+        __match_args__: tuple[Literal["membership_read"], Literal["membership"]] = ("membership_read", "membership")
+        @property
+        def membership_read(self) -> bool: ...
+        @property
+        def membership(self) -> LiteLLM_TeamMembership | None: ...
+
+    @final
+    class Spend(RustAuthStep):
+        __match_args__: tuple[
+            Literal["scope"],
+            Literal["entity_id"],
+            Literal["team_id"],
+            Literal["window"],
+            Literal["recorded"],
+            Literal["max_budget"],
+        ] = ("scope", "entity_id", "team_id", "window", "recorded", "max_budget")
+        @property
+        def scope(
+            self,
+        ) -> Literal[
+            "team", "team_window", "key_window", "organization", "tag", "model_access_group", "user", "team_member", "end_user"
+        ]: ...
+        @property
+        def entity_id(self) -> str: ...
+        @property
+        def team_id(self) -> str | None: ...
+        @property
+        def window(self) -> str | None: ...
+        @property
+        def recorded(self) -> float: ...
+        @property
+        def max_budget(self) -> float: ...
+
+    @final
+    class OrganizationBudget(RustAuthStep):
+        __match_args__: tuple[Literal["org_id"]] = ("org_id",)
+        @property
+        def org_id(self) -> str: ...
+
+    @final
+    class TagBudgets(RustAuthStep):
+        __match_args__: tuple[()] = ()
+
+    @final
+    class ModelAccessGroupBudgets(RustAuthStep):
+        __match_args__: tuple[Literal["groups"]] = ("groups",)
+        @property
+        def groups(self) -> list[str]: ...
+
+    @final
+    class TeamMemberBudgetState(RustAuthStep):
+        __match_args__: tuple[Literal["membership"]] = ("membership",)
+        @property
+        def membership(self) -> LiteLLM_TeamMembership | None: ...
+
+    @final
+    class BudgetAlert(RustAuthStep):
+        __match_args__: tuple[Literal["kind"], Literal["org_id"], Literal["spend"], Literal["max_budget"]] = (
+            "kind",
+            "org_id",
+            "spend",
+            "max_budget",
+        )
+        @property
+        def kind(self) -> Literal["team", "team_soft_budget", "organization", "user", "team_member"]: ...
+        @property
+        def org_id(self) -> str | None: ...
+        @property
+        def spend(self) -> float | None: ...
+        @property
+        def max_budget(self) -> float | None: ...
+
+    @final
+    class CheckGuardrailModification(RustAuthStep):
+        __match_args__: tuple[()] = ()
+
+    @final
+    class TeamOrganization(RustAuthStep):
+        __match_args__: tuple[Literal["team_id"]] = ("team_id",)
+        @property
+        def team_id(self) -> str: ...
+
+    @final
+    class CheckObjectAccess(RustAuthStep):
+        __match_args__: tuple[()] = ()
+
+    @final
+    class Done(RustAuthStep):
+        __match_args__: tuple[Literal["outcome"]] = ("outcome",)
+        @property
+        def outcome(self) -> RustAuthOutcome: ...
+
+@final
+class RustAuth:
+    @staticmethod
+    def plan(request: _AuthRequest, settings: RustAuthSettings) -> RustPlan | RustDenial: ...
+    @staticmethod
+    def authenticate_key(request: _AuthRequest, key: str | None, settings: RustAuthSettings) -> RustAuth: ...
+    @staticmethod
+    def oauth2_introspection_applies(request: _AuthRequest, settings: RustAuthSettings) -> bool: ...
+    @staticmethod
+    def authenticate_jwt(request: _AuthRequest, settings: RustAuthSettings) -> RustAuth: ...
+    @staticmethod
+    def authorize_jwt(request: _AuthRequest, settings: RustAuthSettings, *, provisioning: bool) -> RustAuth: ...
+    @staticmethod
+    def resolve_jwt_identity(request: _AuthRequest, settings: RustAuthSettings) -> RustAuth: ...
+    @staticmethod
+    def resolve_jwt_mapping(request: _AuthRequest, settings: RustAuthSettings) -> RustAuth: ...
+    @staticmethod
+    def authorize(facts: _AuthorizeFacts) -> RustAuth: ...
+    @staticmethod
+    def key_max_budget(
+        facts: _KeyFacts, key: UserAPIKeyAuth, owner: LiteLLM_UserTable | None = None
+    ) -> RustAuth: ...
+    @staticmethod
+    def verify_jwt(token: str, now: float, settings: RustAuthSettings) -> RustAuth: ...
+    @staticmethod
+    def verify_jwt_assertion(
+        token: str, now: float, settings: RustAuthSettings, *, audience: list[str], required_claims: list[str]
+    ) -> RustAuth: ...
+    def resume(self) -> RustAuthStep: ...
+    def fail(self) -> None: ...
+    def unavailable(self, *, dependency: Literal["db"], transient: bool, message: str) -> None: ...
+    def done(self) -> None: ...
+    def budget_exceeded(self, error: _BudgetExceeded) -> None: ...
+    def found(self, found: bool) -> None: ...
+    def amount(self, value: float | None = None) -> None: ...
+    def row(self, row: UserAPIKeyAuth | EndUserRow | LiteLLM_UserTable) -> None: ...
+    def found_row(
+        self,
+        row: LiteLLM_TeamTableCachedObj
+        | LiteLLM_ObjectPermissionTable
+        | LiteLLM_ProjectTableCachedObj
+        | LiteLLM_TeamMembership
+        | None = None,
+    ) -> None: ...
+    def key(self, facts: _KeyFacts | None = None, row: UserAPIKeyAuth | None = None) -> None: ...
+    def key_owner(self, row: LiteLLM_UserTable | None = None, *, deactivated: bool = False) -> None: ...
+    def cached_team(
+        self, row: LiteLLM_TeamTableCachedObj | None = None, *, refreshed_at: float | None = None
+    ) -> None: ...
+    def json(self, value: object = None) -> None: ...
+    def team(self, read: _TeamFacts | str, row: LiteLLM_TeamTable | None = None) -> None: ...
+    def team_alias(self, read: _TeamFacts | str, row: LiteLLM_TeamTable | None = None) -> None: ...
+    def model_access(self, *, allowed: bool) -> None: ...
+    def user(
+        self,
+        user: _UserFacts | None = None,
+        row: LiteLLM_UserTable | None = None,
+        *,
+        membership: LiteLLM_TeamMembership | None = None,
+    ) -> None: ...
+    def org(self, org_id: str | None = None, row: LiteLLM_OrganizationTable | None = None) -> None: ...
+    def text(self, value: str | None = None) -> None: ...
+    def names(self, names: list[str]) -> None: ...
+    def spend(self, spend: float) -> None: ...
+    def organization_budget(self, max_budget: float | None = None, spend: float = 0.0) -> None: ...
+    def named_budgets(self, budgets: list[tuple[str, float, float]]) -> None: ...
+    def member_budget(
+        self,
+        *,
+        spend: float,
+        budget: tuple[float | None, float | None, float | None] | None = None,
+        team_default: float | None = None,
+    ) -> None: ...
+    def mapped_key(
+        self, facts: _KeyFacts | None = None, row: UserAPIKeyAuth | None = None, *, user_email: str | None = None
+    ) -> None: ...
+    def key_mapping(self, *, token_hash: str | None, conflict: bool) -> None: ...
+    def managed_agent(self, agent: _ManagedAgent | None = None) -> None: ...
+    def agent_failure(self, failure: _AgentFailure | None = None) -> None: ...
+    def registered_agent(self, agent: _RegisteredAgent | None = None) -> None: ...
+
+def jwt_is_jwt(token: str | None) -> bool: ...
+def jwt_unverified_claims(token: str) -> dict[str, object] | None: ...
+def jwt_claims(claims: dict[str, object], litellm_jwtauth: LiteLLM_JWTAuth) -> RustMappedClaims: ...
+def jwt_is_allowed_domain(user_email: str, litellm_jwtauth: LiteLLM_JWTAuth) -> bool: ...
+def jwt_key_mapping_cache_key(claim_field: str, claim_value: str, issuer: str | None = None) -> str: ...
+def auth_route_matches_wildcard(route: str, pattern: str) -> bool: ...
+def auth_managed_route(route: str) -> Literal["discovery", "realtime", "live", "model", "tool", "other"]: ...
+def auth_managed_agent_route_allowed(route: str, method: str | None = None) -> bool: ...
+def auth_organization_denial(facts: RouteFacts) -> RustDenial | None: ...
+def auth_route_denial(facts: RouteFacts, organization_id: str | None = None) -> RustDenial | None: ...
+def auth_viewer_route_denial(facts: RouteFacts) -> RustDenial | None: ...
+def auth_user_is_org_admin(facts: RouteFacts) -> bool: ...
+def auth_org_context_team(facts: RouteFacts) -> str | None: ...
+def auth_mask_user_id(user_id: str) -> str: ...
+def auth_key_max_budget_warning_due(facts: _KeyFacts) -> bool: ...
+def auth_key_soft_budget_due(facts: _KeyFacts) -> bool: ...
+def auth_route_matches_prefix(route: str, allowed_route: str) -> bool: ...
+def auth_route_matches_denied(route: str, denied_route: str) -> bool: ...
+def auth_first_denied_route(forwarded_routes: Sequence[str], denied_routes: Sequence[str]) -> str | None: ...
+def auth_jwt_team_routes_grant(route: str, team_allowed_routes: Sequence[str]) -> bool: ...
+def auth_allowed_routes_grant(route: str, *, key: Sequence[str] | None, team: Sequence[str] | None) -> bool: ...
+def auth_end_user_id(
+    request_body: Mapping[str, object],
+    request_headers: Mapping[str, object] | None,
+    general_settings: Mapping[str, object],
+    validate_end_user_id_in_db: bool,
+) -> str | None: ...
+
 @final
 class NativeAuthCache:
     def __new__(
@@ -706,7 +1937,17 @@ __all__ = [
     "ResponsesWebSocketConnection",
     "RouterCall",
     "RouterCoreHandle",
+    "RustAuth",
+    "RustAuthOutcome",
+    "RustAuthSettings",
+    "RustAuthStep",
     "RustBridgeDeclined",
+    "RustClaimIdentity",
+    "RustDenial",
+    "RustIdentity",
+    "RustJwtMapping",
+    "RustMappedClaims",
+    "RustPlan",
     "RustUpstreamError",
     "SpendRead",
     "TokenCounter",
@@ -718,10 +1959,21 @@ __all__ = [
     "aocr",
     "aresponses",
     "atranscription",
+    "auth_allowed_routes_grant",
+    "auth_end_user_id",
+    "auth_first_denied_route",
+    "auth_jwt_team_routes_grant",
+    "auth_route_matches_denied",
+    "auth_route_matches_prefix",
+    "auth_route_matches_wildcard",
     "bundled_model_cost_map",
     "completion",
     "embedding",
     "gil_stats",
+    "jwt_claims",
+    "jwt_is_allowed_domain",
+    "jwt_is_jwt",
+    "jwt_unverified_claims",
     "messages",
     "native_redis_breaker_states",
     "ocr",

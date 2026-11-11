@@ -1,12 +1,18 @@
 use std::{
     error::Error,
+    ffi::OsString,
+    sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use axum::Router;
 use litellm_config::Config;
-use litellm_gateway_auth::UiBackend;
+use litellm_gateway::RedisClients;
+use litellm_gateway_auth::{Auth, UiBackend};
+use litellm_gateway_mcp::ConfiguredGateway;
 use litellm_tracing::{Level, Logger, Metadata, Record, Sink};
 use serde_json::json;
+use tokio_util::sync::CancellationToken;
 
 mod settings;
 
@@ -48,16 +54,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
             level: log.log_level(),
         })
         .install_global()?;
-        litellm_gateway_forward::run(forward, shutdown_signal()).await?;
+        match std::env::var_os("LITELLM_CONFIG") {
+            None => litellm_gateway_forward::run(forward, shutdown_signal()).await?,
+            Some(config) => in_front_of_python(forward, config).await?,
+        }
         return Ok(());
     }
     let settings: Settings = settings::from_iter(std::env::vars_os())?;
     let level = settings.log_level();
     Logger::new(StderrSink { level }).install_global()?;
     let config = Config::load(settings.litellm_config)?;
-    let inference = litellm_gateway::build_inference(&config)?;
-    let _redis =
-        litellm_gateway::build_redis(&config, &inference.resources.pool, &inference.http).await?;
     let ui = match std::env::var_os("LITELLM_UI_PATH") {
         Some(directory) => {
             let ui_settings: UiSettings = settings::from_iter(std::env::vars_os())?;
@@ -75,15 +81,81 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
         None => None,
     };
-    let shutdown = tokio_util::sync::CancellationToken::new();
+    let shutdown = shutdown_on_signal();
     let _shutdown_guard = shutdown.clone().drop_guard();
-    let signal_shutdown = shutdown.clone();
-    tokio::spawn(async move {
-        shutdown_signal().await;
-        signal_shutdown.cancel();
-    });
+    let native = native(&config, shutdown.clone()).await?;
+    let router = litellm_gateway::router(native.inference, native.auth, ui, native.mcp_router);
+    let listener = tokio::net::TcpListener::bind((settings.host.as_str(), settings.port)).await?;
+
+    tracing::info!(address = %listener.local_addr()?, models = config.model_list.len(), log_level = %level, "gateway listening");
+
+    let result = axum::serve(listener, router)
+        .with_graceful_shutdown(shutdown.clone().cancelled_owned())
+        .await;
+    shutdown.cancel();
+    if let Some(mcp) = native.mcp {
+        mcp.close().await;
+    }
+    result?;
+    Ok(())
+}
+
+/// Serves natively what the gateway can, and forwards everything else to the Python proxy behind it.
+async fn in_front_of_python(
+    forward: litellm_gateway_forward::Settings,
+    config: OsString,
+) -> Result<(), Box<dyn Error>> {
+    let config = Config::load(config)?;
+    let shutdown = shutdown_on_signal();
+    let _shutdown_guard = shutdown.clone().drop_guard();
+    let Native {
+        inference,
+        auth,
+        mcp,
+        mcp_router,
+        redis: _redis,
+    } = native(&config, shutdown.clone()).await?;
+    let result = litellm_gateway_forward::run_app(
+        forward,
+        |to_python| {
+            litellm_gateway::dispatching_router(
+                inference,
+                mcp_router,
+                &config,
+                &|name| std::env::var(name).ok(),
+                auth,
+                to_python,
+            )
+        },
+        shutdown.clone().cancelled_owned(),
+    )
+    .await;
+    shutdown.cancel();
+    if let Some(mcp) = mcp {
+        mcp.close().await;
+    }
+    result?;
+    Ok(())
+}
+
+struct Native {
+    inference: Arc<litellm_gateway_inference::Gateway>,
+    auth: Auth,
+    mcp: Option<ConfiguredGateway>,
+    mcp_router: Option<Router>,
+    redis: RedisClients,
+}
+
+async fn native(config: &Config, shutdown: CancellationToken) -> Result<Native, Box<dyn Error>> {
+    let inference = litellm_gateway::build_inference(config)?;
+    let auth = litellm_gateway::auth(config, inference.secrets.as_ref(), &|name| {
+        std::env::var(name).ok()
+    })
+    .await?;
+    let redis =
+        litellm_gateway::build_redis(config, &inference.resources.pool, &inference.http).await?;
     let mcp = litellm_gateway::build_mcp(
-        &config,
+        config,
         inference.secrets.clone(),
         shutdown.clone(),
         &inference.resources.pool,
@@ -102,27 +174,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     .map(Vec::from)
                     .unwrap_or(defaults.allowed_hosts),
                 allowed_origins: config.general_settings.mcp_allowed_origins.to_vec(),
-                cancellation_token: shutdown.clone(),
+                cancellation_token: shutdown,
                 server_info: defaults.server_info,
             },
         )
     });
-    let listener = tokio::net::TcpListener::bind((settings.host.as_str(), settings.port)).await?;
+    Ok(Native {
+        inference,
+        auth,
+        mcp,
+        mcp_router,
+        redis,
+    })
+}
 
-    tracing::info!(address = %listener.local_addr()?, models = config.model_list.len(), log_level = %level, "gateway listening");
-
-    let result = axum::serve(
-        listener,
-        litellm_gateway::router(inference, &config, ui, mcp_router),
-    )
-    .with_graceful_shutdown(shutdown.clone().cancelled_owned())
-    .await;
-    shutdown.cancel();
-    if let Some(mcp) = mcp {
-        mcp.close().await;
-    }
-    result?;
-    Ok(())
+fn shutdown_on_signal() -> CancellationToken {
+    let shutdown = CancellationToken::new();
+    let signal_shutdown = shutdown.clone();
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        signal_shutdown.cancel();
+    });
+    shutdown
 }
 
 async fn shutdown_signal() {

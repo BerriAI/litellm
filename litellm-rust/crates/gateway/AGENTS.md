@@ -4,6 +4,16 @@
 - Inject shared state and infrastructure. Avoid global runtimes, duplicate client pools, and abstractions for hypothetical endpoint groups
 - Test mounting and server lifecycle through public HTTP behavior. Test endpoint semantics in the owning crate
 
+## Dispatch in front of Python
+- With `LITELLM_FORWARD_UPSTREAM` and `LITELLM_CONFIG` both set, the gateway serves its native router in front of the Python proxy (`src/dispatch.rs`). Without `LITELLM_CONFIG` it only forwards
+- axum is the route gate. A path no native route matches goes to `fallback_service(forward)`, a wrong method to `method_not_allowed_fallback`, and nothing else lists the native routes
+- The `gate` route layer decides the rest, in stages: the config at boot, then the request (`Policy::dispatch` plans with `gateway-auth-core` and matches on `Plan` exhaustively, so a new auth path forwards until someone decides to serve it), then the authenticated caller (`Policy::serves`). Anything the gateway can't classify forwards, since Python is always right, and that includes a caller Rust denies
+- Authentication runs once per request. In front of Python the gate runs it and hands the caller to the handlers as an extension, and standalone the `authenticate` layer in `router` does. Neither path mounts the other's layer
+- `src/auth/` builds `Auth` from `gateway-auth-core` with `Host`, the gateway's `AuthHost`. Until the gateway has a database and the key cache, the key path's reads find nothing and every other host step fails, so only the master key authenticates
+- Settings Python applies that the gateway can't (custom auth, DB-backed `general_settings`, `server_root_path`, no master key, `max_request_size_mb`, `allowed_ips`, `allowed_routes`, `litellm_key_header_name`, `pass_through_endpoints`) send every request to Python. Supporting one removes it from that check
+- `Policy` reads its inputs once at boot from the config and the environment. A DB (`database_url`, `DATABASE_URL`, `DIRECT_URL`, `DATABASE_HOST`) forwards everything because Python overlays `general_settings` from it at runtime. `premium` is always false until the license check runs in Rust, so premium-only auth paths forward and any `public_routes` forwards everything
+- TODO: request body safety (`is_request_body_safe`) only runs in Python and applies to every key, so any request with a body forwards. Serving bodies natively needs it in `gateway-auth-core` with Python calling it through `_native`
+
 ## Redis
 - `build_redis` builds the Redis clients once at boot (`src/redis/mod.rs`). Components get a clone as a field, never a per-request extractor or a pool. redis-rs multiplexes one connection per node, so there is no connection pool and pool settings like `max_connections` are accepted and ignored
 - Which Redis backs which role mirrors the proxy: coordination is `general_settings.coordination_redis`, else the `cache_params` Redis when `cache: true` and `type: redis`, else `REDIS_*` env. The transaction buffer reuses coordination, else env when `use_redis_transaction_buffer` is on. The response cache gets its own client so large values never queue in front of coordination commands

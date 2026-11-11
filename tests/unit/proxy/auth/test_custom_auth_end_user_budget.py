@@ -20,7 +20,7 @@ from litellm.proxy.auth.user_api_key_auth import (
 @pytest.mark.asyncio
 async def test_custom_auth_run_post_custom_auth_checks_without_end_user_id():
     # common_checks now runs in the user_api_key_auth wrapper via
-    # _run_centralized_common_checks, gated by
+    # run_centralized_common_checks, gated by
     # custom_auth_run_common_checks for custom-auth deployments. The
     # helper itself no longer calls common_checks.
     valid_token = UserAPIKeyAuth(token="test_token")
@@ -398,10 +398,10 @@ def test_update_valid_token_db_values_override_custom_auth_when_set():
 
 
 def test_end_user_budget_tpd_limit_reaches_the_token():
-    from litellm.proxy.auth.user_api_key_auth import _apply_budget_limits_to_end_user_params
+    from litellm.proxy.auth.user_api_key_auth import apply_budget_limits_to_end_user_params
 
     end_user_params = {"end_user_id": "user_1"}
-    _apply_budget_limits_to_end_user_params(
+    apply_budget_limits_to_end_user_params(
         end_user_params=end_user_params,
         budget_info=LiteLLM_BudgetTable(rpm_limit=5, tpd_limit=750000),
         end_user_id="user_1",
@@ -441,12 +441,12 @@ def test_update_valid_token_keeps_custom_auth_per_model_limits_when_the_budget_h
 
 
 def test_apply_budget_limits_copies_per_model_limits_onto_end_user_params():
-    from litellm.proxy.auth.user_api_key_auth import _apply_budget_limits_to_end_user_params
+    from litellm.proxy.auth.user_api_key_auth import apply_budget_limits_to_end_user_params
 
     end_user_params: Final[dict[str, object]] = {}
     budget: Final = LiteLLM_BudgetTable(model_tpm_limit={"gpt-4o": 400000}, model_rpm_limit={"gpt-4o": 200})
 
-    _apply_budget_limits_to_end_user_params(end_user_params, budget, "acme")
+    apply_budget_limits_to_end_user_params(end_user_params, budget, "acme")
 
     assert end_user_params == {
         "end_user_model_tpm_limit": {"gpt-4o": 400000},

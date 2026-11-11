@@ -28,7 +28,8 @@ from pydantic import TypeAdapter, ValidationError
 from litellm._logging import verbose_proxy_logger
 from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy._types import IdJagRequestingApp
-from litellm.proxy.auth.handle_jwt import ID_JAG_TYP, AssertionRejection, JWTHandler
+from litellm.proxy.auth import rust_jwt
+from litellm.proxy.auth.rust_jwt import ID_JAG_TYP, AssertionRejection
 from litellm.proxy.mcp_server.gateway_dcr_flow import (
     AssertionIdentity,
     ConsentTeam,
@@ -205,7 +206,7 @@ class IdJagPrerequisites:
 
 def read_id_jag_prerequisites() -> IdJagPrerequisites:
     from litellm.proxy.proxy_server import (  # noqa: PLC0415  # rebound after startup, so read them per call
-        jwt_handler,
+        litellm_jwtauth,
         redis_usage_cache,
     )
 
@@ -217,14 +218,8 @@ def read_id_jag_prerequisites() -> IdJagPrerequisites:
         maps_jwts_to_virtual_keys=shared.maps_jwts_to_virtual_keys,
         shared_replay_store=redis_usage_cache is not None,
         base_url=proxy_base_url_from_env(),
-        requesting_apps=_requesting_apps(jwt_handler),
+        requesting_apps=tuple(litellm_jwtauth.id_jag_requesting_apps or ()),
     )
-
-
-def _requesting_apps(jwt_handler: JWTHandler) -> tuple[IdJagRequestingApp, ...]:
-    if not hasattr(jwt_handler, "litellm_jwtauth"):
-        return ()
-    return tuple(jwt_handler.litellm_jwtauth.id_jag_requesting_apps or ())
 
 
 def jwt_bearer_available() -> bool:
@@ -239,7 +234,7 @@ def gateway_audiences(base_url: str | None) -> tuple[str, ...]:
 
 class DecodeAssertion(Protocol):
     """Injected signature and claim verification ``(assertion, audience, required_claims)``:
-    ``JWTHandler.decode_trusted_assertion`` in production, which returns the verified claims,
+    ``rust_jwt.verify_assertion`` in production, which returns the verified claims,
     a rejection, or raises when the gateway could not reach the issuer's keys."""
 
     def __call__(
@@ -248,7 +243,7 @@ class DecodeAssertion(Protocol):
 
 
 class ClaimReader(Protocol):
-    """The JWT auth user mapping as ``JWTHandler`` exposes it: the litellm user id and email the
+    """The JWT auth user mapping as ``rust_jwt.ClaimReading`` exposes it: the litellm user id and email the
     verified claims name through ``user_id_jwt_field`` and ``user_email_jwt_field``."""
 
     def get_user_id(self, token: dict[str, object], default_value: str | None) -> str | None: ...
@@ -400,14 +395,14 @@ async def redeem_id_jag_assertion(
         lookup_consent_teams_from_database,
     )
     from litellm.proxy.proxy_server import (  # noqa: PLC0415  # rebound after startup, so read them per call
-        jwt_handler,
+        litellm_jwtauth,
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
     )
 
     resolve_subject: Final = subject_resolver(
-        _claim_reader(jwt_handler),
+        rust_jwt.ClaimReading(litellm_jwtauth),
         proxy_user_lookup(
             partial(
                 get_user_object,
@@ -430,16 +425,12 @@ async def redeem_id_jag_assertion(
             team_id=request.headers.get(TEAM_HEADER),
             audiences=gateway_audiences(prerequisites.base_url),
             now=datetime.now(timezone.utc).timestamp(),
-            leeway_seconds=jwt_handler.leeway,
+            leeway_seconds=rust_jwt.LEEWAY_SECONDS,
         ),
         prerequisites=prerequisites,
-        decode=jwt_handler.decode_trusted_assertion,
+        decode=rust_jwt.verify_assertion,
         resolve_subject=resolve_subject,
     )
-
-
-def _claim_reader(handler: ClaimReader) -> ClaimReader:
-    return handler
 
 
 async def identity_from_id_jag(

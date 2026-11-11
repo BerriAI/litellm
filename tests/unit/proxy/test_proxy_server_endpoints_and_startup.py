@@ -625,7 +625,8 @@ def test_fallback_login_has_no_deprecation_banner(client_no_auth):
     assert "<form" in html
 
 
-def test_text_completion_without_a_prompt_returns_400_naming_prompt(client_no_auth):
+def test_text_completion_without_a_prompt_returns_400_naming_prompt(client_no_auth, build_proxy_auth_settings):
+    build_proxy_auth_settings()
     response = client_no_auth.post("/v1/completions", json={"model": "vllm_embed_model"})
 
     assert response.status_code == 400, response.text
@@ -3715,58 +3716,6 @@ async def test_load_config_max_budget_env_var_coerced_to_float(tmp_path, monkeyp
         assert litellm.max_budget > 0
     finally:
         litellm.max_budget = original_max_budget
-
-
-@pytest.mark.asyncio
-async def test_load_config_role_permissions_usable_by_jwt_auth(tmp_path):
-    from litellm.proxy.auth.auth_checks import get_role_based_models, get_role_based_routes
-    from litellm.proxy.proxy_server import ProxyConfig
-
-    config_file: Final = tmp_path / "config.yaml"
-    config_file.write_text(
-        yaml.dump(
-            {
-                "model_list": [],
-                "general_settings": {
-                    "role_permissions": [
-                        {
-                            "role": "proxy_admin",
-                            "models": ["admin-only-model"],
-                            "routes": ["/v1/embeddings"],
-                        },
-                        {
-                            "role": "internal_user",
-                            "models": ["shared-model"],
-                            "routes": ["/v1/chat/completions"],
-                        },
-                    ]
-                },
-            }
-        )
-    )
-
-    _, _, settings = await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
-
-    assert get_role_based_models(rbac_role="internal_user", general_settings=settings) == ["shared-model"]
-    assert get_role_based_routes(rbac_role="internal_user", general_settings=settings) == ["/v1/chat/completions"]
-    assert get_role_based_models(rbac_role="proxy_admin", general_settings=settings) == ["admin-only-model"]
-    assert get_role_based_routes(rbac_role="proxy_admin", general_settings=settings) == ["/v1/embeddings"]
-    assert get_role_based_models(rbac_role="team", general_settings=settings) is None
-
-
-@pytest.mark.asyncio
-async def test_load_config_without_role_permissions_leaves_every_role_unrestricted(tmp_path):
-    from litellm.proxy.auth.auth_checks import get_role_based_models, get_role_based_routes
-    from litellm.proxy.proxy_server import ProxyConfig
-
-    config_file: Final = tmp_path / "config.yaml"
-    config_file.write_text(yaml.dump({"model_list": [], "general_settings": {"max_parallel_requests": 7}}))
-
-    _, _, settings = await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
-
-    assert settings["max_parallel_requests"] == 7
-    assert get_role_based_models(rbac_role="internal_user", general_settings=settings) is None
-    assert get_role_based_routes(rbac_role="internal_user", general_settings=settings) is None
 
 
 @pytest.mark.asyncio
@@ -8498,7 +8447,7 @@ async def test_update_general_settings_apply_user_budget_to_team_keys_yaml_wins(
 
 
 @pytest.mark.asyncio
-async def test_update_general_settings_keeps_yaml_pass_through_endpoints_next_to_db_ones():
+async def test_update_general_settings_keeps_yaml_pass_through_endpoints_next_to_db_ones(build_proxy_auth_settings):
     """user_api_key_auth honours ``auth: false`` only for entries it finds in
     general_settings["pass_through_endpoints"]. The DB overlay used to replace that
     list wholesale, so once one endpoint existed in the DB the YAML-declared
@@ -8530,6 +8479,7 @@ async def test_update_general_settings_keeps_yaml_pass_through_endpoints_next_to
     )  # test-quality-ok: a set master key is what makes a missing Authorization header a 401
     with settings, yaml_endpoints, initialize, master_key:
         await ProxyConfig()._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
+        build_proxy_auth_settings()
 
         anonymous: Final = await user_api_key_auth(request=request_without_key("/v1/cuopt/request"), api_key=None)
         assert anonymous.api_key is None
@@ -16195,6 +16145,8 @@ async def test_initialize_jwt_auth_leaves_the_declared_jwtauth_mapping_unresolve
     declared = {"public_key_ttl": "600", "team_id_jwt_field": "os.environ/JWT_TEAM_FIELD"}
     general_settings = {"litellm_jwtauth": declared}
     monkeypatch.setattr(proxy_server_module, "get_secret", lambda value: "resolved-team-field")
+    monkeypatch.setattr(proxy_server_module, "litellm_jwtauth", proxy_server_module.litellm_jwtauth)
+    monkeypatch.setattr(proxy_server_module, "rust_auth_settings", None)
 
     ProxyStartupEvent._initialize_jwt_auth(
         general_settings=general_settings,
@@ -16203,7 +16155,7 @@ async def test_initialize_jwt_auth_leaves_the_declared_jwtauth_mapping_unresolve
     )
 
     assert declared["team_id_jwt_field"] == "os.environ/JWT_TEAM_FIELD"
-    assert proxy_server_module.jwt_handler.litellm_jwtauth.team_id_jwt_field == "resolved-team-field"
+    assert proxy_server_module.litellm_jwtauth.team_id_jwt_field == "resolved-team-field"
 
 
 def test_spend_capture_rate_check_job_validates_the_boot_settings_and_reads_them_again_on_every_run(monkeypatch):

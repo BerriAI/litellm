@@ -4,12 +4,11 @@ use axum::{
     Router,
     body::{Body, to_bytes},
     http::{Request, StatusCode},
-    middleware::from_extractor_with_state,
     routing::get,
 };
 use futures_util::future::BoxFuture;
 use litellm_config::Config;
-use litellm_gateway_auth::{Auth, RequireMasterKey, hash_token};
+use litellm_gateway_auth::{Auth, hash_token};
 use litellm_secret_value::SecretValue;
 use litellm_secrets::source::SecretSource;
 use rstest::{fixture, rstest};
@@ -50,12 +49,13 @@ fn secrets() -> Arc<dyn SecretSource> {
 )]
 #[case::wrong("literal-key", Some("Bearer other-key"), 401)]
 #[case::missing("literal-key", None, 401)]
-#[case::wrong_scheme("literal-key", Some("Basic literal-key"), 401)]
+#[case::basic_scheme("literal-key", Some("Basic literal-key"), 204)]
+#[case::unknown_scheme("literal-key", Some("Token literal-key"), 401)]
 #[case::empty_token("literal-key", Some("Bearer "), 401)]
 #[case::missing_reference("os.environ/MISSING", Some("Bearer os.environ/MISSING"), 500)]
-#[case::empty_reference("os.environ/EMPTY", Some("Bearer "), 500)]
-#[case::empty_key("", Some("Bearer "), 500)]
-#[case::whitespace_key("   ", Some("Bearer "), 500)]
+#[case::empty_reference("os.environ/EMPTY", Some("Bearer some-key"), 500)]
+#[case::empty_key("", Some("Bearer some-key"), 500)]
+#[case::whitespace_key("   ", Some("Bearer some-key"), 500)]
 #[case::empty_reference_name("os.environ/", Some("Bearer os.environ/"), 500)]
 #[case::secret_failure("os.environ/ERROR", Some("Bearer private-backend-detail"), 500)]
 #[tokio::test]
@@ -71,8 +71,9 @@ async fn enforces_configured_keys_without_exposing_secrets(
     .unwrap();
     let app = Router::new()
         .route("/protected", get(|| async { StatusCode::NO_CONTENT }))
-        .layer(from_extractor_with_state::<RequireMasterKey, _>(
+        .route_layer(axum::middleware::from_fn_with_state(
             Auth::from_config(&config, secrets),
+            authenticate,
         ));
     let request = Request::get("/protected");
     let request = match authorization {
@@ -279,11 +280,7 @@ async fn policy_cannot_expand_membership_or_credential_permissions(
     #[case] restrictions: Permissions,
 ) {
     let pipeline = pipeline("issuer-a", permissions, restrictions, None);
-    let identity = pipeline
-        .auth
-        .authenticate(&SecretValue::new("test-token"))
-        .await
-        .unwrap();
+    let identity = token_identity(&pipeline.auth, "test-token").await.unwrap();
     assert!(matches!(
         identity.authorize(model("denied")).await,
         Err(Error::Forbidden)
@@ -304,16 +301,8 @@ async fn policy_cannot_expand_membership_or_credential_permissions(
 async fn authorization_grants_bind_the_exact_caller_and_target() {
     let first = pipeline("issuer-a", Permissions::All, Permissions::All, None);
     let second = pipeline("issuer-b", Permissions::All, Permissions::All, None);
-    let caller = first
-        .auth
-        .authenticate(&SecretValue::new("test-token"))
-        .await
-        .unwrap();
-    let other = second
-        .auth
-        .authenticate(&SecretValue::new("test-token"))
-        .await
-        .unwrap();
+    let caller = token_identity(&first.auth, "test-token").await.unwrap();
+    let other = token_identity(&second.auth, "test-token").await.unwrap();
     assert_ne!(caller.caller().principal(), other.caller().principal());
     assert_ne!(
         caller.caller().session_owner(),
@@ -342,11 +331,7 @@ async fn authorization_grants_bind_the_exact_caller_and_target() {
 #[tokio::test]
 async fn expiry_is_checked_again_for_operations_on_existing_connections() {
     let pipeline = pipeline("issuer-a", Permissions::All, Permissions::All, None);
-    let identity = pipeline
-        .auth
-        .authenticate(&SecretValue::new("test-token"))
-        .await
-        .unwrap();
+    let identity = token_identity(&pipeline.auth, "test-token").await.unwrap();
     assert!(identity.authorize(model("allowed")).await.is_ok());
     pipeline.clock.0.store(100, Ordering::SeqCst);
     assert!(matches!(
@@ -354,10 +339,7 @@ async fn expiry_is_checked_again_for_operations_on_existing_connections() {
         Err(Error::Expired)
     ));
     assert!(matches!(
-        pipeline
-            .auth
-            .authenticate(&SecretValue::new("test-token"))
-            .await,
+        token_identity(&pipeline.auth, "test-token").await,
         Err(Error::Expired)
     ));
     assert_eq!(pipeline.identities.calls.load(Ordering::SeqCst), 1);
@@ -366,13 +348,9 @@ async fn expiry_is_checked_again_for_operations_on_existing_connections() {
 
 #[rstest]
 #[tokio::test]
-async fn bearer_extraction_rejects_duplicates_and_does_not_trust_preexisting_identity() {
+async fn extraction_reads_the_first_header_and_does_not_trust_preexisting_identity() {
     let pipeline = pipeline("issuer-a", Permissions::All, Permissions::All, None);
-    let identity = pipeline
-        .auth
-        .authenticate(&SecretValue::new("test-token"))
-        .await
-        .unwrap();
+    let identity = token_identity(&pipeline.auth, "test-token").await.unwrap();
     let app = Router::new()
         .route(
             "/protected",
@@ -383,7 +361,7 @@ async fn bearer_extraction_rejects_duplicates_and_does_not_trust_preexisting_ide
             authenticate,
         ));
     let duplicate = Request::get("/protected")
-        .header("authorization", "Bearer test-token")
+        .header("authorization", "Bearer other-token")
         .header("authorization", "Bearer test-token")
         .body(Body::empty())
         .unwrap();
@@ -430,6 +408,23 @@ async fn route_permissions_are_checked_before_parsing_or_dispatch() {
         .unwrap();
     assert_eq!(app.clone().oneshot(allowed).await.unwrap().status(), 204);
     assert_eq!(app.oneshot(denied).await.unwrap().status(), 403);
+}
+
+#[rstest]
+#[tokio::test]
+async fn authentication_outside_a_matched_route_fails_closed() {
+    let pipeline = pipeline("issuer-a", Permissions::All, Permissions::All, None);
+    let app = Router::new()
+        .route("/protected", get(|| async { StatusCode::NO_CONTENT }))
+        .layer(axum::middleware::from_fn_with_state(
+            pipeline.auth,
+            authenticate,
+        ));
+    let unmatched = Request::get("/unrouted")
+        .header("authorization", "Bearer test-token")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(app.oneshot(unmatched).await.unwrap().status(), 500);
 }
 
 struct CustomHeader;
@@ -488,21 +483,17 @@ async fn master_rotation_preserves_session_owner_but_rejects_the_old_key(
         Config::from_yaml("model_list: []\ngeneral_settings:\n  master_key: first-key\n").unwrap();
     let second =
         Config::from_yaml("model_list: []\ngeneral_settings:\n  master_key: second-key\n").unwrap();
-    let original = Auth::from_config(&first, secrets.clone())
-        .authenticate(&SecretValue::new("first-key"))
+    let original = token_identity(&Auth::from_config(&first, secrets.clone()), "first-key")
         .await
         .unwrap();
     let rotated = Auth::from_config(&second, secrets);
-    let replacement = rotated
-        .authenticate(&SecretValue::new("second-key"))
-        .await
-        .unwrap();
+    let replacement = token_identity(&rotated, "second-key").await.unwrap();
     assert_eq!(
         original.caller().session_owner(),
         replacement.caller().session_owner()
     );
     assert!(matches!(
-        rotated.authenticate(&SecretValue::new("first-key")).await,
+        token_identity(&rotated, "first-key").await,
         Err(Error::InvalidToken)
     ));
 }
@@ -539,14 +530,8 @@ async fn mapping_two_issuers_to_one_account_does_not_merge_session_ownership() {
         Arc::new(Policy(AtomicUsize::new(0))),
         Arc::new(TestClock(AtomicU64::new(10))),
     );
-    let original = first
-        .authenticate(&SecretValue::new("test-token"))
-        .await
-        .unwrap();
-    let mapped = second
-        .authenticate(&SecretValue::new("test-token"))
-        .await
-        .unwrap();
+    let original = token_identity(&first, "test-token").await.unwrap();
+    let mapped = token_identity(&second, "test-token").await.unwrap();
     assert_eq!(original.caller().principal(), mapped.caller().principal());
     assert_ne!(
         original.caller().verified_principal(),
@@ -556,4 +541,12 @@ async fn mapping_two_issuers_to_one_account_does_not_merge_session_ownership() {
         original.caller().session_owner(),
         mapped.caller().session_owner()
     );
+}
+
+async fn token_identity(auth: &Auth, token: &str) -> Result<AuthenticatedRequest, Error> {
+    auth.authenticate_request(
+        &litellm_gateway_auth::Credential::Token(SecretValue::new(token)),
+        &Request::new(()).into_parts().0,
+    )
+    .await
 }

@@ -14,7 +14,7 @@ from typing_extensions import assert_never
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import JWTAuthBuilderResult, ProxyException
-from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
+from litellm.proxy.auth import rust_jwt
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.mcp_server.gateway_dcr_flow import SubjectIdentity, SubjectTokenRefusal
 
@@ -78,7 +78,7 @@ class TokenExchangePrerequisites:
 def read_token_exchange_prerequisites() -> TokenExchangePrerequisites:
     from litellm.proxy.proxy_server import (  # noqa: PLC0415  # rebound after startup, so read them per call
         general_settings,
-        jwt_handler,
+        litellm_jwtauth,
         premium_user,
         prisma_client,
     )
@@ -87,14 +87,8 @@ def read_token_exchange_prerequisites() -> TokenExchangePrerequisites:
         jwt_auth_enabled=general_settings.get("enable_jwt_auth", False) is True,
         has_database=prisma_client is not None,
         licensed=premium_user is True,
-        maps_jwts_to_virtual_keys=_maps_jwts_to_virtual_keys(jwt_handler),
+        maps_jwts_to_virtual_keys=litellm_jwtauth.is_virtual_key_mapping_configured(),
     )
-
-
-def _maps_jwts_to_virtual_keys(jwt_handler: JWTHandler) -> bool:
-    if not hasattr(jwt_handler, "litellm_jwtauth"):
-        return False
-    return jwt_handler.litellm_jwtauth.is_virtual_key_mapping_configured()
 
 
 def token_exchange_available() -> bool:
@@ -103,7 +97,7 @@ def token_exchange_available() -> bool:
 
 class AuthorizeSubjectToken(Protocol):
     """Injected JWT authorization ``(subject_token, request_headers)``: the proxy's
-    ``JWTAuthManager.auth_builder`` in production, which raises when the token is not
+    ``rust_jwt.authorize`` with provisioning in production, which raises when the token is not
     acceptable and otherwise names the user and team it resolved."""
 
     def __call__(
@@ -112,34 +106,15 @@ class AuthorizeSubjectToken(Protocol):
 
 
 async def exchange_idp_subject_token(subject_token: str, request: Request) -> SubjectIdentity | SubjectTokenRefusal:
-    from litellm.proxy.proxy_server import (  # noqa: PLC0415  # rebound after startup, so read them per call
-        general_settings,
-        jwt_handler,
-        prisma_client,
-        proxy_logging_obj,
-        user_api_key_cache,
-    )
 
     async def authorize(token: str, request_headers: Mapping[str, str]) -> JWTAuthBuilderResult:
-        return await JWTAuthManager.auth_builder(
-            api_key=token,
-            jwt_handler=jwt_handler,
-            request_data={},
-            general_settings=general_settings,
-            route=EXCHANGE_ROUTE,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            parent_otel_span=None,
-            proxy_logging_obj=proxy_logging_obj,
-            request_headers=request_headers,
-            request_method="POST",
-        )
+        return await rust_jwt.authorize(token, EXCHANGE_ROUTE, "POST", headers=request_headers, provisioning=True)
 
     return await identity_from_subject_token(
         subject_token,
         request_headers=request.headers,
         prerequisites=read_token_exchange_prerequisites(),
-        is_jwt=jwt_handler.is_jwt,
+        is_jwt=rust_jwt.is_jwt,
         authorize=authorize,
     )
 

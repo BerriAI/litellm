@@ -1,7 +1,10 @@
 mod auth;
+mod dispatch;
 mod error;
 mod redis;
 mod secrets;
+pub use auth::auth;
+pub use dispatch::dispatching_router;
 pub use error::Error;
 pub use redis::RedisClients;
 
@@ -121,9 +124,12 @@ pub async fn build_mcp(
     {
         return Err(Error::McpGuardrails);
     }
-    Auth::from_config(config, secrets.clone())
-        .validate()
-        .await?;
+    litellm_gateway_auth::master_key(
+        config.general_settings.master_key.as_ref(),
+        secrets.as_ref(),
+    )
+    .await?
+    .ok_or(litellm_gateway_auth::Error::Unconfigured)?;
     let client = pool.client(http, ClientVariant::NoRedirect)?;
     Ok(Some(
         litellm_gateway_mcp::ConfiguredGateway::connect(
@@ -136,16 +142,14 @@ pub async fn build_mcp(
     ))
 }
 
+/// The native routes, each authenticated by `auth`.
 pub fn router(
     inference: Arc<Gateway>,
-    config: &Config,
+    auth: Auth,
     ui: Option<Router>,
     mcp: Option<Router>,
 ) -> Router {
-    let auth = Auth::from_config(config, inference.secrets.clone());
-    let inference = litellm_gateway_inference::router(inference)
-        .merge(mcp.unwrap_or_default())
-        .route_layer(axum::middleware::from_fn(auth::bind_session_owner))
+    let inference = native_routes(inference, mcp)
         .route_layer(axum::middleware::from_fn_with_state(
             auth,
             litellm_gateway_auth::authenticate,
@@ -158,11 +162,18 @@ pub fn router(
     }
 }
 
+/// The inference and MCP routes, before anything authenticates them.
+pub(crate) fn native_routes(inference: Arc<Gateway>, mcp: Option<Router>) -> Router {
+    litellm_gateway_inference::router(inference)
+        .merge(mcp.unwrap_or_default())
+        .route_layer(axum::middleware::from_fn(auth::bind_session_owner))
+}
+
 async fn readiness() -> axum::Json<serde_json::Value> {
     axum::Json(serde_json::json!({"status": "healthy", "db": "Not connected"}))
 }
 
-async fn log_request(request: Request, next: Next) -> Response {
+pub(crate) async fn log_request(request: Request, next: Next) -> Response {
     let request_id = Uuid::new_v4().to_string();
     let log_body_chunks = tracing::enabled!(tracing::Level::DEBUG);
     let method = request.method().clone();

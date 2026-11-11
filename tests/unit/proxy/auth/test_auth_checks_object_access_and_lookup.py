@@ -18,13 +18,27 @@ from datetime import datetime, timedelta, timezone
 import httpx
 import pytest
 from fastapi import Request, status
+from prisma.errors import DataError
 
 import litellm
+from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.redis_cache import RedisCache
+from litellm.constants import (
+    DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+    END_USER_RESTRICTED_REGISTRY_MAX_SIZE,
+    LITELLM_PROXY_MASTER_KEY_ALIAS,
+    PROXY_DB_LOOKUP_MAX_CONCURRENCY,
+    REGISTRY_ERROR_NEGATIVE_CACHE_TTL,
+    TAG_REGISTRY_MAX_SIZE,
+)
+from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
+from litellm.llms.base_llm.managed_resources.utils import encode_unified_id, generate_unified_id_string
+from litellm.proxy import proxy_server
 from litellm.proxy._types import (
     CallInfo,
-    Litellm_EntityType,
     LiteLLM_BudgetTable,
     LiteLLM_EndUserTable,
+    Litellm_EntityType,
     LiteLLM_ObjectPermissionTable,
     LiteLLM_TagTable,
     LiteLLM_TeamMembership,
@@ -34,63 +48,45 @@ from litellm.proxy._types import (
     ModelAccessDeniedProxyException,
     ProxyErrorTypes,
     ProxyException,
-    SSOUserDefinedValues,
     UserAPIKeyAuth,
     WebhookEvent,
 )
 from litellm.proxy.agent_endpoints.auth.agent_access_groups import AgentAccessGroupCeiling, CeilingResolver
-from litellm.types.agents import AgentCaller
 from litellm.proxy.auth.auth_checks import (
     LITELLM_SESSION_TOKEN_PREFIX,
-    ExperimentalUIJWTToken,
-    _cache_management_object,
-    can_object_call_model,
-    _can_object_call_vector_stores,
-    _check_agent_access_group_model_access,
-    agent_model_grants,
-    check_end_user_budget,
-    _check_team_member_budget,
-    personal_key_owner_teams,
-    personal_key_owner_teams_with_status,
-    fetch_key_object_from_db_with_reconnect,
-    _get_fuzzy_user_object,
     CallerTeamLoader,
     CallerUserLoader,
+    ExperimentalUIJWTToken,
+    _cache_management_object,
+    _can_object_call_vector_stores,
+    _check_agent_access_group_model_access,
+    _check_agent_caller_model_access,
+    _check_team_member_budget,
+    _get_fuzzy_user_object,
     _get_team_db_check,
     _log_budget_lookup_failure,
     _tag_max_budget_check,
-    team_max_budget_check,
-    team_member_max_budget_alert_check,
-    virtual_key_max_budget_alert_check,
-    _check_agent_caller_model_access,
-    virtual_key_max_budget_check,
-    virtual_key_soft_budget_check,
+    agent_model_grants,
+    can_object_call_model,
+    check_end_user_budget,
     common_checks,
+    fetch_key_object_from_db_with_reconnect,
     get_key_object,
     get_user_object,
     invalidate_team_member_spend_state,
+    personal_key_owner_teams_with_status,
     request_skips_budget_checks,
     route_skips_budget_checks,
+    team_max_budget_check,
+    team_member_max_budget_alert_check,
     vector_store_access_check,
-)
-from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.caching.redis_cache import RedisCache
-from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
-from litellm.constants import (
-    DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
-    END_USER_RESTRICTED_REGISTRY_MAX_SIZE,
-    LITELLM_PROXY_MASTER_KEY_ALIAS,
-    PROXY_DB_LOOKUP_MAX_CONCURRENCY,
-    REGISTRY_ERROR_NEGATIVE_CACHE_TTL,
-    TAG_REGISTRY_MAX_SIZE,
+    virtual_key_max_budget_alert_check,
+    virtual_key_max_budget_check,
+    virtual_key_soft_budget_check,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.auth.user_api_key_auth import check_api_key_for_custom_headers_or_pass_through_endpoints
-from litellm.proxy.utils import ProxyLogging
-from litellm.proxy import proxy_server
+from litellm.proxy.auth.user_api_key_auth import pass_through_key
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_bearer_token, encrypt_value_helper
-from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
-from prisma.errors import DataError
 from litellm.proxy.common_utils.user_api_key_cache import (
     END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL,
     TAG_REGISTRY_OVERFLOW_SENTINEL,
@@ -101,12 +97,14 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     tag_cache_key,
     tag_registry_cache_key,
 )
-from litellm.utils import get_utc_datetime
-from litellm.llms.base_llm.managed_resources.utils import encode_unified_id, generate_unified_id_string
-from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
-from tests._master_key import MASTER_KEY
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from litellm.proxy.utils import ProxyLogging
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
+from litellm.types.agents import AgentCaller
+from litellm.utils import get_utc_datetime
+from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+from tests._master_key import MASTER_KEY
 from tests.unit.redis.stores.auth_cache_double import shared_cache
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
@@ -321,13 +319,11 @@ async def test_session_token_survives_langfuse_basic_auth_parsing(valid_sso_user
     request = MagicMock()
     request.headers = {}
 
-    api_key = await check_api_key_for_custom_headers_or_pass_through_endpoints(
-        request=request,
-        route="/api/public/ingestion",
-        pass_through_endpoints=[
-            {"path": "/api/public/ingestion", "target": "https://example.com", "custom_auth_parser": "langfuse"}
-        ],
-        api_key=f"Basic {basic_credentials}",
+    api_key = pass_through_key(
+        request,
+        "/api/public/ingestion",
+        [{"path": "/api/public/ingestion", "target": "https://example.com", "custom_auth_parser": "langfuse"}],
+        f"Basic {basic_credentials}",
     )
 
     assert api_key == session_token
@@ -5477,7 +5473,7 @@ async def test_custom_auth_common_checks_opt_in():
     custom_auth_run_common_checks is explicitly set to True in general_settings.
 
     After the centralization refactor, common_checks runs in the
-    ``user_api_key_auth`` wrapper via ``_run_centralized_common_checks``
+    ``user_api_key_auth`` wrapper via ``run_centralized_common_checks``
     (not inside ``_run_post_custom_auth_checks``). The opt-in flag now
     gates the centralized gate for custom-auth deployments, preserving
     the pre-existing RPS guarantee for custom-auth hot paths.
@@ -7633,7 +7629,7 @@ async def test_common_checks_personal_user_budget_blocks_in_gather():
 
 async def _common_checks_for_over_budget_personal_key(*, model: str) -> bool:
     from litellm import Router
-    from litellm.proxy.auth.auth_checks import is_model_cost_zero, common_checks
+    from litellm.proxy.auth.auth_checks import common_checks, is_model_cost_zero
 
     llm_router: Final = Router(
         model_list=[
@@ -10218,7 +10214,7 @@ def test_model_has_no_cost_mapping_tiered_pricing_only_is_false():
 
 
 async def _run_common_checks(
-    model: Optional[str], llm_router: Optional["Router"], route: str = "/chat/completions"
+    model: str | None, llm_router: Optional["Router"], route: str = "/chat/completions"
 ) -> bool:
     from fastapi import Request
 
@@ -10581,90 +10577,6 @@ def test_model_has_no_cost_mapping_alias_to_a_group_priced_through_model_info_is
     router = _router_with_a_group_priced_through_model_info()
 
     assert model_has_no_cost_mapping(model="model-info-priced-alias", llm_router=router) is False
-
-
-@pytest.mark.parametrize(
-    "user_route, expected",
-    [
-        ("/internal-models/v1/chat/completions", True),
-        ("/internal-models/newly-registered-model/predict", True),
-        ("/internal-models-other/v1/chat/completions", False),
-        ("/anthropic/v1/messages", False),
-    ],
-)
-def test_team_allowed_routes_wildcard_prefix_matches_unregistered_passthrough_routes(user_route, expected):
-    """A `/prefix/*` entry in `team_allowed_routes` must cover every route under that prefix, so
-    passthrough endpoints registered after the proxy config was written are reachable without an
-    exact-route config change."""
-    from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.proxy.auth.auth_checks import allowed_routes_check
-
-    assert (
-        allowed_routes_check(
-            user_role=LitellmUserRoles.TEAM,
-            user_route=user_route,
-            litellm_proxy_roles=LiteLLM_JWTAuth(team_allowed_routes=["/internal-models/*"]),
-        )
-        is expected
-    )
-
-
-def test_team_allowed_routes_exact_route_does_not_become_a_prefix_grant():
-    from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.proxy.auth.auth_checks import allowed_routes_check
-
-    roles = LiteLLM_JWTAuth(team_allowed_routes=["/internal-models/model-a"])
-
-    assert (
-        allowed_routes_check(
-            user_role=LitellmUserRoles.TEAM, user_route="/internal-models/model-a", litellm_proxy_roles=roles
-        )
-        is True
-    )
-    assert (
-        allowed_routes_check(
-            user_role=LitellmUserRoles.TEAM, user_route="/internal-models/model-b", litellm_proxy_roles=roles
-        )
-        is False
-    )
-
-
-def test_admin_allowed_routes_wildcard_prefix_is_honored():
-    from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.proxy.auth.auth_checks import allowed_routes_check
-
-    roles = LiteLLM_JWTAuth(admin_allowed_routes=["/internal-models/*"])
-
-    assert (
-        allowed_routes_check(
-            user_role=LitellmUserRoles.PROXY_ADMIN, user_route="/internal-models/anything", litellm_proxy_roles=roles
-        )
-        is True
-    )
-    assert (
-        allowed_routes_check(
-            user_role=LitellmUserRoles.PROXY_ADMIN, user_route="/other/anything", litellm_proxy_roles=roles
-        )
-        is False
-    )
-
-
-def test_team_allowed_routes_named_route_group_still_resolves():
-    from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.proxy.auth.auth_checks import allowed_routes_check
-
-    roles = LiteLLM_JWTAuth(team_allowed_routes=["openai_routes"])
-
-    assert (
-        allowed_routes_check(
-            user_role=LitellmUserRoles.TEAM, user_route="/v1/chat/completions", litellm_proxy_roles=roles
-        )
-        is True
-    )
-    assert (
-        allowed_routes_check(user_role=LitellmUserRoles.TEAM, user_route="/key/generate", litellm_proxy_roles=roles)
-        is False
-    )
 
 
 @pytest.mark.asyncio
@@ -11130,24 +11042,6 @@ async def test_access_group_model_fallback_uses_the_injected_database(channel: s
                 is True
             )
     reader.assert_awaited_once_with(where={"access_group_id": "group-a"})
-
-
-def test_jwt_team_role_reaches_the_gateway_token_endpoint_by_default():
-    """The RFC 8693 token exchange authorizes the IdP JWT against ``POST /token`` itself, and JWT
-    auth only binds a team from a multi-team claim when that team may call the route, so the
-    default team allowlist has to cover the gateway's token endpoint or the exchange would mint
-    teamless credentials for every ``team_ids_jwt_field`` deployment."""
-    from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.proxy.auth.auth_checks import allowed_routes_check
-
-    assert allowed_routes_check(
-        user_role=LitellmUserRoles.TEAM, user_route="/token", litellm_proxy_roles=LiteLLM_JWTAuth()
-    )
-    assert not allowed_routes_check(
-        user_role=LitellmUserRoles.TEAM,
-        user_route="/token",
-        litellm_proxy_roles=LiteLLM_JWTAuth(team_allowed_routes=[]),
-    )
 
 
 def test_route_skips_budget_checks_marks_only_spend_free_routes() -> None:
@@ -11893,13 +11787,11 @@ def _client_tag_body(client_tags, client_slot):
 
 
 def _client_tag_rejection(route, data, request):
-    from litellm.proxy.auth.auth_checks import _reject_clientside_metadata_tags_check
+    """The core rejects client-side tags on an LLM route; Python only reads whether the request sent them."""
+    from litellm.proxy.auth.auth_checks import has_client_metadata_tags
+    from litellm.proxy.auth.route_checks import RouteChecks
 
-    try:
-        _reject_clientside_metadata_tags_check({"reject_clientside_metadata_tags": True}, data, route, request)
-    except ProxyException as error:
-        return error.code
-    return None
+    return "400" if RouteChecks.is_llm_api_route(route=route) and has_client_metadata_tags(request, data) else None
 
 
 @pytest.mark.asyncio

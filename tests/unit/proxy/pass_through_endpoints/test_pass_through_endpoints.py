@@ -11766,6 +11766,8 @@ async def _boot_db_backed_proxy(
     monkeypatch.setattr(proxy_server, "config_passthrough_endpoints", None)
     monkeypatch.setattr(proxy_server, "master_key", None)
     monkeypatch.setattr(proxy_server, "premium_user", False)
+    monkeypatch.setattr(proxy_server, "rust_auth_settings", None)
+    monkeypatch.setattr(proxy_server, "litellm_jwtauth", proxy_server.litellm_jwtauth)
     monkeypatch.setattr(proxy_utils, "litellm_config_cache", DualCache())
     monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
     monkeypatch.delitem(proxy_server.app.dependency_overrides, user_api_key_auth, raising=False)
@@ -11774,6 +11776,11 @@ async def _boot_db_backed_proxy(
     await proxy_config.load_config(router=None, config_file_path=str(config_path))
     monkeypatch.setattr(proxy_server, "prisma_client", config_table)
     monkeypatch.setattr(proxy_server, "store_model_in_db", store_model_in_db)
+    proxy_server.ProxyStartupEvent.initialize_jwt_auth(
+        general_settings=proxy_server.general_settings,
+        prisma_client=config_table,
+        user_api_key_cache=proxy_server.user_api_key_cache,
+    )
     return _DbBackedProxy(proxy_config, str(config_path), config_table)
 
 

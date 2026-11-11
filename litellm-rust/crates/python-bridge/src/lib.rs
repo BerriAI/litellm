@@ -1,3 +1,4 @@
+mod auth;
 mod cache;
 mod callable;
 mod coercion;
@@ -25,6 +26,20 @@ mod _native {
     use litellm_host_python::{ForkedAfterNativeRuntimeStarted, ProcessReservedForForking};
     use pyo3::{prelude::*, types::PyModule};
 
+    #[pymodule_export]
+    use crate::auth::{
+        AuthCall, AuthOutcome, AuthSettings, AuthStep, ClaimIdentityView, DenialView, IdentityView,
+        KeyContextView, MappedClaimsView, MappingView, PlanView, TeamGrantView, jwt_claims, jwt_is_allowed_domain, jwt_is_jwt,
+        jwt_key_mapping_cache_key, jwt_unverified_claims,
+    };
+    #[pymodule_export]
+    use crate::auth::{
+        auth_allowed_routes_grant, auth_end_user_id, auth_first_denied_route, auth_jwt_team_routes_grant,
+        auth_managed_agent_route_allowed, auth_managed_route, auth_route_matches_denied, auth_route_matches_prefix,
+        auth_route_matches_wildcard,
+        auth_key_max_budget_warning_due, auth_key_soft_budget_due, auth_mask_user_id, auth_org_context_team, auth_organization_denial, auth_route_denial, auth_user_is_org_admin,
+        auth_viewer_route_denial,
+    };
     #[pymodule_export]
     use crate::db::NativeDatabase;
     #[cfg(feature = "panic-test")]

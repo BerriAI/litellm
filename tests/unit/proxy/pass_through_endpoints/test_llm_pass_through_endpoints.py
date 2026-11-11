@@ -80,8 +80,8 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     vertex_proxy_route,
     vllm_proxy_route,
 )
-from litellm.proxy._types import LitellmUserRoles, SpecialHeaders, UserAPIKeyAuth
-from litellm.proxy.auth.handle_jwt import JWTHandler
+from litellm.proxy._types import LiteLLM_JWTAuth, LitellmUserRoles, SpecialHeaders, UserAPIKeyAuth
+from litellm.proxy.auth import core, rust_jwt
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
@@ -5269,8 +5269,8 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
                     user_id="jwt-subject",
                     jwt_claims={
                         **LITELLM_JWT_CLAIMS,
-                        JWTHandler.LITELLM_JWT_ISSUER_CLAIM: "https://idp.example.com",
-                        JWTHandler.LITELLM_USER_ID_CLAIM: "jwt-subject",
+                        rust_jwt.LITELLM_JWT_ISSUER_CLAIM: "https://idp.example.com",
+                        "_litellm_user_id": "jwt-subject",
                     },
                 ),
                 id="multi-issuer-jwt-auth-normalized-claims",
@@ -9261,7 +9261,7 @@ class TestAzureSpeechProxyRoutePathTraversal:
         assert AZURE_SPEECH_FAST_ENDPOINT in str(denied.value.detail)
 
 
-def _azure_speech_real_auth_attrs() -> dict[str, object]:
+def _azure_speech_real_auth_attrs(custom_auth: object | None = None) -> dict[str, object]:
     from litellm.caching.caching import DualCache
     from litellm.proxy.utils import ProxyLogging
 
@@ -9275,8 +9275,16 @@ def _azure_speech_real_auth_attrs() -> dict[str, object]:
         "llm_model_list": [],
         "llm_router": None,
         "open_telemetry_logger": None,
-        "user_custom_auth": None,
-        "jwt_handler": None,
+        "user_custom_auth": custom_auth,
+        "litellm_jwtauth": LiteLLM_JWTAuth(),
+        "rust_auth_settings": core.build_settings(
+            {},
+            LiteLLM_JWTAuth(),
+            master_key="sk-master-key",
+            premium_user=False,
+            has_db=False,
+            custom_auth=custom_auth is not None,
+        ),
     }
 
 
@@ -9460,7 +9468,7 @@ class TestVertexPassthroughAuthenticatesOncePerRequest:
         litellm.in_memory_llm_clients_cache.flush_cache()
         with (
             patch.multiple(  # test-quality-ok: the real user_api_key_auth reads proxy_server module globals (custom auth, master_key, caches) that have no injection seam
-                "litellm.proxy.proxy_server", **{**_azure_speech_real_auth_attrs(), "user_custom_auth": custom_auth}
+                "litellm.proxy.proxy_server", **_azure_speech_real_auth_attrs(custom_auth)
             ),
             patch(  # test-quality-ok: the route mints its Google token through its own VertexBase, nothing injects the credential loader
                 "litellm.llms.vertex_ai.vertex_llm_base.VertexBase.load_auth",
@@ -11455,9 +11463,16 @@ class TestOpenSearchProxyRoute:
     )
     @pytest.mark.parametrize("content_type", [NDJSON_TYPE, "application/json"])
     def test_an_ndjson_body_without_index_references_is_sent_byte_for_byte(
-        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, api: str, body: bytes, content_type: str
+        self,
+        opensearch_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        build_proxy_auth_settings: Callable[[], None],
+        api: str,
+        body: bytes,
+        content_type: str,
     ) -> None:
         monkeypatch.setattr("litellm.proxy.proxy_server.master_key", SHARED_MASTER_KEY)
+        build_proxy_auth_settings()
         with respx.mock(assert_all_called=True) as upstream:
             route = upstream.post(f"{DOCS_UPSTREAM}/{api}").mock(
                 return_value=httpx.Response(200, json={"errors": False, "items": []})
@@ -11483,7 +11498,11 @@ class TestOpenSearchProxyRoute:
         ids=["model", "api_base", "base_url"],
     )
     def test_a_document_field_named_like_an_llm_param_is_written_for_a_model_limited_key(
-        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, document: bytes
+        self,
+        opensearch_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        build_proxy_auth_settings: Callable[[], None],
+        document: bytes,
     ) -> None:
         from litellm.proxy import proxy_server
 
@@ -11496,6 +11515,7 @@ class TestOpenSearchProxyRoute:
         monkeypatch.setattr(proxy_server, "master_key", SHARED_MASTER_KEY)
         monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
         monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+        build_proxy_auth_settings()
         with respx.mock(assert_all_called=True) as upstream:
             route = upstream.post(f"{DOCS_UPSTREAM}/_doc").mock(
                 return_value=httpx.Response(201, json={"_id": "abc", "result": "created"})

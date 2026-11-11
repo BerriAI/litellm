@@ -23,7 +23,7 @@ from litellm.types.mcp_server.mcp_server_manager import MCPServer
 if TYPE_CHECKING:
     from litellm.models.user import LiteLLM_UserTable
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.auth.handle_jwt import JWTIdentity
+    from litellm.proxy.auth.rust_jwt import JwtIdentity
     from litellm.proxy.mcp_server.discoverable_endpoints import _BridgeAuthorizationCode
     from litellm.proxy.mcp_server.outbound_credentials.envelope import (
         EnvelopeIdentity,
@@ -57,9 +57,9 @@ def _litellm_key_from_request(request: Request) -> str | None:
 
 async def oauth_authorization_uses_gateway_credential(request: Request) -> bool:
     """Classify credentials for browser authorize; candidates still require full authorization."""
-    from litellm.proxy.auth.handle_jwt import JWTHandler  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.auth import rust_jwt  # noqa: PLC0415  # proxy import cycle
     from litellm.proxy.proxy_server import (  # noqa: PLC0415  # startup owns the active auth configuration
-        jwt_handler,
+        litellm_jwtauth,
         master_key,
     )
 
@@ -70,9 +70,9 @@ async def oauth_authorization_uses_gateway_credential(request: Request) -> bool:
         return "authorization" in request.headers
     if token.startswith("sk-") or (master_key and secrets.compare_digest(token.encode(), master_key.encode())):
         return True
-    if custom_auth_configured() or jwt_handler.litellm_jwtauth.oidc_userinfo_enabled:
+    if custom_auth_configured() or litellm_jwtauth.oidc_userinfo_enabled:
         return True
-    if not JWTHandler.is_jwt(token):
+    if not rust_jwt.is_jwt(token):
         return is_sealed_gateway_bearer(token) or await virtual_key_may_exist(token)
     return jwt_issuer_may_be_litellm(token)
 
@@ -87,17 +87,19 @@ def custom_auth_configured() -> bool:
 
 def jwt_issuer_may_be_litellm(token: str) -> bool:
     """False only when the JWT names an issuer LiteLLM's JWT auth is not configured to accept."""
-    from litellm.proxy.auth.handle_jwt import JWTHandler  # noqa: PLC0415  # proxy import cycle
-    from litellm.proxy.proxy_server import jwt_handler  # noqa: PLC0415  # startup owns the active auth configuration
+    from litellm.proxy.auth import rust_jwt  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.proxy_server import (
+        litellm_jwtauth,  # noqa: PLC0415  # startup owns the active auth configuration
+    )
 
-    claims: Final = JWTHandler.get_unverified_claims(token)
+    claims: Final = rust_jwt.unverified_claims(token)
     issuer: Final = claims.get("iss") if claims is not None else None
     global_issuer: Final = os.getenv("JWT_ISSUER")
     # An unscoped global validator can accept issuers absent from the configured issuer list.
     if not isinstance(issuer, str) or not issuer or not global_issuer:
         return True
     return issuer == global_issuer or any(
-        issuer == configured.issuer for configured in jwt_handler.litellm_jwtauth.issuers or ()
+        issuer == configured.issuer for configured in litellm_jwtauth.issuers or ()
     )
 
 
@@ -436,10 +438,10 @@ async def _revalidate_active_subject(identity: "EnvelopeIdentity") -> "_KeyResol
 
 async def extract_user_id_from_request(request: Request) -> str | None:
     """Resolve the caller for identity binding without granting credential-write permission."""
-    from litellm.proxy.auth.handle_jwt import JWTIdentity  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.auth.rust_jwt import JwtIdentity  # noqa: PLC0415  # proxy import cycle
 
     resolved: Final = await _resolve_request_auth(request)
-    if isinstance(resolved, JWTIdentity):
+    if isinstance(resolved, JwtIdentity):
         return resolved.user_id
     return _active_key_user_id(resolved) if resolved is not None else None
 
@@ -460,11 +462,11 @@ async def authorize_oauth_credential_request(request: Request, server_id: str) -
 
 async def _resolve_request_auth(
     request: Request, write_route: str | None = None
-) -> "UserAPIKeyAuth | JWTIdentity | None":
-    from litellm.proxy.auth.handle_jwt import JWTHandler  # noqa: PLC0415  # proxy import cycle
+) -> "UserAPIKeyAuth | JwtIdentity | None":
+    from litellm.proxy.auth import rust_jwt  # noqa: PLC0415  # proxy import cycle
 
     token: Final = _litellm_key_from_request(request)
-    if token is not None and JWTHandler.is_jwt(token):
+    if token is not None and rust_jwt.is_jwt(token):
         return await _resolve_jwt_auth(request, token, write_route)
     resolved: Final = await _resolve_active_litellm_key(request)
     return resolved.key if isinstance(resolved, _ResolvedKey) else None
@@ -502,70 +504,37 @@ async def _resolve_jwt_auth(
     request: Request,
     token: str,
     write_route: str | None,
-) -> "UserAPIKeyAuth | JWTIdentity | None":
+) -> "UserAPIKeyAuth | JwtIdentity | None":
     from litellm.proxy._types import UserAPIKeyAuth  # noqa: PLC0415  # proxy import cycle
-    from litellm.proxy.auth.handle_jwt import JWTAuthManager  # noqa: PLC0415  # proxy import cycle
-    from litellm.proxy.auth.user_api_key_auth import (  # noqa: PLC0415  # proxy import cycle
-        _resolve_jwt_to_virtual_key,  # pyright: ignore[reportPrivateUsage]  # reuse admission mapping policy without provisioning a new key
-    )
+    from litellm.proxy.auth import rust_jwt  # noqa: PLC0415  # proxy import cycle
     from litellm.proxy.proxy_server import (  # noqa: PLC0415  # proxy globals initialized at startup
         general_settings,
-        jwt_handler,
+        litellm_jwtauth,
         premium_user,
         prisma_client,
-        proxy_logging_obj,
-        user_api_key_cache,
     )
 
     if general_settings.get("enable_jwt_auth") is not True or premium_user is not True or prisma_client is None:
         return None
     try:
-        if jwt_handler.litellm_jwtauth.is_virtual_key_mapping_configured():
-            claims: Final = await jwt_handler.auth_jwt(token=token)
-            validate: Final = jwt_handler.litellm_jwtauth.custom_validate
-            if validate is not None and not validate(claims):
-                return None
-            mapped: Final = await _resolve_jwt_to_virtual_key(
-                jwt_claims=claims,
-                jwt_handler=jwt_handler,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=None,
-                proxy_logging_obj=proxy_logging_obj,
-            )
+        if litellm_jwtauth.is_virtual_key_mapping_configured():
+            mapped: Final = await rust_jwt.resolve_mapping(token)
             if isinstance(mapped, UserAPIKeyAuth):
                 return None if await _key_owner_scim_deactivated(mapped) or not _key_is_active(mapped) else mapped
-            if mapped is not None:
+            if mapped != rust_jwt.RustJwtMapping.Unmapped:
                 return None
         if write_route is None:
-            identity: Final = await JWTAuthManager.resolve_identity(
-                api_key=token,
-                jwt_handler=jwt_handler,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=None,
-                proxy_logging_obj=proxy_logging_obj,
-            )
+            identity: Final = await rust_jwt.resolve_identity(token)
             if identity.user_object is not None and isinstance(_active_user_record(identity.user_object), str):
                 return None
             return identity
-        authorized: Final = await JWTAuthManager.authorize_jwt(
-            api_key=token,
-            jwt_handler=jwt_handler,
-            request_data={},
-            general_settings=general_settings,
-            route=write_route,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            parent_otel_span=None,
-            proxy_logging_obj=proxy_logging_obj,
-            request_headers=dict(request.headers),
-            request_method=request.method,
+        authorized: Final = await rust_jwt.authorize(
+            token, write_route, request.method, headers=dict(request.headers), provisioning=False
         )
         resolved_user: Final = authorized["user_object"]
         if resolved_user is not None and isinstance(_active_user_record(resolved_user), str):
             return None
-        return JWTAuthManager.user_api_key_auth_from_result(authorized)
+        return rust_jwt.auth_from_result(authorized)
     except Exception as exc:  # noqa: BLE001  # public OAuth exchange stays available; unvalidated identities never write credentials
         verbose_logger.debug("OAuth JWT identity could not be validated (%s)", type(exc).__name__)
         return None
@@ -816,7 +785,7 @@ async def prepare_bridge_mint(
     present is ``no_identity``. The refresh_token grant has its own phase-1
     (:func:`_prepare_bridge_refresh`), which recovers identity from the presented refresh envelope."""
     from litellm.proxy._types import UserAPIKeyAuth  # noqa: PLC0415  # proxy import cycle
-    from litellm.proxy.auth.handle_jwt import JWTHandler  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.auth import rust_jwt  # noqa: PLC0415  # proxy import cycle
     from litellm.proxy.mcp_server.client_allowlist import (  # noqa: PLC0415  # keep mint policy dependencies local
         load_mcp_client_allowlist,
     )
@@ -839,7 +808,7 @@ async def prepare_bridge_mint(
         identity = user_identity(server_id=mcp_server.server_id, user_id=bridge_identity.litellm_user_id)
         return _BridgeMintReady(identity=identity, keys=keys)
     presented_token: Final = _litellm_key_from_request(request)
-    if presented_token is not None and JWTHandler.is_jwt(presented_token):
+    if presented_token is not None and rust_jwt.is_jwt(presented_token):
         client_allowlist: Final = load_mcp_client_allowlist(general_settings)
         if client_allowlist is not None and client_allowlist.jwt_field is not None:
             return "jwt_client_policy_unsupported"

@@ -22,6 +22,18 @@ use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 use tower::ServiceExt;
 
+async fn router(
+    inference: Arc<litellm_gateway_inference::Gateway>,
+    config: &Config,
+    ui: Option<axum::Router>,
+    mcp: Option<axum::Router>,
+) -> axum::Router {
+    let auth = litellm_gateway::auth(config, inference.secrets.as_ref(), &|_| None)
+        .await
+        .unwrap();
+    litellm_gateway::router(inference, auth, ui, mcp)
+}
+
 #[derive(Clone)]
 struct Upstream;
 
@@ -165,7 +177,7 @@ mcp_servers:
             ..Default::default()
         },
     );
-    let app = litellm_gateway::router(inference, &config, None, Some(mcp_router));
+    let app = router(inference, &config, None, Some(mcp_router)).await;
     Served {
         app,
         mcp,

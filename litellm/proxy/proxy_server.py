@@ -206,6 +206,7 @@ from litellm.router_strategy.auto_router.auto_router_tuning_baseline import (
     snapshot_tuning_baselines,
     tuning_limit_violation,
 )
+from litellm.rust_bridge._native import RustAuthSettings
 from litellm.rust_bridge.catalog import Target
 from litellm.types.utils import (
     PRICING_OVERRIDES_KEY,
@@ -420,6 +421,7 @@ from litellm.llms.anthropic.messages.convertible_blocks import (
 )
 from litellm.llms.custom_httpx.aiohttp_pool_diagnostics import build_pool_wait_trace_config
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.httpx_handler import HTTPHandler as JwksHTTPHandler
 from litellm.llms.openai.live import parse_live_session_start
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
@@ -434,6 +436,7 @@ from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
 )
 from litellm.proxy.anthropic_endpoints.answered_status import is_provider_overload
+from litellm.proxy.auth import core as auth_core
 from litellm.proxy.auth.auth_checks import (
     ROLE_BASED_PERMISSIONS_ADAPTER,
     ExperimentalUIJWTToken,
@@ -455,7 +458,6 @@ from litellm.proxy.auth.auth_utils import (
 from litellm.proxy.auth.fallback_budget import RouterFallbackBudgetCheck, router_fallback_budget_check
 from litellm.proxy.auth.fallback_model_access import router_fallback_access_check
 from litellm.proxy.auth.fallback_rate_limit import RouterFallbackRateLimitCheck
-from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.legacy_empty_models_check import warn_about_legacy_empty_models
 from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_REMEDY, LicenseCheck
 from litellm.proxy.auth.login_throttle import (
@@ -489,7 +491,6 @@ from litellm.proxy.auth.model_checks import (
 )
 from litellm.proxy.auth.password_policy import validate_password_not_breached, validate_password_policy
 from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401, RUF100  # legacy module exports
-    _fetch_global_spend_with_event_coordination,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     fetch_global_spend_with_event_coordination,
     user_api_key_auth,
     user_api_key_auth_accepted_websocket_for_model,
@@ -1463,7 +1464,7 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
     if litellm.cache is not None:
         await litellm.cache.disconnect()
 
-    await jwt_handler.close()
+    await jwt_http_handler.close()
 
     if db_writer_client is not None:
         await db_writer_client.close()
@@ -3264,7 +3265,9 @@ _BATCH_WRITE_JITTER_MAX_SECONDS: Final = 5
 proxy_config_reload_interval_seconds = PROXY_CONFIG_RELOAD_INTERVAL_SECONDS
 litellm_master_key_hash = None
 disable_spend_logs = False
-jwt_handler: Final = JWTHandler()
+litellm_jwtauth: LiteLLM_JWTAuth = LiteLLM_JWTAuth()
+jwt_http_handler: Final = JwksHTTPHandler()
+rust_auth_settings: RustAuthSettings | None = None
 prompt_injection_detection_obj: Final[OPTIONAL_PromptInjectionDetection | None] = None
 store_model_in_db: bool = False
 open_telemetry_logger: OpenTelemetry | None = None
@@ -11468,6 +11471,7 @@ class ProxyStartupEvent:
         user_api_key_cache: UserApiKeyCache,
     ):
         """Initialize JWT auth on startup"""
+        global litellm_jwtauth
         declared_jwtauth: Final = general_settings.get("litellm_jwtauth", None)
         if declared_jwtauth is not None:
             resolved_jwtauth: Final = {
@@ -11485,14 +11489,14 @@ class ProxyStartupEvent:
             )
         else:
             litellm_jwtauth = LiteLLM_JWTAuth()
-        jwt_handler.update_environment(
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            litellm_jwtauth=litellm_jwtauth,
+        global rust_auth_settings
+        rust_auth_settings = auth_core.build_settings(
+            general_settings,
+            litellm_jwtauth,
+            master_key=master_key,
+            premium_user=premium_user,
+            has_db=prisma_client is not None,
         )
-        from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
-
-        jwt_handler.bind_agent_lookup(global_agent_registry)
 
     _initialize_jwt_auth = initialize_jwt_auth
 

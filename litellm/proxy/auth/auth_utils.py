@@ -21,12 +21,10 @@ from litellm.constants import (
     EMPTY_MAPPING,
     INVALID_VIRTUAL_KEY_ERROR_MARKER,
     MINIMUM_CUSTOM_KEY_LENGTH,
-    STANDARD_CUSTOMER_ID_HEADERS,
 )
 from litellm.litellm_core_utils.cloud_storage_security import REQUEST_S3_BUCKET_PARAMS, STORED_S3_BUCKET_PARAM
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor, reject_api_key_secret_reference
 from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
-from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import (
     SSRFError,
     is_url_destination_allowed_by_host,
@@ -38,6 +36,7 @@ from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_model_
 from litellm.proxy._types import *
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.http_parsing_utils import extract_nested_form_metadata
+from litellm.rust_bridge._native import auth_end_user_id
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
 )
@@ -2149,174 +2148,12 @@ def is_sso_provider_fully_configured() -> bool:
     return _is_google_ready() or _is_microsoft_ready() or _is_generic_oauth_ready() or _is_saml_ready()
 
 
-def get_customer_user_header_from_mapping(user_id_mapping) -> list | None:
-    """Return the header_name mapped to CUSTOMER role, if any (dict-based)."""
-    if not user_id_mapping:
-        return None
-    items: Final = user_id_mapping if isinstance(user_id_mapping, list) else [user_id_mapping]
-    customer_headers_mappings: Final = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        role = item.get("litellm_user_role")
-        header_name = item.get("header_name")
-        if role is None or not header_name:
-            continue
-        if str(role).lower() == str(LitellmUserRoles.CUSTOMER).lower():
-            customer_headers_mappings.append(header_name.lower())
-
-    if customer_headers_mappings:
-        return customer_headers_mappings
-
-    return None
-
-
-def _get_customer_id_from_standard_headers(
-    request_headers: Mapping[str, object] | None,
-) -> str | None:
-    """
-    Check standard customer ID headers for a customer/end-user ID.
-
-    This enables tools like Claude Code to pass customer IDs via ANTHROPIC_CUSTOM_HEADERS.
-    No configuration required - these headers are always checked.
-
-    Args:
-        request_headers: The request headers dict
-
-    Returns:
-        The customer ID if found in standard headers, None otherwise
-    """
-    if request_headers is None:
-        return None
-
-    for standard_header in STANDARD_CUSTOMER_ID_HEADERS:
-        for header_name, header_value in request_headers.items():
-            if header_name.lower() == standard_header.lower():
-                user_id_str = _coerce_user_id_to_str(header_value)
-                if user_id_str:
-                    return user_id_str
-    return None
-
-
-def _coerce_user_id_to_str(value: object) -> str | None:
-    """Return a usable end-user identifier string, or None if the value isn't one.
-
-    Always drops non-string structured values (dict/list/tuple/set) because
-    stringifying them produces garbage spend-log rows like
-    ``"{'device_id': ...}"``. Strings that *decode* to a structured payload
-    are only rejected when ``litellm.validate_end_user_id_in_db`` is enabled
-    — operators who currently pass JSON-encoded identifiers keep their
-    existing behavior until they opt in. See
-    auth_utils.py:get_end_user_id_from_request_body for the extraction chain.
-    """
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        # bool is an int subclass; handle explicitly to avoid "True"/"False".
-        return None
-    if isinstance(value, (int, float)):
-        return str(value)
-    if isinstance(value, str):
-        stripped: Final = value.strip()
-        if not stripped:
-            return None
-        # Reject strings that decode to a structured payload (JSON object/array)
-        # only when the operator has opted into end-user validation. Gating
-        # behind the flag preserves backwards compatibility for deployments
-        # that intentionally pass JSON-encoded user identifiers.
-        if litellm.validate_end_user_id_in_db and stripped[:1] in ("{", "["):
-            parsed: Final[object] = _DECODED_JSON.validate_python(safe_json_loads(stripped))
-            if isinstance(parsed, (dict, list)):
-                return None
-        return stripped
-    # dict, list, tuple, set, arbitrary objects -> drop.
-    return None
-
-
 def get_end_user_id_from_request_body(
     request_body: Mapping[str, object], request_headers: Mapping[str, object] | None = None
 ) -> str | None:
-    # Import general_settings here to avoid potential circular import issues at module level
-    # and to ensure it's fetched at runtime.
     from litellm.proxy.proxy_server import general_settings
 
-    # Check 1: Standard customer ID headers (always checked, no configuration required)
-    customer_id: Final = _get_customer_id_from_standard_headers(request_headers=request_headers)
-    if customer_id is not None:
-        return customer_id
-
-    # Check 2: Follow the user header mappings feature, if not found, then check for deprecated user_header_name (only if request_headers is provided)
-    # User query: "system not respecting user_header_name property"
-    # This implies the key in general_settings is 'user_header_name'.
-    if request_headers is not None:
-        custom_header_name_to_check: list | str | None = None
-
-        # Prefer user mappings (new behavior)
-        user_id_mapping: Final = general_settings.get("user_header_mappings", None)
-        if user_id_mapping:
-            custom_header_name_to_check = get_customer_user_header_from_mapping(user_id_mapping)
-
-        # Fallback to deprecated user_header_name if mapping did not specify
-        if not custom_header_name_to_check:
-            user_id_header_config_key: Final = "user_header_name"
-            value: Final = general_settings.get(user_id_header_config_key)
-            if isinstance(value, str) and value.strip() != "":
-                custom_header_name_to_check = value
-
-        # If we have a header name to check, try to read it from request headers
-        if isinstance(custom_header_name_to_check, list):
-            headers_lower: Final = {k.lower(): v for k, v in request_headers.items()}
-            for expected_header in custom_header_name_to_check:
-                user_id_str = _coerce_user_id_to_str(headers_lower.get(expected_header))
-                if user_id_str:
-                    return user_id_str
-
-        elif isinstance(custom_header_name_to_check, str):
-            for header_name, header_value in request_headers.items():
-                if header_name.lower() == custom_header_name_to_check.lower():
-                    user_id_str = _coerce_user_id_to_str(header_value)
-                    if user_id_str:
-                        return user_id_str
-
-    # Check 3: 'user' field in request_body (commonly OpenAI)
-    if "user" in request_body:
-        user_id_str = _coerce_user_id_to_str(request_body["user"])
-        if user_id_str:
-            return user_id_str
-
-    def _as_dict(value: object) -> dict:
-        # metadata / litellm_metadata can arrive as JSON strings from
-        # multipart/form-data or extra_body; coerce so string-encoded
-        # payloads can't evade end-user attribution.
-        if isinstance(value, dict):
-            return value
-        if isinstance(value, str):
-            parsed: Final = _DECODED_JSON.validate_python(safe_json_loads(value))
-            return parsed if isinstance(parsed, dict) else {}
-        return {}
-
-    # Check 4: 'litellm_metadata.user' in request_body (commonly Anthropic)
-    litellm_metadata: Final = _as_dict(request_body.get("litellm_metadata"))
-    user_id_str = _coerce_user_id_to_str(litellm_metadata.get("user"))
-    if user_id_str:
-        return user_id_str
-
-    # Check 5: 'metadata.user_id' in request_body (another common pattern)
-    metadata_dict: Final = _as_dict(request_body.get("metadata"))
-    user_id_str = _coerce_user_id_to_str(metadata_dict.get("user_id"))
-    if user_id_str:
-        return user_id_str
-
-    # Check 6: 'safety_identifier' in request body (OpenAI Responses API parameter)
-    # SECURITY NOTE: safety_identifier can be set by any caller in the request body.
-    # Only use this for end-user identification in trusted environments where you control
-    # the calling application. For untrusted callers, prefer using headers or server-side
-    # middleware to set the end_user_id to prevent impersonation.
-    user_id_str = _coerce_user_id_to_str(request_body.get("safety_identifier"))
-    if user_id_str:
-        return user_id_str
-
-    return None
+    return auth_end_user_id(request_body, request_headers, general_settings, bool(litellm.validate_end_user_id_in_db))
 
 
 MODEL_ROUTING_HEADER_NAME: Final = "x-litellm-model"

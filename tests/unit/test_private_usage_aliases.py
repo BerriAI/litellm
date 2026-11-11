@@ -182,11 +182,6 @@ MODULE_IMPORT_ALIAS_CASES: Final = (
         "read_request_body",
     ),
     (
-        "litellm.proxy.mcp_server.auth.user_api_key_auth_mcp",
-        "_run_centralized_common_checks",
-        "run_centralized_common_checks",
-    ),
-    (
         "litellm.proxy.mcp_server.bridge_token_flow",
         "_V2_GCM_PREFIX",
         "V2_GCM_PREFIX",
@@ -748,11 +743,6 @@ MODULE_IMPORT_ALIAS_CASES: Final = (
     ),
     (
         "litellm.proxy.management_endpoints.mcp_management_endpoints",
-        "_user_api_key_auth_builder",
-        "user_api_key_auth_builder",
-    ),
-    (
-        "litellm.proxy.management_endpoints.mcp_management_endpoints",
         "_user_has_admin_view",
         "user_api_key_has_admin_view",
     ),
@@ -918,11 +908,6 @@ MODULE_IMPORT_ALIAS_CASES: Final = (
     ),
     (
         "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints",
-        "_get_bearer_token",
-        "get_bearer_token",
-    ),
-    (
-        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints",
         "_read_request_body",
         "read_request_body",
     ),
@@ -985,11 +970,6 @@ MODULE_IMPORT_ALIAS_CASES: Final = (
         "litellm.proxy.proxy_server",
         "_deduplicate_litellm_router_models",
         "deduplicate_litellm_router_models",
-    ),
-    (
-        "litellm.proxy.proxy_server",
-        "_fetch_global_spend_with_event_coordination",
-        "fetch_global_spend_with_event_coordination",
     ),
     (
         "litellm.proxy.proxy_server",
@@ -2830,34 +2810,6 @@ PROXY_ALIAS_CASES: Final = (
         '',
         '_enforce_key_and_fallback_model_access',
         'enforce_key_and_fallback_model_access',
-        False,
-    ),
-    (
-        'litellm.proxy.auth.user_api_key_auth',
-        '',
-        '_fetch_global_spend_with_event_coordination',
-        'fetch_global_spend_with_event_coordination',
-        False,
-    ),
-    (
-        'litellm.proxy.auth.user_api_key_auth',
-        '',
-        '_get_bearer_token',
-        'get_bearer_token',
-        False,
-    ),
-    (
-        'litellm.proxy.auth.user_api_key_auth',
-        '',
-        '_run_centralized_common_checks',
-        'run_centralized_common_checks',
-        False,
-    ),
-    (
-        'litellm.proxy.auth.user_api_key_auth',
-        '',
-        '_user_api_key_auth_builder',
-        'user_api_key_auth_builder',
         False,
     ),
     (

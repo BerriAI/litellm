@@ -184,8 +184,7 @@ if MCP_AVAILABLE:
         UserMCPManagementMode,
         is_per_server_oauth_discovery_eligible,
     )
-    from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401  # legacy module exports
-        _user_api_key_auth_builder,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    from litellm.proxy.auth.user_api_key_auth import (  # legacy module exports
         user_api_key_auth,
         user_api_key_auth_builder,
     )

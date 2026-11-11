@@ -9,15 +9,9 @@ import jwt
 import pytest
 from fastapi import HTTPException
 
-from litellm.caching.caching import DualCache
 from litellm.proxy._types import IdJagRequestingApp, LiteLLM_JWTAuth, LiteLLMRoutes
-from litellm.proxy.auth.handle_jwt import (
-    ID_JAG_TYP,
-    AssertionRejection,
-    JWKSUnreachableError,
-    JWTHandler,
-    jwks_unavailable_exception,
-)
+from litellm.proxy.auth import rust_jwt
+from litellm.proxy.auth.rust_jwt import ID_JAG_TYP, AssertionRejection
 from litellm.proxy.mcp_server.gateway_dcr_flow import (
     AssertionIdentity,
     ConsentTeam,
@@ -33,7 +27,6 @@ from litellm.proxy.mcp_server.id_jag_grant import (
     GrantedScope,
     IdJagPrerequisites,
     LookupTeams,
-    _claim_reader,
     basic_client_id,
     gateway_audiences,
     granted_scope,
@@ -62,7 +55,7 @@ EVERY_GATE_HOLDS = {
     "base_url": "https://gateway.example.com",
     "requesting_apps": (PUBLIC_APP, CONFIDENTIAL_APP, SPACED_APP),
 }
-JWKS_DOWN = jwks_unavailable_exception(JWKSUnreachableError("ConnectError fetching the IdP's JWKS after 3 attempts"))
+JWKS_DOWN = HTTPException(status_code=503, detail="JWT Auth: the IdP's JWKS could not be fetched")
 
 
 def _claims(**overrides: object) -> dict[str, object]:
@@ -403,13 +396,6 @@ async def test_the_deployment_gates_refuse_before_any_verification(unmet, descri
     assert IdJagPrerequisites(**EVERY_GATE_HOLDS).available is True
 
 
-def _running_jwt_handler(litellm_jwtauth: LiteLLM_JWTAuth | None) -> JWTHandler:
-    handler: Final = JWTHandler()
-    if litellm_jwtauth is not None:
-        handler.update_environment(prisma_client=None, user_api_key_cache=DualCache(), litellm_jwtauth=litellm_jwtauth)
-    return handler
-
-
 @pytest.mark.parametrize(
     "general_settings, prisma_client, premium_user, litellm_jwtauth, expected",
     [
@@ -437,7 +423,6 @@ def _running_jwt_handler(litellm_jwtauth: LiteLLM_JWTAuth | None) -> JWTHandler:
             False,
         ),
         ({"enable_jwt_auth": True}, object(), True, LiteLLM_JWTAuth(), False),
-        ({"enable_jwt_auth": True}, object(), True, None, False),
         ({}, object(), True, LiteLLM_JWTAuth(id_jag_requesting_apps=[PUBLIC_APP]), False),
         ({"enable_jwt_auth": True}, None, True, LiteLLM_JWTAuth(id_jag_requesting_apps=[PUBLIC_APP]), False),
         ({"enable_jwt_auth": True}, object(), False, LiteLLM_JWTAuth(id_jag_requesting_apps=[PUBLIC_APP]), False),
@@ -451,7 +436,7 @@ def test_availability_is_read_from_the_running_proxy(
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", premium_user)
     monkeypatch.setattr("litellm.proxy.proxy_server.redis_usage_cache", general_settings.get("redis", object()))
-    monkeypatch.setattr("litellm.proxy.proxy_server.jwt_handler", _running_jwt_handler(litellm_jwtauth))
+    monkeypatch.setattr("litellm.proxy.proxy_server.litellm_jwtauth", litellm_jwtauth)
     assert jwt_bearer_available() is expected
 
 
@@ -574,9 +559,8 @@ async def test_a_blocked_or_unmapped_user_is_a_bad_grant_not_an_outage_to_retry(
 def test_the_assertion_team_claims_ignore_team_id_default():
     """``team_id_default`` is how bearer JWT auth picks a team for a request, not a claim the
     assertion made, so a user outside that team must still get their only team or no team."""
-    handler = JWTHandler()
-    handler.litellm_jwtauth = LiteLLM_JWTAuth(team_id_default="default-team")
-    claim_teams = tuple(_claim_reader(handler).get_all_jwt_team_ids(token={"iss": ISSUER, "sub": "u1"}))
+    reader = rust_jwt.ClaimReading(LiteLLM_JWTAuth(team_id_default="default-team"))
+    claim_teams = tuple(reader.get_all_jwt_team_ids(token={"iss": ISSUER, "sub": "u1"}))
     assert claim_teams == ()
     assert select_team(None, claim_teams, (ENG,)) == "team-eng"
     assert select_team(None, claim_teams, ()) is None

@@ -1,39 +1,29 @@
 use axum::{
     extract::{FromRequestParts, MatchedPath, Request, State},
-    http::{header::AUTHORIZATION, request::Parts},
+    http::request::Parts,
     middleware::Next,
     response::Response,
 };
 use litellm_secret_value::SecretValue;
 
-use crate::{AccessRequest, Auth, AuthenticatedRequest, Credential, Error};
+use crate::{AccessRequest, ApiKey, Auth, AuthenticatedRequest, Credential, Error};
 
 pub trait CredentialExtractor: Send + Sync {
     fn extract(&self, parts: &Parts) -> Result<Credential, Error>;
 }
 
-pub struct Bearer;
+/// Reads the key from the headers Python reads, in Python's order.
+pub struct ApiKeyHeaders;
 
-impl CredentialExtractor for Bearer {
+impl CredentialExtractor for ApiKeyHeaders {
     fn extract(&self, parts: &Parts) -> Result<Credential, Error> {
-        bearer(parts).map(Credential::Token)
+        match ApiKey::from_headers(&parts.headers) {
+            ApiKey::Token(token) if !token.is_empty() => {
+                Ok(Credential::Token(SecretValue::new(token)))
+            }
+            ApiKey::Token(_) | ApiKey::Missing | ApiKey::Unreadable => Err(Error::InvalidToken),
+        }
     }
-}
-
-fn bearer(parts: &Parts) -> Result<SecretValue, Error> {
-    let mut values = parts.headers.get_all(AUTHORIZATION).iter();
-    let value = values.next().ok_or(Error::InvalidToken)?;
-    if values.next().is_some() {
-        return Err(Error::InvalidToken);
-    }
-    let token = value
-        .to_str()
-        .ok()
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .map(str::trim)
-        .filter(|value| !value.is_empty() && !value.bytes().any(|byte| byte.is_ascii_whitespace()))
-        .ok_or(Error::InvalidToken)?;
-    Ok(SecretValue::new(token))
 }
 
 pub async fn authenticate(
@@ -42,21 +32,28 @@ pub async fn authenticate(
     next: Next,
 ) -> Result<Response, Error> {
     let (mut parts, body) = request.into_parts();
-    let identity = auth.authenticate_parts(&parts).await?;
+    let identity = auth.admit(&parts).await?;
+    parts.extensions.insert(identity);
+    Ok(next.run(Request::from_parts(parts, body)).await)
+}
+
+/// Whether `identity` may call the method and matched route of `parts`.
+pub(crate) async fn authorize_route(
+    identity: &AuthenticatedRequest,
+    parts: &Parts,
+) -> Result<(), Error> {
+    let path = parts
+        .extensions
+        .get::<MatchedPath>()
+        .ok_or(Error::MissingRoute)?;
     let route = AccessRequest::Route {
         method: parts.method.to_string(),
-        path: parts
-            .extensions
-            .get::<MatchedPath>()
-            .map_or(parts.uri.path(), MatchedPath::as_str)
-            .into(),
+        path: path.as_str().into(),
     };
     identity
         .authorize(route.clone())
         .await?
-        .consume(identity.caller(), &route)?;
-    parts.extensions.insert(identity);
-    Ok(next.run(Request::from_parts(parts, body)).await)
+        .consume(identity.caller(), &route)
 }
 
 impl<S: Send + Sync> FromRequestParts<S> for AuthenticatedRequest {
@@ -68,23 +65,5 @@ impl<S: Send + Sync> FromRequestParts<S> for AuthenticatedRequest {
             .get::<Self>()
             .cloned()
             .ok_or(Error::MissingIdentity)
-    }
-}
-
-pub struct RequireMasterKey;
-
-impl FromRequestParts<Auth> for RequireMasterKey {
-    type Rejection = Error;
-
-    async fn from_request_parts(parts: &mut Parts, state: &Auth) -> Result<Self, Error> {
-        state.validate().await?;
-        let identity = state
-            .authenticate_request(&Credential::Token(bearer(parts)?), parts)
-            .await?;
-        if identity.caller().authentication().method != crate::AuthenticationMethod::MasterKey {
-            return Err(Error::InvalidToken);
-        }
-        parts.extensions.insert(identity);
-        Ok(Self)
     }
 }

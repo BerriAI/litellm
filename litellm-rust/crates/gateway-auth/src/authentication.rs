@@ -1,6 +1,6 @@
 use std::{future::Future, pin::Pin, sync::Arc, time::SystemTime};
 
-use axum::http::{Request, request::Parts};
+use axum::http::request::Parts;
 use litellm_config::Config;
 use litellm_secret_value::SecretValue;
 use litellm_secrets::source::SecretSource;
@@ -8,9 +8,9 @@ use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
 use crate::{
-    AuthenticatedCaller, AuthenticatedRequest, Authentication, AuthenticationMethod, Authorizer,
-    Bearer, CredentialExtractor, Error, NoAdditionalPolicy, Permissions, Principal, PrincipalKind,
-    ResolvedIdentity, VerifiedIdentity,
+    ApiKeyHeaders, AuthenticatedCaller, AuthenticatedRequest, Authentication, AuthenticationMethod,
+    Authorizer, CredentialExtractor, Error, NoAdditionalPolicy, Permissions, Principal,
+    PrincipalKind, ResolvedIdentity, VerifiedIdentity,
 };
 
 pub type AuthFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
@@ -89,7 +89,7 @@ impl Auth {
         clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
-            extractor: Arc::new(Bearer),
+            extractor: Arc::new(ApiKeyHeaders),
             authenticator,
             identities,
             authorizer,
@@ -103,7 +103,7 @@ impl Auth {
             secrets,
         });
         Self {
-            extractor: Arc::new(Bearer),
+            extractor: Arc::new(ApiKeyHeaders),
             authenticator: master,
             identities: Arc::new(LocalAdministrator),
             authorizer: Arc::new(NoAdditionalPolicy),
@@ -120,19 +120,11 @@ impl Auth {
         self.authenticate_request(&credential, request).await
     }
 
-    pub async fn validate(&self) -> Result<(), Error> {
-        self.authenticator.validate().await
-    }
-
-    pub async fn authenticate(
-        &self,
-        credential: &SecretValue,
-    ) -> Result<AuthenticatedRequest, Error> {
-        self.authenticate_request(
-            &Credential::Token(credential.clone()),
-            &Request::new(()).into_parts().0,
-        )
-        .await
+    /// Authenticates `request` and checks its caller may call its method and matched route.
+    pub async fn admit(&self, request: &Parts) -> Result<AuthenticatedRequest, Error> {
+        let identity = self.authenticate_parts(request).await?;
+        crate::http::authorize_route(&identity, request).await?;
+        Ok(identity)
     }
 
     pub async fn authenticate_request(
@@ -183,21 +175,27 @@ impl MasterKeyAuthenticator {
     }
 
     async fn key(&self) -> Result<SecretValue, Error> {
-        let configured = self.key.as_ref().ok_or(Error::Unconfigured)?;
-        let resolved = match configured.expose().strip_prefix("os.environ/") {
-            Some(name) if !name.is_empty() => self
-                .secrets
-                .get_secret_str(name)
-                .await?
-                .ok_or(Error::Unconfigured)?,
-            Some(_) => return Err(Error::Unconfigured),
-            None => configured.clone(),
-        };
-        if resolved.expose().trim().is_empty() {
-            return Err(Error::Unconfigured);
-        }
-        Ok(resolved)
+        master_key(self.key.as_ref(), self.secrets.as_ref())
+            .await?
+            .ok_or(Error::Unconfigured)
     }
+}
+
+/// The configured master key with an `os.environ/` reference resolved, `None` when it is unset,
+/// names no variable, or resolves to blank.
+pub async fn master_key(
+    configured: Option<&SecretValue>,
+    secrets: &dyn SecretSource,
+) -> Result<Option<SecretValue>, Error> {
+    let Some(configured) = configured else {
+        return Ok(None);
+    };
+    let resolved = match configured.expose().strip_prefix("os.environ/") {
+        Some("") => None,
+        Some(name) => secrets.get_secret_str(name).await?,
+        None => Some(configured.clone()),
+    };
+    Ok(resolved.filter(|key| !key.expose().trim().is_empty()))
 }
 
 impl Authenticator for MasterKeyAuthenticator {
@@ -220,17 +218,21 @@ impl Authenticator for MasterKeyAuthenticator {
             ) {
                 return Err(Error::InvalidToken);
             }
-            Ok(VerifiedIdentity {
-                principal: master_principal(),
-                authentication: Authentication {
-                    method: AuthenticationMethod::MasterKey,
-                    verifier: "litellm:master-key".into(),
-                    credential_id: "master".into(),
-                    expires_at: None,
-                },
-                restrictions: Permissions::All,
-            })
+            Ok(master_identity())
         })
+    }
+}
+
+pub(crate) fn master_identity() -> VerifiedIdentity {
+    VerifiedIdentity {
+        principal: master_principal(),
+        authentication: Authentication {
+            method: AuthenticationMethod::MasterKey,
+            verifier: "litellm:master-key".into(),
+            credential_id: "master".into(),
+            expires_at: None,
+        },
+        restrictions: Permissions::All,
     }
 }
 

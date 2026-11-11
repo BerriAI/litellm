@@ -1,22 +1,33 @@
 import itertools
 import re
-from collections.abc import Collection, Iterable, Mapping
-from typing import Final, cast
+from collections.abc import Collection, Iterable, Mapping, Sequence
+from dataclasses import dataclass
+from typing import Final, NoReturn, cast
 
 from fastapi import HTTPException, Request, status
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
     MODEL_LIST_ROUTES,
     UI_TEAM_ID,
     CommonProxyErrors,
-    KeyManagementRoutes,
     LiteLLM_UserTable,
     LiteLLMRoutes,
     LitellmUserRoles,
-    ProxyErrorTypes,
-    ProxyException,
     UserAPIKeyAuth,
+)
+from litellm.rust_bridge._native import (
+    RustDenial,
+    auth_allowed_routes_grant,
+    auth_first_denied_route,
+    auth_jwt_team_routes_grant,
+    auth_mask_user_id,
+    auth_route_denial,
+    auth_route_matches_denied,
+    auth_route_matches_prefix,
+    auth_route_matches_wildcard,
+    auth_viewer_route_denial,
 )
 
 from .auth_checks_organization import (  # noqa: F401  # legacy module exports
@@ -24,76 +35,9 @@ from .auth_checks_organization import (  # noqa: F401  # legacy module exports
     user_is_org_admin,
 )
 
-# Management write routes denied to PROXY_ADMIN_VIEW_ONLY. Adding a new write
-# endpoint to a management router REQUIRES adding it here too — the surrounding
-# check falls through to "allow" if the route is not matched, which previously
-# let view-only admins call /team/block, /team/unblock, /key/bulk_update, etc.
-_PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES: Final = frozenset(
-    [
-        # user
-        "/user/new",
-        "/management/v1/users/bulk",
-        "/user/delete",
-        "/management/v1/users/bulk_delete",
-        "/user/bulk_update",
-        # team
-        "/team/new",
-        "/management/v1/teams/{team_id}/members/bulk_delete",
-        "/management/v1/teams/{team_id}/members/bulk_update",
-        "/team/update",
-        "/team/delete",
-        "/team/block",
-        "/team/unblock",
-        "/team/permissions_update",
-        "/team/permissions_bulk_update",
-        # model
-        "/model/new",
-        "/model/update",
-        "/model/delete",
-        # JWT key mapping
-        "/jwt/key/mapping/new",
-        "/jwt/key/mapping/update",
-        "/jwt/key/mapping/delete",
-        # key management — keep in sync with KeyManagementRoutes write entries
-        KeyManagementRoutes.KEY_GENERATE.value,
-        KeyManagementRoutes.KEY_UPDATE.value,
-        KeyManagementRoutes.KEY_DELETE.value,
-        KeyManagementRoutes.KEY_REGENERATE.value,
-        KeyManagementRoutes.KEY_GENERATE_SERVICE_ACCOUNT.value,
-        KeyManagementRoutes.KEY_BLOCK.value,
-        KeyManagementRoutes.KEY_UNBLOCK.value,
-        KeyManagementRoutes.KEY_BULK_UPDATE.value,
-        KeyManagementRoutes.TEAM_KEY_BULK_UPDATE.value,
-    ]
-)
-
-# Suffixes for `/key/{key_id}/...` path-parameterized write routes that the
-# enum templates with `{key_id}`. The blocklist above can't match templated
-# paths directly because the request route carries the resolved key id.
-_PROXY_ADMIN_VIEW_ONLY_BLOCKED_KEY_SUFFIXES: Final = ("/regenerate", "/reset_spend")
-
 _LLM_API_ROUTE_GROUPS: Final = frozenset(("llm_api_routes", "llm_api_routes_without_mcp"))
 _EU_JEV_DECISION_ROUTE: Final = "/eu_jev/v1/systemone"
 _AUTH_ENFORCED_PASS_THROUGH_ROUTE_GROUPS: Final = frozenset(("openai_routes", *_LLM_API_ROUTE_GROUPS))
-
-# Writes that only touch the caller's own credential row (BYOK connections and
-# per-user MCP credentials). Method-scoped because the generic credential CRUD
-# handlers share these paths: the route check cannot admit PATCH/DELETE on a
-# name like "user_connections" without also opening the admin CRUD handlers.
-_SELF_SCOPED_CREDENTIAL_ROUTES: Final = (
-    ("GET", "/credentials/user_connections"),
-    ("POST", "/credentials/{credential_name:path}/user_connection/start"),
-    ("POST", "/credentials/{credential_name:path}/user_connection/poll"),
-    ("DELETE", "/credentials/{credential_name:path}/user_connection"),
-    ("POST", "/v1/mcp/server/oauth/{server_id}/register"),
-    ("POST", "/v1/mcp/server/{server_id}/oauth-user-credential"),
-    ("DELETE", "/v1/mcp/server/{server_id}/oauth-user-credential"),
-    ("POST", "/v1/mcp/server/{server_id}/user-credential"),
-    ("DELETE", "/v1/mcp/server/{server_id}/user-credential"),
-    ("POST", "/v1/mcp/server/{server_id}/user-env-vars"),
-    ("DELETE", "/v1/mcp/server/{server_id}/user-env-vars"),
-)
-
 
 _UNBILLED_ROUTES: Final[frozenset[str]] = frozenset(
     {
@@ -107,6 +51,12 @@ _UNBILLED_ROUTES: Final[frozenset[str]] = frozenset(
 )
 _TOKEN_COUNTING_SEGMENTS: Final[frozenset[str]] = frozenset({"count_tokens", "count-tokens"})
 _TOKEN_COUNTING_ACTION: Final = "countTokens"
+
+
+def _allowed_passthrough_routes(metadata: Mapping[str, object] | None) -> list[str] | None:
+    return cast(  # cast-ok: management endpoints validate this metadata key as a list of route strings on write
+        "list[str] | None", (metadata or {}).get("allowed_passthrough_routes")
+    )
 
 
 class RouteChecks:
@@ -258,56 +208,8 @@ class RouteChecks:
 
     @staticmethod
     def _mask_user_id(user_id: str) -> str:
-        """
-        Mask user_id to prevent leaking sensitive information in error messages
-
-        Args:
-            user_id (str): The user_id to mask
-
-        Returns:
-            str: Masked user_id showing only first 2 and last 2 characters
-        """
-        from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
-
-        if not user_id or len(user_id) <= 4:
-            return "***"
-
-        # Use SensitiveDataMasker with custom configuration for user_id
-        masker: Final = SensitiveDataMasker(visible_prefix=6, visible_suffix=2, mask_char="*")
-
-        return masker.mask_value(user_id)
-
-    @staticmethod
-    def _raise_admin_only_route_exception(
-        user_obj: LiteLLM_UserTable | None,
-        route: str,
-    ) -> None:
-        """
-        Raise exception for routes that require proxy admin access
-
-        Args:
-            user_obj (Optional[LiteLLM_UserTable]): The user object
-            route (str): The route being accessed
-
-        Raises:
-            ProxyException: 401 with user role and masked user_id information
-        """
-        user_role = "unknown"
-        user_id = "unknown"
-        if user_obj is not None:
-            user_role = user_obj.user_role or "unknown"
-            user_id = user_obj.user_id or "unknown"
-
-        masked_user_id: Final = RouteChecks._mask_user_id(user_id)
-        raise ProxyException(
-            message=(
-                "Authentication Error, Only proxy admin can be used to generate, delete, update info for new "
-                f"keys/users/teams. Route={route}. Your role={user_role}. Your user_id={masked_user_id}"
-            ),
-            type=ProxyErrorTypes.auth_error,
-            param=None,
-            code=status.HTTP_401_UNAUTHORIZED,
-        )
+        """The user id an admin-only denial shows: its first 6 and last 2 characters."""
+        return auth_mask_user_id(user_id)
 
     @staticmethod
     def non_proxy_admin_allowed_routes_check(
@@ -317,110 +219,14 @@ class RouteChecks:
         request: Request,
         valid_token: UserAPIKeyAuth,
         request_data: dict,
-    ):
-        """
-        Checks if Non Proxy Admin User is allowed to access the route
-        """
-
-        # Check user has defined custom admin routes
-        RouteChecks.custom_admin_only_route_check(
-            route=route,
+    ) -> None:
+        """Whether a non proxy admin may call the route, decided by gateway-auth-core."""
+        denial: Final = auth_route_denial(
+            route_facts(route, request, request_data, valid_token, user_obj, user_role=_user_role),
+            organization_id=_organization_id(request_data),
         )
-
-        if RouteChecks.is_auth_enforced_pass_through_route(
-            route=route,
-            method=RouteChecks.get_request_method(request=request),
-        ):
-            RouteChecks._require_auth_pass_through_access(
-                route=route,
-                valid_token=valid_token,
-                jwt_team_allowed_routes=RouteChecks._jwt_team_allowed_routes(valid_token=valid_token),
-            )
-        elif RouteChecks.is_llm_api_route(route=route):
-            pass
-        elif RouteChecks.is_info_route(route=route):
-            # check if user allowed to call an info route
-            if route == "/key/info":
-                # handled by function itself
-                pass
-            elif route == "/user/info":
-                # check if user can access this route
-                query_params: Final = request.query_params
-                user_id: Final = query_params.get("user_id")
-                verbose_proxy_logger.debug("user_id: %s & valid_token.user_id: %s", user_id, valid_token.user_id)
-                if (
-                    user_id
-                    and user_id != valid_token.user_id
-                    and _user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
-                ):
-                    raise HTTPException(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        detail=f"key not allowed to access this user's info. user_id={user_id}, key's user_id={valid_token.user_id}",
-                    )
-            elif route == "/v2/user/info":
-                # handled by the endpoint itself (full RBAC in handler)
-                pass
-            elif route == "/model/info":
-                # /model/info just shows models user has access to
-                pass
-            elif route == "/team/info":
-                pass  # handled by function itself
-        elif (
-            route in LiteLLMRoutes.global_spend_tracking_routes.value
-            and getattr(valid_token, "permissions", None) is not None
-            and "get_spend_routes" in getattr(valid_token, "permissions", [])
-        ):
-            pass
-        elif route == "/lens" or route.startswith("/lens/"):
-            pass  # Lens authorizes the delegated role, including its POST-based read endpoints.
-        elif _user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value:
-            RouteChecks._check_proxy_admin_viewer_access(
-                route=route,
-                _user_role=_user_role,
-                request_data=request_data,
-                request=request,
-            )
-        elif (
-            _user_role == LitellmUserRoles.INTERNAL_USER.value
-            and (
-                RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.internal_user_routes.value)
-                or RouteChecks.is_self_scoped_credential_route(route=route, request=request)
-            )
-            or user_is_org_admin(request_data=request_data, user_object=user_obj)
-            and RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.org_admin_allowed_routes.value)
-            or _user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
-            and RouteChecks.check_route_access(
-                route=route,
-                allowed_routes=LiteLLMRoutes.internal_user_view_only_routes.value,
-            )
-            or RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.self_managed_routes.value)
-        ):
-            pass
-        elif route.startswith("/v1/mcp/") or route.startswith("/mcp-rest/"):
-            pass  # authN/authZ handled by api itself
-        elif RouteChecks.check_passthrough_route_access(route=route, user_api_key_dict=valid_token) or (
-            valid_token.is_team_service_account
-            and RouteChecks.check_route_access(
-                route=route, allowed_routes=LiteLLMRoutes.team_service_account_key_routes.value
-            )
-        ):
-            pass
-        elif valid_token.allowed_routes is not None:
-            # check if route is in allowed_routes (exact match or prefix match)
-            route_allowed = False
-            for allowed_route in valid_token.allowed_routes:
-                if RouteChecks._route_matches_allowed_route(route=route, allowed_route=allowed_route):
-                    route_allowed = True
-                    break
-
-                if RouteChecks.route_matches_wildcard_pattern(route=route, pattern=allowed_route):
-                    route_allowed = True
-                    break
-
-            if not route_allowed:
-                RouteChecks._raise_admin_only_route_exception(user_obj=user_obj, route=route)
-        else:
-            RouteChecks._raise_admin_only_route_exception(user_obj=user_obj, route=route)
+        if denial is not None:
+            _raise(denial)
 
     @staticmethod
     def custom_admin_only_route_check(route: str):
@@ -653,58 +459,13 @@ class RouteChecks:
 
     @staticmethod
     def route_matches_wildcard_pattern(route: str, pattern: str) -> bool:
-        """
-        Check if route matches the wildcard pattern
-
-        eg.
-
-        pattern: "/scim/v2/*"
-        route: "/scim/v2/Users"
-        - returns: True
-
-        pattern: "/scim/v2/*"
-        route: "/chat/completions"
-        - returns: False
-
-
-        pattern: "/scim/v2/*"
-        route: "/scim/v2/Users/123"
-        - returns: True
-
-        """
-        if pattern.endswith("*"):
-            # Get the prefix (everything before the wildcard)
-            prefix: Final = pattern[:-1]
-            return route.startswith(prefix)
-        else:
-            # If there's no wildcard, the pattern and route should match exactly
-            return route == pattern
+        """A trailing `*` matches by prefix, anything else exactly."""
+        return auth_route_matches_wildcard(route, pattern)
 
     @staticmethod
     def _route_matches_allowed_route(route: str, allowed_route: str) -> bool:
-        """
-        Check if route matches the allowed_route pattern.
-        Supports both exact match and prefix match.
-
-        Examples:
-        - allowed_route="/fake-openai-proxy-6", route="/fake-openai-proxy-6" -> True (exact match)
-        - allowed_route="/fake-openai-proxy-6", route="/fake-openai-proxy-6/v1/chat/completions" -> True (prefix match)
-        - allowed_route="/fake-openai-proxy-6", route="/fake-openai-proxy-600" -> False (not a valid prefix)
-
-        Args:
-            route: The actual route being accessed
-            allowed_route: The allowed route pattern
-
-        Returns:
-            bool: True if route matches (exact or prefix), False otherwise
-        """
-        # Exact match
-        if route == allowed_route:
-            return True
-        # Prefix match - ensure we add "/" to prevent false matches like /fake-openai-proxy-600
-        if route.startswith(allowed_route + "/"):
-            return True
-        return False
+        """The route itself or anything under it, never a sibling that only shares the prefix."""
+        return auth_route_matches_prefix(route, allowed_route)
 
     @staticmethod
     def check_route_access(route: str, allowed_routes: Collection[str]) -> bool:
@@ -767,16 +528,6 @@ class RouteChecks:
     _get_request_method = get_request_method
 
     @staticmethod
-    def is_self_scoped_credential_route(route: str, request: Request | None) -> bool:
-        method: Final = RouteChecks.get_request_method(request)
-        if method is None:
-            return False
-        return any(
-            method == expected_method and RouteChecks.check_route_access(route=route, allowed_routes=(pattern,))
-            for expected_method, pattern in _SELF_SCOPED_CREDENTIAL_ROUTES
-        )
-
-    @staticmethod
     def is_auth_enforced_pass_through_route(route: str, method: str | None = None) -> bool:
         """
         True for config/DB pass-through endpoints registered with auth=true.
@@ -807,12 +558,15 @@ class RouteChecks:
     @staticmethod
     def _route_matches_denied_route(route: str, denied_route: str) -> bool:
         """A `/` entry denies every route, since every route sits under the root."""
-        normalized_denied_route: Final = denied_route.rstrip("/") or "/"
-        return (
-            normalized_denied_route == "/"
-            or RouteChecks._route_matches_allowed_route(route=route, allowed_route=normalized_denied_route)
-            or RouteChecks.route_matches_wildcard_pattern(route=route, pattern=denied_route)
+        return auth_route_matches_denied(route, denied_route)
+
+    @staticmethod
+    def forwarded_pass_through_routes(route: str) -> tuple[str, ...]:
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (  # noqa: PLC0415  # pass-through endpoints import this module
+            InitPassThroughEndpointHelpers,
         )
+
+        return InitPassThroughEndpointHelpers.forwarded_routes(route)
 
     @staticmethod
     def matching_denied_passthrough_route(
@@ -822,7 +576,7 @@ class RouteChecks:
         First ``denied_passthrough_routes`` entry across ``metadata_sources`` that matches ``route``.
         Unlike the allowlist (key list, else team list), every source's deny list applies.
         """
-        denied_routes: Final = tuple(
+        denied_routes: Final = list(
             itertools.chain.from_iterable(
                 cast(  # cast-ok: management endpoints validate this metadata key as a list of route strings on write
                     "list[str]", (metadata or {}).get("denied_passthrough_routes") or []
@@ -832,22 +586,7 @@ class RouteChecks:
         )
         if not denied_routes:
             return None
-        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
-            InitPassThroughEndpointHelpers,
-        )
-
-        forwarded_routes: Final = InitPassThroughEndpointHelpers.forwarded_routes(route)
-        return next(
-            (
-                denied_route
-                for denied_route in denied_routes
-                if any(
-                    RouteChecks._route_matches_denied_route(route=candidate, denied_route=denied_route)
-                    for candidate in forwarded_routes
-                )
-            ),
-            None,
-        )
+        return auth_first_denied_route(list(RouteChecks.forwarded_pass_through_routes(route)), denied_routes)
 
     @staticmethod
     def passthrough_route_denied_exception(route: str, denied_route: str) -> HTTPException:
@@ -875,11 +614,7 @@ class RouteChecks:
         a named route group like ``openai_routes`` is only ever compared as a path, and an entry that names
         no path segment (``*``, ``/*``) is skipped.
         """
-        return any(
-            RouteChecks.route_matches_wildcard_pattern(route=route, pattern=allowed_route)
-            for allowed_route in team_allowed_routes
-            if allowed_route.rstrip("*").strip("/")
-        )
+        return auth_jwt_team_routes_grant(route, list(team_allowed_routes))
 
     @staticmethod
     def _jwt_team_allowed_routes(valid_token: UserAPIKeyAuth) -> Collection[str]:
@@ -887,56 +622,18 @@ class RouteChecks:
         if valid_token.jwt_claims is None or valid_token.token is not None or valid_token.team_id is None:
             return ()
 
-        from litellm.proxy.proxy_server import jwt_handler
+        from litellm.proxy.proxy_server import litellm_jwtauth
 
-        return jwt_handler.litellm_jwtauth.team_allowed_routes
-
-    @staticmethod
-    def _require_auth_pass_through_access(
-        route: str,
-        valid_token: UserAPIKeyAuth,
-        jwt_team_allowed_routes: Collection[str] = (),
-    ) -> None:
-        """
-        Require an explicit grant for auth=true pass-through: ``allowed_passthrough_routes`` on the
-        key or team, or an explicit JWT ``team_allowed_routes`` entry. A key or team
-        ``denied_passthrough_routes`` match blocks the route even when one of those grants it.
-        """
-        RouteChecks._raise_if_passthrough_route_denied(route=route, valid_token=valid_token)
-        if RouteChecks.check_passthrough_route_access(route=route, user_api_key_dict=valid_token):
-            return
-        if RouteChecks.jwt_team_routes_grant_pass_through(route=route, team_allowed_routes=jwt_team_allowed_routes):
-            return
-        raise RouteChecks._auth_pass_through_denied_exception(route=route)
+        return litellm_jwtauth.team_allowed_routes
 
     @staticmethod
     def check_passthrough_route_access(route: str, user_api_key_dict: UserAPIKeyAuth) -> bool:
-        """
-        Check if route is a passthrough route.
-        Supports both exact match and prefix match.
-        """
-        metadata: Final = user_api_key_dict.metadata
-        team_metadata: Final = user_api_key_dict.team_metadata or {}
-        if metadata is None and team_metadata is None:
-            return False
-        if "allowed_passthrough_routes" not in metadata and "allowed_passthrough_routes" not in team_metadata:
-            return False
-        if (
-            metadata.get("allowed_passthrough_routes") is None
-            and team_metadata.get("allowed_passthrough_routes") is None
-        ):
-            return False
-
-        allowed_passthrough_routes: Final = (
-            metadata.get("allowed_passthrough_routes") or team_metadata.get("allowed_passthrough_routes") or []
+        """The key's ``allowed_passthrough_routes`` when it lists any, otherwise the team's, matched by prefix."""
+        return auth_allowed_routes_grant(
+            route,
+            key=_allowed_passthrough_routes(user_api_key_dict.metadata),
+            team=_allowed_passthrough_routes(user_api_key_dict.team_metadata),
         )
-
-        # Check if route matches any allowed passthrough route (exact or prefix match)
-        for allowed_route in allowed_passthrough_routes:
-            if RouteChecks._route_matches_allowed_route(route=route, allowed_route=allowed_route):
-                return True
-
-        return False
 
     @staticmethod
     def is_assistants_api_request(request: Request) -> bool:
@@ -972,44 +669,6 @@ class RouteChecks:
             return True
         return False
 
-    # HTTP methods that are intrinsically read-only and therefore safe to
-    # default-allow for PROXY_ADMIN_VIEW_ONLY. Anything else (POST/PUT/PATCH/
-    # DELETE) is treated as a write attempt and goes through the explicit
-    # write-allowlist below.
-    _SAFE_HTTP_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
-
-    # Explicit write routes that PROXY_ADMIN_VIEW_ONLY must NEVER call. The
-    # role-principle is "no writes, ever" — the management_routes list is the
-    # authoritative source for which non-llm routes are writes; we just need
-    # to filter out the read endpoints (info / list) that share the prefix.
-    # A cleaner approach is to denylist by HTTP verb (POST/PUT/PATCH/DELETE);
-    # this block stays as a backstop in case a write is implemented as GET.
-    _ADMIN_VIEWER_BLOCKED_WRITE_ROUTES = frozenset(
-        [
-            "/user/new",
-            "/management/v1/users/bulk",
-            "/user/delete",
-            "/management/v1/users/bulk_delete",
-            "/user/bulk_update",
-            "/team/new",
-            "/management/v1/teams/{team_id}/members/bulk_delete",
-            "/management/v1/teams/{team_id}/members/bulk_update",
-            "/team/update",
-            "/team/delete",
-            "/model/new",
-            "/model/update",
-            "/model/delete",
-            "/key/generate",
-            "/key/delete",
-            "/key/update",
-            "/key/regenerate",
-            "/key/service-account/generate",
-            "/key/block",
-            "/key/unblock",
-            "/team/key/bulk_update",
-        ]
-    )
-
     @staticmethod
     def _check_proxy_admin_viewer_access(
         route: str,
@@ -1017,117 +676,150 @@ class RouteChecks:
         request_data: dict,
         request: Request | None = None,
     ) -> None:
-        """
-        Check access for PROXY_ADMIN_VIEW_ONLY role.
+        """A proxy admin viewer reads everything a proxy admin reads and never writes, decided by gateway-auth-core."""
+        denial: Final = auth_viewer_route_denial(route_facts(route, request, request_data, None, None))
+        if denial is not None:
+            _raise(denial)
 
-        Admin Viewer follows a read-parity-with-Proxy-Admin rule: anything Proxy
-        Admin can read/list/get, Admin Viewer can read/list/get. The only
-        exclusions are cost-incurring inference routes (Playground, /chat/
-        completions, etc.) and any state-mutating request.
 
-        Implementation:
-          1. LLM/inference routes → 403 (cost-incurring).
-          2. Safe HTTP method (GET/HEAD/OPTIONS) → allow by default. This is
-             the read-parity guarantee — every new GET endpoint added anywhere
-             in the codebase is automatically readable by Admin Viewer
-             without needing to remember to add it to an allowlist.
-          3. Unsafe HTTP method (POST/PUT/PATCH/DELETE):
-             - Allow `/user/update` only when restricted to user_email.
-             - Allow `/user/password/change` (endpoint only writes the caller's own row).
-             - Block all explicit writes in `_ADMIN_VIEWER_BLOCKED_WRITE_ROUTES`.
-             - Otherwise allow only if the route is in admin_viewer_routes /
-               global_spend_tracking_routes (legacy explicit-allow set).
-             - Else 403.
-        """
-        if RouteChecks.is_llm_api_route(route=route):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"user not allowed to access this OpenAI routes, role= {_user_role}",
-            )
+@dataclass(frozen=True, slots=True)
+class RouteFacts:
+    """What gateway-auth-core's route checks read from the request, the user row and the token. python-bridge
+    reads it by attribute."""
 
-        # Check if this is a write operation on management routes
-        if RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.management_routes.value):
-            # For management routes, only allow read operations or specific allowed updates
-            if route == "/user/update":
-                # Check the Request params are valid for PROXY_ADMIN_VIEW_ONLY
-                if request_data is not None and isinstance(request_data, dict):
-                    _params_updated: Final = request_data.keys()
-                    for param in _params_updated:
-                        if param != "user_email":
-                            raise HTTPException(
-                                status_code=status.HTTP_403_FORBIDDEN,
-                                detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route} and updating invalid param: {param}. only user_email can be updated",
-                            )
-            elif RouteChecks.check_route_access(route=route, allowed_routes=_PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES) or (
-                route.startswith("/key/") and route.endswith(_PROXY_ADMIN_VIEW_ONLY_BLOCKED_KEY_SUFFIXES)
-            ):
-                # Block write operations for PROXY_ADMIN_VIEW_ONLY
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route}",
-                )
-            # Allow read operations on management routes (like /user/info, /team/info, /model/info)
-        method: Final = request.method.upper() if request is not None else "GET"
-        is_safe_method: Final = method in RouteChecks._SAFE_HTTP_METHODS
+    route: str
+    method: str | None
+    route_template: str | None
+    query_user_id: str | None
+    body_keys: Sequence[str]
+    organization_id: str | None
+    organizations: Sequence[str] | None
+    team_id: str | None
+    is_llm_api_route: bool
+    auth_enforced_pass_through: bool
+    forwarded_routes: Sequence[str]
+    admin_only_routes: Sequence[str]
+    has_user: bool
+    user_id: str | None
+    user_role: str | None
+    organization_memberships: Sequence[tuple[str, str | None]] | None
+    has_token: bool
+    token_user_id: str | None
+    can_read_spend: bool
+    is_team_service_account: bool
+    allowed_routes: Sequence[str] | None
+    key_passthrough_routes: Sequence[str] | None
+    team_passthrough_routes: Sequence[str] | None
+    denied_passthrough_routes: Sequence[str]
+    jwt_team_allowed_routes: Sequence[str] | None
 
-        # ── Safe HTTP method: default-allow ──────────────────────────────
-        if is_safe_method:
-            return
 
-        # ── Unsafe HTTP method: explicit checks ──────────────────────────
-        # Allow `/user/update` for self-service email change.
-        if route == "/user/update":
-            if request_data is not None and isinstance(request_data, dict):
-                for param in request_data:
-                    if param != "user_email":
-                        raise HTTPException(
-                            status_code=status.HTTP_403_FORBIDDEN,
-                            detail=(
-                                f"user not allowed to access this route, role= {_user_role}. "
-                                f"Trying to access: {route} and updating invalid param: {param}. "
-                                "only user_email can be updated"
-                            ),
-                        )
-            return
+def _raise(denial: RustDenial) -> NoReturn:
+    from litellm.proxy.auth.denial import (
+        denial_error,  # noqa: PLC0415  # denial imports auth_checks, which imports this module
+    )
 
-        # Self-service password change; the endpoint only writes the caller's own row.
-        if route == "/user/password/change":
-            return
+    raise denial_error(denial)
 
-        # Self-service logout; the endpoint only revokes the caller's own session key.
-        if route == "/session/logout":
-            return
 
-        if RouteChecks.is_self_scoped_credential_route(route=route, request=request):
-            return
+_STRINGS: Final = TypeAdapter(tuple[str, ...])
 
-        # Hard-block known write routes regardless of HTTP method (defensive
-        # — these are POSTs in practice, but pinning them here protects
-        # against future GET-shaped writes).
-        if RouteChecks.check_route_access(
-            route=route, allowed_routes=RouteChecks._ADMIN_VIEWER_BLOCKED_WRITE_ROUTES
-        ) or (route.startswith("/key/") and route.endswith("/regenerate")):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route}",
-            )
 
-        # Legacy explicit-allow sets (kept for routes that are POST but
-        # semantically read-only, e.g. /spend/calculate). Both admin_viewer_routes
-        # and global_spend_tracking_routes are reads/listings.
-        if RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.admin_viewer_routes.value):
-            return
-        if RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.global_spend_tracking_routes.value):
-            return
+def _strings(value: object) -> tuple[str, ...] | None:
+    return _STRINGS.validate_python(value) if isinstance(value, list | tuple) else None
 
-        # NOTE: We intentionally do NOT fall back to allowing all
-        # `management_routes`. That set is a mix of reads (info/list — handled
-        # via the safe-method branch above) and writes (`/team/block`,
-        # `/team/permissions_update`, `/jwt/key/mapping/{new,update,delete}`,
-        # `/key/bulk_update`, `/key/{id}/reset_spend`). A blanket allow would
-        # let Admin Viewer POST these write endpoints — violating the
-        # "no writes, ever" rule. Default-deny instead.
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route}",
+
+def _text(value: object) -> str | None:
+    return None if value is None else str(value)
+
+
+def _organization_id(request_data: Mapping[str, object]) -> str | None:
+    return _text(request_data.get("organization_id"))
+
+
+def _admin_only_routes() -> tuple[str, ...]:
+    from litellm.proxy.proxy_server import general_settings, premium_user  # noqa: PLC0415  # rebound on config load
+
+    if "admin_only_routes" not in general_settings:
+        return ()
+    if premium_user is not True:
+        verbose_proxy_logger.error(
+            "Trying to use 'admin_only_routes' this is an Enterprise only feature. %s",
+            CommonProxyErrors.not_premium_user.value,
         )
+        return ()
+    return tuple(general_settings["admin_only_routes"])
+
+
+def _query_user_id(request: Request | None) -> str | None:
+    if request is None:
+        return None
+    try:
+        return request.query_params.get("user_id")
+    except (AttributeError, KeyError):
+        return None
+
+
+def _role_text(role: object) -> str | None:
+    if role is None:
+        return None
+    return role.value if isinstance(role, LitellmUserRoles) else str(role)
+
+
+def route_facts(
+    route: str,
+    request: Request | None,
+    request_data: Mapping[str, object],
+    valid_token: UserAPIKeyAuth | None,
+    user_obj: LiteLLM_UserTable | None,
+    *,
+    user_role: LitellmUserRoles | str | None = None,
+) -> RouteFacts:
+    """`user_role` stands in for the user row's role when a caller checks a role without a row."""
+    from litellm.proxy.auth.auth_utils import (  # noqa: PLC0415  # auth_utils imports this module
+        get_request_route_template,
+    )
+
+    method: Final = RouteChecks.get_request_method(request)
+    auth_enforced: Final = RouteChecks.is_auth_enforced_pass_through_route(route=route, method=method)
+    memberships: Final = None if user_obj is None else user_obj.organization_memberships
+    role: Final = _role_text(user_role if user_obj is None else user_obj.user_role)
+    team_id: Final = request_data.get("team_id")
+    jwt_team_routes: Final = () if valid_token is None else RouteChecks._jwt_team_allowed_routes(valid_token)
+    key_metadata: Final = {} if valid_token is None else valid_token.metadata or {}
+    team_metadata: Final = {} if valid_token is None else valid_token.team_metadata or {}
+    return RouteFacts(
+        route=route,
+        method=method,
+        route_template=None if request is None else get_request_route_template(request),
+        query_user_id=_query_user_id(request),
+        body_keys=tuple(str(key) for key in request_data),
+        organization_id=_organization_id(request_data),
+        organizations=_strings(request_data.get("organizations")),
+        team_id=team_id if isinstance(team_id, str) else None,
+        is_llm_api_route=RouteChecks.is_llm_api_route(route=route),
+        auth_enforced_pass_through=auth_enforced,
+        forwarded_routes=RouteChecks.forwarded_pass_through_routes(route) if auth_enforced else (),
+        admin_only_routes=_admin_only_routes(),
+        has_user=user_obj is not None or role is not None,
+        user_id=None if user_obj is None else user_obj.user_id,
+        user_role=role,
+        organization_memberships=None
+        if memberships is None
+        else tuple((membership.organization_id, membership.user_role) for membership in memberships),
+        has_token=valid_token is not None,
+        token_user_id=None if valid_token is None else valid_token.user_id,
+        can_read_spend=valid_token is not None
+        and "get_spend_routes" in (getattr(valid_token, "permissions", None) or []),
+        is_team_service_account=valid_token is not None and valid_token.is_team_service_account is True,
+        allowed_routes=None if valid_token is None else _strings(valid_token.allowed_routes),
+        key_passthrough_routes=_strings(key_metadata.get("allowed_passthrough_routes")),
+        team_passthrough_routes=_strings(team_metadata.get("allowed_passthrough_routes")),
+        denied_passthrough_routes=tuple(
+            route
+            for metadata in (key_metadata, team_metadata)
+            for route in _strings(metadata.get("denied_passthrough_routes"))
+            or ()  # comprehension-ok: the key's deny list then the team's
+        ),
+        jwt_team_allowed_routes=tuple(jwt_team_routes) if jwt_team_routes else None,
+    )

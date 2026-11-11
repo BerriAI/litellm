@@ -47,10 +47,8 @@ from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_auth
 from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_agent_policy
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.oauth2_check import OAuth2TokenValidationError
-from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401  # legacy module exports
+from litellm.proxy.auth.user_api_key_auth import (  # legacy module exports
     _get_bearer_token_or_received_api_key,  # pyright: ignore[reportPrivateUsage]  # shared x-litellm-api-key parser lives with user_api_key_auth
-    _run_centralized_common_checks,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
-    oauth2_introspection_applies,
     run_centralized_common_checks,
     user_api_key_auth,
 )
@@ -94,6 +92,7 @@ from litellm.repositories.table_repositories import (
     AgentsRepository,
     MCPServerRepository,
 )
+from litellm.rust_bridge._native import RustAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 
@@ -290,42 +289,35 @@ async def _bearer_is_litellm_credential(token: str) -> bool:
 def _identity_check(token: str, route: str, settings: Mapping[str, object]) -> _IdentityCheck | None:
     """The identity check LiteLLM's own auth would run on ``token`` for ``route``, in its order: OAuth2
     introspection, then trusted reverse-proxy identity headers, then a JWT whose issuer may be LiteLLM's."""
-    from litellm.proxy.auth.handle_jwt import JWTHandler  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.auth import rust_jwt  # noqa: PLC0415  # proxy import cycle
     from litellm.proxy.mcp_server.bridge_token_flow import (  # noqa: PLC0415  # bridge flow imports this module
         jwt_issuer_may_be_litellm,
     )
     from litellm.proxy.proxy_server import (  # noqa: PLC0415  # startup owns the active auth configuration
-        jwt_handler,
         premium_user,
     )
 
     enable_jwt_auth: Final = settings.get("enable_jwt_auth") is True
-    if oauth2_introspection_applies(
-        token,
-        route,
-        enable_oauth2_auth=settings.get("enable_oauth2_auth") is True,
-        enable_jwt_auth=enable_jwt_auth,
-        jwt_handler=jwt_handler,
-    ):
+    if RustAuth.oauth2_introspection_applies(rust_jwt.request(token, route, None), rust_jwt.proxy_settings()):
         return "oauth2" if premium_user is True else None
     if settings.get("enable_oauth2_proxy_auth") is True:
         return "oauth2_proxy"
-    if enable_jwt_auth and premium_user is True and JWTHandler.is_jwt(token=token) and jwt_issuer_may_be_litellm(token):
+    if enable_jwt_auth and premium_user is True and rust_jwt.is_jwt(token) and jwt_issuer_may_be_litellm(token):
         return "jwt"
     return None
 
 
 async def _verify_identity(check: Literal["oauth2_proxy", "jwt"], token: str, request: Request) -> None:
+    from litellm.proxy.auth import rust_jwt  # noqa: PLC0415  # proxy import cycle
     from litellm.proxy.auth.oauth2_proxy_hook import (  # noqa: PLC0415  # proxy import cycle
         handle_oauth2_proxy_request,
     )
-    from litellm.proxy.proxy_server import jwt_handler  # noqa: PLC0415  # startup owns the active auth configuration
 
     match check:
         case "oauth2_proxy":
             await handle_oauth2_proxy_request(request=request)
         case "jwt":
-            await jwt_handler.auth_jwt(token=token)  # pyright: ignore[reportUnknownMemberType]  # returns a bare dict; only whether it raises matters
+            _ = await rust_jwt.verify(token)
         case _:  # pragma: no cover - exhaustiveness guard, unreachable while the Literal holds
             assert_never(check)  # pragma: no cover
 
@@ -1676,7 +1668,7 @@ class MCPRequestHandler:
     async def _reject_if_admitted_owner_scim_deactivated(key_object: UserAPIKeyAuth) -> None:
         """Fail closed with a 401 when the key's owning user was deactivated via SCIM.
 
-        The standard pipeline enforces this inline in ``_user_api_key_auth_builder`` rather
+        The standard pipeline enforces this inline in ``user_api_key_auth_builder`` rather
         than in ``common_checks``, so the centralized policy gate does not cover it; without
         this mirror, IdP offboarding would leave the user's already-minted envelopes live
         until expiry. A failed user lookup skips the gate (fail-open), matching the builder:
@@ -1710,7 +1702,7 @@ class MCPRequestHandler:
         Mirrors the ``user_api_key_auth`` wrapper between the builder and its return: clear the
         request-scoped ``budget_reservation`` on the reloaded identity, run the route gate
         (``RouteChecks.should_call_route``) to enforce the identity's ``allowed_routes`` and any
-        disabled/admin-only route, then run ``_run_centralized_common_checks`` (the same gate every
+        disabled/admin-only route, then run ``run_centralized_common_checks`` (the same gate every
         builder path funnels through) for team-block, project-block, org, and budget. The route gate
         closes a bypass: a key barred from MCP routes could otherwise mint an envelope at the token
         endpoint (not itself an MCP route) and replay it against MCP, because the centralized checks

@@ -1,9 +1,8 @@
-"""Load a caller's user row, team row, and team membership from the database and validate them together.
+"""Load a caller's user row and team membership from the database.
 
 The virtual-key path reads these off the combined-view SQL join. Every other credential (an IdP JWT, a
-``lite login`` session token) carries only identifiers, or a snapshot of grants taken when it was minted, so
-it has to read the live rows on each request. Both of those paths resolve the same rows with the same
-membership rule, and ``GrantResolver`` is the one place that rule lives.
+``lite login`` session token) carries only identifiers, so it reads the live rows on each request through
+``GrantResolver``. gateway-auth-core decides what the rows mean.
 """
 
 from __future__ import annotations
@@ -11,30 +10,15 @@ from __future__ import annotations
 from collections.abc import Coroutine, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, NoReturn, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Final, Protocol
 
-from fastapi import HTTPException, status
 from pydantic import ValidationError
 from pydantic.main import IncEx
-from typing_extensions import assert_never
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import (
-    LiteLLM_TeamMembership,
-    LiteLLM_TeamTableCachedObj,
-    LiteLLM_UserTable,
-    ProxyErrorTypes,
-    ProxyException,
-)
-from litellm.proxy.auth.auth_checks import (
-    TeamNotFoundError,
-    forget_missing_user,
-    get_team_membership,
-    get_team_object,
-    get_user_object,
-)
+from litellm.proxy._types import LiteLLM_TeamMembership, LiteLLM_UserTable
+from litellm.proxy.auth.auth_checks import forget_missing_user, get_team_membership, get_user_object
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 
 if TYPE_CHECKING:
     from litellm.proxy._types import Span
@@ -55,18 +39,6 @@ class UserLoader(Protocol):
         sso_user_id: str | None,
         user_email: str | None,
     ) -> Coroutine[object, object, LiteLLM_UserTable | None]: ...
-
-
-class TeamLoader(Protocol):
-    def __call__(
-        self,
-        *,
-        team_id: str,
-        prisma_client: PrismaClient | None,
-        user_api_key_cache: UserApiKeyCache,
-        parent_otel_span: Span | None,
-        proxy_logging_obj: ProxyLogging | None,
-    ) -> Coroutine[object, object, LiteLLM_TeamTableCachedObj]: ...
 
 
 class MembershipLoader(Protocol):
@@ -93,45 +65,6 @@ class UserLookup:
     upsert: bool = False
 
 
-@dataclass(frozen=True, slots=True)
-class ResolvedGrants:
-    """The live rows behind a credential. ``effective_user_id`` is the DB row's id when a fuzzy match found a
-    legacy row under a different id (GH #26789), otherwise the id the credential named."""
-
-    user_object: LiteLLM_UserTable | None
-    team_object: LiteLLM_TeamTableCachedObj | None
-    team_membership: LiteLLM_TeamMembership | None
-    effective_user_id: str | None
-
-
-@dataclass(frozen=True, slots=True)
-class UserGone:
-    user_id: str
-
-
-@dataclass(frozen=True, slots=True)
-class TeamGone:
-    team_id: str
-
-
-@dataclass(frozen=True, slots=True)
-class NotAMember:
-    user_id: str
-    team_id: str
-
-
-@dataclass(frozen=True, slots=True)
-class LookupDegraded:
-    """A row could not be read for a reason that says nothing about the caller: the database is down or a
-    loader failed. The caller decides whether a grant it already holds may stand in."""
-
-    error: Exception
-
-
-GrantDenial: TypeAlias = UserGone | TeamGone | NotAMember
-GrantOutcome: TypeAlias = ResolvedGrants | GrantDenial | LookupDegraded
-
-
 _MODELS_COLUMN: Final[Mapping[str, IncEx | bool]] = MappingProxyType({"models": True})
 
 
@@ -154,35 +87,9 @@ def canonical_user_id(user_id: str | None, user_object: LiteLLM_UserTable | None
     return user_id
 
 
-def raise_public(denial: GrantDenial) -> NoReturn:
-    match denial:
-        case UserGone(user_id=user_id):
-            raise ProxyException(
-                message=f"Authentication Error, user '{user_id}' no longer exists.",
-                type=ProxyErrorTypes.auth_error,
-                param="user_id",
-                code=status.HTTP_401_UNAUTHORIZED,
-            )
-        case TeamGone(team_id=team_id):
-            raise TeamNotFoundError(team_id=team_id)
-        case NotAMember(team_id=team_id):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Team '{team_id}' is not in your team memberships.",
-            )
-        case _:
-            assert_never(denial)
-
-
 class GrantResolver:
-    """Reads the user, membership, and team rows for a credential through injected loaders.
-
-    The loaders default to the shared ``auth_checks`` readers. A caller passes its own module's names for them
-    so the reads stay interceptable where that module's callers already intercept them. ``resolve_identity``
-    is the JWT half: user and membership only, since the JWT builder selects the team itself and lets loader
-    errors surface as they are. ``resolve`` also reads the team row and applies the membership rule, which is
-    what a credential carrying a grant snapshot needs to refresh it.
-    """
+    """Reads the user and membership rows for a credential through injected loaders, which default to the
+    shared ``auth_checks`` readers. Loader errors surface as they are."""
 
     def __init__(
         self,
@@ -192,7 +99,6 @@ class GrantResolver:
         parent_otel_span: Span | None = None,
         proxy_logging_obj: ProxyLogging | None = None,
         load_user: UserLoader = get_user_object,
-        load_team: TeamLoader = get_team_object,
         load_membership: MembershipLoader = get_team_membership,
     ) -> None:
         self._prisma = prisma_client
@@ -200,7 +106,6 @@ class GrantResolver:
         self._parent_otel_span = parent_otel_span
         self._proxy_logging_obj = proxy_logging_obj
         self._load_user = load_user
-        self._load_team = load_team
         self._load_membership = load_membership
 
     async def resolve_identity(
@@ -220,31 +125,6 @@ class GrantResolver:
             else None
         )
         return user_object, membership, effective_user_id
-
-    async def resolve(self, lookup: UserLookup, team_id: str | None) -> GrantOutcome:
-        try:
-            user_object, membership, effective_user_id = await self.resolve_identity(lookup, team_id)
-        except UserNotFoundError:
-            return UserGone(user_id=lookup.user_id or "")
-        except Exception as error:
-            return LookupDegraded(error=error)
-        if team_id is None:
-            return ResolvedGrants(user_object, None, membership, effective_user_id)
-        if user_object is not None and team_id not in user_object.teams:
-            return NotAMember(user_id=user_object.user_id, team_id=team_id)
-        try:
-            team_object: Final = await self._load_team(
-                team_id=team_id,
-                prisma_client=self._prisma,
-                user_api_key_cache=self._cache,
-                parent_otel_span=self._parent_otel_span,
-                proxy_logging_obj=self._proxy_logging_obj,
-            )
-        except TeamNotFoundError:
-            return TeamGone(team_id=team_id)
-        except Exception as error:
-            return LookupDegraded(error=error)
-        return ResolvedGrants(user_object, team_object, membership, effective_user_id)
 
     async def _user(self, lookup: UserLookup) -> LiteLLM_UserTable | None:
         if lookup.user_id is not None:

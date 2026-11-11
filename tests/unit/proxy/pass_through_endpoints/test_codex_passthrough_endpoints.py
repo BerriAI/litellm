@@ -22,7 +22,6 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.chatgpt.common_utils import OPENAI_AUTH_CLAIM_KEY
 from litellm.proxy import proxy_server
 from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_TeamTableCachedObj, LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.codex_model_catalog import bundled_codex_models
 from litellm.proxy.pass_through_endpoints.codex_passthrough_endpoints import (
@@ -43,9 +42,12 @@ _HEADERS: Final = {"authorization": f"Bearer {_TOKEN}", "x-litellm-api-key": MAS
 
 
 @pytest.fixture
-def client(monkeypatch: pytest.MonkeyPatch, httpx_transport: None) -> Iterator[TestClient]:
+def client(
+    monkeypatch: pytest.MonkeyPatch, httpx_transport: None, build_proxy_auth_settings: Callable[[], None]
+) -> Iterator[TestClient]:
     monkeypatch.setattr(proxy_server, "master_key", MASTER_KEY)
     monkeypatch.setattr(proxy_server.proxy_logging_obj.internal_usage_cache, "dual_cache", DualCache())
+    build_proxy_auth_settings()
     yield TestClient(proxy_server.app)
 
 
@@ -157,9 +159,14 @@ class UsageRecorder(CustomLogger):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True])
 async def test_usage_logged_without_credentials(
-    monkeypatch: pytest.MonkeyPatch, httpx_transport: None, respx_mock: respx.MockRouter, stream: bool
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+    build_proxy_auth_settings: Callable[[], None],
+    stream: bool,
 ) -> None:
     monkeypatch.setattr(proxy_server, "master_key", MASTER_KEY)
+    build_proxy_auth_settings()
     recorder: Final = UsageRecorder()
     monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
     litellm.register_model(
@@ -629,7 +636,9 @@ def test_chatgpt_model_keeps_passthrough_without_other_providers_reasoning(
 
 
 @pytest.fixture
-def restricted_key(monkeypatch: pytest.MonkeyPatch) -> Callable[..., str]:
+def restricted_key(
+    monkeypatch: pytest.MonkeyPatch, build_proxy_auth_settings: Callable[[], None]
+) -> Callable[..., str]:
     monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
 
     def mint(
@@ -649,6 +658,7 @@ def restricted_key(monkeypatch: pytest.MonkeyPatch) -> Callable[..., str]:
                 metadata={"allowed_tools": list(allowed_tools)} if allowed_tools else {},
             ),
         )
+        build_proxy_auth_settings()
         return key
 
     return mint
@@ -734,7 +744,11 @@ def _key_with_alias_to_budgeted_target(monkeypatch: pytest.MonkeyPatch, target_b
 
 @pytest.mark.parametrize("custom_auth", (False, True), ids=("virtual-key", "custom-auth"))
 def test_native_route_refuses_a_saved_alias_when_its_target_is_over_budget(
-    client: TestClient, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, custom_auth: bool
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    build_proxy_auth_settings: Callable[[], None],
+    custom_auth: bool,
 ) -> None:
     key: Final = _key_with_alias_to_budgeted_target(monkeypatch, target_budget=0.0)
     if custom_auth:
@@ -749,6 +763,7 @@ def test_native_route_refuses_a_saved_alias_when_its_target_is_over_budget(
         monkeypatch.setattr(
             proxy_server, "general_settings", {**proxy_server.general_settings, "custom_auth_run_common_checks": True}
         )
+    build_proxy_auth_settings()
     _account_catalog(respx_mock)
     provider: Final = _open_weights_provider(respx_mock)
     response: Final = client.post(
@@ -762,9 +777,13 @@ def test_native_route_refuses_a_saved_alias_when_its_target_is_over_budget(
 
 
 def test_native_route_serves_a_saved_alias_target_within_budget_under_the_requested_name(
-    client: TestClient, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    build_proxy_auth_settings: Callable[[], None],
 ) -> None:
     key: Final = _key_with_alias_to_budgeted_target(monkeypatch, target_budget=5.0)
+    build_proxy_auth_settings()
     _account_catalog(respx_mock)
     provider: Final = _open_weights_provider(respx_mock)
     response: Final = client.post(
@@ -782,8 +801,10 @@ def test_native_route_keeps_a_chatgpt_turn_on_the_subscription_despite_a_saved_a
     respx_mock: respx.MockRouter,
     mixed_router: Router,
     monkeypatch: pytest.MonkeyPatch,
+    build_proxy_auth_settings: Callable[[], None],
 ) -> None:
     monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
+    build_proxy_auth_settings()
     key: Final = "sk-test-alias-on-a-chatgpt-name"
     proxy_server.user_api_key_cache.set_cache(
         key=hash_token(key),
@@ -806,9 +827,13 @@ def test_native_route_keeps_a_chatgpt_turn_on_the_subscription_despite_a_saved_a
 
 
 def test_native_route_keeps_a_name_the_account_lists_on_the_subscription_despite_a_saved_alias(
-    client: TestClient, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    build_proxy_auth_settings: Callable[[], None],
 ) -> None:
     monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
+    build_proxy_auth_settings()
     monkeypatch.setattr(
         proxy_server, "llm_router", Router(model_list=[_open_weights("gpt-reserve"), _open_weights("group-b")])
     )
@@ -845,9 +870,14 @@ _BEARER_KEY: Final = "sk-test-alias-key-sent-as-the-bearer"
     ids=["key only in the bearer", "same key in both headers"],
 )
 def test_native_route_never_sends_a_litellm_key_sent_as_the_bearer_to_chatgpt(
-    client: TestClient, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, gateway_header: dict[str, str]
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    build_proxy_auth_settings: Callable[[], None],
+    gateway_header: dict[str, str],
 ) -> None:
     monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
+    build_proxy_auth_settings()
     monkeypatch.setattr(
         proxy_server, "llm_router", Router(model_list=[_open_weights("gpt-reserve"), _open_weights("group-b")])
     )
@@ -1039,7 +1069,9 @@ _JWT_KID: Final = "codex-test-key"
 _JWT_TEAM: Final = "codex-team"
 
 
-def _team_jwt(monkeypatch: pytest.MonkeyPatch, team_allowed_routes: list[str]) -> str:
+def _team_jwt(
+    monkeypatch: pytest.MonkeyPatch, build_proxy_auth_settings: Callable[[], None], team_allowed_routes: list[str]
+) -> str:
     private_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     public_jwk: Final = {
         **json.loads(RSAAlgorithm.to_jwk(private_key.public_key())),
@@ -1047,22 +1079,20 @@ def _team_jwt(monkeypatch: pytest.MonkeyPatch, team_allowed_routes: list[str]) -
         "alg": "RS256",
         "use": "sig",
     }
-    keys_cache: Final = DualCache()
-    keys_cache.set_cache(key=f"litellm_jwt_auth_keys_{_JWT_JWKS_URL}", value=[public_jwk])
-    handler: Final = JWTHandler()
-    handler.update_environment(
-        prisma_client=None,
-        user_api_key_cache=keys_cache,
-        litellm_jwtauth=LiteLLM_JWTAuth(
+    proxy_server.user_api_key_cache.set_cache(key=f"litellm_jwt_auth_keys_{_JWT_JWKS_URL}", value=[public_jwk])
+    monkeypatch.setattr(
+        proxy_server,
+        "litellm_jwtauth",
+        LiteLLM_JWTAuth(
             issuers=[{"issuer": _JWT_ISSUER, "jwks_url": _JWT_JWKS_URL, "audience": _JWT_AUDIENCE}],
             team_ids_jwt_field="groups",
             team_allowed_routes=team_allowed_routes,
         ),
     )
-    monkeypatch.setattr(proxy_server, "jwt_handler", handler)
     monkeypatch.setattr(proxy_server, "general_settings", {"enable_jwt_auth": True})
     monkeypatch.setattr(proxy_server, "premium_user", True)
     monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
+    build_proxy_auth_settings()
     proxy_server.user_api_key_cache.set_cache(
         key=f"team_id:{_JWT_TEAM}",
         value=LiteLLM_TeamTableCachedObj(team_id=_JWT_TEAM, models=["chatgpt-native", "open-weights"]),
@@ -1095,10 +1125,11 @@ def test_jwt_team_routes_keep_litellm_models_off_native_routes_unless_v1_respons
     respx_mock: respx.MockRouter,
     mixed_router: Router,
     monkeypatch: pytest.MonkeyPatch,
+    build_proxy_auth_settings: Callable[[], None],
     team_allowed_routes: list[str],
     through_litellm: bool,
 ) -> None:
-    token: Final = _team_jwt(monkeypatch, team_allowed_routes)
+    token: Final = _team_jwt(monkeypatch, build_proxy_auth_settings, team_allowed_routes)
     _account_catalog(respx_mock)
     provider: Final = _open_weights_provider(respx_mock)
     chatgpt: Final = _chatgpt_responses(respx_mock)

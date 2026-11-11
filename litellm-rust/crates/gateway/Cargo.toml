@@ -18,6 +18,7 @@ tokio-util = "0.7"
 thiserror.workspace = true
 futures-util.workspace = true
 litellm-gateway-auth.workspace = true
+litellm-gateway-auth-core.workspace = true
 litellm-gateway-ui.workspace = true
 litellm-config.workspace = true
 litellm-core-utils.workspace = true
@@ -38,6 +39,7 @@ tracing.workspace = true
 tokio = { workspace = true, features = ["signal"] }
 uuid.workspace = true
 veil.workspace = true
+tower = { version = "0.5", features = ["util"] }
 tower-sessions-moka-store = "0.15.0"
 
 [dev-dependencies]
@@ -47,4 +49,3 @@ base64.workspace = true
 rstest.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["sync"] }
-tower = { version = "0.5", features = ["util"] }

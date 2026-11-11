@@ -116,7 +116,7 @@ async fn test_identity(
         litellm_gateway_auth::Permissions,
         Option<litellm_gateway_auth::Principal>,
     )>,
-    mut request: axum::extract::Request,
+    request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
     let auth = litellm_gateway_auth::Auth::new(
@@ -128,12 +128,17 @@ async fn test_identity(
         Arc::new(litellm_gateway_auth::NoAdditionalPolicy),
         Arc::new(litellm_gateway_auth::SystemClock),
     );
+    let (mut parts, body) = request.into_parts();
     let identity = auth
-        .authenticate(&SecretValue::new("test-inbound-key"))
+        .authenticate_request(
+            &litellm_gateway_auth::Credential::Token(SecretValue::new("test-inbound-key")),
+            &parts,
+        )
         .await
         .unwrap();
-    request.extensions_mut().insert(identity);
-    next.run(request).await
+    parts.extensions.insert(identity);
+    next.run(axum::extract::Request::from_parts(parts, body))
+        .await
 }
 
 pub async fn post(app: Router, path: &str, body: Value) -> Response {

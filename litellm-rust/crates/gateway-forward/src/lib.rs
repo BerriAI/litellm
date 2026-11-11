@@ -19,11 +19,29 @@ pub async fn run(
     settings: Settings,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), Error> {
+    run_app(settings, |forward| forward, shutdown).await
+}
+
+/// Like `run`, but every request goes to the app `app` builds first, which forwards what it does
+/// not serve through the `Forward` it was given.
+pub async fn run_app<A>(
+    settings: Settings,
+    app: impl FnOnce(Forward) -> A,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> Result<(), Error>
+where
+    A: tower::Service<axum::extract::Request, Response = axum::response::Response, Error = std::convert::Infallible>
+        + Clone
+        + Send
+        + 'static,
+    A::Future: Send,
+{
     let forward = Forward::new(&settings.upstream, settings.upstream_keepalive);
+    let app = app(forward.clone());
     let listener = tokio::net::TcpListener::bind((settings.host.as_str(), settings.port)).await?;
     tracing::info!(address = %listener.local_addr()?, "forwarding gateway listening");
     forward
-        .serve(listener, shutdown, settings.shutdown_drain)
+        .serve_app(app, listener, shutdown, settings.shutdown_drain)
         .await;
     Ok(())
 }

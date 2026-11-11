@@ -7,7 +7,6 @@ use litellm_secret_value::SecretValue;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
-use tower_sessions::Session;
 use veil::Redact;
 
 use crate::{
@@ -96,10 +95,8 @@ impl<S: Send + Sync> FromRequestParts<S> for UiSession {
             .await
             .map_err(|_| Error::MissingSessionLayer)?;
         let user = auth.user.ok_or(Error::InvalidSession)?;
-        let session = Session::from_request_parts(parts, state)
-            .await
-            .map_err(|_| Error::MissingSessionLayer)?;
-        let expected = session
+        let expected = auth
+            .session
             .get::<String>(UI_CSRF_KEY)
             .await?
             .ok_or(Error::InvalidSession)?;
@@ -113,7 +110,6 @@ impl<S: Send + Sync> FromRequestParts<S> for UiSession {
             return Err(Error::InvalidSession);
         }
         let identity = session_identity(&user).await?;
-        parts.extensions.insert(identity.clone());
         Ok(Self { user, identity })
     }
 }

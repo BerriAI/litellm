@@ -5439,6 +5439,7 @@ async def test_ProxyConfig_add_deployment_rebuilds_pass_through_routes_only_from
     assert rebuild_routes.await_count == (1 if rebuilds_routes else 0)
 
 
+
 # ---------------------------------------------------------------------------
 # ProxyConfig._update_config_from_db
 # ---------------------------------------------------------------------------
@@ -6091,50 +6092,56 @@ async def test_ProxyConfig__init_agents_in_db_keeps_config_defined_agents(clean_
 @pytest.mark.asyncio
 @pytest.mark.parametrize("agents_source", ["config", "db", "api"])
 async def test_ProxyStartupEvent_jwt_auth_resolves_agent_claims_against_live_registry(
-    clean_agent_registry, agents_source
+    clean_agent_registry, agents_source, monkeypatch
 ):
     """A JWT agent claim must resolve against every agent the proxy knows, including ones created after startup."""
+    import jwt
+
     from litellm.proxy import proxy_server
-    from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.proxy.auth.handle_jwt import JWTAuthManager
+    from litellm.proxy.auth import rust_jwt
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.types.agents import AgentResponse
 
-    original_lookup = proxy_server.jwt_handler.agent_lookup
-    try:
-        proxy_server.ProxyStartupEvent._initialize_jwt_auth(
-            general_settings={"litellm_jwtauth": {"agent_id_jwt_field": "appid"}},
-            prisma_client=None,
-            user_api_key_cache=UserApiKeyCache(),
+    jwks_url: Final = "https://idp.example/jwks"
+    signing_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_jwk: Final = jwt.algorithms.RSAAlgorithm.to_jwk(signing_key.public_key(), as_dict=True)
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
+    proxy_server.user_api_key_cache.set_cache(
+        key=f"litellm_jwt_auth_keys_{jwks_url}", value=[{**public_jwk, "kid": "k1"}]
+    )
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    monkeypatch.setattr(proxy_server, "litellm_jwtauth", proxy_server.litellm_jwtauth)
+    monkeypatch.setattr(proxy_server, "rust_auth_settings", None)
+    proxy_server.ProxyStartupEvent._initialize_jwt_auth(
+        general_settings={"enable_jwt_auth": True, "litellm_jwtauth": {"agent_id_jwt_field": "appid"}},
+        prisma_client=None,
+        user_api_key_cache=UserApiKeyCache(),
+    )
+    if agents_source == "config":
+        await ProxyConfig()._init_non_llm_configs(
+            config={"agents": [_config_agent("loaded-agent")]},
+            config_file_path=None,
         )
-        if agents_source == "config":
-            await ProxyConfig()._init_non_llm_configs(
-                config={"agents": [_config_agent("loaded-agent")]},
-                config_file_path=None,
-            )
-        elif agents_source == "db":
-            prisma_client = MagicMock()
-            prisma_client.db.litellm_agentstable.find_many = AsyncMock(
-                return_value=[_agent_db_row("db-id", "loaded-agent")]
-            )
-            await ProxyConfig()._init_agents_in_db(prisma_client=prisma_client)
-        else:
-            clean_agent_registry.register_agent(
-                agent_config=AgentResponse(agent_id="api-id", **_config_agent("loaded-agent"))
-            )
+    elif agents_source == "db":
+        prisma_client = MagicMock()
+        prisma_client.db.litellm_agentstable.find_many = AsyncMock(
+            return_value=[_agent_db_row("db-id", "loaded-agent")]
+        )
+        await ProxyConfig()._init_agents_in_db(prisma_client=prisma_client)
+    else:
+        clean_agent_registry.register_agent(
+            agent_config=AgentResponse(agent_id="api-id", **_config_agent("loaded-agent"))
+        )
+    token: Final = jwt.encode(
+        {"sub": "agent-caller", "appid": "loaded-agent", "exp": 4102444800},
+        signing_key,
+        algorithm="RS256",
+        headers={"kid": "k1"},
+    )
 
-        resolved = JWTAuthManager.resolve_agent_id(
-            jwt_handler=proxy_server.jwt_handler,
-            jwt_valid_token={"appid": "loaded-agent"},
-            agent_registry=proxy_server.jwt_handler.agent_lookup,
-        )
-    finally:
-        proxy_server.jwt_handler.bind_agent_lookup(original_lookup)
-        proxy_server.jwt_handler.update_environment(
-            prisma_client=None, user_api_key_cache=UserApiKeyCache(), litellm_jwtauth=LiteLLM_JWTAuth()
-        )
+    result: Final = await rust_jwt.authorize(token, "/chat/completions", "POST", provisioning=False)
 
-    assert resolved == clean_agent_registry.get_agent_by_name(agent_name="loaded-agent").agent_id
+    assert result["agent_id"] == clean_agent_registry.get_agent_by_name(agent_name="loaded-agent").agent_id
 
 
 @pytest.mark.asyncio

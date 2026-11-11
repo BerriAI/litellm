@@ -1,4 +1,5 @@
 use std::{
+    convert::Infallible,
     pin::Pin,
     task::{Context, Poll},
     time::Duration,
@@ -16,6 +17,7 @@ use hyper_util::{
     rt::{TokioExecutor, TokioTimer},
 };
 use tokio::net::TcpListener;
+use tower::Service;
 
 use crate::{
     Rejection, Upstream, connections::Connections, connector::Connector, rewrite, server,
@@ -65,7 +67,22 @@ impl Forward {
         shutdown: impl Future<Output = ()>,
         drain: Duration,
     ) {
-        server::serve(self, listener, shutdown, drain).await;
+        server::serve(self.clone(), self, listener, shutdown, drain).await;
+    }
+
+    /// Like `serve`, but every request goes to `app`, which hands what it does not serve back to
+    /// this `Forward` as a service.
+    pub async fn serve_app<A>(
+        self,
+        app: A,
+        listener: TcpListener,
+        shutdown: impl Future<Output = ()>,
+        drain: Duration,
+    ) where
+        A: Service<Request, Response = Response, Error = Infallible> + Clone + Send + 'static,
+        A::Future: Send,
+    {
+        server::serve(self, app, listener, shutdown, drain).await;
     }
 
     pub(crate) fn connections(&self) -> &Connections {
@@ -116,6 +133,26 @@ impl Forward {
             return websocket::switch(&self.connections, downstream, response).await;
         }
         http_response(response)
+    }
+}
+
+impl Service<Request> for Forward {
+    type Response = Response;
+    type Error = Infallible;
+    type Future = Pin<Box<dyn Future<Output = Result<Response, Infallible>> + Send>>;
+
+    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Infallible>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, request: Request) -> Self::Future {
+        let forward = self.clone();
+        Box::pin(async move {
+            let Some(client) = request.extensions().get::<ClientSocket>().copied() else {
+                return Ok(Rejection::Internal.into_response());
+            };
+            Ok(forward.handle(client, request).await)
+        })
     }
 }
 

@@ -28,6 +28,18 @@ impl Sink for LogSink {
     }
 }
 
+async fn router(
+    inference: Arc<litellm_gateway_inference::Gateway>,
+    config: &Config,
+    ui: Option<axum::Router>,
+    mcp: Option<axum::Router>,
+) -> axum::Router {
+    let auth = litellm_gateway::auth(config, inference.secrets.as_ref(), &|_| None)
+        .await
+        .unwrap();
+    litellm_gateway::router(inference, auth, ui, mcp)
+}
+
 #[fixture]
 fn inference() -> Arc<Gateway> {
     litellm_gateway::build_inference(&Config::from_yaml("model_list: []").unwrap()).unwrap()
@@ -36,7 +48,7 @@ fn inference() -> Arc<Gateway> {
 #[rstest]
 #[case::authorized("/v1/messages", Some("Bearer gateway-key"), Some("gateway-key"), 400)]
 #[case::missing_token("/v1/messages", None, Some("gateway-key"), 401)]
-#[case::wrong_token("/v1/messages", Some("Bearer wrong"), Some("gateway-key"), 401)]
+#[case::wrong_token_without_db("/v1/messages", Some("Bearer wrong"), Some("gateway-key"), 400)]
 #[case::ocr("/ocr", None, Some("gateway-key"), 401)]
 #[case::chat("/v1/chat/completions", None, Some("gateway-key"), 401)]
 #[case::deployment(
@@ -72,14 +84,11 @@ async fn authenticates_before_serving_mounted_inference_routes(
     let address = listener.local_addr().unwrap();
     let (shutdown, stopped) = oneshot::channel();
     let server = tokio::spawn(async move {
-        axum::serve(
-            listener,
-            litellm_gateway::router(inference, &config, None, None),
-        )
-        .with_graceful_shutdown(async move {
-            let _ = stopped.await;
-        })
-        .await
+        axum::serve(listener, router(inference, &config, None, None).await)
+            .with_graceful_shutdown(async move {
+                let _ = stopped.await;
+            })
+            .await
     });
 
     let request = client
@@ -93,7 +102,7 @@ async fn authenticates_before_serving_mounted_inference_routes(
     };
     let response = request.send().await.unwrap();
     assert_eq!(response.status().as_u16(), status);
-    if status == 400 {
+    if authorization == Some("Bearer gateway-key") && master_key.is_some() {
         let expected = Error::UnknownModel {
             route: "/v1/messages",
             model: "unconfigured-model".into(),
@@ -132,16 +141,20 @@ async fn logs_request_outcome_without_credentials_or_query(inference: Arc<Gatewa
     let logger = Logger::new(LogSink(sender));
 
     let response = logger
-        .instrument(litellm_gateway::router(inference, &config, None, None).oneshot(request))
+        .instrument(
+            router(inference, &config, None, None)
+                .await
+                .oneshot(request),
+        )
         .await
         .unwrap();
 
-    assert_eq!(response.status().as_u16(), 401);
+    assert_eq!(response.status().as_u16(), 400);
     let record = receiver.try_recv().unwrap();
     assert_eq!(record["message"], "response headers");
     assert_eq!(record["fields"]["method"], "POST");
     assert_eq!(record["fields"]["path"], "/v1/messages");
-    assert_eq!(record["fields"]["status"], 401);
+    assert_eq!(record["fields"]["status"], 400);
     assert!(record["fields"]["time_to_headers_ms"].as_f64().unwrap() >= 0.0);
     assert!(record["fields"]["request_id"].as_str().is_some());
     assert!(receiver.try_recv().is_err());
@@ -168,7 +181,7 @@ async fn mounts_ui_without_exposing_credentials_or_authorizing_inference(inferen
         false,
     )
     .merge(litellm_gateway_ui::dashboard_assets(assets.path()));
-    let app = litellm_gateway::router(inference, &config, Some(ui), None);
+    let app = router(inference, &config, Some(ui), None).await;
     let page = app
         .clone()
         .oneshot(Request::get("/ui/").body(Body::empty()).unwrap())
@@ -251,7 +264,7 @@ async fn mounts_ui_without_exposing_credentials_or_authorizing_inference(inferen
         )
         .await
         .unwrap();
-    assert_eq!(inference_response.status().as_u16(), 401);
+    assert_eq!(inference_response.status().as_u16(), 400);
     let master_response = app
         .oneshot(
             Request::get("/session/info")
@@ -278,7 +291,8 @@ async fn ui_routes_are_absent_when_not_mounted(
     let config =
         Config::from_yaml("model_list: []\ngeneral_settings:\n  master_key: gateway-key\n")
             .unwrap();
-    let response = litellm_gateway::router(inference, &config, None, None)
+    let response = router(inference, &config, None, None)
+        .await
         .oneshot(
             Request::builder()
                 .method(method)
@@ -300,7 +314,7 @@ async fn readiness_answers_without_credentials_like_the_proxy_with_no_database(
     #[case] yaml: &str,
 ) {
     let config = Config::from_yaml(yaml).unwrap();
-    let app = litellm_gateway::router(inference, &config, None, None);
+    let app = router(inference, &config, None, None).await;
 
     let response = app
         .oneshot(

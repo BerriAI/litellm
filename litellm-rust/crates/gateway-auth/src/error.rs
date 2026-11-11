@@ -14,6 +14,8 @@ pub enum Error {
     Expired,
     #[error("operation is not permitted")]
     Forbidden,
+    #[error("{message}")]
+    Denied { status: StatusCode, message: String },
     #[error("authentication service unavailable")]
     Unavailable(#[source] Source),
     #[error("gateway authentication unavailable")]
@@ -26,6 +28,8 @@ pub enum Error {
     UiUnconfigured,
     #[error("authenticated request context is missing")]
     MissingIdentity,
+    #[error("authentication ran outside a matched route")]
+    MissingRoute,
     #[error("UI session layer is not installed")]
     MissingSessionLayer,
 }
@@ -35,25 +39,32 @@ impl Error {
         match self {
             Self::InvalidToken | Self::InvalidSession | Self::Expired => StatusCode::UNAUTHORIZED,
             Self::Forbidden => StatusCode::FORBIDDEN,
+            Self::Denied { status, .. } => *status,
             Self::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             Self::Secret(_)
             | Self::Session(_)
             | Self::Unconfigured
             | Self::UiUnconfigured
             | Self::MissingIdentity
+            | Self::MissingRoute
             | Self::MissingSessionLayer => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 
     pub fn is_denied(&self) -> bool {
         match self {
-            Self::InvalidToken | Self::InvalidSession | Self::Expired | Self::Forbidden => true,
+            Self::InvalidToken
+            | Self::InvalidSession
+            | Self::Expired
+            | Self::Forbidden
+            | Self::Denied { .. } => true,
             Self::Unavailable(_)
             | Self::Secret(_)
             | Self::Session(_)
             | Self::Unconfigured
             | Self::UiUnconfigured
             | Self::MissingIdentity
+            | Self::MissingRoute
             | Self::MissingSessionLayer => false,
         }
     }

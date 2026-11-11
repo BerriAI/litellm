@@ -16,7 +16,7 @@
 
 ## Layout
 
-Every forwarding decision has one home. `rewrite.rs` owns what Python and the client receive, as pure functions over requests and responses. `Rejection` in `error.rs` is the only place that picks a status for a request Rust answers itself. `settings.rs` parses the environment into typed values, so an `Upstream` is a loopback origin by construction. `server.rs` accepts client connections and owns their timeouts, since `axum::serve` exposes none, and `connections.rs` tracks every connection and relay for shutdown. `forward.rs` and `websocket.rs` only move requests, bodies and upgraded connections and never touch a header themselves. `connector.rs` keeps hyper reading Python's answer after Python stops reading the request
+Every forwarding decision has one home. `rewrite.rs` owns what Python and the client receive, as pure functions over requests and responses. `Rejection` in `error.rs` is the only place that picks a status for a request Rust answers itself. `settings.rs` parses the environment into typed values, so an `Upstream` is a loopback origin by construction. `server.rs` accepts client connections and owns their timeouts, since `axum::serve` exposes none, and hands each request to an app service with its `ClientSocket` in the extensions. `Forward` is itself that service in forward-only mode, and the fallback of the gateway's native router otherwise. The crate never decides what the app serves, and `connections.rs` tracks every connection and relay for shutdown. `forward.rs` and `websocket.rs` only move requests, bodies and upgraded connections and never touch a header themselves. `connector.rs` keeps hyper reading Python's answer after Python stops reading the request
 
 ## Environment
 

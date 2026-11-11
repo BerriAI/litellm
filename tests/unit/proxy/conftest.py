@@ -21,8 +21,10 @@ from fastapi.testclient import TestClient
 from prisma.errors import ClientNotConnectedError
 
 import litellm
+import litellm.proxy.auth.user_api_key_auth
 import litellm.proxy.proxy_server
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.auth import core
 from litellm.proxy.common_utils.fips import enforce_fips_mode
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     InitPassThroughEndpointHelpers,
@@ -173,7 +175,7 @@ def setup_and_teardown():
 
     What is NOT reset:
       - Class instances without flush_cache() (e.g. ProxyLogging,
-        JWTHandler, FastAPI routers, loggers). If a test mutates such an
+        LiteLLM_JWTAuth, FastAPI routers, loggers). If a test mutates such an
         instance in-place (setattr on the instance, appending to one of
         its internal lists, etc.), the mutation will leak into later tests.
         Use pytest's monkeypatch.setattr() or a local fixture for those
@@ -241,6 +243,27 @@ def pytest_runtest_teardown(item, nextitem):
             setattr(proxy_server, name, snapshot[name])
         elif name in vars(proxy_server):
             delattr(proxy_server, name)
+
+
+@pytest.fixture
+def build_proxy_auth_settings(monkeypatch: pytest.MonkeyPatch) -> Callable[[], None]:
+    """Builds `proxy_server.rust_auth_settings` from the proxy globals as the test set them, like startup does."""
+
+    def build() -> None:
+        proxy_server: Final = litellm.proxy.proxy_server
+        monkeypatch.setattr(
+            proxy_server,
+            "rust_auth_settings",
+            core.build_settings(
+                proxy_server.general_settings,
+                proxy_server.litellm_jwtauth,
+                master_key=proxy_server.master_key,
+                premium_user=proxy_server.premium_user,
+                has_db=proxy_server.prisma_client is not None,
+            ),
+        )
+
+    return build
 
 
 @pytest.fixture
