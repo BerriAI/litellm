@@ -36,6 +36,9 @@ from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
+
+    from litellm.proxy.rust_forward.peer import ASGIApp
+    from litellm.proxy.rust_forward.server import PythonServer
 else:
     FastAPI = Any
 
@@ -680,7 +683,7 @@ class ProxyInitializationHelpers:
     def run_gunicorn_server(
         host: str,
         port: int,
-        app: FastAPI,
+        app: "ASGIApp",
         num_workers: int,
         ssl_certfile_path: str,
         ssl_keyfile_path: str,
@@ -835,6 +838,65 @@ class ProxyInitializationHelpers:
     @staticmethod
     def serving_port(port: int) -> int:
         return random.randint(1024, 49152) if port == 4000 and ProxyInitializationHelpers.is_port_in_use(port) else port
+
+    @staticmethod
+    def python_server(
+        host: str,
+        port: int,
+        keepalive_timeout: int | None,
+        run_gunicorn: bool,
+        run_hypercorn: bool,
+        run_granian: bool,
+        tls: bool,
+    ) -> "PythonServer":
+        """``run_gunicorn_server`` never hands ``--keepalive_timeout`` or forwarded IPs to gunicorn, so its workers keep
+        gunicorn's keep-alive and gunicorn's trusted proxies, which include ``::1`` where uvicorn's do not."""
+        import uvicorn
+
+        from litellm.proxy.rust_forward.server import Listener, PythonServer, Server, uvicorn_trusted_proxies
+        from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+
+        server: Final = (
+            Server.HYPERCORN
+            if run_hypercorn
+            else Server.GRANIAN
+            if run_granian
+            else Server.GUNICORN
+            if run_gunicorn
+            else Server.UVICORN
+        )
+        keepalive, trusted_proxies = (
+            ProxyInitializationHelpers.gunicorn_keepalive_and_trusted_proxies()
+            if server is Server.GUNICORN
+            else (
+                uvicorn.Config(app="", log_config=None).timeout_keep_alive
+                if keepalive_timeout is None
+                else keepalive_timeout,
+                uvicorn_trusted_proxies(None),
+            )
+        )
+        return PythonServer(
+            server=server,
+            listener=Listener.TLS if tls else Listener.TCP,
+            host=host,
+            port=ProxyInitializationHelpers.serving_port(port),
+            keepalive_seconds=keepalive,
+            graceful_timeout_seconds=GracefulShutdownManager.get_timeout(),
+            trusted_proxies=trusted_proxies,
+        )
+
+    @staticmethod
+    def gunicorn_keepalive_and_trusted_proxies() -> tuple[int, str]:
+        """Loaded only when gunicorn is the server, because gunicorn imports ``fcntl``, which Windows lacks."""
+        from gunicorn.config import Config as GunicornConfig
+
+        config: Final = GunicornConfig()
+        keepalive: Final[object] = config.keepalive
+        forwarded_allow_ips: Final[object] = config.forwarded_allow_ips
+        return (
+            TypeAdapter(int).validate_python(keepalive),
+            ",".join(TypeAdapter(list[str]).validate_python(forwarded_allow_ips)),
+        )
 
     @staticmethod
     def get_loop_type():
@@ -1276,7 +1338,7 @@ def run_server(
     skip_server_startup,
     validate_config: bool,
     check_migrations_against_existing_data: bool,
-    keepalive_timeout,
+    keepalive_timeout: int | None,
     timeout_worker_healthcheck,
     max_request_header_size: int | None,
     max_requests_before_restart: int | None,
@@ -1305,6 +1367,49 @@ def run_server(
 
         run_setup_wizard()
         return
+
+    from pydantic import ValidationError
+
+    from litellm.proxy.rust_forward.mode import (
+        Mode,
+        environment_error,
+        private_listener,
+        rust_forward_mode,
+        stop_with_supervisor,
+        uvicorn_options,
+    )
+
+    try:
+        forward_mode: Final = rust_forward_mode(os.environ)
+    except ValidationError as error:
+        raise click.ClickException(environment_error(error)) from None
+    stop_with_supervisor(forward_mode)
+    runs_one_command: Final = (
+        version is True
+        or validate_config
+        or health is True
+        or test is True
+        or skip_server_startup is True
+        or check_migrations_against_existing_data
+    )
+    if forward_mode is Mode.SUPERVISOR and not runs_one_command:
+        from litellm.proxy.rust_forward.supervisor import supervise
+        from litellm.proxy.rust_forward.supervisor.preflight import StartupError
+
+        server: Final = ProxyInitializationHelpers.python_server(
+            host,
+            port,
+            keepalive_timeout,
+            run_gunicorn=run_gunicorn is True,
+            run_hypercorn=run_hypercorn is True,
+            run_granian=run_granian is True,
+            tls=None not in (ssl_keyfile_path, ssl_certfile_path),
+        )
+        if prometheus_metrics_port == server.port:
+            raise click.UsageError("--prometheus_metrics_port must differ from --port")
+        supervised: Final = supervise(server)
+        if not isinstance(supervised, StartupError):
+            raise SystemExit(supervised)
 
     args: Final = locals()
     try:
@@ -1773,6 +1878,8 @@ def run_server(
             timeout_worker_healthcheck=(timeout_worker_healthcheck if running_uvicorn else None),
             max_request_header_size=max_request_header_size,
         )
+        for option, value in uvicorn_options(forward_mode, WORKER_APP).items():
+            uvicorn_args[option] = value
         # Optional: recycle uvicorn workers after N requests
         if max_requests_before_restart is not None:
             uvicorn_args["limit_max_requests"] = max_requests_before_restart
@@ -1837,16 +1944,19 @@ def run_server(
                 workers=num_workers,
             )
         elif run_gunicorn is True:
+            from litellm.proxy.rust_forward.peer import wrap
+
             ProxyInitializationHelpers.run_gunicorn_server(
                 host=host,
                 port=port,
-                app=app,
+                app=wrap(app, forward_mode),
                 num_workers=num_workers,
                 ssl_certfile_path=ssl_certfile_path,
                 ssl_keyfile_path=ssl_keyfile_path,
                 max_requests_before_restart=max_requests_before_restart,
                 max_requests_before_restart_jitter=max_requests_before_restart_jitter,
                 max_request_header_size=max_request_header_size,
+                private_listener=private_listener(forward_mode),
             )
         elif run_hypercorn is True:
             ProxyInitializationHelpers.init_hypercorn_server(

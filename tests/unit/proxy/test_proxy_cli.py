@@ -26,6 +26,7 @@ import urllib.parse as urlparse
 
 import uvicorn
 import yaml
+from gunicorn.config import Config as GunicornConfig
 from uvicorn.config import LOOP_FACTORIES
 from uvicorn.importer import import_from_string
 
@@ -34,8 +35,9 @@ from litellm._logging import turn_on_json
 from litellm.constants import DEFAULT_MAX_REQUEST_HEADER_SIZE, GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS
 from litellm.proxy import proxy_cli
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers, run_server
+from litellm.proxy.rust_forward.server import Listener, Server
 from litellm.proxy.server_listener import AssignedPort, InheritedFd
-from litellm.proxy.shutdown.graceful_shutdown_manager import DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT
+from litellm.proxy.shutdown.graceful_shutdown_manager import DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT, GracefulShutdownManager
 
 
 @pytest.fixture(autouse=True)
@@ -4382,3 +4384,154 @@ def test_migration_data_check_requires_database_url(monkeypatch):
 
     with pytest.raises(click.UsageError, match="requires DATABASE_URL"):
         ProxyInitializationHelpers.run_migration_data_check(use_migrate=True)
+
+
+class TestRustForwardServer:
+    """The public listener ``run_server`` reports to the Rust supervisor matches what it would serve itself."""
+
+    @staticmethod
+    def _server(argv: list[str]):
+        params: Final = run_server.make_context("litellm", ["--port", "45999", *argv]).params
+        return params, ProxyInitializationHelpers.python_server(
+            str(params["host"]),
+            int(str(params["port"])),
+            params["keepalive_timeout"],
+            run_gunicorn=params["run_gunicorn"] is True,
+            run_hypercorn=params["run_hypercorn"] is True,
+            run_granian=params["run_granian"] is True,
+            tls=None not in (params["ssl_keyfile_path"], params["ssl_certfile_path"]),
+        )
+
+    @pytest.mark.parametrize(
+        ("argv", "server", "listener"),
+        [
+            ([], Server.UVICORN, Listener.TCP),
+            (["--run_gunicorn"], Server.GUNICORN, Listener.TCP),
+            (["--run_hypercorn"], Server.HYPERCORN, Listener.TCP),
+            (["--run_granian"], Server.GRANIAN, Listener.TCP),
+            (["--ssl_keyfile_path", "key.pem", "--ssl_certfile_path", "cert.pem"], Server.UVICORN, Listener.TLS),
+        ],
+    )
+    def test_the_supervisor_sees_the_server_and_listener_python_would_use(
+        self, argv: list[str], server: Server, listener: Listener
+    ) -> None:
+        _, described = self._server(argv)
+        assert (described.server, described.listener) == (server, listener)
+
+    def test_uvicorn_is_described_where_gunicorn_cannot_be_imported(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _, with_gunicorn = self._server([])
+        monkeypatch.setitem(sys.modules, "gunicorn.config", None)
+        _, without_gunicorn = self._server([])
+        assert without_gunicorn == with_gunicorn
+
+    @patch("uvicorn.run")
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False)
+    @pytest.mark.parametrize(
+        ("argv", "reason", "served_keyfile"),
+        [
+            (
+                ["--ssl_keyfile_path", "key.pem", "--ssl_certfile_path", "cert.pem"],
+                "does not support TLS on the public port",
+                "key.pem",
+            ),
+            (["--ssl_keyfile_path", "key.pem"], "requires the litellm-gateway binary", None),
+            (["--ssl_certfile_path", "cert.pem"], "requires the litellm-gateway binary", None),
+            (["--ciphers", "ECDHE"], "requires the litellm-gateway binary", None),
+        ],
+    )
+    def test_a_refused_forwarding_start_serves_from_python_alone(
+        self,
+        mock_should_update,
+        mock_setup_db,
+        mock_atexit_register,
+        mock_uvicorn_run,
+        argv: list[str],
+        reason: str,
+        served_keyfile: str | None,
+    ) -> None:
+        from click.testing import CliRunner
+
+        proxy_module: Final = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        environ: Final = {
+            **{
+                k: v
+                for k, v in os.environ.items()
+                if k not in ("DATABASE_URL", "DIRECT_URL", "_LITELLM_GATEWAY_SUPERVISED")
+            },
+            "LITELLM_RUST_FIRST": "true",
+        }
+        with (
+            patch.dict(os.environ, environ, clear=True),
+            patch.dict("sys.modules", {"proxy_server": proxy_module, "litellm.proxy.proxy_server": proxy_module}),
+            patch("litellm.proxy.rust_forward.supervisor.gateway_binary", return_value=None),
+        ):
+            result: Final = CliRunner().invoke(run_server, ["--port", "45999", *argv])
+        assert result.exit_code == 0, result.output
+        assert f"LITELLM_RUST_FIRST {reason}" in result.output
+        assert "so Python serves the public port without Rust forwarding" in result.output
+        mock_uvicorn_run.assert_called_once()
+        assert mock_uvicorn_run.call_args.kwargs.get("ssl_keyfile") == served_keyfile
+        assert mock_uvicorn_run.call_args.kwargs["port"] == 45999
+
+    def test_an_invalid_rust_switch_stops_startup_with_one_line_naming_it(self) -> None:
+        from click.testing import CliRunner
+
+        with patch.dict(os.environ, {"LITELLM_RUST_FIRST": "sometimes"}):
+            result: Final = CliRunner().invoke(run_server, ["--port", "45999"])
+        lines: Final = result.output.splitlines()
+        assert (result.exit_code, len(lines)) == (1, 1)
+        assert lines[0].startswith("Error: LITELLM_RUST_FIRST is invalid: ")
+
+    def test_a_metrics_port_on_the_public_port_is_refused_before_forwarding_starts(self) -> None:
+        from click.testing import CliRunner
+
+        with (
+            patch.dict(os.environ, {"LITELLM_RUST_FIRST": "true"}),
+            patch("litellm.proxy.rust_forward.supervisor.supervise") as supervise,
+        ):
+            result: Final = CliRunner().invoke(run_server, ["--port", "45999", "--prometheus_metrics_port", "45999"])
+        assert result.exit_code == 2
+        assert "--prometheus_metrics_port must differ from --port" in result.output
+        supervise.assert_not_called()
+
+    @staticmethod
+    def _served_by_python(params: dict[str, object]) -> tuple[object, ...]:
+        if params["run_gunicorn"]:
+            gunicorn: Final = GunicornConfig()
+            return gunicorn.keepalive, GracefulShutdownManager.get_timeout(), ",".join(gunicorn.forwarded_allow_ips)
+        served: Final = uvicorn.Config(
+            **ProxyInitializationHelpers.get_default_unvicorn_init_args(
+                "127.0.0.1", 45555, keepalive_timeout=params["keepalive_timeout"]
+            )
+        )
+        return served.timeout_keep_alive, served.timeout_graceful_shutdown, served.forwarded_allow_ips
+
+    @pytest.mark.parametrize(
+        ("argv", "environ"),
+        [
+            ([], {}),
+            (["--keepalive_timeout", "2"], {"GRACEFUL_SHUTDOWN_TIMEOUT": "12.5"}),
+            ([], {"KEEPALIVE_TIMEOUT": "7", "FORWARDED_ALLOW_IPS": "10.0.0.5"}),
+            (["--run_gunicorn", "--keepalive_timeout", "9"], {}),
+        ],
+    )
+    def test_rust_follows_the_keepalive_drain_and_trust_python_serves_with(
+        self, argv: list[str], environ: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        for name in ("KEEPALIVE_TIMEOUT", "GRACEFUL_SHUTDOWN_TIMEOUT", "FORWARDED_ALLOW_IPS"):
+            monkeypatch.delenv(name, raising=False)
+        for name, value in environ.items():
+            monkeypatch.setenv(name, value)
+        params, server = self._server(argv)
+        assert (
+            server.keepalive_seconds,
+            server.graceful_timeout_seconds,
+            server.trusted_proxies,
+        ) == self._served_by_python(params)
