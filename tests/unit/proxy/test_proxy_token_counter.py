@@ -2065,6 +2065,50 @@ async def test_router_wide_runtime_endpoint_keeps_counts_on_that_endpoint(monkey
     assert (result.total_tokens, peer.hosts) == (25, (private_runtime,))
 
 
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_no_bedrock_endpoint_env")
+async def test_framed_pinned_runtime_deployment_still_rejects_a_malformed_count(monkeypatch: pytest.MonkeyPatch):
+    peer: Final = _CountingBedrockPeer()
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "opus",
+                    "litellm_params": {
+                        "model": "bedrock/us.anthropic.claude-opus-5-5",
+                        "api_base": "https://vpce-0a1b2c3d.bedrock-runtime.us-west-2.vpce.amazonaws.com",
+                        "aws_access_key_id": "AKIATESTACCESSKEY",
+                        "aws_secret_access_key": "test-secret",
+                        "aws_region_name": "us-west-2",
+                    },
+                    "model_info": {"token_count_framing": 10},
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "_get_provider_token_counter",
+        lambda deployment, model: (
+            BedrockTokenCounter(client=AsyncHTTPHandler(transport=httpx.MockTransport(peer))),
+            model,
+            "bedrock",
+        ),
+    )
+
+    with pytest.raises(ProxyException) as raised:
+        await token_counter(
+            request=TokenCountRequest(
+                model="opus", messages=[{"role": "user", "content": "hi"}, {"role": "assistant"}]
+            ),
+            call_endpoint=True,
+        )
+
+    assert (raised.value.code, "must have a 'content' field" in raised.value.message, peer.hosts) == ("400", True, ())
+
+
 @pytest.mark.parametrize(
     ("count_model", "region"),
     [

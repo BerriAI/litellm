@@ -141,13 +141,13 @@ class BedrockMantleCountTokensHandler(BaseAWSLLM):
             aws_region_name: Final = await run_aws_signing(
                 self.get_aws_region_name, optional_params=litellm_params, model=resolved_model, model_id=None
             )
-            endpoint: Final = await run_aws_signing(deployment_mantle_endpoint, litellm_params)
-            if endpoint is None:
-                raise NoMantleEndpointError(aws_region_name)
             request: Final = _COUNT_REQUEST.validate_python(request_data)
             problem: Final = count_tokens_messages_problem(request["messages"])
             if problem is not None:
                 raise BedrockCountTokensRequestError(problem)
+            endpoint: Final = await run_aws_signing(deployment_mantle_endpoint, litellm_params)
+            if endpoint is None:
+                raise NoMantleEndpointError(aws_region_name)
             endpoint_url: Final = await run_aws_signing(
                 self.get_mantle_count_tokens_endpoint, endpoint, aws_region_name
             )
