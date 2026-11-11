@@ -5,7 +5,8 @@ Tests for rerank_endpoints/endpoints.py response headers.
 import asyncio
 import json
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -37,9 +38,13 @@ HIDDEN_PARAMS = {
 
 def _build_request(headers: tuple[tuple[bytes, bytes], ...] = ()) -> Request:
     body = json.dumps({"model": "rerank-model", "query": "q", "documents": ["a", "b"]}).encode()
+    messages: Final = iter(({"type": "http.request", "body": body, "more_body": False},))
 
     async def receive():
-        return {"type": "http.request", "body": body, "more_body": False}
+        message: Final = next(messages, None)
+        if message is None:
+            await asyncio.Event().wait()
+        return message
 
     return Request(
         scope={
@@ -53,7 +58,7 @@ def _build_request(headers: tuple[tuple[bytes, bytes], ...] = ()) -> Request:
     )
 
 
-async def _call_rerank(hidden_params: dict = HIDDEN_PARAMS) -> Response:
+async def _call_rerank(hidden_params: dict = HIDDEN_PARAMS, general_settings: Mapping[str, object] = MappingProxyType({})) -> Response:
     response = RerankResponse(id="rerank-1", results=[{"index": 0, "relevance_score": 0.9}])
     response._hidden_params = dict(hidden_params)
 
@@ -77,6 +82,7 @@ async def _call_rerank(hidden_params: dict = HIDDEN_PARAMS) -> Response:
         patch.object(proxy_server_mod, "proxy_logging_obj", proxy_logging_obj),  # test-quality-ok: the rerank route reads these proxy_server module globals; no injection seam on the FastAPI handler
         patch.object(proxy_server_mod, "llm_router", MagicMock()),  # test-quality-ok: the rerank route reads these proxy_server module globals; no injection seam on the FastAPI handler
         patch.object(proxy_server_mod, "version", "1.2.3"),  # test-quality-ok: the rerank route reads these proxy_server module globals; no injection seam on the FastAPI handler
+        patch.object(proxy_server_mod, "general_settings", general_settings),  # test-quality-ok: the rerank route reads these proxy_server module globals; no injection seam on the FastAPI handler
     ):
         await rerank(
             request=_build_request(headers=((b"x-litellm-call-id", b"call-123"),)),
@@ -109,6 +115,15 @@ async def test_rerank_emits_detailed_timing_headers_when_enabled():
     assert fastapi_response.headers["x-litellm-timing-pre-processing-ms"] == "10.0"
     assert fastapi_response.headers["x-litellm-timing-post-processing-ms"] == "2.5"
     assert fastapi_response.headers["x-litellm-timing-message-copy-ms"] == "0.01"
+
+
+@pytest.mark.asyncio
+async def test_connected_rerank_with_cancel_on_disconnect_still_returns_its_headers():
+    fastapi_response = await asyncio.wait_for(_call_rerank(general_settings={"cancel_on_disconnect": True}), timeout=5)
+
+    assert fastapi_response.headers["x-litellm-call-id"] == "call-123"
+    assert fastapi_response.headers["x-litellm-response-cost"] == "0.002"
+    assert fastapi_response.headers["x-litellm-model-id"] == "deployment-1"
 
 
 @pytest.mark.asyncio
