@@ -10,7 +10,7 @@ The generateContent completion adapter cannot preserve image-generation configur
 
 CustomLLM exposes separate synchronous and asynchronous non-streaming generateContent hooks. An overridden hook receives native contents, config and tools, with other request fields in optional_params and the usual logging and LiteLLM context. Dispatch happens before built-in provider config lookup. Calls without an override use the completion adapter, including arbitrary registered custom provider names
 
-The hook returns the native response without completion conversion. Logging records a JSON representation through the existing generateContent response logging path so usageMetadata remains available to logging and cost normalization without changing the response sent to the caller
+The hook returns the native response without completion conversion. A dict goes back to the caller unchanged, and any other object goes back as its camelCase JSON dict, the same shape the completion adapter returns, so the router can tag either one with its deployment. Logging records that JSON through the existing generateContent response logging path so usageMetadata remains available to logging and cost normalization
 
 ## Alternatives Considered
 

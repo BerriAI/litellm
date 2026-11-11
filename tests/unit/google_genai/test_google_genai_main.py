@@ -779,6 +779,9 @@ _IMAGE_CANDIDATE: Final = {
     "finishReason": "STOP",
     "index": 0,
 }
+_IMAGE_USAGE: Final = {"promptTokenCount": 3, "candidatesTokenCount": 5, "totalTokenCount": 8}
+_IMAGE_WIRE_BODY: Final = {"candidates": [_IMAGE_CANDIDATE], "usageMetadata": _IMAGE_USAGE}
+_DICT_WITHOUT_USAGE: Final = {"candidates": [_IMAGE_CANDIDATE]}
 _HOOK_RESPONSE_SHAPES: Final = (
     pytest.param(
         GenerateContentResponse(
@@ -792,17 +795,16 @@ _HOOK_RESPONSE_SHAPES: Final = (
             usage_metadata={"prompt_token_count": 3, "candidates_token_count": 5, "total_token_count": 8},
         ),
         (3, 5),
+        _IMAGE_WIRE_BODY,
         id="snake-case-sdk-object-with-bytes",
     ),
     pytest.param(
-        CamelCaseContentResponse(
-            candidates=(_IMAGE_CANDIDATE,),
-            usageMetadata={"promptTokenCount": 3, "candidatesTokenCount": 5, "totalTokenCount": 8},
-        ),
+        CamelCaseContentResponse(candidates=(_IMAGE_CANDIDATE,), usageMetadata=_IMAGE_USAGE),
         (3, 5),
+        _IMAGE_WIRE_BODY,
         id="camel-case-model-with-unset-fields",
     ),
-    pytest.param({"candidates": [_IMAGE_CANDIDATE]}, (0, 0), id="dict-without-usage"),
+    pytest.param(_DICT_WITHOUT_USAGE, (0, 0), _DICT_WITHOUT_USAGE, id="dict-without-usage"),
 )
 
 
@@ -826,11 +828,15 @@ class ContentUsageRecorder:
         self.log(kwargs, *rest)
 
 
-@pytest.mark.parametrize("hook_response, expected_usage", _HOOK_RESPONSE_SHAPES)
+@pytest.mark.parametrize("hook_response, expected_usage, expected_result", _HOOK_RESPONSE_SHAPES)
 @pytest.mark.parametrize("is_async", [False, True])
 @pytest.mark.asyncio
 async def test_custom_native_content_logs_each_hook_response_shape_once(
-    native_content_handler: NativeContentLLM, is_async: bool, hook_response: object, expected_usage: tuple[int, int]
+    native_content_handler: NativeContentLLM,
+    is_async: bool,
+    hook_response: object,
+    expected_usage: tuple[int, int],
+    expected_result: dict[str, object],
 ) -> None:
     native_content_handler.response = hook_response
     recorder: Final = ContentUsageRecorder()
@@ -842,8 +848,30 @@ async def test_custom_native_content_logs_each_hook_response_shape_once(
     assert await asyncio.to_thread(recorder.logged.wait, 5)
     if is_async:
         await GLOBAL_LOGGING_WORKER.flush()
-    assert result is hook_response
+    assert result == expected_result
     assert recorder.usage == (expected_usage,)
+
+
+@pytest.mark.asyncio
+async def test_router_tags_custom_native_content_objects_with_their_deployment(
+    native_content_handler: NativeContentLLM,
+) -> None:
+    native_content_handler.response = CamelCaseContentResponse(candidates=(_IMAGE_CANDIDATE,), usageMetadata=_IMAGE_USAGE)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "image-group",
+                "litellm_params": {"model": "native_image_test/image-model"},
+                "model_info": {"id": "native-leg"},
+            }
+        ]
+    )
+    result: Final = await router.agenerate_content(model="image-group", contents=[], config={})
+    assert isinstance(result, dict)
+    hidden_params: Final = result.pop("_hidden_params")
+    assert result == _IMAGE_WIRE_BODY
+    assert hidden_params["model_id"] == "native-leg"
+    assert hidden_params["additional_headers"]["x-litellm-model-group"] == "image-group"
 
 
 class AdapterOnlyContentLLM(CompletionContentLLM):
