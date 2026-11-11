@@ -22,8 +22,8 @@ they stay out of the body even without it.
 
 import datetime
 import json
-from collections.abc import Mapping, Sequence
-from typing import Any, Dict, Final, List, Optional, Tuple
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any, ClassVar, Dict, Final, List, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -38,6 +38,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.chat_completion_agentic_loop import (
     _execute_chat_completion_agentic_plan,
     maybe_run_chat_completion_agentic_loop,
+    run_chat_completion_agentic_hooks,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -67,6 +68,7 @@ _INTERNAL_CONTROL_FIELDS = (
     "_code_interpreter_interception_active",
     "_code_interpreter_interception_sandbox_key",
     "_code_interpreter_interception_converted_stream",
+    "_agentic_loop_tool_choice",
     "litellm_metadata",
 )
 
@@ -125,6 +127,27 @@ def _tool_call_model_response() -> ModelResponse:
                                 arguments='{"code": "print(6*7)"}',
                             ),
                         )
+                    ],
+                ),
+            )
+        ]
+    )
+
+
+def _custom_tool_call_model_response() -> ModelResponse:
+    return ModelResponse(
+        choices=[
+            Choices(
+                finish_reason="tool_calls",
+                message=Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        {
+                            "id": "call_abc",
+                            "type": "custom",
+                            "custom": {"name": "litellm_code_execution", "input": "print(6*7)"},
+                        }
                     ],
                 ),
             )
@@ -1090,3 +1113,231 @@ class TestAgenticFollowUpKeepsTheProviderPrefix:
         response: Final = await self._run_followup("openai/gpt-4o", "openrouter", patched_model="openai/gpt-4o")
 
         assert response._hidden_params["custom_llm_provider"] == "openrouter"
+
+
+_ALLOWS_ONLY_GET_WEATHER: Final = {
+    "type": "allowed_tools",
+    "mode": "auto",
+    "tools": [{"type": "function", "name": "get_weather"}],
+}
+_ALLOWS_THE_HOOKS_CALL: Final = {
+    "type": "allowed_tools",
+    "mode": "auto",
+    "tools": [{"type": "function", "name": "litellm_code_execution"}],
+}
+
+
+async def _dispatch_under_the_choice(tool_choice: object, acompletion_mock: AsyncMock) -> Any:
+    gate: Final = _GateOnlyLogger(
+        plan=AgenticLoopPlan(
+            run_agentic_loop=True, request_patch=AgenticLoopRequestPatch(messages=_patched_messages())
+        ),
+        tool_calls=_REFUSED_GATE_TOOL_CALLS,
+    )
+    with patch.object(litellm, "acompletion", acompletion_mock):
+        return await maybe_run_chat_completion_agentic_loop(
+            response=_tool_call_model_response(),
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "what is 6*7?"}],
+            optional_params={"tool_choice": tool_choice},
+            kwargs={},
+            logging_obj=_LoggingWithCallbacks((gate,)),
+            custom_llm_provider="openai",
+            stream=False,
+        )
+
+
+@pytest.mark.asyncio
+async def test_an_intercepted_call_the_choice_excludes_ends_the_turn_without_running(restore_callbacks):
+    acompletion_mock: Final = AsyncMock()
+
+    result: Final = await _dispatch_under_the_choice(_ALLOWS_ONLY_GET_WEATHER, acompletion_mock)
+
+    acompletion_mock.assert_not_awaited()
+    assert isinstance(result, ModelResponse)
+    assert not result.choices[0].message.tool_calls
+    assert result.choices[0].finish_reason == "stop"
+
+
+@pytest.mark.asyncio
+async def test_an_intercepted_call_the_choice_lists_still_runs(restore_callbacks):
+    followup: Final = _plain_model_response("done")
+    acompletion_mock: Final = AsyncMock(return_value=followup)
+
+    result: Final = await _dispatch_under_the_choice(_ALLOWS_THE_HOOKS_CALL, acompletion_mock)
+
+    acompletion_mock.assert_awaited_once()
+    assert result is followup
+
+
+class _ChatHookLogger(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.runs = 0
+
+    async def async_should_run_chat_completion_agentic_loop(
+        self,
+        response: object,
+        model: str,
+        messages: list[dict],
+        tools: list[dict] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: dict,
+    ) -> tuple[bool, dict]:
+        return True, {"tool_calls": [{"id": "call_abc", "name": "litellm_code_execution"}]}
+
+    async def async_run_chat_completion_agentic_loop(
+        self,
+        tools: dict,
+        model: str,
+        messages: list[dict],
+        response: object,
+        optional_params: dict,
+        logging_obj: Any,
+        stream: bool,
+        kwargs: dict,
+    ) -> object:
+        self.runs += 1
+        return _plain_model_response("ran the hook")
+
+
+def _logging_with(hook: CustomLogger) -> Logging:
+    return Logging(
+        model="gpt-4o-mini",
+        messages=[],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="call-test",
+        function_id="function-test",
+        dynamic_success_callbacks=[hook],
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model_response", [_tool_call_model_response, _custom_tool_call_model_response])
+async def test_a_chat_hook_never_runs_a_call_the_choice_excludes(model_response: Callable[[], ModelResponse]):
+    hook: Final = _ChatHookLogger()
+
+    result: Final = await run_chat_completion_agentic_hooks(
+        response=model_response(),
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "what is 6*7?"}],
+        optional_params={},
+        kwargs={"_agentic_loop_tool_choice": _ALLOWS_ONLY_GET_WEATHER},
+        logging_obj=_logging_with(hook),
+        custom_llm_provider="openai",
+        stream=False,
+    )
+
+    assert hook.runs == 0
+    assert isinstance(result, ModelResponse)
+    assert not result.choices[0].message.tool_calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_response", "tool_type"),
+    [(_tool_call_model_response, "function"), (_custom_tool_call_model_response, "custom")],
+)
+async def test_a_chat_hook_runs_a_call_the_choice_lists(model_response: Callable[[], ModelResponse], tool_type: str):
+    hook: Final = _ChatHookLogger()
+
+    result: Final = await run_chat_completion_agentic_hooks(
+        response=model_response(),
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "what is 6*7?"}],
+        optional_params={},
+        kwargs={
+            "_agentic_loop_tool_choice": {
+                "type": "allowed_tools",
+                "mode": "auto",
+                "tools": [{"type": tool_type, "name": "litellm_code_execution"}],
+            }
+        },
+        logging_obj=_logging_with(hook),
+        custom_llm_provider="openai",
+        stream=False,
+    )
+
+    assert hook.runs == 1
+    assert isinstance(result, ModelResponse)
+    assert result.choices[0].message.content == "ran the hook"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("tool_choice", "hook_runs"), [(_ALLOWS_ONLY_GET_WEATHER, 0), (_ALLOWS_THE_HOOKS_CALL, 1)])
+async def test_acompletion_hands_the_callers_choice_to_the_chat_hooks(tool_choice: dict[str, object], hook_runs: int):
+    hook: Final = _ChatHookLogger()
+    mock_client: Final = MagicMock()
+    mock_client.post = AsyncMock(return_value=_raw_response_for(_tool_call_model_response()))
+
+    response: Final = await litellm.acompletion(
+        model="openai/gpt-4o-mini",
+        messages=[{"role": "user", "content": "what is 6*7?"}],
+        tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+        tool_choice=tool_choice,
+        api_key="sk-test",
+        client=mock_client,
+        success_callback=[hook],
+    )
+
+    assert (hook.runs, mock_client.post.await_count, response.choices[0].message.tool_calls) == (hook_runs, 1, None)
+
+
+
+class _RetrievalHookLogger(_ChatHookLogger):
+    server_fulfilled_tool_names: ClassVar[frozenset[str]] = frozenset({"litellm_code_execution"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model_response", [_tool_call_model_response, _custom_tool_call_model_response])
+async def test_a_chat_hook_runs_a_tool_litellm_serves_itself_that_no_choice_can_list(
+    model_response: Callable[[], ModelResponse],
+):
+    hook: Final = _RetrievalHookLogger()
+
+    result: Final = await run_chat_completion_agentic_hooks(
+        response=model_response(),
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "what is 6*7?"}],
+        optional_params={},
+        kwargs={"_agentic_loop_tool_choice": _ALLOWS_ONLY_GET_WEATHER},
+        logging_obj=_logging_with(hook),
+        custom_llm_provider="openai",
+        stream=False,
+    )
+
+    assert hook.runs == 1
+    assert isinstance(result, ModelResponse)
+    assert result.choices[0].message.content == "ran the hook"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        {"type": "allowed_tools", "mode": "auto", "tools": []},
+        {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "mcp", "name": ["get_weather"]}]},
+    ],
+)
+async def test_a_malformed_choice_dropped_by_drop_params_never_holds_back_the_chat_hooks(
+    tool_choice: dict[str, object],
+):
+    hook: Final = _ChatHookLogger()
+    mock_client: Final = MagicMock()
+    mock_client.post = AsyncMock(return_value=_raw_response_for(_tool_call_model_response()))
+
+    response: Final = await litellm.acompletion(
+        model="openai/gpt-4o-mini",
+        messages=[{"role": "user", "content": "what is 6*7?"}],
+        tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+        tool_choice=tool_choice,
+        drop_params=True,
+        api_key="sk-test",
+        client=mock_client,
+        success_callback=[hook],
+    )
+
+    assert (hook.runs, response.choices[0].message.content) == (1, "ran the hook")

@@ -15,6 +15,8 @@ from queue import SimpleQueue
 from types import MappingProxyType
 from typing import TYPE_CHECKING, BinaryIO, Final
 
+from tests.integration._support.ports import allocate_port
+
 if TYPE_CHECKING:
     from collections.abc import Buffer
 
@@ -334,7 +336,7 @@ def wire_server(
             if tls is not None:
                 self.socket = tls.wrap_socket(self.socket, server_side=True)
 
-    with OwnedHTTPServer(("127.0.0.1", port), Handler) as server:
+    with OwnedHTTPServer(("127.0.0.1", port or allocate_port()), Handler) as server:
         thread: Final = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": _POLL_SECONDS})
         thread.start()
         try:

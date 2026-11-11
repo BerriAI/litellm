@@ -9,6 +9,7 @@ import { Field, FieldLabel } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 type GuardrailFields = { request_fields?: string[]; response_fields?: string[] };
 type GuardrailSettings = Record<string, GuardrailFields | null>;
@@ -56,7 +57,11 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
     emit({ ...value, [guardrailName]: isEmpty ? null : updated });
   };
 
-  const appendField = (guardrailName: string, fieldType: keyof GuardrailFields, field: string) => {
+  const appendField = (
+    guardrailName: string,
+    fieldType: keyof GuardrailFields,
+    field: "query" | "documents[*]" | "results[*]",
+  ) => {
     handleFieldChange(guardrailName, fieldType, [...(value[guardrailName]?.[fieldType] ?? []), field]);
   };
 
@@ -139,9 +144,9 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
                             </div>
                             <div className="space-y-1 text-xs">
                               <div>{t("passThroughGuardrailsSection.examples")}</div>
-                              <div>• query</div>
-                              <div>• documents[*].text</div>
-                              <div>• messages[*].content</div>
+                              <div>{codeSamples.passThrough.guardrailRequestQuery}</div>
+                              <div>{codeSamples.passThrough.guardrailRequestDocuments}</div>
+                              <div>{codeSamples.passThrough.guardrailRequestMessages}</div>
                             </div>
                           </div>,
                         )}
@@ -154,7 +159,7 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
                           disabled={disabled}
                           onClick={() => appendField(guardrailName, "request_fields", "query")}
                         >
-                          + query
+                          {codeSamples.passThrough.guardrailAddQuery}
                         </Button>
                         <Button
                           type="button"
@@ -163,7 +168,7 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
                           disabled={disabled}
                           onClick={() => appendField(guardrailName, "request_fields", "documents[*]")}
                         >
-                          + documents[*]
+                          {codeSamples.passThrough.guardrailAddDocuments}
                         </Button>
                       </div>
                     </div>
@@ -190,8 +195,8 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
                             </div>
                             <div className="space-y-1 text-xs">
                               <div>{t("passThroughGuardrailsSection.examples")}</div>
-                              <div>• results[*].text</div>
-                              <div>• choices[*].message.content</div>
+                              <div>{codeSamples.passThrough.guardrailResponseResults}</div>
+                              <div>{codeSamples.passThrough.guardrailResponseChoices}</div>
                             </div>
                           </div>,
                         )}
@@ -204,7 +209,7 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
                           disabled={disabled}
                           onClick={() => appendField(guardrailName, "response_fields", "results[*]")}
                         >
-                          + results[*]
+                          {codeSamples.passThrough.guardrailAddResults}
                         </Button>
                       </div>
                     </div>

@@ -34,7 +34,7 @@ from litellm.integrations.otel.model.db_endpoint import db_span_attributes
 from litellm.integrations.otel.model.metadata import flatten_metadata
 from litellm.integrations.otel.model.semconv import LiteLLM, Metric
 from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
-from litellm.integrations.otel.routing import routing_decision_attributes
+from litellm.integrations.otel.routing import routed_model_name, routing_decision_attributes
 from litellm.litellm_core_utils.core_helpers import iter_items, require_attributes
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -2617,7 +2617,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 )
 
             # The model used to generate the response.
-            response_model: Final = _response_field(response_obj, "model")
+            response_model: Final = routed_model_name(
+                _response_field(response_obj, "model"),
+                standard_logging_payload.get("model_group"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # kwargs is untyped
+                decision,
+            )
             if response_model:
                 self.safe_set_attribute(
                     span=span,

@@ -826,6 +826,7 @@ const ExistingEditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
 };
 
 const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = (props) => {
+  const { t } = useTranslation();
   if (props.modelData?.litellm_params?.model?.startsWith("auto_router/switchyard")) {
     return (
       <Dialog
@@ -836,7 +837,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = (props) => {
       >
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Edit Switchyard router</DialogTitle>
+            <DialogTitle>{t("editAutoRouter.editAutoRouterModal.switchyardTitle")}</DialogTitle>
           </DialogHeader>
           <SwitchyardRouterForm
             key={props.modelData.model_info.id}

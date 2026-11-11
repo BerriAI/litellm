@@ -28,6 +28,7 @@ from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Union, cast, get_args
 
+from litellm._internal_context import is_resent_failure
 from litellm._logging import redact_string
 from litellm._uuid import uuid
 
@@ -58,7 +59,6 @@ from litellm.utils import (
     peek_reasoning_summary_aliases,
     reasoning_effort_with_summary_alias,
     strip_reasoning_summary_aliases_from_optional_params,
-    with_reasoning_summary_in_effort,
 )
 
 if TYPE_CHECKING:
@@ -75,7 +75,9 @@ from litellm.constants import (
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
-    raise_if_allowed_tools_tool_choice_unsupported,
+    drops_unsupported_allowed_tools_tool_choice,
+    parse_allowed_tools_tool_choice,
+    raise_if_hosted_tool_choice_unsupported,
 )
 from litellm.litellm_core_utils.asyncify import asyncify, run_async_function
 from litellm.litellm_core_utils.audio_utils.utils import (
@@ -90,6 +92,7 @@ from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, Str
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_litellm_params import (
     AGENTIC_LOOP_CONTROL_KWARGS_KEYS,
+    AGENTIC_LOOP_TOOL_CHOICE_KEY,
     AWS_CREDENTIAL_KWARGS_KEYS,
     OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS,
     PROVIDER_AFFINITY_HEADER_KWARG_KEY,
@@ -154,7 +157,10 @@ from litellm.llms.bedrock.common_utils import (
 from litellm.llms.bedrock_mantle.chat.claude_transformation import bedrock_mantle_chat_config
 from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, http2_enabled
-from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
+from litellm.llms.openai.chat.gpt_reasoning_transformation import (
+    DeferredReasoningDropWarnings,
+    OpenAIGPT5Config,
+)
 from litellm.llms.openai.common_utils import get_openai_credentials
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.vertex_ai.common_utils import (
@@ -225,7 +231,7 @@ from litellm.utils import (
     token_counter as token_counter,  # noqa: PLC0414  # public re-export
 )
 
-from ._logging import verbose_logger
+from ._logging import WarningLogger, verbose_logger
 from .caching.caching import disable_cache, enable_cache, update_cache
 from .litellm_core_utils.core_helpers import (
     as_str_mapping,
@@ -5478,6 +5484,51 @@ def _complete_langflow(ctx: CompletionDispatchContext) -> _CompletionDispatchRes
     )
 
 
+def _responses_bridge_optional_params(
+    optional_params: dict[str, object],  # mutable-ok: completion's optional_params, which the Responses bridge takes
+    summary_alias: object,
+    requested: RequestedReasoningEffort,
+    *,
+    custom_llm_provider: str,
+    model: str,
+    base_model: str | None,
+    api_base: str | None,
+    deployment_model_info: Mapping[str, object] | None,
+    drop_params: bool,
+    additional_drop_params: object,
+) -> dict[str, object]:  # mutable-ok: completion's optional_params, which the Responses bridge takes
+    if isinstance(requested, dict):
+        from litellm.responses.utils import (
+            RefusedReasoningFields,
+            bridge_reasoning,
+            raise_refused_reasoning_fields,
+        )
+
+        bridged_reasoning: Final = bridge_reasoning(
+            requested=requested,
+            effort_kept="reasoning_effort" in optional_params,
+            summary_alias=summary_alias,
+            model=model,
+            base_model=base_model,
+            custom_llm_provider=custom_llm_provider,
+            api_base=api_base,
+            deployment_model_info=deployment_model_info,
+            drop_params=drop_params,
+            additional_drop_params=additional_drop_params,
+        )
+        if isinstance(bridged_reasoning, RefusedReasoningFields):
+            raise_refused_reasoning_fields(bridged_reasoning, model, custom_llm_provider)
+        return {**optional_params, "reasoning_effort": bridged_reasoning}
+    if summary_alias is None:
+        return optional_params
+    kept_effort: Final = optional_params.get("reasoning_effort", requested)
+    if isinstance(kept_effort, dict):
+        return {**optional_params, "reasoning_effort": {**kept_effort, "summary": summary_alias}}
+    if kept_effort is None:
+        return {**optional_params, "reasoning_effort": {"summary": summary_alias}}
+    return {**optional_params, "reasoning_effort": {"effort": kept_effort, "summary": summary_alias}}
+
+
 def _complete_databricks_agent(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     from litellm.llms.databricks.agent.transformation import DatabricksAgentConfig
 
@@ -5512,45 +5563,34 @@ def _responses_bridge_request_params(
     bridges_bedrock: bool,
     resolved_reasoning_effort: RequestedReasoningEffort,
     model: str,
-    base_model: object,
+    base_model: str | None,
     custom_llm_provider: str,
     api_base: str | None,
     deployment_model_info: Mapping[str, object] | None,
     drop_params: bool,
     additional_drop_params: object,
 ) -> tuple[Mapping[str, object], Mapping[str, object]]:
-    from litellm.responses.utils import (
-        RefusedReasoningFields,
-        bridge_reasoning,
-        raise_refused_reasoning_fields,
-    )
-
     bridge_optional_params, bridge_litellm_params = (
         bedrock_responses_bridge_call_params(optional_params, litellm_params, api_base)
         if bridges_bedrock
         else (optional_params, litellm_params)
     )
     stripped_optional_params, rs_val = strip_reasoning_summary_aliases_from_optional_params(bridge_optional_params)
-    if not isinstance(resolved_reasoning_effort, dict):
-        return (
-            with_reasoning_summary_in_effort(stripped_optional_params, resolved_reasoning_effort, rs_val),
-            bridge_litellm_params,
-        )
-    bridged_reasoning: Final = bridge_reasoning(
-        requested=resolved_reasoning_effort,
-        effort_kept="reasoning_effort" in stripped_optional_params,
-        summary_alias=rs_val,
-        model=model,
-        base_model=base_model if isinstance(base_model, str) else None,
-        custom_llm_provider=custom_llm_provider,
-        api_base=api_base,
-        deployment_model_info=deployment_model_info,
-        drop_params=drop_params,
-        additional_drop_params=additional_drop_params,
+    return (
+        _responses_bridge_optional_params(
+            stripped_optional_params,
+            rs_val,
+            resolved_reasoning_effort,
+            custom_llm_provider=custom_llm_provider,
+            model=model,
+            base_model=base_model,
+            api_base=api_base,
+            deployment_model_info=deployment_model_info,
+            drop_params=drop_params,
+            additional_drop_params=additional_drop_params,
+        ),
+        bridge_litellm_params,
     )
-    if isinstance(bridged_reasoning, RefusedReasoningFields):
-        raise_refused_reasoning_fields(bridged_reasoning, model, custom_llm_provider)
-    return {**stripped_optional_params, "reasoning_effort": bridged_reasoning}, bridge_litellm_params
 
 
 @tracer.wrap()
@@ -5662,7 +5702,16 @@ def completion(
     messages = validate_and_fix_openai_messages(messages=messages)
     tools = validate_and_fix_openai_tools(tools=tools)
     # validate tool_choice
-    tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice, model=model)
+    requested_tool_choice: Final = cast(  # cast-ok: widening an untyped dict to object is always sound
+        object, tool_choice
+    )
+    tool_choice = validate_chat_completion_tool_choice(
+        tool_choice=tool_choice,
+        model=model,
+        drop_params=drops_unsupported_params(
+            cast("Mapping[str, object]", kwargs).get("drop_params")  # cast-ok: kwargs is the untyped request dict
+        ),
+    )
     # validate optional params
     stop = validate_openai_optional_params(stop=stop)
     thinking = validate_and_fix_thinking_param(thinking=thinking)
@@ -5869,6 +5918,7 @@ def completion(
             merge_with_first_system=True,
         )
 
+    reasoning_drop_warnings: Final = DeferredReasoningDropWarnings(logger=verbose_logger)
     try:
         if base_url is not None:
             api_base = base_url
@@ -5959,7 +6009,15 @@ def completion(
         if not is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model):
             tools = _drop_anthropic_only_tool_keys(tools=tools)
 
-        raise_if_allowed_tools_tool_choice_unsupported(
+        drops_tool_choice: Final = drops_unsupported_allowed_tools_tool_choice(
+            tool_choice=cast(  # cast-ok: widening an untyped dict to object is always sound, the helper validates it with pydantic
+                object, tool_choice
+            ),
+            custom_llm_provider=custom_llm_provider,
+            model=model,
+            drop_params=drop_unsupported_reasoning,
+        )
+        raise_if_hosted_tool_choice_unsupported(
             tool_choice=cast(  # cast-ok: widening an untyped dict to object is always sound, the helper validates it with pydantic
                 object, tool_choice
             ),
@@ -6082,7 +6140,7 @@ def completion(
             "response_format": response_format,
             "seed": seed,
             "tools": tools,
-            "tool_choice": tool_choice,
+            "tool_choice": None if drops_tool_choice else tool_choice,
             "max_retries": max_retries,
             "logprobs": logprobs,
             "top_logprobs": top_logprobs,
@@ -6117,10 +6175,14 @@ def completion(
         mapping_args: Final = MappingProxyType({**optional_param_args, "reasoning_effort": provider_reasoning_effort})
         mapping_special_params: Final = MappingProxyType(dict(provider_params))
 
-        def optional_params_for_model_info(deployment_info: Mapping[str, object] | None) -> dict[str, object]:
+        def optional_params_for_model_info(
+            deployment_info: Mapping[str, object] | None,
+            reasoning_drop_logger: WarningLogger = verbose_logger,
+        ) -> dict[str, object]:
             return get_optional_params(
                 **mapping_args,
                 model_info=deployment_info,
+                _litellm_reasoning_drop_logger=reasoning_drop_logger,
                 **mapping_special_params,
                 _litellm_responses_api_bridge_allowed=bedrock_responses_bridge_allowed,
             )
@@ -6129,7 +6191,7 @@ def completion(
             _MODEL_INFO_ADAPTER.validate_python(model_info) if isinstance(model_info, dict) else None
         )
         deployment_base_model: Final = base_model if isinstance(base_model, str) else None
-        optional_params = optional_params_for_model_info(validated_model_info)
+        optional_params = optional_params_for_model_info(validated_model_info, reasoning_drop_warnings)
         fakes_stream: Final = partial(
             _completion_fakes_stream,
             model,
@@ -6277,7 +6339,18 @@ def completion(
                 if key in kwargs
             },
         )
-        litellm_params: Final = with_control_options(requested_litellm_params, control_options)
+        litellm_params: Final = with_control_options(
+            {
+                **requested_litellm_params,
+                **(
+                    {AGENTIC_LOOP_TOOL_CHOICE_KEY: requested_tool_choice}
+                    if AGENTIC_LOOP_TOOL_CHOICE_KEY not in kwargs
+                    and parse_allowed_tools_tool_choice(requested_tool_choice) is not None
+                    else {}
+                ),
+            },
+            control_options,
+        )
         affinity_api_base: Final = (
             str(client.base_url)
             if isinstance(client, openai.OpenAI | openai.AsyncOpenAI)
@@ -6315,6 +6388,7 @@ def completion(
         )
         if mock_response is not None or mock_tool_calls or mock_timeout:
             kwargs.pop("mock_timeout", None)  # remove for any fallbacks triggered
+            reasoning_drop_warnings.log_unless_dropped_effort_sent(optional_params)
             return mock_completion(
                 model,
                 messages,
@@ -6386,14 +6460,14 @@ def completion(
                 bridges_bedrock=bedrock_bridges_to_responses,
                 resolved_reasoning_effort=resolved_reasoning_effort,
                 model=model,
-                base_model=base_model,
+                base_model=deployment_base_model,
                 custom_llm_provider=custom_llm_provider,
                 api_base=api_base,
                 deployment_model_info=typed_deployment_model_info,
                 drop_params=drop_unsupported_reasoning,
                 additional_drop_params=routing_kwargs.get("additional_drop_params"),
             )
-
+            reasoning_drop_warnings.log_unless_dropped_effort_sent(bridged_optional_params)
             return responses_api_bridge.completion(  # pyright: ignore[reportReturnType]  # bridge returns a coroutine on the acompletion path; awaited by the async caller
                 model=model,
                 messages=messages,
@@ -6412,7 +6486,9 @@ def completion(
                 stream=stream,
                 cache=kwargs.get("cache"),
             )
-        elif (custom_llm_provider == "openai" and OpenAIGPT5Config.is_model_gpt_5_model(model)) or (
+
+        reasoning_drop_warnings.log_unless_dropped_effort_sent(optional_params)
+        if (custom_llm_provider == "openai" and OpenAIGPT5Config.is_model_gpt_5_model(model)) or (
             custom_llm_provider == "azure"
             and litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(_azure_detection_model)
         ):
@@ -6676,6 +6752,7 @@ def completion(
             raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
         return response
     except Exception as e:
+        reasoning_drop_warnings.log_unless_dropped_effort_sent(MappingProxyType({}))
         ## Map to OpenAI Exception
         raise exception_type(
             model=model,
@@ -6684,6 +6761,10 @@ def completion(
             completion_kwargs=args,
             extra_kwargs=kwargs,
         )
+
+
+def _is_not_resent_failure(error: BaseException) -> bool:
+    return isinstance(error, Exception) and not is_resent_failure(error)
 
 
 def completion_with_retries(*args, **kwargs):
@@ -6705,10 +6786,15 @@ def completion_with_retries(*args, **kwargs):
         retryer = tenacity.Retrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
-        retryer = tenacity.Retrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
+        retryer = tenacity.Retrying(
+            stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
+            reraise=True,
+        )
     return retryer(original_function, *args, **kwargs)
 
 
@@ -6731,10 +6817,15 @@ async def acompletion_with_retries(*args, **kwargs):
         retryer = tenacity.AsyncRetrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
-        retryer = tenacity.AsyncRetrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
+        retryer = tenacity.AsyncRetrying(
+            stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
+            reraise=True,
+        )
     return await retryer(original_function, *args, **kwargs)
 
 
@@ -6759,10 +6850,15 @@ def responses_with_retries(*args, **kwargs):
         retryer = tenacity.Retrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
-        retryer = tenacity.Retrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
+        retryer = tenacity.Retrying(
+            stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
+            reraise=True,
+        )
     return retryer(original_function, *args, **kwargs)
 
 
@@ -6786,10 +6882,15 @@ async def aresponses_with_retries(*args, **kwargs):
         retryer = tenacity.AsyncRetrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
-        retryer = tenacity.AsyncRetrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
+        retryer = tenacity.AsyncRetrying(
+            stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
+            reraise=True,
+        )
     return await retryer(original_function, *args, **kwargs)
 
 

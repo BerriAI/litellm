@@ -25,28 +25,26 @@ pub struct HostServices {
 // litellm/constants.py REDIS_CLUSTER_HEALTH_CHECK_INTERVAL, the default _redis.py sets for cluster clients only
 const CLUSTER_HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(25);
 
+/// A breaker whose transitions reach `events`, for every client that talks to one Redis.
+pub(crate) fn breaker(config: BreakerConfig, events: Option<Arc<dyn RedisEvents>>) -> Breaker {
+    Breaker::new(
+        config,
+        Box::new(move |transition| {
+            if let Some(events) = &events {
+                events.breaker(transition);
+            }
+        }),
+    )
+}
+
 pub fn connect(
     resolved: Resolution,
     host: HostServices,
-    breaker: Option<BreakerConfig>,
+    breaker: Option<Breaker>,
 ) -> Result<RedisClient, Error> {
-    if rustls::crypto::CryptoProvider::get_default().is_none() {
-        let _ = rustls::crypto::ring::default_provider().install_default();
-    }
     tracing::info!(target = ?resolved.target, namespace = ?resolved.namespace, "redis client configured");
     let credentials = credentials(resolved.auth, &host)?;
     let events = host.events;
-    let breaker = breaker.map(|config| {
-        let observer = events.clone();
-        Breaker::new(
-            config,
-            Box::new(move |transition| {
-                if let Some(events) = &observer {
-                    events.breaker(transition);
-                }
-            }),
-        )
-    });
     let health_check = health_check(&resolved.target, resolved.health_check);
     Ok(RedisClient::new(RedisConfig {
         target: resolved.target,

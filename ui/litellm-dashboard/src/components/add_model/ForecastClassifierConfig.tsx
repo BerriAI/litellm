@@ -32,6 +32,8 @@ import { activeTierRows } from "./tier_rows";
 import { setTierModels } from "./tier_set_actions";
 import { tierRowLabel, setTierModelParam, setTierModelReasoningEffort } from "./complexity_router_tiers";
 
+const CALIBRATION_ROLES = ["efficient", "capable"] as const;
+
 interface Props {
   value: ComplexityRouterConfigValue;
   onChange: (value: ComplexityRouterConfigValue) => void;
@@ -401,7 +403,7 @@ const ForecastClassifierConfig = ({ value, onChange, modelOptions, effortOptions
               )}
               {!isCapability &&
                 fuse.calibration &&
-                (["efficient", "capable"] as const).map((role) => (
+                CALIBRATION_ROLES.map((role) => (
                   <CalibrationFields
                     key={role}
                     label={

@@ -24,6 +24,46 @@ from litellm.llms.vertex_ai.image_edit.vertex_imagen_transformation import (
 from litellm.types.router import GenericLiteLLMParams
 
 
+@pytest.mark.parametrize("traffic_type", ("ON_DEMAND_PRIORITY", "", None))
+def test_vertex_gemini_edit_preserves_usage_and_traffic_type(traffic_type: str | None) -> None:
+    response: Final = VertexAIGeminiImageEditConfig().transform_image_edit_response(
+        model="gemini-3.1-flash-image",
+        raw_response=httpx.Response(
+            200,
+            json={
+                "candidates": [],
+                "usageMetadata": {
+                    "promptTokenCount": 1131,
+                    "candidatesTokenCount": 0,
+                    "totalTokenCount": 1131,
+                    "promptTokensDetails": [
+                        {"modality": "TEXT", "tokenCount": 7},
+                        {"modality": "IMAGE", "tokenCount": 1124},
+                    ],
+                    **({"trafficType": traffic_type} if traffic_type is not None else {}),
+                },
+            },
+        ),
+        logging_obj=Logging(
+            model="gemini-3.1-flash-image",
+            messages=[],
+            stream=False,
+            call_type="image_edit",
+            start_time=datetime(2025, 1, 1),
+            litellm_call_id="edit",
+            function_id="edit",
+        ),
+    )
+    assert response.usage is not None
+    assert response.usage.input_tokens == 1131
+    assert response.usage.output_tokens == 0
+    assert response.usage.input_tokens_details.text_tokens == 7
+    assert response.usage.input_tokens_details.image_tokens == 1124
+    assert response.hidden_params.get("provider_specific_fields", {}) == (
+        {"traffic_type": traffic_type} if traffic_type else {}
+    )
+
+
 @pytest.mark.parametrize("size", ("1536x1024", "1024x1536", "3072x2048", "256x256", "512x512", "4096x4096"))
 @pytest.mark.parametrize("model", ("gemini-3.1-flash-image", "gemini-3-pro-image", "gemini-3.1-flash-lite-image"))
 def test_vertex_gemini_edit_size_reaches_request(size: str, model: str) -> None:
@@ -231,10 +271,10 @@ class TestVertexAIGeminiImageEditTransformation:
         )
 
     def test_transform_image_edit_request_without_image_raises(self) -> None:
-        """Test that missing image raises ValueError"""
+        """Test that missing image raises BadRequestError with 400 status code"""
         optional_params = {}
 
-        with pytest.raises(ValueError, match="requires at least one image"):
+        with pytest.raises(litellm.BadRequestError, match="requires at least one image") as exc_info:
             self.config.transform_image_edit_request(
                 model=self.model,
                 prompt=self.prompt,
@@ -243,6 +283,7 @@ class TestVertexAIGeminiImageEditTransformation:
                 litellm_params=MagicMock(),
                 headers={},
             )
+        assert exc_info.value.status_code == 400
 
     def test_validate_environment_with_litellm_params(self) -> None:
         """Test validate_environment uses credentials from litellm_params"""

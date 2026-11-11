@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, Final, TypeVar
 
 from typing_extensions import NotRequired, ReadOnly, TypedDict
@@ -114,7 +114,7 @@ class RAGQuery:
     @staticmethod
     def add_search_results_to_response(
         response: ModelResponse,
-        search_results: VectorStoreSearchResponse,
+        search_results: Mapping[str, object],
         rerank_results: object = None,
     ) -> ModelResponse:
         """
