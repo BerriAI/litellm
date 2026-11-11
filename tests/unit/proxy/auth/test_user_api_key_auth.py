@@ -1294,6 +1294,52 @@ def test_get_model_from_request(route, request_data, expected_model):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route_template",
+    [
+        "/v1beta/models/{model}:generateContent",
+        "/models/{model}:streamGenerateContent",
+        "/openai/deployments/{model}/images/generations",
+        "/openai/deployments/{model}/images/edits",
+    ],
+)
+@pytest.mark.parametrize("body", [{"model": "cheap-model"}, {"target_model_names": ["cheap-model"]}])
+async def test_key_model_allowlist_applies_to_the_model_selected_by_the_url(
+    monkeypatch, route_template: str, body: dict[str, object]
+):
+    from litellm.proxy._types import ProxyErrorTypes
+    from litellm.proxy.auth.user_api_key_auth import enforce_key_and_fallback_model_access
+
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", None)
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"model": f"openai/{name}", "api_key": "sk-fake"}}
+            for name in ("cheap-model", "premium-model")
+        ]
+    )
+    token: Final = UserAPIKeyAuth(models=["cheap-model"])
+
+    async def authorize(url_model: str) -> None:
+        route: Final = route_template.format(model=url_model)
+        request: Final = StarletteRequest(
+            {"type": "http", "method": "POST", "path": route, "headers": [], "query_string": b""}
+        )
+        await enforce_key_and_fallback_model_access(
+            valid_token=token,
+            request_data=dict(body),
+            route=route,
+            request=request,
+            llm_model_list=router.model_list,
+            llm_router=router,
+        )
+
+    await authorize("cheap-model")
+    with pytest.raises(ProxyException) as exc_info:
+        await authorize("premium-model")
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+
+
+@pytest.mark.asyncio
 async def test_jwt_non_admin_team_route_access(monkeypatch):
     """
     Test that a non-admin JWT user cannot access team management routes

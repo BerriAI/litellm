@@ -1379,6 +1379,42 @@ def test_get_model_from_request_supports_google_model_names_with_slashes():
     )
 
 
+_URL_SELECTED_MODEL_ROUTES: Final = (
+    ("/v1beta/models/premium-model:generateContent", "premium-model"),
+    ("/models/premium-model:generateContent", "premium-model"),
+    ("/v1beta/models/premium-model:streamGenerateContent", "premium-model"),
+    ("/models/provider/premium-model:7b:streamGenerateContent", "provider/premium-model:7b"),
+    ("/openai/deployments/premium-model/images/generations", "premium-model"),
+    ("/openai/deployments/provider/premium-model/images/edits", "provider/premium-model"),
+)
+
+
+@pytest.mark.parametrize("route, url_model", _URL_SELECTED_MODEL_ROUTES)
+@pytest.mark.parametrize(
+    "request_data",
+    [
+        {"model": "cheap-model"},
+        {"target_model_names": ["cheap-model"]},
+        {"model": "cheap-model", "target_model_names": "cheap-model"},
+    ],
+)
+def test_get_model_from_request_checks_the_url_model_on_routes_served_from_the_url(
+    route: str, url_model: str, request_data: dict[str, object]
+):
+    assert get_model_from_request(request_data=request_data, route=route) == url_model
+
+
+@pytest.mark.parametrize("route", ["/v1/images/generations", "/images/edits", "/v1/chat/completions"])
+def test_get_model_from_request_keeps_the_body_model_where_the_url_names_none(route: str):
+    assert get_model_from_request(request_data={"model": "cheap-model"}, route=route) == "cheap-model"
+
+
+@pytest.mark.parametrize("route, url_model", _URL_SELECTED_MODEL_ROUTES)
+def test_get_model_from_request_skips_url_model_on_configured_pass_through(route: str, url_model: str):
+    request: Final = _request_dispatched_to(_pass_through_endpoint())
+    assert get_model_from_request(request_data={"model": url_model}, route=route, request=request) is None
+
+
 def test_get_model_from_request_vertex_passthrough_still_works():
     route = "/vertex_ai/v1/projects/p/locations/l/publishers/google/models/gemini-1.5-pro:generateContent"
     assert get_model_from_request(request_data={}, route=route) == "gemini-1.5-pro"

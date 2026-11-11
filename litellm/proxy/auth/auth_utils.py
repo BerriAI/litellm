@@ -2690,6 +2690,10 @@ def get_model_from_request(
     if request_dispatched_to_pass_through_endpoint(request):
         return None
 
+    url_selected_model: Final = _url_selected_model(route)
+    if url_selected_model is not None:
+        return url_selected_model
+
     candidates: Final = _extract_model_candidates_from_request(
         request_data=request_data,
         route=route,
@@ -2717,6 +2721,16 @@ def get_model_from_request(
         return model if nvidia_nim_model is None else nvidia_nim_model
 
     return model
+
+
+_URL_SELECTED_MODEL_ROUTES: Final = (
+    re.compile(r"^(?:/v1beta)?/models/(.+):(?:generateContent|streamGenerateContent)$"),
+    re.compile(r"^/openai/deployments/(.+)/images/(?:generations|edits)$"),
+)
+
+
+def _url_selected_model(route: str) -> str | None:
+    return next((match.group(1) for pattern in _URL_SELECTED_MODEL_ROUTES if (match := pattern.match(route))), None)
 
 
 def _model_from_route_path(route: str) -> str | None:
