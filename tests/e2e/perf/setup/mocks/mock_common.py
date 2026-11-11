@@ -5,7 +5,7 @@ cap, a tool call when tools were offered, in the provider's own wire format with
 event order and chunk sizes, so the gateway parses, prices and streams it as it would the real thing. The
 model id stays a real one (`gpt-6-luna`, `anthropic.claude-sonnet-5`) so every name-based branch in the
 gateway runs, and one mock pod per provider serves any number of deployments. How long a mock waits before answering is the one setting a case
-controls, `POST /mock/latency {"seconds": 1.0, "jitter_seconds": 0.25}`, set by the test's setup directly
+controls, `POST /mock/latency {"seconds": 1.0, "jitter_seconds": 0.25, "token_interval_seconds": 0.0125}`, set by the test's setup directly
 on the pod, never through the gateway. The wait, the reply's size and its ids are pure functions of the request marker (`perfreq-000123-n`, put in the prompt by the plan
 generator), so the test can join what each provider received against what each client saw.
 """
@@ -91,6 +91,7 @@ class MockRequest(BaseModel):
     output_tokens: int
     text_sha1: str
     delay_s: float
+    generation_s: float = 0.0
 
 
 class MockRequestsResponse(BaseModel):
@@ -113,6 +114,8 @@ class Latency(BaseModel):
 
     seconds: float = Field(default=0.0, ge=0.0)
     jitter_seconds: float = Field(default=0.0, ge=0.0)
+    token_interval_seconds: float = Field(default=0.0, ge=0.0)
+    """Seconds per output token the provider spends generating, after the first byte."""
 
     def for_seed(self, seed: str) -> float:
         return max(0.0, self.seconds + self.jitter_seconds * (2 * unit(f"{seed}:latency") - 1))
@@ -127,6 +130,7 @@ class Decision:
     route: Route
     delay_s: float
     """Seconds before the first byte, what `gateway_added_seconds` subtracts from the client's time."""
+    generation_s: float
 
     @property
     def seed(self) -> str:
@@ -160,7 +164,13 @@ class RequestLog:
         reply: Final = reply_for(
             provider=self._provider, body=body, seed=seed, model=model, prompt_tokens=token_count(prompt_text)
         )
-        decision: Final = Decision(marker=marker, reply=reply, route=route, delay_s=self._latency.for_seed(seed))
+        decision: Final = Decision(
+            marker=marker,
+            reply=reply,
+            route=route,
+            delay_s=self._latency.for_seed(seed),
+            generation_s=reply.output_tokens * self._latency.token_interval_seconds,
+        )
         self._entries.append(
             MockRequest(
                 provider=self._provider,
@@ -170,6 +180,7 @@ class RequestLog:
                 output_tokens=reply.output_tokens,
                 text_sha1=hashlib.sha1(reply.text.encode()).hexdigest(),
                 delay_s=decision.delay_s,
+                generation_s=decision.generation_s,
             )
         )
         return decision
@@ -184,9 +195,10 @@ class RequestLog:
 
 
 async def json_reply(decision: Decision) -> Response:
-    """The generated body after the case's latency."""
-    if decision.delay_s > 0:
-        await asyncio.sleep(decision.delay_s)
+    """The generated body after the case's latency and the reply's generation time."""
+    wait_s: Final = decision.delay_s + decision.generation_s
+    if wait_s > 0:
+        await asyncio.sleep(wait_s)
     return Response(
         content=render_json(decision.reply, decision.route),
         media_type="application/json",
@@ -195,9 +207,9 @@ async def json_reply(decision: Decision) -> Response:
 
 
 def stream_reply(decision: Decision, media_type: str) -> Response:
-    """The generated chunks back to back after the case's latency."""
+    """The generated chunks after the case's latency, paced over the reply's generation time."""
     return StreamingResponse(
-        chunks_after(render_chunks(decision.reply, decision.route), decision.delay_s),
+        chunks_after(render_chunks(decision.reply, decision.route), decision.delay_s, decision.generation_s),
         media_type=media_type,
         headers=decision.headers,
     )

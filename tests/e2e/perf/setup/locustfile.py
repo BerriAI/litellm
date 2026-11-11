@@ -329,6 +329,7 @@ class PlanUser(FastHttpUser):
                 response_id=identifier,
                 litellm_overhead_ms=_ms_header(response, "x-litellm-overhead-duration-ms"),
                 litellm_response_ms=_ms_header(response, "x-litellm-response-duration-ms"),
+                litellm_rust=response is not None and _header(response, "x-litellm-rust") == "true",
             )
         )
         if _PROGRESS.drained:

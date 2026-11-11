@@ -174,9 +174,14 @@ def grouped(events: Sequence[bytes], target_bytes: int) -> tuple[bytes, ...]:
     return tuple(b"".join(event for _, event in group) for _, group in groupby(keyed, key=lambda pair: pair[0]))
 
 
-async def chunks_after(chunks: Sequence[bytes], delay_s: float) -> AsyncIterator[bytes]:
-    """The chunks back to back once `delay_s` has passed."""
+async def chunks_after(chunks: Sequence[bytes], delay_s: float, generation_s: float = 0.0) -> AsyncIterator[bytes]:
+    """The chunks once `delay_s` has passed, `generation_s` spread evenly over the gaps between them."""
     if delay_s > 0:
         await asyncio.sleep(delay_s)
-    for chunk in chunks:
+    gap_s: Final = generation_s / max(1, len(chunks) - 1)
+    for index, chunk in enumerate(chunks):
+        if index and gap_s > 0:
+            await asyncio.sleep(gap_s)
         yield chunk
+    if len(chunks) == 1 and generation_s > 0:
+        await asyncio.sleep(generation_s)

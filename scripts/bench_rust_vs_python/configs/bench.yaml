@@ -1,0 +1,26 @@
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+
+litellm_settings:
+  callbacks:
+    - s3_v2
+    - prometheus
+  s3_callback_params:
+    s3_bucket_name: bench-logs
+    s3_region_name: us-east-1
+    s3_endpoint_url: os.environ/BENCH_S3_URL
+    s3_aws_access_key_id: bench
+    s3_aws_secret_access_key: bench
+  require_auth_for_metrics_endpoint: false
+
+model_list:
+  - model_name: claude-sonnet-5-5
+    litellm_params:
+      model: anthropic/claude-sonnet-5-5
+      api_base: os.environ/BENCH_MOCK_ANTHROPIC_URL
+      api_key: bench-mock-not-checked
+  - model_name: gpt-6.1-sol
+    litellm_params:
+      model: openai/gpt-6.1-sol
+      api_base: os.environ/BENCH_MOCK_OPENAI_URL
+      api_key: bench-mock-not-checked
