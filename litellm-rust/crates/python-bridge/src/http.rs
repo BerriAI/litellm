@@ -112,19 +112,22 @@ pub(crate) fn call_config(
     Ok(resolved(py, settings))
 }
 
-/// The client config for a value of `litellm.rust_bridge.host.settings.http_settings()` the caller handed in, under
-/// the process environment. `None` reads the environment alone
 pub(crate) fn settings_config(
     py: Python<'_>,
-    http_settings: Option<&Bound<'_, PyAny>>,
+    use_http_settings: bool,
 ) -> PyResult<HttpClientConfig> {
-    let configured = match http_settings {
-        Some(value) => configured(&PythonSettings::Http.snapshot(value.clone()))?,
+    let snapshot = if use_http_settings {
+        PythonSettings::Http.read_or_unset(py)?
+    } else {
+        None
+    };
+    let layer = match snapshot {
+        Some(snapshot) => configured(&snapshot)?,
         None => HttpSettingsLayer::default(),
     };
     let settings = HttpSettings::from_layers([
         HttpSettingsLayer::from_environment(&ProcessEnvironment),
-        configured,
+        layer,
     ]);
     Ok(resolved(py, settings))
 }

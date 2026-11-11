@@ -27922,7 +27922,7 @@ export interface components {
             router_type: string;
             /**
              * Saved Spend
-             * @description Recorded historical savings plus newer estimates, net of classifier cost
+             * @description Recorded historical savings plus newer estimates, net of classifier cost. None until a turn is estimated. A turn that starts within the longest prompt-cache TTL its breakpoints use (5 minutes, or 1 hour with a 1h breakpoint) of the session's first observed turn, or of the last turn whose observation was incomplete, is not estimated, because the baseline's cache state is unknown then. Two kinds of turn are still estimated inside that window: turns that took the identical baseline path, and turns whose whole cached prefix the session had already written
              */
             saved_spend: number | null;
             /**
@@ -27947,6 +27947,11 @@ export interface components {
              * @description What the session's routed traffic actually cost, classifier calls included
              */
             spend: number;
+            /**
+             * Total Spend
+             * @description Spend billed to this key under the session id, routed or not, from a shared Redis counter whose one-hour expiry every billed request resets. None without a shared Redis or once the counter expired. A best-effort figure, not a lifetime total: a session idle past the expiry restarts from zero, and a failed Redis write, eviction or flush drops spend without notice
+             */
+            total_spend?: number | null;
             /**
              * Turns
              * @description Auto-routed turns the rollup has recorded for this session so far
