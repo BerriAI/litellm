@@ -1503,7 +1503,7 @@ def _response_time_ms_for_cost(
 def _model_is_none_error(completion_response_text: str, litellm_logging_obj: LitellmLoggingObject | None) -> ValueError:
     message: Final = "Model is None and does not exist in passed completion_response."
     model_call_details: Final = {} if litellm_logging_obj is None else litellm_logging_obj.model_call_details
-    if should_redact_message_logging(model_call_details):
+    if should_redact_message_logging(model_call_details) or model_call_details.get("query_image") is not None:
         return ValueError(message)
     return ValueError(f"{message} Passed completion_response={completion_response_text}, model=None")
 
