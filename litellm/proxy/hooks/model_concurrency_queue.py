@@ -16,10 +16,19 @@ Example:
         gpt-4o:
           limit: 5
           queue_timeout_seconds: 60
+          max_queue_size: 100
 
 The key is the model group the client asks for (the same name it would pass as
 ``model``), not the deployment. Every HTTP request holds one slot for its whole
 life, including the full stream of a streaming response.
+
+The wait is bounded twice. ``queue_timeout_seconds`` (or the request's own
+remaining ``total_timeout``, if shorter) limits how long one request waits, and
+``max_queue_size`` limits how many requests wait at all. A request that finds
+the queue full gets a 429 immediately, so a saturated group cannot pin an
+unbounded number of tasks and Redis polls on the worker. ``max_queue_size``
+counts waiters per process, not across replicas, because the resource it
+protects is per process.
 """
 
 from __future__ import annotations
@@ -38,6 +47,7 @@ from litellm.redis.stores.rate_limits import RateLimitScope
 MODEL_CONCURRENCY_SETTING_KEY: Final = "model_concurrency"
 MODEL_CONCURRENCY_DESCRIPTOR_KEY: Final = "model_concurrency"
 MODEL_CONCURRENCY_QUEUE_POLL_INTERVAL_SECONDS: Final = 0.1
+DEFAULT_MODEL_CONCURRENCY_MAX_QUEUE_SIZE: Final = 100
 
 
 class ModelConcurrencyLimit(BaseModel):
@@ -45,6 +55,32 @@ class ModelConcurrencyLimit(BaseModel):
 
     limit: int = Field(gt=0)
     queue_timeout_seconds: float = Field(default=60.0, ge=0)
+    max_queue_size: int = Field(default=DEFAULT_MODEL_CONCURRENCY_MAX_QUEUE_SIZE, ge=1)
+
+
+class ModelConcurrencyQueueAdmission:
+    """Bounds waiters per process, where the cost of a waiter is paid.
+
+    A Redis-wide cap would throttle an unshared resource and would need a TTL
+    reaper to survive a worker dying mid-wait.
+    """
+
+    def __init__(self) -> None:
+        self._waiters: dict[str, int] = {}
+
+    def try_enter(self, model_group: str, max_queue_size: int) -> bool:
+        waiters: Final = self._waiters.get(model_group, 0)
+        if waiters >= max_queue_size:
+            return False
+        self._waiters[model_group] = waiters + 1
+        return True
+
+    def leave(self, model_group: str) -> None:
+        waiters: Final = self._waiters.get(model_group, 0)
+        if waiters <= 1:
+            self._waiters.pop(model_group, None)
+        else:
+            self._waiters[model_group] = waiters - 1
 
 
 @dataclass(frozen=True, slots=True)
