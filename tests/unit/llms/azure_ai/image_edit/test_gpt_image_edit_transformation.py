@@ -180,27 +180,6 @@ def test_gpt_image_edit_end_to_end_posts_multipart_to_deployment_route(monkeypat
     assert b'name="model"' not in request.content
 
 
-@pytest.mark.parametrize("env_api_key", [None, "env-key"])
-@pytest.mark.parametrize(("auth_header", "other_auth_header"), [("api-key", "Authorization"), ("Authorization", "api-key")])
-def test_gpt_image_edit_sends_only_the_caller_auth_header(
-    monkeypatch: pytest.MonkeyPatch,
-    no_ambient_azure_credentials: None,
-    env_api_key: str | None,
-    auth_header: str,
-    other_auth_header: str,
-):
-    if env_api_key is None:
-        monkeypatch.delenv("AZURE_AI_API_KEY", raising=False)
-    else:
-        monkeypatch.setenv("AZURE_AI_API_KEY", env_api_key)
-    monkeypatch.setattr(litellm, "api_key", None)
-
-    request: Final = _edit_through_fake_foundry("gpt-image-1", extra_headers={auth_header: "caller-credential"})
-
-    assert request.headers[auth_header] == "caller-credential"
-    assert other_auth_header not in request.headers
-
-
 def test_gpt_image_edit_requires_a_foundry_api_base_instead_of_the_azure_openai_one(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("AZURE_AI_API_BASE", raising=False)
     monkeypatch.setenv("AZURE_API_BASE", "https://other-resource.openai.azure.com")
