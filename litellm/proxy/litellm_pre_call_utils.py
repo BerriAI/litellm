@@ -332,8 +332,10 @@ from litellm.types.router import BaggageMappedTagsStamp, holds_api_key_secret_re
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
     API_KEY_SECRET_REFERENCE_REJECTION,
+    BAGGAGE_METADATA_KEYS_VAR,
     CAPTURE_MESSAGE_CONTENT_VAR,
     EXCLUDED_SERVICES_VAR,
+    OTEL_DESTINATION_VARS,
     CustomPricingLiteLLMParams,
     LlmProviders,
     ProviderSpecificHeader,
@@ -342,7 +344,7 @@ from litellm.types.utils import (
     SupportedCacheControls,
 )
 
-_DESTINATION_ONLY_CALLBACK_VARS: Final[frozenset[str]] = frozenset({CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_VAR})
+_DESTINATION_ONLY_CALLBACK_VARS: Final[frozenset[str]] = frozenset(OTEL_DESTINATION_VARS)
 
 _CALLBACK_CREDENTIAL_KEYS: Final = frozenset(StandardCallbackDynamicParams.__annotations__) | frozenset(
     {TRUSTED_CALLBACK_VARS_FIELD}
@@ -1479,6 +1481,7 @@ def resolve_tenant_otel_destinations(
 def _tenant_destination(
     name: str, callbacks: Sequence[AddTeamCallback], service_name: str | None
 ) -> "OtelDestination | None":
+    from litellm.integrations.otel.model.baggage import parse_destination_metadata_keys
     from litellm.integrations.otel.model.config import parse_capture_message_content, parse_excluded_services
     from litellm.integrations.otel.presets.destinations import destination_for
 
@@ -1495,6 +1498,7 @@ def _tenant_destination(
         service_name,
         parse_capture_message_content(callback_vars.get(CAPTURE_MESSAGE_CONTENT_VAR)),
         parse_excluded_services(callback_vars.get(EXCLUDED_SERVICES_VAR)),
+        parse_destination_metadata_keys(callback_vars.get(BAGGAGE_METADATA_KEYS_VAR)),
     )
 
 
