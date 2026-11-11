@@ -4,7 +4,8 @@ use crate::compatibility::python_manager_string;
 use litellm_core_utils::{serde_compat::parse_str_bool, settings::Lookup};
 
 use crate::state::{LookupTarget, normalize_secret_name};
-use crate::{Error, OidcResolver, Secret, SecretManagerState, SecretValue};
+use crate::{Error, OidcResolver, Secret, SecretManagerState};
+use litellm_secret_value::SecretValue;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum FailurePolicy {

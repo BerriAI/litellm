@@ -1,3 +1,4 @@
+import asyncio
 import gc
 import importlib
 import inspect
@@ -30,7 +31,7 @@ from uvicorn.importer import import_from_string
 
 import litellm
 from litellm._logging import turn_on_json
-from litellm.constants import GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS
+from litellm.constants import DEFAULT_MAX_REQUEST_HEADER_SIZE, GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS
 from litellm.proxy import proxy_cli
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers, run_server
 from litellm.proxy.shutdown.graceful_shutdown_manager import DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT
@@ -39,10 +40,112 @@ from litellm.proxy.shutdown.graceful_shutdown_manager import DEFAULT_GRACEFUL_SH
 @pytest.fixture(autouse=True)
 def fork_reservation():
     """Reserving is irreversible: it would forbid native routes in this pytest worker for good"""
-    with patch(  # test-quality-ok: process-global native state, a real reservation would poison every later test in the worker
-        "litellm.rust_bridge.fork_guard.reserve_process_for_forking"
-    ) as reserve:
+    with (
+        patch(  # test-quality-ok: process-global native state, a real reservation would poison every later test in the worker
+            "litellm.rust_bridge.fork_guard.reserve_process_for_forking"
+        ) as reserve
+    ):
         yield reserve
+
+
+@pytest.mark.parametrize(
+    ("cli_value", "env_value", "expected"),
+    [(None, None, None), (None, "131072", 131072), ("65536", "131072", 65536)],
+)
+def test_max_request_header_size_cli_precedence(
+    monkeypatch: pytest.MonkeyPatch, cli_value: str | None, env_value: str | None, expected: int | None
+) -> None:
+    monkeypatch.delenv("MAX_REQUEST_HEADER_SIZE", raising=False)
+    if env_value is not None:
+        monkeypatch.setenv("MAX_REQUEST_HEADER_SIZE", env_value)
+    args: Final = [] if cli_value is None else ["--max_request_header_size", cli_value]
+    with run_server.make_context("litellm", args) as context:
+        assert context.params["max_request_header_size"] == expected
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "invalid"])
+@pytest.mark.parametrize("source", ["cli", "env"])
+def test_max_request_header_size_rejects_invalid_values(
+    monkeypatch: pytest.MonkeyPatch, value: str, source: str
+) -> None:
+    monkeypatch.delenv("MAX_REQUEST_HEADER_SIZE", raising=False)
+    if source == "env":
+        monkeypatch.setenv("MAX_REQUEST_HEADER_SIZE", value)
+    args: Final = ["--max_request_header_size", value] if source == "cli" else []
+    with pytest.raises(click.BadParameter):
+        run_server.make_context("litellm", args)
+
+
+def _request_header_test_config(server: str, limit: int | None) -> uvicorn.Config:
+    from starlette.responses import PlainTextResponse
+
+    app: Final = PlainTextResponse("ok")
+    if server == "uvicorn":
+        args: Final = ProxyInitializationHelpers.get_default_unvicorn_init_args(
+            "127.0.0.1", 4000, max_request_header_size=limit
+        )
+        return uvicorn.Config(**{**args, "app": app, "log_config": None})
+
+    import gunicorn.config
+    import gunicorn.glogging
+
+    from litellm.proxy.shutdown.graceful_uvicorn_worker import build_graceful_shutdown_uvicorn_worker
+
+    gunicorn_config: Final = gunicorn.config.Config()
+    worker: Final = build_graceful_shutdown_uvicorn_worker(7.5, limit)(
+        0, os.getpid(), [], MagicMock(), 30, gunicorn_config, gunicorn.glogging.Logger(gunicorn_config)
+    )
+    worker.config.app = app
+    return worker.config
+
+
+@pytest.mark.parametrize("server", ["uvicorn", "gunicorn"])
+@pytest.mark.parametrize("limit", [None, DEFAULT_MAX_REQUEST_HEADER_SIZE, 128 * 1024])
+def test_request_header_size_preserves_parser_selection(server: str, limit: int | None) -> None:
+    config: Final = _request_header_test_config(server, limit)
+    assert config.http == "auto"
+    assert config.h11_max_incomplete_event_size == (limit if limit is not None else DEFAULT_MAX_REQUEST_HEADER_SIZE)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("server", ["uvicorn", "gunicorn"])
+@pytest.mark.parametrize("parser", ["h11", "httptools"])
+@pytest.mark.parametrize(
+    ("limit", "header_bytes", "expected_status"),
+    [(16384, 16384, 200), (16384, 16896, 400), (16384, 39936, 400), (131072, 39936, 200), (131072, 131073, 400)],
+)
+async def test_segmented_request_headers(
+    monkeypatch: pytest.MonkeyPatch, server: str, parser: str, limit: int, header_bytes: int, expected_status: int
+) -> None:
+    from uvicorn.server import ServerState
+
+    from uvicorn.protocols.http.h11_impl import H11Protocol
+    from uvicorn.protocols.http.httptools_impl import HttpToolsProtocol
+
+    selected_protocol: Final = H11Protocol if parser == "h11" else HttpToolsProtocol
+    monkeypatch.setattr("uvicorn.protocols.http.auto.AutoHTTPProtocol", selected_protocol)
+    config: Final = _request_header_test_config(server, limit)
+    config.load()
+    assert config.http_protocol_class is selected_protocol
+    protocol: Final = config.http_protocol_class(config, ServerState(), {}, _loop=asyncio.get_running_loop())
+    transport: Final = MagicMock(spec=asyncio.Transport)
+    transport.get_extra_info.return_value = None
+    transport.is_closing.return_value = False
+    protocol.connection_made(transport)
+    prefix: Final = b"GET /health/liveliness HTTP/1.1\r\nHost: localhost\r\nX-Large: "
+    pending_headers: Final = prefix + b"x" * (header_bytes - len(prefix))
+    try:
+        for offset in range(0, len(pending_headers), 4096):
+            protocol.data_received(pending_headers[offset : offset + 4096])
+            if transport.close.called:
+                break
+        if not transport.close.called:
+            protocol.data_received(b"\r\n\r\n")
+        await asyncio.gather(*protocol.tasks)
+        response: Final = b"".join(call.args[0] for call in transport.write.call_args_list)
+        assert response.startswith(f"HTTP/1.1 {expected_status if parser == 'h11' else 200} ".encode())
+    finally:
+        protocol.connection_lost(None)
 
 
 @pytest.mark.xdist_group("proxy_cli")
@@ -1550,6 +1653,7 @@ class TestProxyInitializationHelpers:
                 log_config=None,
                 keepalive_timeout=30,
                 timeout_worker_healthcheck=None,
+                max_request_header_size=None,
             )
             mock_uvicorn_run.assert_called_once()
 
@@ -1626,6 +1730,7 @@ class TestProxyInitializationHelpers:
                 log_config=None,
                 keepalive_timeout=None,
                 timeout_worker_healthcheck=15,
+                max_request_header_size=None,
             )
 
     @patch("uvicorn.run")
@@ -2092,7 +2197,10 @@ class TestProxyInitializationHelpers:
         assert captured["options"]["max_requests_jitter"] == 50
 
     @pytest.mark.skipif(os.name == "nt", reason="gunicorn server path skips Windows")
-    def test_gunicorn_workers_bound_graceful_shutdown_by_graceful_shutdown_timeout(self, monkeypatch):
+    @pytest.mark.parametrize("max_request_header_size", [DEFAULT_MAX_REQUEST_HEADER_SIZE, 128 * 1024])
+    def test_gunicorn_workers_bound_graceful_shutdown_by_graceful_shutdown_timeout(
+        self, monkeypatch, max_request_header_size: int
+    ):
         pytest.importorskip("gunicorn")
         import gunicorn.config
         import gunicorn.glogging
@@ -2117,6 +2225,7 @@ class TestProxyInitializationHelpers:
                 num_workers=2,
                 ssl_certfile_path=None,
                 ssl_keyfile_path=None,
+                max_request_header_size=max_request_header_size,
             )
 
         for name in ("uvicorn.error", "uvicorn.access"):
@@ -2132,6 +2241,7 @@ class TestProxyInitializationHelpers:
         assert worker.config.timeout_graceful_shutdown == 7.5
         assert worker.config.loop == UvicornWorker.CONFIG_KWARGS["loop"]
         assert worker.config.http == UvicornWorker.CONFIG_KWARGS["http"]
+        assert worker.config.h11_max_incomplete_event_size == max_request_header_size
         assert captured["options"]["graceful_timeout"] == 8 + GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS
 
     @pytest.mark.skipif(os.name == "nt", reason="gunicorn server path skips Windows")
@@ -2382,17 +2492,15 @@ class TestProxyInitializationHelpers:
 
 
 class TestQueryEngineReaperWiring:
-    def _invoke_run_server(self, args):
+    def _invoke_run_server(self, args, env: dict[str, str] | None = None):
         from click.testing import CliRunner
 
         from litellm.proxy.proxy_cli import run_server
 
         runner = CliRunner()
-        clean_env = {
-            k: v
-            for k, v in os.environ.items()
-            if k not in ("DATABASE_URL", "DIRECT_URL")
-        }
+        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL", "NUM_WORKERS")}
+        if env:
+            clean_env.update(env)
         with (
             patch.dict(os.environ, clean_env, clear=True),
             patch.dict(
@@ -2437,6 +2545,20 @@ class TestQueryEngineReaperWiring:
         assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
         mock_uvicorn_run.assert_called_once()
         mock_start_reaper.assert_not_called()
+
+    def test_num_workers_env_var_sets_uvicorn_workers(self):
+        result, mock_uvicorn_run, _ = self._invoke_run_server(["--local"], env={"NUM_WORKERS": "3"})
+        assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
+        mock_uvicorn_run.assert_called_once()
+        assert mock_uvicorn_run.call_args.kwargs["workers"] == 3
+
+    def test_num_workers_flag_beats_env_var(self):
+        result, mock_uvicorn_run, _ = self._invoke_run_server(
+            ["--local", "--num_workers", "2"], env={"NUM_WORKERS": "3"}
+        )
+        assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
+        mock_uvicorn_run.assert_called_once()
+        assert mock_uvicorn_run.call_args.kwargs["workers"] == 2
 
     @pytest.mark.skipif(os.name == "nt", reason="gunicorn server path skips Windows")
     def test_gunicorn_arbiter_starts_reaper(self):

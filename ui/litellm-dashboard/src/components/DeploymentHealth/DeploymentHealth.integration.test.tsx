@@ -1,9 +1,15 @@
+import { NotificationsBellView } from "@/components/Navbar/NotificationsBell/NotificationsBell";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useState } from "react";
 import userEvent from "@testing-library/user-event";
 import type { DeploymentWarning } from "@/app/(dashboard)/hooks/deploymentWarnings/useDeploymentWarnings";
 import { renderWithProviders, screen, testQueryClient, waitFor, within } from "../../../tests/test-utils";
-import { createDeploymentHealthHandle, DeploymentHealthBanner, DeploymentHealthIcon } from "./DeploymentHealth";
+import {
+  createDeploymentHealthHandle,
+  DeploymentHealthBanner,
+  DeploymentHealthIcon,
+  DeploymentHealthLink,
+} from "./DeploymentHealth";
 import { DeploymentHealthPanel } from "./DeploymentHealthPanel";
 
 vi.unmock("@/app/(dashboard)/hooks/useAuthorized");
@@ -84,6 +90,11 @@ const Harness = () => {
     <>
       <header>
         <DeploymentHealthIcon handle={handle} />
+        <NotificationsBellView
+          currentVersion={null}
+          latestRelease={null}
+          deploymentHealthLink={<DeploymentHealthLink handle={handle} />}
+        />
       </header>
       <DeploymentHealthBanner handle={handle} />
       <DeploymentHealthPanel handle={handle} />
@@ -97,7 +108,13 @@ const renderHealth = (userRole = "proxy_admin") => {
 };
 
 const openPanel = async (user: ReturnType<typeof userEvent.setup>) => {
-  await user.click(await screen.findByRole("button", { name: /^Deployment health/ }));
+  await waitFor(() => expect(proxy.gets).toBeGreaterThan(0));
+  const icon = screen.queryByRole("button", { name: /^Deployment health/ });
+  if (icon) await user.click(icon);
+  else {
+    await user.click(screen.getByRole("button", { name: /^Notifications/ }));
+    await user.click(await screen.findByRole("button", { name: "Deployment health", exact: true }));
+  }
   return screen.findByRole("dialog", { name: "Deployment health" });
 };
 
@@ -124,15 +141,17 @@ afterEach(() => {
 });
 
 describe("deployment health icon", () => {
-  it("should show a plain shield with no count when every warning is ignored", async () => {
-    proxy.warnings = [{ ...NO_REDIS, ignore: snoozedBy("admin-2", "2026-10-21T17:04:12Z") }];
-    renderHealth();
+  it.each([{ warnings: [] }, { warnings: [{ ...NO_REDIS, ignore: snoozedBy("admin-2", "2026-10-21T17:04:12Z") }] }])(
+    "hides the shield without active warnings: $warnings",
+    async ({ warnings }) => {
+      proxy.warnings = warnings;
+      renderHealth();
 
-    await waitFor(() => expect(proxy.gets).toBe(1));
-    const icon = await screen.findByRole("button", { name: "Deployment health" });
-    expect(icon).toHaveTextContent(/^$/);
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-  });
+      await waitFor(() => expect(proxy.gets).toBe(1));
+      expect(screen.queryByRole("button", { name: /^Deployment health/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    },
+  );
 
   it.each([
     {

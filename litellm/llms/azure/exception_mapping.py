@@ -1,5 +1,7 @@
 from typing import Final
 
+import httpx
+
 from litellm.exceptions import ContentPolicyViolationError
 
 
@@ -14,6 +16,7 @@ class AzureOpenAIExceptionMapping:
         model: str,
         extra_information: str,
         original_exception: Exception,
+        response: httpx.Response | None,
     ) -> ContentPolicyViolationError:
         """
         Create a content policy violation error
@@ -39,7 +42,7 @@ class AzureOpenAIExceptionMapping:
             llm_provider="azure",
             model=model,
             litellm_debug_info=extra_information,
-            response=getattr(original_exception, "response", None),
+            response=response,
             provider_specific_fields={
                 # Preserve legacy key for backward compatibility.
                 "innererror": inner_error,

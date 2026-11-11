@@ -24,6 +24,7 @@ import yaml
 from pydantic import JsonValue
 from redis import Redis
 
+from litellm.constants import TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS
 from tests.integration._support.client import (
     Gateway,
     Scenario,
@@ -166,19 +167,11 @@ def _remove_team_by_sql(team_id: str) -> None:
     assert _team_rows(team_id) == []
 
 
-def _remove_team_if_present(gateway: Gateway, team_id: str) -> None:
-    """Cleanup for teams the test deletes itself: the API delete first, SQL for anything it leaves."""
-    if not _team_rows(team_id):
-        return
-    gateway.request("POST", "/team/delete", {"team_ids": [team_id]})
-    _remove_team_by_sql(team_id)
-
-
 def _create_team(scenario: Scenario, **fields: JsonValue) -> str:
     """A team the test deletes itself; cleanup only removes it if the test left it behind."""
     created: Final = scenario.gateway.post("/team/new", {"team_alias": f"integration-{uuid.uuid4().hex}", **fields})
     team_id: Final = string_value(created["team_id"])
-    scenario.cleanups.callback(_remove_team_if_present, scenario.gateway, team_id)
+    scenario.cleanups.callback(_remove_team_by_sql, team_id)
     return team_id
 
 
@@ -783,7 +776,9 @@ def test_deleting_a_team_with_more_keys_than_the_publish_cap_revokes_every_key_o
         keys: Final = _seeded_team_keys(team, KEYS_WELL_PAST_THE_PUBLISH_CAP)
         assert _statuses(peer, keys) == {200: len(keys)}
 
-        response: Final = _delete_teams(gateway, [team])
+        response: Final = _post_with_timeout(
+            gateway, "/team/delete", {"team_ids": [team]}, timeout=2 * TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS
+        )
         assert response.status_code == 200, response.text
         assert read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE team_id = %s', (team,)) == []
 
