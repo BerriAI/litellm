@@ -70,7 +70,7 @@ from litellm.redis.stores.rate_limits import (
 )
 from litellm.responses.streaming_iterator import _record_usage_for_failure
 from tests._support.clock_loops import AutojumpClockLoop
-from tests.unit.redis.stores.fake_rate_limits import FakeRateLimits, scope_key
+from tests.unit.redis.stores.fake_rate_limits import FakeRateLimits, counter_key, scope_key
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.extraction import ExtractionResponse
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
@@ -6008,6 +6008,57 @@ async def test_a_responses_websocket_closed_mid_turn_keeps_its_tpm_reservation_b
 
 
 @pytest.mark.asyncio
+async def test_a_responses_websocket_close_refunds_its_tpm_only_once_its_turns_logged() -> None:
+    cache: Final = DualCache()
+    handler, proxy_logging_obj = _responses_websocket_limiter(cache)
+    api_key: Final = hash_token("sk-responses-websocket-turns-logging")
+    auth: Final = UserAPIKeyAuth(
+        api_key=api_key, tpm_limit=1_000, max_parallel_requests=1, metadata={"default_estimated_output_tokens": 60}
+    )
+    tokens_key: Final = _counter("api_key", api_key)
+    parallel_key: Final = RateLimitScope("api_key", api_key).gauge
+    await _admit_responses_websocket(handler, cache, auth, "socket")
+    reserved: Final = int(_local(handler, tokens_key) or 0)
+    while_turns_logged: Final[list[tuple[int, int]]] = []
+
+    async def turns_logged() -> None:
+        while_turns_logged.append(
+            (
+                int(_local(handler, tokens_key) or 0),
+                handler._gauge_in_flight_from_cache_value(_local(handler, parallel_key)),
+            )
+        )
+
+    await proxy_logging_obj.arelease_responses_websocket_slot(auth, "turns_finished", turns_logged)
+
+    assert reserved > 0
+    assert while_turns_logged == [(reserved, 0)]
+    assert int(_local(handler, tokens_key) or 0) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("close", [(), ("settled_by_its_log",)], ids=["one_argument_caller", "settled_by_its_log"])
+async def test_a_responses_websocket_its_own_row_settles_frees_its_slot_and_leaves_the_reservation_to_that_row(
+    close: tuple[str, ...],
+) -> None:
+    cache: Final = DualCache()
+    handler, proxy_logging_obj = _responses_websocket_limiter(cache)
+    api_key: Final = hash_token("sk-responses-websocket-session-row")
+    auth: Final = UserAPIKeyAuth(
+        api_key=api_key, tpm_limit=1_000, max_parallel_requests=1, metadata={"default_estimated_output_tokens": 60}
+    )
+    tokens_key: Final = _counter("api_key", api_key)
+    await _admit_responses_websocket(handler, cache, auth, "session-row-socket")
+    reserved: Final = int(_local(handler, tokens_key) or 0)
+
+    await proxy_logging_obj.arelease_responses_websocket_slot(auth, *close)
+
+    assert reserved > 0
+    assert int(_local(handler, tokens_key) or 0) == reserved
+    assert handler._gauge_in_flight_from_cache_value(_local(handler, RateLimitScope("api_key", api_key).gauge)) == 0
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("close", ["refused_at_open", "turns_finished", "turn_unfinished"])
 async def test_closing_a_responses_websocket_the_limiter_never_admitted_reports_no_release_error(
     close: ResponsesWebSocketClose, caplog: pytest.LogCaptureFixture
@@ -8350,6 +8401,30 @@ async def test_fail_closed_tpm_rejection_releases_the_parallel_slot_it_acquired(
         )
     ]
     assert get_or_create_request_stash().parallel_slot is None
+
+
+@pytest.mark.asyncio
+async def test_a_proxy_side_rejection_refunds_its_key_tpm_even_when_the_window_guard_script_fails() -> None:
+    redis: Final = _ScriptedRedis(failing_script="window_guarded_token_increment_script")
+
+    async def reserve(keys: list[str], args: list[object]) -> list[object]:
+        return [0, *[value for index in range(0, len(args), 4) for value in (0, args[index + 1])]]
+
+    redis.fakes.check_and_increment_by_n_script = reserve
+    handler: Final = _handler_with_redis(redis)
+    api_key: Final = hash_token("sk-http-rejection-guard-down")
+    auth: Final = UserAPIKeyAuth(api_key=api_key, tpm_limit=1_000, metadata={"default_estimated_output_tokens": 60})
+    data: Final = {"model": "test-model", "messages": [{"role": "user", "content": "hi"}], "litellm_call_id": "rejected"}
+    _request_stash.set(None)
+    await _admit(handler, auth, data)
+    reserved: Final = get_or_create_request_stash().reserved_tokens
+
+    await handler.async_post_call_failure_hook(
+        request_data=data, original_exception=Exception("guardrail rejected the request"), user_api_key_dict=auth
+    )
+
+    assert reserved > 0
+    assert (counter_key(_counter("api_key", api_key)), -reserved) in redis.increments
 
 
 @pytest.mark.asyncio

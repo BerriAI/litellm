@@ -45,6 +45,7 @@ from litellm.litellm_core_utils.model_response_utils import (
     is_model_response_stream_empty,
 )
 from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject, drop_token_ids
+from litellm.litellm_core_utils.socket_logging import track_socket_logging
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.ollama.common_utils import OllamaResponseIdNormalizer
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -2716,12 +2717,14 @@ class CustomStreamWrapper:
                 # when consumers use ``async for`` on sync-SDK streams. Legacy string
                 # callbacks still run via executor.submit inside dispatch_success_handlers.
                 asyncio.create_task(
-                    self.logging_obj.dispatch_success_handlers(
-                        complete_streaming_response,
-                        cache_hit=cache_hit,
-                        start_time=None,
-                        end_time=None,
-                        prefer_async_handlers=True,
+                    track_socket_logging(
+                        self.logging_obj.dispatch_success_handlers(
+                            complete_streaming_response,
+                            cache_hit=cache_hit,
+                            start_time=None,
+                            end_time=None,
+                            prefer_async_handlers=True,
+                        )
                     )
                 )
 

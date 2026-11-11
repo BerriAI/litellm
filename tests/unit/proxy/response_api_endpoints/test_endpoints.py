@@ -3693,16 +3693,17 @@ class TestResponsesWSFirstFrameModelAuth:
         }
 
     @pytest.mark.parametrize(
-        ("ending", "sessions_after_close"),
+        ("ending", "sessions_after_close", "admitted_while_its_turn_logged"),
         [
-            ("turns_finished", (True, False)),
-            ("turn_cut", (False, False)),
-            ("rate_limited_at_open", (True, False)),
-            ("refused_by_a_later_hook", (True, False)),
+            ("turns_finished", (True, False), ()),
+            ("turn_still_logging", (True, False), (False,)),
+            ("turn_cut", (False, False), ()),
+            ("rate_limited_at_open", (True, False), ()),
+            ("refused_by_a_later_hook", (True, False), ()),
         ],
     )
     async def test_the_socket_frees_its_tpm_reservation_unless_a_turn_was_cut(
-        self, ending: str, sessions_after_close: tuple[bool, bool]
+        self, ending: str, sessions_after_close: tuple[bool, bool], admitted_while_its_turn_logged: tuple[bool, ...]
     ):
         import uuid
 
@@ -3711,6 +3712,7 @@ class TestResponsesWSFirstFrameModelAuth:
         from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
         from litellm.proxy.response_api_endpoints.endpoints import responses_websocket_endpoint
         from litellm.proxy.utils import InternalUsageCache
+        from litellm.responses.streaming_iterator import spawn_logging_task
 
         limiter_cache: Final = DualCache()
         limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(limiter_cache))
@@ -3760,10 +3762,18 @@ class TestResponsesWSFirstFrameModelAuth:
         processor = MagicMock()
         processor.common_processing_pre_call_logic = AsyncMock(side_effect=admitted_then_maybe_refused)
 
+        probes_while_turn_logged: Final[list[bool]] = []
+
+        async def turn_logged_late() -> None:
+            await asyncio.sleep(0.05)
+            probes_while_turn_logged.append(await opens_another_session())
+
         def route_request(data, **kwargs):
             async def relay():
                 if ending == "turn_cut":
                     data["responses_ws_on_unfinished_turn"]()
+                if ending == "turn_still_logging":
+                    spawn_logging_task(asyncio.get_running_loop(), turn_logged_late(), task_name="turn logging")
 
             return relay()
 
@@ -3795,6 +3805,7 @@ class TestResponsesWSFirstFrameModelAuth:
                 context=contextvars.Context(),
             )
 
+        assert tuple(probes_while_turn_logged) == admitted_while_its_turn_logged
         assert (await opens_another_session(), await opens_another_session()) == sessions_after_close
 
     @pytest.mark.asyncio
@@ -3860,7 +3871,7 @@ class TestResponsesWSFirstFrameModelAuth:
             side_effect=lambda user_api_key_dict, data, call_type, guardrails_only: data
         )
         proxy_logging_obj.post_call_failure_hook = AsyncMock(side_effect=slow_failure_hook)
-        async def release_over_the_network(user_api_key_dict, close):
+        async def release_over_the_network(user_api_key_dict, close, turns_logged):
             await asyncio.sleep(0.01)
 
         proxy_logging_obj.arelease_responses_websocket_slot = AsyncMock(side_effect=release_over_the_network)

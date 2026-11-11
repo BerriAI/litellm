@@ -8,7 +8,7 @@ import os
 import sys
 import uuid
 import zlib
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -8869,6 +8869,137 @@ async def test_websocket_passthrough_gives_back_its_tpm_reservation_only_once_it
 
     assert while_open == [False]
     assert (len(logged_rows), after_close) == rows_and_sessions_after_close
+
+
+@dataclass(frozen=True, slots=True)
+class _TpmLimitedKey:
+    limiter: PROXY_MaxParallelRequestsHandler_v3
+    cache: DualCache
+    key: UserAPIKeyAuth
+    proxy_logging_obj: ProxyLogging
+
+    @classmethod
+    def new(cls, api_key: str) -> "_TpmLimitedKey":
+        cache: Final = DualCache()
+        limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(cache))
+        proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = limiter
+        key: Final = UserAPIKeyAuth(
+            api_key=hash_token(api_key), tpm_limit=100, metadata={"default_estimated_output_tokens": 60}
+        )
+        return cls(limiter=limiter, cache=cache, key=key, proxy_logging_obj=proxy_logging_obj)
+
+    async def admit(self, user_api_key_dict: UserAPIKeyAuth, data: Mapping[str, object], call_type: str) -> None:
+        await self.limiter.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict, cache=self.cache, data=dict(data), call_type=call_type
+        )
+
+    async def log_row(self, **row: object) -> None:
+        await self.limiter.async_log_success_event(
+            kwargs=row, response_obj=None, start_time=row["start_time"], end_time=row["end_time"]
+        )
+
+    async def admits_another_session(self) -> bool:
+        try:
+            await asyncio.create_task(
+                self.admit(self.key, {"litellm_call_id": str(uuid.uuid4())}, "pass_through_endpoint"),
+                context=contextvars.Context(),
+            )
+        except ProxyRateLimitError:
+            return False
+        return True
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_holds_its_tpm_reservation_until_its_turn_rows_charge_their_usage():
+    limited: Final = _TpmLimitedKey.new("sk-socket-turn-rows")
+    rows: Final[list[asyncio.Task[None]]] = []
+    admitted_while_its_turn_logged: Final[list[bool]] = []
+
+    async def log_row(**row: object) -> None:
+        admitted_while_its_turn_logged.append(await limited.admits_another_session())
+        await limited.log_row(**row)
+
+    async def logged_later(row: Coroutine[object, object, None]) -> None:
+        await asyncio.sleep(0.05)
+        await row
+
+    client: Final = _turn_taking_client(
+        [json.dumps({"type": "response.create", "model": "gpt-5.4-mini"})], answered_by='"response.completed"'
+    )
+    with (
+        _patched_websocket_passthrough_environment(
+            ScriptedUpstreamWebSocket(replies=[_responses_turn("gpt-5.4-mini")])
+        ) as proxy_logging,
+        patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER") as worker,
+        patch(SUCCESS_HANDLER, new_callable=AsyncMock, side_effect=log_row),
+    ):
+        proxy_logging.pre_call_hook = AsyncMock(side_effect=limited.admit)
+        proxy_logging.arelease_responses_websocket_slot = limited.proxy_logging_obj.arelease_responses_websocket_slot
+        worker.ensure_initialized_and_enqueue = MagicMock(
+            side_effect=lambda async_coroutine: rows.append(asyncio.create_task(logged_later(async_coroutine)))
+        )
+        await asyncio.wait_for(
+            websocket_passthrough_request(
+                websocket=client,
+                target="wss://api.openai.com/v1/responses",
+                custom_headers={"Authorization": "Bearer sk-provider"},
+                user_api_key_dict=limited.key,
+                forward_headers=False,
+                endpoint="/openai_passthrough/v1/responses",
+                accept_websocket=False,
+                client_frame_model_gate=RecordingFrameModelGate(),
+                upstream_frame_kind=openai_websocket_frame_kind,
+                walkout_turn_drain_seconds=0.05,
+            ),
+            timeout=10,
+        )
+    await asyncio.gather(*rows)
+
+    assert admitted_while_its_turn_logged == [False]
+    assert await limited.admits_another_session()
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_without_a_turn_classifier_leaves_its_tpm_reservation_to_its_session_row():
+    limited: Final = _TpmLimitedKey.new("sk-socket-session-row")
+    rows: Final[list[asyncio.Task[None]]] = []
+    session_row_may_log: Final = asyncio.Event()
+
+    async def logged_once_allowed(row: Coroutine[object, object, None]) -> None:
+        await session_row_may_log.wait()
+        await row
+
+    client: Final = _turn_taking_client([json.dumps({"type": "ping"})], answered_by='"pong"')
+    with (
+        _patched_websocket_passthrough_environment(
+            ScriptedUpstreamWebSocket(replies=[[json.dumps({"type": "pong"})]])
+        ) as proxy_logging,
+        patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER") as worker,
+        patch(SUCCESS_HANDLER, new_callable=AsyncMock, side_effect=limited.log_row),
+    ):
+        proxy_logging.pre_call_hook = AsyncMock(side_effect=limited.admit)
+        proxy_logging.arelease_responses_websocket_slot = limited.proxy_logging_obj.arelease_responses_websocket_slot
+        worker.ensure_initialized_and_enqueue = MagicMock(
+            side_effect=lambda async_coroutine: rows.append(asyncio.create_task(logged_once_allowed(async_coroutine)))
+        )
+        await asyncio.wait_for(
+            websocket_passthrough_request(
+                websocket=client,
+                target="wss://live.example.com/v1/session",
+                custom_headers={"Authorization": "Bearer sk-provider"},
+                user_api_key_dict=limited.key,
+                forward_headers=False,
+                endpoint="/live/v1/session",
+                accept_websocket=False,
+            ),
+            timeout=2,
+        )
+        admitted_before_its_session_row: Final = await limited.admits_another_session()
+        session_row_may_log.set()
+        await asyncio.gather(*rows)
+
+    assert (admitted_before_its_session_row, len(rows)) == (False, 1)
 
 
 @pytest.mark.asyncio

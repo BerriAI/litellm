@@ -5303,13 +5303,16 @@ class ProxyLogging:
     _arelease_max_parallel_requests_on_disconnect = arelease_max_parallel_requests
 
     async def arelease_responses_websocket_slot(
-        self, user_api_key_dict: UserAPIKeyAuth, close: ResponsesWebSocketClose
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        close: ResponsesWebSocketClose = "settled_by_its_log",
+        turns_logged: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         """Release what a Responses WebSocket took at admission. The legacy limiter keeps no record of its
         acquisitions and decrements unconditionally, so it only releases a socket that got past every pre-call hook."""
         match self.get_proxy_hook("parallel_request_limiter"):
             case PROXY_MaxParallelRequestsHandler_v3() as limiter:
-                await limiter.async_release_responses_websocket_admission(user_api_key_dict, close)
+                await limiter.async_release_responses_websocket_admission(user_api_key_dict, close, turns_logged)
             case _PROXY_MaxParallelRequestsHandler() as legacy_limiter if close != "refused_at_open":
                 await legacy_limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
             case _:

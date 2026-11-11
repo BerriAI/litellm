@@ -42,6 +42,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping, get_metadata
 from litellm.litellm_core_utils.internal_call_metadata import is_background_response, requests_background
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+from litellm.litellm_core_utils.socket_logging import collect_socket_logging
 from litellm.litellm_core_utils.token_counter import usage_tokenizer_model
 from litellm.litellm_core_utils.tool_fields import TOOL_FIELDS, first_validation_error
 from litellm.llms.openai.responses.guardrail_translation.handler import (
@@ -2711,12 +2712,15 @@ async def _responses_websocket_session(
         return bill_socket_failure(outcome) if isinstance(outcome, Exception) else None
 
     # Phase 2: route to upstream provider
-    try:
-        failure_row: Final = await relay_and_bill_failure()
-    finally:
-        await proxy_logging_obj.arelease_responses_websocket_slot(
-            user_api_key_dict, "turn_unfinished" if unfinished_turn.is_set() else "turns_finished"
-        )
+    with collect_socket_logging() as socket_logging:
+        try:
+            failure_row: Final = await relay_and_bill_failure()
+        finally:
+            await proxy_logging_obj.arelease_responses_websocket_slot(
+                user_api_key_dict,
+                "turn_unfinished" if unfinished_turn.is_set() else "turns_finished",
+                socket_logging.finished,
+            )
     if failure_row is not None:
         with contextlib.suppress(Exception):
             await asyncio.shield(failure_row)

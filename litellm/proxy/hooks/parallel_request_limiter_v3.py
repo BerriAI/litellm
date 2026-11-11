@@ -338,7 +338,9 @@ class WindowGuardedIncrement:
 
 ReservationOperation: TypeAlias = CounterIncrement | WindowGuardedIncrement
 
-ResponsesWebSocketClose: TypeAlias = Literal["refused_at_open", "turns_finished", "turn_unfinished"]
+ResponsesWebSocketClose: TypeAlias = Literal[
+    "refused_at_open", "turns_finished", "turn_unfinished", "settled_by_its_log"
+]
 
 
 class RateLimitDescriptorRateLimitObject(TypedDict, total=False):
@@ -5310,16 +5312,20 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     @with_service_target("rate_limits")
     async def async_release_responses_websocket_admission(
-        self, user_api_key_dict: UserAPIKeyAuth, close: ResponsesWebSocketClose
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        close: ResponsesWebSocketClose,
+        turns_logged: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         """Free the slot a Responses WebSocket took at admission once it closes, and settle its token reservations.
         A socket refused at open sent nothing upstream, so it refunds them all. Turns log under their own call ids
         and charge their own key TPM, but never the team PTU, so a socket whose turns all finished refunds its TPM
-        and keeps the PTU estimate. A turn cut before its terminal event charged nothing, so its socket keeps every
-        reservation until the window ends."""
+        once ``turns_logged`` says their charges are in, and keeps the PTU estimate. A turn cut before its terminal
+        event charged nothing, so its socket keeps every reservation until the window ends. A socket that logs as one
+        row under its own call id is settled by that row, like an HTTP request, so its close only frees the slot."""
         parent_otel_span: Final = user_api_key_dict.parent_otel_span
         release_error: Final = await self._release_stashed_admission(
-            lambda stash: self._settle_closed_responses_websocket(stash, close, parent_otel_span),
+            lambda stash: self._settle_closed_responses_websocket(stash, close, turns_logged, parent_otel_span),
             parent_otel_span,
         )
         if release_error is not None:
@@ -5328,17 +5334,27 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
 
     async def _settle_closed_responses_websocket(
-        self, stash: RequestRateLimiterStash, close: ResponsesWebSocketClose, parent_otel_span: Span | None
+        self,
+        stash: RequestRateLimiterStash,
+        close: ResponsesWebSocketClose,
+        turns_logged: Callable[[], Awaitable[None]] | None,
+        parent_otel_span: Span | None,
     ) -> None:
         match close:
             case "refused_at_open":
-                await self._settle_stashed_reservations(stash, MappingProxyType({}), parent_otel_span)
-            case "turns_finished":
                 await self._settle_stashed_reservations(
-                    stash, MappingProxyType({}), parent_otel_span, refunds_ptu=False
+                    stash, MappingProxyType({}), parent_otel_span, guards_late_refund=True
+                )
+            case "turns_finished":
+                if turns_logged is not None:
+                    await turns_logged()
+                await self._settle_stashed_reservations(
+                    stash, MappingProxyType({}), parent_otel_span, refunds_ptu=False, guards_late_refund=True
                 )
             case "turn_unfinished":
                 stash.mark_reservation_released()
+            case "settled_by_its_log":
+                return
             case _:
                 assert_never(close)
 
@@ -5364,6 +5380,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         parent_otel_span: Span | None,
         *,
         refunds_ptu: bool = True,
+        guards_late_refund: bool = False,
     ) -> None:
         if stash.batch_enqueued_reservation is not None:
             await self.batch_enqueued_token_store.refund(
@@ -5392,7 +5409,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 reserved_scopes=stash.reserved_scopes,
                 actual_tokens=tpm_actual,
                 reserved_tokens=reserved_tokens,
-                reservation_window_identities=stash.reserved_window_identities,
+                reservation_window_identities=stash.reserved_window_identities if guards_late_refund else frozenset(),
             )
             if reserved_tokens > 0
             else ()
