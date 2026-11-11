@@ -9,6 +9,7 @@ import copy
 import json
 import uuid
 from collections.abc import Callable
+from itertools import chain
 from typing import Any, Final, List, Literal, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -20,12 +21,18 @@ import pytest
 
 from fastapi import HTTPException
 from pydantic import BaseModel
+from openai.types.responses.response_function_web_search import ActionSearch
 from openai.types.responses import (
+    ResponseFunctionWebSearch,
     ResponseCustomToolCall,
     ResponseCustomToolCallInputDeltaEvent,
     ResponseCustomToolCallInputDoneEvent,
     ResponseFunctionToolCall,
+    ResponseOutputMessage,
+    ResponseOutputRefusal,
+    ResponseOutputText,
 )
+from openai.types.responses.response_compaction_item import ResponseCompactionItem
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -39,7 +46,16 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
 from litellm.types.guardrails import ContentFilterAction, ContentFilterPattern
-from litellm.types.llms.openai import ChatCompletionToolCallChunk
+from litellm.types.llms.openai import (
+    ChatCompletionToolCallChunk,
+    ContentPartDoneEvent,
+    ContentPartDonePartRefusal,
+    OutputItemDoneEvent,
+    RefusalDeltaEvent,
+    RefusalDoneEvent,
+    ResponseIncompleteEvent,
+    ResponsesAPIStreamEvents,
+)
 from litellm.responses.litellm_completion_transformation.compaction_items import compaction_summary
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
@@ -48,6 +64,7 @@ from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.responses.litellm_completion_transformation.tool_search import build_tool_search_call
 from litellm.types.responses.main import (
     CustomToolCallOutputItem,
+    build_web_search_call,
     GenericResponseOutputItem,
     OutputText,
     OutputToolSearchCall,
@@ -235,6 +252,30 @@ CUSTOM_TOOL_CALL_ITEM = {
     "input": "echo persimmon",
     "status": "completed",
 }
+
+
+def _claude_web_calls_and_a_native_search() -> list[ResponseFunctionWebSearch]:
+    return [
+        build_web_search_call("srvtoolu_1", {"query": "persimmon"}, None, "completed"),
+        build_web_search_call("srvtoolu_2", {"url": "https://persimmon.example"}, None, "in_progress", "web_fetch"),
+        ResponseFunctionWebSearch(
+            id="ws_native",
+            type="web_search_call",
+            status="completed",
+            action=ActionSearch(type="search", query="persimmon"),
+        ),
+    ]
+
+
+def _web_call_actions(items: list[object]) -> list[dict[str, object]]:
+    return [ResponseFunctionWebSearch.model_validate(item, from_attributes=True).action.model_dump() for item in items]
+
+
+_MASKED_WEB_CALL_ACTIONS: Final = [
+    {"type": "search", "query": "[MASKED]", "queries": ["[MASKED]"], "sources": []},
+    {"type": "open_page", "url": "https://[MASKED].example"},
+    {"type": "search", "query": "persimmon", "queries": None, "sources": None},
+]
 
 
 class TestOpenAIResponsesHandlerDiscovery:
@@ -1811,6 +1852,27 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
         assert "name" not in search_call.model_dump()
 
     @pytest.mark.asyncio
+    async def test_process_output_response_scans_and_rewrites_claude_web_calls_but_not_native_search(self):
+        guardrail: Final = RecordingPersimmonMaskingGuardrail(guardrail_name="mask")
+        response: Final = ResponsesAPIResponse(
+            id="resp_1",
+            created_at=1,
+            model="claude-sonnet-5-5",
+            object="response",
+            status="completed",
+            output=_claude_web_calls_and_a_native_search(),
+        )
+
+        result: Final = await OpenAIResponsesHandler().process_output_response(response, guardrail)
+
+        assert guardrail.seen_tool_calls == [
+            ("web_search", '{"query": "persimmon"}'),
+            ("web_fetch", '{"url": "https://persimmon.example"}'),
+        ]
+        assert [item.type for item in result.output] == ["web_search_call"] * 3
+        assert _web_call_actions(result.output) == _MASKED_WEB_CALL_ACTIONS
+
+    @pytest.mark.asyncio
     async def test_process_output_response_never_returns_original_search_arguments_after_a_non_json_rewrite(self):
         response = ResponsesAPIResponse(
             id="resp_1",
@@ -2746,6 +2808,117 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
         assert "name" not in done.item.model_dump()
 
     @pytest.mark.asyncio
+    async def test_deliver_ended_stream_scans_and_rewrites_claude_web_calls_but_not_native_search(self):
+        from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
+        from litellm.types.llms.openai import (
+            OutputItemAddedEvent,
+            OutputItemDoneEvent,
+            ResponseCompletedEvent,
+            ResponsesAPIStreamEvents,
+        )
+
+        items: Final = _claude_web_calls_and_a_native_search()
+        added: Final = [
+            OutputItemAddedEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+                output_index=index,
+                item=BaseLiteLLMOpenAIResponseObject(**{**item.model_dump(), "action": None}),
+            )
+            for index, item in enumerate(items)
+        ]
+        done: Final = [
+            OutputItemDoneEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+                output_index=index,
+                sequence_number=index + 3,
+                item=BaseLiteLLMOpenAIResponseObject(**item.model_dump()),
+            )
+            for index, item in enumerate(items)
+        ]
+        completed: Final = ResponseCompletedEvent(
+            type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            response=ResponsesAPIResponse(
+                id="resp_1",
+                created_at=1,
+                model="claude-sonnet-5-5",
+                object="response",
+                status="completed",
+                output=_claude_web_calls_and_a_native_search(),
+            ),
+        )
+        guardrail: Final = RecordingPersimmonMaskingGuardrail(guardrail_name="mask")
+
+        await OpenAIResponsesHandler().process_output_streaming_response(
+            responses_so_far=[*added, *done, completed],
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert sorted(guardrail.seen_tool_calls) == [
+            ("web_fetch", '{"url": "https://persimmon.example"}'),
+            ("web_search", '{"query": "persimmon"}'),
+        ]
+        assert [event.item.model_dump()["action"] for event in added] == [None, None, None]
+        assert _web_call_actions([event.item for event in done]) == _MASKED_WEB_CALL_ACTIONS
+        assert _web_call_actions(completed.response.output) == _MASKED_WEB_CALL_ACTIONS
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_rewrites_dict_shaped_claude_web_calls_but_not_native_search(self):
+        items: Final = [item.model_dump() for item in _claude_web_calls_and_a_native_search()]
+        done: Final = [
+            {"type": "response.output_item.done", "output_index": index, "item": dict(item)}
+            for index, item in enumerate(items)
+        ]
+        completed: Final = {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_1",
+                "model": "claude-sonnet-5-5",
+                "status": "completed",
+                "output": [dict(item) for item in items],
+            },
+        }
+        guardrail: Final = RecordingPersimmonMaskingGuardrail(guardrail_name="mask")
+
+        await OpenAIResponsesHandler().process_output_streaming_response(
+            responses_so_far=[*done, completed],
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert sorted(guardrail.seen_tool_calls) == [
+            ("web_fetch", '{"url": "https://persimmon.example"}'),
+            ("web_search", '{"query": "persimmon"}'),
+        ]
+        assert _web_call_actions([event["item"] for event in done]) == _MASKED_WEB_CALL_ACTIONS
+        assert _web_call_actions(completed["response"]["output"]) == _MASKED_WEB_CALL_ACTIONS
+
+    @pytest.mark.asyncio
+    async def test_streaming_output_item_done_reports_a_claude_web_search_call(self):
+        from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
+        from litellm.types.llms.openai import OutputItemDoneEvent, ResponsesAPIStreamEvents
+
+        done: Final = OutputItemDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            output_index=0,
+            sequence_number=1,
+            item=BaseLiteLLMOpenAIResponseObject(
+                **build_web_search_call("srvtoolu_1", {"query": "persimmon"}, None, "completed").model_dump()
+            ),
+        )
+        guardrail: Final = RecordingPersimmonMaskingGuardrail(guardrail_name="mask")
+
+        await OpenAIResponsesHandler().process_output_streaming_response(
+            responses_so_far=[done],
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+        )
+
+        assert guardrail.seen_tool_calls == [("web_search", '{"query": "persimmon"}')]
+
+    @pytest.mark.asyncio
     async def test_deliver_ended_stream_rewrites_a_native_tool_search_call_that_has_no_call_id(self):
         def search_call(arguments: dict, status: str) -> dict:
             return {
@@ -3336,6 +3509,25 @@ class TestGetStructuredMessages:
         data = {"input": None}
         result = handler.get_structured_messages(data)
         assert result is None
+
+    def test_should_return_none_for_a_moderation_style_list_of_strings(self):
+        handler = OpenAIResponsesHandler()
+        data = {"model": "omni-moderation-latest", "input": ["safe text", "more safe text"]}
+        assert handler.get_structured_messages(data) is None
+
+    def test_should_keep_an_image_item_replayed_with_an_sdk_compaction_item(self):
+        handler = OpenAIResponsesHandler()
+        image_url = "https://example.com/cat.png"
+        data = {
+            "model": "gpt-5.5",
+            "input": [
+                ResponseCompactionItem(type="compaction", id="cmp_1", encrypted_content="abc"),
+                {"role": "user", "content": [{"type": "input_image", "image_url": image_url}]},
+            ],
+        }
+        result = handler.get_structured_messages(data)
+        assert result is not None
+        assert image_url in json.dumps(result)
 
 
 class ToolAppendingGuardrail(CustomGuardrail):
@@ -4032,6 +4224,26 @@ class TestProvenancePatching:
 
         assert _input_item_provenance(["not a mapping"], []) is None
 
+    def test_provenance_reads_a_self_named_namespace_echo_with_the_request_tools(self):
+        from litellm.llms.openai.responses.guardrail_translation.handler import _input_item_provenance
+        from litellm.responses.litellm_completion_transformation.transformation import (
+            LiteLLMCompletionResponsesConfig,
+        )
+
+        tools = [{"type": "namespace", "name": "search", "tools": [{"type": "function", "name": "search"}]}]
+        raw_input = [
+            {"role": "user", "content": "Search for the release notes."},
+            {"type": "function_call", "name": "search", "namespace": "search", "call_id": "call_1", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call_1", "output": "found"},
+        ]
+        expected = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=raw_input, responses_api_request={"tools": tools}
+        )
+
+        assert expected[1]["tool_calls"][0]["function"]["name"] == "search__search"
+        assert _input_item_provenance(raw_input, expected, tools) is not None
+        assert _input_item_provenance(raw_input, expected) is None
+
     def test_provenance_bails_when_expected_messages_disagree(self):
         from litellm.llms.openai.responses.guardrail_translation.handler import _input_item_provenance
 
@@ -4429,7 +4641,14 @@ class TestBuildBlockSseChunks:
     def _payloads(self, chunks):
         import json
 
-        return [json.loads(chunk.decode().removeprefix("data: ").strip()) for chunk in chunks]
+        payloads: Final = [
+            json.loads(next(line[6:] for line in chunk.decode().splitlines() if line.startswith("data: ")))
+            for chunk in chunks
+        ]
+        assert [chunk.decode().splitlines()[0] for chunk in chunks] == [
+            f"event: {payload['type']}" for payload in payloads
+        ]
+        return payloads
 
     def test_standalone_block_emits_complete_synthetic_stream(self):
         handler = OpenAIResponsesHandler()
@@ -4514,6 +4733,34 @@ class TestBuildBlockSseChunks:
         assert completed["model"] == "gpt-5.4-mini-2026-01-01"
         assert completed["output"][0]["content"][0]["text"] == "Blocked by policy."
         assert completed["usage"] == {"input_tokens": 7, "output_tokens": 21, "total_tokens": 28}
+
+    def test_continuation_numbers_every_event_after_the_last_one_relayed(self):
+        yielded: Final = [
+            {"type": "response.created", "sequence_number": 0, "response": {"id": "resp_live", "output": []}},
+            {
+                "type": "response.output_item.added",
+                "sequence_number": 1,
+                "output_index": 0,
+                "item": {"id": "msg_orig", "type": "message", "role": "assistant"},
+            },
+            {
+                "type": "response.output_text.delta",
+                "sequence_number": 2,
+                "item_id": "msg_orig",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "partial",
+            },
+        ]
+
+        payloads: Final = self._payloads(
+            OpenAIResponsesHandler().build_block_sse_chunks(
+                self._exc(original_response=yielded), stream_started=True, responses_so_far=yielded
+            )
+        )
+
+        assert payloads[-1]["type"] == "response.completed"
+        assert [payload.get("sequence_number") for payload in payloads] == list(range(3, 3 + len(payloads)))
 
     def test_continuation_reads_usage_from_typed_completed_event(self):
         from litellm.types.llms.openai import (
@@ -5017,3 +5264,307 @@ class TestCompactionOutputSummaryReachesOutputGuardrails:
             )
 
         assert ended_key(self.SUMMARY) != ended_key("The user lives elsewhere.")
+
+
+@pytest.mark.asyncio
+async def test_output_guardrail_rewrite_reaches_the_text_of_an_openai_sdk_message_item() -> None:
+    from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+
+    response: Final = ResponsesAPIResponse(
+        id="resp_123",
+        created_at=1234567890,
+        model="gpt-4",
+        object="response",
+        status="completed",
+        output=[
+            ResponseOutputMessage(
+                type="message",
+                id="msg_123",
+                status="completed",
+                role="assistant",
+                content=[ResponseOutputText(type="output_text", text="My SSN is 123-45-6789", annotations=[])],
+            )
+        ],
+    )
+
+    await OpenAIResponsesHandler().process_output_response(
+        response, TextsReplacingGuardrail(guardrail_name="masker", texts=("My SSN is [MASKED]",))
+    )
+
+    assert [part.text for part in response.output[0].content] == ["My SSN is [MASKED]"]
+
+
+class _WordMaskingGuardrail(CustomGuardrail):
+    def __init__(self, word: str) -> None:
+        super().__init__(guardrail_name="word-masker")
+        self.word = word
+        self.seen_tool_call_arguments: list[str] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        messages: Final = inputs.get("structured_messages") or []
+        tool_calls: Final = chain.from_iterable(message.get("tool_calls") or [] for message in messages)
+        self.seen_tool_call_arguments.extend(tool_call["function"]["arguments"] for tool_call in tool_calls)
+        return {**inputs, "structured_messages": json.loads(json.dumps(messages).replace(self.word, "[MASKED]"))}
+
+
+_REPLAYED_CLAUDE_SEARCH_INPUT: Final = (
+    {"role": "user", "content": "What is the weather in Paris?"},
+    {
+        "type": "tool_search_call",
+        "id": "tsc_srvtoolu_01Search",
+        "call_id": "srvtoolu_01Search",
+        "execution": "server",
+        "status": "completed",
+        "arguments": {"pattern": "Paris weather"},
+    },
+    {
+        "type": "tool_search_output",
+        "id": "tso_srvtoolu_01Search",
+        "call_id": "srvtoolu_01Search",
+        "execution": "server",
+        "status": "completed",
+        "tools": [{"type": "function", "name": "get_weather", "parameters": {"type": "object"}, "defer_loading": True}],
+    },
+    {"type": "function_call", "call_id": "toolu_01GuardrailWeather", "name": "get_weather", "arguments": '{"city": "Paris"}'},
+    {"type": "function_call_output", "call_id": "toolu_01GuardrailWeather", "output": "14C"},
+    {"role": "user", "content": "Thanks"},
+)
+
+
+@pytest.mark.asyncio
+async def test_a_guardrail_masks_the_arguments_of_a_replayed_claude_tool_search_and_keeps_the_search() -> None:
+    guardrail: Final = _WordMaskingGuardrail("Paris")
+    data: Final = {
+        "model": "anthropic/claude-sonnet-5-5",
+        "input": copy.deepcopy(list(_REPLAYED_CLAUDE_SEARCH_INPUT)),
+        "tools": [{"type": "tool_search"}],
+    }
+
+    result: Final = await OpenAIResponsesHandler().process_input_messages(data, guardrail)
+
+    assert guardrail.seen_tool_call_arguments == ['{"pattern": "Paris weather"}', '{"city": "Paris"}']
+    assert result["input"][1:4] == [
+        {**_REPLAYED_CLAUDE_SEARCH_INPUT[1], "arguments": {"pattern": "[MASKED] weather"}},
+        _REPLAYED_CLAUDE_SEARCH_INPUT[2],
+        {**_REPLAYED_CLAUDE_SEARCH_INPUT[3], "arguments": '{"city": "[MASKED]"}'},
+    ]
+    assert "Paris" not in json.dumps(result["input"])
+
+
+@pytest.mark.asyncio
+async def test_a_follow_up_without_a_search_tool_still_scans_the_claude_search_and_keeps_it_through_a_rewrite() -> None:
+    guardrail: Final = _WordMaskingGuardrail("Paris")
+    sent_input: Final = [{"role": "user", "content": "What is the weather?"}, *_REPLAYED_CLAUDE_SEARCH_INPUT[1:]]
+    data: Final = {
+        "model": "anthropic/claude-sonnet-5-5",
+        "input": copy.deepcopy(sent_input),
+        "tools": [{"type": "function", "name": "get_weather", "parameters": {"type": "object"}}],
+    }
+
+    result: Final = await OpenAIResponsesHandler().process_input_messages(data, guardrail)
+
+    assert guardrail.seen_tool_call_arguments == ['{"pattern": "Paris weather"}', '{"city": "Paris"}']
+    assert result["input"][1:4] == [
+        {**sent_input[1], "arguments": {"pattern": "[MASKED] weather"}},
+        sent_input[2],
+        {**sent_input[3], "arguments": '{"city": "[MASKED]"}'},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_guardrail_rewriting_another_turn_leaves_a_replayed_claude_tool_search_as_sent() -> None:
+    data: Final = {
+        "model": "anthropic/claude-sonnet-5-5",
+        "input": copy.deepcopy(list(_REPLAYED_CLAUDE_SEARCH_INPUT)),
+        "tools": [{"type": "tool_search"}],
+    }
+
+    result: Final = await OpenAIResponsesHandler().process_input_messages(data, _WordMaskingGuardrail("Thanks"))
+
+    assert result["input"] == [*_REPLAYED_CLAUDE_SEARCH_INPUT[:5], {"role": "user", "content": "[MASKED]"}]
+
+
+_REFUSAL: Final = "I can't share where Jane lives."
+_MASKED_REFUSAL: Final = "I can't share where [NAME] lives."
+
+
+class NameMaskingGuardrail(CustomGuardrail):
+    def __init__(self, guardrail_name: str) -> None:
+        super().__init__(guardrail_name=guardrail_name)
+        self.seen_texts: list[list[str]] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        texts: Final = list(inputs.get("texts", []))
+        self.seen_texts.append(texts)
+        return {**inputs, "texts": [text.replace("Jane", "[NAME]") for text in texts]}
+
+
+def _refused_message(*leading_text: str) -> GenericResponseOutputItem:
+    return GenericResponseOutputItem(
+        type="message",
+        id="msg_123",
+        status="incomplete",
+        role="assistant",
+        content=[
+            *(OutputText(type="output_text", text=text, annotations=[]) for text in leading_text),
+            ResponseOutputRefusal(type="refusal", refusal=_REFUSAL),
+        ],
+    )
+
+
+def _refused_response(*leading_text: str) -> ResponsesAPIResponse:
+    return ResponsesAPIResponse(
+        id="resp_123",
+        created_at=1234567890,
+        model="claude-opus-5-5",
+        object="response",
+        status="incomplete",
+        output=[_refused_message(*leading_text)],
+    )
+
+
+class TestRefusalPartsReachTextGuardrails:
+    @pytest.mark.asyncio
+    async def test_input_refusal_part_is_scanned_and_rewritten(self) -> None:
+        guardrail: Final = NameMaskingGuardrail(guardrail_name="test")
+        data: Final = {
+            "model": "claude-opus-5-5",
+            "input": [
+                {"role": "user", "content": "Where does Jane live?"},
+                {"type": "message", "role": "assistant", "content": [{"type": "refusal", "refusal": _REFUSAL}]},
+            ],
+        }
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(data, guardrail)
+
+        assert guardrail.seen_texts == [["Where does Jane live?", _REFUSAL]]
+        assert result["input"][1]["content"] == [{"type": "refusal", "refusal": _MASKED_REFUSAL}]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("leading_text", "expected_parts"),
+        [
+            ((), [("refusal", _MASKED_REFUSAL)]),
+            (("Jane asked first.",), [("output_text", "[NAME] asked first."), ("refusal", _MASKED_REFUSAL)]),
+        ],
+        ids=["refusal_only", "text_then_refusal"],
+    )
+    async def test_output_refusal_part_is_scanned_and_rewritten(
+        self, leading_text: tuple[str, ...], expected_parts: list[tuple[str, str]]
+    ) -> None:
+        guardrail: Final = NameMaskingGuardrail(guardrail_name="test")
+
+        result: Final = await OpenAIResponsesHandler().process_output_response(
+            _refused_response(*leading_text), guardrail
+        )
+
+        assert guardrail.seen_texts == [[*leading_text, _REFUSAL]]
+        assert [
+            (part["type"], part.get("text") or part.get("refusal")) for part in result.model_dump()["output"][0]["content"]
+        ] == expected_parts
+
+    @pytest.mark.asyncio
+    async def test_output_refusal_part_in_an_openai_message_is_rewritten(self) -> None:
+        guardrail: Final = NameMaskingGuardrail(guardrail_name="test")
+        openai_message: Final = ResponseOutputMessage(
+            type="message",
+            id="msg_123",
+            role="assistant",
+            status="incomplete",
+            content=[
+                ResponseOutputText(type="output_text", text="Jane asked first.", annotations=[]),
+                ResponseOutputRefusal(type="refusal", refusal=_REFUSAL),
+            ],
+        )
+
+        result: Final = await OpenAIResponsesHandler().process_output_response(
+            _refused_response().model_copy(update={"output": [openai_message]}), guardrail
+        )
+
+        assert guardrail.seen_texts == [["Jane asked first.", _REFUSAL]]
+        assert [
+            (part["type"], part.get("text") or part.get("refusal")) for part in result.model_dump()["output"][0]["content"]
+        ] == [("output_text", "[NAME] asked first."), ("refusal", _MASKED_REFUSAL)]
+
+    @pytest.mark.asyncio
+    async def test_streamed_refusal_events_carry_the_rewrite(self) -> None:
+        position: Final = {"item_id": "msg_123", "output_index": 0, "content_index": 0}
+        events: Final = [
+            RefusalDeltaEvent(type=ResponsesAPIStreamEvents.REFUSAL_DELTA, delta=_REFUSAL, **position),
+            RefusalDoneEvent(type=ResponsesAPIStreamEvents.REFUSAL_DONE, refusal=_REFUSAL, **position),
+            ContentPartDoneEvent(
+                type=ResponsesAPIStreamEvents.CONTENT_PART_DONE,
+                part=ContentPartDonePartRefusal(type="refusal", refusal=_REFUSAL),
+                **position,
+            ),
+            OutputItemDoneEvent(type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, output_index=0, item=_refused_message()),
+            ResponseIncompleteEvent(type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE, response=_refused_response()),
+        ]
+
+        await OpenAIResponsesHandler().process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=NameMaskingGuardrail(guardrail_name="test"),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert [json.loads(event.model_dump_json()) for event in events] == [
+            json.loads(event.model_dump_json())
+            for event in (
+                RefusalDeltaEvent(type=ResponsesAPIStreamEvents.REFUSAL_DELTA, delta=_MASKED_REFUSAL, **position),
+                RefusalDoneEvent(type=ResponsesAPIStreamEvents.REFUSAL_DONE, refusal=_MASKED_REFUSAL, **position),
+                ContentPartDoneEvent(
+                    type=ResponsesAPIStreamEvents.CONTENT_PART_DONE,
+                    part=ContentPartDonePartRefusal(type="refusal", refusal=_MASKED_REFUSAL),
+                    **position,
+                ),
+                OutputItemDoneEvent(
+                    type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+                    output_index=0,
+                    item=_refused_message().model_copy(
+                        update={"content": [ResponseOutputRefusal(type="refusal", refusal=_MASKED_REFUSAL)]}
+                    ),
+                ),
+                ResponseIncompleteEvent(
+                    type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+                    response=_refused_response().model_copy(
+                        update={
+                            "output": [
+                                _refused_message().model_copy(
+                                    update={"content": [ResponseOutputRefusal(type="refusal", refusal=_MASKED_REFUSAL)]}
+                                )
+                            ]
+                        }
+                    ),
+                ),
+            )
+        ]
+
+    @pytest.mark.asyncio
+    async def test_cut_refusal_stream_carries_the_rewrite(self) -> None:
+        position: Final = {"item_id": "msg_123", "output_index": 0, "content_index": 0}
+        events: Final = [
+            RefusalDeltaEvent(type=ResponsesAPIStreamEvents.REFUSAL_DELTA, delta=_REFUSAL, **position),
+            RefusalDoneEvent(type=ResponsesAPIStreamEvents.REFUSAL_DONE, refusal=_REFUSAL, **position),
+        ]
+
+        await OpenAIResponsesHandler().process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=NameMaskingGuardrail(guardrail_name="test"),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert (events[0].delta, events[1].refusal) == (_MASKED_REFUSAL, _MASKED_REFUSAL)

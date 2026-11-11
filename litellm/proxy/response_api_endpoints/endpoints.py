@@ -36,7 +36,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.anthropic_interface.exceptions.exception_mapping_utils import AnthropicExceptionMapping
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import EMPTY_MAPPING, MANAGED_BACKGROUND_RESPONSE_METADATA_KEY, TERMINAL_RESPONSE_STATUSES
-from litellm.exceptions import EndpointNotSupportedByModelError
+from litellm.exceptions import EndpointNotSupportedByModelError, RateLimitError
 from litellm.integrations.custom_guardrail import ModifyResponseException, guardrail_request_data_with_streaming
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, get_metadata_variable_name_from_kwargs
 from litellm.litellm_core_utils.internal_call_metadata import is_background_response, requests_background
@@ -61,6 +61,7 @@ from litellm.proxy.auth.user_api_key_auth import (
     user_api_key_auth_websocket,
 )
 from litellm.proxy.common_request_processing import (
+    RESPONSES_SSE_FRAMING,
     ProxyBaseLLMRequestProcessing,
     cost_headers,
     create_response,
@@ -103,12 +104,12 @@ from litellm.responses.streaming_iterator import (
     ResponsesWsFrameGuard,
     ResponsesWsFrameRejection,
     spawn_logging_task,
+    turn_refusal_frame,
 )
 from litellm.router import Router
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     REASONING_EFFORT,
-    ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
 )
 from litellm.types.responses.main import DeleteResponseResult
@@ -396,6 +397,9 @@ async def responses_api(
         # instead of a polling ID that immediately fails in the background task.
         processor = ProxyBaseLLMRequestProcessing(data=data)
         try:
+            # A background request runs after its polling id is returned, so a total_timeout it
+            # cannot apply is refused (or a header one dropped) before the id is handed out.
+            _ = processor.total_timeout_for(request, "aresponses", is_streaming_request=None)
             data, _logging_obj = await processor.common_processing_pre_call_logic(
                 request=request,
                 general_settings=general_settings,
@@ -482,6 +486,7 @@ async def responses_api(
                 if requests_background(_PROXY_SERVER_REQUEST_ADAPTER.validate_python(data))
                 else native_data_generator
             ),
+            sse_framing=RESPONSES_SSE_FRAMING,
             model=None,
             user_model=user_model,
             user_temperature=user_temperature,
@@ -540,7 +545,6 @@ async def responses_api(
             async def _blocked_stream() -> AsyncGenerator[str, None]:
                 for chunk in block_chunks:
                     yield chunk.decode()
-                yield "data: [DONE]\n\n"
 
             return await create_response(generator=_blocked_stream(), media_type="text/event-stream", headers={})
         return build_blocked_response(e)
@@ -907,6 +911,7 @@ async def get_response(
                 response_id,
                 read_settles_billing,
             ),
+            sse_framing=RESPONSES_SSE_FRAMING,
             model=None,
             user_model=user_model,
             user_temperature=user_temperature,
@@ -1703,16 +1708,18 @@ def _missing_responses_param_response(param: str) -> JSONResponse:
 
 def _responses_input_as_token_count_messages(
     input_value: str | ResponseInputParam,
-    instructions: str | None,
+    request_params: Mapping[str, object],
 ) -> tuple[Mapping[str, object], ...]:
     from litellm.responses.litellm_completion_transformation.transformation import (
         LiteLLMCompletionResponsesConfig,
     )
 
-    request_params: Final[ResponsesAPIOptionalRequestParams] = {"instructions": instructions}
     transformed: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
         input=input_value,
-        responses_api_request=request_params,
+        responses_api_request={
+            "instructions": request_params.get("instructions"),
+            "tools": request_params.get("tools"),
+        },
         only_since_compaction=True,
     )
     return tuple(
@@ -1793,10 +1800,7 @@ async def responses_input_tokens(
     try:
         payload: Final[_TokenCountPayload] = {
             "model": model_name,
-            "messages": _responses_input_as_token_count_messages(
-                input_value=input_value,
-                instructions=data.get("instructions"),
-            ),
+            "messages": _responses_input_as_token_count_messages(input_value=input_value, request_params=data),
             "tools": token_fields.get("tools"),
         }
         token_request: Final = TokenCountRequest.model_validate(payload)
@@ -2161,7 +2165,7 @@ _WS_FRAME: Final = TypeAdapter(dict[str, object])
 _GUARDRAIL_INFORMATION: Final = TypeAdapter(list[dict[str, object]])
 _PII_TOKENS: Final = TypeAdapter(dict[str, str])
 _GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
-_GUARDED_FRAME_FIELDS: Final = ("input", "instructions", "tools")
+_GUARDED_FRAME_FIELDS: Final = ("input", "instructions", "tools", "tool_choice", "extra_body")
 _CLIENT_METADATA_KEYS: Final = ("metadata", "litellm_metadata")
 _CLIENT_GUARDRAIL_SELECTORS: Final = ("guardrails", "guardrail_config", "policies")
 _METADATA_GUARDRAIL_SELECTORS: Final = ("guardrails", "guardrail_config")
@@ -2627,6 +2631,12 @@ async def _responses_websocket_session(
             route_type="_aresponses_websocket",
             skip_guardrails=True,
         )
+    except RateLimitError as e:
+        verbose_proxy_logger.info("Responses WebSocket refused at open by a rate limit: %s", e)
+        with contextlib.suppress(WebSocketDisconnect, RuntimeError, OSError):
+            await websocket.send_text(turn_refusal_frame(e))
+        await websocket.close(code=1008, reason="Rate limit exceeded")
+        return
     except Exception as e:
         verbose_proxy_logger.exception("Responses WebSocket pre-call error")
         try:

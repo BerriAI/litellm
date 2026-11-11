@@ -42,9 +42,11 @@ impl<'a, I: Interceptors<Error>> CallContext<'a, I> {
     }
 
     pub async fn response_received(&self, body: &str) -> Result<(), Error> {
-        let raw = RawResponse {
-            body: body.to_owned(),
-        };
+        self.raw_response_received(RawResponse::new(body.to_owned()))
+            .await
+    }
+
+    pub async fn raw_response_received(&self, raw: RawResponse) -> Result<(), Error> {
         if let Some(observers) = &self.observers {
             observers.emit(CallEvent::Execution(
                 ExecutionEvent::ProviderResponseReceived { raw: raw.clone() },
