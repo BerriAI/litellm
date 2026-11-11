@@ -1878,6 +1878,23 @@ def test_bedrock_mantle_gpt_oss_responses_overflow_event_maps_to_context_window_
     assert "prompt is too long: 165068 tokens > 131072 maximum" in mapped_exception.message
 
 
+@pytest.mark.parametrize("custom_llm_provider", ["hosted_vllm", "openai", "azure"])
+def test_vllm_gpt_oss_responses_overflow_maps_to_context_window_exceeded_on_any_provider(custom_llm_provider):
+    from litellm.responses.streaming_iterator import map_stream_error_to_exception
+
+    mapped_exception = map_stream_error_to_exception(
+        {
+            "type": "invalid_request_error",
+            "message": "The engine prompt length 165068 exceeds the max_model_len 131072. Please reduce prompt.",
+        },
+        model="openai/gpt-oss-20b",
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    assert isinstance(mapped_exception, litellm.ContextWindowExceededError)
+    assert "165068" in mapped_exception.message
+
+
 @pytest.mark.parametrize("original_status_code", [500, 503])
 def test_bedrock_mantle_in_stream_context_overflow_answers_400_whatever_the_event_status_was(original_status_code):
     original_exception = OpenAIError(

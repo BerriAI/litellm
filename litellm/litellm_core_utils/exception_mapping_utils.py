@@ -107,6 +107,7 @@ class ExceptionCheckers:
             "`inputs` tokens + `max_new_tokens` must be",
             "exceeds the available context size",  # llama.cpp/Lemonade
             "exceeds the maximum number of tokens allowed",  # Gemini
+            "exceeds the max_model_len",
             '"code": "context_length_exceeded"',
             "prompt is too long",
         ]

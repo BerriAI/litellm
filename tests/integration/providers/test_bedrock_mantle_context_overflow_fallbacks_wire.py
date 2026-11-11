@@ -1,5 +1,5 @@
 import json
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -31,6 +31,20 @@ _OPENAI_OVERFLOW_MARK: Final = "maximum context length is 128000 tokens"
 _INVALID_INPUT_MESSAGE: Final = "Invalid 'input': expected a string or array"
 _INVALID_PROMPT_MESSAGE: Final = "Invalid prompt: your prompt was flagged as potentially violating our usage policy."
 _FALLBACK_TEXT: Final = "fallback answered"
+_GPT_OSS_OVERFLOW_TEXT: Final = "prompt is too long: 165068 tokens > 131072 maximum"
+_FAILED_INPUT_TOKENS: Final = 165068
+_SERVER_ERROR: Final[dict[str, JsonValue]] = {"code": "server_error", "message": "The model had an internal error"}
+_NO_ERROR_MESSAGE: Final = "The provider reported a failed response"
+_FAILED_REQUEST_ID: Final = "req-mantle-failed-body"
+_GPT_OSS_MODEL: Final = "bedrock_mantle/openai.gpt-oss-20b"
+_GPT_OSS_RESPONSES_PATH: Final = "/v1/responses"
+_GPT_OSS_OVERFLOW_ERROR: Final[dict[str, JsonValue]] = {
+    "code": "invalid_prompt",
+    "message": (
+        'ErrorEvent { error: APIError { type: "invalid_request_error", code: Some(400), message: "The engine prompt '
+        'length 165068 exceeds the max_model_len 131072. Please reduce prompt.", param: Some("input") } }'
+    ),
+}
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _OVERFLOW_ENVELOPE: Final[dict[str, JsonValue]] = {
     "error": {
@@ -97,6 +111,20 @@ def _overflow_peer(request: Request) -> Reply:
     if not _streaming(request):
         return Reply(status=400, body=_OVERFLOW_BODY)
     return Reply(content_type="text/event-stream", chunks=_failed_frames(uuid4().hex, _OVERFLOW_ENVELOPE["error"]))
+
+
+def _body_peer(status: str, fields: Mapping[str, JsonValue], path: str = _RESPONSES_PATH) -> Callable[[Request], Reply]:
+    def reply(request: Request) -> Reply:
+        assert request.method == "POST" and request.target == path, request.target
+        assert not _streaming(request), request.body
+        body: Final = {
+            **_response_object(uuid4().hex, status, _BACKEND),
+            "usage": {"input_tokens": _FAILED_INPUT_TOKENS, "output_tokens": 0, "total_tokens": _FAILED_INPUT_TOKENS},
+            **fields,
+        }
+        return Reply(body=json.dumps(body).encode(), headers={"x-request-id": _FAILED_REQUEST_ID})
+
+    return reply
 
 
 def _passthrough_peer(request: Request) -> Reply:
@@ -227,8 +255,8 @@ class Rig:
     models: Mapping[str, str]
 
 
-def _mantle_params(api_base: str) -> dict[str, JsonValue]:
-    return {"model": _MANTLE_MODEL, "api_base": api_base, "api_key": _MANTLE_KEY}
+def _mantle_params(api_base: str, model: str = _MANTLE_MODEL) -> dict[str, JsonValue]:
+    return {"model": model, "api_base": api_base, "api_key": _MANTLE_KEY}
 
 
 def _openai_params(api_base: str) -> dict[str, JsonValue]:
@@ -263,25 +291,64 @@ def _write_config(
 def cwf_rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
     root: Final = tmp_path_factory.mktemp("mantle-cwf")
     rig_id: Final = uuid4().hex[:8]
-    cwf: Final = f"mantle-cwf-{rig_id}"
+    names: Final = {
+        "cwf": f"mantle-cwf-{rig_id}",
+        "cwf_failed": f"mantle-cwf-failed-{rig_id}",
+        "failed_alone": f"mantle-failed-alone-{rig_id}",
+        "cwf_failed_fake_stream": f"mantle-cwf-failed-fake-stream-{rig_id}",
+        "failed_server_error": f"mantle-failed-server-error-{rig_id}",
+        "fb_failed_server_error": f"mantle-fb-failed-server-error-{rig_id}",
+        "failed_no_error": f"mantle-failed-no-error-{rig_id}",
+        "incomplete": f"mantle-incomplete-{rig_id}",
+    }
     fallback_name: Final = f"fallback-{rig_id}"
     with (
         gateway_from_environment() as gateway,
         wire_server(_overflow_peer) as overflow,
+        wire_server(_body_peer("failed", {"error": _GPT_OSS_OVERFLOW_ERROR})) as failed,
+        wire_server(_body_peer("failed", {"error": _GPT_OSS_OVERFLOW_ERROR}, _GPT_OSS_RESPONSES_PATH)) as failed_oss,
+        wire_server(_body_peer("failed", {"error": _SERVER_ERROR})) as server_error,
+        wire_server(_body_peer("failed", {"error": None})) as no_error,
+        wire_server(_body_peer("incomplete", {"incomplete_details": {"reason": "max_output_tokens"}})) as incomplete,
         wire_server(_fallback_peer) as fallback,
     ):
         config: Final = _write_config(
             root,
             "cwf",
             [
-                {"model_name": cwf, "litellm_params": _mantle_params(overflow.url)},
+                {"model_name": names["cwf"], "litellm_params": _mantle_params(overflow.url)},
+                {"model_name": names["cwf_failed"], "litellm_params": _mantle_params(failed.url)},
+                {"model_name": names["failed_alone"], "litellm_params": _mantle_params(failed.url)},
+                {
+                    "model_name": names["cwf_failed_fake_stream"],
+                    "litellm_params": _mantle_params(failed_oss.url, _GPT_OSS_MODEL),
+                    "model_info": {"supports_native_streaming": False},
+                },
+                {"model_name": names["failed_server_error"], "litellm_params": _mantle_params(server_error.url)},
+                {"model_name": names["fb_failed_server_error"], "litellm_params": _mantle_params(server_error.url)},
+                {"model_name": names["failed_no_error"], "litellm_params": _mantle_params(no_error.url)},
+                {"model_name": names["incomplete"], "litellm_params": _mantle_params(incomplete.url)},
                 {"model_name": fallback_name, "litellm_params": _openai_params(fallback.url)},
             ],
-            {"context_window_fallbacks": [{cwf: [fallback_name]}]},
+            {
+                "context_window_fallbacks": [
+                    {name: [fallback_name]}
+                    for name in (names["cwf"], names["cwf_failed"], names["cwf_failed_fake_stream"])
+                ],
+                "fallbacks": [{names["fb_failed_server_error"]: [fallback_name]}],
+            },
             None,
         )
         with owned_proxy_process(gateway, root, {}, config=config, workers=2) as owned:
-            yield Rig(owned.gateway, owned, fallback, {"overflow": overflow}, {"cwf": cwf})
+            peers: Final = {
+                "overflow": overflow,
+                "failed": failed,
+                "failed_oss": failed_oss,
+                "server_error": server_error,
+                "no_error": no_error,
+                "incomplete": incomplete,
+            }
+            yield Rig(owned.gateway, owned, fallback, peers, names)
 
 
 @pytest.fixture(scope="module")
@@ -400,6 +467,88 @@ def test_context_window_fallback_fires_for_the_overflow_on_responses(cwf_rig: Ri
     response: Final = cwf_rig.gateway.request("POST", "/v1/responses", _responses(cwf_rig.models["cwf"], prompt))
     assert response.status_code == 200, response.text
     _assert_fell_back(cwf_rig, "overflow", prompt, response.text)
+
+
+def test_context_window_fallback_fires_when_the_provider_answers_200_status_failed_on_responses(
+    cwf_rig: Rig,
+) -> None:
+    prompt: Final = _prompt("cwf responses failed body")
+    response: Final = cwf_rig.gateway.request("POST", "/v1/responses", _responses(cwf_rig.models["cwf_failed"], prompt))
+    assert response.status_code == 200, response.text
+    _assert_fell_back(cwf_rig, "failed", prompt, response.text)
+
+
+def test_a_200_status_failed_overflow_with_no_fallback_answers_400_on_responses(cwf_rig: Rig) -> None:
+    prompt: Final = _prompt("failed body alone")
+    response: Final = cwf_rig.gateway.request(
+        "POST", "/v1/responses", _responses(cwf_rig.models["failed_alone"], prompt)
+    )
+    assert response.status_code == 400, response.text
+    assert _GPT_OSS_OVERFLOW_TEXT in str(object_value(_JSON_OBJECT.validate_json(response.content)["error"])["message"])
+    _assert_no_fallback(cwf_rig, "failed", prompt)
+    rows: Final = eventually(
+        lambda: cwf_rig.gateway.rows(
+            'SELECT status, prompt_tokens FROM "LiteLLM_SpendLogs" WHERE request_id = %s',
+            (response.headers["x-litellm-call-id"],),
+        ),
+        lambda found: len(found) == 1,
+        seconds=70,
+    )
+    assert (rows[0]["status"], rows[0]["prompt_tokens"]) == ("failure", _FAILED_INPUT_TOKENS), rows
+
+
+def test_context_window_fallback_fires_when_a_fake_streamed_provider_answers_200_status_failed_on_responses(
+    cwf_rig: Rig,
+) -> None:
+    prompt: Final = _prompt("cwf responses failed body fake stream")
+    response, text = _consumed(
+        cwf_rig.gateway, "/v1/responses", _responses(cwf_rig.models["cwf_failed_fake_stream"], prompt, True)
+    )
+    assert response.status_code == 200, text
+    _assert_fell_back(cwf_rig, "failed_oss", prompt, text)
+
+
+def test_plain_fallback_fires_when_the_provider_answers_200_status_failed_with_a_server_error_on_responses(
+    cwf_rig: Rig,
+) -> None:
+    prompt: Final = _prompt("fb failed body server error")
+    response: Final = cwf_rig.gateway.request(
+        "POST", "/v1/responses", _responses(cwf_rig.models["fb_failed_server_error"], prompt)
+    )
+    assert response.status_code == 200, response.text
+    _assert_fell_back(cwf_rig, "server_error", prompt, response.text)
+
+
+def test_a_200_status_failed_server_error_is_retried_and_answers_503_with_the_provider_request_id(
+    cwf_rig: Rig,
+) -> None:
+    prompt: Final = _prompt("failed body server error")
+    response: Final = cwf_rig.gateway.request(
+        "POST", "/v1/responses", {**_responses(cwf_rig.models["failed_server_error"], prompt), "num_retries": 2}
+    )
+    assert response.status_code == 503, response.text
+    assert str(_SERVER_ERROR["message"]) in response.text
+    forwarded: Final = response.headers.get("llm_provider-x-request-id") or response.headers.get("x-request-id")
+    assert forwarded == _FAILED_REQUEST_ID, response.headers
+    assert _calls_with(cwf_rig.peers["server_error"], prompt) == 3
+
+
+def test_a_200_status_failed_body_with_no_error_answers_503_on_responses(cwf_rig: Rig) -> None:
+    prompt: Final = _prompt("failed body no error")
+    response: Final = cwf_rig.gateway.request(
+        "POST", "/v1/responses", _responses(cwf_rig.models["failed_no_error"], prompt)
+    )
+    assert response.status_code == 503, response.text
+    assert _NO_ERROR_MESSAGE in response.text
+    assert _calls_with(cwf_rig.peers["no_error"], prompt) == 1
+
+
+def test_an_incomplete_body_still_answers_200_on_responses(cwf_rig: Rig) -> None:
+    prompt: Final = _prompt("incomplete body")
+    response: Final = cwf_rig.gateway.request("POST", "/v1/responses", _responses(cwf_rig.models["incomplete"], prompt))
+    assert response.status_code == 200, response.text
+    assert _JSON_OBJECT.validate_json(response.content)["status"] == "incomplete"
+    assert _calls_with(cwf_rig.peers["incomplete"], prompt) == 1
 
 
 def test_context_window_fallback_fires_for_the_overflow_on_streamed_chat_completions(cwf_rig: Rig) -> None:
