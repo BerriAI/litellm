@@ -1,8 +1,10 @@
 import asyncio
 import inspect
+import itertools
 import logging
 import os
 import sys
+import traceback
 from typing import Final, cast
 
 import pytest
@@ -26,7 +28,14 @@ from unittest.mock import ANY, MagicMock, patch
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.types.utils import Choices, EmbeddingResponse, Message, ModelResponse, ModelResponseStream
+from litellm.types.utils import (
+    ChatCompletionDeltaToolCall,
+    Choices,
+    EmbeddingResponse,
+    Message,
+    ModelResponse,
+    ModelResponseStream,
+)
 from unittest import mock
 
 
@@ -1042,6 +1051,132 @@ class TestOllamaToolCallTransformation:
         assert tool_msg["content"] == "Sunny, 72°F"
         assert "tool_call_id" in tool_msg, "tool_call_id must be forwarded to Ollama"
         assert tool_msg["tool_call_id"] == "call_abc123"
+
+    @staticmethod
+    def _replayed_history(arguments: object) -> list[AllMessageValues]:
+        return cast(
+            list[AllMessageValues],
+            [
+                {"role": "user", "content": "Read a.rs and b.rs"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_abc123",
+                            "type": "function",
+                            "function": {"name": "read_file", "arguments": arguments},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_abc123", "content": "fn main() {}"},
+            ],
+        )
+
+    @pytest.mark.parametrize(
+        ("arguments", "expected"),
+        [
+            ("", {}),
+            (None, {}),
+            ("null", {}),
+            ('{"path": "a.rs"', {"path": "a.rs"}),
+            ('{"path": "a.rs", "limit": 2}', {"path": "a.rs", "limit": 2}),
+            ({"path": "a.rs"}, {"path": "a.rs"}),
+        ],
+        ids=["empty", "null", "null_string", "truncated", "non_string_value", "object"],
+    )
+    def test_replayed_tool_call_arguments_are_forwarded_as_an_object(self, arguments: object, expected: object):
+        result: Final = OllamaChatConfig().transform_request(
+            model="qwen3:8b",
+            messages=self._replayed_history(arguments),
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert result["messages"][1]["tool_calls"] == [
+            {"id": "call_abc123", "function": {"name": "read_file", "arguments": expected}}
+        ]
+
+    @pytest.mark.parametrize(
+        "arguments",
+        ['{"path": "a.rs"}{"path": "b.rs"}', '["a.rs", "b.rs"]', '[["path", "a.rs"]]', "[]"],
+        ids=["glued", "array", "pairs", "empty_array"],
+    )
+    def test_replayed_tool_call_arguments_that_are_not_an_object_answer_400_without_echoing_them(
+        self, arguments: str
+    ):
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            litellm.completion(
+                model="ollama_chat/qwen3:8b",
+                messages=self._replayed_history(arguments),
+                api_base="http://127.0.0.1:9",
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "call_abc123" in str(exc_info.value)
+        assert "a.rs" not in "".join(traceback.format_exception(exc_info.value))
+
+
+class TestOllamaStreamingParallelToolCallIndex:
+    """Regression for https://github.com/BerriAI/litellm/issues/33678.
+
+    Ollama streams each parallel tool call in its own chunk without an OpenAI-style top-level
+    index. Every delta used to carry index 0, so index-accumulating clients appended the
+    arguments of every later call onto the first one.
+    """
+
+    @staticmethod
+    def _tool_call(index: int, command: str) -> dict[str, object]:
+        return {
+            "id": f"call_{index}",
+            "function": {"index": index, "name": "bash", "arguments": {"command": command}},
+        }
+
+    @staticmethod
+    def _chunk(*tool_calls: dict[str, object]) -> dict[str, object]:
+        return {
+            "model": "qwen3:8b",
+            "message": {"role": "assistant", "content": "", "tool_calls": list(tool_calls)},
+            "done": False,
+        }
+
+    @staticmethod
+    def _parsed_tool_calls(
+        iterator: OllamaChatCompletionResponseIterator, *chunks: dict[str, object]
+    ) -> tuple[ChatCompletionDeltaToolCall, ...]:
+        return tuple(
+            itertools.chain.from_iterable(
+                iterator.chunk_parser(chunk).choices[0].delta.tool_calls or () for chunk in chunks
+            )
+        )
+
+    def test_tool_calls_in_separate_chunks_get_distinct_sequential_indices(self):
+        iterator: Final = OllamaChatCompletionResponseIterator(streaming_response=iter([]), sync_stream=True)
+        chunks: Final = [
+            self._chunk(self._tool_call(index, command))
+            for index, command in enumerate(("date", "uname -a", "whoami"))
+        ]
+
+        tool_calls: Final = self._parsed_tool_calls(iterator, *chunks)
+
+        assert [tool_call.index for tool_call in tool_calls] == [0, 1, 2]
+        assert [json.loads(tool_call.function.arguments) for tool_call in tool_calls] == [
+            {"command": "date"},
+            {"command": "uname -a"},
+            {"command": "whoami"},
+        ]
+
+    def test_index_counter_continues_across_chunks(self):
+        iterator: Final = OllamaChatCompletionResponseIterator(streaming_response=iter([]), sync_stream=True)
+        chunks: Final = [
+            self._chunk(self._tool_call(0, "date"), self._tool_call(1, "uname -a")),
+            self._chunk(self._tool_call(2, "whoami")),
+        ]
+
+        tool_calls: Final = self._parsed_tool_calls(iterator, *chunks)
+
+        assert [tool_call.index for tool_call in tool_calls] == [0, 1, 2]
 
 
 class TestOllamaStreamingUsage:

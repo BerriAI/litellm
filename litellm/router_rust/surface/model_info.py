@@ -46,6 +46,7 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
 from litellm.litellm_core_utils.batch_utils import deployment_supported_endpoints
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, coerce_token_limit
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm.litellm_core_utils.litellm_logging import resolve_vertex_location_for_cost
 from litellm.litellm_core_utils.reasoning_effort_capability import (
     deployment_is_catalog_mapped,
     intersect_supported_reasoning_efforts,
@@ -56,11 +57,13 @@ from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 from litellm.redis.stores.router_usage import ROUTER_USAGE_TARGET, RouterUsage, UsageCounter
 from litellm.router_python_host import python_host
+from litellm.router_utils.model_group_pricing import deployment_pricing
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import build_io_token_rate_limit_headers
 from litellm.router_utils.router_callbacks.track_deployment_metrics import find_deployment_metadata
 from litellm.types.router import (
     Deployment,
     DeploymentModelListingInfo,
+    DeploymentPricing,
     DeploymentTypedDict,
     DiscoveredDeploymentModelInfo,
     LiteLLM_Params,
@@ -78,6 +81,7 @@ if TYPE_CHECKING:
     )
 
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 # The key router-core's merge reads as an opaque value (``router-core/src/model_info.rs``).
 _OPAQUE_KEY: Final = "__litellm_python_value__"
@@ -140,6 +144,11 @@ def _configured_model_info(deployment: Mapping[str, object]) -> Mapping[str, obj
     return _MODEL_INFO_ADAPTER.validate_python(deployment.get("model_info") or {})
 
 
+def _configured_deployment_id(deployment: Mapping[str, object]) -> str | None:
+    deployment_id: Final = _configured_model_info(deployment).get("id")
+    return deployment_id if isinstance(deployment_id, str) else None
+
+
 def _operator_max_input_tokens(deployment: Mapping[str, object]) -> int | None:
     """``_operator_max_input_tokens``: the deployment's own limit, skipping one a saved
     ``/model/info`` response copied from the cost map."""
@@ -187,6 +196,7 @@ class _GroupBuild:
     # Filled as the lookups arrive.
     params: dict[int, LiteLLM_Params] = dataclasses.field(default_factory=dict)  # mutable-ok: see above
     info: ModelGroupInfo | None = None
+    pricing: tuple[DeploymentPricing, ...] = ()
 
 
 def _usage_total(values: Sequence[object]) -> int | None:
@@ -358,6 +368,7 @@ class HostModelInfo:
             return None
         for field, value in (as_str_mapping(answer["assignments"]) or {}).items():
             setattr(group.info, field, _group_field(field, wire.from_wire(value)))
+        group.info.deployment_pricing = group.pricing
         return group.info
 
     def _answer_group_lookup(self, step: Mapping[str, object], group: "_GroupBuild", wire: "_Wire") -> object:
@@ -384,6 +395,17 @@ class HostModelInfo:
                 efforts: Final = resolve_supported_reasoning_efforts(
                     model_info, deployment_is_mapped=step["mapped"] is True
                 )
+                pricing: Final = deployment_pricing(
+                    llm_provider,
+                    _configured_deployment_id(deployment),
+                    group.params[int(str(step["index"]))].model,
+                    model_info,
+                    resolve_vertex_location_for_cost(
+                        llm_provider, deployment.get("litellm_params"), None, litellm_model
+                    ),
+                )
+                if pricing is not None and pricing not in group.pricing:
+                    group.pricing = (*group.pricing, pricing)  # rebind-ok: the merge's state
                 return {
                     "supported_endpoints": wire.to_wire(
                         list(
@@ -739,6 +761,20 @@ class HostModelInfo:
             ]
         )
         return tuple(wire.from_wire(tier) for tier in tiers)
+
+    def _core_get_pinned_reasoning_efforts(self, model_name: str, team_id: str | None = None) -> tuple[object, ...]:
+        """
+        Return the litellm_params.reasoning_effort each deployment a request
+        from team_id to model_name can route to (see _routable_deployments)
+        pins, unvalidated and in model_list order, None for a deployment that
+        pins none; the caller decides how the deployments combine.
+
+        Returns an empty tuple for wildcard-expanded or unknown names.
+        """
+        return tuple(
+            _LITELLM_PARAMS_ADAPTER.validate_python(deployment["litellm_params"]).get("reasoning_effort")
+            for deployment in self._routable_deployments(model_name, team_id)
+        )
 
     def _core_get_configured_max_input_tokens(
         self, model_name: str, team_id: str | None = None

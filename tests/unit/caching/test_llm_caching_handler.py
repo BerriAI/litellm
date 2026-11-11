@@ -28,7 +28,7 @@ from litellm.llms.custom_httpx.http_handler import(
     HTTPHandler,
 )
 from litellm.types.utils import LlmProviders
-from litellm.utils import _invalidate_model_cost_lowercase_map
+from litellm.litellm_core_utils.model_cost_table import publish
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from tests.unit.caching._event_loop_reuse import runs_until_a_loop_address_repeats
 
@@ -408,7 +408,7 @@ def isolate_litellm_state():
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),

@@ -17,6 +17,7 @@ from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.anthropic.wif import get_anthropic_wif_token
+from litellm.types.llms.anthropic_tool_search import get_tool_search_beta_header
 from litellm.llms.deepseek.messages.transformation import DeepSeekAnthropicMessagesConfig
 from litellm.llms.minimax.messages.transformation import MinimaxMessagesConfig
 from litellm.llms.openai_like.messages.transformation import OpenAILikeAnthropicMessagesConfig
@@ -721,3 +722,146 @@ def test_a_first_party_messages_request_never_fetches_the_remote_beta_headers_co
 
     assert request["messages"][1] == {"role": "system", "content": "be terse"}
     assert not remote_config.called
+
+
+MESSAGE_THREADS_BETA: Final = "message-threads-2026-08-12"
+
+
+@pytest.mark.parametrize(
+    "thread",
+    ({"type": "create"}, {"type": "continue", "previous_message_id": "msg_01previous"}),
+    ids=("create", "continue"),
+)
+def test_messages_request_forwards_the_thread_field_to_anthropic(thread: dict[str, str]) -> None:
+    request: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(  # pyright: ignore[reportUnknownMemberType]  # bare-dict signature
+        model="claude-opus-4-8",
+        messages=[{"role": "user", "content": "what did I just say"}],
+        anthropic_messages_optional_request_params={"max_tokens": 64, "thread": dict(thread)},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert request["thread"] == thread
+    assert request["messages"] == [{"role": "user", "content": "what did I just say"}]
+
+
+def test_messages_headers_add_the_message_threads_beta_next_to_the_callers_betas() -> None:
+    headers: Final = AnthropicMessagesConfig()._update_headers_with_anthropic_beta(  # pyright: ignore[reportUnknownMemberType]  # bare-dict signature
+        headers={"anthropic-beta": "context-1m-2025-08-07"},
+        optional_params={"thread": {"type": "continue", "previous_message_id": "msg_01previous"}},
+        messages=[],
+    )
+    assert headers["anthropic-beta"] == f"context-1m-2025-08-07,{MESSAGE_THREADS_BETA}"
+
+
+def test_messages_headers_add_no_message_threads_beta_without_a_thread() -> None:
+    headers: Final = AnthropicMessagesConfig()._update_headers_with_anthropic_beta(  # pyright: ignore[reportUnknownMemberType]  # bare-dict signature
+        headers={}, optional_params={"max_tokens": 64}, messages=[]
+    )
+    assert MESSAGE_THREADS_BETA not in headers.get("anthropic-beta", "")  # pyright: ignore[reportUnknownMemberType]  # bare-dict result
+
+
+TOOL_SEARCH_TOOLS: Final = (
+    {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+    {"type": "advisor_20260301", "name": "advisor", "model": "claude-opus-4-8"},
+)
+TURN_WITH_OUTPUT_CONFIG: Final = (
+    {"role": "user", "content": "be brief", "output_config": {"effort": "low"}},
+    {
+        "role": "system",
+        "content": [{"type": "tool_addition", "tool": {"type": "tool_reference", "tool_name": "lookup_record"}}],
+    },
+)
+
+
+def test_a_thread_create_turn_takes_betas_from_its_tools_and_messages() -> None:
+    headers: Final = AnthropicMessagesConfig()._update_headers_with_anthropic_beta(  # pyright: ignore[reportUnknownMemberType]  # bare-dict signature
+        headers={"anthropic-beta": "context-1m-2025-08-07"},
+        optional_params={"thread": {"type": "create"}, "system": "be terse", "tools": list(TOOL_SEARCH_TOOLS)},
+        messages=list(TURN_WITH_OUTPUT_CONFIG),
+    )
+    assert set(headers["anthropic-beta"].split(",")) == {  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # bare-dict result
+        "context-1m-2025-08-07",
+        MESSAGE_THREADS_BETA,
+        get_tool_search_beta_header("anthropic"),
+        "advisor-tool-2026-03-01",
+        "per-turn-control-2026-07-01",
+        "mid-conversation-tool-changes-2026-07-01",
+    }
+
+
+def test_a_thread_continue_turn_takes_no_betas_from_its_new_messages() -> None:
+    headers: Final = AnthropicMessagesConfig()._update_headers_with_anthropic_beta(  # pyright: ignore[reportUnknownMemberType]  # bare-dict signature
+        headers={"anthropic-beta": "context-1m-2025-08-07"},
+        optional_params={"thread": {"type": "continue", "previous_message_id": "msg_01p"}},
+        messages=list(TURN_WITH_OUTPUT_CONFIG),
+    )
+    assert headers["anthropic-beta"] == f"context-1m-2025-08-07,{MESSAGE_THREADS_BETA}"
+
+
+def test_a_request_without_a_thread_still_takes_betas_from_its_tools_and_messages() -> None:
+    headers: Final = AnthropicMessagesConfig()._update_headers_with_anthropic_beta(  # pyright: ignore[reportUnknownMemberType]  # bare-dict signature
+        headers={}, optional_params={"tools": list(TOOL_SEARCH_TOOLS)}, messages=list(TURN_WITH_OUTPUT_CONFIG)
+    )
+    assert set(headers["anthropic-beta"].split(",")) >= {  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # bare-dict result
+        get_tool_search_beta_header("anthropic"),
+        "advisor-tool-2026-03-01",
+        "per-turn-control-2026-07-01",
+        "mid-conversation-tool-changes-2026-07-01",
+    }
+
+
+def _advisor_turn() -> list[dict[str, object]]:
+    return [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "server_tool_use", "id": "srvtoolu_01", "name": "advisor", "input": {}},
+                {
+                    "type": "advisor_tool_result",
+                    "tool_use_id": "srvtoolu_01",
+                    "content": [{"type": "text", "text": "ok"}],
+                },
+                {"type": "text", "text": "done"},
+            ],
+        },
+        {"role": "user", "content": "and now?"},
+    ]
+
+
+def test_a_thread_continue_turn_keeps_advisor_blocks_the_stored_tools_still_explain() -> None:
+    request: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(  # pyright: ignore[reportUnknownMemberType]  # bare-dict signature
+        model="claude-opus-4-8",
+        messages=_advisor_turn(),
+        anthropic_messages_optional_request_params={
+            "max_tokens": 64,
+            "thread": {"type": "continue", "previous_message_id": "msg_01previous"},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert request["messages"][0]["content"] == _advisor_turn()[0]["content"]
+
+
+def test_a_request_without_a_thread_still_strips_advisor_blocks_when_the_tool_is_absent() -> None:
+    request: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(  # pyright: ignore[reportUnknownMemberType]  # bare-dict signature
+        model="claude-opus-4-8",
+        messages=_advisor_turn(),
+        anthropic_messages_optional_request_params={"max_tokens": 64},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert request["messages"][0]["content"] == [{"type": "text", "text": "done"}]
+
+
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        ("claude-sonnet-5", {"type": "disabled"}),
+        ("claude-haiku-4-5", None),
+        ("claude-sonnet-5-5", None),
+    ],
+)
+def test_none_disables_only_optional_default_thinking(model: str, expected: dict[str, str] | None) -> None:
+    params: Final[dict[str, object]] = {"reasoning_effort": "none", "output_config": {"effort": "high"}}
+    AnthropicMessagesConfig._translate_reasoning_effort_to_anthropic(model, params, 1024, "anthropic")
+    assert params == ({"thinking": expected} if expected is not None else {})

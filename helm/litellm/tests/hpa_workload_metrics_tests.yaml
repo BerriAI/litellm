@@ -201,6 +201,50 @@ tests:
               scrapeTimeout: 10s
               scheme: http
 
+  - it: carries litellm-helm annotations, relabelings and namespaceSelector onto the ServiceMonitor
+    template: gateway/servicemonitor.yaml
+    release:
+      namespace: llm
+    set:
+      gateway.serviceMonitor.enabled: true
+      gateway.metricsServer.enabled: true
+      gateway.serviceMonitor.annotations:
+        team: platform
+      gateway.serviceMonitor.relabelings:
+        - targetLabel: node
+          sourceLabels: [__meta_kubernetes_pod_node_name]
+          action: replace
+      gateway.serviceMonitor.namespaceSelector.matchNames:
+        - llm
+        - shared
+    asserts:
+      - equal:
+          path: metadata.annotations
+          value:
+            team: platform
+      - equal:
+          path: spec.endpoints[0].relabelings
+          value:
+            - targetLabel: node
+              sourceLabels: [__meta_kubernetes_pod_node_name]
+              action: replace
+      - equal:
+          path: spec.namespaceSelector.matchNames
+          value:
+            - llm
+            - shared
+
+  - it: renders no ServiceMonitor annotations or relabelings by default
+    template: gateway/servicemonitor.yaml
+    set:
+      gateway.serviceMonitor.enabled: true
+      gateway.metricsServer.enabled: true
+    asserts:
+      - notExists:
+          path: metadata.annotations
+      - notExists:
+          path: spec.endpoints[0].relabelings
+
   - it: honours a custom scrape interval
     template: gateway/servicemonitor.yaml
     set:
@@ -211,3 +255,74 @@ tests:
       - equal:
           path: spec.endpoints[0].interval
           value: 30s
+
+  - it: should configure bearer authorization from an existing secret
+    template: gateway/servicemonitor.yaml
+    set:
+      gateway.serviceMonitor.enabled: true
+      gateway.serviceMonitor.scheme: https
+      gateway.serviceMonitor.tlsConfig:
+        serverName: litellm.monitoring.svc
+        ca:
+          secret:
+            name: metrics-ca
+            key: ca.crt
+      gateway.serviceMonitor.authSecret.enabled: true
+      gateway.serviceMonitor.authSecret.name: prometheus-litellm-key
+      gateway.serviceMonitor.authSecret.key: token
+    asserts:
+      - equal:
+          path: spec.endpoints[0].port
+          value: http
+      - equal:
+          path: spec.endpoints[0].scheme
+          value: https
+      - equal:
+          path: spec.endpoints[0].tlsConfig
+          value:
+            serverName: litellm.monitoring.svc
+            ca:
+              secret:
+                name: metrics-ca
+                key: ca.crt
+      - equal:
+          path: spec.endpoints[0].authorization
+          value:
+            credentials:
+              name: prometheus-litellm-key
+              key: token
+      - isNull:
+          path: spec.endpoints[0].bearerTokenSecret
+
+  - it: should reject an enabled authorization secret without a name
+    template: gateway/servicemonitor.yaml
+    set:
+      gateway.serviceMonitor.enabled: true
+      gateway.serviceMonitor.scheme: https
+      gateway.serviceMonitor.authSecret.enabled: true
+      gateway.serviceMonitor.authSecret.key: token
+    asserts:
+      - failedTemplate:
+          errorMessage: gateway.serviceMonitor.authSecret.name is required when gateway.serviceMonitor.authSecret.enabled is true
+
+  - it: should reject an enabled authorization secret without a key
+    template: gateway/servicemonitor.yaml
+    set:
+      gateway.serviceMonitor.enabled: true
+      gateway.serviceMonitor.scheme: https
+      gateway.serviceMonitor.authSecret.enabled: true
+      gateway.serviceMonitor.authSecret.name: prometheus-litellm-key
+    asserts:
+      - failedTemplate:
+          errorMessage: gateway.serviceMonitor.authSecret.key is required when gateway.serviceMonitor.authSecret.enabled is true
+
+  - it: should reject authenticated scrapes over HTTP
+    template: gateway/servicemonitor.yaml
+    set:
+      gateway.serviceMonitor.enabled: true
+      gateway.serviceMonitor.authSecret.enabled: true
+      gateway.serviceMonitor.authSecret.name: prometheus-litellm-key
+      gateway.serviceMonitor.authSecret.key: token
+    asserts:
+      - failedTemplate:
+          errorMessage: gateway.serviceMonitor.scheme must be https when gateway.serviceMonitor.authSecret.enabled is true

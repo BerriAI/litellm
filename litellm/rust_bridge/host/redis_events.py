@@ -121,4 +121,13 @@ def record_redis_call(
 
 
 def record_redis_breaker(state: BreakerState) -> None:
+    match state:
+        case "open":
+            verbose_logger.warning("Redis circuit breaker OPENED, fast-failing Redis calls")
+        case "half_open":
+            verbose_logger.info("Redis circuit breaker HALF_OPEN, probing Redis")
+        case "closed":
+            verbose_logger.info("Redis circuit breaker CLOSED, Redis recovered")
+        case _:
+            assert_never(state)
     _service_logging().redis_breaker_hook(transitions_to=state, failure_class=None)

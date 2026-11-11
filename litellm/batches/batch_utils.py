@@ -11,6 +11,7 @@ from pydantic import JsonValue, TypeAdapter
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils import batch_utils as core_batch_utils
+from litellm.litellm_core_utils.cloud_storage_security import stored_s3_bucket_kwargs
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
 from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
@@ -48,6 +49,10 @@ def _uses_native_vertex_output(
     model_name: str | None,
     first_row: Mapping[str, object] | None,
 ) -> bool:
+    if custom_llm_provider == "gemini":
+        from litellm.llms.gemini.batches.transformation import is_native_gemini_batch_output_row
+
+        return first_row is not None and is_native_gemini_batch_output_row(first_row)
     if custom_llm_provider != "vertex_ai":
         return False
     if model_name and litellm.disable_vertex_batch_output_transformation:
@@ -551,7 +556,7 @@ async def fetch_batch_managed_file_content(
         "file_id": provider_output_file_id,
         "custom_llm_provider": custom_llm_provider,
         **cast(  # cast-ok: preserve dynamic provider credentials without validation
-            FileContentCallOptions, credentials
+            FileContentCallOptions, {**credentials, **stored_s3_bucket_kwargs(provider_output_file_id)}
         ),
     }
 
@@ -830,6 +835,12 @@ def _get_batch_job_usage_from_response_body(
     _usage_dict: Final = response_body.get("usage", None) or {}
     if ResponseAPILoggingUtils.is_response_api_usage(_usage_dict):
         return ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(_usage_dict)
+    if custom_llm_provider == "gemini":
+        from litellm.llms.gemini.batches.transformation import is_gemini_batch_usage_shape, usage_from_batch_output
+
+        gemini_usage: Final = cast(Mapping[str, object], _usage_dict)  # cast-ok: usage block comes from provider JSON
+        if is_gemini_batch_usage_shape(gemini_usage):
+            return usage_from_batch_output(gemini_usage)
     usage: Final[Usage] = Usage(**_usage_dict)
     if custom_llm_provider == "xai":
         from litellm.llms.xai.chat.transformation import XAIChatConfig

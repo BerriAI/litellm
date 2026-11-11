@@ -1,5 +1,6 @@
 import asyncio
 import json
+import uuid
 from typing import Final
 from collections.abc import AsyncIterator, Mapping
 from datetime import datetime, timezone
@@ -15,7 +16,11 @@ from litellm.caching.affinity_cache import claim_affinity_pin
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache
-from litellm.constants import SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, SESSION_ID_GENERATED_METADATA_KEY
+from litellm.constants import (
+    REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
+    SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
+    SESSION_ID_GENERATED_METADATA_KEY,
+)
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
 )
@@ -192,7 +197,7 @@ async def shared_session_router() -> AsyncIterator[tuple[litellm.Router, FakeSer
             patch("redis.Redis.from_url", return_value=sync_client),
             patch("redis.asyncio.BlockingConnectionPool.from_url", return_value=pool),
         ):
-            redis: Final = RedisCache(url="redis://session-outage.example:6379/0")
+            redis: Final = RedisCache(url=f"redis://session-outage-{uuid.uuid4().hex}.example:6379/0")
             router.cache.attach_redis_cache(redis)
             yield router, server, redis
     finally:
@@ -223,11 +228,11 @@ async def test_redis_read_failures_and_open_breaker_preserve_session_routing(
         assert await _selected_session_ids(router) == ("replacement",)
     server.connected = False
     with patch("time.time", return_value=1790000000.0):
-        for _ in range(redis._circuit_breaker.failure_threshold + 1):
+        for _ in range(REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD + 1):
             assert set(await _selected_session_ids(router)) == (
                 {"replacement"} if has_pin else {"original", "replacement", "other"}
             )
-        assert redis._circuit_breaker.is_open()
+        assert redis._health is not None and redis._health.breaker.state == "open"
 
 
 async def test_confirmed_redis_miss_does_not_revive_a_local_pin_during_outage(

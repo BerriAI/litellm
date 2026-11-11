@@ -1,4 +1,15 @@
 {
+  "format": {
+    "number": "{{val, number}}",
+    "compactNumber": "{{val, compact}}",
+    "usd": "{{val, usd}}",
+    "relativeTime": "{{val, relativetime}}",
+    "date": "{{val, date}}",
+    "monthDay": "{{val, monthday}}",
+    "monthDayTime": "{{val, monthdaytime}}",
+    "timestamp": "{{val, timestamp}}",
+    "numericDateTime": "{{val, numericdatetime}}"
+  },
   "agents": {
     "killSwitchConfig": {
       "authTypes": {
@@ -3070,6 +3081,10 @@
     "empty": "No teams found",
     "loading": "Loading teams…"
   },
+  "storePromptsToggle": {
+    "label": "Store prompts in spend logs",
+    "description": "Turn off to exclude prompts and responses from spend logs. Global and team restrictions still apply."
+  },
   "accessGroupSelector": {
     "placeholder": "Select access groups",
     "label": "Access Group",
@@ -4699,6 +4714,7 @@
         "sameAsOnFail": "{{action}} (same as on fail)"
       },
       "testPanel": {
+        "close": "x",
         "title": "Test Pipeline",
         "sourceLabel": "Test with",
         "sources": {
@@ -4724,6 +4740,7 @@
         "result": "Result",
         "customResponse": "Response: {{message}}",
         "compliance": {
+          "errorResult": "error",
           "title": "Compliance dataset",
           "matchedSummary": "{{matched}} / {{total}} matched expected",
           "expected": "expected: {{result}}",
@@ -7217,7 +7234,8 @@
         "rpm": "Requests per Minute:",
         "openaiParams": "Supported OpenAI Parameters",
         "usageExample": "Usage Example",
-        "copyToClipboard": "Copy to clipboard"
+        "copyToClipboard": "Copy to clipboard",
+        "pricingByDeployment": "Pricing by Deployment:"
       },
       "agentDialog": {
         "fallbackTitle": "Agent Details",
@@ -7370,7 +7388,8 @@
         "usageExample": "Usage Example",
         "decisionNote": "Decision models answer on <code>/v1/decisions</code> and <code>/v1/systemone</code>, not <code>/chat/completions</code>.",
         "howToCall": "How to call decision models",
-        "tryPlayground": "Try it in the Playground"
+        "tryPlayground": "Try it in the Playground",
+        "pricingByDeployment": "Pricing by Deployment:"
       },
       "agentDialog": {
         "fallbackTitle": "Agent Details",
@@ -7905,7 +7924,8 @@
         "title": "Wildcard model",
         "description": "Call it as <example/>, with any model name this provider offers"
       },
-      "capabilities": "Capabilities"
+      "capabilities": "Capabilities",
+      "pricingByDeployment": "Pricing by deployment"
     },
     "agentInspector": {
       "copyName": "Copy agent name",
@@ -7974,14 +7994,16 @@
         "observability": "OBSERVABILITY",
         "accessControl": "ACCESS CONTROL",
         "developerTools": "DEVELOPER TOOLS",
-        "settings": "SETTINGS"
+        "settings": "SETTINGS",
+        "customerPortal": "CUSTOMER PORTAL"
       },
       "sections": {
         "aiGateway": "AI Gateway",
         "observability": "Observability",
         "accessControl": "Access Control",
         "developerTools": "Developer Tools",
-        "settings": "Settings"
+        "settings": "Settings",
+        "customerPortal": "Customer Portal"
       },
       "items": {
         "home": "Home",
@@ -8027,7 +8049,9 @@
         "adminSettings": "Admin Settings",
         "costTracking": "Cost Tracking",
         "uiTheme": "UI Theme",
-        "telemetry": "Telemetry"
+        "telemetry": "Telemetry",
+        "customers": "Customers",
+        "chargebacks": "Chargebacks"
       },
       "homeLink": "LiteLLM home"
     },
@@ -8184,6 +8208,7 @@
       "upgrade": {
         "title": "LiteLLM v{{version}} is available",
         "description": "{{summary}}. Your current version is v{{current}}",
+        "descriptionWithoutCounts": "Your current version is v{{current}}",
         "link": "View release notes"
       },
       "announcement": {
@@ -10008,6 +10033,7 @@
     },
     "chatUi": {
       "a2aMetrics": {
+        "secondsSuffix": "s",
         "header": "A2A Metadata",
         "totalLatency": "Total latency",
         "ttft": "TTFT: {{seconds}}s",
@@ -10907,6 +10933,7 @@
       "partnerDescription": "Third-party guardrail integrations from leading AI security providers."
     },
     "gardenCard": {
+      "f1Label": "F1: ",
       "testCases": "test cases"
     },
     "gardenDetail": {
@@ -14237,6 +14264,8 @@
         "audioPlaceholder": "[Audio]"
       },
       "drawer": {
+        "secondsSuffix": "s",
+        "agentCountSuffix": " Agent",
         "shortcuts": {
           "close": "close",
           "log": "log"
@@ -14295,6 +14324,7 @@
         "maskedCount": "{{count}} masked"
       },
       "metrics": {
+        "secondsSuffix": " s",
         "title": "Metrics",
         "inputTokens": "Input Tokens",
         "outputTokens": "Output Tokens",
@@ -14495,6 +14525,16 @@
         }
       },
       "bedrock": {
+        "policyChips": {
+          "word": "word",
+          "content": "content",
+          "topic": "topic",
+          "sensitiveInformation": "sensitive-info",
+          "contextualGrounding": "contextual-grounding",
+          "automatedReasoning": "automated-reasoning"
+        },
+        "unnamedRegex": "regex",
+        "unnamedTopic": "topic",
         "notAvailable": "N/A",
         "detected": "detected",
         "notDetected": "not detected",
@@ -14535,6 +14575,7 @@
         "rawResponse": "Raw Bedrock Guardrail Response"
       },
       "contentFilter": {
+        "unknown": "unknown",
         "error": "Error",
         "noDetections": "No detections found",
         "totalDetections": "Total Detections:",
@@ -14656,6 +14697,7 @@
         "calledWith": "Called With"
       },
       "realtime": {
+        "unknownStatus": "unknown",
         "noEvents": "No recognized realtime events found",
         "session": "Session",
         "turnCount_one": "{{count}} turn",
@@ -14850,6 +14892,7 @@
         "keyHash": "Key Hash",
         "keyAlias": "Key Alias",
         "model": "Model",
+        "moreModelsNotShown": "More models not shown",
         "tokens": "Tokens",
         "internalUser": "Internal User",
         "endUser": "End User",
@@ -15572,6 +15615,7 @@
       "agentLoadFailed": "Failed to load agent data"
     },
     "providerSpend": {
+      "unknownProvider": "unknown",
       "columns": {
         "provider": "Provider",
         "spend": "Spend",
@@ -15586,6 +15630,11 @@
       "showZeroSpend": "Show Zero Spend",
       "showUnknown": "Show Unknown",
       "showUnknownHint": "Requests that failed to route to a provider"
+    },
+    "customerTeamSpend": {
+      "title": "Spend by team",
+      "attributionNote": "Uses each key's current team, or its last team when deleted. This is not historical team ownership.",
+      "noData": "No customer spend for this period"
     },
     "teamUserSpend": {
       "columns": {
@@ -17273,6 +17322,68 @@
     }
   },
   "addModel": {
+    "switchyardConfigFields": {
+      "heuristic": "Heuristic",
+      "stageRouter": "Stage Router",
+      "bias": "Bias",
+      "biasOptions": {
+        "costFirst": "Cost-first",
+        "qualityFirst": "Quality-first (experimental)"
+      },
+      "qualityFirstWarning": "Switchyard has not benchmarked this bias, so it has no calibrated confidence thresholds.",
+      "capableModel": "Capable model",
+      "efficientModel": "Efficient model",
+      "selectModel": "Select a model",
+      "classifier": "Classifier",
+      "classifierDescription": "Ask a judge model when the tool history does not give a confident routing decision.",
+      "classifierType": "Classifier type",
+      "classifierKinds": {
+        "llm": "LLM judge",
+        "decision": "Decision model"
+      },
+      "decisionModel": "Decision model",
+      "judgeModel": "Judge model",
+      "selectDecisionModel": "Select a decision model",
+      "selectJudgeModel": "Select a judge model",
+      "confidenceThreshold": "Confidence threshold",
+      "fallbackToJudge": "Below this confidence, use the judge model. Critical errors can still select the capable model.",
+      "fallbackToDefault": "Below this confidence, use the bias’s default model. Critical errors can still select the capable model.",
+      "advancedSettings": "Advanced settings",
+      "sections": {
+        "stage": "Stage",
+        "decisionModel": "Decision model",
+        "classifier": "Classifier"
+      },
+      "recentWindow": "Recent window",
+      "libraryDefault": "Library default",
+      "toolSemantics": "Tool semantics",
+      "advantageCutoff": "Advantage cutoff",
+      "advantageCutoffHelp": "Route to the capable model when the decision model’s advantage probability is above this value.",
+      "decisionInstructions": "Decision instructions",
+      "decisionInstructionsPlaceholder": "Use Switchyard’s built-in instructions",
+      "llmFields": {
+        "capabilityThreshold": "Capability threshold",
+        "thresholdStep": "Threshold step",
+        "maxOutputTokens": "Maximum output tokens",
+        "recentTurnWindow": "Recent turn window"
+      },
+      "responseFormat": "Response format",
+      "responseFormats": {
+        "jsonSchema": "JSON schema",
+        "jsonObject": "JSON object"
+      },
+      "classifierPrompt": "Classifier prompt",
+      "classifierPromptPlaceholder": "Use Switchyard’s built-in prompt"
+    },
+    "switchyardRouterForm": {
+      "modelFields": {
+        "description": "Route between a capable and an efficient model using the conversation’s tool history.",
+        "modelsLoadFailed": "Unable to load available models."
+      },
+      "routerName": "Router name",
+      "saving": "Saving…",
+      "saveChanges": "Save changes"
+    },
     "addModelModes": {
       "chat": "Chat - /chat/completions",
       "completion": "Completion - /completions",
@@ -17411,12 +17522,13 @@
       "menu": {
         "unlimited": "Unlimited"
       },
-      "title": "Choose your classifier",
-      "titleTooltip": "Choose how requests are evaluated and routed to your tiers",
-      "aboutClassifiers": "About classifiers",
+      "title": "Choose your routing strategy",
+      "titleTooltip": "Choose how each request is evaluated and which model it is routed to",
+      "aboutClassifiers": "About routing strategies",
       "families": {
+        "switchyardDescription": "Route by the conversation’s tool history.",
         "heuristics": "Heuristics",
-        "heuristicsDescription": "Classify locally, with no API call",
+        "heuristicsDescription": "Default. Classify locally, with no API call",
         "llmDescription": "Use a judge model to choose a solver",
         "decisionModel": "Decisions Model",
         "decisionModelDescription": "Use a decision model to choose a tier"
@@ -18251,6 +18363,8 @@
       "close": "Close"
     },
     "advancedSettings": {
+      "ptuCountPlaceholder": "e.g. 15",
+      "ptuRatePlaceholder": "e.g. 2.00",
       "pricingModels": {
         "perToken": "Per Million Tokens",
         "perSecond": "Per Second"
@@ -18440,9 +18554,9 @@
       "hardDescription": "Your stronger model",
       "roleModel": "{{label}} model",
       "selectModel": "Select a deployed model",
-      "needTwoModels": "Two deployed models are needed. Add a model or use Advanced configuration.",
+      "needTwoModels": "Two deployed models are needed. Add a model or customize tiers and keywords.",
       "chooseTwoModels": "Choose two models to get started.",
-      "advancedConfiguration": "Advanced configuration"
+      "advancedConfiguration": "Customize tiers and keywords"
     },
     "routerConfigBuilder": {
       "removeUtterance": "Remove {{utterance}}",
@@ -18481,6 +18595,7 @@
       "retry": "Retry"
     },
     "autoRouterConnectionTest": {
+      "embeddingSuffix": " (embedding)",
       "ossNotReached": "OSS classifier was not reached successfully (routing cause: {{cause}})",
       "nothingToTest": "No complexity tiers are configured yet, so there is nothing to test.",
       "intro": "Test Connection sends a minimal request to every configured tier, classifier, default, and embedding model. The classifier probe includes its reasoning effort override.",
@@ -18748,7 +18863,6 @@
   "updateModelCredentialsModal": {
     "apiKeyRequired": "Enter a new API key",
     "updated": "API key updated",
-    "updateFailed": "Failed to update API key",
     "title": "Update API Key",
     "description": "Update this model's API key. Only the new key is sent; the rest of the deployment configuration is left untouched.",
     "apiKeyOnlyWarning": "Only the API key is rotated here. Models that authenticate with an Azure AD token, AWS credentials, or a Vertex service-account JSON aren't supported yet; update those from the model's LiteLLM Params for now.",
@@ -18762,6 +18876,7 @@
   },
   "editAutoRouter": {
     "editAutoRouterModal": {
+      "switchyardTitle": "Edit Switchyard router",
       "errors": {
         "nameRequired": "Auto router name is required",
         "defaultModelRequired": "Default model is required",
@@ -19345,6 +19460,7 @@
       }
     },
     "healthChecksTableColumns": {
+      "unknownStatus": "unknown",
       "sentinels": {
         "none": "None",
         "checkInProgress": "Check in progress..."
@@ -19604,7 +19720,6 @@
       "invalidLitellmParams": "LiteLLM Params must be a valid JSON object",
       "invalidModelInfo": "Invalid JSON in Model Info",
       "updateSuccess": "Model settings updated successfully",
-      "updateFailed": "Failed to update model settings",
       "noComplexityTiers": "No complexity tiers are configured yet, so there is nothing to test.",
       "testingConnection": "Testing connection...",
       "connectionSuccess": "Connection test successful!",
@@ -19945,6 +20060,9 @@
         "docsLink": "Learn how to set up email notifications"
       },
       "fields": {
+        "supplyUserId": "Supply custom User ID",
+        "userId": "User ID",
+        "userIdDescription": "A unique ID for this user. Leave the checkbox unchecked to generate one automatically.",
         "userEmail": "User Email",
         "userRole": "User Role",
         "globalRole": "Global Proxy Role",
@@ -20299,6 +20417,194 @@
         "cancel": "Cancel",
         "save": "Save Changes"
       }
+    }
+  },
+  "deploymentPricing": {
+    "deploymentCount_one": "This model has {{count}} deployment. Each request is billed at the prices of the deployment that served it.",
+    "deploymentCount_other": "This model has {{count}} deployments. Each request is billed at the prices of the deployment that served it.",
+    "requestAdjustments": "These are list prices. Adjustments made per request, like off-peak discounts, regional or data residency surcharges, and some providers' own pricing rules, aren't included.",
+    "providerPricing": "{{provider}} pricing",
+    "chargeColumn": "Charge",
+    "basePrices": "Base prices",
+    "aboveThreshold": "Above {{threshold}} tokens",
+    "blankCells": "Blank cells aren't priced separately for this deployment.",
+    "tieredPricing": "Prices by request size, per 1M tokens",
+    "tierRange": "{{low}}–{{high}} tokens: {{prices}}",
+    "tierPrice": "{{price}} {{charge}}",
+    "tierPricePerUnit": "{{price}} {{charge}} per {{unit}}",
+    "free": "Free",
+    "rowLabel": "{{charge}} / {{unit}}",
+    "withModality": "{{modality}} {{charge}}",
+    "withCacheDuration": "{{charge}} ({{duration}})",
+    "fallbackCost": "Cost",
+    "tiers": {
+      "standard": "Standard",
+      "flex": "Flex",
+      "balanced": "Balanced",
+      "priority": "Priority",
+      "ultrafast": "Ultrafast",
+      "batches": "Batch"
+    },
+    "charges": {
+      "input": "Input",
+      "cacheRead": "Cache read",
+      "explicitCacheRead": "Explicit cache read",
+      "cacheWrite": "Cache write",
+      "output": "Output"
+    },
+    "chargesInline": {
+      "input": "input",
+      "cacheRead": "cache read",
+      "explicitCacheRead": "explicit cache read",
+      "cacheWrite": "cache write",
+      "output": "output"
+    },
+    "modalities": {
+      "text": "Text",
+      "image": "Image",
+      "audio": "Audio",
+      "video": "Video",
+      "reasoning": "Reasoning"
+    },
+    "modalitiesInline": {
+      "text": "text",
+      "image": "image",
+      "audio": "audio",
+      "video": "video",
+      "reasoning": "reasoning"
+    },
+    "units": {
+      "token": "1M tokens",
+      "second": "second",
+      "image": "image",
+      "pixel": "pixel",
+      "character": "character",
+      "query": "query",
+      "request": "request"
+    }
+  },
+  "routerWeights": {
+    "title": "Deployment Weights",
+    "description": "Split a model group's traffic across its deployments. A deployment with no weight gets no traffic once any weight in its group is set. Weights only apply with the simple-shuffle routing strategy.",
+    "ignoredForStrategy": "Weights are ignored with {{strategy}}. Select simple-shuffle to use them.",
+    "addGroup": "Add a model group",
+    "addGroupPlaceholder": "Select a model group to weight",
+    "noModels": "No model groups found",
+    "noDeployments": "No deployments found for this model group",
+    "unknownDeployment": "Deployment no longer exists",
+    "weightFor": "Weight for {{deployment}}",
+    "share": "{{percent}}% of traffic",
+    "noPositiveWeight": "Set at least one weight above 0, or remove this model group.",
+    "removeGroup": "Remove weights for {{group}}",
+    "summary": "Deployment Weights:",
+    "loadFailed": "Could not load this model group's deployments. Saved weights are kept."
+  },
+  "customerPortal": {
+    "switcher": {
+      "label": "Customer Portal",
+      "description": "End customers, budgets and chargebacks"
+    },
+    "status": {
+      "active": "Active",
+      "overBudget": "Over budget",
+      "blocked": "Blocked"
+    },
+    "common": {
+      "noBudget": "No budget",
+      "cancel": "Cancel",
+      "save": "Save",
+      "block": "Block",
+      "blockHint": "Block and Unblock change the customer record. The proxy only rejects a blocked customer's requests when the blocked_user_check callback is enabled in litellm_settings.callbacks.",
+      "unblock": "Unblock",
+      "edit": "Edit",
+      "total": "Total",
+      "loading": "Loading..."
+    },
+    "toasts": {
+      "blocked": "Customer blocked",
+      "unblocked": "Customer unblocked",
+      "created": "Created {{name}}",
+      "updated": "Customer updated",
+      "createFailed": "Failed to create customer: {{error}}",
+      "updateFailed": "Failed to update customer: {{error}}"
+    },
+    "list": {
+      "title": "Customers",
+      "subtitle": "End users of your product, identified by customer id on every request.",
+      "create": "Create Customer",
+      "searchPlaceholder": "Search by customer id or alias",
+      "columns": {
+        "customer": "Customer",
+        "spend": "Spend this month",
+        "budget": "Budget",
+        "keys": "Keys",
+        "status": "Status"
+      },
+      "loading": "Loading customers...",
+      "empty": "No customers yet. Create one to start tracking spend.",
+      "budgetUsage": "{{spend}} / {{max}}"
+    },
+    "detail": {
+      "spendThisMonth": "Spend this month",
+      "ofBudget": "of {{max}} budget",
+      "noBudget": "no budget",
+      "tpm": "{{val}} TPM",
+      "rpm": "{{val}} RPM",
+      "keysTitle": "Keys",
+      "keysSubtitle": "Keys that sent requests as this customer this month.",
+      "keysEmpty": "No traffic from this customer this month.",
+      "columns": {
+        "key": "Key",
+        "requests": "Requests",
+        "tokens": "Tokens",
+        "spend": "Spend"
+      },
+      "unnamedKey": "Unnamed key",
+      "back": "Back to customers"
+    },
+    "createDialog": {
+      "title": "Create customer",
+      "description": "A customer is an end user of your product. Pass its id as `user` on every request to track spend and apply its limits.",
+      "customerId": "Customer id",
+      "customerIdPlaceholder": "e.g. acme-corp",
+      "alias": "Alias",
+      "aliasPlaceholder": "Optional display name",
+      "maxBudget": "Monthly budget (USD)",
+      "maxBudgetPlaceholder": "Leave empty for no budget",
+      "tpm": "TPM limit",
+      "rpm": "RPM limit",
+      "noLimit": "No limit",
+      "limitsHelp": "Budget and limits apply to this customer across every key it uses.",
+      "submit": "Create"
+    },
+    "editDialog": {
+      "title": "Edit customer",
+      "alias": "Alias",
+      "maxBudget": "Max budget (USD)",
+      "maxBudgetPlaceholder": "Leave empty for no budget",
+      "sharedBudgetWarning": "This customer is on budget {{budgetId}}. Changing the budget here changes it for every customer on that budget."
+    },
+    "chargebacks": {
+      "title": "Chargebacks",
+      "subtitle": "Spend per customer for a month, from the daily spend rollup.",
+      "groupBy": {
+        "customer": "Group by customer",
+        "key": "Customer and key",
+        "model": "Customer and model"
+      },
+      "dimension": {
+        "key": "Key",
+        "model": "Model"
+      },
+      "exportCsv": "Export CSV",
+      "columns": {
+        "customer": "Customer",
+        "requests": "Requests",
+        "inputTokens": "Input tokens",
+        "outputTokens": "Output tokens",
+        "spend": "Spend"
+      },
+      "empty": "No customer traffic in {{month}}."
     }
   }
 }

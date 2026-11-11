@@ -14,7 +14,7 @@ from pydantic import InstanceOf, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object
 from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
@@ -849,6 +849,7 @@ class InvokeStreamFrame:
 
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
 _Frame: Final = TypeVar("_Frame", ConverseStreamFrame, InvokeStreamFrame)
 
 
@@ -1298,7 +1299,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             texts: Sequence[tuple[_StreamGroupKey, str]] = ()
             if event_type == "contentBlockDelta":
                 try:
-                    payload_dict: dict[str, object] = json.loads(payload_bytes)
+                    payload_dict = decoded_json_object(_DECODED_JSON.validate_python(json.loads(payload_bytes)))
                     texts = _delta_frame_texts(payload_dict)
                 except Exception as e:
                     verbose_proxy_logger.debug(
