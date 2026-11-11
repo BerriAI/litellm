@@ -16,6 +16,7 @@ import pytest
 
 from litellm._service_logger import ServiceTypes
 from litellm.proxy import proxy_server
+from litellm.proxy.common_utils.callback_utils import CALLBACK_VAR_ENCRYPTED_PREFIX
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     V2_GCM_PREFIX,
     encrypt_value_helper,
@@ -484,6 +485,27 @@ async def test_scan_covered_tables_classifies_search_tool_params(salt_key, monke
 
 
 @pytest.mark.asyncio
+async def test_scan_covered_tables_classifies_marked_guardrail_params(salt_key, monkeypatch):
+    legacy = _legacy_ct("guardrail-secret", monkeypatch)
+
+    client = MagicMock()
+    _empty_covered_tables(client)
+    client.db.litellm_guardrailstable.find_many = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                litellm_params={"guardrail": "openai_moderation", "api_key": CALLBACK_VAR_ENCRYPTED_PREFIX + legacy}
+            )
+        ]
+    )
+    client.db.litellm_config.find_unique = AsyncMock(return_value=None)
+
+    by_loc = {r.location: r for r in await cm._scan_covered_tables(client)}
+
+    assert by_loc["guardrails"].legacy == 1
+    assert by_loc["guardrails"].plaintext == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("column", ("static_headers", "env"))
 @pytest.mark.parametrize("algorithm", ("xsalsa20-poly1305", "aes-256-gcm"))
 @pytest.mark.parametrize("as_json", (False, True))
@@ -600,6 +622,24 @@ async def test_migrate_covered_tables_reports_real_counts(salt_key, monkeypatch)
     assert by_loc["model_table"].legacy == 0  # residual zero after rotation
     assert by_loc["model_table"].already_v2 == 1
 
+
+@pytest.mark.asyncio
+async def test_scan_covered_tables_reports_router_settings_next_to_environment_variables(salt_key, monkeypatch):
+    legacy = _legacy_ct("sk-openai", monkeypatch)
+    config_rows = {
+        "environment_variables": SimpleNamespace(param_value={"OPENAI_API_KEY": legacy}),
+        "router_settings": SimpleNamespace(param_value={"redis_password": "plain-redis-pw", "num_retries": 2}),
+    }
+
+    client = MagicMock()
+    _empty_covered_tables(client)
+    client.db.litellm_config.find_unique = AsyncMock(side_effect=lambda where: config_rows.get(where["param_name"]))
+
+    by_loc = {r.location: r for r in await cm._scan_covered_tables(client)}
+
+    assert by_loc["config_environment_variables"].legacy == 1
+    assert by_loc["config_router_settings"].plaintext == 1
+    assert by_loc["config_router_settings"].legacy == 0
 
 def _db_service_hooks() -> tuple[AsyncMock, MagicMock]:
     success: Final = AsyncMock()

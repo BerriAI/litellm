@@ -22,6 +22,7 @@ from redis.exceptions import NoPermissionError
 
 import litellm
 from litellm import Router
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_json_strings, encrypt_json_strings
 from litellm.proxy.config_resolvers.settings_rules import Section
 from litellm.proxy.management_endpoints.fallback_management_endpoints import (
     FallbackCreateRequest,
@@ -344,9 +345,11 @@ class _RedisThatRefusesDel:
 class TestFallbackWritesSeeTheLatestStoredRules:
     """A write reads the rules the database holds now and leaves no stale copy in the config cache behind"""
 
-    async def _create(self, request: FallbackCreateRequest, stored: _StoredRouterSettings) -> FallbackResponse:
+    async def _create(
+        self, request: FallbackCreateRequest, stored: _StoredRouterSettings, router: Router | None = None
+    ) -> FallbackResponse:
         with (
-            patch("litellm.proxy.proxy_server.llm_router", _team_router()),
+            patch("litellm.proxy.proxy_server.llm_router", router or _team_router()),
             patch("litellm.proxy.proxy_server.prisma_client", stored.prisma_client),
             patch("litellm.proxy.proxy_server.proxy_config", stored.proxy_config),
             patch("litellm.proxy.proxy_server.store_model_in_db", True),
@@ -368,6 +371,28 @@ class TestFallbackWritesSeeTheLatestStoredRules:
         await self._create(FallbackCreateRequest(model="gpt-5.4-mini", fallback_models=["team-fallback"]), stored)
 
         assert stored.stored_fallbacks() == [TEAM_RULE, GATEWAY_RULE]
+
+    async def test_a_create_beside_an_encrypted_row_applies_and_stores_its_rules_decrypted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-fallback-salt-1234")
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+        stored: Final = _StoredRouterSettings(
+            encrypt_json_strings({"redis_password": "redis-canary-password", "fallbacks": [TEAM_RULE]})
+        )
+        router: Final = _team_router()
+
+        await self._create(
+            FallbackCreateRequest(model="gpt-5.4-mini", fallback_models=["team-fallback"]), stored, router
+        )
+
+        assert stored.row is not None
+        assert "redis-canary-password" not in json.dumps(stored.row.param_value)
+        assert decrypt_json_strings(stored.row.param_value) == {
+            "redis_password": "redis-canary-password",
+            "fallbacks": [TEAM_RULE, GATEWAY_RULE],
+        }
+        assert router.settings().fallbacks == [TEAM_RULE, GATEWAY_RULE]
 
     async def test_a_second_create_keeps_the_first_rule(self) -> None:
         stored: Final = _StoredRouterSettings(None)

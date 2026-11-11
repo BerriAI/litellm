@@ -99,6 +99,7 @@ def _seeded_tables() -> Tables:
                     "rpm": 10,
                     "use_in_pass_through": False,
                     "api_base": None,
+                    "extra_headers": {"Authorization": _encrypted("Bearer nested-secret"), "X-Trace": "plain"},
                 },
             },
             {"model_id": "model-2", "litellm_params": {"api_key": _encrypted("other-deployment", UNRELATED_KEY)}},
@@ -141,7 +142,7 @@ def _seeded_tables() -> Tables:
     }
 
 
-_VALUES_UNDER_THE_PREVIOUS_KEY = 8
+_VALUES_UNDER_THE_PREVIOUS_KEY = 9
 
 
 @pytest.mark.asyncio
@@ -160,6 +161,8 @@ async def test_reencryption_moves_every_stored_shape_to_the_new_key_and_nothing_
     assert decrypt_if_encrypted_with(model_params["model"], NEW_KEY) == "openai/gpt-5.4-mini"
     assert decrypt_if_encrypted_with(model_params["api_key"], PREVIOUS_KEY) is None
     assert (model_params["rpm"], model_params["use_in_pass_through"], model_params["api_base"]) == (10, False, None)
+    assert decrypt_if_encrypted_with(model_params["extra_headers"]["Authorization"], NEW_KEY) == "Bearer nested-secret"
+    assert model_params["extra_headers"]["X-Trace"] == "plain"
     mcp_server = tables["LiteLLM_MCPServerTable"][0]
     assert decrypt_if_encrypted_with(mcp_server["static_headers"], NEW_KEY) == '{"X-Api-Key": "header-secret"}'
     assert mcp_server["credentials"]["aws_region_name"] == "us-east-1"
