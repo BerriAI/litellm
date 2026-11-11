@@ -250,11 +250,19 @@ def _redact_responses_api_output_dict(output_items, redacted_str: str):
             output_item["input"] = redacted_str
 
 
-_REDACTED_REQUEST_FIELDS: Final = ("query_image",)
+_REDACTED_REQUEST_FIELDS: Final = ("query_image", "retrievalQuery")
+_NESTED_REQUEST_FIELDS: Final = ("extra_body", "additional_args", "complete_input_dict")
 
 
 def _request_field_redactions(params: Mapping[str, object]) -> Mapping[str, object]:
-    return {field: REDACTED_BY_LITELLM for field in _REDACTED_REQUEST_FIELDS if params.get(field) is not None}
+    return {
+        **{field: REDACTED_BY_LITELLM for field in _REDACTED_REQUEST_FIELDS if params.get(field) is not None},
+        **{
+            field: _with_redacted_request_fields(nested)
+            for field in _NESTED_REQUEST_FIELDS
+            if (nested := _as_mapping(params.get(field))) is not None
+        },
+    }
 
 
 def _with_redacted_request_fields(params: Mapping[str, object]) -> Mapping[str, object]:

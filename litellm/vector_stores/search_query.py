@@ -104,8 +104,18 @@ def sent_query_image(query_image: object, extra_body: object) -> object:
     return None if body is None else body.get("query_image")
 
 
+def _without_retrieval_query(params: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in params.items() if key not in RETRIEVAL_QUERY_PARAMS}
+
+
 def store_search_params(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
-    return MappingProxyType({key: value for key, value in litellm_params.items() if key not in RETRIEVAL_QUERY_PARAMS})
+    extra_body: Final = as_str_mapping(litellm_params.get("extra_body"))
+    return MappingProxyType(
+        {
+            **_without_retrieval_query(litellm_params),
+            **({} if extra_body is None else {"extra_body": _without_retrieval_query(extra_body)}),
+        }
+    )
 
 
 def resolve_search_query(
