@@ -158,21 +158,11 @@ async def route_a2a_agent_request(
         route_name = ROUTE_ENDPOINT_MAPPING.get(route_type, route_type)
         raise ProxyModelNotFoundError(route=route_name, model_name=model_name, retryable_with_model_read_through=False)
 
-    # Verify the caller is permitted to use this agent (admins bypass the check)
-    is_admin: Final = user_api_key_dict is not None and (
-        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
-        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+    # Verify the caller is permitted to use this agent
+    await AgentRequestHandler.verify_a2a_agent_access(
+        model_name=model_name,
+        user_api_key_auth=user_api_key_dict,
     )
-    if not is_admin or agent.identity_managed:
-        is_allowed: Final = await AgentRequestHandler.is_agent_allowed(
-            agent_id=agent.agent_id,
-            user_api_key_auth=user_api_key_dict,
-        )
-        if not is_allowed:
-            raise HTTPException(
-                status_code=403,
-                detail=f"Agent '{agent_name}' is not allowed for your key/team. Contact proxy admin for access.",
-            )
 
     litellm_params: Final = agent.litellm_params or {}
 
