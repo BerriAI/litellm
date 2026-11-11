@@ -215,6 +215,7 @@ class _Build:
     entries: dict[int, _BuildEntry] = dataclasses.field(default_factory=dict)  # mutable-ok: filled in step order
     # `add`: the deployment to add, and the entry it is stored as.
     deployment: Deployment | None = None
+    replace_existing: bool = False
     stored: UntypedEntry | None = None
     # The deployment the build is on, its provider and its data-source values.
     pending: Deployment | None = None
@@ -1007,12 +1008,13 @@ class HostRegistry(HostModelInfo):
             raise RuntimeError("the host registry builds deployments through its Rust core")
         for entry in entries:
             refuse_wide_numbers(entry)
-        self._core_model_list.begin_build(replacing=install == "replace")
-        try:
-            self.build_runner(entries, build.path, resolve_secrets, install, partial(self._answer_shown, build))
-        finally:
-            self._core_model_list.end_build()
-            self._drop_removed_live_values()
+        with self._deployment_index_lock:
+            self._core_model_list.begin_build(replacing=install == "replace")
+            try:
+                self.build_runner(entries, build.path, resolve_secrets, install, partial(self._answer_shown, build))
+            finally:
+                self._core_model_list.end_build()
+                self._drop_removed_live_values()
         if build.failure is not None:
             # router-core served what it built before the entry that raised (`set_model_list`
             # cleared the list first), so the router is left as the Python core leaves it.
@@ -1220,7 +1222,11 @@ class HostRegistry(HostModelInfo):
         deployment: Final = build.deployment
         if deployment is None:
             raise RuntimeError("an add build holds its deployment")
-        if deployment.model_info.id and self._core_has_model_id(deployment.model_info.id):
+        if (
+            not build.replace_existing
+            and deployment.model_info.id
+            and self._core_has_model_id(deployment.model_info.id)
+        ):
             return {"skip": True}
         declared_params: Final = deployment.litellm_params.model_dump(exclude_none=True)
         warn_on_provider_credential_mismatch(model_name=deployment.model_name, litellm_params=declared_params)
@@ -1273,7 +1279,9 @@ class HostRegistry(HostModelInfo):
         deployment: Final = build.pending
         if deployment is None:
             raise RuntimeError("an added step follows a validated deployment")
-        self._register_deployment(deployment, build.provider, build.data_source_values)
+        self._register_deployment(
+            deployment, build.provider, build.data_source_values, replace_existing=build.replace_existing
+        )
         build.pending = None  # rebind-ok: the build's state, which each step advances
         build.data_source_values = ()  # rebind-ok: the build's state, which each step advances
         self._invalidate_model_group_info_cache()
@@ -1319,6 +1327,8 @@ class HostRegistry(HostModelInfo):
         deployment: Deployment,
         custom_llm_provider: str | None,
         data_source_values: Sequence[tuple[int, str, str]],
+        *,
+        replace_existing: bool,
     ) -> None:
         """``_add_deployment`` after the provider: its data-source values, pass-through
         credentials and pre-routing strategies (router-core registers its names and patterns)."""
@@ -1366,7 +1376,7 @@ class HostRegistry(HostModelInfo):
         if custom_llm_provider is not None:
             self._initialize_deployment_for_pass_through(deployment, custom_llm_provider)
         if self.strategies is not None:
-            self.strategies.register(deployment)
+            self.strategies.register(deployment, replace_existing=replace_existing)
 
     def _initialize_deployment_for_pass_through(self, deployment: Deployment, custom_llm_provider: str) -> None:
         """Register vertex credentials for a pass-through deployment (``_initialize_deployment_for_pass_through``)."""
@@ -1395,7 +1405,10 @@ class HostRegistry(HostModelInfo):
 
     def add_deployment(self, deployment: Deployment) -> Deployment | None:
         """Add one deployment unless its id exists (``add_deployment``), built by router-core."""
-        build: Final = _Build(path="add", deployment=deployment)
+        return self._install_deployment(deployment, replace_existing=False)
+
+    def _install_deployment(self, deployment: Deployment, *, replace_existing: bool) -> Deployment | None:
+        build: Final = _Build(path="add", deployment=deployment, replace_existing=replace_existing)
         self._run_build(build, [deployment.to_json(exclude_none=True)], resolve_secrets=False, install="upsert")
         if build.result is None:
             return None
@@ -1410,61 +1423,37 @@ class HostRegistry(HostModelInfo):
         on_router: Final = self._core_get_deployment(model_id=model_id)
         served: Final = without_model_capability_flags(deployment)
         try:
+            if (
+                on_router is not None
+                and deployment.model_name == on_router.model_name
+                and served.litellm_params == on_router.litellm_params
+                and deployment.model_info == on_router.model_info
+            ):
+                return None
+            self._install_deployment(deployment, replace_existing=True)
             if on_router is not None:
-                if (
-                    deployment.model_name == on_router.model_name
-                    and served.litellm_params == on_router.litellm_params
-                    and deployment.model_info == on_router.model_info
-                ):
-                    return None
-                with self._deployment_index_lock:
-                    removal_idx: Final = self.model_id_to_deployment_index_map.get(model_id)
-                    if removal_idx is not None:
-                        removed: Final = self._core_model_list[removal_idx]  # pyright: ignore[reportArgumentType]  # raises IndexError for a position past the list, as the pop does
-                        self._remove(model_id)
-                        withdraw_shared_capabilities(
-                            self._host, removed, deployment.to_json(exclude_none=True), self._served_by_live_routers()
-                        )
+                withdraw_shared_capabilities(
+                    self._host,
+                    on_router.to_json(exclude_none=True),
+                    deployment.to_json(exclude_none=True),
+                    self._served_by_live_routers(),
+                )
                 if self.strategies is not None:
-                    self.strategies.release(on_router)
-                self._on_change()
-            self.add_deployment(deployment=deployment)
+                    self.strategies.release(on_router, replaced=True)
             if self.strategies is not None:
                 self.strategies.upserted(deployment, on_router)
         except Exception as e:
             if not self.ignore_invalid_deployments:
                 raise
             verbose_router_logger.warning(
-                "Error upserting deployment %s (id=%s): %s. Dropping it and continuing with other deployments.",
+                "Error upserting deployment %s (id=%s): %s. Keeping its previous deployment, if any.",
                 deployment.model_name,
                 deployment.model_info.id,
                 e,
             )
-            self._restore_deployment_after_failed_upsert(on_router, model_id)
             return None
         else:
             return deployment
-
-    def _restore_deployment_after_failed_upsert(self, previous: Deployment | None, model_id: str) -> None:
-        if previous is None or self._core_has_model_id(model_id):
-            return
-        try:
-            if self.strategies is None:
-                self.add_deployment(deployment=previous)
-            else:
-                self.strategies.without_capability_limit(lambda: self.add_deployment(deployment=previous))
-            verbose_router_logger.info(
-                "Restored deployment %s (id=%s); it keeps serving its previous configuration.",
-                previous.model_name,
-                model_id,
-            )
-        except Exception as restore_error:  # noqa: BLE001  # best-effort restore: a second failure must not abort the reload
-            verbose_router_logger.warning(
-                "Could not restore previously served deployment %s (id=%s) after the failed upsert: %s",
-                previous.model_name,
-                model_id,
-                restore_error,
-            )
 
     def _live_handle(self) -> "RouterCoreHandle | None":
         return None if self.handle_lookup is None else self.handle_lookup()
