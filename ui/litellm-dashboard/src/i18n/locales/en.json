@@ -14952,7 +14952,8 @@
         "users": "Users",
         "organizations": "Organizations",
         "models": "Models",
-        "agents": "Agents"
+        "agents": "Agents",
+        "guardrails": "Guardrails"
       },
       "drawer": {
         "notAvailable": "N/A",
