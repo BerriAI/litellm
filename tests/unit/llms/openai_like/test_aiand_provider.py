@@ -89,7 +89,7 @@ def test_json_provider_chat_uses_only_its_own_key(
     monkeypatch.setattr(litellm, "openai_key", None)
     route: Final = respx_mock.route(method="POST").mock(return_value=httpx.Response(401, json={"error": "no key"}))
 
-    with pytest.raises(Exception):
+    with pytest.raises(litellm.AuthenticationError):
         litellm.completion(model=model, messages=[{"role": "user", "content": "Hello"}], num_retries=0)
 
     assert all("sk-env-key" not in call.request.headers.get("Authorization", "") for call in route.calls)
