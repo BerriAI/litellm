@@ -8305,16 +8305,14 @@
         "markAsRead": "Mark as read"
       },
       "bell": {
-        "triggerDeprecations_one": "Notifications, {{count}} model deprecation alert needs attention",
-        "triggerDeprecations_other": "Notifications, {{count}} model deprecation alerts need attention",
-        "deprecationsTitle": "Model deprecations",
-        "viewAllDeprecations": "View all {{total}}",
-        "deprecationsDescription": "Model migrations across your keys and teams.",
+        "triggerAlerts": "Notifications, alerts need attention",
+        "seeAll": "See all",
+        "comparison": "{{value}} vs. {{baseline}} usual",
+        "noOpenAlerts": "No open alerts.",
         "announcementsHeading": "Announcements",
-        "viewDeprecations": "View model deprecations",
         "trigger": "Notifications",
         "triggerUnread": "Notifications, {{unread}} unread",
-        "title": "What's new"
+        "title": "Notifications"
       }
     },
     "dashboardCommunityLinks": {
