@@ -19,6 +19,8 @@ from litellm._logging import verbose_logger
 from litellm.anthropic_beta_headers_manager import aload_beta_headers_config
 from litellm.constants import PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+from litellm.integrations.custom_logger_v2.enums import Hook
+from litellm.integrations.custom_logger_v2.host import has_natives
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -49,7 +51,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes, LlmProviders, LlmProvidersSet
-from litellm.utils import ProviderConfigManager, client
+from litellm.utils import ProviderConfigManager, client, route_through_dispatcher
 
 from ..adapters.handler import LiteLLMMessagesToCompletionTransformationHandler, request_safeguards_evaluator
 from ..responses_adapters.handler import LiteLLMMessagesToResponsesAPIHandler
@@ -503,7 +505,14 @@ async def anthropic_messages(
     # tool_choice is forwarded explicitly (it is a named param, not in kwargs)
     # so hooks that rename tools — e.g. websearch_interception converting
     # web_search -> litellm_web_search — can keep a forced tool_choice in sync.
-    request_kwargs: Final = await _execute_pre_request_hooks(
+    request_kwargs: Final = await (
+        route_through_dispatcher(
+            Hook.pre_deployment_call,
+            _execute_pre_request_hooks,  # pyright: ignore[reportUnknownArgumentType]  # the legacy hook is untyped
+        )
+        if has_natives(Hook.pre_deployment_call)
+        else _execute_pre_request_hooks
+    )(
         model=model,
         messages=messages,
         tools=tools,

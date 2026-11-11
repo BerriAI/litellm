@@ -44,6 +44,8 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger_v2 import CallContext, CustomLoggerV2, Hook, build_manifest, on
+from litellm.integrations.custom_logger_v2.host import register_native, reset_host_for_tests
 from litellm.integrations.humanloop import HumanloopLogger
 from litellm.llms.base_llm.audio_transcription.transformation import BaseAudioTranscriptionConfig
 from litellm.integrations.langfuse.langfuse_prompt_management import LangfusePromptManagement
@@ -11845,3 +11847,122 @@ async def test_pre_call_deployment_hook_hands_responses_compact_its_call_type(mo
     await async_pre_call_deployment_hook({"model": "gpt-5.4-mini"}, "acompact_responses")
 
     assert hook.seen_call_types == (CallTypes.acompact_responses,)
+
+
+_REWRITTEN_RESPONSE: Final = ModelResponse(id="rewritten-by-the-deployment-hook")
+
+
+class _PreDeploymentRewriter(CustomLogger):
+    def __init__(self, seen: list[str]) -> None:
+        super().__init__()
+        self.seen = seen
+
+    async def async_pre_call_deployment_hook(
+        self, kwargs: dict[str, object], call_type: CallTypes | None
+    ) -> dict[str, object] | None:
+        self.seen.append("legacy")
+        return {**kwargs, "mock_response": "rewritten by the pre-deployment hook"}
+
+
+class _PostDeploymentSuccessRewriter(CustomLogger):
+    def __init__(self, seen: list[str]) -> None:
+        super().__init__()
+        self.seen = seen
+
+    async def async_post_call_success_deployment_hook(
+        self, request_data: dict[str, object], response: object, call_type: CallTypes | None
+    ) -> object:
+        self.seen.append("legacy")
+        return _REWRITTEN_RESPONSE
+
+
+class _PostDeploymentFailureRecorder(CustomLogger):
+    def __init__(self, seen: list[str]) -> None:
+        super().__init__()
+        self.seen = seen
+        self.failures: tuple[Exception, ...] = ()
+
+    async def async_post_call_failure_deployment_hook(
+        self, request_data: Mapping[str, object], exception: Exception, call_type: CallTypes | None
+    ) -> None:
+        self.seen.append("legacy")
+        self.failures = (*self.failures, exception)
+
+
+def _deployment_gate(hook: Hook, seen: list[str]) -> CustomLoggerV2:
+    class Gate(CustomLoggerV2):
+        @on(hook, may_abort=True)
+        async def gate(self, view: object, ctx: CallContext[object]) -> None:
+            seen.append("native")
+
+    return Gate()
+
+
+@pytest.fixture
+def v2_host() -> Iterator[None]:
+    reset_host_for_tests()
+    yield
+    reset_host_for_tests()
+
+
+def _install_deployment_hook(
+    monkeypatch: pytest.MonkeyPatch, legacy: CustomLogger, native: Hook | None, seen: list[str]
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [legacy])
+    if native is not None:
+        register_native(build_manifest(_deployment_gate(native, seen)))
+
+
+@pytest.mark.parametrize("native", [False, True])
+async def test_pre_deployment_call_sends_the_kwargs_the_legacy_hook_returned(
+    monkeypatch: pytest.MonkeyPatch, v2_host: None, native: bool
+) -> None:
+    seen: Final[list[str]] = []
+    _install_deployment_hook(
+        monkeypatch, _PreDeploymentRewriter(seen), Hook.pre_deployment_call if native else None, seen
+    )
+
+    response: Final = await litellm.acompletion(
+        model="gpt-4o-mini", messages=[{"role": "user", "content": "hi"}], mock_response="original", num_retries=0
+    )
+
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.content == "rewritten by the pre-deployment hook"
+    assert seen == (["native", "legacy"] if native else ["legacy"])
+
+
+@pytest.mark.parametrize("native", [False, True])
+async def test_post_deployment_success_returns_what_the_legacy_hook_returned(
+    monkeypatch: pytest.MonkeyPatch, v2_host: None, native: bool
+) -> None:
+    seen: Final[list[str]] = []
+    _install_deployment_hook(
+        monkeypatch, _PostDeploymentSuccessRewriter(seen), Hook.post_deployment_success if native else None, seen
+    )
+
+    response: Final = await litellm.acompletion(
+        model="gpt-4o-mini", messages=[{"role": "user", "content": "hi"}], mock_response="original", num_retries=0
+    )
+
+    assert response is _REWRITTEN_RESPONSE
+    assert seen == (["native", "legacy"] if native else ["legacy"])
+
+
+@pytest.mark.parametrize("native", [False, True])
+async def test_post_deployment_failure_reaches_the_legacy_hook_and_keeps_the_real_error(
+    monkeypatch: pytest.MonkeyPatch, v2_host: None, native: bool
+) -> None:
+    seen: Final[list[str]] = []
+    recorder: Final = _PostDeploymentFailureRecorder(seen)
+    _install_deployment_hook(monkeypatch, recorder, Hook.post_deployment_failure if native else None, seen)
+    error: Final = litellm.AuthenticationError(message="bad key", llm_provider="openai", model="gpt-4o-mini")
+
+    with pytest.raises(litellm.AuthenticationError, match="bad key") as raised:
+        await litellm.acompletion(
+            model="gpt-4o-mini", messages=[{"role": "user", "content": "hi"}], mock_response=error, num_retries=0
+        )
+
+    assert len(recorder.failures) == 1
+    assert type(recorder.failures[0]) is type(raised.value)
+    assert recorder.failures[0] is not raised.value
+    assert seen == (["native", "legacy"] if native else ["legacy"])

@@ -83,6 +83,8 @@ from litellm.constants import (
     PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
+from litellm.integrations.custom_logger_v2.enums import Hook
+from litellm.integrations.custom_logger_v2.host import has_natives, run_legacy_hook
 from litellm.litellm_core_utils.agentic_followup_failure import is_agentic_followup_failure
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     HOSTED_TOOL_CHOICE_TYPES,
@@ -334,7 +336,7 @@ except (ImportError, AttributeError, TypeError):
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
 from collections.abc import AsyncIterator, Callable, Collection, Iterable, Iterator, Mapping, Sequence, Sized
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Literal, ParamSpec, Protocol, TypeAlias, TypeVar, cast, runtime_checkable
 
 from typing_extensions import assert_never
 
@@ -351,6 +353,8 @@ from litellm.llms.base_llm.base_utils import (
 )
 
 if TYPE_CHECKING:
+    from types import CoroutineType
+
     # Heavy types that are only needed for type checking; avoid importing
     # their modules at runtime during `litellm` import.
     from litellm.caching.caching_handler import (
@@ -831,6 +835,10 @@ _PASS_THROUGH_CALL_TYPES: Final = frozenset(
     {CallTypes.allm_passthrough_route.value, CallTypes.llm_passthrough_route.value}
 )
 _Resolved: Final = TypeVar("_Resolved")
+_DeploymentHookParams: Final = ParamSpec("_DeploymentHookParams")
+_DeploymentHookResult: Final = TypeVar("_DeploymentHookResult")
+if TYPE_CHECKING:
+    _DeploymentHookCall: TypeAlias = CoroutineType[Any, Any, _DeploymentHookResult]
 
 
 async def _resolved_off_the_event_loop(resolve: Callable[[OidcResolver], _Resolved], api_key: object) -> _Resolved:
@@ -1963,6 +1971,18 @@ async def async_post_call_failure_deployment_hook(
                 )
 
 
+def route_through_dispatcher(
+    hook: Hook, legacy: Callable[_DeploymentHookParams, _DeploymentHookCall[_DeploymentHookResult]]
+) -> Callable[_DeploymentHookParams, _DeploymentHookCall[_DeploymentHookResult]]:
+    async def routed(
+        *args: _DeploymentHookParams.args,
+        **kwargs: _DeploymentHookParams.kwargs,  # kwargs-ok: ParamSpec keeps the wrapped hook's keyword contract
+    ) -> _DeploymentHookResult:
+        return await run_legacy_hook(hook, lambda _patches: legacy(*args, **kwargs))
+
+    return routed
+
+
 def post_call_processing(
     original_response,
     model,
@@ -2416,7 +2436,11 @@ def client(original_function):
                 bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
 
             kwargs["litellm_logging_obj"] = logging_obj
-            modified_kwargs: Final = await async_pre_call_deployment_hook(kwargs, call_type)
+            modified_kwargs: Final = await (
+                route_through_dispatcher(Hook.pre_deployment_call, async_pre_call_deployment_hook)
+                if has_natives(Hook.pre_deployment_call)
+                else async_pre_call_deployment_hook
+            )(kwargs, call_type)
             transcription_runs_unstreamed: Final = _transcription_runs_unstreamed(call_type, kwargs, modified_kwargs)
             if modified_kwargs is not None:
                 kwargs = modified_kwargs
@@ -2523,7 +2547,11 @@ def client(original_function):
             except Exception as deployment_error:
                 _deployment_call_end_time = datetime.datetime.now()  # noqa: DTZ005  # matches the naive datetimes this whole function already times start_time/end_time with
                 try:
-                    await async_post_call_failure_deployment_hook(
+                    await (
+                        route_through_dispatcher(Hook.post_deployment_failure, async_post_call_failure_deployment_hook)
+                        if has_natives(Hook.post_deployment_failure)
+                        else async_post_call_failure_deployment_hook
+                    )(
                         request_data=call_kwargs,
                         exception=deployment_error,
                         call_type=call_type,
@@ -2584,7 +2612,14 @@ def client(original_function):
             # Only run if call_type is a valid value in CallTypes
             _call_type_enum: Final = _CALL_TYPE_ENUM_MAP.get(call_type)
             if _call_type_enum is not None:
-                result = await async_post_call_success_deployment_hook(
+                result = await (
+                    route_through_dispatcher(
+                        Hook.post_deployment_success,
+                        async_post_call_success_deployment_hook,  # pyright: ignore[reportUnknownArgumentType]  # the legacy hook takes a bare dict
+                    )
+                    if has_natives(Hook.post_deployment_success)
+                    else async_post_call_success_deployment_hook
+                )(
                     request_data=_guardrail_view_of_requested_stream(call_kwargs)
                     if transcription_runs_unstreamed
                     else call_kwargs,

@@ -3,7 +3,7 @@ import copy
 import json
 import os
 import uuid
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Final, List
@@ -22,6 +22,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import litellm
 from litellm.anthropic_interface import messages
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger_v2 import CallContext, CustomLoggerV2, Hook, build_manifest, on
+from litellm.integrations.custom_logger_v2.host import register_native, reset_host_for_tests
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -2995,3 +2997,44 @@ async def test_azure_messages_replay_encrypted_reasoning_only_to_responses(
     else:
         assert route.calls.last.request.url.path.endswith("/chat/completions")
         assert "qa-opaque-reasoning" not in json.dumps(body)
+
+
+@pytest.fixture
+def v2_host() -> Iterator[None]:
+    reset_host_for_tests()
+    yield
+    reset_host_for_tests()
+
+
+@pytest.mark.parametrize("native", [False, True])
+async def test_messages_send_the_request_the_pre_request_hook_returned(
+    monkeypatch: pytest.MonkeyPatch, v2_host: None, native: bool
+) -> None:
+    seen: Final[list[str]] = []
+
+    class MockRewriter(CustomLogger):
+        async def async_pre_request_hook(
+            self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+        ) -> dict[str, object] | None:
+            seen.append("legacy")
+            return {**kwargs, "mock_response": "rewritten by the pre-request hook"}
+
+    class Gate(CustomLoggerV2):
+        @on(Hook.pre_deployment_call, may_abort=True)
+        async def gate(self, view: object, ctx: CallContext[object]) -> None:
+            seen.append("native")
+
+    monkeypatch.setattr(litellm, "callbacks", [MockRewriter()])
+    if native:
+        register_native(build_manifest(Gate()))
+
+    response: Final = await messages.acreate(
+        model="anthropic/claude-sonnet-4-5",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=10,
+        mock_response="original",
+    )
+
+    assert isinstance(response, dict)
+    assert response["content"][0]["text"] == "rewritten by the pre-request hook"
+    assert seen == (["native", "native", "legacy"] if native else ["legacy"])
