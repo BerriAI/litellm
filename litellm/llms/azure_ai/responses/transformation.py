@@ -10,6 +10,7 @@ from litellm.llms.azure_ai.common_utils import (
     foundry_project_root,
     get_azure_ai_auth_headers,
     with_foundry_project_scope,
+    without_api_version,
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
@@ -19,7 +20,8 @@ _RESPONSES_PATH: Final = ("openai", "v1", "responses")
 
 def _responses_url(api_base: str) -> str:
     base_url: Final = httpx.URL(api_base)
-    return str(base_url.copy_with(path="/" + "/".join((*foundry_project_root(base_url), *_RESPONSES_PATH)), query=None))
+    responses_path: Final = "/" + "/".join((*foundry_project_root(base_url), *_RESPONSES_PATH))
+    return str(base_url.copy_with(path=responses_path, params=without_api_version(base_url)))
 
 
 class AzureAIResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
