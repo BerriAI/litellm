@@ -16095,11 +16095,12 @@ async def _count_request_tokens(
     openai_model: Final = deployment_openai_model(deployment_view)
     template_model: Final = openai_model or _deployment_base_model(deployment_view) or model_to_use
     tool_section: Final = chat_template_tool_section(template_model)
+    count_policy: Final = _count_drop_policy(deployment_view, {**request_litellm_params, **(responses_request or {})})
     counted_tool_choice: Final = (
         request.tool_choice
         if counted_messages is not None
         and isinstance(request.tool_choice, (str, Mapping))
-        and "tool_choice" not in _count_drop_policy(deployment_view, responses_request or {}).additional_drop_params
+        and "tool_choice" not in count_policy.additional_drop_params
         and not _xai_tool_choice_off_xai(
             template_model, tool_section, _deployment_served_model(deployment_view, request.model, responses_request)
         )

@@ -5555,6 +5555,44 @@ async def test_count_routes_count_no_tool_choice_the_deployment_drops(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route_count", "tool_choice"),
+    [(_messages_route_count, {"type": "none"}), (_responses_route_count, "none")],
+    ids=["messages", "responses"],
+)
+@pytest.mark.parametrize(
+    ("dropped", "counts_choice"),
+    [(["tool_choice"], False), (["temperature"], True)],
+    ids=["tool-choice-dropped", "other-param-dropped"],
+)
+async def test_count_routes_count_no_tool_choice_the_request_drops(
+    monkeypatch: pytest.MonkeyPatch,
+    route_count: Callable[[Mapping[str, JsonValue]], Coroutine[None, None, int]],
+    tool_choice: JsonValue,
+    dropped: list[JsonValue],
+    counts_choice: bool,
+) -> None:
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "no-count-api",
+                    "litellm_params": {"model": f"mistral/{_TOOL_CHOICE_MODEL}", "api_key": "sk-test"},
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "proxy_config", litellm.proxy.proxy_server.ProxyConfig())
+    drop_list: Final = {"additional_drop_params": dropped}
+
+    route_added: Final = await route_count({"tool_choice": tool_choice, **drop_list}) - await route_count(drop_list)
+
+    assert (route_added > 0) == counts_choice
+
+
+@pytest.mark.asyncio
 async def test_utils_token_counter_counts_a_bare_prompt_with_a_tool_choice_like_the_prompt_alone(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
