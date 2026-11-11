@@ -8,6 +8,9 @@ metadata:
     app.kubernetes.io/component: ui
 spec:
   type: {{ .Values.ui.service.type }}
+  {{- with .Values.ui.service.trafficDistribution }}
+  trafficDistribution: {{ . }}
+  {{- end }}
   ports:
     - port: {{ .Values.ui.service.port }}
       targetPort: http

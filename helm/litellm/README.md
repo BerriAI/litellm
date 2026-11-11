@@ -39,6 +39,16 @@ billingMetrics:
 The chart requires an HTTPS endpoint, an HTTPS token URL, and the Secret name
 when billing metrics are enabled
 
+## Zone-aware routing
+
+On a multi-zone cluster, set `gateway.service.trafficDistribution` to keep in-cluster clients on a gateway pod in their own zone when one is ready, which keeps cross-zone traffic down. The field needs Kubernetes 1.31 or newer and is left empty by default. `backend.service` and `ui.service` take the same key
+
+```yaml
+gateway:
+  service:
+    trafficDistribution: PreferSameZone
+```
+
 ## Routes to another Service
 
 For a shared hostname, `ingress.extraPaths` can route to a Service in the same namespace using `serviceName` and `servicePort`. The port can be a number or a named Service port. Omit `service` when using these fields

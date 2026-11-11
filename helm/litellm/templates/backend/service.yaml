@@ -8,6 +8,9 @@ metadata:
     app.kubernetes.io/component: backend
 spec:
   type: {{ .Values.backend.service.type }}
+  {{- with .Values.backend.service.trafficDistribution }}
+  trafficDistribution: {{ . }}
+  {{- end }}
   ports:
     - port: {{ .Values.backend.service.port }}
       targetPort: http
