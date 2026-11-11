@@ -3,10 +3,17 @@ Test that VertexBase subclasses (PartnerModels, Gemma, ModelGarden) reuse
 cached credentials instead of creating a new VertexLLM instance on every request.
 """
 
+import json
 import sys
+from typing import Final
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
+import responses
+import respx
+
+import litellm
 
 from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
     VertexAIPartnerModels,
@@ -256,3 +263,60 @@ class TestModelGardenCredentialReuse:
                 project_id="test-project",
                 custom_llm_provider="vertex_ai",
             )
+
+
+@respx.mock
+def test_sync_mistral_partner_completion_posts_to_raw_predict_without_a_client():
+    route: Final = respx.post(
+        "https://us-central1-aiplatform.googleapis.com/v1/projects/partner-project/locations/us-central1"
+        "/publishers/mistralai/models/mistral-small-2503@001:rawPredict"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-vertex-mistral",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "mistral-small-2503",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": "I am Litellm Bot."},
+                    }
+                ],
+                "usage": {"prompt_tokens": 21, "completion_tokens": 5, "total_tokens": 26},
+            },
+        )
+    )
+    messages: Final = [
+        {"role": "system", "content": "Your name is Litellm Bot, you are a helpful assistant"},
+        {"role": "user", "content": "Hello, what is your name?"},
+    ]
+
+    with responses.RequestsMock() as google_token_endpoint:
+        token_route: Final = google_token_endpoint.post(
+            "https://oauth2.googleapis.com/token",
+            json={"access_token": "partner-access-token", "expires_in": 3600, "token_type": "Bearer"},
+        )
+        response: Final = litellm.completion(
+            model="vertex_ai/mistral-small-2503@001",
+            messages=messages,
+            vertex_project="partner-project",
+            vertex_location="us-central1",
+            vertex_credentials=json.dumps(
+                {
+                    "type": "authorized_user",
+                    "client_id": "partner-client-id",
+                    "client_secret": "partner-client-secret",
+                    "refresh_token": "partner-refresh-token",
+                }
+            ),
+        )
+
+    assert token_route.call_count == 1
+    request: Final = route.calls[0].request
+    assert request.headers["authorization"] == "Bearer partner-access-token"
+    assert json.loads(request.content) == {"model": "mistral-small-2503", "messages": messages, "stream": False}
+    assert response.choices[0].message.content == "I am Litellm Bot."
+    assert response.usage.total_tokens == 26

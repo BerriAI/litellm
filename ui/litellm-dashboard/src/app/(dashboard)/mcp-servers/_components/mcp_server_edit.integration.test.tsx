@@ -88,6 +88,7 @@ const EXPECTED_BASE: Readonly<Record<string, unknown>> = {
     tool_allowlist_enforced: false,
   },
   oauth_passthrough: false,
+  rpm: undefined,
   server_id: "srv_1",
   server_name: "srv",
   static_headers: {},
@@ -133,6 +134,11 @@ const CASES: readonly Case[] = [
     label: "basic sends only auth_value under credentials",
     server: { ...BASE, auth_type: "basic", credentials: CREDS },
     expected: { ...EXPECTED_BASE, auth_type: "basic", credentials: { auth_value: "secret-value" } },
+  },
+  {
+    label: "authorization sends only auth_value under credentials",
+    server: { ...BASE, auth_type: "authorization", credentials: CREDS },
+    expected: { ...EXPECTED_BASE, auth_type: "authorization", credentials: { auth_value: "secret-value" } },
   },
   {
     label: "oauth2 m2m mounts token_url and omits the interactive endpoints entirely",
@@ -263,6 +269,8 @@ const CASES: readonly Case[] = [
       ...EXPECTED_BASE,
       auth_type: "true_passthrough",
       credentials: { client_id: "cid", client_secret: "csec" },
+      authorization_url: undefined,
+      token_url: undefined,
     },
   },
   {
@@ -272,6 +280,8 @@ const CASES: readonly Case[] = [
       ...EXPECTED_BASE,
       auth_type: "oauth_delegate",
       credentials: { client_id: "cid", client_secret: "csec" },
+      authorization_url: undefined,
+      token_url: undefined,
     },
   },
   {
@@ -282,7 +292,13 @@ const CASES: readonly Case[] = [
   {
     label: "dcr_bridge stays true for a client-forwarded mode",
     server: { ...BASE, auth_type: "true_passthrough", dcr_bridge: true },
-    expected: { ...EXPECTED_BASE, auth_type: "true_passthrough", dcr_bridge: true },
+    expected: {
+      ...EXPECTED_BASE,
+      auth_type: "true_passthrough",
+      dcr_bridge: true,
+      authorization_url: undefined,
+      token_url: undefined,
+    },
   },
   {
     label: "an existing allowed_tools list enforces the allowlist and round-trips",

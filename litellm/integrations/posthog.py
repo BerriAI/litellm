@@ -26,8 +26,8 @@ from litellm.integrations.posthog_mock_client import (
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.custom_httpx.http_handler import (
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
     httpxSpecialProvider,
 )
 from litellm.types.integrations.posthog import (
@@ -73,7 +73,7 @@ class PostHogLogger(CustomBatchLogger):
                 raise Exception("POSTHOG_API_KEY is not set, set 'POSTHOG_API_KEY=<>'")
 
             self.async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
-            self.sync_client = _get_httpx_client()
+            self.sync_client = get_httpx_client()
 
             self.POSTHOG_API_KEY = os.getenv("POSTHOG_API_KEY")
             posthog_api_url: Final = os.getenv("POSTHOG_API_URL", "https://us.i.posthog.com")

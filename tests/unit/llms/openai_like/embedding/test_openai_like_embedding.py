@@ -3,9 +3,13 @@ Test cases for OpenAI-like embedding handler
 """
 
 import json
+from typing import Final
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
+import respx
+
+import litellm
 
 from litellm.llms.openai_like.embedding.handler import OpenAILikeEmbeddingHandler
 from litellm.types.utils import EmbeddingResponse
@@ -346,3 +350,40 @@ class TestOpenAILikeEmbeddingHandler:
         assert sent_data["model"] == "test-model"
         assert sent_data["input"] == ["test input"]
         assert "encoding_format" not in sent_data
+
+
+_OPENAI_LIKE_EMBEDDING_BODY: Final = {
+    "object": "list",
+    "data": [{"object": "embedding", "index": 0, "embedding": [0.5, 0.25]}],
+    "model": "jina-embeddings-v3",
+    "usage": {"prompt_tokens": 2, "total_tokens": 2},
+}
+
+
+def test_llamafile_embedding_posts_to_the_env_api_base(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LLAMAFILE_API_BASE", "http://llamafile.test/v1")
+    route: Final = respx_mock.post("http://llamafile.test/v1/embeddings").respond(json=_OPENAI_LIKE_EMBEDDING_BODY)
+
+    response: Final = litellm.embedding(model="llamafile/jina-embeddings-v3", input=["Hello world"])
+
+    assert route.call_count == 1
+    assert json.loads(route.calls.last.request.content) == {"model": "jina-embeddings-v3", "input": ["Hello world"]}
+    assert response.data[0]["embedding"] == [0.5, 0.25]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_lm_studio_embedding_posts_to_the_env_api_base(
+    sync_mode: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("LM_STUDIO_API_BASE", "http://lm-studio.test")
+    route: Final = respx_mock.post("http://lm-studio.test/embeddings").respond(json=_OPENAI_LIKE_EMBEDDING_BODY)
+    request: Final = {"model": "lm_studio/jina-embeddings-v3", "input": ["Hello world"]}
+
+    response: Final = litellm.embedding(**request) if sync_mode else await litellm.aembedding(**request)
+
+    assert route.call_count == 1
+    assert json.loads(route.calls.last.request.content) == {"model": "jina-embeddings-v3", "input": ["Hello world"]}
+    assert response.data[0]["embedding"] == [0.5, 0.25]

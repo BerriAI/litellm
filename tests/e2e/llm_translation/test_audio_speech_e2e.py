@@ -10,8 +10,11 @@ the SDK refuses to send a request missing its required fields.
 
 from __future__ import annotations
 
+from typing import Final
+
 import pytest
 from e2e_config import unique_marker
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from e2e_http import assert_client_error
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
@@ -20,6 +23,9 @@ from pydantic import BaseModel
 from sdk_clients import SdkClients, response_header
 
 pytestmark = pytest.mark.e2e
+
+OPENAI_TTS_MODEL: Final = "openai/gpt-4o-mini-tts"
+AWS_POLLY_MODEL: Final = "aws_polly/generative"
 
 
 class _OptionalSpeechBody(BaseModel):
@@ -32,7 +38,7 @@ def _register_tts(proxy: ProxyClient, resources: ResourceManager) -> tuple[str, 
     model = f"e2e-speech-{unique_marker()}"
     model_id = proxy.create_model(
         model,
-        LiteLLMParamsBody(model="openai/gpt-4o-mini-tts", api_key="os.environ/OPENAI_API_KEY"),
+        LiteLLMParamsBody(model=OPENAI_TTS_MODEL, api_key="os.environ/OPENAI_API_KEY"),
     )
     resources.defer(lambda: proxy.delete_model(model_id))
     return model, resources.key()
@@ -40,6 +46,15 @@ def _register_tts(proxy: ProxyClient, resources: ResourceManager) -> tuple[str, 
 
 class TestAudioSpeech:
     @pytest.mark.covers("llm.audio_speech.openai.basic.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.AUDIO,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_TTS_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_audio_speech_returns_audio(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -56,6 +71,15 @@ class TestAudioSpeech:
         assert response.content, "/audio/speech returned an empty body"
 
     @pytest.mark.covers("llm.audio_speech.openai.basic.stream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.AUDIO,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_TTS_MODEL,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_audio_speech_streams_audio_chunks(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -90,6 +114,15 @@ class TestAudioSpeech:
 
     @pytest.mark.skip(reason="stage red: product gap, /v1/audio/speech 500s on missing input instead of 400")
     @pytest.mark.covers("llm.audio_speech.openai.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.AUDIO,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_TTS_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_missing_input_returns_error(
         self, proxy: ProxyClient, resources: ResourceManager
     ) -> None:
@@ -103,6 +136,12 @@ class TestAudioSpeech:
 
     @pytest.mark.skip(reason="stage red: product gap, /v1/audio/speech 500s on missing model instead of 400")
     @pytest.mark.covers("llm.audio_speech.openai.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.AUDIO,
+        )
+    )
     def test_missing_model_returns_error(
         self, proxy: ProxyClient, resources: ResourceManager
     ) -> None:
@@ -116,6 +155,15 @@ class TestAudioSpeech:
 
     @pytest.mark.skip(reason="stage red: product gap, /v1/audio/speech 500s on invalid voice instead of surfacing the provider 4xx")
     @pytest.mark.covers("llm.audio_speech.openai.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.AUDIO,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_TTS_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_invalid_voice_returns_error(
         self, proxy: ProxyClient, resources: ResourceManager
     ) -> None:
@@ -129,6 +177,15 @@ class TestAudioSpeech:
 
     @pytest.mark.skip(reason="stage red: product gap, /v1/audio/speech 500s on empty input instead of surfacing the provider 4xx")
     @pytest.mark.covers("llm.audio_speech.openai.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.AUDIO,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_TTS_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_empty_input_returns_error(
         self, proxy: ProxyClient, resources: ResourceManager
     ) -> None:
@@ -145,6 +202,15 @@ MP3_PREFIXES = (b"ID3", b"\xff\xfb", b"\xff\xf3", b"\xff\xf2")
 
 
 class TestAwsPollySpeech:
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.AUDIO,
+            providers=(Provider.AWS_POLLY,),
+            models=(AWS_POLLY_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_polly_generative_voice_returns_mp3(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -152,7 +218,7 @@ class TestAwsPollySpeech:
         model_id = proxy.create_model(
             model,
             LiteLLMParamsBody(
-                model="aws_polly/generative",
+                model=AWS_POLLY_MODEL,
                 aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
                 aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
                 aws_region_name="os.environ/AWS_REGION",

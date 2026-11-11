@@ -10,7 +10,7 @@ worker thread, off any event loop — and caches it for the process lifetime.
 """
 
 from collections.abc import Sequence
-from typing import Any, Final
+from typing import Final
 
 import httpx
 from opentelemetry.sdk.trace import ReadableSpan
@@ -76,6 +76,7 @@ def agentops_preset(
 
 def _build_agentops_exporter(spec: ExporterSpec) -> SpanExporter:
     """Factory for the ``agentops`` exporter kind: a lazy-auth OTLP/HTTP exporter."""
+    import requests
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
         OTLPSpanExporter,
     )
@@ -89,7 +90,8 @@ def _build_agentops_exporter(spec: ExporterSpec) -> SpanExporter:
         """
 
         def __init__(self, *, endpoint: str | None, api_key: str | None) -> None:
-            super().__init__(endpoint=endpoint)
+            self._agentops_session = requests.Session()
+            super().__init__(endpoint=endpoint, session=self._agentops_session)
             self._agentops_api_key = api_key
             self._auth_resolved = False
 
@@ -102,10 +104,7 @@ def _build_agentops_exporter(spec: ExporterSpec) -> SpanExporter:
             try:
                 token: Final = _fetch_agentops_jwt(self._agentops_api_key).get("token")
                 if token:
-                    # ``_session`` is the requests.Session the base exporter
-                    # POSTs through; updating its Authorization header is how the
-                    # minted JWT reaches every subsequent export.
-                    self._session.headers["Authorization"] = f"Bearer {token}"
+                    self._agentops_session.headers["Authorization"] = f"Bearer {token}"
             except Exception as e:
                 verbose_logger.debug("AgentOps JWT fetch failed: %s", e)
 
@@ -117,7 +116,7 @@ def _build_agentops_exporter(spec: ExporterSpec) -> SpanExporter:
     return _LazyAuthAgentOpsExporter(endpoint=spec.endpoint, api_key=options.get("api_key"))
 
 
-def _fetch_agentops_jwt(api_key: str) -> dict[str, Any]:
+def _fetch_agentops_jwt(api_key: str) -> dict[str, object]:
     # Own a short-lived client rather than ``_get_httpx_client()``: that returns
     # a process-wide cached ``HTTPHandler`` whose connection pool is shared by
     # every caller, so closing it here would break concurrent/subsequent

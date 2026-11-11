@@ -13,8 +13,8 @@ from typing_extensions import ReadOnly, TypedDict, Unpack
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.llms.custom_httpx.http_handler import (
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
     httpxSpecialProvider,
 )
 
@@ -53,7 +53,7 @@ class OpikLogger(CustomBatchLogger):
 
     def __init__(self, **kwargs: Unpack[_OpikLoggerKwargs]) -> None:
         self.async_httpx_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
-        self.sync_httpx_client = _get_httpx_client()
+        self.sync_httpx_client = get_httpx_client()
 
         self.opik_project_name: str = (
             utils.get_opik_config_variable(

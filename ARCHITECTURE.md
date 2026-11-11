@@ -2,6 +2,8 @@
 
 This document helps contributors understand where to make changes in LiteLLM.
 
+For why a layer is shaped the way it is, read the architecture decision records in [`docs/adrs/`](docs/adrs/AGENTS.md) (Python SDK and proxy) and [`litellm-rust/docs/adrs/`](litellm-rust/docs/adrs/AGENTS.md) (Rust core)
+
 ---
 
 ## How It Works
@@ -239,6 +241,8 @@ graph LR
 7. `DBSpendUpdateWriter.update_database()` queues spend increments to Redis
 8. Background job `update_spend` flushes queued spend to PostgreSQL every 60s
 
+Cost lookup falls back to the response model when the provider-reported name cannot be priced. Explicitly registered zero rates remain zero, and custom deployment pricing or an explicit `base_model` retain precedence
+
 ### Data Access Layer (Models & Repositories)
 
 Database entities and the operations on them live in two packages at the root of `litellm/` so both the gateway (`proxy/`) and the SDK can use them without importing proxy internals:
@@ -332,13 +336,13 @@ Each translation is isolated in its own file, making it easy to test and modify 
 |--------------|----------|------------------|
 | `/v1/chat/completions` | Anthropic | `llms/anthropic/chat/transformation.py` |
 | `/v1/chat/completions` | Bedrock Converse | `llms/bedrock/chat/converse_transformation.py` |
-| `/v1/chat/completions` | Bedrock Invoke | `llms/bedrock/chat/invoke_transformations/anthropic_claude3_transformation.py` |
+| `/v1/chat/completions` | Bedrock Invoke | `llms/bedrock/chat/invoke_transformations/anthropic_claude_transformation.py` |
 | `/v1/chat/completions` | Gemini | `llms/gemini/chat/transformation.py` |
 | `/v1/chat/completions` | Vertex AI | `llms/vertex_ai/gemini/transformation.py` |
 | `/v1/chat/completions` | OpenAI | `llms/openai/chat/gpt_transformation.py` |
-| `/v1/messages` (passthrough) | Anthropic | `llms/anthropic/pass_through/messages/transformation.py` |
-| `/v1/messages` (passthrough) | Bedrock | `llms/bedrock/messages/invoke_transformations/anthropic_claude3_transformation.py` |
-| `/v1/messages` (passthrough) | Vertex AI | `llms/vertex_ai/vertex_ai_partner_models/anthropic/experimental_pass_through/transformation.py` |
+| `/v1/messages` (passthrough) | Anthropic | `llms/anthropic/messages/native/transformation.py` |
+| `/v1/messages` (passthrough) | Bedrock | `llms/bedrock/messages/invoke_transformations/anthropic_claude_transformation.py` |
+| `/v1/messages` (passthrough) | Vertex AI | `llms/vertex_ai/vertex_ai_partner_models/anthropic/messages/transformation.py` |
 | Passthrough endpoints | All | `proxy/pass_through_endpoints/llm_provider_handlers/` |
 
 ### Example: Debugging prompt caching
@@ -346,7 +350,7 @@ Each translation is isolated in its own file, making it easy to test and modify 
 If `/v1/messages` → Bedrock Converse prompt caching isn't working but Bedrock Invoke works:
 
 1. **Bedrock Converse translation**: `llms/bedrock/chat/converse_transformation.py`
-2. **Bedrock Invoke translation**: `llms/bedrock/chat/invoke_transformations/anthropic_claude3_transformation.py`
+2. **Bedrock Invoke translation**: `llms/bedrock/chat/invoke_transformations/anthropic_claude_transformation.py`
 3. Compare how each handles `cache_control` in `transform_request()`
 
 ### How translations work

@@ -623,7 +623,7 @@ async def test_pipeline(
     ```
     """
     try:
-        validated_pipeline: Final = GuardrailPipeline(**request.pipeline)
+        validated_pipeline: Final = GuardrailPipeline.model_validate(request.pipeline)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid pipeline: {e}")
 

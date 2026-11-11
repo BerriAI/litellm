@@ -1,21 +1,46 @@
 """
 Tests for RAG proxy endpoints.
-
-Covers:
-- internal_user_viewer restriction: can only ingest to existing vector stores (must provide vector_store_id)
 """
 
+import base64
 import io
 import json
+from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
 from fastapi.testclient import TestClient
 
 import litellm
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm import Router
+from litellm.constants import LITELLM_PROXY_ADMIN_NAME
+from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.openai_files_endpoints.common_utils import (
+    TeamProviderDeployment,
+    detect_content_type_from_filename,
+)
 from litellm.proxy.proxy_server import app
+from litellm.types.utils import SpecialEnums
+from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
+from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+_TEAM_PROVIDER_KEY: Final = "team-openai-key"
+_REGISTRY_PROVIDER_KEY: Final = "registry-openai-key"
+_ENVIRONMENT_OPENAI_KEY: Final = "environment-openai-key"
+_TEAM_ID: Final = "team-a"
+_TEAM_OPENAI_BASE: Final = "https://team-openai.example/v1"
+_REGISTRY_OPENAI_BASE: Final = "https://registry-openai.example/v1"
+_OPENAI_SEARCH_PAGE: Final = {"object": "vector_store.search_results.page", "search_query": "q", "data": []}
+_BEDROCK_KNOWLEDGE_BASE_ID: Final = "KB12345678"
+_CALLER_AWS_ACCESS_KEY: Final = "caller-access-key"
+_TEAM_AWS_ACCESS_KEY: Final = "team-access-key"
+_HEADER_UNSAFE_PROVIDER_KEY: Final = "sk-forwarded\u00a0".encode("latin-1")
 
 
 @pytest.fixture
@@ -48,31 +73,32 @@ def client_internal_user():
         app.dependency_overrides = original_overrides
 
 
-def test_internal_user_viewer_rag_ingest_without_vector_store_id_rejected(
-    client_internal_user_viewer,
-):
-    """
-    internal_user_viewer cannot create new vector stores - must provide vector_store_id.
-    """
-    # Form upload without vector_store_id (would create new store)
-    response = client_internal_user_viewer.post(
-        "/v1/rag/ingest",
-        files={"file": ("sample.txt", io.BytesIO(b"test content"), "text/plain")},
-        data={
-            "request": '{"ingest_options":{"vector_store":{"custom_llm_provider":"openai"}}}'
-        },
-    )
+@pytest.fixture
+def client_team_a() -> Iterator[TestClient]:
+    mock_auth: Final = UserAPIKeyAuth(user_id="test_team_user", team_id=_TEAM_ID)
+    original_overrides: Final = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides = original_overrides
 
-    assert response.status_code == 403
-    detail = response.json()
-    assert "detail" in detail
-    error_msg = (
-        detail["detail"]["error"]
-        if isinstance(detail["detail"], dict)
-        else str(detail["detail"])
-    )
-    assert "internal_user_viewer" in error_msg
-    assert "vector_store_id" in error_msg
+
+def test_internal_user_viewer_rag_ingest_without_vector_store_id_allowed(client_internal_user_viewer):
+    with patch(
+        "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
+        new_callable=AsyncMock,
+        return_value={"status": "completed", "vector_store_id": "vs_new", "file_id": "file_123"},
+    ) as mock_aingest:
+        response: Final = client_internal_user_viewer.post(
+            "/v1/rag/ingest",
+            files={"file": ("sample.txt", io.BytesIO(b"test content"), "text/plain")},
+            data={"request": '{"ingest_options":{"vector_store":{"custom_llm_provider":"openai"}}}'},
+        )
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["status"] == "completed"
+    mock_aingest.assert_awaited_once()
 
 
 def test_internal_user_viewer_rag_ingest_with_vector_store_id_passes_check(
@@ -97,8 +123,7 @@ def test_internal_user_viewer_rag_ingest_with_vector_store_id_passes_check(
 
     # Should not be 403 (role check passed)
     assert response.status_code != 403, (
-        f"internal_user_viewer with vector_store_id should pass role check. "
-        f"Response: {response.json()}"
+        f"internal_user_viewer with vector_store_id should pass role check. Response: {response.json()}"
     )
 
 
@@ -114,15 +139,12 @@ def test_internal_user_rag_ingest_without_vector_store_id_allowed(client_interna
         response = client_internal_user.post(
             "/v1/rag/ingest",
             files={"file": ("sample.txt", io.BytesIO(b"test content"), "text/plain")},
-            data={
-                "request": '{"ingest_options":{"vector_store":{"custom_llm_provider":"openai"}}}'
-            },
+            data={"request": '{"ingest_options":{"vector_store":{"custom_llm_provider":"openai"}}}'},
         )
 
     # Should not be 403
     assert response.status_code != 403, (
-        f"internal_user should be allowed to create new vector stores. "
-        f"Response: {response.json()}"
+        f"internal_user should be allowed to create new vector stores. Response: {response.json()}"
     )
 
 
@@ -170,13 +192,13 @@ def test_rag_ingest_blocks_clientside_credentials(client_internal_user, blocked_
             },
         },
     )
-    assert (
-        response.status_code == 400
-    ), f"Expected 400 when '{blocked_field}' is set clientside, got {response.status_code}: {response.json()}"
+    assert response.status_code == 400, (
+        f"Expected 400 when '{blocked_field}' is set clientside, got {response.status_code}: {response.json()}"
+    )
     body = response.json()
-    assert blocked_field in str(
-        body
-    ), f"Response should mention '{blocked_field}': {body}"
+    assert blocked_field in str(body), f"Response should mention '{blocked_field}': {body}"
+
+
 class TestRagIngestSSRFBlocked:
     """
     aws_sts_endpoint and related credential-redirect fields must be rejected
@@ -193,9 +215,7 @@ class TestRagIngestSSRFBlocked:
             ("aws_bedrock_runtime_endpoint", "https://attacker.example/bedrock"),
         ],
     )
-    def test_ssrf_field_in_vector_store_config_rejected(
-        self, field, value, client_internal_user
-    ):
+    def test_ssrf_field_in_vector_store_config_rejected(self, field, value, client_internal_user):
         payload = {
             "file_url": "https://example.com/doc.pdf",
             "ingest_options": {
@@ -215,9 +235,7 @@ class TestRagIngestSSRFBlocked:
         )
         body = response.json()
         detail = body.get("detail", {})
-        error_text = (
-            detail.get("error", "") if isinstance(detail, dict) else str(detail)
-        )
+        error_text = detail.get("error", "") if isinstance(detail, dict) else str(detail)
         assert field in error_text, f"Error should name the offending field: {error_text}"
 
     def test_clean_bedrock_ingest_options_not_rejected(self, client_internal_user):
@@ -230,14 +248,10 @@ class TestRagIngestSSRFBlocked:
                 "/v1/rag/ingest",
                 json={
                     "file_url": "https://example.com/doc.pdf",
-                    "ingest_options": {
-                        "vector_store": {"custom_llm_provider": "bedrock"}
-                    },
+                    "ingest_options": {"vector_store": {"custom_llm_provider": "bedrock"}},
                 },
             )
-        assert response.status_code != 400, (
-            f"Clean Bedrock ingest_options should not be rejected: {response.json()}"
-        )
+        assert response.status_code != 400, f"Clean Bedrock ingest_options should not be rejected: {response.json()}"
 
 
 S3_REGISTRY_STORE = {
@@ -279,6 +293,7 @@ VERTEX_REGISTRY_STORE = {
     "vector_store_id": "projects/registry-project/locations/us-central1/ragCorpora/42",
     "custom_llm_provider": "vertex_ai",
     "litellm_params": {"vertex_project": "registry-project", "vertex_location": "us-central1"},
+    "is_config": True,
 }
 UNSUPPORTED_INGEST_PROVIDER_ERROR = (
     "Provider '{provider}' is not supported for RAG ingestion. "
@@ -292,10 +307,20 @@ def _registry_with(store):
     return registry
 
 
-def _ingest_form(vector_store):
+def _ingest_form(vector_store, **request_fields):
     return {
         "files": {"file": ("sample.txt", io.BytesIO(b"test content"), "text/plain")},
-        "data": {"request": json.dumps({"ingest_options": {"vector_store": vector_store}})},
+        "data": {"request": json.dumps({"ingest_options": {"vector_store": vector_store}, **request_fields})},
+    }
+
+
+def _ingest_json(vector_store, **request_fields):
+    return {
+        "json": {
+            "file_url": "https://example.com/doc.txt",
+            "ingest_options": {"vector_store": vector_store},
+            **request_fields,
+        }
     }
 
 
@@ -318,6 +343,1060 @@ def _patched_prisma_client(prisma_client):
         "litellm.proxy.proxy_server.prisma_client",
         prisma_client,
     )
+
+
+def _team_provider_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "openai/team-provider",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": _TEAM_PROVIDER_KEY,
+                    "api_base": _TEAM_OPENAI_BASE,
+                },
+                "model_info": {"team_id": _TEAM_ID},
+            },
+            _completion_deployment(),
+        ]
+    )
+
+
+def _completion_deployment() -> dict[str, object]:
+    return {
+        "model_name": "gpt-4o-mini",
+        "litellm_params": {
+            "model": "openai/gpt-4o-mini",
+            "api_key": "completion-key",
+            "mock_response": "hello",
+        },
+    }
+
+
+def _team_bedrock_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "bedrock/team-provider",
+                "litellm_params": {
+                    "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                    "aws_region_name": "us-west-2",
+                    "aws_access_key_id": _TEAM_AWS_ACCESS_KEY,
+                    "aws_secret_access_key": "team-secret-key",
+                },
+                "model_info": {"team_id": _TEAM_ID},
+            },
+            _completion_deployment(),
+        ]
+    )
+
+
+def _managed_openai_store(vector_store_id: str, litellm_params: Mapping[str, object]) -> LiteLLM_ManagedVectorStore:
+    return LiteLLM_ManagedVectorStore(
+        vector_store_id=vector_store_id,
+        custom_llm_provider="openai",
+        litellm_credential_name=None,
+        litellm_params=dict(litellm_params),
+    )
+
+
+def _post_rag_query(
+    client: TestClient,
+    *,
+    retrieval_config: Mapping[str, object],
+    managed_stores: Sequence[LiteLLM_ManagedVectorStore],
+    router: Router,
+    headers: Mapping[str, str | bytes] | None = None,
+    body: Mapping[str, object] | None = None,
+) -> httpx.Response:
+    with (
+        patch.object(  # test-quality-ok: seeds the real managed-store registry the query path reads
+            litellm,
+            "vector_store_registry",
+            VectorStoreRegistry(vector_stores=list(managed_stores)),
+        ),
+        patch("litellm.proxy.proxy_server.llm_router", router),
+        _patched_prisma_client(None),
+    ):
+        return client.post(
+            "/v1/rag/query",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "hello"}],
+                "retrieval_config": dict(retrieval_config),
+                **(body or {}),
+            },
+            headers=dict(headers or {}),
+        )
+
+
+def test_rag_ingest_forwards_team_provider_credentials_without_persisting_them(client_team_a):
+    router: Final = _team_provider_router()
+    prisma_client: Final = MagicMock()
+    managed_vector_store_table: Final = prisma_client.db.litellm_managedvectorstorestable
+    managed_vector_store_table.find_unique = AsyncMock(return_value=None)
+    created_row: Final = MagicMock()
+    created_row.model_dump.return_value = {
+        "vector_store_id": "vs_new",
+        "custom_llm_provider": "openai",
+        "litellm_params": "{}",
+        "vector_store_metadata": "{}",
+    }
+    managed_vector_store_table.create = AsyncMock(return_value=created_row)
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file_123"},
+    )
+
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", router),
+        _patched_prisma_client(prisma_client),
+    ):
+        response: Final = client_team_a.post(
+            "/v1/rag/ingest",
+            **_ingest_form({"custom_llm_provider": "openai"}),
+        )
+
+    assert response.status_code == 200, response.json()
+    forwarded: Final = mock_aingest.await_args.kwargs["ingest_options"]["vector_store"]
+    assert forwarded["api_key"] == _TEAM_PROVIDER_KEY
+    assert forwarded["api_base"] == _TEAM_OPENAI_BASE
+    managed_vector_store_table.create.assert_awaited_once()
+    saved_data: Final = managed_vector_store_table.create.await_args.kwargs["data"]
+    assert saved_data["vector_store_id"] == "vs_new"
+    assert _TEAM_PROVIDER_KEY not in json.dumps(saved_data, default=str)
+
+
+def test_rag_ingest_uses_the_forwarded_provider_key_over_team_provider_credentials(client_team_a):
+    forwarded_provider_key: Final = "sk-forwarded-provider-key"
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file_123"},
+    )
+
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", _team_provider_router()),
+        patch.dict("litellm.proxy.proxy_server.general_settings", {"forward_llm_provider_auth_headers": True}),
+        _patched_prisma_client(None),
+    ):
+        response: Final = client_team_a.post(
+            "/v1/rag/ingest",
+            headers={"Authorization": "Bearer sk-litellm-virtual-key", "x-api-key": forwarded_provider_key},
+            **_ingest_form({"custom_llm_provider": "openai"}),
+        )
+
+    assert response.status_code == 200, response.json()
+    forwarded: Final = mock_aingest.await_args.kwargs["ingest_options"]["vector_store"]
+    assert forwarded["api_key"] == forwarded_provider_key
+    assert forwarded["api_base"] == _TEAM_OPENAI_BASE
+
+
+@pytest.mark.parametrize("ingest_request", [_ingest_form, _ingest_json])
+def test_rag_ingest_drop_params_drops_a_forwarded_key_that_cannot_be_an_http_header(client_team_a, ingest_request):
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file_123"},
+    )
+
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", _team_provider_router()),
+        patch.dict("litellm.proxy.proxy_server.general_settings", {"forward_llm_provider_auth_headers": True}),
+        _patched_prisma_client(None),
+    ):
+        response: Final = client_team_a.post(
+            "/v1/rag/ingest",
+            headers={"Authorization": "Bearer sk-litellm-virtual-key", "x-api-key": _HEADER_UNSAFE_PROVIDER_KEY},
+            **ingest_request({"custom_llm_provider": "openai"}, drop_params=True),
+        )
+
+    assert response.status_code == 200, response.json()
+    forwarded: Final = mock_aingest.await_args.kwargs["ingest_options"]["vector_store"]
+    assert forwarded["api_key"] == _TEAM_PROVIDER_KEY
+    assert forwarded["api_base"] == _TEAM_OPENAI_BASE
+
+
+@pytest.mark.parametrize("unread_request_field", ["not json", json.dumps({"drop_params": False})])
+def test_rag_ingest_json_body_ignores_a_request_field_it_does_not_read(client_team_a, unread_request_field):
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file_123"},
+    )
+
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", _team_provider_router()),
+        patch.dict("litellm.proxy.proxy_server.general_settings", {"forward_llm_provider_auth_headers": True}),
+        _patched_prisma_client(None),
+    ):
+        response: Final = client_team_a.post(
+            "/v1/rag/ingest",
+            headers={"Authorization": "Bearer sk-litellm-virtual-key", "x-api-key": _HEADER_UNSAFE_PROVIDER_KEY},
+            **_ingest_json({"custom_llm_provider": "openai"}, drop_params=True, request=unread_request_field),
+        )
+
+    assert response.status_code == 200, response.json()
+    assert mock_aingest.await_args.kwargs["ingest_options"]["vector_store"]["api_key"] == _TEAM_PROVIDER_KEY
+
+
+def test_rag_ingest_caller_credential_name_suppresses_team_provider_credentials(client_team_a):
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file_123"},
+    )
+
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", _team_provider_router()),
+        _patched_prisma_client(None),
+    ):
+        response: Final = client_team_a.post(
+            "/v1/rag/ingest",
+            **_ingest_form({"custom_llm_provider": "openai", "litellm_credential_name": "caller-openai"}),
+        )
+
+    assert response.status_code == 200, response.json()
+    forwarded: Final = mock_aingest.await_args.kwargs["ingest_options"]["vector_store"]
+    assert forwarded["litellm_credential_name"] == "caller-openai"
+    assert "api_key" not in forwarded
+
+
+def test_rag_ingest_managed_store_credentials_override_team_provider_credentials(client_team_a):
+    managed_store: Final = _managed_openai_store("registry-store-with-key", {"api_key": _REGISTRY_PROVIDER_KEY})
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        managed_store,
+        {"status": "completed", "vector_store_id": "registry-store-with-key", "file_id": "file_123"},
+    )
+
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", _team_provider_router()),
+        patch(
+            "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store",
+            new=AsyncMock(return_value=True),
+        ),
+        _patched_prisma_client(None),
+    ):
+        response: Final = client_team_a.post(
+            "/v1/rag/ingest",
+            **_ingest_form({"vector_store_id": "registry-store-with-key"}),
+        )
+
+    assert response.status_code == 200, response.json()
+    forwarded: Final = mock_aingest.await_args.kwargs["ingest_options"]["vector_store"]
+    assert forwarded["api_key"] == _REGISTRY_PROVIDER_KEY
+    assert forwarded["api_key"] != _TEAM_PROVIDER_KEY
+
+
+def test_rag_ingest_managed_store_without_credentials_uses_team_provider_credentials(client_team_a):
+    managed_store: Final = _managed_openai_store("registry-store-without-key", {})
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        managed_store,
+        {"status": "completed", "vector_store_id": "registry-store-without-key", "file_id": "file_123"},
+    )
+
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", _team_provider_router()),
+        patch(
+            "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store",
+            new=AsyncMock(return_value=True),
+        ),
+        _patched_prisma_client(None),
+    ):
+        response: Final = client_team_a.post(
+            "/v1/rag/ingest",
+            **_ingest_form({"vector_store_id": "registry-store-without-key"}),
+        )
+
+    assert response.status_code == 200, response.json()
+    forwarded: Final = mock_aingest.await_args.kwargs["ingest_options"]["vector_store"]
+    assert forwarded["api_key"] == _TEAM_PROVIDER_KEY
+
+
+@pytest.mark.parametrize("blank_credential_name", [None, "", "   "])
+def test_rag_ingest_blank_caller_credential_name_uses_team_provider_credentials(client_team_a, blank_credential_name):
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file_123"},
+    )
+
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", _team_provider_router()),
+        _patched_prisma_client(None),
+    ):
+        response: Final = client_team_a.post(
+            "/v1/rag/ingest",
+            **_ingest_form({"custom_llm_provider": "openai", "litellm_credential_name": blank_credential_name}),
+        )
+
+    assert response.status_code == 200, response.json()
+    forwarded: Final = mock_aingest.await_args.kwargs["ingest_options"]["vector_store"]
+    assert forwarded["api_key"] == _TEAM_PROVIDER_KEY
+    assert forwarded["api_base"] == _TEAM_OPENAI_BASE
+
+
+@dataclass(frozen=True, slots=True)
+class _ProviderFileRegistration:
+    provider_file_id: str
+    content_type: str
+    deployment: TeamProviderDeployment
+    owner: UserAPIKeyAuth
+
+
+class _ManagedFilesHookStub:
+    def __init__(
+        self,
+        *,
+        managed_file_id: str | None,
+        can_access: bool = True,
+        model_mappings: Mapping[str, Mapping[str, str]] = MappingProxyType({}),
+        unified_file_ids: Mapping[str, str] = MappingProxyType({}),
+    ) -> None:
+        self.managed_file_id: Final = managed_file_id
+        self.can_access: Final = can_access
+        self.model_mappings: Final = model_mappings
+        self.unified_file_ids: Final = unified_file_ids
+        self.registrations: tuple[_ProviderFileRegistration, ...] = ()
+
+    async def register_provider_file(
+        self,
+        *,
+        provider_file_id: str,
+        content_type: str,
+        deployment: TeamProviderDeployment,
+        owner: UserAPIKeyAuth,
+        llm_router: Router | None,
+    ) -> str | None:
+        self.registrations = (
+            *self.registrations,
+            _ProviderFileRegistration(provider_file_id, content_type, deployment, owner),
+        )
+        return self.managed_file_id
+
+    async def can_user_call_unified_file_id(self, unified_file_id: str, user_api_key_dict: UserAPIKeyAuth) -> bool:
+        return self.can_access
+
+    async def can_user_call_unified_object_id(self, unified_object_id: str, user_api_key_dict: UserAPIKeyAuth) -> bool:
+        return self.can_access
+
+    async def get_model_file_id_mapping(
+        self, file_ids: Sequence[str], litellm_parent_otel_span: object
+    ) -> Mapping[str, Mapping[str, str]]:
+        return {file_id: self.model_mappings[file_id] for file_id in file_ids if file_id in self.model_mappings}
+
+    async def get_unified_file_ids_for_provider_file_ids(
+        self, provider_file_ids: Sequence[str], user_api_key_dict: UserAPIKeyAuth
+    ) -> Mapping[str, str]:
+        return {file_id: self.unified_file_ids[file_id] for file_id in provider_file_ids if file_id in self.unified_file_ids}
+
+
+def _managed_file_id(provider_file_id: str) -> str:
+    unified_file_id: Final = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
+        "text/plain", "unified-1", "openai/team-provider", provider_file_id, "team-deployment"
+    )
+    return base64.urlsafe_b64encode(unified_file_id.encode()).decode().rstrip("=")
+
+
+def _installed_managed_files_hook(hook: _ManagedFilesHookStub | None):
+    from litellm.proxy import proxy_server
+
+    proxy_hook_mapping: Final = proxy_server.proxy_logging_obj.proxy_hook_mapping
+    hooks_without_managed_files: Final = {
+        name: installed for name, installed in proxy_hook_mapping.items() if name != "managed_files"
+    }
+    return patch.dict(  # test-quality-ok: the proxy reads its hooks from this process-wide mapping, no injection seam
+        proxy_hook_mapping,
+        {**hooks_without_managed_files, **({} if hook is None else {"managed_files": hook})},
+        clear=True,
+    )
+
+
+def _prisma_client_saving_a_new_store() -> tuple[MagicMock, MagicMock]:
+    prisma_client: Final = MagicMock()
+    managed_vector_store_table: Final = prisma_client.db.litellm_managedvectorstorestable
+    managed_vector_store_table.find_unique = AsyncMock(return_value=None)
+    created_row: Final = MagicMock()
+    created_row.model_dump.return_value = {
+        "vector_store_id": "vs_new",
+        "custom_llm_provider": "openai",
+        "litellm_params": "{}",
+        "vector_store_metadata": "{}",
+    }
+    managed_vector_store_table.create = AsyncMock(return_value=created_row)
+    return prisma_client, managed_vector_store_table
+
+
+def _router_without_team_deployment() -> Router:
+    return Router(model_list=[_completion_deployment()])
+
+
+@pytest.mark.parametrize("ingest_request", [_ingest_form, _ingest_json])
+def test_rag_ingest_returns_a_managed_file_id_for_an_upload_through_the_team_deployment(client_team_a, ingest_request):
+    router: Final = _team_provider_router()
+    team_deployment_id: Final = router.registry().all()[0]["model_info"]["id"]
+    managed_file_id: Final = _managed_file_id("file_123")
+    hook: Final = _ManagedFilesHookStub(managed_file_id=managed_file_id)
+    prisma_client, managed_vector_store_table = _prisma_client_saving_a_new_store()
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file_123"},
+    )
+
+    with (
+        aingest_patch,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", router),
+        _patched_prisma_client(prisma_client),
+        _installed_managed_files_hook(hook),
+    ):
+        response: Final = client_team_a.post("/v1/rag/ingest", **ingest_request({"custom_llm_provider": "openai"}))
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["file_id"] == managed_file_id
+    (registration,) = hook.registrations
+    assert registration.provider_file_id == "file_123"
+    assert registration.content_type == "text/plain"
+    assert registration.deployment.deployment_id == team_deployment_id
+    assert registration.deployment.public_model_name == "openai/team-provider"
+    assert registration.deployment.credentials["api_key"] == _TEAM_PROVIDER_KEY
+    assert registration.owner.team_id == _TEAM_ID
+    saved_data: Final = managed_vector_store_table.create.await_args.kwargs["data"]
+    saved_metadata: Final = json.loads(saved_data["vector_store_metadata"])
+    assert [entry["file_id"] for entry in saved_metadata["ingested_files"]] == [managed_file_id]
+
+
+def test_rag_ingest_registers_a_url_upload_with_the_type_its_path_names(client_team_a):
+    hook: Final = _ManagedFilesHookStub(managed_file_id=_managed_file_id("file_123"))
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file_123"},
+    )
+
+    with (
+        aingest_patch,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", _team_provider_router()),
+        _installed_managed_files_hook(hook),
+    ):
+        response: Final = client_team_a.post(
+            "/v1/rag/ingest",
+            **_ingest_json(
+                {"custom_llm_provider": "openai"}, file_url="https://example.com/files/handbook.pdf?sig=abc#page=2"
+            ),
+        )
+
+    assert response.status_code == 200, response.json()
+    (registration,) = hook.registrations
+    assert registration.content_type == detect_content_type_from_filename("handbook.pdf")
+
+
+@pytest.mark.parametrize(
+    ("vector_store", "registry_store", "headers", "general_settings"),
+    [
+        pytest.param(
+            {"custom_llm_provider": "openai", "litellm_credential_name": "caller-openai"},
+            None,
+            {},
+            {},
+            id="caller-credential-name",
+        ),
+        pytest.param(
+            {"vector_store_id": "registry-store-with-key"},
+            _managed_openai_store("registry-store-with-key", {"api_key": _REGISTRY_PROVIDER_KEY}),
+            {},
+            {},
+            id="registered-store-key",
+        ),
+        pytest.param(
+            {"custom_llm_provider": "openai"},
+            None,
+            {"Authorization": "Bearer sk-litellm-virtual-key", "x-api-key": "sk-forwarded-provider-key"},
+            {"forward_llm_provider_auth_headers": True},
+            id="forwarded-provider-key",
+        ),
+        pytest.param({"custom_llm_provider": "bedrock"}, None, {}, {}, id="non-openai-provider"),
+    ],
+)
+def test_rag_ingest_keeps_the_provider_file_id_when_the_upload_used_other_credentials(
+    client_team_a, vector_store, registry_store, headers, general_settings
+):
+    hook: Final = _ManagedFilesHookStub(managed_file_id=_managed_file_id("file_123"))
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        registry_store,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file_123"},
+    )
+
+    with (
+        aingest_patch,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", _team_provider_router()),
+        patch(
+            "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store",
+            new=AsyncMock(return_value=True),
+        ),
+        patch.dict("litellm.proxy.proxy_server.general_settings", general_settings),
+        _patched_prisma_client(None),
+        _installed_managed_files_hook(hook),
+    ):
+        response: Final = client_team_a.post("/v1/rag/ingest", headers=headers, **_ingest_form(vector_store))
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["file_id"] == "file_123"
+    assert hook.registrations == ()
+
+
+def _team_wildcard_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": _TEAM_PROVIDER_KEY, "api_base": _TEAM_OPENAI_BASE},
+                "model_info": {"team_id": _TEAM_ID},
+            }
+        ]
+    )
+
+
+_ONE_MODEL_TEAM_KEY: Final = UserAPIKeyAuth(user_id="test_team_user", team_id=_TEAM_ID, models=["openai/gpt-5.4-mini"])
+
+
+def test_rag_ingest_keeps_the_provider_file_id_for_a_key_the_team_deployment_checks_reject(client_team_a):
+    hook: Final = _ManagedFilesHookStub(managed_file_id=_managed_file_id("file_123"))
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file_123"},
+    )
+
+    with (
+        aingest_patch as aingest,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", _team_wildcard_router()),
+        patch.dict(app.dependency_overrides, {user_api_key_auth: lambda: _ONE_MODEL_TEAM_KEY}),
+        _patched_prisma_client(None),
+        _installed_managed_files_hook(hook),
+    ):
+        response: Final = client_team_a.post("/v1/rag/ingest", **_ingest_form({"custom_llm_provider": "openai"}))
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["file_id"] == "file_123"
+    assert hook.registrations == ()
+    assert aingest.await_args.kwargs["ingest_options"]["vector_store"]["api_key"] == _TEAM_PROVIDER_KEY
+
+
+@pytest.mark.parametrize(
+    ("router_factory", "hook"),
+    [
+        pytest.param(
+            _router_without_team_deployment,
+            _ManagedFilesHookStub(managed_file_id=_managed_file_id("file_123")),
+            id="no-team-deployment",
+        ),
+        pytest.param(_team_provider_router, None, id="no-managed-files-hook"),
+    ],
+)
+def test_rag_ingest_keeps_the_provider_file_id_without_a_team_deployment_or_managed_files_hook(
+    client_team_a, router_factory, hook
+):
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file_123"},
+    )
+
+    with (
+        aingest_patch,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", router_factory()),
+        _patched_prisma_client(None),
+        _installed_managed_files_hook(hook),
+    ):
+        response: Final = client_team_a.post("/v1/rag/ingest", **_ingest_form({"custom_llm_provider": "openai"}))
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["file_id"] == "file_123"
+    assert hook is None or hook.registrations == ()
+
+
+def test_rag_ingest_keeps_the_provider_file_id_when_managed_file_registration_fails(client_team_a):
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file_123"},
+    )
+
+    with (
+        aingest_patch,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", _team_provider_router()),
+        _patched_prisma_client(None),
+        _installed_managed_files_hook(_ManagedFilesHookStub(managed_file_id=None)),
+    ):
+        response: Final = client_team_a.post("/v1/rag/ingest", **_ingest_form({"custom_llm_provider": "openai"}))
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["file_id"] == "file_123"
+
+
+def test_rag_ingest_with_a_managed_file_id_attaches_the_provider_file_and_returns_the_managed_id(client_team_a):
+    managed_file_id: Final = _managed_file_id("file-raw")
+    hook: Final = _ManagedFilesHookStub(managed_file_id=None)
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file-raw"},
+    )
+
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", _team_provider_router()),
+        _patched_prisma_client(None),
+        _installed_managed_files_hook(hook),
+    ):
+        response: Final = client_team_a.post(
+            "/v1/rag/ingest",
+            json={"file_id": managed_file_id, "ingest_options": {"vector_store": {"custom_llm_provider": "openai"}}},
+        )
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["file_id"] == managed_file_id
+    assert mock_aingest.await_args.kwargs["file_id"] == "file-raw"
+    assert hook.registrations == ()
+
+
+def test_rag_ingest_with_a_managed_file_id_attaches_the_team_deployment_copy(client_team_a):
+    router: Final = _team_provider_router()
+    team_deployment_id: Final = router.registry().all()[0]["model_info"]["id"]
+    managed_file_id: Final = _managed_file_id("file-other-copy")
+    hook: Final = _ManagedFilesHookStub(
+        managed_file_id=None,
+        model_mappings={managed_file_id: {"team-deployment": "file-other-copy", team_deployment_id: "file-team-copy"}},
+    )
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file-team-copy"},
+    )
+
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", router),
+        _patched_prisma_client(None),
+        _installed_managed_files_hook(hook),
+    ):
+        response: Final = client_team_a.post(
+            "/v1/rag/ingest",
+            json={"file_id": managed_file_id, "ingest_options": {"vector_store": {"custom_llm_provider": "openai"}}},
+        )
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["file_id"] == managed_file_id
+    assert mock_aingest.await_args.kwargs["file_id"] == "file-team-copy"
+
+
+def test_rag_ingest_with_a_managed_file_id_attaches_the_copy_matching_the_credentials_for_a_key_limited_to_one_model(
+    client_team_a,
+):
+    router: Final = _team_wildcard_router()
+    team_deployment_id: Final = router.registry().all()[0]["model_info"]["id"]
+    managed_file_id: Final = _managed_file_id("file-other-copy")
+    hook: Final = _ManagedFilesHookStub(
+        managed_file_id=None,
+        model_mappings={managed_file_id: {"team-deployment": "file-other-copy", team_deployment_id: "file-team-copy"}},
+    )
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file-team-copy"},
+    )
+
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", router),
+        patch.dict(app.dependency_overrides, {user_api_key_auth: lambda: _ONE_MODEL_TEAM_KEY}),
+        _patched_prisma_client(None),
+        _installed_managed_files_hook(hook),
+    ):
+        response: Final = client_team_a.post(
+            "/v1/rag/ingest",
+            json={"file_id": managed_file_id, "ingest_options": {"vector_store": {"custom_llm_provider": "openai"}}},
+        )
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["file_id"] == managed_file_id
+    assert mock_aingest.await_args.kwargs["file_id"] == "file-team-copy"
+    assert mock_aingest.await_args.kwargs["ingest_options"]["vector_store"]["api_key"] == _TEAM_PROVIDER_KEY
+
+
+def test_rag_ingest_rejects_a_managed_file_id_the_caller_cannot_access(client_team_a):
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file-raw"},
+    )
+
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", _team_provider_router()),
+        _patched_prisma_client(None),
+        _installed_managed_files_hook(_ManagedFilesHookStub(managed_file_id=None, can_access=False)),
+    ):
+        response: Final = client_team_a.post(
+            "/v1/rag/ingest",
+            json={
+                "file_id": _managed_file_id("file-raw"),
+                "ingest_options": {"vector_store": {"custom_llm_provider": "openai"}},
+            },
+        )
+
+    assert response.status_code == 403, response.json()
+    assert mock_aingest.await_count == 0
+
+
+def test_rag_ingest_with_an_empty_file_url_never_claims_a_raw_file_id(client_team_a):
+    hook: Final = _ManagedFilesHookStub(managed_file_id=_managed_file_id("file-raw"))
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file-raw"},
+    )
+
+    with (
+        aingest_patch,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", _team_provider_router()),
+        _patched_prisma_client(None),
+        _installed_managed_files_hook(hook),
+    ):
+        response: Final = client_team_a.post(
+            "/v1/rag/ingest",
+            json={
+                "file_id": "file-raw",
+                "file_url": "",
+                "ingest_options": {"vector_store": {"custom_llm_provider": "openai"}},
+            },
+        )
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["file_id"] == "file-raw"
+    assert hook.registrations == ()
+
+
+def test_rag_ingest_answers_400_for_a_managed_file_id_without_the_managed_files_hook(client_team_a):
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file-raw"},
+    )
+
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", _team_provider_router()),
+        _patched_prisma_client(None),
+        _installed_managed_files_hook(None),
+    ):
+        response: Final = client_team_a.post(
+            "/v1/rag/ingest",
+            json={
+                "file_id": _managed_file_id("file-raw"),
+                "ingest_options": {"vector_store": {"custom_llm_provider": "openai"}},
+            },
+        )
+
+    assert response.status_code == 400, response.json()
+    assert mock_aingest.await_count == 0
+
+
+def test_rag_ingest_failed_upstream_status_is_returned_without_persisting_store(client_internal_user):
+    prisma_client: Final = MagicMock()
+    managed_vector_store_table: Final = prisma_client.db.litellm_managedvectorstorestable
+    managed_vector_store_table.find_unique = AsyncMock(return_value=None)
+    managed_vector_store_table.create = AsyncMock()
+    with (
+        patch(
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
+            new=AsyncMock(
+                return_value={
+                    "id": "ingest_abc",
+                    "status": "failed",
+                    "error": "unauthorized",
+                    "error_status_code": 401,
+                }
+            ),
+        ),
+        patch("litellm.vector_store_registry", None),
+        _patched_prisma_client(prisma_client),
+    ):
+        response: Final = client_internal_user.post(
+            "/v1/rag/ingest",
+            **_ingest_form({"custom_llm_provider": "openai"}),
+        )
+
+    assert response.status_code == 401, response.json()
+    assert response.json() == {"detail": {"id": "ingest_abc", "status": "failed", "error": "unauthorized"}}
+    managed_vector_store_table.create.assert_not_called()
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize(
+    "caller_fields",
+    [
+        {},
+        {"api_key": None},
+        {"api_base": None},
+        {"api_key": "sk-caller-key-the-search-never-uses"},
+        {"custom_llm_provider": None},
+    ],
+)
+def test_rag_query_forwards_team_provider_credentials_to_unmanaged_search(
+    client_team_a: TestClient, respx_mock: respx.MockRouter, caller_fields: Mapping[str, object]
+) -> None:
+    search: Final = respx_mock.post(f"{_TEAM_OPENAI_BASE}/vector_stores/provider-native-store/search").respond(
+        json=_OPENAI_SEARCH_PAGE
+    )
+
+    response: Final = _post_rag_query(
+        client_team_a,
+        retrieval_config={"vector_store_id": "provider-native-store", "custom_llm_provider": "openai", **caller_fields},
+        managed_stores=(),
+        router=_team_provider_router(),
+    )
+
+    assert response.status_code == 200, response.json()
+    assert search.call_count == 1
+    assert search.calls.last.request.headers["authorization"] == f"Bearer {_TEAM_PROVIDER_KEY}"
+
+
+@pytest.mark.usefixtures("httpx_transport")
+def test_rag_query_search_results_carry_the_managed_file_id_ingest_returned(
+    client_team_a: TestClient, respx_mock: respx.MockRouter
+) -> None:
+    managed_file_id: Final = _managed_file_id("file-ingested")
+    respx_mock.post(f"{_TEAM_OPENAI_BASE}/vector_stores/provider-native-store/search").respond(
+        json={
+            **_OPENAI_SEARCH_PAGE,
+            "data": [
+                {
+                    "file_id": "file-ingested",
+                    "filename": "handbook.txt",
+                    "score": 0.9,
+                    "attributes": {},
+                    "content": [{"type": "text", "text": "hello"}],
+                }
+            ],
+        }
+    )
+
+    with _installed_managed_files_hook(
+        _ManagedFilesHookStub(managed_file_id=None, unified_file_ids={"file-ingested": managed_file_id})
+    ):
+        response: Final = _post_rag_query(
+            client_team_a,
+            retrieval_config={"vector_store_id": "provider-native-store", "custom_llm_provider": "openai"},
+            managed_stores=(),
+            router=_team_provider_router(),
+        )
+
+    assert response.status_code == 200, response.json()
+    search_results: Final = response.json()["choices"][0]["message"]["provider_specific_fields"]["search_results"]
+    assert [hit["file_id"] for hit in search_results["data"]] == [managed_file_id]
+
+
+@pytest.mark.usefixtures("httpx_transport")
+def test_rag_query_managed_store_credentials_override_team_provider_credentials(
+    client_team_a: TestClient, respx_mock: respx.MockRouter
+) -> None:
+    search: Final = respx_mock.post(f"{_REGISTRY_OPENAI_BASE}/vector_stores/registry-store-with-key/search").respond(
+        json=_OPENAI_SEARCH_PAGE
+    )
+
+    response: Final = _post_rag_query(
+        client_team_a,
+        retrieval_config={"vector_store_id": "registry-store-with-key"},
+        managed_stores=(
+            _managed_openai_store(
+                "registry-store-with-key",
+                {"api_key": _REGISTRY_PROVIDER_KEY, "api_base": _REGISTRY_OPENAI_BASE},
+            ),
+        ),
+        router=_team_provider_router(),
+    )
+
+    assert response.status_code == 200, response.json()
+    assert search.call_count == 1
+    assert search.calls.last.request.headers["authorization"] == f"Bearer {_REGISTRY_PROVIDER_KEY}"
+
+
+@pytest.mark.usefixtures("httpx_transport")
+def test_rag_query_managed_store_without_credentials_uses_team_provider_credentials(
+    client_team_a: TestClient, respx_mock: respx.MockRouter
+) -> None:
+    search: Final = respx_mock.post(f"{_TEAM_OPENAI_BASE}/vector_stores/registry-store-without-key/search").respond(
+        json=_OPENAI_SEARCH_PAGE
+    )
+
+    response: Final = _post_rag_query(
+        client_team_a,
+        retrieval_config={"vector_store_id": "registry-store-without-key"},
+        managed_stores=(_managed_openai_store("registry-store-without-key", {}),),
+        router=_team_provider_router(),
+    )
+
+    assert response.status_code == 200, response.json()
+    assert search.call_count == 1
+    assert search.calls.last.request.headers["authorization"] == f"Bearer {_TEAM_PROVIDER_KEY}"
+
+
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize("blank_key", ["", "   "])
+def test_rag_query_managed_store_with_an_empty_key_uses_team_provider_credentials(
+    client_team_a: TestClient, respx_mock: respx.MockRouter, blank_key: str
+) -> None:
+    search: Final = respx_mock.post(f"{_TEAM_OPENAI_BASE}/vector_stores/registry-store-blank-key/search").respond(
+        json=_OPENAI_SEARCH_PAGE
+    )
+
+    response: Final = _post_rag_query(
+        client_team_a,
+        retrieval_config={"vector_store_id": "registry-store-blank-key"},
+        managed_stores=(_managed_openai_store("registry-store-blank-key", {"api_key": blank_key}),),
+        router=_team_provider_router(),
+    )
+
+    assert response.status_code == 200, response.json()
+    assert search.call_count == 1
+    assert search.calls.last.request.headers["authorization"] == f"Bearer {_TEAM_PROVIDER_KEY}"
+
+
+@pytest.mark.usefixtures("httpx_transport")
+def test_rag_query_without_a_team_deployment_keeps_the_environment_openai_credentials(
+    client_internal_user: TestClient, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", _ENVIRONMENT_OPENAI_KEY)
+    for unset in ("OPENAI_BASE_URL", "OPENAI_API_BASE"):
+        monkeypatch.delenv(unset, raising=False)
+    search: Final = respx_mock.post("https://api.openai.com/v1/vector_stores/provider-native-store/search").respond(
+        json=_OPENAI_SEARCH_PAGE
+    )
+
+    response: Final = _post_rag_query(
+        client_internal_user,
+        retrieval_config={"vector_store_id": "provider-native-store", "custom_llm_provider": "openai"},
+        managed_stores=(),
+        router=_team_provider_router(),
+    )
+
+    assert response.status_code == 200, response.json()
+    assert search.call_count == 1
+    assert search.calls.last.request.headers["authorization"] == f"Bearer {_ENVIRONMENT_OPENAI_KEY}"
+
+
+@pytest.mark.usefixtures("httpx_transport")
+def test_rag_query_search_uses_the_forwarded_provider_key_over_team_provider_credentials(
+    client_team_a: TestClient, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    forwarded_provider_key: Final = "sk-forwarded-provider-key"
+    monkeypatch.setenv("OPENAI_API_KEY", _ENVIRONMENT_OPENAI_KEY)
+    for unset in ("OPENAI_BASE_URL", "OPENAI_API_BASE"):
+        monkeypatch.delenv(unset, raising=False)
+    search: Final = respx_mock.post(f"{_TEAM_OPENAI_BASE}/vector_stores/provider-native-store/search").respond(
+        json=_OPENAI_SEARCH_PAGE
+    )
+
+    with patch.dict("litellm.proxy.proxy_server.general_settings", {"forward_llm_provider_auth_headers": True}):
+        response: Final = _post_rag_query(
+            client_team_a,
+            retrieval_config={"vector_store_id": "provider-native-store", "custom_llm_provider": "openai"},
+            managed_stores=(),
+            router=_team_provider_router(),
+            headers={"Authorization": "Bearer sk-litellm-virtual-key", "x-api-key": forwarded_provider_key},
+        )
+
+    assert response.status_code == 200, response.json()
+    assert search.call_count == 1
+    assert search.calls.last.request.headers["authorization"] == f"Bearer {forwarded_provider_key}"
+
+
+@pytest.mark.usefixtures("httpx_transport")
+def test_rag_query_drop_params_drops_a_forwarded_key_that_cannot_be_an_http_header(
+    client_team_a: TestClient, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", _ENVIRONMENT_OPENAI_KEY)
+    for unset in ("OPENAI_BASE_URL", "OPENAI_API_BASE"):
+        monkeypatch.delenv(unset, raising=False)
+    search: Final = respx_mock.post(f"{_TEAM_OPENAI_BASE}/vector_stores/provider-native-store/search").respond(
+        json=_OPENAI_SEARCH_PAGE
+    )
+
+    with patch.dict("litellm.proxy.proxy_server.general_settings", {"forward_llm_provider_auth_headers": True}):
+        response: Final = _post_rag_query(
+            client_team_a,
+            retrieval_config={"vector_store_id": "provider-native-store", "custom_llm_provider": "openai"},
+            managed_stores=(),
+            router=_team_provider_router(),
+            headers={"Authorization": "Bearer sk-litellm-virtual-key", "x-api-key": _HEADER_UNSAFE_PROVIDER_KEY},
+            body={"drop_params": True},
+        )
+
+    assert response.status_code == 200, response.json()
+    assert search.call_count == 1
+    assert search.calls.last.request.headers["authorization"] == f"Bearer {_TEAM_PROVIDER_KEY}"
+
+
+@pytest.mark.parametrize(
+    "retrieval_config, error",
+    [
+        ({"custom_llm_provider": "openai"}, "retrieval_config must contain 'vector_store_id'"),
+        ({"vector_store_id": 7, "custom_llm_provider": "openai"}, "vector_store_id must be a non-empty string"),
+    ],
+)
+def test_rag_query_names_what_is_wrong_with_the_vector_store_id(
+    client_team_a: TestClient, retrieval_config: Mapping[str, object], error: str
+) -> None:
+    response: Final = _post_rag_query(
+        client_team_a, retrieval_config=retrieval_config, managed_stores=(), router=_team_provider_router()
+    )
+
+    assert response.status_code == 400, response.json()
+    assert error in response.text
+
+
+@pytest.mark.usefixtures("httpx_transport")
+def test_rag_query_bedrock_search_keeps_the_callers_region_and_credentials_over_team_deployment(
+    client_team_a: TestClient, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", _CALLER_AWS_ACCESS_KEY)
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "caller-secret-key")
+    for unset in ("AWS_BEARER_TOKEN_BEDROCK", "AWS_SESSION_TOKEN", "AWS_PROFILE", "AWS_REGION_NAME", "AWS_REGION"):
+        monkeypatch.delenv(unset, raising=False)
+    retrieve: Final = respx_mock.post(
+        url__regex=rf"^https://bedrock-agent-runtime\.[a-z0-9-]+\.amazonaws\.com/knowledgebases/{_BEDROCK_KNOWLEDGE_BASE_ID}/retrieve$"
+    ).respond(json={"retrievalResults": []})
+
+    response: Final = _post_rag_query(
+        client_team_a,
+        retrieval_config={
+            "vector_store_id": _BEDROCK_KNOWLEDGE_BASE_ID,
+            "custom_llm_provider": "bedrock",
+            "aws_region_name": "us-east-1",
+        },
+        managed_stores=(),
+        router=_team_bedrock_router(),
+    )
+
+    assert response.status_code == 200, response.json()
+    assert retrieve.call_count == 1
+    sent: Final = retrieve.calls.last.request
+    assert sent.url.host == "bedrock-agent-runtime.us-east-1.amazonaws.com"
+    assert f"Credential={_CALLER_AWS_ACCESS_KEY}/" in sent.headers["authorization"]
 
 
 def test_rag_ingest_resolves_registry_store_provider_and_params(client_internal_user):
@@ -422,6 +1501,292 @@ def test_rag_ingest_unmanaged_store_keeps_the_callers_full_config(client_interna
 
     assert response.status_code == 200, response.json()
     assert mock_aingest.await_args.kwargs["ingest_options"]["vector_store"] == caller_config
+
+
+_PROXY_VERTEX_PROJECT: Final = "proxy-project"
+_PROXY_VERTEX_LOCATION: Final = "europe-west4"
+
+
+@pytest.fixture
+def proxy_vertex_target(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "vertex_project", None)
+    monkeypatch.setattr(litellm, "vertex_location", None)
+    monkeypatch.setenv("VERTEXAI_PROJECT", _PROXY_VERTEX_PROJECT)
+    monkeypatch.setenv("VERTEXAI_LOCATION", _PROXY_VERTEX_LOCATION)
+
+
+def _vertex_ingest(client: TestClient, vector_store: Mapping[str, str]) -> tuple[httpx.Response, AsyncMock]:
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None, {"vector_store_id": "projects/p/locations/l/ragCorpora/7", "file_id": "file_123"}
+    )
+    with aingest_patch as mock_aingest, registry_patch, _patched_prisma_client(None):
+        response = client.post("/v1/rag/ingest", **_ingest_form({"custom_llm_provider": "vertex_ai", **vector_store}))
+    return response, mock_aingest
+
+
+@pytest.mark.parametrize(
+    "vector_store, field",
+    [
+        ({"vertex_project": "other-project"}, "vertex_project"),
+        ({"vertex_location": "us-east5"}, "vertex_location"),
+        (
+            {"vector_store_id": f"projects/other-project/locations/{_PROXY_VERTEX_LOCATION}/ragCorpora/7"},
+            "vector_store_id",
+        ),
+        (
+            {
+                "vertex_project": _PROXY_VERTEX_PROJECT,
+                "vector_store_id": f"projects/other-project/locations/{_PROXY_VERTEX_LOCATION}/ragCorpora/7",
+            },
+            "vector_store_id",
+        ),
+        ({"vector_store_id": f"projects/{_PROXY_VERTEX_PROJECT}/locations/us-east5/ragCorpora/7"}, "vector_store_id"),
+        ({"vertex_ai_project": "other-project"}, "vertex_ai_project"),
+        ({"vertex_ai_location": "us-east5"}, "vertex_ai_location"),
+        ({"vector_store_id": "projects/123456789/locations/us-east5/ragCorpora/7"}, "vector_store_id"),
+    ],
+    ids=[
+        "project_field",
+        "location_field",
+        "corpus_project",
+        "corpus_project_behind_matching_field",
+        "corpus_region",
+        "project_alias_field",
+        "location_alias_field",
+        "corpus_region_by_project_number",
+    ],
+)
+@pytest.mark.usefixtures("proxy_vertex_target")
+def test_rag_ingest_refuses_a_key_pointing_the_proxys_vertex_credentials_elsewhere(
+    client_internal_user, vector_store: Mapping[str, str], field: str
+):
+    response, mock_aingest = _vertex_ingest(client_internal_user, vector_store)
+
+    assert response.status_code == 400, response.json()
+    assert response.json()["detail"]["error"].startswith(f"Rejected Request: {field} picks a Vertex project")
+    mock_aingest.assert_not_awaited()
+
+
+def test_rag_ingest_refuses_a_key_naming_a_vertex_project_when_the_proxy_names_none(
+    client_internal_user, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "vertex_project", None)
+    monkeypatch.delenv("VERTEXAI_PROJECT", raising=False)
+
+    response, mock_aingest = _vertex_ingest(client_internal_user, {"vertex_project": "other-project"})
+
+    assert response.status_code == 400, response.json()
+    mock_aingest.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "vector_store",
+    [
+        {},
+        {"vertex_project": _PROXY_VERTEX_PROJECT, "vertex_location": _PROXY_VERTEX_LOCATION},
+        {"vector_store_id": f"projects/{_PROXY_VERTEX_PROJECT}/locations/{_PROXY_VERTEX_LOCATION}/ragCorpora/7"},
+        {"vertex_ai_project": _PROXY_VERTEX_PROJECT, "vertex_ai_location": _PROXY_VERTEX_LOCATION},
+    ],
+    ids=["proxy_defaults", "same_fields", "corpus_in_the_proxy_project", "same_alias_fields"],
+)
+@pytest.mark.usefixtures("proxy_vertex_target")
+def test_rag_ingest_lets_a_key_use_the_proxys_own_vertex_target(client_internal_user, vector_store: Mapping[str, str]):
+    response, mock_aingest = _vertex_ingest(client_internal_user, vector_store)
+
+    assert response.status_code == 200, response.json()
+    assert mock_aingest.await_args.kwargs["ingest_options"]["vector_store"] == {
+        "custom_llm_provider": "vertex_ai",
+        **vector_store,
+    }
+
+
+@pytest.mark.parametrize(
+    "project_field, location_field",
+    [("vertex_project", "vertex_location"), ("vertex_ai_project", "vertex_ai_location")],
+    ids=["fields", "alias_fields"],
+)
+@pytest.mark.parametrize(
+    "user_role, general_settings",
+    [
+        (LitellmUserRoles.PROXY_ADMIN, {}),
+        (LitellmUserRoles.INTERNAL_USER, {"allow_client_side_credentials": True}),
+    ],
+    ids=["proxy_admin", "proxy_wide_opt_in"],
+)
+@pytest.mark.usefixtures("proxy_vertex_target")
+def test_rag_ingest_lets_the_admin_choose_another_vertex_target(
+    user_role: LitellmUserRoles, general_settings: Mapping[str, object], project_field: str, location_field: str
+):
+    caller: Final = UserAPIKeyAuth(user_id="vertex-caller", user_role=user_role)
+    original_overrides: Final = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: caller
+    vector_store: Final = {
+        project_field: "other-project",
+        location_field: "us-east5",
+        "vector_store_id": "projects/other-project/locations/us-east5/ragCorpora/7",
+    }
+    try:
+        with patch.dict("litellm.proxy.proxy_server.general_settings", general_settings):
+            response, mock_aingest = _vertex_ingest(TestClient(app), vector_store)
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 200, response.json()
+    assert mock_aingest.await_args.kwargs["ingest_options"]["vector_store"] == {
+        "custom_llm_provider": "vertex_ai",
+        **vector_store,
+    }
+
+
+@pytest.mark.usefixtures("proxy_vertex_target")
+def test_rag_ingest_reads_a_corpus_named_by_project_number_on_the_proxys_own_project(client_internal_user):
+    response, mock_aingest = _vertex_ingest(
+        client_internal_user, {"vector_store_id": f"projects/123456789/locations/{_PROXY_VERTEX_LOCATION}/ragCorpora/7"}
+    )
+
+    assert response.status_code == 200, response.json()
+    assert mock_aingest.await_args.kwargs["ingest_options"]["vector_store"]["vector_store_id"] == (
+        f"projects/{_PROXY_VERTEX_PROJECT}/locations/{_PROXY_VERTEX_LOCATION}/ragCorpora/7"
+    )
+
+
+_PROXY_CORPUS_PREFIX: Final = f"projects/{_PROXY_VERTEX_PROJECT}/locations/{_PROXY_VERTEX_LOCATION}/ragCorpora"
+_FOREIGN_CORPUS: Final = f"projects/other-project/locations/{_PROXY_VERTEX_LOCATION}/ragCorpora/1"
+
+
+@pytest.mark.usefixtures("proxy_vertex_target")
+def test_rag_ingest_refuses_another_teams_store_named_by_a_project_number(client_internal_user):
+    other_teams_store: Final = LiteLLM_ManagedVectorStore(
+        vector_store_id=f"{_PROXY_CORPUS_PREFIX}/1",
+        custom_llm_provider="vertex_ai",
+        litellm_params={},
+        user_id="other-user",
+        team_id="other-team",
+    )
+    registry: Final = MagicMock()
+    registry.get_litellm_managed_vector_store_from_registry.side_effect = lambda vector_store_id: (
+        other_teams_store if vector_store_id == other_teams_store["vector_store_id"] else None
+    )
+    with (
+        patch(  # test-quality-ok: aingest is the endpoint's downstream boundary; the test asserts it is never called
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
+            new=AsyncMock(return_value={"vector_store_id": f"{_PROXY_CORPUS_PREFIX}/1", "file_id": "file_123"}),
+        ) as mock_aingest,
+        patch.object(litellm, "vector_store_registry", registry),  # test-quality-ok: seeds the saved stores by id
+        _patched_prisma_client(None),
+    ):
+        response = client_internal_user.post(
+            "/v1/rag/ingest",
+            **_ingest_form(
+                {
+                    "custom_llm_provider": "vertex_ai",
+                    "vector_store_id": f"projects/0/locations/{_PROXY_VERTEX_LOCATION}/ragCorpora/1",
+                }
+            ),
+        )
+
+    assert response.status_code == 403, response.json()
+    mock_aingest.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "vector_store_id",
+    [
+        f"./{_FOREIGN_CORPUS}",
+        f"x/../{_FOREIGN_CORPUS}",
+        f"{_PROXY_CORPUS_PREFIX}/1{'/..' * 6}/{_FOREIGN_CORPUS}",
+        f"{_PROXY_CORPUS_PREFIX}/..",
+        f"{_PROXY_CORPUS_PREFIX}/1%2F..%2F..",
+        f"{_PROXY_CORPUS_PREFIX}/1\\..\\..",
+    ],
+    ids=["dot_prefix", "dot_dot_prefix", "own_corpus_then_dot_dots", "dot_dot_corpus", "percent", "backslash"],
+)
+@pytest.mark.usefixtures("proxy_vertex_target")
+def test_rag_ingest_refuses_a_vertex_corpus_name_with_path_tricks(client_internal_user, vector_store_id: str):
+    response, mock_aingest = _vertex_ingest(client_internal_user, {"vector_store_id": vector_store_id})
+
+    assert response.status_code == 400, response.json()
+    assert response.json()["detail"]["error"].startswith("Rejected Request: vector_store_id picks a Vertex project")
+    mock_aingest.assert_not_awaited()
+
+
+_FOREIGN_CORPUS_BY_NUMBER: Final = f"projects/987654321/locations/{_PROXY_VERTEX_LOCATION}/ragCorpora/1"
+
+
+def _foreign_vertex_store(created_by: str | None, corpus: str = _FOREIGN_CORPUS) -> LiteLLM_ManagedVectorStore:
+    return LiteLLM_ManagedVectorStore(
+        vector_store_id=corpus, custom_llm_provider="vertex_ai", litellm_params={}, user_id=created_by
+    )
+
+
+def _prisma_with_user_row(user_row: LiteLLM_UserTable | None) -> MagicMock:
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
+    prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
+        return_value=MagicMock(vector_store_metadata={})
+    )
+    prisma_client.db.litellm_managedvectorstorestable.update = AsyncMock()
+    return prisma_client
+
+
+def _ingest_into_saved_store(
+    store: LiteLLM_ManagedVectorStore, creator_row: LiteLLM_UserTable | None
+) -> tuple[httpx.Response, AsyncMock]:
+    caller: Final = UserAPIKeyAuth(user_id="vertex-caller", user_role=LitellmUserRoles.INTERNAL_USER)
+    original_overrides: Final = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: caller
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        store, {"vector_store_id": store["vector_store_id"], "file_id": "file_123"}
+    )
+    try:
+        with aingest_patch as mock_aingest, registry_patch, _patched_prisma_client(_prisma_with_user_row(creator_row)):
+            response = TestClient(app).post(
+                "/v1/rag/ingest", **_ingest_form({"vector_store_id": store["vector_store_id"]})
+            )
+    finally:
+        app.dependency_overrides = original_overrides
+    return response, mock_aingest
+
+
+@pytest.mark.parametrize(
+    "creator_row",
+    [LiteLLM_UserTable(user_id="vertex-caller", user_role=LitellmUserRoles.INTERNAL_USER.value), None],
+    ids=["saved_by_an_internal_user", "saved_by_a_key_with_no_user"],
+)
+@pytest.mark.usefixtures("proxy_vertex_target")
+def test_rag_ingest_refuses_a_saved_vertex_store_a_non_admin_pointed_elsewhere(creator_row: LiteLLM_UserTable | None):
+    store: Final = _foreign_vertex_store(creator_row.user_id if creator_row is not None else None)
+
+    response, mock_aingest = _ingest_into_saved_store(store, creator_row)
+
+    assert response.status_code == 400, response.json()
+    assert response.json()["detail"]["error"].startswith("Rejected Request: vector_store_id picks a Vertex project")
+    mock_aingest.assert_not_awaited()
+
+
+@pytest.mark.parametrize("corpus", [_FOREIGN_CORPUS, _FOREIGN_CORPUS_BY_NUMBER], ids=["by_id", "by_number"])
+@pytest.mark.parametrize(
+    "created_by, is_config, creator_row",
+    [
+        (LITELLM_PROXY_ADMIN_NAME, False, None),
+        ("admin-user", False, LiteLLM_UserTable(user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN.value)),
+        (None, True, None),
+    ],
+    ids=["master_key_created", "admin_user_created", "config_store"],
+)
+@pytest.mark.usefixtures("proxy_vertex_target")
+def test_rag_ingest_lets_a_key_use_a_vertex_store_an_admin_pointed_elsewhere(
+    corpus: str, created_by: str | None, is_config: bool, creator_row: LiteLLM_UserTable | None
+):
+    store: Final = LiteLLM_ManagedVectorStore(**_foreign_vertex_store(created_by, corpus), is_config=is_config)
+
+    response, mock_aingest = _ingest_into_saved_store(store, creator_row)
+
+    assert response.status_code == 200, response.json()
+    assert mock_aingest.await_args.kwargs["ingest_options"]["vector_store"] == {
+        "vector_store_id": corpus,
+        "custom_llm_provider": "vertex_ai",
+    }
 
 
 def test_rag_ingest_db_managed_store_drops_the_callers_credential_name(client_internal_user):
@@ -703,12 +2068,14 @@ def test_rag_query_returns_response_cost_header(client_internal_user):
     )
     mock_response._hidden_params["response_cost"] = 3.45e-06
 
-    with patch(
-        "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
-        new_callable=AsyncMock,
-        return_value=mock_response,
-    ), patch("litellm.vector_store_registry", None), patch(
-        "litellm.proxy.proxy_server.prisma_client", None
+    with (
+        patch(
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ),
+        patch("litellm.vector_store_registry", None),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
     ):
         response = client_internal_user.post(
             "/v1/rag/query",
@@ -742,7 +2109,9 @@ def test_rag_query_surfaces_upstream_status_code(client_internal_user, upstream_
             new=AsyncMock(side_effect=upstream_error),
         ),
         patch("litellm.vector_store_registry", None),  # test-quality-ok: proxy module global, no injection seam
-        patch("litellm.proxy.proxy_server.prisma_client", None),  # test-quality-ok: proxy module global, no injection seam
+        patch(
+            "litellm.proxy.proxy_server.prisma_client", None
+        ),  # test-quality-ok: proxy module global, no injection seam
     ):
         response = client_internal_user.post(
             "/v1/rag/query",
@@ -779,10 +2148,14 @@ def test_rag_query_stream_returns_event_stream(client_internal_user):
             api_key="test-key",
         )
 
-    with patch(
-        "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
-        new=AsyncMock(side_effect=fake_aquery),
-    ), patch("litellm.vector_store_registry", None), patch("litellm.proxy.proxy_server.prisma_client", None):
+    with (
+        patch(
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
+            new=AsyncMock(side_effect=fake_aquery),
+        ),
+        patch("litellm.vector_store_registry", None),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+    ):
         response = client_internal_user.post(
             "/v1/rag/query",
             json={
@@ -825,7 +2198,9 @@ def test_rag_query_stream_pings_while_retrieval_is_still_running(client_internal
             new=AsyncMock(side_effect=slow_aquery),
         ),
         patch("litellm.vector_store_registry", None),  # test-quality-ok: proxy module global, no injection seam
-        patch("litellm.proxy.proxy_server.prisma_client", None),  # test-quality-ok: proxy module global, no injection seam
+        patch(
+            "litellm.proxy.proxy_server.prisma_client", None
+        ),  # test-quality-ok: proxy module global, no injection seam
     ):
         response = client_internal_user.post(
             "/v1/rag/query",
@@ -849,9 +2224,7 @@ def test_rag_query_stream_pings_while_retrieval_is_still_running(client_internal
     assert response.text.endswith("data: [DONE]\n\n")
 
 
-def test_rag_query_stream_keeps_response_headers_when_retrieval_beats_the_keepalive(
-    client_internal_user, monkeypatch
-):
+def test_rag_query_stream_keeps_response_headers_when_retrieval_beats_the_keepalive(client_internal_user, monkeypatch):
     import litellm as litellm_module
 
     monkeypatch.setattr(litellm_module, "sse_keepalive_ping_interval_seconds", 5)
@@ -873,7 +2246,9 @@ def test_rag_query_stream_keeps_response_headers_when_retrieval_beats_the_keepal
             new=AsyncMock(side_effect=fast_aquery),
         ),
         patch("litellm.vector_store_registry", None),  # test-quality-ok: proxy module global, no injection seam
-        patch("litellm.proxy.proxy_server.prisma_client", None),  # test-quality-ok: proxy module global, no injection seam
+        patch(
+            "litellm.proxy.proxy_server.prisma_client", None
+        ),  # test-quality-ok: proxy module global, no injection seam
     ):
         response = client_internal_user.post(
             "/v1/rag/query",
@@ -925,13 +2300,17 @@ def test_rag_query_merges_managed_store_params(client_internal_user):
         model="gpt-4o-mini",
     )
 
-    with patch(  # test-quality-ok: aquery is the endpoint's downstream boundary; the forwarded config is what the test asserts
-        "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
-        new_callable=AsyncMock,
-        return_value=mock_response,
-    ) as mock_aquery, patch.object(litellm, "vector_store_registry", mock_registry), patch(  # test-quality-ok: seeds the managed-store registry the merge under test reads and grants access so real store resolution runs
-        "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store",
-        new=AsyncMock(return_value=True),
+    with (
+        patch(  # test-quality-ok: aquery is the endpoint's downstream boundary; the forwarded config is what the test asserts
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ) as mock_aquery,
+        patch.object(litellm, "vector_store_registry", mock_registry),
+        patch(  # test-quality-ok: seeds the managed-store registry the merge under test reads and grants access so real store resolution runs
+            "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store",
+            new=AsyncMock(return_value=True),
+        ),
     ):
         response = client_internal_user.post(
             "/v1/rag/query",
@@ -971,13 +2350,17 @@ def test_rag_query_store_params_win_over_user_retrieval_config(client_internal_u
         model="gpt-4o-mini",
     )
 
-    with patch(  # test-quality-ok: aquery is the endpoint's downstream boundary; the forwarded config is what the test asserts
-        "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
-        new_callable=AsyncMock,
-        return_value=mock_response,
-    ) as mock_aquery, patch.object(litellm, "vector_store_registry", mock_registry), patch(  # test-quality-ok: seeds the managed-store registry the merge under test reads and grants access so real store resolution runs
-        "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store",
-        new=AsyncMock(return_value=True),
+    with (
+        patch(  # test-quality-ok: aquery is the endpoint's downstream boundary; the forwarded config is what the test asserts
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ) as mock_aquery,
+        patch.object(litellm, "vector_store_registry", mock_registry),
+        patch(  # test-quality-ok: seeds the managed-store registry the merge under test reads and grants access so real store resolution runs
+            "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store",
+            new=AsyncMock(return_value=True),
+        ),
     ):
         response = client_internal_user.post(
             "/v1/rag/query",
@@ -1087,6 +2470,62 @@ def test_rag_query_rejects_caller_embedding_selection_params(client_internal_use
     assert blocked_key in str(response.json())
 
 
+@pytest.mark.parametrize(
+    ("provider", "expected_status", "expected_searches"),
+    [("opensearch", 400, 0), ("opensearch/x", 400, 0), ("openai", 200, 1)],
+)
+def test_rag_query_rejects_caller_opensearch_index_name_only_on_opensearch_stores(
+    client_internal_user, provider, expected_status, expected_searches
+):
+    """
+    Regression: retrieval_config must not pick the index an OpenSearch store searches,
+    while other providers keep ignoring the key as they did before OpenSearch support.
+    """
+    import litellm
+    from litellm import Router
+    from litellm.types.vector_stores import VectorStoreSearchResponse
+
+    store = {
+        "vector_store_id": "kb",
+        "custom_llm_provider": provider,
+        "litellm_params": {"vector_store_id": "kb", "custom_llm_provider": provider},
+    }
+    registry = MagicMock()
+    registry.get_litellm_managed_vector_store_from_registry.return_value = store
+    fake_search = AsyncMock(
+        return_value=VectorStoreSearchResponse(object="vector_store.search_results.page", search_query="q", data=[])
+    )
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test", "mock_response": "hi"},
+            }
+        ]
+    )
+
+    with (
+        patch("litellm.vector_stores.asearch", new=fake_search),  # test-quality-ok: the search boundary under test
+        patch.object(litellm, "vector_store_registry", registry),  # test-quality-ok: seeds the store under test
+        patch("litellm.proxy.proxy_server.llm_router", router),  # test-quality-ok: mock-response router for completion
+        patch(  # test-quality-ok: store access is not under test, so the request reaches the search boundary
+            "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store",
+            new=AsyncMock(return_value=True),
+        ),
+    ):
+        response = client_internal_user.post(
+            "/v1/rag/query",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "hello"}],
+                "retrieval_config": {"vector_store_id": "kb", "opensearch_index_name": "another-teams-index"},
+            },
+        )
+
+    assert response.status_code == expected_status, response.json()
+    assert fake_search.await_count == expected_searches
+
+
 EICAR = r"X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
 INGEST_REQUEST = '{"ingest_options":{"vector_store":{"custom_llm_provider":"openai"}}}'
 
@@ -1164,9 +2603,7 @@ class TestVectorStoreUploadControls:
             content=b"benign document text\n",
             content_type="text/plain",
         )
-        _options, file_data, _url, _file_id = await parse_rag_ingest_request(
-            request, scanner=EicarTestMalwareScanner()
-        )
+        _options, file_data, _url, _file_id = await parse_rag_ingest_request(request, scanner=EicarTestMalwareScanner())
         assert file_data is not None
         server_filename, content_bytes, secured_content_type = file_data
         assert server_filename != "../../etc/passwd"

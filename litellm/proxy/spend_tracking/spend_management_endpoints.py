@@ -2,7 +2,8 @@
 import collections
 import json
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from functools import partial
 from itertools import groupby
@@ -16,7 +17,6 @@ from typing import (
     NamedTuple,
     Protocol,
     TypeAlias,
-    TypedDict,
     TypeVar,
     cast,  # noqa: TID251  # custom-logger and cold-storage payloads are untyped JSON
 )
@@ -24,7 +24,7 @@ from typing import (
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import TypeAdapter
-from typing_extensions import ReadOnly, assert_never
+from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -35,6 +35,7 @@ from litellm.constants import (
     SPEND_CAPTURE_RATE_MAX_RANGE_DAYS,
 )
 from litellm.litellm_core_utils.classifier_logging import classifier_audit_fields, classifier_input_snapshot
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
 from litellm.proxy.auth.authorization import (
@@ -50,7 +51,16 @@ from litellm.proxy.auth.authorization_dependencies import (
     LogTeamLookupDependency,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.openai_error_payload import error_status_code, openai_error_param, openai_error_type
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.spend_tracking.committed_spend import committed_spend_tracked, drop_committed_spend
+from litellm.proxy.spend_tracking.session_page import (
+    AGENT_CALL_TYPE_SQL,
+    MCP_CALL_TYPES_SQL,
+    SESSION_KEY_EXPR,
+    SESSION_REPRESENTATIVE_ORDER_SQL,
+    read_session_page,
+)
 from litellm.proxy.spend_tracking.spend_capture_rate import (
     ProviderBillingCredentialMissing,
     ProviderBillingRequestFailed,
@@ -60,17 +70,19 @@ from litellm.proxy.spend_tracking.spend_capture_rate import (
 # NOTE: Avoid module-level import from common_utils: proxy_server imports this
 # module while common_utils may pull proxy_server during init, which can leave
 # those names undefined. Import the helpers locally where they are used.
+from litellm.proxy.spend_tracking.spend_log_api_key_scope import (
+    spend_log_api_keys_for_teams,
+    spend_log_api_keys_for_user,
+)
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     get_spend_by_team,
     get_spend_by_team_and_customer,
 )
-from litellm.proxy.utils import handle_exception_on_proxy
+from litellm.proxy.utils import handle_exception_on_proxy, query_raw_within_statement_timeout
+from litellm.redis.stores.spend_counters import key_counter, team_counter
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import SpendLogsRepository
 from litellm.repositories.team_repository import TeamRepository
-from litellm.repositories.verification_token_repository import (
-    VerificationTokenRepository,
-)
 from litellm.types.proxy.spend_capture_rate import CaptureRateReport, SpendCaptureProvider
 
 if TYPE_CHECKING:
@@ -84,24 +96,17 @@ else:
 router: Final = APIRouter()
 
 SPEND_LOGS_PAGINATION_COUNT_CAP: Final = 10000
+_DECODED_JSON: Final = TypeAdapter(object)
 
-_SESSION_KEY_EXPR: Final = "COALESCE(NULLIF(session_id, ''), request_id)"
-_SESSION_GROUP_KEY_SQL: Final = f"{_SESSION_KEY_EXPR}, api_key"
-_MCP_CALL_TYPES_SQL: Final = "('call_mcp_tool', 'list_mcp_tools')"
-_AGENT_CALL_TYPE_SQL: Final = "'asend_message'"
-_SESSION_REPRESENTATIVE_ORDER_SQL: Final = (
-    f"(call_type = {_AGENT_CALL_TYPE_SQL}) DESC, "
-    f'CASE WHEN call_type = {_AGENT_CALL_TYPE_SQL} THEN "endTime" END DESC NULLS LAST, '
-    f'call_type IN {_MCP_CALL_TYPES_SQL}, "startTime" DESC, request_id'
-)
+_SESSION_GROUP_KEY_SQL: Final = f"{SESSION_KEY_EXPR}, api_key"
 _BATCH_CALL_TYPES_SQL: Final = "('acreate_batch', 'create_batch', 'aretrieve_batch', 'retrieve_batch')"
 _SPAN_TYPE_SQL_CONDITIONS: Final[Mapping[str, str]] = MappingProxyType(
     {
-        "mcp": f"call_type IN {_MCP_CALL_TYPES_SQL}",
-        "agent": f"call_type = {_AGENT_CALL_TYPE_SQL}",
+        "mcp": f"call_type IN {MCP_CALL_TYPES_SQL}",
+        "agent": f"call_type = {AGENT_CALL_TYPE_SQL}",
         "batch": f"call_type IN {_BATCH_CALL_TYPES_SQL}",
         "llm": (
-            f"(call_type NOT IN {_MCP_CALL_TYPES_SQL} AND call_type != {_AGENT_CALL_TYPE_SQL} "
+            f"(call_type NOT IN {MCP_CALL_TYPES_SQL} AND call_type != {AGENT_CALL_TYPE_SQL} "
             f"AND call_type NOT IN {_BATCH_CALL_TYPES_SQL})"
         ),
     }
@@ -129,11 +134,6 @@ _RowT = TypeVar("_RowT")
 
 class _SupportsModelDump(Protocol):
     def model_dump(self) -> Mapping[str, object]: ...
-
-
-class _SpendLogOwnerRow(TypedDict):
-    user: ReadOnly[str | None]
-    team_id: ReadOnly[str | None]
 
 
 class _ActivityRow(TypedDict):
@@ -261,9 +261,93 @@ async def _query_raw(prisma_client: PrismaClient, sql_query: str, *args: object)
     return await prisma_client.db.query_raw(sql_query, *args)
 
 
+async def _scope_api_keys(
+    prisma_client: PrismaClient, *, where_conditions: Mapping[str, object], start: datetime | None, end: datetime | None
+) -> tuple[str, ...] | None:
+    """The api_keys behind a ``"user"`` / ``team_id`` filter, so the unindexed column is only checked on rows the
+    ``(api_key, "startTime")`` index already picked."""
+    if start is None or end is None or isinstance(where_conditions.get("api_key"), str):
+        return None
+    user_id: Final = where_conditions.get("user")
+    if isinstance(user_id, str):
+        return await spend_log_api_keys_for_user(prisma_client, user_id, start.date(), end.date())
+    team_id: Final = where_conditions.get("team_id")
+    if isinstance(team_id, str):
+        return await spend_log_api_keys_for_teams(prisma_client, (team_id,), start.date(), end.date())
+    return None
+
+
 async def _query_raw_or_none(prisma_client: PrismaClient, sql_query: str, *args: object) -> Sequence[_RowT] | None:
     """``_query_raw`` for the call sites that guard the result against ``None``."""
     return await _query_raw(prisma_client, sql_query, *args)
+
+
+async def _query_spend_logs(prisma_client: PrismaClient, sql_query: str, *args: object) -> Sequence[_RowT]:
+    return cast(  # cast-ok: callers declare the row shape their SELECT list produces, as with _query_raw
+        "Sequence[_RowT]", await query_raw_within_statement_timeout(prisma_client, sql_query, *args)
+    )
+
+
+_SpendLogIdColumn: TypeAlias = Literal["request_id", "litellm_call_id"]
+
+
+@dataclass(frozen=True, slots=True)
+class _SpendLogWindow:
+    start: datetime | None = None
+    end: datetime | None = None
+
+
+_UNBOUNDED_SPEND_LOG_WINDOW: Final = _SpendLogWindow()
+
+
+def _spend_log_id_filter(
+    id_column: _SpendLogIdColumn, lookup_id: str, window: _SpendLogWindow
+) -> tuple[str, tuple[object, ...]]:
+    match id_column:
+        case "request_id":
+            return "request_id = $1", (lookup_id,)
+        case "litellm_call_id":
+            bounds: Final = tuple(
+                (operator, bound.isoformat())
+                for operator, bound in ((">=", window.start), ("<=", window.end))
+                if bound is not None
+            )
+            bound_sql: Final = "".join(
+                f""" AND "startTime" {operator} (${index}::timestamptz AT TIME ZONE 'UTC')"""
+                for index, (operator, _) in enumerate(bounds, start=2)
+            )
+            return f"litellm_call_id = $1{bound_sql}", (lookup_id, *(bound for _, bound in bounds))
+
+
+def _spend_log_lookup_timeout_hint(id_column: _SpendLogIdColumn) -> str:
+    match id_column:
+        case "request_id":
+            return "Try again"
+        case "litellm_call_id":
+            return (
+                "Pass a narrower start_date and end_date, or ask an admin to check that the "
+                "LiteLLM_SpendLogs_litellm_call_id_idx index exists and is valid"
+            )
+
+
+async def _query_spend_logs_by_id(
+    prisma_client: PrismaClient, id_column: _SpendLogIdColumn, sql_query: str, *args: object
+) -> Sequence[Mapping[str, object]]:
+    return await query_raw_within_statement_timeout(
+        prisma_client,
+        sql_query,
+        *args,
+        what=f"Spend log lookup by {id_column}",
+        hint=_spend_log_lookup_timeout_hint(id_column),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _SpendLogsReader:
+    prisma_client: PrismaClient
+
+    async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
+        return await query_raw_within_statement_timeout(self.prisma_client, query, *args)
 
 
 class _TeamTable(Protocol):
@@ -276,22 +360,20 @@ class _TeamTable(Protocol):
     async def update_many(self, *, data: Mapping[str, float], where: Mapping[str, object]) -> int: ...
 
 
-class _VerificationTokenTable(Protocol):
-    """The subset of the Prisma verification token table API this module uses."""
-
-    async def update_many(self, *, data: Mapping[str, float], where: Mapping[str, object]) -> int: ...
-
-
 def _spend_logs_table(prisma_client: PrismaClient) -> TableActions["prisma_models.LiteLLM_SpendLogs"]:
     return SpendLogsRepository(prisma_client).table
 
 
+_LOCK_ALL_TEAMS_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_TeamTable" WHERE TRUE ORDER BY team_id COLLATE "C" FOR UPDATE'
+)
+_LOCK_ALL_KEYS_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_VerificationToken" WHERE TRUE ORDER BY token COLLATE "C" FOR UPDATE'
+)
+
+
 def _team_table(prisma_client: PrismaClient) -> _TeamTable:
     return TeamRepository(prisma_client).table
-
-
-def _verification_token_table(prisma_client: PrismaClient) -> _VerificationTokenTable:
-    return VerificationTokenRepository(prisma_client).table
 
 
 def _spend_logs_daily_summary_sql(
@@ -386,9 +468,11 @@ def _request_id_or_call_id_clause(request_id: str) -> tuple[_RequestIdEquals, _L
     return (request_id_clause, call_id_clause)
 
 
-async def _find_spend_log_owners(prisma_client: PrismaClient, request_id: str) -> Sequence[_SpendLogOwnerRow]:
+async def _find_spend_log_owners(
+    prisma_client: PrismaClient, id_column: _SpendLogIdColumn, lookup_id: str, window: _SpendLogWindow
+) -> frozenset[tuple[str | None, str | None]]:
     """Read the distinct ``(user, team_id)`` owner pairs across every spend log row
-    identified by ``request_id`` or ``litellm_call_id``.
+    whose ``id_column`` is ``lookup_id``.
 
     ``litellm_call_id`` is populated from the client-settable ``x-litellm-call-id``
     request header, so it is not guaranteed unique to one tenant: any number of rows
@@ -396,13 +480,14 @@ async def _find_spend_log_owners(prisma_client: PrismaClient, request_id: str) -
     carrying the caller's id could otherwise push the caller's own owner pair past a
     row-sample cap and lock them out of their own lookup.
     """
-    sql_query: Final = """
-        SELECT DISTINCT "user", team_id
-        FROM "LiteLLM_SpendLogs"
-        WHERE request_id = $1 OR litellm_call_id = $1
-    """
-    owners: Final[Sequence[_SpendLogOwnerRow] | None] = await _query_raw_or_none(prisma_client, sql_query, request_id)
-    return owners if owners is not None else ()
+    id_filter, id_params = _spend_log_id_filter(id_column, lookup_id, window)
+    rows: Final = await _query_spend_logs_by_id(
+        prisma_client,
+        id_column,
+        f'SELECT DISTINCT "user", team_id FROM "LiteLLM_SpendLogs" WHERE {id_filter}',
+        *id_params,
+    )
+    return frozenset(_fetched_row_owner(row) for row in rows)
 
 
 async def _count_spend_logs(prisma_client: PrismaClient, where: Mapping[str, object]) -> int:
@@ -437,7 +522,7 @@ async def spend_key_fn(
     Example Request:
     ```
     curl -X GET "http://0.0.0.0:8000/spend/keys" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
 
@@ -449,7 +534,7 @@ async def spend_key_fn(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        if _is_admin_view_safe(user_api_key_dict=user_api_key_dict):
+        if is_admin_view_safe(user_api_key_dict=user_api_key_dict):
             return await prisma_client.get_data(table_name="key", query_type="find_all")
 
         caller_user_id: Final = user_api_key_dict.user_id
@@ -505,13 +590,13 @@ async def spend_user_fn(
     Example Request:
     ```
     curl -X GET "http://0.0.0.0:8000/spend/users" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     View User Table row for user_id
     ```
     curl -X GET "http://0.0.0.0:8000/spend/users?user_id=1234" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
@@ -522,7 +607,7 @@ async def spend_user_fn(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        if not _is_admin_view_safe(user_api_key_dict=user_api_key_dict):
+        if not is_admin_view_safe(user_api_key_dict=user_api_key_dict):
             caller_user_id: Final = user_api_key_dict.user_id
             if not caller_user_id:
                 return []
@@ -552,6 +637,20 @@ async def spend_user_fn(
         )
 
 
+def _parse_utc_day(value: str | None, param_name: str) -> datetime | None:
+    """Parse an optional YYYY-MM-DD query param to a UTC datetime, so the SQL
+    day window never depends on the database session timezone."""
+    if value is None:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": f"{param_name} must be a YYYY-MM-DD date, got {value!r}"},
+        )
+
+
 @router.get(
     "/spend/tags",
     tags=["Budget & Spend Tracking"],
@@ -561,6 +660,8 @@ async def spend_user_fn(
     },
 )
 async def view_spend_tags(
+    log_team_lookup: LogTeamLookupDependency,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     start_date: str | None = fastapi.Query(
         default=None,
         description="Time from which to start viewing key spend",
@@ -573,16 +674,21 @@ async def view_spend_tags(
     """
     LiteLLM Enterprise - View Spend Per Request Tag
 
+    - Admin callers (PROXY_ADMIN / PROXY_ADMIN_VIEW_ONLY) see tag aggregates
+      across every spend log.
+    - All other callers see aggregates over their own spend logs and those of
+      teams they may view, exactly like ``/spend/logs/ui``.
+
     Example Request:
     ```
     curl -X GET "http://0.0.0.0:8000/spend/tags" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     Spend with Start Date and End Date
     ```
     curl -X GET "http://0.0.0.0:8000/spend/tags?start_date=2022-01-01&end_date=2022-02-01" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
 
@@ -594,16 +700,19 @@ async def view_spend_tags(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        # run the following SQL query on prisma
-        """
-        SELECT
-        jsonb_array_elements_text(request_tags) AS individual_request_tag,
-        COUNT(*) AS log_count,
-        SUM(spend) AS total_spend
-        FROM "LiteLLM_SpendLogs"
-        GROUP BY individual_request_tag;
-        """
-        response: Final = await get_spend_by_tags(start_date=start_date, end_date=end_date, prisma_client=prisma_client)
+        read_scope: Final = (
+            AllRows()
+            if is_admin_view_safe(user_api_key_dict=user_api_key_dict)
+            else await _spend_log_read_scope(user_api_key_dict, log_team_lookup)
+            if _can_user_view_spend_log(user_api_key_dict=user_api_key_dict)
+            else OwnedRows(user_api_key_dict.user_id)
+        )
+        response: Final = await get_spend_by_tags(
+            prisma_client=prisma_client,
+            read_scope=read_scope,
+            start_date=_parse_utc_day(start_date, "start_date"),
+            end_date=_parse_utc_day(end_date, "end_date"),
+        )
 
         return response
     except Exception as e:
@@ -611,7 +720,7 @@ async def view_spend_tags(
             raise ProxyException(
                 message=getattr(e, "detail", f"/spend/tags Error({e})"),
                 type="internal_error",
-                param=getattr(e, "param", "None"),
+                param=openai_error_param(e),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
             )
         elif isinstance(e, ProxyException):
@@ -619,7 +728,7 @@ async def view_spend_tags(
         raise ProxyException(
             message="/spend/tags Error" + str(e),
             type="internal_error",
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -1238,13 +1347,13 @@ async def get_spend_capture_rate(
 
     Example:
     ```
-    curl -H "Authorization: Bearer sk-1234" \
+    curl -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
       "http://localhost:4000/spend/capture_rate?provider=openai&start_date=2026-09-17&end_date=2026-09-23"
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
 
-    if not _is_admin_view_safe(user_api_key_dict):
+    if not is_admin_view_safe(user_api_key_dict):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only proxy admins can read the capture rate")
     if prisma_client is None:
         raise HTTPException(
@@ -1385,7 +1494,7 @@ async def get_global_spend_provider(
             _model_id = row["model_id"]
             _provider = "Unknown"
             if llm_router is not None:
-                _deployment = llm_router.get_deployment(model_id=_model_id)
+                _deployment = llm_router.registry().deployment(_model_id)
                 if _deployment is not None:
                     try:
                         _, _provider, _, _ = litellm.get_llm_provider(
@@ -1541,10 +1650,7 @@ async def get_global_spend_report(
                 ORDER BY
                     total_cost DESC;
             """
-            db_response = await _query_raw_or_none(prisma_client, sql_query, start_date_obj, end_date_obj, api_key)
-            if db_response is None:
-                return []
-
+            db_response = await _query_spend_logs(prisma_client, sql_query, start_date_obj, end_date_obj, api_key)
             return db_response
         elif internal_user_id is not None:
             verbose_proxy_logger.debug("Getting /spend for internal_user_id: %s", internal_user_id)
@@ -1584,12 +1690,9 @@ async def get_global_spend_report(
                 ORDER BY
                     total_cost DESC;
             """
-            db_response = await _query_raw_or_none(
+            db_response = await _query_spend_logs(
                 prisma_client, sql_query, start_date_obj, end_date_obj, internal_user_id
             )
-            if db_response is None:
-                return []
-
             return db_response
         elif team_id is not None and customer_id is not None:
             return await get_spend_by_team_and_customer(
@@ -1651,10 +1754,7 @@ async def get_global_spend_report(
                 group_by_day;
                 """
 
-            db_response = await _query_raw_or_none(prisma_client, sql_query, start_date_obj, end_date_obj)
-            if db_response is None:
-                return []
-
+            db_response = await _query_spend_logs(prisma_client, sql_query, start_date_obj, end_date_obj)
             return db_response
         elif group_by == "api_key":
             sql_query = """
@@ -1692,12 +1792,11 @@ async def get_global_spend_report(
                 ORDER BY
                     total_cost DESC;
             """
-            db_response = await _query_raw_or_none(prisma_client, sql_query, start_date_obj, end_date_obj)
-            if db_response is None:
-                return []
-
+            db_response = await _query_spend_logs(prisma_client, sql_query, start_date_obj, end_date_obj)
             return db_response
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1863,7 +1962,7 @@ def _resolve_spend_report_scope(
     viewers) may request any scope.
     """
     if requested:
-        if requested != caller_value and not _is_admin_view_safe(user_api_key_dict=user_api_key_dict):
+        if requested != caller_value and not is_admin_view_safe(user_api_key_dict=user_api_key_dict):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Not authorized to view spend for a {scope_name} other than your own",
@@ -1887,7 +1986,7 @@ async def _resolve_org_spend_report_scope(
     Callable by proxy admins (any organization) and org admins of the target
     organization; every other caller is a 403 from ``_verify_org_access``.
     """
-    from litellm.proxy.management_endpoints.organization_endpoints import _verify_org_access
+    from litellm.proxy.management_endpoints.organization_endpoints import verify_org_access
 
     target_org = organization_id or user_api_key_dict.org_id
     if target_org is None:
@@ -1895,7 +1994,7 @@ async def _resolve_org_spend_report_scope(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No organization_id associated with this API key; pass an organization_id query param",
         )
-    await _verify_org_access(
+    await verify_org_access(
         organization_id=target_org,
         user_api_key_dict=user_api_key_dict,
         prisma_client=prisma_client,
@@ -1941,7 +2040,7 @@ async def get_key_spend_report(
         caller_value=LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict),
         scope_name="api_key",
     )
-    db_response: Sequence[Mapping[str, object]] | None = await _query_raw_or_none(
+    db_response: Sequence[Mapping[str, object]] = await _query_spend_logs(
         prisma_client,
         _scoped_spend_report_sql(scope_column="api_key"),
         start_date_obj,
@@ -1983,7 +2082,7 @@ async def get_user_spend_report(
         caller_value=user_api_key_dict.user_id,
         scope_name="internal_user_id",
     )
-    db_response: Sequence[Mapping[str, object]] | None = await _query_raw_or_none(
+    db_response: Sequence[Mapping[str, object]] = await _query_spend_logs(
         prisma_client,
         _scoped_spend_report_sql(scope_column="user"),
         start_date_obj,
@@ -2025,7 +2124,7 @@ async def get_team_spend_report(
         caller_value=user_api_key_dict.team_id,
         scope_name="team_id",
     )
-    db_response: Sequence[Mapping[str, object]] | None = await _query_raw_or_none(
+    db_response: Sequence[Mapping[str, object]] = await _query_spend_logs(
         prisma_client,
         _scoped_spend_report_sql(scope_column="team_id"),
         start_date_obj,
@@ -2067,7 +2166,7 @@ async def get_organization_spend_report(
         organization_id=organization_id,
         prisma_client=prisma_client,
     )
-    db_response: Sequence[Mapping[str, object]] | None = await _query_raw_or_none(
+    db_response: Sequence[Mapping[str, object]] = await _query_spend_logs(
         prisma_client,
         _ORG_SPEND_REPORT_SQL,
         start_date_obj,
@@ -2117,7 +2216,7 @@ async def global_get_all_tag_names():
             raise ProxyException(
                 message=getattr(e, "detail", f"/spend/all_tag_names Error({e})"),
                 type="internal_error",
-                param=getattr(e, "param", "None"),
+                param=openai_error_param(e),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
             )
         elif isinstance(e, ProxyException):
@@ -2125,7 +2224,7 @@ async def global_get_all_tag_names():
         raise ProxyException(
             message="/spend/all_tag_names Error" + str(e),
             type="internal_error",
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -2158,13 +2257,13 @@ async def global_view_spend_tags(
     Example Request:
     ```
     curl -X GET "http://0.0.0.0:4000/spend/tags" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     Spend with Start Date and End Date
     ```
     curl -X GET "http://0.0.0.0:4000/spend/tags?start_date=2022-01-01&end_date=2022-02-01" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     import traceback
@@ -2199,7 +2298,7 @@ async def global_view_spend_tags(
             raise ProxyException(
                 message=getattr(e, "detail", f"/spend/tags Error({error_str})"),
                 type="internal_error",
-                param=getattr(e, "param", "None"),
+                param=openai_error_param(e),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
             )
         elif isinstance(e, ProxyException):
@@ -2207,15 +2306,15 @@ async def global_view_spend_tags(
         raise ProxyException(
             message="/spend/tags Error" + error_str,
             type="internal_error",
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
 
-async def _get_spend_report_for_time_range(
+async def get_spend_report_for_time_range(
     start_date: str,
     end_date: str,
-):
+) -> tuple[Sequence[_TeamSpendRow] | None, Sequence[_TagSpendRow] | None] | None:
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -2274,6 +2373,9 @@ async def _get_spend_report_for_time_range(
         verbose_proxy_logger.error("Exception in _get_daily_spend_reports %s", e)
 
 
+_get_spend_report_for_time_range: Final = get_spend_report_for_time_range
+
+
 @router.post(
     "/spend/calculate",
     tags=["Budget & Spend Tracking"],
@@ -2308,7 +2410,7 @@ async def calculate_spend(request: SpendCalculateRequest):
 
     ```
     curl --location 'http://localhost:4000/spend/calculate'
-    --header 'Authorization: Bearer sk-1234'
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY"
     --header 'Content-Type: application/json'
     --data '{
         "model": "anthropic.claude-v2",
@@ -2320,7 +2422,7 @@ async def calculate_spend(request: SpendCalculateRequest):
 
     ```
     curl --location 'http://localhost:4000/spend/calculate'
-    --header 'Authorization: Bearer sk-1234'
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY"
     --header 'Content-Type: application/json'
     --data '{
         "completion_response": {
@@ -2364,17 +2466,19 @@ async def calculate_spend(request: SpendCalculateRequest):
             _model_in_llm_router = None
             cost_per_token: CostPerToken | None = None
             if llm_router is not None:
-                if llm_router.model_group_alias is not None and request.model in llm_router.model_group_alias:
+                router_registry: Final = llm_router.registry()
+                model_group_alias: Final = router_registry.aliases()
+                if model_group_alias is not None and request.model in model_group_alias:
                     # lookup alias in llm_router
-                    _model_group_name: Final = llm_router.model_group_alias[request.model]
-                    for model in llm_router.model_list:
+                    _model_group_name: Final = model_group_alias[request.model]
+                    for model in router_registry.all():
                         if model.get("model_name") == _model_group_name:
                             _model_in_llm_router = model
 
                 else:
                     # no model_group aliases set -> try finding model in llm_router
                     # find model in llm_router
-                    for model in llm_router.model_list:
+                    for model in router_registry.all():
                         if model.get("model_name") == request.model:
                             _model_in_llm_router = model
 
@@ -2417,9 +2521,9 @@ async def calculate_spend(request: SpendCalculateRequest):
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", str(e)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+                type=openai_error_type(e, error_status_code(e, status.HTTP_400_BAD_REQUEST)),
+                param=openai_error_param(e),
+                code=error_status_code(e, status.HTTP_400_BAD_REQUEST),
             )
         if isinstance(e, litellm.exceptions.ModelNotMappedError):
             raise ProxyException(
@@ -2431,9 +2535,9 @@ async def calculate_spend(request: SpendCalculateRequest):
         error_msg: Final = f"{e}"
         raise ProxyException(
             message=getattr(e, "message", error_msg),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
-            code=getattr(e, "status_code", 500),
+            type=openai_error_type(e, error_status_code(e, 500)),
+            param=openai_error_param(e),
+            code=error_status_code(e, 500),
         )
 
 
@@ -2467,7 +2571,7 @@ def _build_spend_log_search_condition(
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
     responses={
-        200: {"model": dict[str, Any]},
+        200: {"model": dict[str, object]},
     },
 )
 @router.get(
@@ -2594,7 +2698,7 @@ async def ui_view_spend_logs(
     Example:
     ```
     curl -X GET "http://0.0.0.0:8000/spend/logs/v2?start_date=2025-11-25%2000:00:00&end_date=2025-11-26%2023:59:59&page=1&page_size=50" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
@@ -2603,7 +2707,7 @@ async def ui_view_spend_logs(
         raise ProxyException(
             message="Prisma Client is not initialized",
             type="internal_error",
-            param="None",
+            param=None,
             code=status.HTTP_401_UNAUTHORIZED,
         )
 
@@ -2652,7 +2756,7 @@ async def ui_view_spend_logs(
         )
 
     try:
-        is_admin_view: Final = _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
+        is_admin_view: Final = is_admin_view_safe(user_api_key_dict=user_api_key_dict)
         is_request_id_lookup: Final = request_id is not None and not is_v2
         is_search_lookup: Final = search is not None
         search_owns_window: Final = is_search_lookup and not is_v2
@@ -2670,7 +2774,7 @@ async def ui_view_spend_logs(
                 raise ProxyException(
                     message="Start date and end date are required",
                     type="bad_request",
-                    param="None",
+                    param=None,
                     code=status.HTTP_400_BAD_REQUEST,
                 )
             formats: Final = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d"] if is_v2 else ["%Y-%m-%d %H:%M:%S"]
@@ -2692,7 +2796,7 @@ async def ui_view_spend_logs(
             end_date_obj = parse_date(end_date)
 
         # Build where conditions
-        where_conditions: Final[dict[str, Any]] = {}
+        where_conditions: Final[dict[str, object]] = {}
         if start_date_obj is not None and end_date_obj is not None:
             where_conditions["startTime"] = {
                 "gte": start_date_obj.isoformat(),  # Already in UTC, no need to add Z
@@ -2754,18 +2858,14 @@ async def ui_view_spend_logs(
             if len(metadata_filters) == 1:
                 where_conditions["metadata"] = metadata_filters[0]
             else:
-                where_conditions["AND"] = where_conditions.get("AND", []) + [
-                    {"metadata": filter_cond} for filter_cond in metadata_filters
-                ]
+                where_conditions["AND"] = [{"metadata": filter_cond} for filter_cond in metadata_filters]
         if end_user is not None:
             where_conditions["end_user"] = end_user
 
         if min_spend is not None or max_spend is not None:
-            where_conditions["spend"] = {}
-            if min_spend is not None:
-                where_conditions["spend"]["gte"] = min_spend
-            if max_spend is not None:
-                where_conditions["spend"]["lte"] = max_spend
+            where_conditions["spend"] = {
+                key: value for key, value in (("gte", min_spend), ("lte", max_spend)) if value is not None
+            }
         # A request_id lookup drops the date window, so a non-admin could otherwise
         # reach any single row by id; require they own one of the matches, mirroring
         # the detail endpoint, and keep the general scoping below so a colliding
@@ -2870,6 +2970,18 @@ async def ui_view_spend_logs(
             sql_params.append(f"%{like_escaped_session_id}%")
             p += 1
 
+        scope_api_keys: Final = (
+            await _scope_api_keys(
+                prisma_client, where_conditions=where_conditions, start=start_date_obj, end=end_date_obj
+            )
+            if not search_owns_window
+            else None
+        )
+        if scope_api_keys is not None:
+            sql_conditions.append(f"api_key = ANY(${p}::text[])")
+            sql_params.append(list(scope_api_keys))
+            p += 1  # rebind-ok: advances the file's shared $N placeholder counter
+
         # Status filter
         if status_filter is not None and not (group_by_session is True and not is_search_lookup):
             if status_filter == "success":
@@ -2921,23 +3033,6 @@ async def ui_view_spend_logs(
             sql_params.append(json.dumps(used_client_oauth_token))
             p += 1
 
-        if status_filter is not None and group_by_session is True and not is_search_lookup:
-            session_filter_conditions: Final = " AND ".join(sql_conditions) or "TRUE"
-            sql_conditions.append(
-                f"""({_SESSION_GROUP_KEY_SQL}) IN (
-                    SELECT session_key, api_key FROM (
-                        SELECT DISTINCT ON ({_SESSION_GROUP_KEY_SQL})
-                            {_SESSION_KEY_EXPR} AS session_key, api_key, status
-                        FROM "LiteLLM_SpendLogs"
-                        WHERE {session_filter_conditions}
-                        ORDER BY {_SESSION_GROUP_KEY_SQL}, {_SESSION_REPRESENTATIVE_ORDER_SQL}
-                    ) AS session_outcomes
-                    WHERE COALESCE(status, 'success') = ${p}
-                )"""
-            )
-            sql_params.append(status_filter)
-            p += 1
-
         if (
             group_by_session is True
             and not is_v2
@@ -2950,11 +3045,29 @@ async def ui_view_spend_logs(
                 sql_conditions=sql_conditions,
                 sql_params=sql_params,
                 next_param_index=p,
+                status_filter=status_filter,
                 page=page,
                 page_size=page_size,
                 sort_desc=order_direction != "asc",
                 session_cursor=session_cursor,
             )
+
+        if status_filter is not None and group_by_session is True and not is_search_lookup:
+            session_filter_conditions: Final = " AND ".join(sql_conditions) or "TRUE"
+            sql_conditions.append(
+                f"""({_SESSION_GROUP_KEY_SQL}) IN (
+                    SELECT session_key, api_key FROM (
+                        SELECT DISTINCT ON ({_SESSION_GROUP_KEY_SQL})
+                            {SESSION_KEY_EXPR} AS session_key, api_key, status
+                        FROM "LiteLLM_SpendLogs"
+                        WHERE {session_filter_conditions}
+                        ORDER BY {_SESSION_GROUP_KEY_SQL}, {SESSION_REPRESENTATIVE_ORDER_SQL}
+                    ) AS session_outcomes
+                    WHERE COALESCE(status, 'success') = ${p}
+                )"""
+            )
+            sql_params.append(status_filter)
+            p += 1
 
         # Build the ORDER BY expression. ttft_ms is computed from
         # completionStartTime - startTime; non-streaming rows (where
@@ -2990,7 +3103,7 @@ async def ui_view_spend_logs(
                 LIMIT ${p}
             ) AS bounded_matches
         """
-        count_rows: Final[Sequence[_SpendLogsCountRow] | None] = await _query_raw_or_none(
+        count_rows: Final[Sequence[_SpendLogsCountRow]] = await _query_spend_logs(
             prisma_client, count_query, *sql_params, SPEND_LOGS_PAGINATION_COUNT_CAP + 1
         )
         raw_total: Final = int(count_rows[0]["total_count"]) if count_rows else 0
@@ -3004,7 +3117,7 @@ async def ui_view_spend_logs(
                         {_SPEND_LOG_LIST_COLUMNS}
                     FROM "LiteLLM_SpendLogs"
                     WHERE {joined_conditions}
-                    ORDER BY {_SESSION_GROUP_KEY_SQL}, {_SESSION_REPRESENTATIVE_ORDER_SQL}
+                    ORDER BY {_SESSION_GROUP_KEY_SQL}, {SESSION_REPRESENTATIVE_ORDER_SQL}
                 ) AS session_representatives
                 ORDER BY {exact_request_id_first}{_order_expr} {_sql_dir}{_nulls_clause}, request_id
                 LIMIT ${p} OFFSET ${p + 1}
@@ -3021,7 +3134,7 @@ async def ui_view_spend_logs(
         )
         sql_params.extend([page_size, skip])
 
-        data: Final = await prisma_client.db.query_raw(sql_query, *sql_params)
+        data: Final[Sequence[Mapping[str, object]]] = await _query_spend_logs(prisma_client, sql_query, *sql_params)
 
         if request_id is not None and not is_v2 and not is_admin_view:
             await _assert_user_owns_fetched_spend_rows(
@@ -3040,7 +3153,7 @@ async def ui_view_spend_logs(
 
         return await _build_ui_spend_logs_response(
             prisma_client,
-            data,
+            list(data),
             total_records,
             page,
             page_size,
@@ -3053,22 +3166,6 @@ async def ui_view_spend_logs(
         raise handle_exception_on_proxy(e)
 
 
-class _SessionPageRow(TypedDict):
-    session_key: ReadOnly[str]
-    api_key: ReadOnly[str]
-    last_activity: ReadOnly[str]
-
-
-def _parse_session_cursor(session_cursor: str | None) -> tuple[str, str, str] | None:
-    if session_cursor is None or session_cursor.count("|") < 2:
-        return None
-    last_activity, _, rest = session_cursor.partition("|")
-    api_key, _, session_key = rest.partition("|")
-    if not last_activity or not session_key:
-        return None
-    return (last_activity, session_key, api_key)
-
-
 async def _fetch_session_representatives(
     prisma_client: "PrismaClient",
     where_clause: str,
@@ -3077,19 +3174,21 @@ async def _fetch_session_representatives(
     session_keys: Sequence[tuple[str, str]],
 ) -> list[dict[str, object]]:  # mutable-ok: _build_ui_spend_logs_response writes session counts onto each row
     """Fetch the final agent outcome, or newest non-MCP row, of each ``(session_key, api_key)`` session, in ``session_keys`` order."""
+    # Lets Postgres use the session_id and request_id indexes.
     rep_query: Final = f"""
         SELECT * FROM (
             SELECT DISTINCT ON ({_SESSION_GROUP_KEY_SQL})
                 {_SPEND_LOG_LIST_COLUMNS}
             FROM "LiteLLM_SpendLogs"
             WHERE {where_clause}
+              AND (session_id = ANY(${next_param_index}::text[]) OR request_id = ANY(${next_param_index}::text[]))
               AND ({_SESSION_GROUP_KEY_SQL}) IN (
                   SELECT * FROM unnest(${next_param_index}::text[], ${next_param_index + 1}::text[])
               )
-            ORDER BY {_SESSION_GROUP_KEY_SQL}, {_SESSION_REPRESENTATIVE_ORDER_SQL}
+            ORDER BY {_SESSION_GROUP_KEY_SQL}, {SESSION_REPRESENTATIVE_ORDER_SQL}
         ) AS session_representatives
     """
-    rep_rows: Final[Sequence[dict[str, object]]] = await _query_raw(  # mutable-ok: rows are enriched in place
+    rep_rows: Final[Sequence[dict[str, object]]] = await _query_spend_logs(  # mutable-ok: rows are enriched in place
         prisma_client,
         rep_query,
         *sql_params,
@@ -3102,117 +3201,32 @@ async def _fetch_session_representatives(
     return [rep_by_key[key] for key in session_keys if key in rep_by_key]
 
 
-async def _count_grouped_sessions(
-    prisma_client: "PrismaClient",
-    where_clause: str,
-    sql_params: Sequence[object],
-    next_param_index: int,
-) -> tuple[int, bool]:
-    """Count the sessions matching the filter, returning ``(total, total_is_capped)`` bounded by the count cap."""
-    count_query: Final = f"""
-        SELECT COUNT(*) AS total_count
-        FROM (
-            SELECT 1
-            FROM "LiteLLM_SpendLogs"
-            WHERE {where_clause}
-            GROUP BY {_SESSION_GROUP_KEY_SQL}
-            LIMIT ${next_param_index}
-        ) AS bounded_sessions
-    """
-    count_rows: Final[Sequence[_SpendLogsCountRow]] = await _query_raw(
-        prisma_client, count_query, *sql_params, SPEND_LOGS_PAGINATION_COUNT_CAP + 1
-    )
-    raw_total: Final = int(count_rows[0]["total_count"]) if count_rows else 0
-    return (
-        (SPEND_LOGS_PAGINATION_COUNT_CAP, True) if raw_total > SPEND_LOGS_PAGINATION_COUNT_CAP else (raw_total, False)
-    )
-
-
 async def _ui_session_grouped_spend_logs(
     prisma_client: "PrismaClient",
     sql_conditions: Sequence[str],
     sql_params: Sequence[object],
     next_param_index: int,
+    status_filter: str | None,
     page: int,
     page_size: int,
     sort_desc: bool,
     session_cursor: str | None,
 ) -> Mapping[str, object]:
-    """
-    One row per session, keyset-paginated by session last activity.
-
-    Sessions are derived on the fly from ``LiteLLM_SpendLogs`` (no extra
-    table): rows sharing a ``session_id`` and ``api_key`` form a session, rows
-    without a session id are singletons keyed by ``request_id``. A page is the
-    next ``page_size`` sessions ordered by ``(MAX(startTime), session_key,
-    api_key)``, resumed from the ``session_cursor`` keyset
-    ``'<last_activity>|<api_key>|<session_key>'`` instead of an OFFSET, so
-    page depth does not degrade the query plan. A request for ``page > 1``
-    without a cursor (the UI jumping straight to the last page, or back to a
-    page it never walked through) falls back to ``OFFSET (page - 1) *
-    page_size``, trimmed to the end of the ``SPEND_LOGS_PAGINATION_COUNT_CAP``
-    window the capped ``total`` promises, so a page never runs past that total
-    and one starting at or past it returns no rows without a query. Each session is represented
-    by its final agent outcome (or newest non-MCP row), enriched by ``_build_ui_spend_logs_response``
-    exactly like the flat listing, and the response carries
-    ``next_session_cursor`` / ``has_more`` while ``total`` counts sessions
-    (capped like the flat total). A page that runs out of sessions while still
-    holding some is itself the end of the list, so its ``total`` is
-    ``offset + len(page)`` and the grouped count query is skipped; a page that
-    starts past the end says nothing about the total, so that one is counted.
-    """
+    """One row per session, keyset-paginated by last activity. ``read_session_page`` picks and counts the sessions,
+    and each is shown by its final agent outcome or newest non-MCP row."""
     where_clause: Final = " AND ".join(sql_conditions) if sql_conditions else "TRUE"
-    cmp_op: Final = "<" if sort_desc else ">"
-    direction: Final = "DESC" if sort_desc else "ASC"
-
-    cursor: Final = _parse_session_cursor(session_cursor)
-    having_clause: Final = (
-        f'HAVING (MAX("startTime"), {_SESSION_GROUP_KEY_SQL}) {cmp_op} '
-        f"(${next_param_index}::timestamp, ${next_param_index + 1}, ${next_param_index + 2})"
-        if cursor
-        else ""
+    session_page: Final = await read_session_page(
+        _SpendLogsReader(prisma_client),  # pyright: ignore[reportArgumentType]  # rows are the TypedDict the session SQL selects
+        where_clause=where_clause,
+        params=sql_params,
+        status=status_filter,
+        page=page,
+        page_size=page_size,
+        sort_desc=sort_desc,
+        session_cursor=session_cursor,
+        cap=SPEND_LOGS_PAGINATION_COUNT_CAP,
     )
-    cursor_params: Final[tuple[object, ...]] = cursor if cursor else ()
-    limit_index: Final = next_param_index + len(cursor_params)
-    offset: Final = (page - 1) * page_size if cursor is None else 0
-    page_limit: Final = min(page_size, SPEND_LOGS_PAGINATION_COUNT_CAP - offset)
-    offset_params: Final[tuple[int, ...]] = (offset,) if offset and page_limit > 0 else ()
-    offset_clause: Final = f"OFFSET ${limit_index + 1}" if offset_params else ""
-
-    page_query: Final = f"""
-        SELECT {_SESSION_KEY_EXPR} AS session_key,
-               api_key,
-               MAX("startTime")::text AS last_activity
-        FROM "LiteLLM_SpendLogs"
-        WHERE {where_clause}
-        GROUP BY {_SESSION_GROUP_KEY_SQL}
-        {having_clause}
-        ORDER BY MAX("startTime") {direction}, {_SESSION_KEY_EXPR} {direction}, api_key {direction}
-        LIMIT ${limit_index} {offset_clause}
-    """
-    page_rows: Final[Sequence[_SessionPageRow]] = (
-        ()
-        if page_limit <= 0
-        else await _query_raw(prisma_client, page_query, *sql_params, *cursor_params, page_limit + 1, *offset_params)
-    )
-
-    has_more: Final = len(page_rows) > page_limit
-    visible_rows: Final = page_rows[:page_limit]
-    next_cursor: Final = (
-        f"{visible_rows[-1]['last_activity']}|{visible_rows[-1]['api_key']}|{visible_rows[-1]['session_key']}"
-        if has_more and visible_rows
-        else None
-    )
-
-    page_starts_inside_the_list: Final = offset == 0 or len(page_rows) > 0
-    page_ends_the_list: Final = cursor is None and page_limit > 0 and not has_more and page_starts_inside_the_list
-    total_records, total_is_capped = (
-        (offset + len(page_rows), False)
-        if page_ends_the_list
-        else await _count_grouped_sessions(prisma_client, where_clause, sql_params, next_param_index)
-    )
-
-    session_keys: Final = tuple((row["session_key"], row["api_key"]) for row in visible_rows)
+    session_keys: Final = tuple((session.key, session.api_key) for session in session_page.sessions)
     data: Final[list[dict[str, object]]] = (  # mutable-ok: _build_ui_spend_logs_response writes onto each row
         await _fetch_session_representatives(
             prisma_client=prisma_client,
@@ -3226,18 +3240,17 @@ async def _ui_session_grouped_spend_logs(
     )
     _hydrate_spend_log_metadata(data)
 
-    total_pages: Final = (total_records + page_size - 1) // page_size
     response: Final[Mapping[str, object]] = await _build_ui_spend_logs_response(
         prisma_client,
         data,
-        total_records,
+        session_page.total,
         page,
         page_size,
-        total_pages,
+        (session_page.total + page_size - 1) // page_size,
         enrich_session_counts=True,
-        total_is_capped=total_is_capped,
+        total_is_capped=session_page.total_is_capped,
     )
-    return {**response, "next_session_cursor": next_cursor, "has_more": has_more}
+    return {**response, "next_session_cursor": session_page.next_cursor, "has_more": session_page.has_more}
 
 
 class RequestResponsePayload(NamedTuple):
@@ -3283,14 +3296,17 @@ def _hydrate_spend_log_metadata(rows: Sequence[Mapping[str, object]]) -> None:
 def _cold_storage_object_key_from_metadata(
     metadata: str | Mapping[str, object] | None,
 ) -> str | None:
-    if isinstance(metadata, str):
-        try:
-            metadata = json.loads(metadata)
-        except (json.JSONDecodeError, TypeError):
-            return None
-    if not isinstance(metadata, dict):
+    if not isinstance(metadata, str):
+        return _cold_storage_object_key(metadata if isinstance(metadata, dict) else None)
+    try:
+        decoded: Final = as_str_mapping(_DECODED_JSON.validate_python(json.loads(metadata)))
+    except (json.JSONDecodeError, TypeError):
         return None
-    object_key: Final = metadata.get("cold_storage_object_key")
+    return _cold_storage_object_key(decoded)
+
+
+def _cold_storage_object_key(metadata: Mapping[str, object] | None) -> str | None:
+    object_key: Final = metadata.get("cold_storage_object_key") if metadata is not None else None
     return object_key if isinstance(object_key, str) and object_key else None
 
 
@@ -3360,6 +3376,18 @@ async def _resolve_request_response_payload(
     )
 
 
+def _parse_spend_log_ui_date(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": f"Invalid date {value!r}, expected YYYY-MM-DD HH:MM:SS in UTC"},
+        ) from error
+
+
 @router.get(
     "/spend/logs/ui/{request_id}",
     tags=["Budget & Spend Tracking"],
@@ -3387,7 +3415,8 @@ async def ui_view_request_response_for_request_id(
     """
     from litellm.proxy.proxy_server import prisma_client
 
-    caller_is_admin: Final = _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
+    window: Final = _SpendLogWindow(start=_parse_spend_log_ui_date(start_date), end=_parse_spend_log_ui_date(end_date))
+    caller_is_admin: Final = is_admin_view_safe(user_api_key_dict=user_api_key_dict)
     if not caller_is_admin:
         if prisma_client is None:
             raise HTTPException(
@@ -3403,16 +3432,10 @@ async def ui_view_request_response_for_request_id(
             prisma_client=prisma_client,
             user_api_key_dict=user_api_key_dict,
             request_id=request_id,
+            window=window,
         )
 
     custom_loggers: Final = litellm.logging_callback_manager.get_active_additional_logging_utils_from_custom_logger()
-    start_date_obj: datetime | None = None
-    end_date_obj: datetime | None = None
-    if start_date is not None:
-        start_date_obj = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-    if end_date is not None:
-        end_date_obj = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-
     spend_log_row: Final = (
         None
         if prisma_client is None
@@ -3422,6 +3445,7 @@ async def ui_view_request_response_for_request_id(
             request_id=request_id,
             caller_is_admin=caller_is_admin,
             log_team_lookup=log_team_lookup,
+            window=window,
         )
     )
     stored_request_id: Final = _stored_request_id(spend_log_row, request_id)
@@ -3429,8 +3453,8 @@ async def ui_view_request_response_for_request_id(
     for custom_logger in custom_loggers:
         payload = await custom_logger.get_request_response_payload(
             request_id=stored_request_id,
-            start_time_utc=start_date_obj,
-            end_time_utc=end_date_obj,
+            start_time_utc=window.start,
+            end_time_utc=window.end,
         )
         if payload is not None:
             if not caller_is_admin and prisma_client is not None:
@@ -3506,31 +3530,31 @@ async def view_spend_logs(
     Example Request for all logs
     ```
     curl -X GET "http://0.0.0.0:8000/spend/logs" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     Example Request for specific request_id
     ```
     curl -X GET "http://0.0.0.0:8000/spend/logs?request_id=chatcmpl-6dcb2540-d3d7-4e49-bb27-291f863f112e" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     Example Request for specific api_key
     ```
     curl -X GET "http://0.0.0.0:8000/spend/logs?api_key=d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     Example Request for specific user_id
     ```
     curl -X GET "http://0.0.0.0:8000/spend/logs?user_id=ishaan@berri.ai" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     Example Request for date range with individual logs (unsummarized)
     ```
     curl -X GET "http://0.0.0.0:8000/spend/logs?start_date=2024-01-01&end_date=2024-01-02&summarize=false" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
@@ -3652,7 +3676,7 @@ async def view_spend_logs(
             raise ProxyException(
                 message=getattr(e, "detail", f"/spend/logs Error({e})"),
                 type="internal_error",
-                param=getattr(e, "param", "None"),
+                param=openai_error_param(e),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
             )
         elif isinstance(e, ProxyException):
@@ -3660,9 +3684,53 @@ async def view_spend_logs(
         raise ProxyException(
             message="/spend/logs Error" + str(e),
             type="internal_error",
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
+
+class _EntityIdRow(TypedDict):
+    id: ReadOnly[str]
+
+
+_COMMITTED_DROP_PAGE_SIZE: Final = 1000
+_CommittedDropEntity: TypeAlias = Literal["key", "team"]
+_COMMITTED_DROP_PAGE_QUERIES: Final[Mapping[_CommittedDropEntity, str]] = MappingProxyType(
+    {
+        "key": 'SELECT token AS id FROM "LiteLLM_VerificationToken" WHERE token > $1 ORDER BY token LIMIT $2',
+        "team": 'SELECT team_id AS id FROM "LiteLLM_TeamTable" WHERE team_id > $1 ORDER BY team_id LIMIT $2',
+    }
+)
+_COMMITTED_DROP_COUNTERS: Final[Mapping[_CommittedDropEntity, Callable[[str], str]]] = MappingProxyType(
+    {"key": key_counter, "team": team_counter}
+)
+
+
+async def _drop_committed_spend_page(
+    prisma_client: PrismaClient, entity: _CommittedDropEntity, after_id: str
+) -> str | None:
+    from litellm.proxy.proxy_server import spend_counter_store
+
+    rows: Final[Sequence[_EntityIdRow]] = await _query_raw(
+        prisma_client, _COMMITTED_DROP_PAGE_QUERIES[entity], after_id, _COMMITTED_DROP_PAGE_SIZE
+    )
+    counter_of: Final = _COMMITTED_DROP_COUNTERS[entity]
+    await drop_committed_spend(spend_counter_store, tuple(counter_of(row["id"]) for row in rows))
+    return rows[-1]["id"] if len(rows) == _COMMITTED_DROP_PAGE_SIZE else None
+
+
+async def _drop_committed_spend_pages(prisma_client: PrismaClient, entity: _CommittedDropEntity) -> None:
+    after_id: str | None = ""  # rebind-ok: the keyset cursor moves one page at a time
+    while after_id is not None:
+        after_id = await _drop_committed_spend_page(prisma_client, entity, after_id)
+
+
+async def _drop_all_key_and_team_committed_spend(prisma_client: PrismaClient) -> None:
+    try:
+        await _drop_committed_spend_pages(prisma_client, "key")
+        await _drop_committed_spend_pages(prisma_client, "team")
+    except Exception as e:  # noqa: BLE001  # the reset already committed; a kept twin lasts until charges stop for its TTL
+        verbose_proxy_logger.warning("committed spend drop after a global reset failed: %s", e)
 
 
 @router.post(
@@ -3687,12 +3755,17 @@ async def global_spend_reset():
         raise ProxyException(
             message="Prisma Client is not initialized",
             type="internal_error",
-            param="None",
+            param=None,
             code=status.HTTP_401_UNAUTHORIZED,
         )
 
-    await _verification_token_table(prisma_client).update_many(data={"spend": 0.0}, where={})
-    await _team_table(prisma_client).update_many(data={"spend": 0.0}, where={})
+    async with prisma_client.tx() as transaction:
+        _ = await transaction.query_raw(_LOCK_ALL_TEAMS_SQL)
+        _ = await transaction.litellm_teamtable.update_many(data={"spend": 0.0}, where={})
+        _ = await transaction.query_raw(_LOCK_ALL_KEYS_SQL)
+        _ = await transaction.litellm_verificationtoken.update_many(data={"spend": 0.0}, where={})
+    if committed_spend_tracked():
+        await _drop_all_key_and_team_committed_spend(prisma_client)
 
     return {
         "message": "Spend for all API Keys and Teams reset successfully",
@@ -3718,7 +3791,7 @@ async def global_spend_refresh():
         raise ProxyException(
             message="Prisma Client is not initialized",
             type="internal_error",
-            param="None",
+            param=None,
             code=status.HTTP_401_UNAUTHORIZED,
         )
 
@@ -3764,7 +3837,7 @@ async def global_spend_refresh():
                 },
             )
             await new_client.db.connect()
-            await _query_raw(new_client, sql_query)
+            await new_client.db.execute_raw(sql_query)
             verbose_proxy_logger.info("MonthlyGlobalSpend view refreshed")
             return {
                 "message": "MonthlyGlobalSpend view refreshed",
@@ -3789,7 +3862,7 @@ async def global_spend_for_internal_user(
         raise ProxyException(
             message="Prisma Client is not initialized",
             type="internal_error",
-            param="None",
+            param=None,
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
     try:
@@ -3850,7 +3923,7 @@ async def global_spend_logs(
             raise ProxyException(
                 message="Prisma Client is not initialized",
                 type="internal_error",
-                param="None",
+                param=None,
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
@@ -3894,7 +3967,7 @@ async def global_spend_logs(
             raise ProxyException(
                 message=getattr(e, "detail", f"/global/spend/logs Error({error_str})"),
                 type="internal_error",
-                param=getattr(e, "param", "None"),
+                param=openai_error_param(e),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
             )
         elif isinstance(e, ProxyException):
@@ -3902,7 +3975,7 @@ async def global_spend_logs(
         raise ProxyException(
             message="/global/spend/logs Error" + error_str,
             type="internal_error",
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -3942,7 +4015,7 @@ async def global_spend():
             raise ProxyException(
                 message=getattr(e, "detail", f"/global/spend Error({error_str})"),
                 type="internal_error",
-                param=getattr(e, "param", "None"),
+                param=openai_error_param(e),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
             )
         elif isinstance(e, ProxyException):
@@ -3950,7 +4023,7 @@ async def global_spend():
         raise ProxyException(
             message="/global/spend Error" + error_str,
             type="internal_error",
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -4304,7 +4377,7 @@ async def provider_budgets() -> ProviderBudgetResponse:
     ```bash
     curl -X GET http://localhost:4000/provider/budgets \
     -H "Content-Type: application/json" \
-    -H "Authorization: Bearer sk-1234"
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     Example Response
@@ -4347,13 +4420,13 @@ async def provider_budgets() -> ProviderBudgetResponse:
         if llm_router is None:
             raise HTTPException(status_code=500, detail={"error": "No llm_router found"})
 
-        provider_budget_config: Final = llm_router.provider_budget_config
+        provider_budget_config: Final = llm_router.settings().provider_budget_config
         if provider_budget_config is None:
             raise ValueError(
                 "No provider budget config found. Please set a provider budget config in the router settings. https://docs.litellm.ai/docs/proxy/provider_budget_routing"
             )
 
-        router_budget_logger: Final = llm_router._get_router_deployment_budget_limiter()
+        router_budget_logger: Final = llm_router.registry().plugins("budget_limiter")
         if router_budget_logger is None:
             raise ValueError("No router budget logger found")
 
@@ -4374,17 +4447,41 @@ async def provider_budgets() -> ProviderBudgetResponse:
         raise handle_exception_on_proxy(e)
 
 
-async def get_spend_by_tags(prisma_client: PrismaClient, start_date=None, end_date=None):
+async def get_spend_by_tags(
+    prisma_client: PrismaClient,
+    read_scope: ReadScope,
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
+):
+    scope_clause, scope_params = read_scope_sql(read_scope, 1)
+    start_clause: Final = (
+        (f"\"startTime\" >= (${len(scope_params) + 1}::timestamptz AT TIME ZONE 'UTC')",) if start_date else ()
+    )
+    end_clause: Final = (
+        (
+            f"\"startTime\" < ((${len(scope_params) + len(start_clause) + 1}::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')",
+        )
+        if end_date
+        else ()
+    )
+    clauses: Final = tuple(clause for clause in (scope_clause, *start_clause, *end_clause) if clause)
+    where_sql: Final = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    params: Final = (
+        *scope_params,
+        *((start_date,) if start_date else ()),
+        *((end_date,) if end_date else ()),
+    )
     response: Final[Sequence[Mapping[str, object]]] = await _query_raw(
         prisma_client,
-        """
+        f"""
         SELECT
         jsonb_array_elements_text(request_tags) AS individual_request_tag,
         COUNT(*) AS log_count,
         SUM(spend) AS total_spend
-        FROM "LiteLLM_SpendLogs"
+        FROM "LiteLLM_SpendLogs"{where_sql}
         GROUP BY individual_request_tag;
         """,
+        *params,
     )
 
     return response
@@ -4532,7 +4629,7 @@ async def ui_view_session_spend_logs(
 
         read_scope: Final = (
             AllRows()
-            if _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
+            if is_admin_view_safe(user_api_key_dict=user_api_key_dict)
             else await _spend_log_read_scope(user_api_key_dict, log_team_lookup)
             if _can_user_view_spend_log(user_api_key_dict=user_api_key_dict)
             else OwnedRows(user_api_key_dict.user_id)
@@ -4651,7 +4748,7 @@ async def _build_ui_spend_logs_response(
                     if (row.get("api_key") if isinstance(row, dict) else getattr(row, "api_key", None)) is not None
                 }
             )
-            rows: Final[Sequence[_SessionSpendRow]] = await _query_raw(
+            rows: Final[Sequence[_SessionSpendRow]] = await _query_spend_logs(
                 prisma_client,
                 f"""
                 SELECT s.*, COALESCE(m.session_models, ARRAY[]::text[]) AS session_models
@@ -4666,16 +4763,16 @@ async def _build_ui_spend_logs_response(
                                )
                            ), 0)::bigint AS session_total_duration_ms,
                            COUNT(*) FILTER (
-                               WHERE call_type IN {_MCP_CALL_TYPES_SQL}
+                               WHERE call_type IN {MCP_CALL_TYPES_SQL}
                            )::int AS mcp_tool_call_count,
                            COALESCE(SUM(spend) FILTER (
-                               WHERE call_type IN {_MCP_CALL_TYPES_SQL}
+                               WHERE call_type IN {MCP_CALL_TYPES_SQL}
                            ), 0)::double precision AS mcp_tool_call_spend,
                            COUNT(*) FILTER (WHERE LOWER(cache_hit) = 'true')::int AS session_cache_hit_count,
                            COUNT(*) FILTER (
-                               WHERE call_type NOT IN {_MCP_CALL_TYPES_SQL} AND call_type != {_AGENT_CALL_TYPE_SQL}
+                               WHERE call_type NOT IN {MCP_CALL_TYPES_SQL} AND call_type != {AGENT_CALL_TYPE_SQL}
                            )::int AS session_llm_count,
-                           COUNT(*) FILTER (WHERE call_type = {_AGENT_CALL_TYPE_SQL})::int AS session_agent_count,
+                           COUNT(*) FILTER (WHERE call_type = {AGENT_CALL_TYPE_SQL})::int AS session_agent_count,
                            COALESCE(SUM(prompt_tokens), 0)::bigint AS session_total_prompt_tokens,
                            COALESCE(SUM(completion_tokens), 0)::bigint AS session_total_completion_tokens,
                            COALESCE(SUM(total_tokens), 0)::bigint AS session_total_tokens
@@ -4722,7 +4819,7 @@ async def _build_ui_spend_logs_response(
                 if row.get("session_id") and row.get("api_key") is not None
                 for models in (TypeAdapter(list[str]).validate_python(row.get("session_models") or ()),)
             }
-        except PrismaError:
+        except (PrismaError, HTTPException):
             verbose_proxy_logger.debug(
                 "Failed to enrich session spend aggregates for spend logs UI",
                 exc_info=True,
@@ -4793,7 +4890,7 @@ def _span_type_sql_condition(span_type: str | None) -> str | None:
     return _SPAN_TYPE_SQL_CONDITIONS.get(span_type)
 
 
-def _is_admin_view_safe(user_api_key_dict: UserAPIKeyAuth) -> bool:
+def is_admin_view_safe(user_api_key_dict: UserAPIKeyAuth) -> bool:
     """
     Safely determine if the current user has admin view permissions.
     Defaults to False on any exception.
@@ -4808,6 +4905,9 @@ def _is_admin_view_safe(user_api_key_dict: UserAPIKeyAuth) -> bool:
         )
     except Exception:
         return False
+
+
+_is_admin_view_safe: Final = is_admin_view_safe
 
 
 async def _can_team_member_view_log(
@@ -4869,6 +4969,7 @@ async def _assert_user_can_view_request_id(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     request_id: str,
+    window: _SpendLogWindow = _UNBOUNDED_SPEND_LOG_WINDOW,
 ) -> None:
     """
     Verify the requesting non-admin user is allowed to view at least one spend-log
@@ -4881,11 +4982,24 @@ async def _assert_user_can_view_request_id(
     so a missing row can't be used to read a payload out of cold storage via the
     detail endpoint.
     """
-    owners: Final = await _find_spend_log_owners(prisma_client, request_id)
-    for owner in owners:
-        if await _user_can_view_spend_log_owner(prisma_client, user_api_key_dict, owner["user"], owner["team_id"]):
-            return
-    raise _spend_log_forbidden(request_id)
+    if not (
+        await _user_can_view_spend_log_by_id(prisma_client, user_api_key_dict, "request_id", request_id, window)
+        or await _user_can_view_spend_log_by_id(prisma_client, user_api_key_dict, "litellm_call_id", request_id, window)
+    ):
+        raise _spend_log_forbidden(request_id)
+
+
+async def _user_can_view_spend_log_by_id(
+    prisma_client: PrismaClient,
+    user_api_key_dict: UserAPIKeyAuth,
+    id_column: _SpendLogIdColumn,
+    lookup_id: str,
+    window: _SpendLogWindow,
+) -> bool:
+    for user, team_id in await _find_spend_log_owners(prisma_client, id_column, lookup_id, window):
+        if await _user_can_view_spend_log_owner(prisma_client, user_api_key_dict, user, team_id):
+            return True
+    return False
 
 
 async def _spend_log_read_scope(user_api_key_dict: UserAPIKeyAuth, log_team_lookup: LogTeamLookup) -> OwnedRows:
@@ -4919,24 +5033,45 @@ def _read_scope_where(scope: ReadScope) -> Mapping[str, object]:
     return grants[0] if len(grants) == 1 else {"OR": list(grants)}
 
 
-def _spend_log_payload_query(request_id: str, scope: ReadScope) -> tuple[str, tuple[object, ...]]:
+def _spend_log_payload_query(
+    id_column: _SpendLogIdColumn, lookup_id: str, scope: ReadScope, window: _SpendLogWindow
+) -> tuple[str, tuple[object, ...]]:
     """
-    Fetch the one row an id lookup resolves to, preferring the exact ``request_id``
-    match over rows that merely carry the id as their client-set ``litellm_call_id``.
-    A non-admin viewer only ever gets rows they own or rows of a team they may view.
+    Fetch one row whose ``id_column`` is ``lookup_id``. A non-admin viewer only ever
+    gets rows they own or rows of a team they may view.
     """
-    scope_clause, scope_params = read_scope_sql(scope, 2)
+    id_filter, id_params = _spend_log_id_filter(id_column, lookup_id, window)
+    scope_clause, scope_params = read_scope_sql(scope, len(id_params) + 1)
     scope_sql: Final = f" AND {scope_clause}" if scope_clause else ""
     return (
         f"""
             SELECT request_id, messages, response, proxy_server_request, metadata, "user", team_id
             FROM "LiteLLM_SpendLogs"
-            WHERE (request_id = $1 OR litellm_call_id = $1){scope_sql}
-            ORDER BY (request_id = $1) DESC
+            WHERE {id_filter}{scope_sql}
             LIMIT 1
         """,
-        (request_id, *scope_params),
+        (*id_params, *scope_params),
     )
+
+
+async def _query_spend_log_payload(
+    prisma_client: PrismaClient,
+    id_column: _SpendLogIdColumn,
+    lookup_id: str,
+    scope: ReadScope,
+    window: _SpendLogWindow,
+) -> Sequence[Mapping[str, object]]:
+    sql_query, sql_params = _spend_log_payload_query(id_column, lookup_id, scope, window)
+    return await _query_spend_logs_by_id(prisma_client, id_column, sql_query, *sql_params)
+
+
+async def _fetch_spend_log_payload_rows(
+    prisma_client: PrismaClient, lookup_id: str, scope: ReadScope, window: _SpendLogWindow
+) -> Sequence[Mapping[str, object]]:
+    by_request_id: Final = await _query_spend_log_payload(prisma_client, "request_id", lookup_id, scope, window)
+    if by_request_id:
+        return by_request_id
+    return await _query_spend_log_payload(prisma_client, "litellm_call_id", lookup_id, scope, window)
 
 
 async def _resolve_spend_log_payload_row(
@@ -4945,6 +5080,7 @@ async def _resolve_spend_log_payload_row(
     request_id: str,
     caller_is_admin: bool,
     log_team_lookup: LogTeamLookup,
+    window: _SpendLogWindow,
 ) -> Mapping[str, object] | None:
     """
     Resolve an id lookup to the caller's own spend-log row before any payload
@@ -4954,8 +5090,7 @@ async def _resolve_spend_log_payload_row(
     ``request_id`` is the key that names the caller's own request.
     """
     scope: Final = AllRows() if caller_is_admin else await _spend_log_read_scope(user_api_key_dict, log_team_lookup)
-    sql_query, sql_params = _spend_log_payload_query(request_id, scope)
-    rows: Final[Sequence[Mapping[str, object]] | None] = await _query_raw_or_none(prisma_client, sql_query, *sql_params)
+    rows: Final = await _fetch_spend_log_payload_rows(prisma_client, request_id, scope, window)
     if not rows:
         return None
     if not caller_is_admin:

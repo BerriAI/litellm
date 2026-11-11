@@ -49,6 +49,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict, Field
 
 from e2e_config import unique_marker
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from e2e_http import AnthropicHeaders, AuthHeaders, UnauthorizedError, unwrap
 from lifecycle import ResourceManager
 from models import (
@@ -341,6 +342,15 @@ def credentialed_alias(proxy: ProxyClient, router_stack: ExitStack) -> Credentia
 
 class TestTagSplitRouting:
     @pytest.mark.covers("reliability.routing.tagged_marker.request_tag_selects_marker")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(CHEAP_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_body_tagged_chat_routes_through_the_marker_to_its_tier(
         self, proxy: ProxyClient, resources: ResourceManager, plain_first_split: TagSplitDeployment
     ) -> None:
@@ -355,6 +365,15 @@ class TestTagSplitRouting:
         _assert_served_only_by(rows, CHEAP_SERVED | {plain_first_split.tier}, "body-tagged chat on the shared name")
 
     @pytest.mark.covers("reliability.routing.tagged_marker.untagged_request_served_by_plain_deployment")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(PLAIN_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_untagged_chat_is_always_served_by_the_plain_deployment(
         self, proxy: ProxyClient, resources: ResourceManager, plain_first_split: TagSplitDeployment
     ) -> None:
@@ -370,6 +389,15 @@ class TestTagSplitRouting:
         _assert_served_only_by(rows, PLAIN_SERVED | {plain_first_split.shared}, "untagged chat on the shared name")
 
     @pytest.mark.covers("reliability.routing.tagged_marker.untagged_request_served_by_plain_deployment")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            route=Route.MESSAGES,
+            providers=(Provider.ANTHROPIC,),
+            models=(PLAIN_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_untagged_messages_is_served_by_the_plain_deployment(
         self, proxy: ProxyClient, resources: ResourceManager, plain_first_split: TagSplitDeployment
     ) -> None:
@@ -387,6 +415,15 @@ class TestTagSplitRouting:
 
 class TestUntaggedTierDeployments:
     @pytest.mark.covers("reliability.routing.tagged_marker.header_tag_selects_marker")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            route=Route.MESSAGES,
+            providers=(Provider.ANTHROPIC,),
+            models=(CHEAP_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_header_tagged_messages_routes_through_the_marker_to_an_untagged_tier(
         self, proxy: ProxyClient, resources: ResourceManager, marker_first_split: TagSplitDeployment
     ) -> None:
@@ -413,6 +450,15 @@ class TestUntaggedTierDeployments:
         )
 
     @pytest.mark.covers("reliability.routing.tagged_marker.untagged_tier_deployments_still_served")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(CHEAP_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_body_tagged_chat_reaches_the_untagged_tier_after_marker_rewrite(
         self, proxy: ProxyClient, resources: ResourceManager, marker_first_split: TagSplitDeployment
     ) -> None:
@@ -431,6 +477,12 @@ class TestUntaggedTierDeployments:
         _assert_served_only_by(rows, CHEAP_SERVED | {marker_first_split.tier}, "body-tagged chat with untagged tier")
 
     @pytest.mark.covers("reliability.routing.tagged_marker.tag_semantics_stay_strict")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            route=Route.CHAT_COMPLETIONS,
+        )
+    )
     def test_tagged_call_straight_at_an_untagged_deployment_stays_denied(
         self, proxy: ProxyClient, resources: ResourceManager, marker_first_split: TagSplitDeployment
     ) -> None:
@@ -449,6 +501,15 @@ class TestUntaggedTierDeployments:
 
 class TestResponsesApiTagRouting:
     @pytest.mark.covers("reliability.routing.tagged_marker.responses_input_routes_through_marker")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            route=Route.RESPONSES,
+            providers=(Provider.ANTHROPIC,),
+            models=(CHEAP_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_header_tagged_responses_with_string_input_routes_to_the_tier(
         self, proxy: ProxyClient, resources: ResourceManager, plain_first_split: TagSplitDeployment
     ) -> None:
@@ -471,6 +532,15 @@ class TestResponsesApiTagRouting:
         )
 
     @pytest.mark.covers("reliability.routing.tagged_marker.responses_input_routes_through_marker")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            route=Route.RESPONSES,
+            providers=(Provider.ANTHROPIC,),
+            models=(CHEAP_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_body_tagged_responses_with_list_input_routes_to_the_tier(
         self, proxy: ProxyClient, resources: ResourceManager, plain_first_split: TagSplitDeployment
     ) -> None:
@@ -497,6 +567,15 @@ class TestResponsesApiTagRouting:
         _assert_served_only_by(rows, CHEAP_SERVED | {plain_first_split.tier}, "body-tagged /v1/responses list input")
 
     @pytest.mark.covers("reliability.routing.tagged_marker.untagged_request_served_by_plain_deployment")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            route=Route.RESPONSES,
+            providers=(Provider.ANTHROPIC,),
+            models=(PLAIN_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_untagged_responses_is_served_by_the_plain_deployment(
         self, proxy: ProxyClient, resources: ResourceManager, plain_first_split: TagSplitDeployment
     ) -> None:
@@ -524,6 +603,14 @@ class TestResponsesApiTagRouting:
 
 class TestStrategyAliasPricing:
     @pytest.mark.covers("reliability.routing.strategy_alias.custom_pricing_ignored")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            providers=(Provider.ANTHROPIC,),
+            models=(CHEAP_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_zero_priced_alias_still_logs_spend_at_the_tier_rate(
         self, proxy: ProxyClient, resources: ResourceManager, zero_priced_alias: ZeroPricedAlias
     ) -> None:
@@ -546,6 +633,14 @@ class TestStrategyAliasPricing:
 
 class TestComplexityHeuristicScope:
     @pytest.mark.covers("reliability.routing.complexity_heuristic.scores_current_ask_only")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            providers=(Provider.ANTHROPIC,),
+            models=(CHEAP_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_trivial_ask_behind_keyword_heavy_system_prompt_stays_on_the_cheap_tier(
         self, proxy: ProxyClient, resources: ResourceManager, heuristic_split: HeuristicSplit
     ) -> None:
@@ -573,6 +668,15 @@ class TestComplexityHeuristicScope:
 
 class TestSemanticAutoRouterResponses:
     @pytest.mark.covers("reliability.routing.semantic_auto_router.responses_input_routed")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            route=Route.RESPONSES,
+            providers=(Provider.ANTHROPIC, Provider.OPENAI,),
+            models=(CHEAP_MODEL, EMBEDDING_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_responses_input_reaches_the_semantic_auto_router(
         self, proxy: ProxyClient, resources: ResourceManager, semantic_auto_router: SemanticAutoRouter
     ) -> None:
@@ -617,6 +721,14 @@ class TestSemanticAutoRouterResponses:
 
 class TestAliasParamForwarding:
     @pytest.mark.covers("reliability.routing.tagged_marker.alias_connection_params_stay_with_tier")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            providers=(Provider.ANTHROPIC,),
+            models=(CHEAP_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_alias_api_key_never_overrides_the_tier_credential(
         self, proxy: ProxyClient, resources: ResourceManager, credentialed_alias: CredentialedAlias
     ) -> None:

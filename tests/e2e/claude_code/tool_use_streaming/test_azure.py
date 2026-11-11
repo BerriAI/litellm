@@ -21,6 +21,7 @@ from typing import Any, Mapping, Sequence
 
 import pytest
 
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from claude_code._env import require_proxy
 from claude_code.cli_driver import (
     ClaudeCLIError,
@@ -83,6 +84,16 @@ def _count_input_json_deltas(events: Sequence[Mapping[str, Any]]) -> int:
 
 
 @pytest.mark.covers("llm.messages.azure_foundry.tool_use.stream.works")
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.MESSAGES,
+        providers=(Provider.AZURE_AI,),
+        models=tuple(AZURE_MODELS),
+        capabilities=(Capability.FUNCTION_CALLING,),
+        mode=Mode.STREAM,
+    )
+)
 def test_tool_use_streaming_azure(compat_result):
     base_url, api_key = require_proxy(compat_result)
 

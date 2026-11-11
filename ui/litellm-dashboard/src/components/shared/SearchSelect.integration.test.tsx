@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { SearchSelect } from "./SearchSelect";
 import { chooseSelectOption } from "../../../tests/test-utils";
+import { ProviderLogo } from "../molecules/models/ProviderLogo";
 
 const OPTIONS = [
   { label: "Acme Prod", value: "team-1" },
@@ -28,6 +29,38 @@ describe("SearchSelect", () => {
   it("shows the selected option's label in the field", () => {
     render(<SearchSelect options={OPTIONS} value="team-2" onValueChange={vi.fn()} />);
     expect(screen.getByRole("combobox")).toHaveValue("Growth");
+  });
+
+  it("should keep the LiteLLM Gateway logo visible after selection and remove it when cleared", async () => {
+    const user = userEvent.setup();
+    const options = [
+      {
+        label: "LiteLLM Gateway",
+        value: "LITELLM_PROXY",
+        icon: <ProviderLogo provider="litellm_proxy" className="w-5 h-5" />,
+      },
+    ];
+    function Controlled() {
+      const [value, setValue] = useState<string | null>(null);
+      return <SearchSelect options={options} value={value} onValueChange={setValue} aria-label="Provider" />;
+    }
+    render(<Controlled />);
+    const input = screen.getByRole("combobox", { name: "Provider" });
+
+    await chooseSelectOption(user, input, /LiteLLM Gateway/);
+    await user.tab();
+
+    expect(input).toHaveValue("LiteLLM Gateway");
+    expect(screen.getByRole("img", { name: "litellm_proxy logo" })).toHaveAttribute(
+      "src",
+      expect.stringContaining("litellm_monogram"),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Clear" }));
+    await user.tab();
+
+    expect(input).toHaveValue("");
+    expect(screen.queryByRole("img", { name: "litellm_proxy logo" })).not.toBeInTheDocument();
   });
 
   it("shows a value the options do not carry yet instead of blanking the field", () => {
@@ -61,6 +94,24 @@ describe("SearchSelect", () => {
     expect(screen.getByRole("combobox")).toHaveValue("");
     await chooseSelectOption(user, screen.getByRole("combobox"), "Data Team");
     expect(onValueChange).toHaveBeenLastCalledWith("team-3");
+  });
+
+  it("offers the typed text as a value only when the caller accepts it", async () => {
+    const user = userEvent.setup();
+    const onValueChange = vi.fn();
+    const customValue = { hint: "Custom value", accepts: (typed: string) => typed.endsWith("*") };
+    const { rerender } = render(<SearchSelect options={OPTIONS} onValueChange={onValueChange} />);
+    const input = screen.getByRole("combobox");
+    await user.click(input);
+    fireEvent.change(input, { target: { value: "team-*" } });
+    expect(screen.queryByRole("option", { name: /team-\*/ })).not.toBeInTheDocument();
+
+    rerender(<SearchSelect options={OPTIONS} onValueChange={onValueChange} customValue={customValue} />);
+    fireEvent.change(input, { target: { value: "team-4" } });
+    expect(screen.queryByRole("option", { name: /team-4/ })).not.toBeInTheDocument();
+    fireEvent.change(input, { target: { value: "team-*" } });
+    await user.click(await screen.findByRole("option", { name: /team-\*/ }));
+    expect(onValueChange).toHaveBeenLastCalledWith("team-*");
   });
 
   it("filters the options client-side as you type", async () => {

@@ -1,5 +1,7 @@
+import type { ResponseHeadersListener } from "@/lib/http/observeResponseHeaders";
+import i18n from "@/i18n/i18n";
 import { toast } from "@/lib/toast";
-import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
+import { getGatewayBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
 import {
   buildPlaygroundHeaders,
   type CustomHeaders,
@@ -14,6 +16,7 @@ export async function makeOpenAIEmbeddingsRequest(
   tags?: string[],
   customBaseUrl?: string,
   customHeaders?: CustomHeaders,
+  onResponseHeaders?: ResponseHeadersListener,
 ) {
   if (!accessToken) {
     throw new Error("Virtual Key is required");
@@ -25,7 +28,7 @@ export async function makeOpenAIEmbeddingsRequest(
     console.log = function () {};
   }
 
-  const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
+  const proxyBaseUrl = customBaseUrl || getGatewayBaseUrl();
   const headers = withRequiredHeaders(buildPlaygroundHeaders(tags, customHeaders), {
     "Content-Type": "application/json",
     [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
@@ -43,6 +46,7 @@ export async function makeOpenAIEmbeddingsRequest(
         input,
       }),
     });
+    onResponseHeaders?.(response.headers);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -58,7 +62,7 @@ export async function makeOpenAIEmbeddingsRequest(
 
     updateEmbeddingsUI(JSON.stringify(embedding), responseData?.model ?? selectedModel);
   } catch (error: unknown) {
-    toast.fromError(`Error occurred while making embeddings request. Please try again. Error: ${error}`);
+    toast.fromError(i18n.t("playground.llmCalls.embeddingsApi.requestFailed", { error: String(error) }));
 
     throw error; // Re-throw to allow the caller to handle the error
   }

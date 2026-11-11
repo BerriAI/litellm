@@ -9,6 +9,7 @@ import pytest
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration.translation.chat_completions.cross_model.contracts import assert_completion
 from pydantic import JsonValue, TypeAdapter
 
 _BACKEND: Final = "qwen3-reasoning"
@@ -186,6 +187,7 @@ def test_hosted_vllm_assistant_reasoning_content_reaches_the_wire(gateway: Gatew
         )
         assert response.status_code == 200, response.text
         payload: Final = _JSON_OBJECT.validate_json(response.content)
+        assert_completion(payload)
         assert payload["id"] == identity
         _only_request(wire)
 

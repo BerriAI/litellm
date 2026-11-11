@@ -6,7 +6,7 @@ use pyo3::types::{PyDict, PyTuple};
 use crate::{LegacyLogging, PublicCall};
 
 /// The parameters of every `callbacks_legacy_python` function, as the real module declares them.
-/// `tests/unit/rust_bridge/test_callbacks_legacy_python.py` pins this file to the Python
+/// `tests/unit/rust_bridge/host/test_callbacks_legacy_python.py` pins this file to the Python
 /// signatures, and [`namespace`] binds every fake call against it.
 pub(crate) const PYTHON_CONTRACT: &str = include_str!("../python_contract.json");
 
@@ -23,10 +23,10 @@ import sys
 import traceback
 import types
 
-for name in ('litellm', 'litellm.rust_bridge', 'litellm.rust_bridge.callbacks_legacy_python'):
+for name in ('litellm', 'litellm.rust_bridge', 'litellm.rust_bridge.host', 'litellm.rust_bridge.host.callbacks_legacy_python'):
     sys.modules.setdefault(name, types.ModuleType(name))
 
-legacy = sys.modules['litellm.rust_bridge.callbacks_legacy_python']
+legacy = sys.modules['litellm.rust_bridge.host.callbacks_legacy_python']
 CONTRACT = json.loads(python_contract)
 
 
@@ -62,11 +62,22 @@ FAKES = {
         custom_llm_provider=provider,
     ),
     'pre_call': lambda logger, input, api_key, additional_args: logger.pre_call(input, api_key, additional_args),
+    'messages_input': lambda body, kwargs: [{'role': 'user', 'content': json.dumps(body)}],
     'post_call': lambda logger, original_response, api_key, additional_args: logger.post_call(
         original_response, api_key, additional_args
     ),
+    'record_response': lambda logger, status, headers, body: logger.model_call_details.update(
+        response_headers=dict(headers)
+    ),
+    'record_api_window': lambda logger, start, end: logger.model_call_details.update(
+        llm_api_duration_ms=(end - start) * 1000
+    ),
     'defers_async_logging': lambda logger: bool(getattr(logger, '_defer_async_logging', False)),
-    'defer_success': lambda logger, pending: setattr(logger, '_native_pending_logging', pending),
+    'claim_async_success_log': lambda logger: logger.claim_async_success_log(),
+    'defer_success': lambda logger, pending, response, start, end: (
+        setattr(logger, 'deferred_success_result', (response, start, end)),
+        setattr(logger, 'enqueue_deferred_logging', pending),
+    ),
     'sync_success_for_async_call': lambda logger, response, start, end: logger.handle_sync_success_callbacks_for_async_calls(
         response, start, end
     ),
@@ -75,6 +86,7 @@ FAKES = {
     )(error, ''.join(traceback.format_exception(error)), start, end),
     'submit_success': lambda logger, response, start, end: logger.record('submit', (response, start, end)),
     'async_success_handler': lambda logger, response, start, end: logger.async_success_handler(response, start, end),
+    'mark_async_success_enqueued': lambda logger: logger.record('mark_async_success_enqueued', None),
     'enqueue_logging': lambda coroutine: coroutine.enqueue(),
     'restore_context': lambda logger: logger.record('restore', None),
     'custom_pricing_fields': lambda: ('ocr_cost_per_page',),
@@ -84,8 +96,9 @@ FAKES = {
         'success', response, call_type
     ),
     'after_deployment_failure': lambda kwargs, error, call_type: kwargs['logger'].hook('failure', error, call_type),
-    'stream_opened': lambda logger: logger.record('stream_opened', None),
-    'stream_success': lambda logger, url_route, endpoint_type, request_body, chunks, start, end, first_chunk: logger.record(
+    'stream_opened': lambda logger, head: logger.record('stream_opened', head),
+    'stamp_stream_head': lambda head, logger, kwargs, start, end: logger.record('stamp_stream_head', head),
+    'stream_success': lambda logger, url_route, endpoint_type, request_body, chunks, start, end, first_chunk, stream_teardown: logger.record(
         'stream_success', list(chunks)
     ),
     'stream_failure': lambda logger, endpoint_type, request_body, chunks, error: logger.record('stream_failure', error),
@@ -122,6 +135,7 @@ class StubCoroutine:
 class StubLogger:
     def __init__(self):
         self.calls = []
+        self.model_call_details = {}
         self.hooks = {}
         self.on_enqueue = lambda coroutine: None
 
@@ -149,6 +163,10 @@ class StubLogger:
         self.record('async_success_handler', response)
         return StubCoroutine(self)
 
+    def claim_async_success_log(self):
+        claimed, self.claimed = getattr(self, 'claimed', False), True
+        return not claimed
+
     def handle_sync_success_callbacks_for_async_calls(self, response, start, end):
         self.record('sync_success_for_async_call', response)
 
@@ -173,21 +191,23 @@ pub(crate) fn local<'py>(locals: &Bound<'py, PyDict>, name: &str) -> Bound<'py, 
     locals.get_item(name).unwrap().unwrap()
 }
 
-/// A legacy call over the namespace's `kwargs` (or none) and `request` (or `None`).
+pub(crate) fn local_dict<'py>(locals: &Bound<'py, PyDict>, name: &str) -> Bound<'py, PyDict> {
+    local(locals, name).cast_into().unwrap()
+}
+
+/// A legacy call over the namespace's `kwargs` and `bound` dicts, each empty when absent.
 pub(crate) fn legacy_call(
     py: Python<'_>,
     locals: &Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> LegacyLogging {
-    let request = locals
-        .get_item("request")
-        .unwrap()
-        .unwrap_or_else(|| py.None().into_bound(py));
-    let kwargs = locals
-        .get_item("kwargs")
-        .unwrap()
-        .map(|kwargs| kwargs.cast_into::<PyDict>().unwrap())
-        .unwrap_or_else(|| PyDict::new(py));
-    let call = PublicCall::capture(&request, &PyTuple::empty(py), &kwargs).unwrap();
+    let dict = |name: &str| {
+        locals
+            .get_item(name)
+            .unwrap()
+            .map(|value| value.cast_into::<PyDict>().unwrap())
+            .unwrap_or_else(|| PyDict::new(py))
+    };
+    let call = PublicCall::capture(&dict("bound"), &PyTuple::empty(py), &dict("kwargs")).unwrap();
     LegacyLogging::new(py, crate::LoggingOperation::Ocr, call, asynchronous)
 }

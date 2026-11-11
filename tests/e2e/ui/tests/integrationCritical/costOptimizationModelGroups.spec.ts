@@ -4,11 +4,12 @@ import { execFileSync } from "node:child_process";
 import * as path from "node:path";
 import { Page } from "../../fixtures/pages";
 import { navigateToPage } from "../../helpers/navigation";
+import { masterKey } from "../../helpers/traffic";
 
 test("cache leakage by model merges a deployment's resolved and requested model names into its model group", async ({
   page,
 }) => {
-  const master = process.env.LITELLM_MASTER_KEY ?? "sk-integration-master";
+  const master = masterKey();
   const marker = `integration-browser-${randomUUID()}`;
   const group = `${marker}-public`;
   const deployment = `${marker}-backend`;

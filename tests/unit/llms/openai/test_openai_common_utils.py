@@ -1,13 +1,21 @@
-from unittest.mock import MagicMock, call, patch
+import asyncio
+import json
+import logging
+from typing import Final
+from unittest.mock import MagicMock, patch
 
 import httpx
 import openai
 import pytest
-
+import respx
 
 import litellm
 from litellm.litellm_core_utils.token_counter import token_counter
-from litellm.llms.openai.common_utils import BaseOpenAILLM, is_openai_backed_api_base
+from litellm.llms.openai.common_utils import (
+    BaseOpenAILLM,
+    drop_params_from_unprocessable_entity_error,
+    is_openai_backed_api_base,
+)
 
 # Test parameters for different API functions
 API_FUNCTION_PARAMS = [
@@ -45,12 +53,12 @@ API_FUNCTION_PARAMS = [
     (
         "image_generation",
         False,
-        {"model": "dall-e-3", "prompt": "A beautiful sunset over mountains"},
+        {"model": "gpt-image-2.5-sunburst", "prompt": "A beautiful sunset over mountains"},
     ),
     (
         "image_generation",
         True,
-        {"model": "dall-e-3", "prompt": "A beautiful sunset over mountains"},
+        {"model": "gpt-image-2.5-sunburst", "prompt": "A beautiful sunset over mountains"},
     ),
     (
         "speech",
@@ -83,11 +91,7 @@ async def test_openai_client_reuse(function_name, is_async, args):
     """
 
     # Determine which client class to mock based on whether the test is async
-    client_path = (
-        "litellm.llms.openai.openai.AsyncOpenAI"
-        if is_async
-        else "litellm.llms.openai.openai.OpenAI"
-    )
+    client_path = "litellm.llms.openai.openai.AsyncOpenAI" if is_async else "litellm.llms.openai.openai.OpenAI"
 
     # Create the appropriate patches
     with (
@@ -97,9 +101,7 @@ async def test_openai_client_reuse(function_name, is_async, args):
     ):
         # Setup the mock to return None first time (cache miss) then a client for subsequent calls
         mock_client = MagicMock()
-        mock_get_cache.side_effect = [None] + [
-            mock_client
-        ] * 9  # First call returns None, rest return the mock client
+        mock_get_cache.side_effect = [None] + [mock_client] * 9  # First call returns None, rest return the mock client
 
         # Make 10 API calls
         for _ in range(10):
@@ -117,9 +119,9 @@ async def test_openai_client_reuse(function_name, is_async, args):
                 pass
 
         # Verify client was created only once
-        assert (
-            mock_client_class.call_count == 1
-        ), f"{'Async' if is_async else ''}OpenAI client should be created only once"
+        assert mock_client_class.call_count == 1, (
+            f"{'Async' if is_async else ''}OpenAI client should be created only once"
+        )
 
         # Verify the client was cached
         assert mock_set_cache.call_count == 1, "Client should be cached once"
@@ -143,12 +145,8 @@ def test_precomputed_init_params_match_inspect_signature():
         _OPENAI_INIT_PARAMS,
     )
 
-    expected_openai = tuple(
-        p for p in inspect.signature(OpenAI.__init__).parameters if p != "self"
-    )
-    expected_azure = tuple(
-        p for p in inspect.signature(AzureOpenAI.__init__).parameters if p != "self"
-    )
+    expected_openai = tuple(p for p in inspect.signature(OpenAI.__init__).parameters if p != "self")
+    expected_azure = tuple(p for p in inspect.signature(AzureOpenAI.__init__).parameters if p != "self")
 
     assert _OPENAI_INIT_PARAMS == expected_openai
     assert _AZURE_OPENAI_INIT_PARAMS == expected_azure
@@ -161,6 +159,28 @@ def test_get_openai_client_initialization_param_fields(client_type):
     assert isinstance(result, tuple)
     assert len(result) > 0
     assert "self" not in result
+
+
+def _loop_test_client_params(is_async: bool) -> dict[str, object]:
+    return {"api_key": "sk-loop-scope-test", "is_async": is_async}
+
+
+async def _cache_openai_client(client: openai.OpenAI | openai.AsyncOpenAI, is_async: bool) -> None:
+    BaseOpenAILLM.set_cached_openai_client(client, "openai", _loop_test_client_params(is_async))
+
+
+async def _cached_openai_client(is_async: bool) -> object:
+    return BaseOpenAILLM.get_cached_openai_client(_loop_test_client_params(is_async), "openai")
+
+
+def test_sync_openai_client_cached_in_one_loop_is_reused_by_the_next_while_async_is_not():
+    sync_client: Final = openai.OpenAI(api_key="sk-loop-scope-test")
+    async_client: Final = openai.AsyncOpenAI(api_key="sk-loop-scope-test")
+    asyncio.run(_cache_openai_client(sync_client, is_async=False))
+    asyncio.run(_cache_openai_client(async_client, is_async=True))
+
+    assert asyncio.run(_cached_openai_client(is_async=False)) is sync_client
+    assert asyncio.run(_cached_openai_client(is_async=True)) is None
 
 
 @pytest.mark.parametrize("client_type", ["openai", "azure"])
@@ -197,7 +217,7 @@ def test_evicting_a_client_built_on_the_callers_session_leaves_that_session_open
         LLMClientCache(evicted_client_closer=closer),
     )
 
-    wrapper = OpenAIChatCompletion()._get_openai_client(
+    wrapper = OpenAIChatCompletion().get_openai_client(
         is_async=True,
         api_key="sk-not-a-real-key",
         api_base="https://api.openai.com/v1",
@@ -229,7 +249,7 @@ def test_a_client_litellm_built_its_own_http_client_for_is_still_closed(monkeypa
         LLMClientCache(evicted_client_closer=closer),
     )
 
-    wrapper = OpenAIChatCompletion()._get_openai_client(
+    wrapper = OpenAIChatCompletion().get_openai_client(
         is_async=False,
         api_key="sk-not-a-real-key",
         api_base="https://api.openai.com/v1",
@@ -305,6 +325,104 @@ def _completion_kwargs(provider: str, client, **overrides) -> dict:
     }
 
 
+_REASONING_EFFORT_422: Final = {
+    "error": {
+        "message": json.dumps(
+            {"detail": [{"loc": ["body", "reasoning_effort"], "msg": "Extra inputs are not permitted"}]}
+        )
+    }
+}
+_CHAT_COMPLETION: Final = {
+    "id": "chatcmpl-1",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "gpt-6.1-sol",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+_CHAT_COMPLETION_STREAM: Final = (
+    'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"gpt-6.1-sol",'
+    '"choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}\n\n'
+    "data: [DONE]\n\n"
+)
+
+
+def _answer_422_while_reasoning_effort_is_sent(request: httpx.Request) -> httpx.Response:
+    body: Final = json.loads(request.content)
+    if "reasoning_effort" in body:
+        return httpx.Response(422, json=_REASONING_EFFORT_422)
+    if body.get("stream"):
+        return httpx.Response(200, text=_CHAT_COMPLETION_STREAM, headers={"content-type": "text/event-stream"})
+    return httpx.Response(200, json=_CHAT_COMPLETION)
+
+
+async def _complete_through_the_422_retry(call_shape: str) -> str:
+    transport: Final = httpx.MockTransport(_answer_422_while_reasoning_effort_is_sent)
+    kwargs: Final = {
+        "model": "gpt-6.1-sol",
+        "messages": [{"role": "user", "content": "hi"}],
+        "reasoning_effort": "high",
+    }
+    if call_shape == "sync":
+        sync_client: Final = openai.OpenAI(api_key="sk-not-a-real-key", http_client=httpx.Client(transport=transport))
+        return litellm.completion(**kwargs, client=sync_client).choices[0].message.content
+    async_client: Final = openai.AsyncOpenAI(
+        api_key="sk-not-a-real-key", http_client=httpx.AsyncClient(transport=transport)
+    )
+    if call_shape == "async":
+        return (await litellm.acompletion(**kwargs, client=async_client)).choices[0].message.content
+    stream: Final = await litellm.acompletion(**kwargs, client=async_client, stream=True)
+    return "".join([chunk.choices[0].delta.content or "" async for chunk in stream])
+
+
+@pytest.mark.parametrize("call_shape", ["sync", "async", "async_stream"])
+def test_a_422_naming_reasoning_effort_drops_it_with_one_warning(
+    call_shape: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", True)
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        content: Final = asyncio.run(_complete_through_the_422_retry(call_shape))
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
+
+    assert content == "ok"
+    assert len(drop_warnings) == 1
+    assert all(
+        fragment in drop_warnings[0]
+        for fragment in ("reasoning_effort='high'", "gpt-6.1-sol", "(drop_params=True)", "422")
+    )
+
+
+def test_a_422_with_an_unhashable_loc_still_drops_reasoning_effort_with_one_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    detail: Final = [
+        {"loc": ["body", ["messages", 0]], "msg": "Invalid"},
+        {"loc": ["body", "reasoning_effort"], "msg": "Extra inputs are not permitted"},
+    ]
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        if "reasoning_effort" in json.loads(request.content):
+            return httpx.Response(422, json={"error": {"message": json.dumps({"detail": detail})}})
+        return httpx.Response(200, json=_CHAT_COMPLETION)
+
+    monkeypatch.setattr(litellm, "drop_params", True)
+    client: Final = openai.OpenAI(
+        api_key="sk-not-a-real-key", http_client=httpx.Client(transport=httpx.MockTransport(answer))
+    )
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        response: Final = litellm.completion(
+            model="gpt-6.1-sol",
+            messages=[{"role": "user", "content": "hi"}],
+            reasoning_effort="high",
+            client=client,
+        )
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
+
+    assert response.choices[0].message.content == "ok"
+    assert len(drop_warnings) == 1
+    assert "reasoning_effort='high'" in drop_warnings[0]
+
+
 @pytest.mark.parametrize("provider", ["openai", "azure"])
 def test_sync_output_limit_400_maps_to_length_truncated_response(provider):
     response = litellm.completion(
@@ -329,6 +447,29 @@ def test_mapped_response_still_bills_the_prompt_the_provider_processed(provider)
     assert response.usage.prompt_tokens == expected_prompt_tokens
     assert response.usage.completion_tokens == 0
     assert litellm.completion_cost(completion_response=response) > 0
+
+
+@pytest.mark.parametrize("provider", ["openai", "azure"])
+@pytest.mark.parametrize(
+    ("base_model", "counted_as"), [("azure/gpt-6.1-sol", "azure/gpt-6.1-sol"), ("claude-sonnet-4-5", "my-gpt-6")]
+)
+@pytest.mark.asyncio
+async def test_mapped_response_bills_a_custom_named_deployment_with_its_base_model_only_when_it_is_openai(
+    provider: str, base_model: str, counted_as: str
+) -> None:
+    messages: Final = [{"role": "user", "content": "日本語のテキストとहिन्दी पाठ और русский текст. " * 20}]
+    overrides: Final = {"model": f"{provider}/my-gpt-6", "messages": messages, "base_model": base_model}
+
+    sync_response: Final = litellm.completion(
+        **_completion_kwargs(provider, _sync_client_raising(provider, OUTPUT_LIMIT_400_MESSAGE), **overrides)
+    )
+    async_response: Final = await litellm.acompletion(
+        **_completion_kwargs(provider, _async_client_raising(provider, OUTPUT_LIMIT_400_MESSAGE), **overrides)
+    )
+
+    expected: Final = token_counter(model=counted_as, messages=messages)
+    assert token_counter(model=base_model, messages=messages) != token_counter(model="my-gpt-6", messages=messages)
+    assert (sync_response.usage.prompt_tokens, async_response.usage.prompt_tokens) == (expected, expected)
 
 
 @pytest.mark.parametrize("provider", ["openai", "azure"])
@@ -413,3 +554,162 @@ def test_is_openai_backed_api_base_decides_by_hostname_only(api_base, expected):
     assert is_openai_backed_api_base(api_base) is expected
 
 
+def _sdk_api_client(
+    api: str,
+    is_async: bool,
+    timeout: float | httpx.Timeout | openai.Timeout | None,
+    client: openai.OpenAI | openai.AsyncOpenAI | None = None,
+) -> openai.OpenAI | openai.AsyncOpenAI | None:
+    from litellm.llms.azure.common_utils import BaseAzureLLM
+    from litellm.llms.openai.fine_tuning.handler import OpenAIFineTuningAPI
+    from litellm.llms.openai.image_variations.handler import OpenAIImageVariationsHandler
+    from litellm.llms.openai.openai import OpenAIAssistantsAPI, OpenAIBatchesAPI, OpenAIFilesAPI
+
+    kwargs: Final = {
+        "api_key": "transport-only",
+        "api_base": "https://sdk-default.example/v1",
+        "timeout": timeout,
+        "max_retries": 0,
+        "organization": None,
+        "client": client,
+    }
+    if api == "assistants":
+        assistant_factory: Final = OpenAIAssistantsAPI()
+        return (
+            assistant_factory.async_get_openai_client(**kwargs)
+            if is_async
+            else assistant_factory.get_openai_client(**kwargs)
+        )
+    if api == "image_variations":
+        variation_factory: Final = OpenAIImageVariationsHandler()
+        return (
+            variation_factory.get_async_client(
+                client=client,
+                api_key="transport-only",
+                api_base="https://sdk-default.example/v1",
+                timeout=timeout,
+                max_retries=0,
+                organization=None,
+                litellm_params={},
+            )
+            if is_async
+            else variation_factory.get_sync_client(
+                client=client,
+                api_key="transport-only",
+                api_base="https://sdk-default.example/v1",
+                timeout=timeout,
+                max_retries=0,
+                organization=None,
+                litellm_params={},
+            )
+        )
+    if api == "azure_gateway":
+        return BaseAzureLLM()._init_azure_client_for_cloudflare_ai_gateway(
+            api_base="https://sdk-default.example",
+            model="deployment",
+            api_version="2024-02-01",
+            max_retries=0,
+            timeout=timeout,
+            litellm_params={},
+            api_key="transport-only",
+            azure_ad_token=None,
+            azure_ad_token_provider=None,
+            acompletion=is_async,
+            client=client,
+        )
+    factory: Final = {"files": OpenAIFilesAPI, "batches": OpenAIBatchesAPI, "fine_tuning": OpenAIFineTuningAPI}[api]()
+    return factory.get_openai_client(**kwargs, _is_async=is_async)
+
+
+async def _list_model_ids(sdk_client: openai.OpenAI | openai.AsyncOpenAI) -> list[str]:
+    page: Final = (
+        await sdk_client.models.list() if isinstance(sdk_client, openai.AsyncOpenAI) else sdk_client.models.list()
+    )
+    return [model.id for model in page.data]
+
+
+@pytest.mark.parametrize("api", ["files", "batches", "assistants", "fine_tuning", "image_variations", "azure_gateway"])
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_sdk_api_factories_keep_httpx_transport_and_request_timeouts(api: str, is_async: bool) -> None:
+    timeout: Final = openai.Timeout(connect=1, read=7, write=2, pool=3)
+    with respx.mock(assert_all_called=True) as mock:
+        mock.get(host="sdk-default.example", path__regex=r".*/models$").mock(
+            return_value=httpx.Response(307, headers={"location": "https://sdk-default.example/v1/moved-models"})
+        )
+        moved: Final = mock.get(host="sdk-default.example", path="/v1/moved-models").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "object": "list",
+                    "data": [{"id": "sdk-compat", "object": "model", "created": 0, "owned_by": "t"}],
+                },
+            )
+        )
+        sdk_client: Final = _sdk_api_client(api, is_async, timeout)
+        assert sdk_client is not None
+        try:
+            assert _sdk_api_client(api, is_async, 19, client=sdk_client) is sdk_client
+            model_ids: Final = await _list_model_ids(sdk_client)
+        finally:
+            if is_async:
+                await sdk_client.close()
+            else:
+                sdk_client.close()
+    assert model_ids == ["sdk-compat"]
+    assert moved.calls.last.request.extensions["timeout"] == {"connect": 1.0, "read": 7.0, "write": 2.0, "pool": 3.0}
+
+
+@pytest.mark.parametrize("backend", ["httpx", "sdk_default"])
+@pytest.mark.asyncio
+async def test_azure_gateway_and_image_variations_use_the_callers_async_session(
+    backend: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from importlib import import_module
+    from io import BytesIO
+
+    from openai._types import Response as SDKResponse
+
+    from litellm.images.main import aimage_variation
+
+    http_module: Final = httpx if backend == "httpx" else import_module(SDKResponse.__module__)
+    transport: Final = http_module.MockTransport(
+        lambda request: http_module.Response(
+            200, json={"created": 0, "data": [{"url": "https://example.com/image.png"}]}
+        )
+    )
+    async with http_module.AsyncClient(transport=transport) as session:
+        monkeypatch.setattr(litellm, "aclient_session", session)
+        monkeypatch.setattr(litellm, "client_session", None)
+        azure_client: Final = _sdk_api_client("azure_gateway", True, 7)
+        assert azure_client is not None
+        assert azure_client._client is session
+        response: Final = await aimage_variation(
+            image=BytesIO(b"image-bytes"),
+            custom_llm_provider="openai",
+            api_key="transport-only",
+            api_base="https://sdk-default.example/v1",
+        )
+        assert response.data[0].url == "https://example.com/image.png"
+        assert not session.is_closed
+
+
+
+def test_reasoning_drop_warning_caps_a_large_caller_value(caplog: pytest.LogCaptureFixture) -> None:
+    error: Final = httpx.HTTPStatusError(
+        message="422",
+        request=httpx.Request("POST", "https://example.invalid/v1/chat/completions"),
+        response=httpx.Response(422, json=_REASONING_EFFORT_422),
+    )
+    data: Final[dict[str, object]] = {"model": "gpt-6.1-sol", "messages": [], "reasoning_effort": "x" * 5000}
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        retried: Final = drop_params_from_unprocessable_entity_error(
+            error, data, model="gpt-6.1-sol", drop_params_gated=True
+        )
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
+
+    assert "reasoning_effort" not in retried
+    assert len(drop_warnings) == 1
+    assert len(drop_warnings[0]) < 300
+    assert all(fragment in drop_warnings[0] for fragment in ("reasoning_effort='xxx", "'gpt-6.1-sol'", "422"))

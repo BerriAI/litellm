@@ -2,9 +2,11 @@ use std::{future::Future, pin::Pin, sync::Arc};
 
 use litellm_core_utils::settings::Lookup;
 use litellm_host_python::{PythonContext, attach_blocking};
+use litellm_secret_value::SecretValue;
 use litellm_secrets::{
-    Error, ExternalSecretManager, KeyManagementSettings, KeyManagementSystem, Secret, SecretValue,
+    Error, ExternalSecretManager, KeyManagementSettings, KeyManagementSystem, Secret,
 };
+
 use pyo3::{
     exceptions::PyException,
     prelude::*,
@@ -13,9 +15,7 @@ use pyo3::{
 
 use super::error::{external_error, read_error};
 
-const HANDLER_MODULE: &str = "litellm.secret_managers.secret_manager_handler";
-const ENVIRONMENT_FALLBACK_LOG: &str =
-    "Defaulting to os.environ value for key=%s. An exception occurred - %s.\n\n%s";
+const DIAGNOSTICS_MODULE: &str = "litellm.rust_bridge.host.diagnostics";
 
 /// A secret manager whose reads execute in Python: a custom manager, a legacy compatible
 /// client, or a manually assigned SDK client.
@@ -60,8 +60,8 @@ impl PythonClient {
             None => kwargs.set_item("key_management_settings", py.None())?,
         }
         let result = py
-            .import(HANDLER_MODULE)?
-            .getattr("get_secret_from_manager")?
+            .import(super::SECRET_MANAGER_MODULE)?
+            .getattr("read_from_manager")?
             .call((), Some(&kwargs))?;
         if result.is_instance_of::<PyString>() {
             result.extract().map(Some)
@@ -112,16 +112,9 @@ impl ExternalSecretManager for PythonSecretManager {
 }
 
 fn log_environment_fallback(py: Python<'_>, name: &str, error: &PyErr) -> PyResult<()> {
-    let traceback = py
-        .import("traceback")?
-        .call_method1("format_exception", (error.value(py),))?;
-    let traceback = "".into_pyobject(py)?.call_method1("join", (traceback,))?;
-    py.import("litellm._logging")?
-        .getattr("verbose_logger")?
-        .call_method1(
-            "error",
-            (ENVIRONMENT_FALLBACK_LOG, name, error.value(py), traceback),
-        )?;
+    py.import(DIAGNOSTICS_MODULE)?
+        .getattr("log_environment_fallback")?
+        .call1((name, error.value(py)))?;
     Ok(())
 }
 
@@ -139,7 +132,8 @@ mod tests {
 
     use litellm_host_python::PythonContext;
 
-    use super::{HANDLER_MODULE, PythonSecretManager, python_name};
+    use super::{DIAGNOSTICS_MODULE, PythonSecretManager, python_name};
+    use crate::secrets::SECRET_MANAGER_MODULE;
     use crate::secrets::python_error;
 
     /// `sys.modules` is interpreter-global, so tests that install or rely on the handler module
@@ -175,12 +169,12 @@ class Manager:
         raise failure
 manager = Manager()
 import sys, types
-for name in ('litellm', 'litellm.secret_managers'):
+for name in ('litellm', 'litellm.rust_bridge', 'litellm.rust_bridge.host'):
     sys.modules.setdefault(name, types.ModuleType(name))
-handler = sys.modules.setdefault('litellm.secret_managers.secret_manager_handler', types.ModuleType('litellm.secret_managers.secret_manager_handler'))
-def get_secret_from_manager(**kwargs):
+handler = sys.modules.setdefault('litellm.rust_bridge.host.secret_manager', types.ModuleType('litellm.rust_bridge.host.secret_manager'))
+def read_from_manager(**kwargs):
     return kwargs['client'].sync_read_secret(kwargs['secret_name'])
-handler.get_secret_from_manager = get_secret_from_manager
+handler.read_from_manager = read_from_manager
 ",
                 Some(&locals),
                 Some(&locals),
@@ -200,7 +194,7 @@ handler.get_secret_from_manager = get_secret_from_manager
                 KeyManagementSettings::default(),
             )),
             Arc::new(move |_: &str| fallback.map(str::to_owned)),
-            OidcResolver::new(litellm_http::Client::plain_for_test()),
+            OidcResolver::new(litellm_http::Client::for_test()),
         )
         .with_failure_policy(FailurePolicy::EnvironmentFallback);
         (resolver, locals, handler)
@@ -250,11 +244,22 @@ class Logger:
         self.calls.append(args)
 logging = types.ModuleType('litellm._logging')
 logging.verbose_logger = Logger()
-sys.modules.setdefault('litellm', types.ModuleType('litellm'))
+for module in ('litellm', 'litellm.rust_bridge', 'litellm.rust_bridge.host'):
+    sys.modules.setdefault(module, types.ModuleType(module))
 sys.modules.setdefault('litellm._logging', logging)
 ",
             None,
             None,
+        )
+        .unwrap();
+        pyo3::types::PyModule::from_code(
+            py,
+            &std::ffi::CString::new(include_str!(
+                "../../../../../litellm/rust_bridge/host/diagnostics.py"
+            ))
+            .unwrap(),
+            c"diagnostics.py",
+            &std::ffi::CString::new(DIAGNOSTICS_MODULE).unwrap(),
         )
         .unwrap();
         py.import("litellm._logging")
@@ -312,7 +317,7 @@ sys.modules.setdefault('litellm._logging', logging)
         });
     }
 
-    /// Installs a fake `get_secret_from_manager` that records its kwargs, runs `body`, and
+    /// Installs a fake `read_from_manager` that records its kwargs, runs `body`, and
     /// removes the fake handler again; parent package stubs persist for concurrent tests.
     /// Callers hold `handler_guard` before attaching so the GIL is never held while waiting on it.
     fn with_fake_handler<'py>(py: Python<'py>, body: impl FnOnce(&Bound<'py, PyDict>)) {
@@ -320,16 +325,16 @@ sys.modules.setdefault('litellm._logging', logging)
         py.run(
             c"
 import sys, types
-previous_handler = sys.modules.get('litellm.secret_managers.secret_manager_handler')
+previous_handler = sys.modules.get('litellm.rust_bridge.host.secret_manager')
 calls = []
-def get_secret_from_manager(**kwargs):
+def read_from_manager(**kwargs):
     calls.append(kwargs)
     return 'handled-' + kwargs['secret_name']
-handler = types.ModuleType('litellm.secret_managers.secret_manager_handler')
-handler.get_secret_from_manager = get_secret_from_manager
-for name in ('litellm', 'litellm.secret_managers'):
+handler = types.ModuleType('litellm.rust_bridge.host.secret_manager')
+handler.read_from_manager = read_from_manager
+for name in ('litellm', 'litellm.rust_bridge', 'litellm.rust_bridge.host'):
     sys.modules.setdefault(name, types.ModuleType(name))
-sys.modules['litellm.secret_managers.secret_manager_handler'] = handler
+sys.modules['litellm.rust_bridge.host.secret_manager'] = handler
 ",
             Some(&locals),
             Some(&locals),
@@ -339,9 +344,9 @@ sys.modules['litellm.secret_managers.secret_manager_handler'] = handler
         py.run(
             c"
 if previous_handler is None:
-    sys.modules.pop('litellm.secret_managers.secret_manager_handler', None)
+    sys.modules.pop('litellm.rust_bridge.host.secret_manager', None)
 else:
-    sys.modules['litellm.secret_managers.secret_manager_handler'] = previous_handler
+    sys.modules['litellm.rust_bridge.host.secret_manager'] = previous_handler
 ",
             Some(&locals),
             Some(&locals),
@@ -361,7 +366,7 @@ else:
             with_fake_handler(py, |locals| {
                 locals.set_item("expression", expression).unwrap();
                 py.run(
-                    c"handler.get_secret_from_manager = lambda **kwargs: eval(expression)",
+                    c"handler.read_from_manager = lambda **kwargs: eval(expression)",
                     Some(locals),
                     Some(locals),
                 )
@@ -412,7 +417,7 @@ else:
                     reader.client.read(py, "API_KEY").unwrap().as_deref(),
                     Some("handled-API_KEY")
                 );
-                assert!(py.import(HANDLER_MODULE).is_ok());
+                assert!(py.import(SECRET_MANAGER_MODULE).is_ok());
                 let calls = locals.get_item("calls").unwrap().unwrap();
                 let call = calls.get_item(0).unwrap().cast_into::<PyDict>().unwrap();
                 assert!(call.get_item("client").unwrap().unwrap().is(&client));

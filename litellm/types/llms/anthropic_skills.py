@@ -2,10 +2,12 @@
 Type definitions for Anthropic Skills API
 """
 
+from collections.abc import Sequence
 from typing import Any
 
-from pydantic import BaseModel
 from typing_extensions import TypedDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
 # Skills API Request Types
@@ -15,7 +17,7 @@ class CreateSkillRequest(TypedDict, total=False):
     display_title: str | None
     """Display title for the skill (optional)"""
 
-    files: list[Any] | None
+    files: Sequence[object] | None
     """Files to upload for the skill. All files must be in the same top-level directory and must include a SKILL.md file at the root."""
 
 
@@ -33,7 +35,7 @@ class ListSkillsParams(TypedDict, total=False):
 
 
 # Skills API Response Types
-class Skill(BaseModel):
+class Skill(LiteLLMBaseModel):
     """Represents a skill from the Anthropic Skills API"""
 
     id: str
@@ -67,7 +69,7 @@ class Skill(BaseModel):
     unless a query was given."""
 
 
-class ListSkillsResponse(BaseModel):
+class ListSkillsResponse(LiteLLMBaseModel):
     """Response from listing skills"""
 
     data: list[Skill]
@@ -80,7 +82,7 @@ class ListSkillsResponse(BaseModel):
     """Whether there are more skills available"""
 
 
-class DeleteSkillResponse(BaseModel):
+class DeleteSkillResponse(LiteLLMBaseModel):
     """Response from deleting a skill"""
 
     id: str
@@ -107,7 +109,7 @@ class CreateSkillVersionRequest(TypedDict, total=False):
     """Additional metadata"""
 
 
-class SkillVersion(BaseModel):
+class SkillVersion(LiteLLMBaseModel):
     """Represents a skill version"""
 
     id: str
@@ -135,7 +137,7 @@ class SkillVersion(BaseModel):
     """Object type"""
 
 
-class ListSkillVersionsResponse(BaseModel):
+class ListSkillVersionsResponse(LiteLLMBaseModel):
     """Response from listing skill versions"""
 
     object: str = "list"
@@ -154,7 +156,7 @@ class ListSkillVersionsResponse(BaseModel):
     """Whether there are more versions available"""
 
 
-class DeleteSkillVersionResponse(BaseModel):
+class DeleteSkillVersionResponse(LiteLLMBaseModel):
     """Response from deleting a skill version"""
 
     id: str

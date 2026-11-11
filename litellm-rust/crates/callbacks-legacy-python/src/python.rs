@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 use strum::{IntoStaticStr, VariantArray};
 
-const MODULE: &str = "litellm.rust_bridge.callbacks_legacy_python";
+const MODULE: &str = "litellm.rust_bridge.host.callbacks_legacy_python";
 
 /// Every litellm Python internal the native call still borrows, grouped by the subsystem it
 /// belongs to. Rust drives the call; these exist only so behaviour that Python owns today
@@ -9,7 +9,7 @@ const MODULE: &str = "litellm.rust_bridge.callbacks_legacy_python";
 /// A group is deleted once Rust owns that subsystem, so this enum only shrinks. Calling a
 /// user's own callback is not borrowing and does not belong here.
 ///
-/// `litellm/rust_bridge/callbacks_legacy_python.py` is the only Python module behind it, and
+/// `litellm/rust_bridge/host/callbacks_legacy_python.py` is the only Python module behind it, and
 /// `python_contract.json` pins each function's parameters on both sides.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LegacyPython {
@@ -42,10 +42,18 @@ pub(crate) enum Logging {
     Update,
     #[strum(serialize = "pre_call")]
     PreCall,
+    #[strum(serialize = "messages_input")]
+    MessagesInput,
     #[strum(serialize = "post_call")]
     PostCall,
+    #[strum(serialize = "record_response")]
+    RecordResponse,
+    #[strum(serialize = "record_api_window")]
+    RecordApiWindow,
     #[strum(serialize = "defers_async_logging")]
     DefersAsync,
+    #[strum(serialize = "claim_async_success_log")]
+    ClaimAsyncSuccess,
     #[strum(serialize = "defer_success")]
     DeferSuccess,
     #[strum(serialize = "sync_success_for_async_call")]
@@ -54,6 +62,8 @@ pub(crate) enum Logging {
     SubmitSuccess,
     #[strum(serialize = "async_success_handler")]
     AsyncSuccessHandler,
+    #[strum(serialize = "mark_async_success_enqueued")]
+    MarkAsyncSuccessEnqueued,
     #[strum(serialize = "enqueue_logging")]
     Enqueue,
     #[strum(serialize = "failure_handler")]
@@ -77,6 +87,8 @@ pub(crate) enum DeploymentHooks {
 pub(crate) enum Streaming {
     #[strum(serialize = "stream_opened")]
     Opened,
+    #[strum(serialize = "stamp_stream_head")]
+    StampHead,
     #[strum(serialize = "stream_success")]
     Success,
     #[strum(serialize = "stream_failure")]

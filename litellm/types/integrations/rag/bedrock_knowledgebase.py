@@ -1,4 +1,4 @@
-from typing import Any, Literal
+from typing import Literal
 
 from typing_extensions import ReadOnly, TypedDict
 
@@ -40,7 +40,7 @@ class BedrockKBRetrievalResult(TypedDict, total=False):
     content: BedrockKBContent | None
     location: BedrockKBLocation | None
     score: float | None
-    metadata: dict[str, Any] | None
+    metadata: dict[str, object] | None
 
 
 class BedrockKBResponse(TypedDict, total=False):
@@ -87,21 +87,21 @@ class BedrockKBMetadataConfiguration(TypedDict, total=False):
 class BedrockKBModelConfiguration(TypedDict, total=False):
     """Model configuration for reranking."""
 
-    additionalModelRequestFields: dict[str, Any] | None
+    additionalModelRequestFields: dict[str, object] | None
     modelArn: str | None
 
 
 class BedrockKBRerankingConfiguration(TypedDict, total=False):
     """Configuration for reranking in vector search."""
 
-    bedrockRerankingConfiguration: dict[str, Any] | None  # This could be further typed if needed
+    bedrockRerankingConfiguration: dict[str, object] | None  # This could be further typed if needed
     type: str | None
 
 
 class BedrockKBVectorSearchConfiguration(TypedDict, total=False):
     """Configuration for vector search."""
 
-    filter: dict[str, Any] | None
+    filter: dict[str, object] | None
     implicitFilterConfiguration: BedrockKBImplicitFilterConfiguration | None
     numberOfResults: int | None
     overrideSearchType: str | None

@@ -158,7 +158,7 @@ def test_azure_passthrough_embeddings_relay_is_costed_per_input_token():
     assert isinstance(result, EmbeddingResponse)
     assert logging_obj.call_type == "aembedding"
     assert per_token > 0
-    assert logging_obj._response_cost_calculator(result=result) == pytest.approx(1000 * per_token)
+    assert logging_obj.response_cost_calculator(result=result) == pytest.approx(1000 * per_token)
 
 
 def test_azure_passthrough_responses_relay_is_costed_per_token():
@@ -167,7 +167,7 @@ def test_azure_passthrough_responses_relay_is_costed_per_token():
 
     assert isinstance(result, ResponsesAPIResponse)
     assert logging_obj.call_type == "aresponses"
-    assert logging_obj._response_cost_calculator(result=result) == pytest.approx(
+    assert logging_obj.response_cost_calculator(result=result) == pytest.approx(
         1000 * info["input_cost_per_token"] + 100 * info["output_cost_per_token"]
     )
 
@@ -230,10 +230,11 @@ def test_azure_passthrough_streaming_chat_chunks_build_the_complete_response():
     assert response.usage.completion_tokens == 8
 
 
-def test_azure_passthrough_streaming_chunks_without_usage_count_prompt_tokens_from_the_relayed_request():
+@pytest.mark.parametrize("stray_fields", [{}, {"prompt": 5}])
+def test_azure_passthrough_streaming_chunks_without_usage_count_prompt_tokens_from_the_relayed_request(stray_fields):
     messages = [{"role": "user", "content": "Say hi in three words"}]
     logging_obj = MagicMock()
-    logging_obj.model_call_details = {"request_data": {"messages": messages, "stream": True}}
+    logging_obj.model_call_details = {"request_data": {"messages": messages, "stream": True, **stray_fields}}
 
     response = AzurePassthroughConfig().handle_logging_collected_chunks(
         all_chunks=[chunk for chunk in _azure_chat_completion_chunks() if '"usage"' not in chunk],
@@ -321,7 +322,7 @@ def test_azure_passthrough_streaming_responses_chunks_are_costed_per_token():
     assert isinstance(response, ResponseCompletedEvent)
     assert response.response.usage.input_tokens == 1000
     assert logging_obj.call_type == "aresponses"
-    assert logging_obj._response_cost_calculator(result=response.response) == pytest.approx(
+    assert logging_obj.response_cost_calculator(result=response.response) == pytest.approx(
         1000 * info["input_cost_per_token"] + 100 * info["output_cost_per_token"]
     )
 

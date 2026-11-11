@@ -14,7 +14,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, NoReturn, Protocol, TypeAlias
 
 from fastapi import HTTPException, status
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 from pydantic.main import IncEx
 from typing_extensions import assert_never
 
@@ -28,10 +28,12 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import (
     TeamNotFoundError,
+    forget_missing_user,
     get_team_membership,
     get_team_object,
     get_user_object,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 
 if TYPE_CHECKING:
@@ -133,7 +135,7 @@ GrantOutcome: TypeAlias = ResolvedGrants | GrantDenial | LookupDegraded
 _MODELS_COLUMN: Final[Mapping[str, IncEx | bool]] = MappingProxyType({"models": True})
 
 
-class _UserModelColumn(BaseModel):
+class _UserModelColumn(LiteLLMBaseModel):
     """``LiteLLM_UserTable.models`` is a bare ``list``; re-read it with the shape a token's ``models`` takes."""
 
     models: tuple[str, ...] = ()
@@ -245,6 +247,8 @@ class GrantResolver:
         return ResolvedGrants(user_object, team_object, membership, effective_user_id)
 
     async def _user(self, lookup: UserLookup) -> LiteLLM_UserTable | None:
+        if lookup.user_id is not None:
+            forget_missing_user(lookup.user_id)
         return await self._load_user(
             user_id=lookup.user_id,
             prisma_client=self._prisma,

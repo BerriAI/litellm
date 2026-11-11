@@ -110,6 +110,41 @@ def test_output_tool_calls_use_the_datadog_tool_call_schema(logger: DataDogLLMOb
     assert "function" not in message["tool_calls"][0]
 
 
+
+def test_claude_server_tool_calls_are_reported_before_client_tool_calls(logger: DataDogLLMObsLogger) -> None:
+    payload: Final = build(
+        logger,
+        response_message={
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [ASSISTANT_TOOL_CALL],
+            "provider_specific_fields": {
+                "server_tool_calls": [
+                    {
+                        "id": "srvtoolu_01Search",
+                        "type": "function",
+                        "function": {"name": "web_search", "arguments": '{"query": "paris weather"}'},
+                    }
+                ]
+            },
+        },
+    )
+
+    assert payload["meta"]["output"]["messages"][0]["tool_calls"] == [
+        {
+            "name": "web_search",
+            "arguments": {"query": "paris weather"},
+            "tool_id": "srvtoolu_01Search",
+            "type": "function",
+        },
+        {
+            "name": "get_weather",
+            "arguments": {"city": "Paris", "unit": "c"},
+            "tool_id": "call_abc123",
+            "type": "function",
+        },
+    ]
+
 def test_tool_call_identifiers_that_are_not_strings_are_blanked_not_stringified(logger: DataDogLLMObsLogger) -> None:
     payload = build(
         logger,
@@ -1139,3 +1174,31 @@ def test_reasoning_content_survives_the_mapping(logger: DataDogLLMObsLogger) -> 
     )
 
     assert payload["meta"]["output"]["messages"][0]["reasoning_content"] == "thinking"
+
+
+@pytest.mark.parametrize(
+    ("raw_arguments", "shipped"),
+    [
+        ('{"city": "Paris", "days": [1, 2]}', {"city": "Paris", "days": [1, 2]}),
+        ("{}", {}),
+        ("[1, 2]", "[1, 2]"),
+        ("null", "null"),
+        ("true", "true"),
+        ('"text"', '"text"'),
+        ("1.5", "1.5"),
+        ("", ""),
+    ],
+)
+def test_tool_arguments_ship_as_an_object_only_when_they_decode_to_one(
+    logger: DataDogLLMObsLogger, raw_arguments: str, shipped: object
+) -> None:
+    payload = build(
+        logger,
+        response_message={
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "f", "arguments": raw_arguments}}],
+        },
+    )
+
+    assert payload["meta"]["output"]["messages"][0]["tool_calls"][0]["arguments"] == shipped

@@ -1,57 +1,44 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Serialize,
+    PartialEq,
+    Eq,
+    Hash,
+    strum::EnumString,
+    strum::IntoStaticStr,
+    strum::VariantArray,
+)]
 pub enum CacheType {
     #[serde(rename = "local")]
+    #[strum(serialize = "local")]
     Local,
     #[serde(rename = "redis")]
+    #[strum(serialize = "redis")]
     Redis,
     #[serde(rename = "redis-semantic")]
+    #[strum(serialize = "redis-semantic")]
     RedisSemantic,
     #[serde(rename = "valkey-semantic")]
+    #[strum(serialize = "valkey-semantic")]
     ValkeySemantic,
     #[serde(rename = "s3")]
+    #[strum(serialize = "s3")]
     S3,
     #[serde(rename = "disk")]
+    #[strum(serialize = "disk")]
     Disk,
     #[serde(rename = "qdrant-semantic")]
+    #[strum(serialize = "qdrant-semantic")]
     QdrantSemantic,
     #[serde(rename = "azure-blob")]
+    #[strum(serialize = "azure-blob")]
     AzureBlob,
     #[serde(rename = "gcs")]
+    #[strum(serialize = "gcs")]
     Gcs,
-}
-
-impl CacheType {
-    pub const ALL: [Self; 9] = [
-        Self::Local,
-        Self::Redis,
-        Self::RedisSemantic,
-        Self::ValkeySemantic,
-        Self::S3,
-        Self::Disk,
-        Self::QdrantSemantic,
-        Self::AzureBlob,
-        Self::Gcs,
-    ];
-
-    pub const fn as_python_name(self) -> &'static str {
-        match self {
-            Self::Local => "local",
-            Self::Redis => "redis",
-            Self::RedisSemantic => "redis-semantic",
-            Self::ValkeySemantic => "valkey-semantic",
-            Self::S3 => "s3",
-            Self::Disk => "disk",
-            Self::QdrantSemantic => "qdrant-semantic",
-            Self::AzureBlob => "azure-blob",
-            Self::Gcs => "gcs",
-        }
-    }
-
-    pub fn from_python_name(value: &str) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|cache_type| cache_type.as_python_name() == value)
-    }
 }

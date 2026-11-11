@@ -1,18 +1,39 @@
 from contextlib import ExitStack
+from itertools import accumulate, repeat
 from typing import Final
 
 import pytest
 
-from .checks import COMPLETE, FATAL, GATED, assert_completed, start_replicas
+from .checks import (
+    COMPLETE,
+    FATAL,
+    GATED,
+    GATED_WITH_SHORT_LOCK_TIMEOUT,
+    assert_completed,
+    assert_completed_after_lock_timeouts,
+    start_replicas,
+)
 from .containers import Containers, failed, ready, until, waiting
-from .database import PRISMA_LOCK, Database, Databases, restricted_user
+from .database import COORDINATOR_LOCK, GATE_KEY, PRISMA_LOCK, Database, Databases, restricted_user
 from .startup_models import Migration
+from e2e_metadata import Domain, Subject, meta
 
 pytestmark: Final = [pytest.mark.e2e, pytest.mark.migration_startup]
 
 
+def union_waiting_identities(
+    observed: frozenset[str], snapshot: frozenset[str]
+) -> frozenset[str]:
+    return observed | snapshot
+
+
 class TestMigrationStartup:
     @pytest.mark.parametrize("replicas,v2", ((1, True), (3, True), (1, False)))
+    @meta(
+        Subject(
+            domain=Domain.DB,
+        )
+    )
     def test_fresh_database(self, containers: Containers, databases: Databases, replicas: int, v2: bool) -> None:
         with databases.create() as database, ExitStack() as stack:
             ready(tuple(stack.enter_context(containers.start(database, v2=v2)) for _ in range(replicas)), database)
@@ -21,36 +42,94 @@ class TestMigrationStartup:
             ) == ((0,),)
             assert database.query("SELECT count(*) > 0 FROM _prisma_migrations") == ((True,),)
 
+    @meta(
+        Subject(
+            domain=Domain.DB,
+        )
+    )
     def test_concurrent_upgrade(self, containers: Containers, database: Database) -> None:
         with ExitStack() as stack:
             ready(start_replicas(stack, containers, database, (COMPLETE,)), database)
             assert_completed(database)
 
-    def test_waiters_survive_prolonged_contention(self, containers: Containers, database: Database) -> None:
+    @meta(
+        Subject(
+            domain=Domain.DB,
+        )
+    )
+    def test_waiters_retry_lock_timeouts_until_contention_clears(
+        self, containers: Containers, database: Database
+    ) -> None:
         with ExitStack() as stack:
             with database.lock():
                 owner: Final = stack.enter_context(containers.start(database, (GATED,)))
                 until("owner blocked in migration SQL", lambda: bool(database.blocked()))
                 followers: Final = start_replicas(stack, containers, database, (GATED,), count=2)
-                until("both followers attempted Prisma locking", lambda: len(database.blocked(PRISMA_LOCK)) == 2)
-                waiting((owner, *followers), 120)
+                waiting_identities: Final = accumulate(
+                    (database.waiting_identities((PRISMA_LOCK, GATE_KEY)) for _ in repeat(None)),
+                    union_waiting_identities,
+                    initial=frozenset(),
+                )
+                follower_identities: Final = frozenset(follower.identity for follower in followers)
+                until(
+                    "both followers entered migration locking",
+                    lambda: follower_identities <= next(waiting_identities),
+                )
+                until(
+                    "a replica logged a migration lock-timeout retry",
+                    lambda: any(
+                        "timed out waiting for a table lock" in replica.logs()
+                        for replica in (owner, *followers)
+                    ),
+                )
+                waiting((owner, *followers), 20)
             ready((owner, *followers), database)
-            assert_completed(database, GATED)
+            assert_completed_after_lock_timeouts(database, GATED)
 
+    @meta(
+        Subject(
+            domain=Domain.DB,
+        )
+    )
     def test_lock_deadline_then_restart(self, containers: Containers, database: Database) -> None:
         history: Final = database.history()
         with database.lock(PRISMA_LOCK):
             with containers.start(
                 database, (COMPLETE,), environment={"LITELLM_MIGRATION_LOCK_TIMEOUT": "12"}
             ) as replica:
-                until("Prisma lock contention", lambda: bool(database.blocked(PRISMA_LOCK)))
-                failed((replica,), "Timed out waiting for")
+                until("Prisma lock contention", lambda: "Waiting for the Prisma migration lock" in replica.logs())
+                failed((replica,), "Timed out waiting for another Prisma migration")
+                assert database.holders(COORDINATOR_LOCK) == ()
                 assert database.history() == history
                 assert not database.exists("migration_effect")
         with containers.start(database, (COMPLETE,)) as restarted:
             ready((restarted,), database)
             assert_completed(database)
 
+    @meta(
+        Subject(
+            domain=Domain.DB,
+        )
+    )
+    def test_lock_timeout_exhaustion_then_restart(self, containers: Containers, database: Database) -> None:
+        with database.lock():
+            with containers.start(database, (GATED_WITH_SHORT_LOCK_TIMEOUT,)) as replica:
+                until("owner blocked in migration SQL", lambda: bool(database.blocked()))
+                failed((replica,), "attempts that made no progress")
+            assert not database.exists("migration_effect")
+            assert database.query(
+                "SELECT count(*) FROM _prisma_migrations WHERE migration_name = %s AND finished_at IS NOT NULL",
+                (GATED_WITH_SHORT_LOCK_TIMEOUT.name,),
+            ) == ((0,),)
+        with containers.start(database, (GATED_WITH_SHORT_LOCK_TIMEOUT,)) as restarted:
+            ready((restarted,), database)
+        assert_completed_after_lock_timeouts(database, GATED_WITH_SHORT_LOCK_TIMEOUT)
+
+    @meta(
+        Subject(
+            domain=Domain.DB,
+        )
+    )
     def test_fatal_sql(self, containers: Containers, database: Database) -> None:
         with ExitStack() as stack:
             replicas: Final = start_replicas(stack, containers, database, (FATAL,))
@@ -61,6 +140,11 @@ class TestMigrationStartup:
                 (COMPLETE.name, "%MIGRATION_TEST_FATAL%"),
             ) == ((1,),)
 
+    @meta(
+        Subject(
+            domain=Domain.DB,
+        )
+    )
     def test_duplicate_object_does_not_hide_incomplete_sql(self, containers: Containers, database: Database) -> None:
         database.execute(
             "CREATE TABLE migration_existing (id int PRIMARY KEY); INSERT INTO migration_existing VALUES (42)"
@@ -77,6 +161,11 @@ class TestMigrationStartup:
             ) == ((True,),)
 
     @pytest.mark.parametrize("v2", (True, False))
+    @meta(
+        Subject(
+            domain=Domain.DB,
+        )
+    )
     def test_restart_preserves_history_and_data(self, containers: Containers, database: Database, v2: bool) -> None:
         history: Final = database.history()
         before: Final = database.query('SELECT token FROM "LiteLLM_VerificationToken" ORDER BY token')
@@ -86,12 +175,22 @@ class TestMigrationStartup:
         assert database.history() == history
         assert set(before).issubset(database.query('SELECT token FROM "LiteLLM_VerificationToken" ORDER BY token'))
 
+    @meta(
+        Subject(
+            domain=Domain.DB,
+        )
+    )
     def test_disabled_migrations(self, containers: Containers, database: Database) -> None:
         history: Final = database.history()
         with containers.start(database, (FATAL,), disabled=True) as replica:
             ready((replica,), database)
         assert database.history() == history
 
+    @meta(
+        Subject(
+            domain=Domain.DB,
+        )
+    )
     def test_insufficient_privileges(self, containers: Containers, database: Database) -> None:
         history: Final = database.history()
         with restricted_user(database) as limited:

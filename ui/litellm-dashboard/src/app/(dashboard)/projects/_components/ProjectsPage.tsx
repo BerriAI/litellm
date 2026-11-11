@@ -1,9 +1,13 @@
+import { useCanManageProjects } from "@/app/(dashboard)/hooks/projects/projectAccess";
 import { Page, PageContent } from "@/components/shared/Page";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { isUserTeamAdminForAnyTeam } from "@/utils/roles";
 import { Folder, Plus, SearchIcon, X } from "lucide-react";
 import { parseAsString, useQueryState } from "nuqs";
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
@@ -13,8 +17,11 @@ import { ProjectsTable } from "./ProjectsTable";
 import { useClearProjectKeysTableState, useProjectsTableState } from "./useProjectsUrlState";
 
 export function ProjectsPage() {
+  const { t } = useTranslation();
   const { data: projects, isLoading } = useProjects();
   const { data: teams, isLoading: isTeamsLoading } = useTeams();
+  const { userId } = useAuthorized();
+  const canCreateProject = useCanManageProjects(isUserTeamAdminForAnyTeam(teams ?? null, userId ?? ""));
 
   const [selectedProjectId, setSelectedProjectId] = useQueryState(
     "project",
@@ -61,15 +68,17 @@ export function ProjectsPage() {
       <PageHeader>
         <PageHeaderTitle>
           <Folder />
-          Projects
+          {t("projects.page.title")}
         </PageHeaderTitle>
-        <PageHeaderDescription>Manage projects within your teams</PageHeaderDescription>
-        <PageHeaderControls>
-          <Button onClick={() => setIsCreateModalVisible(true)}>
-            <Plus className="size-4" />
-            Create Project
-          </Button>
-        </PageHeaderControls>
+        <PageHeaderDescription>{t("projects.page.description")}</PageHeaderDescription>
+        {canCreateProject && (
+          <PageHeaderControls>
+            <Button onClick={() => setIsCreateModalVisible(true)}>
+              <Plus className="size-4" />
+              {t("projects.page.createButton")}
+            </Button>
+          </PageHeaderControls>
+        )}
       </PageHeader>
 
       <PageContent className="gap-3">
@@ -79,13 +88,17 @@ export function ProjectsPage() {
               <SearchIcon className="size-4 text-muted-foreground" />
             </InputGroupAddon>
             <InputGroupInput
-              placeholder="Search projects by name, ID, description, or team..."
+              placeholder={t("projects.page.searchPlaceholder")}
               value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
             />
             {searchText && (
               <InputGroupAddon align="inline-end">
-                <InputGroupButton size="icon-xs" aria-label="Clear search" onClick={() => setSearchText("")}>
+                <InputGroupButton
+                  size="icon-xs"
+                  aria-label={t("projects.page.clearSearch")}
+                  onClick={() => setSearchText("")}
+                >
                   <X />
                 </InputGroupButton>
               </InputGroupAddon>

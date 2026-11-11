@@ -61,7 +61,7 @@ ui/litellm-dashboard/next-env.d.ts
 *.tsbuildinfo
 ui/litellm-dashboard/package.json
 ui/litellm-dashboard/package-lock.json
-helm/litellm-helm/*.tgz
+helm/litellm/charts/*.tgz
 helm/*.tgz
 litellm/proxy/vertex_key.json
 **/.vim/
@@ -105,7 +105,7 @@ litellm_config.yaml
 .cursor
 litellm/proxy/to_delete_loadtest_work/*
 update_model_cost_map.py
-tests/unit/proxy/_experimental/mcp_server/test_mcp_server_manager.py
+tests/unit/proxy/mcp_server/test_mcp_server_manager.py
 scripts/test_vertex_ai_search.py
 LAZY_LOADING_IMPROVEMENTS.md
 STABILIZATION_TODO.md
@@ -154,3 +154,4 @@ coverage-rust.xml
 
 # make lens-dev worker token, generated config and logs
 .lens-dev/
+.mypy_cache/

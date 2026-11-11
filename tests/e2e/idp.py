@@ -31,6 +31,7 @@ from e2e_http import (
     post_json_external,
     unwrap,
 )
+from e2e_metadata import step
 from pydantic import BaseModel, Field
 
 KEYCLOAK_URL_ENV: Final = "E2E_KEYCLOAK_URL"
@@ -171,6 +172,7 @@ class Keycloak:
             case _:
                 return pytest.fail(f"Keycloak refused {context}: {result}")
 
+    @step("Create the Keycloak group {name}")
     def create_group(self, name: str) -> str:
         return created_id(
             post_json_external(
@@ -179,6 +181,7 @@ class Keycloak:
             f"group {name}",
         )
 
+    @step("Create the Keycloak user {username}")
     def create_user(
         self, *, username: str, email: str, password: str, group: str | None = None, groups: tuple[str, ...] = ()
     ) -> str:
@@ -196,12 +199,15 @@ class Keycloak:
             f"user {username}",
         )
 
+    @step("Delete the Keycloak user")
     def delete_user(self, user_id: str) -> None:
         self._delete(f"/users/{user_id}")
 
+    @step("Delete the Keycloak group")
     def delete_group(self, group_id: str) -> None:
         self._delete(f"/groups/{group_id}")
 
+    @step("Check that Keycloak's admin API returns 404 for the deleted entry under /{kind}")
     def assert_absent(self, kind: Literal["users", "groups", "clients"], resource_id: str) -> None:
         result: Final = get_external(
             self._admin_url(f"/{kind}/{resource_id}"),
@@ -230,11 +236,13 @@ class Keycloak:
                 stacklevel=2,
             )
 
+    @step("Create the Keycloak group {group} and the user e2e-jwt-user-{marker} in it")
     def provision(self, *, marker: str, group: str, defer: Callable[[Callable[[], object]], None]) -> Identity:
         """Create `group` and a user in it, credentialed with a password generated
         for this test alone, and hand back the identity a token can be minted for."""
         return self.provision_groups(marker=marker, groups=(group,), defer=defer)
 
+    @step("Create each Keycloak group the user e2e-jwt-user-{marker} belongs to, then the user")
     def provision_groups(
         self, *, marker: str, groups: tuple[str, ...], defer: Callable[[Callable[[], object]], None]
     ) -> Identity:
@@ -246,6 +254,7 @@ class Keycloak:
         group_ids: Final = tuple(provision_group(group) for group in groups)
         return self.provision_user(marker=marker, groups=groups, group_ids=group_ids, defer=defer)
 
+    @step("Create the Keycloak user e2e-jwt-user-{marker} with a password of its own")
     def provision_user(
         self,
         *,
@@ -262,6 +271,7 @@ class Keycloak:
         defer(lambda: self.delete_user(user_id))
         return Identity(user_id=user_id, username=username, password=password, groups=groups, group_ids=group_ids)
 
+    @step("Get a Keycloak access token for {identity.username} from the client {client_id}")
     def access_token(
         self, identity: Identity, *, client_id: str = TESTS_CLIENT_ID, issuer_host: str | None = None
     ) -> str:
@@ -275,9 +285,11 @@ class Keycloak:
         )
         return self._token(result, f"a token for {identity.username}")
 
+    @step("Read Keycloak's OpenID Connect discovery document")
     def discovery(self) -> Discovery:
         return unwrap(get_external(f"{self.issuer}/.well-known/openid-configuration", response_type=Discovery))
 
+    @step("Register a browser SSO client in Keycloak")
     def browser_client(self, *, callback_url: str, defer: Callable[[Callable[[], object]], None]) -> BrowserClient:
         client: Final = BrowserClient(
             client_id=f"e2e-browser-{secrets.token_hex(8)}",
@@ -309,6 +321,7 @@ class Keycloak:
         assert configured.attributes.pkce == "S256"
         return client
 
+    @step("Get a Keycloak access token for {identity.username} through the browser SSO client")
     def browser_token(self, identity: Identity, client: BrowserClient) -> str:
         return self._token(
             post_form_external(
@@ -325,6 +338,7 @@ class Keycloak:
             "browser-profile identity mapping",
         )
 
+    @step("Read the signed-in user's profile from Keycloak's userinfo endpoint")
     def userinfo(self, token: str) -> UserInfo:
         return unwrap(
             get_external(
@@ -435,6 +449,7 @@ def _signal_process_group(process_id: int, signum: int) -> bool:
     return True
 
 
+@step("Stop the child process and everything it started")
 def stop_process_group(child: subprocess.Popen[bytes]) -> None:
     _signal_process_group(child.pid, signal.SIGTERM)
     deadline: Final = time.monotonic() + 5
@@ -457,6 +472,7 @@ def _process_group_exists(process_id: int) -> bool:
     return True
 
 
+@step("Run a command against the proxy with a Keycloak browser SSO client")
 def run_oidc_profile(proxy_url: str, command: list[str]) -> int:
     idp: Final = keycloak_from_env().with_strict_cleanup()
     with ExitStack() as cleanup:

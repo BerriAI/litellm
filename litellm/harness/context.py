@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, TypeAlias
+from typing import TYPE_CHECKING, TypeAlias
 
 from pydantic import BaseModel
 
@@ -42,7 +42,7 @@ class SessionContext:
     api_base: str | None = None
     endpoint: ModelEndpoint | None = None
     instructions: str | None = None
-    tools: Sequence[Callable[..., Any]] = ()
+    tools: Sequence[Callable[..., object]] = ()
     skills: Sequence[str] = ()
     disable_tools: Sequence[str] = ()
     permissions: PermissionMode = "full"
@@ -50,7 +50,7 @@ class SessionContext:
     output: type[BaseModel] | None = None
     max_turns: int | None = None
     timeout: float | None = None
-    metadata: Mapping[str, Any] = field(default_factory=dict)
+    metadata: Mapping[str, object] = field(default_factory=dict)
     options: HarnessOptions | None = None
     # Set by the handler after each turn.
     final_text: str = ""
