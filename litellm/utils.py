@@ -10529,6 +10529,7 @@ class ProviderConfigManager:
             from litellm.llms.azure_ai.common_utils import (
                 azure_ai_supports_native_responses,
                 is_foundry_project_agent,
+                is_foundry_project_model_router,
             )
             from litellm.llms.azure_ai.responses.transformation import (
                 AzureAIAgentResponsesAPIConfig,
@@ -10536,7 +10537,7 @@ class ProviderConfigManager:
 
             if is_foundry_project_agent(model):
                 return AzureAIAgentResponsesAPIConfig()
-            if azure_ai_supports_native_responses(model, api_base):
+            if azure_ai_supports_native_responses(model, api_base) or is_foundry_project_model_router(model, api_base):
                 return litellm.AzureAIResponsesAPIConfig()
             return None
         elif litellm.LlmProviders.XAI == provider:
