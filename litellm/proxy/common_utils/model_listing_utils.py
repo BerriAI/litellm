@@ -360,6 +360,12 @@ def label_entries(listed: Sequence[tuple[str, str]], entries: Sequence[tuple[str
     return tuple((response_id, own.get(response_id, lookup_id)) for response_id, lookup_id in entries)
 
 
+CLAUDE_MODEL_ROUTES: Final = frozenset(
+    f"/{prefix}{endpoint}" for prefix in ("", "v1/") for endpoint in ("messages", "chat/completions", "responses")
+)
+CLAUDE_MODEL_NORMALIZED: Final = "litellm.claude_model_normalized"
+
+
 def alias_target(
     model_id: str,
     aliases: CallerAliases,

@@ -156,7 +156,11 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     safe_get_request_query_params,
     safe_set_request_parsed_body,
 )
-from litellm.proxy.common_utils.model_listing_utils import claude_code_requested_group
+from litellm.proxy.common_utils.model_listing_utils import (
+    CLAUDE_MODEL_NORMALIZED,
+    CLAUDE_MODEL_ROUTES,
+    claude_code_requested_group,
+)
 from litellm.proxy.common_utils.realtime_utils import (  # noqa: F401  # legacy module exports
     _realtime_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     realtime_request_body,
@@ -284,10 +288,8 @@ def _get_model_from_request_context(
     )
 
 
-_CLAUDE_MODEL_ROUTES: Final = frozenset(
-    f"/{prefix}{endpoint}" for prefix in ("", "v1/") for endpoint in ("messages", "chat/completions", "responses")
-)
-_CLAUDE_MODEL_NORMALIZED: Final = "litellm.claude_model_normalized"
+_CLAUDE_MODEL_ROUTES: Final = CLAUDE_MODEL_ROUTES
+_CLAUDE_MODEL_NORMALIZED: Final = CLAUDE_MODEL_NORMALIZED
 _GENERAL_SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
