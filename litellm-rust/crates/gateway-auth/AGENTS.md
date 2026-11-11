@@ -16,7 +16,7 @@ The Axum `authenticate` middleware currently accepts one Authorization header us
 
 The gateway also inserts an MCP `Authorization` extension and a `SessionOwner` derived from the verified principal and credential reference. The MCP host checks the injected policy at initialization and before sending resolved upstream operations. Standalone MCP library hosts retain their existing explicitly trusted registry behavior when no policy is installed. Production mounts must install authentication and the policy extension together
 
-Local UI login continues using axum-login and tower-sessions. Only after session and CSRF validation does `UiSession` expose an authenticated caller. Its credentials are restricted to session-info and logout operations, so the UI CSRF bearer cannot authorize inference. Future UI management routes must extend that explicit scope
+Local UI login continues using axum-login and tower-sessions. Only after session and CSRF validation does `UiSession` expose an authenticated caller. Its credentials are restricted to session-info, current-user lookup, and logout operations, so the UI CSRF bearer cannot authorize inference. Future UI management routes must extend that explicit scope
 
 Authentication evidence and principals contain no raw token, password, request body, or mutable accounting state. Session ownership is scoped by principal authority, subject, verifier, and credential ID, so separate credentials do not silently share an MCP session. Credential rotation may retain ownership when the verifier preserves a stable credential ID. Scope and expiry checks still run for each operation
 

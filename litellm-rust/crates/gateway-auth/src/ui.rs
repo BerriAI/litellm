@@ -134,6 +134,7 @@ async fn session_identity(user: &UiUser) -> Result<AuthenticatedRequest, Error> 
             },
             restrictions: Permissions::Only(Arc::from([
                 AccessRequest::Ui(UiAction::SessionInfo),
+                AccessRequest::Ui(UiAction::CurrentUser),
                 AccessRequest::Ui(UiAction::Logout),
             ])),
         },
@@ -163,6 +164,12 @@ mod tests {
         assert!(
             identity
                 .authorize(AccessRequest::Ui(UiAction::SessionInfo))
+                .await
+                .is_ok()
+        );
+        assert!(
+            identity
+                .authorize(AccessRequest::Ui(UiAction::CurrentUser))
                 .await
                 .is_ok()
         );

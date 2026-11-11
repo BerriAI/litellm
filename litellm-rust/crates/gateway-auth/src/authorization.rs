@@ -14,9 +14,10 @@ pub enum McpAction {
     ReadResource(String),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, strum::VariantArray)]
 pub enum UiAction {
     SessionInfo,
+    CurrentUser,
     Logout,
 }
 
