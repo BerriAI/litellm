@@ -116,6 +116,7 @@ MAX_BUDGET_ALERT_EMAIL_TEMPLATE: Final = """
 
                     Your LiteLLM API key has reached <b>{percentage}% of its maximum budget</b>. <br /> <br />
 
+                    {key_alias_info}
                     <b>Current Spend:</b> {spend} <br />
                     <b>Maximum Budget:</b> {max_budget} <br />
                     <b>Alert Threshold:</b> {alert_threshold} ({percentage}%) <br />

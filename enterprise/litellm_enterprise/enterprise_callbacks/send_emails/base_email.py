@@ -60,6 +60,12 @@ def _max_budget_alert_id(user_info: CallInfo) -> str:
     return user_info.token or user_info.user_id or "default_id"
 
 
+def _key_alias_info(key_alias: str | None) -> str:
+    if not key_alias:
+        return ""
+    return f"<b>Key Alias:</b> {html.escape(key_alias)} <br />"
+
+
 def _parse_email_list(raw) -> List[str]:
     """Parse emails from a list or comma-separated string."""
     if isinstance(raw, list):
@@ -402,6 +408,7 @@ class BaseEmailLogger(CustomLogger):
                 email_html_content = MAX_BUDGET_ALERT_EMAIL_TEMPLATE.format(
                     email_logo_url=email_params.logo_url,
                     recipient_email=greeting,
+                    key_alias_info=_key_alias_info(event.key_alias),
                     percentage=percentage,
                     spend=spend_str,
                     max_budget=max_budget_str,
@@ -427,6 +434,7 @@ class BaseEmailLogger(CustomLogger):
             email_html_content = MAX_BUDGET_ALERT_EMAIL_TEMPLATE.format(
                 email_logo_url=email_params.logo_url,
                 recipient_email=email_params.recipient_email,
+                key_alias_info=_key_alias_info(event.key_alias),
                 percentage=percentage,
                 spend=spend_str,
                 max_budget=max_budget_str,
