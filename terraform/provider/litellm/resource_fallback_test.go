@@ -386,21 +386,26 @@ func TestFallbackWriteAbortsAHungRequestWhenApplyIsCancelled(t *testing.T) {
 	for _, hungPath := range []string{"/fallback", "/fallback/gpt-4"} {
 		t.Run(hungPath, func(t *testing.T) {
 			arrived := make(chan struct{})
+			release := make(chan struct{})
+			hang := func(w http.ResponseWriter, r *http.Request) {
+				close(arrived)
+				select {
+				case <-release:
+				case <-r.Context().Done():
+				}
+			}
 			mux := http.NewServeMux()
 			mux.HandleFunc("/fallback", func(w http.ResponseWriter, r *http.Request) {
 				if hungPath == "/fallback" {
-					close(arrived)
-					<-r.Context().Done()
+					hang(w, r)
 					return
 				}
 				w.Write([]byte(`{"message":"ok"}`))
 			})
-			mux.HandleFunc("/fallback/gpt-4", func(w http.ResponseWriter, r *http.Request) {
-				close(arrived)
-				<-r.Context().Done()
-			})
+			mux.HandleFunc("/fallback/gpt-4", hang)
 			srv := httptest.NewServer(mux)
 			defer srv.Close()
+			defer close(release)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			go func() {

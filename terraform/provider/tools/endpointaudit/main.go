@@ -160,8 +160,15 @@ func requestCallMethodAndPath(call *ast.CallExpr) (methodArg ast.Expr, pathArg a
 		if fun.Name == "MakeRequest" && len(call.Args) >= 3 {
 			return call.Args[1], call.Args[2], true
 		}
+		if fun.Name == "MakeRequestWithContext" && len(call.Args) >= 4 {
+			return call.Args[2], call.Args[3], true
+		}
 	}
 	return nil, nil, false
+}
+
+func isRequestHelper(fn *ast.FuncDecl) bool {
+	return fn.Recv == nil && fn.Name.Name == "MakeRequest"
 }
 
 func isRawHTTPRequest(call *ast.CallExpr) bool {
@@ -195,7 +202,7 @@ func extractFromFiles(fset *token.FileSet, files []*ast.File, helperFiles map[st
 					return true
 				}
 				methodArg, pathArg, matched := requestCallMethodAndPath(call)
-				if !matched {
+				if !matched || (helperFiles[fileName] && isRequestHelper(fn)) {
 					return true
 				}
 				methods := resolveExpr(methodArg, fn, consts)
