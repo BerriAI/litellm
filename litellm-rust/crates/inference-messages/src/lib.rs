@@ -1,6 +1,7 @@
 mod common_utils;
 mod constants;
 mod handler;
+mod pre_request;
 pub mod route;
 mod transport;
 mod types;
@@ -18,6 +19,7 @@ use crate::common_utils::messages_provider;
 
 pub use common_utils::merge_messages_header_sources;
 pub use litellm_inference::Error;
+pub use pre_request::PreRequestHooks;
 pub use transport::{Delivered, Transport, TransportBody, TransportRequest, TransportResponse};
 pub use types::{
     MessagesBody, MessagesCall, MessagesCallResponse, MessagesSettings, MessagesShaping,
@@ -33,6 +35,7 @@ pub struct MessagesRoute {
     cache: Option<litellm_cache_response::ScopedCache>,
     workload_identity: Option<Arc<dyn WorkloadIdentity>>,
     transport: Option<Arc<dyn Transport>>,
+    pre_request_hooks: Option<Arc<dyn PreRequestHooks>>,
 }
 
 impl MessagesRoute {
@@ -48,6 +51,7 @@ impl MessagesRoute {
             cache: None,
             workload_identity: None,
             transport: None,
+            pre_request_hooks: None,
         }
     }
 
@@ -63,6 +67,14 @@ impl MessagesRoute {
     pub fn with_transport(self, transport: Arc<dyn Transport>) -> Self {
         Self {
             transport: Some(transport),
+            ..self
+        }
+    }
+
+    #[must_use]
+    pub fn with_pre_request_hooks(self, hooks: Arc<dyn PreRequestHooks>) -> Self {
+        Self {
+            pre_request_hooks: Some(hooks),
             ..self
         }
     }
@@ -100,25 +112,28 @@ impl MessagesRoute {
         context: CallContext<'_, impl Interceptors<Error>>,
     ) -> Result<MessagesCallResponse, Error> {
         litellm_inference::diagnostic::call(async {
-            let provider = resolve_llm_provider(
-                &call.body.model,
-                call.custom_llm_provider.as_deref(),
-                "messages",
-            )?;
-            let config = messages_provider(provider.provider, provider.model).ok_or_else(|| {
-                Error::InvalidProvider(<&str>::from(provider.provider).to_string())
-            })?;
-            litellm_inference::diagnostic::provider(
-                provider.model,
-                <&'static str>::from(provider.provider),
-            );
-            let model = provider.model.to_owned();
-            if let Some(output) = handler::cached(self, config, &model, &context).await? {
+            let requested_stream = call.body.params.stream == Some(true);
+            let call = match &self.pre_request_hooks {
+                None => call,
+                Some(hooks) => {
+                    let (config, model, _) = Self::provider(&call)?;
+                    if let Some(output) = handler::cached(self, config, &model, &context).await? {
+                        return Ok(output);
+                    }
+                    hooks.run(call).await?
+                }
+            };
+            let (config, model, provider) = Self::provider(&call)?;
+            litellm_inference::diagnostic::provider(&model, provider);
+            if self.pre_request_hooks.is_none()
+                && let Some(output) = handler::cached(self, config, &model, &context).await?
+            {
                 return Ok(output);
             }
             if let Some(mock) = call.shaping.settings.mock_response {
-                let stream = call.body.params.stream == Some(true);
-                return Ok(handler::mocked(self, config, model, &context, mock, stream).await);
+                return Ok(
+                    handler::mocked(self, config, model, &context, mock, requested_stream).await,
+                );
             }
             let secrets = self.secrets.resolve(config.config().secret_names()).await?;
             handler::execute(self, config, model, call, secrets, &context)
@@ -126,5 +141,22 @@ impl MessagesRoute {
                 .await
         })
         .await
+    }
+
+    fn provider(
+        call: &MessagesCall,
+    ) -> Result<(common_utils::MessagesProvider, String, &'static str), Error> {
+        let provider = resolve_llm_provider(
+            &call.body.model,
+            call.custom_llm_provider.as_deref(),
+            "messages",
+        )?;
+        let config = messages_provider(provider.provider, provider.model)
+            .ok_or_else(|| Error::InvalidProvider(<&str>::from(provider.provider).to_string()))?;
+        Ok((
+            config,
+            provider.model.to_owned(),
+            <&'static str>::from(provider.provider),
+        ))
     }
 }

@@ -66,8 +66,6 @@ class Feature(str, Enum):
     """Extra body fields that Python transforms and merges into the provider request."""
     PROVIDER_AFFINITY = "provider_affinity"
     """A provider affinity header that Python validates and populates from the session id."""
-    PRE_REQUEST_HOOK = "pre_request_hook"
-    """A logger overriding async_pre_request_hook, which may rewrite the request."""
     WEBSEARCH_INTERCEPTION = "websearch_interception"
     """A WebSearchInterceptionLogger that may answer without calling the provider."""
     MESSAGES_INTERCEPTOR = "messages_interceptor"
@@ -167,7 +165,6 @@ MESSAGES_PYTHON_FEATURES: Final = (
     - {Feature.TIMEOUT_VARIANTS, Feature.LATEST_ALIAS, Feature.MOCK_RESPONSE, Feature.CALLER_CLIENT, Feature.TLS_POLICY}
 ) | {
     Feature.SAFEGUARDS_CLASSIFIER,
-    Feature.PRE_REQUEST_HOOK,
     Feature.WEBSEARCH_INTERCEPTION,
     Feature.MESSAGES_INTERCEPTOR,
 }

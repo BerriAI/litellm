@@ -362,10 +362,6 @@ class _Rewrite(CustomLogger):
         return kwargs
 
 
-class _InheritedRewrite(_Rewrite):
-    pass
-
-
 class _Agentic(CustomLogger):
     async def async_should_run_agentic_loop(self, *args: object, **kwargs: object) -> tuple[bool, dict]:  # pyright: ignore[reportIncompatibleMethodOverride, reportMissingTypeArgument]  # test double only needs the override
         return False, {}
@@ -386,10 +382,6 @@ class _Deployment(CustomLogger):
 @pytest.mark.parametrize(
     ("detector", "callbacks", "expected"),
     (
-        (messages_detectors.pre_request_hook, [_Rewrite()], True),
-        (messages_detectors.pre_request_hook, [_InheritedRewrite()], True),
-        (messages_detectors.pre_request_hook, [_Logger(), _Agentic()], False),
-        (messages_detectors.pre_request_hook, ["not-a-logger"], False),
         (detectors.agentic_loop_hook, [_Agentic()], True),
         (detectors.agentic_loop_hook, [_Logger(), _Rewrite()], False),
         (detectors.agentic_loop_hook, [_ChatAgentic()], False),
@@ -427,7 +419,6 @@ def _logging_with(callback: CustomLogger) -> Logging:
         (detectors.agentic_loop_hook, {"success_callback": [_Agentic()]}, True),
         (detectors.agentic_loop_hook, {"litellm_logging_obj": _logging_with(_Agentic())}, True),
         (detectors.agentic_loop_hook, {"success_callback": [_Logger()]}, False),
-        (messages_detectors.pre_request_hook, {"success_callback": [_Rewrite()]}, False),
         (chat_detectors.chat_agentic_loop_hook, {"litellm_logging_obj": _logging_with(_ChatAgentic())}, True),
         (responses_detectors.deployment_hook, {"success_callback": [_Deployment()]}, True),
     ),
@@ -435,7 +426,6 @@ def _logging_with(callback: CustomLogger) -> Logging:
         "success-callback",
         "logging-object",
         "plain-logger",
-        "pre-request-reads-globals-only",
         "chat-agentic-logging-object",
         "deployment-success-callback",
     ),

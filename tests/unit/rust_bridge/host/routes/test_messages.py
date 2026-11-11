@@ -1,5 +1,5 @@
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
 
@@ -9,14 +9,19 @@ import pytest
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.anthropic.messages.native import interceptors
+from litellm.llms.anthropic.messages.native.interceptors.base import MessagesInterceptor
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # its params dict is untyped
 )
 from litellm.rust_bridge.host import callbacks_legacy_python
 from litellm.rust_bridge.host.routes import messages as messages_host
 from litellm.rust_bridge.host.routes.messages import response
+from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 
 
 def test_response_is_a_detached_public_messages_dict() -> None:
@@ -949,3 +954,153 @@ def test_a_handler_failure_maps_as_the_python_handler_maps_it(
     assert getattr(mapped, "status_code", None) == status
     assert mapped.__context__ is not None
     assert mapped.__context__.__context__ is error
+
+
+class _Hook(CustomLogger):
+    rewrite: Mapping[str, object] = MappingProxyType({})
+    seen: tuple[tuple[str, list[dict[str, object]], dict[str, object]], ...] = ()
+
+    async def async_pre_request_hook(
+        self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+    ) -> dict[str, object] | None:
+        self.seen = (*self.seen, (model, list(messages), dict(kwargs)))
+        return {**kwargs, **self.rewrite}
+
+
+def _hook(rewrite: Mapping[str, object]) -> _Hook:
+    hook: Final = _Hook()
+    hook.rewrite = rewrite
+    return hook
+
+
+def _hook_request(**overrides: object) -> dict[str, object]:
+    return {
+        "max_tokens": 64,
+        "messages": [{"role": "user", "content": [{"type": "text", "text": ""}, {"type": "text", "text": "hi"}]}],
+        "model": "anthropic/claude-sonnet-4-5",
+        "metadata": None,
+        "stop_sequences": None,
+        "stream": False,
+        "system": None,
+        "temperature": None,
+        "thinking": None,
+        "tool_choice": None,
+        "tools": None,
+        "top_k": None,
+        "top_p": None,
+        "api_key": "sk-test",
+        "api_base": None,
+        "client": None,
+        "custom_llm_provider": None,
+        "litellm_call_id": "call-1",
+        **overrides,
+    }
+
+
+def _instance_hook() -> CustomLogger:
+    logger: Final = CustomLogger()
+    logger.async_pre_request_hook = _hook({}).async_pre_request_hook  # pyright: ignore[reportAttributeAccessIssue]  # rebind-ok: an instance-level override
+    return logger
+
+
+@pytest.mark.parametrize(
+    ("callbacks", "expected"),
+    [
+        pytest.param([_hook({})], True, id="override"),
+        pytest.param([CustomLogger()], False, id="base-logger"),
+        pytest.param([_instance_hook()], True, id="instance-override"),
+        pytest.param(["not-a-logger"], False, id="not-a-logger"),
+    ],
+)
+def test_runs_pre_request_hooks_needs_a_global_override(
+    monkeypatch: pytest.MonkeyPatch, callbacks: list[object], expected: bool
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", callbacks)
+
+    assert messages_host.runs_pre_request_hooks() is expected
+
+
+@pytest.mark.asyncio
+async def test_pre_request_hooks_hand_the_handler_what_the_python_entry_hands_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hook: Final = _hook({"temperature": 0.2, "tools": [{"name": "t"}], "extra_headers": {"x-hooked": "1"}})
+    monkeypatch.setattr(litellm, "callbacks", [hook])
+
+    hooked: Final = await messages_host.pre_request_hooks(_hook_request(temperature=0.9))
+
+    assert hook.seen == (
+        (
+            "anthropic/claude-sonnet-4-5",
+            [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+            {
+                "tools": None,
+                "stream": False,
+                "litellm_params": {"custom_llm_provider": "anthropic"},
+                "tool_choice": None,
+                "litellm_call_id": "call-1",
+            },
+        ),
+    )
+    assert hooked["temperature"] == 0.2
+    assert hooked["tools"] == [{"name": "t"}]
+    assert hooked["extra_headers"] == {"x-hooked": "1"}
+    assert hooked["messages"] == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+    assert hooked["custom_llm_provider"] is None
+    assert "litellm_params" not in hooked
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["model", "max_tokens", "messages", "api_key", "api_base", "custom_llm_provider"])
+async def test_pre_request_hooks_naming_a_handler_argument_raise_the_python_type_error(
+    monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_hook({name: "hooked"})])
+
+    with pytest.raises(TypeError, match=f"functools.partial\\(\\) got multiple values for keyword argument '{name}'"):
+        await messages_host.pre_request_hooks(_hook_request())
+
+
+@pytest.mark.asyncio
+async def test_pre_request_hooks_refuse_a_route_to_another_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_hook({"litellm_params": {"custom_llm_provider": "openai"}})])
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="routing the call to openai") as refused:
+        await messages_host.pre_request_hooks(_hook_request())
+
+    assert refused.value.llm_provider == "anthropic"
+
+
+@pytest.mark.asyncio
+async def test_pre_request_hooks_keep_the_callers_provider_over_the_hook(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_hook({"litellm_params": {"custom_llm_provider": "openai"}})])
+
+    hooked: Final = await messages_host.pre_request_hooks(_hook_request(custom_llm_provider="anthropic"))
+
+    assert hooked["custom_llm_provider"] == "anthropic"
+
+
+@pytest.mark.asyncio
+async def test_pre_request_hooks_refuse_tools_an_interceptor_would_take(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Take(MessagesInterceptor):
+        def can_handle(self, tools: Sequence[Mapping[str, object]] | None, custom_llm_provider: str | None) -> bool:
+            return bool(tools)
+
+        async def handle(self, **kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: never called
+            raise AssertionError
+
+    monkeypatch.setattr(litellm, "callbacks", [_hook({"tools": [{"name": "advisor"}]})])
+    monkeypatch.setattr(interceptors, "_interceptors", [Take()])
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="messages_interceptor"):
+        await messages_host.pre_request_hooks(_hook_request())
+
+
+def test_body_params_hand_hooked_messages_on_as_already_sanitized() -> None:
+    hooked: Final = [{"role": "user", "content": [{"type": "text", "text": ""}]}]
+
+    fields: Final = messages_host.body_params(
+        {"model": "anthropic/claude-sonnet-4-5", "messages": hooked}, asynchronous=True, hooked=True
+    )
+
+    assert fields == {"messages": hooked}

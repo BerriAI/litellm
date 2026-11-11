@@ -1,5 +1,6 @@
 mod host;
 mod modify_params;
+mod pre_request;
 mod transport;
 pub(crate) mod workload_identity;
 
@@ -18,6 +19,7 @@ fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyR
         py,
         arguments,
         move |py, arguments, request| {
+            let hooked = pre_request::runs_pre_request_hooks(py)?;
             let route = litellm_inference_messages::MessagesRoute::new(
                 crate::http::provider_client(py, arguments, asynchronous)?
                     .map_err(crate::http::client_error)?,
@@ -42,6 +44,12 @@ fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyR
                         )))
                     } else {
                         route
+                    };
+                    let route = match hooked {
+                        true => route.with_pre_request_hooks(std::sync::Arc::new(
+                            pre_request::HostPreRequestHooks::new(services.clone()),
+                        )),
+                        false => route,
                     };
                     let (cache, options) = selection.attach(services);
                     let route = match cache {

@@ -39,11 +39,12 @@ from pydantic import JsonValue, TypeAdapter
 import litellm
 from litellm.anthropic_interface.exceptions.exception_mapping_utils import AnthropicExceptionMapping
 from litellm.caching.caching import Cache, CacheMode
-from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.caching.caching_handler import (
     _PENDING_CACHE_WRITES,  # pyright: ignore[reportPrivateUsage]  # a primed entry must land before the measured call reads it
 )
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.llm_caching_handler import LLMClientCache
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import logging_utils
 from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -340,6 +341,7 @@ class Case:
     settings: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
     private_keys: bool = False
     cache: Callable[[], Cache] | None = None
+    callbacks: tuple[Callable[[], CustomLogger], ...] = ()
     gaps: Mapping[str, str | None] = field(default_factory=lambda: MappingProxyType({}))
 
     def params(self) -> Iterator[object]:
@@ -1404,6 +1406,112 @@ TRANSPORT_CASES: Final = (
     Case("tls_security_level_python_cannot_apply", upstream=(), settings=_tls(ssl_security_level="NOT-A-CIPHER")),
 )
 
+
+class _RewritingHook(CustomLogger):
+    async def async_pre_request_hook(
+        self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+    ) -> dict[str, object] | None:
+        kwargs["tools"] = [dict(WEATHER_TOOL)]
+        kwargs["tool_choice"] = {"type": "tool", "name": "get_weather"}
+        kwargs["temperature"] = 0.25
+        kwargs["top_k"] = 7
+        kwargs["system"] = "Answer as a forecaster."
+        kwargs["stop_sequences"] = ["STOP"]
+        kwargs["metadata"] = {"user_id": "hooked-user"}
+        kwargs["extra_headers"] = {"x-hooked": "1"}
+        return kwargs
+
+
+class _InPlaceHook(CustomLogger):
+    async def async_pre_request_hook(
+        self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+    ) -> dict[str, object] | None:
+        messages.append({"role": "assistant", "content": [{"type": "text", "text": ""}]})
+        messages.append({"role": "user", "content": "And Germany?"})
+        return None
+
+
+class _UnstreamingHook(CustomLogger):
+    async def async_pre_request_hook(
+        self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+    ) -> dict[str, object] | None:
+        return {**kwargs, "stream": not kwargs["stream"]}
+
+
+class _MockingHook(CustomLogger):
+    async def async_pre_request_hook(
+        self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+    ) -> dict[str, object] | None:
+        return {**kwargs, "mock_response": "Hi from the hook"}
+
+
+class _RaisingHook(CustomLogger):
+    async def async_pre_request_hook(
+        self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+    ) -> dict[str, object] | None:
+        raise ValueError("the hook refused the request")
+
+
+class _ModelHook(CustomLogger):
+    async def async_pre_request_hook(
+        self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+    ) -> dict[str, object] | None:
+        return {**kwargs, "model": OPUS_ADAPTIVE}
+
+
+class _CredentialHook(CustomLogger):
+    async def async_pre_request_hook(
+        self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+    ) -> dict[str, object] | None:
+        return {**kwargs, "api_key": "sk-ant-hooked"}
+
+
+def _instance_hook() -> CustomLogger:
+    async def hook(model: str, messages: list[dict[str, object]], kwargs: dict[str, object]) -> dict[str, object]:
+        return {**kwargs, "temperature": 0.25, "metadata": {"user_id": "instance-hook"}}
+
+    logger: Final = CustomLogger()
+    logger.async_pre_request_hook = hook  # pyright: ignore[reportAttributeAccessIssue]  # rebind-ok: an instance-level override, as a caller may install one
+    return logger
+
+
+PRE_REQUEST_HOOK_CASES: Final = (
+    Case("pre_request_hook_rewrites_the_request", callbacks=(_RewritingHook,), upstream=(_ok(TOOL_USE_RESPONSE),)),
+    Case("pre_request_hook_edits_messages_in_place", callbacks=(_InPlaceHook,)),
+    Case(
+        "pre_request_hook_after_prompt_caching",
+        _kw(cache_control_injection_points=[{"location": "message", "role": "user"}]),
+        callbacks=(_InPlaceHook,),
+    ),
+    Case(
+        "pre_request_hook_unstreams",
+        _kw(stream=True),
+        callbacks=(_UnstreamingHook,),
+    ),
+    Case(
+        "pre_request_hook_unstreams_behind_a_cache",
+        _kw(stream=True),
+        callbacks=(_UnstreamingHook,),
+        upstream=(_ok(), _ok()),
+        cache=Cache,
+    ),
+    Case("pre_request_hook_streams", callbacks=(_UnstreamingHook,), upstream=(_stream(TEXT_STREAM),)),
+    Case("pre_request_hook_sets_a_mock", callbacks=(_MockingHook,), upstream=()),
+    Case("pre_request_hook_raises", callbacks=(_RaisingHook,), upstream=()),
+    Case("pre_request_hook_set_on_the_instance", callbacks=(_instance_hook,)),
+    Case("pre_request_hook_names_the_model", callbacks=(_ModelHook,), upstream=()),
+    Case("pre_request_hook_names_a_credential", callbacks=(_CredentialHook,), upstream=()),
+    Case(
+        "pre_request_hook_two_hooks_chain", callbacks=(_RewritingHook, _InPlaceHook), upstream=(_ok(TOOL_USE_RESPONSE),)
+    ),
+    Case(
+        "pre_request_hook_behind_a_cache_hit",
+        callbacks=(_RewritingHook,),
+        upstream=(_ok(TOOL_USE_RESPONSE), _ok(TOOL_USE_RESPONSE)),
+        cache=Cache,
+    ),
+)
+
 CASES: Final = (
     *REQUEST_CASES,
     *PROMPT_CACHING_CASES,
@@ -1419,6 +1527,7 @@ CASES: Final = (
     *CACHE_CASES,
     *THREAD_CASES,
     *TRANSPORT_CASES,
+    *PRE_REQUEST_HOOK_CASES,
 )
 
 
@@ -1719,6 +1828,7 @@ async def _leg(case: Case, server: RecordingServer, probe: FallbackProbe | None)
         request_count: Final = len(server.requests)
         recorder: Final = RecordingLogger()
         litellm.callbacks.append(recorder)
+        litellm.callbacks.extend(callback() for callback in case.callbacks)
         fallbacks_before: Final = 0 if probe is None else probe.calls
         primed: Final = await _prime(case, server, recorder, native=probe is not None)
         outcome, hidden = await _invoke(case, _kwargs(case, server), native=probe is not None)

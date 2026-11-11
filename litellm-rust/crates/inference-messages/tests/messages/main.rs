@@ -20,6 +20,7 @@ mod support;
 use support::*;
 
 mod host;
+mod pre_request;
 mod request;
 mod response;
 mod retry;
