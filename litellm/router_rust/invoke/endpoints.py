@@ -293,7 +293,7 @@ class Plan:
         return get_router_metadata_variable_name(function_name=self.function_name)
 
 
-def _generic(endpoint: str, host_op: str | None = None, *, sync: bool = False) -> Plan:
+def _generic(endpoint: str, host_op: str | None = None, *, sync: bool = False, single_attempt: bool = True) -> Plan:
     if sync:
         return Plan(
             endpoint=endpoint,
@@ -303,9 +303,9 @@ def _generic(endpoint: str, host_op: str | None = None, *, sync: bool = False) -
             prepare_field="litellm_metadata",
             function_name="generic_api_call",
             splits_stream_timeout=_handler_name(host_op or endpoint) in STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS,
-            stamp="none",
+            stamp="none" if single_attempt else "deployment",
             fail_key="group",
-            single_attempt=True,
+            single_attempt=single_attempt,
         )
     return Plan(
         endpoint=endpoint,
@@ -483,7 +483,7 @@ PLANS: Final[Mapping[str, Plan]] = MappingProxyType(
         "aanthropic_messages": _generic("aanthropic_messages", "anthropic_messages"),
         "anthropic_messages": _generic("anthropic_messages", "anthropic_messages"),
         "aresponses": _generic("aresponses"),
-        "responses": _generic("responses", sync=True),
+        "responses": _generic("responses", sync=True, single_attempt=False),
     }
 )
 
@@ -582,6 +582,8 @@ _SYNC_GENERIC: Final[Mapping[str, str]] = MappingProxyType(
         },
     }
 )
+
+_ROUTER_RETRIED_SYNC_GENERIC: Final = frozenset({"generate_content", "generate_content_stream"})
 
 _CONTAINER_FILE_ROUTED: Final = frozenset(
     {
@@ -708,7 +710,12 @@ def generic_plan(endpoint: str) -> Plan | None:
     if endpoint in _VIDEO_DIRECT:
         return _generic(endpoint, f"videos.{endpoint}")
     if endpoint in _SYNC_GENERIC:
-        return _generic(endpoint, _SYNC_GENERIC[endpoint], sync=True)
+        return _generic(
+            endpoint,
+            _SYNC_GENERIC[endpoint],
+            sync=True,
+            single_attempt=endpoint not in _ROUTER_RETRIED_SYNC_GENERIC,
+        )
     return None
 
 
@@ -1658,6 +1665,7 @@ class RustEndpoints:
 
     def _sync_factory(self, name: str, plan: Plan) -> Callable[..., object]:
         is_vector_store: Final = name.startswith("vector_store_")
+        attempts: Final = _SINGLE_ATTEMPT if plan.single_attempt else None
 
         def sync_wrapper(
             custom_llm_provider: str | None = None,
@@ -1669,7 +1677,7 @@ class RustEndpoints:
                     raise TypeError(
                         "_generic_api_call_with_fallbacks() missing 1 required positional argument: 'model'"
                     )
-                return self._core.call_sync(plan, kwargs, _SINGLE_ATTEMPT)
+                return self._core.call_sync(plan, kwargs, attempts)
             provider_kwargs: dict[  # mutable-ok: the request kwargs the Python router mutates in place  # rebind-ok: rebound as the Python router rebinds it
                 str, object
             ] = (
@@ -1683,7 +1691,7 @@ class RustEndpoints:
                     "_direct_vector_store_embedding_executor": self._embedding_executor(kwargs),
                 }
             if provider_kwargs.get("model"):
-                return self._core.call_sync(plan, provider_kwargs, _SINGLE_ATTEMPT)
+                return self._core.call_sync(plan, provider_kwargs, attempts)
             if name == "vector_store_search":
                 return self._invoke(plan.host_op)(**{**provider_kwargs, "router": self._core.public})
             return self._invoke(plan.host_op)(**provider_kwargs)

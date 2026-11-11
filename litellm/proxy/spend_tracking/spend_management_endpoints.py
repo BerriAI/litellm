@@ -70,6 +70,10 @@ from litellm.proxy.spend_tracking.spend_capture_rate import (
 # NOTE: Avoid module-level import from common_utils: proxy_server imports this
 # module while common_utils may pull proxy_server during init, which can leave
 # those names undefined. Import the helpers locally where they are used.
+from litellm.proxy.spend_tracking.spend_log_api_key_scope import (
+    spend_log_api_keys_for_teams,
+    spend_log_api_keys_for_user,
+)
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     get_spend_by_team,
     get_spend_by_team_and_customer,
@@ -255,6 +259,22 @@ class _SpendDailySummaryRow(TypedDict):
 async def _query_raw(prisma_client: PrismaClient, sql_query: str, *args: object) -> Sequence[_RowT]:
     """Run a raw read query and return its rows as the row type the caller declares."""
     return await prisma_client.db.query_raw(sql_query, *args)
+
+
+async def _scope_api_keys(
+    prisma_client: PrismaClient, *, where_conditions: Mapping[str, object], start: datetime | None, end: datetime | None
+) -> tuple[str, ...] | None:
+    """The api_keys behind a ``"user"`` / ``team_id`` filter, so the unindexed column is only checked on rows the
+    ``(api_key, "startTime")`` index already picked."""
+    if start is None or end is None or isinstance(where_conditions.get("api_key"), str):
+        return None
+    user_id: Final = where_conditions.get("user")
+    if isinstance(user_id, str):
+        return await spend_log_api_keys_for_user(prisma_client, user_id, start.date(), end.date())
+    team_id: Final = where_conditions.get("team_id")
+    if isinstance(team_id, str):
+        return await spend_log_api_keys_for_teams(prisma_client, (team_id,), start.date(), end.date())
+    return None
 
 
 async def _query_raw_or_none(prisma_client: PrismaClient, sql_query: str, *args: object) -> Sequence[_RowT] | None:
@@ -2949,6 +2969,18 @@ async def ui_view_spend_logs(
             sql_conditions.append(f"session_id LIKE ${p}")
             sql_params.append(f"%{like_escaped_session_id}%")
             p += 1
+
+        scope_api_keys: Final = (
+            await _scope_api_keys(
+                prisma_client, where_conditions=where_conditions, start=start_date_obj, end=end_date_obj
+            )
+            if not search_owns_window
+            else None
+        )
+        if scope_api_keys is not None:
+            sql_conditions.append(f"api_key = ANY(${p}::text[])")
+            sql_params.append(list(scope_api_keys))
+            p += 1  # rebind-ok: advances the file's shared $N placeholder counter
 
         # Status filter
         if status_filter is not None and not (group_by_session is True and not is_search_lookup):

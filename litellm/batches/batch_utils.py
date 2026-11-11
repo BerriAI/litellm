@@ -11,6 +11,7 @@ from pydantic import JsonValue, TypeAdapter
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils import batch_utils as core_batch_utils
+from litellm.litellm_core_utils.cloud_storage_security import stored_s3_bucket_kwargs
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
 from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
@@ -551,7 +552,7 @@ async def fetch_batch_managed_file_content(
         "file_id": provider_output_file_id,
         "custom_llm_provider": custom_llm_provider,
         **cast(  # cast-ok: preserve dynamic provider credentials without validation
-            FileContentCallOptions, credentials
+            FileContentCallOptions, {**credentials, **stored_s3_bucket_kwargs(provider_output_file_id)}
         ),
     }
 

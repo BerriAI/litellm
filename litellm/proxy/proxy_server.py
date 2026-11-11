@@ -10446,23 +10446,34 @@ def _get_streaming_fallback_metadata(
     return True, None, fallback_errors
 
 
+_FALLBACK_METADATA_ID: Final = "litellm-fallback-metadata"
+_RESPONSES_FALLBACK_METADATA_EVENT_TYPE: Final = "litellm.fallback_metadata"
+
+
 def _format_fallback_metadata_sse_event(
     *,
     fallback_model: str | None,
     fallback_errors: list[dict[str, object]],
+    responses_stream: bool,
+    return_raw_model_name: bool,
 ) -> str:
-    import time
-
+    litellm_fallback: Final = {"fallback_model": fallback_model, "errors": fallback_errors}
+    if responses_stream:
+        stamped_model: Final = None if return_raw_model_name else fallback_model
+        event: Final = {
+            "type": _RESPONSES_FALLBACK_METADATA_EVENT_TYPE,
+            "id": _FALLBACK_METADATA_ID,
+            **({"model": stamped_model} if stamped_model else {}),
+            "litellm_fallback": litellm_fallback,
+        }
+        return f"data: {json.dumps(event)}\n\n"
     payload: Final = {
-        "id": "litellm-fallback-metadata",
+        "id": _FALLBACK_METADATA_ID,
         "object": "chat.completion.chunk",
         "created": int(time.time()),
         "model": fallback_model or "",
         "choices": [],
-        "litellm_fallback": {
-            "fallback_model": fallback_model,
-            "errors": fallback_errors,
-        },
+        "litellm_fallback": litellm_fallback,
     }
     return f"data: {json.dumps(payload)}\n\n"
 
@@ -10471,7 +10482,7 @@ def _restamp_streaming_chunk_model(
     *,
     chunk: object,
     requested_model_from_client: str,
-    request_data: dict,
+    request_data: Mapping[str, object],
     model_mismatch_logged: bool,
     fallback_was_attempted: bool = False,
     fallback_model_from_metadata: str | None = None,
@@ -11049,6 +11060,7 @@ async def async_data_generator(
         model_mismatch_logged = False
         fallback_metadata_event_sent = False
         include_fallback_errors: Final = _should_include_fallback_errors(request_data)
+        return_raw_model_name: Final = should_return_raw_model_name(request_data)
         # Use a running string instead of list + join to avoid O(n^2) overhead.
         # Previously "".join(str_so_far_parts) was called every chunk, re-joining
         # the entire accumulated response. String += is O(n) amortized total.
@@ -11146,6 +11158,8 @@ async def async_data_generator(
                     yield _format_fallback_metadata_sse_event(
                         fallback_model=fallback_model_from_metadata,
                         fallback_errors=fallback_errors,
+                        responses_stream=error_state is not None,
+                        return_raw_model_name=return_raw_model_name,
                     )
                     fallback_metadata_event_sent = True
                 continue
@@ -11202,6 +11216,8 @@ async def async_data_generator(
                 yield _format_fallback_metadata_sse_event(
                     fallback_model=fallback_model_from_metadata,
                     fallback_errors=fallback_errors,
+                    responses_stream=error_state is not None,
+                    return_raw_model_name=return_raw_model_name,
                 )
                 fallback_metadata_event_sent = True
 
@@ -15468,7 +15484,12 @@ def _provider_count_outcome(
     if result is not None and result.error is True:
         return ProviderCountFailure(
             status_code=result.status_code or 500,
-            message=result.error_message or "Token counting failed",
+            message=result.error_message
+            or (
+                "Token counting failed"
+                if result.status_code is None
+                else f"The provider's count API answered {result.status_code} with no error message"
+            ),
             rejected_before_provider_call=result.rejected_before_provider_call,
         )
     return result
@@ -15937,6 +15958,14 @@ def _token_count_settings_model(deployment: _TokenCountDeployment, request_model
 _PROVIDERS_COUNTING_WITHOUT_MESSAGES: Final = frozenset(
     {litellm.LlmProviders.GEMINI.value, litellm.LlmProviders.VERTEX_AI.value}
 )
+_CHAT_MODES: Final = frozenset({"chat", "responses"})
+
+
+def _serves_chat(deployment: _TokenCountDeployment, cost_map_row: Mapping[str, object]) -> bool:
+    mode: Final = _non_empty_str(deployment.get("model_info", {}).get("mode")) or _non_empty_str(
+        cost_map_row.get("mode")
+    )
+    return mode is None or mode in _CHAT_MODES
 
 
 _ESTIMABLE_GOOGLE_PART_KEYS: Final = frozenset({"text", "functionCall", "functionResponse", "thoughtSignature"})
@@ -16247,6 +16276,12 @@ async def _routed_count_deployment(
         return None
 
 
+def _with_chat_timeout(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+    if llm_router is None:
+        return litellm_params
+    return {**litellm_params, "timeout": llm_router.settings().timeout_for(litellm_params)}
+
+
 async def _count_request_tokens(
     request: TokenCountRequest,
     routed: Mapping[str, object] | None,
@@ -16271,8 +16306,8 @@ async def _count_request_tokens(
         litellm_model_name = deployment.get("litellm_params", {}).get("model")
         deployment = {  # rebind-ok: merge the named credential into a copy
             **deployment,
-            "litellm_params": with_named_credential(
-                _LITELLM_PARAMS_COPY.validate_python(deployment.get("litellm_params", {}))
+            "litellm_params": _with_chat_timeout(
+                with_named_credential(_LITELLM_PARAMS_COPY.validate_python(deployment.get("litellm_params", {})))
             ),
         }
         # remove the custom_llm_provider_prefix in the litellm_model_name
@@ -16285,9 +16320,10 @@ async def _count_request_tokens(
     deployment_view: Final = _TOKEN_COUNT_DEPLOYMENT.validate_python(
         deployment or _model_group_deployment(llm_router, request.model) or {}
     )
+    cost_map_row: Final = await asyncify(cost_map_entry)(*_token_count_settings_model(deployment_view, request.model))
     settings: Final = await asyncify(resolve_token_count_settings)(
         configured=deployment_view.get("model_info", {}),
-        default=await asyncify(cost_map_entry)(*_token_count_settings_model(deployment_view, request.model)),
+        default=cost_map_row,
         deployment_region=partial(_deployment_aws_region, deployment_view),
     )
 
@@ -16312,6 +16348,15 @@ async def _count_request_tokens(
             code=400,
         )
     prompt_only: Final = bool(prompt) and conversation_empty
+    prompt_as_turn: Final = (
+        prompt_only
+        and provider_counter is not None
+        and provider_counter.should_use_token_counting_api(custom_llm_provider=custom_llm_provider)
+        and _serves_chat(deployment_view, cost_map_row)
+    )
+    prompt_as_message: Final = prompt_as_turn or (
+        prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
+    )
     request_messages: Final = _counted_request_messages(messages, messages_format, count_deployment)
     local_count_error: Final = malformed_tool_result_count_error(request_messages, messages_format, count_deployment)
     malformed_messages: Final = (
@@ -16348,7 +16393,6 @@ async def _count_request_tokens(
     )
     inference_system: Final = system if edited_request is None else edited_request.system
     contents_estimable: Final = not contents or (bool(messages) and _estimable_contents(contents))
-    prompt_as_message: Final = prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
     routed_deployment: Final = _ROUTED_DEPLOYMENT.validate_python(deployment)
     routed_request: Final = (
         None if responses_request is None else with_provider_file_ids(responses_request, routed_deployment)
@@ -16449,7 +16493,7 @@ async def _count_request_tokens(
             _with_get(model_info).get("custom_tokenizer", None),
         )
     system_message: Final = _system_message(local_system)
-    prompt_turn: Final = prompt_only and not (system_message is None and not tools)
+    prompt_turn: Final = prompt_as_turn or (prompt_only and not (system_message is None and not tools))
     typed_messages: Final = cast(  # cast-ok: request messages are raw chat-shaped dicts that token_counter normalizes
         Sequence[AllMessageValues] | None,
         [{"role": "user", "content": prompt}] if prompt_turn else (None if prompt_only else local_messages),
@@ -16611,7 +16655,9 @@ async def model_info_lookup(model: str, custom_llm_provider: str | None = None):
     dependencies=[Depends(user_api_key_auth)],
     response_model=RawRequestTypedDict,
 )
-async def transform_request(request: TransformRequestBody):
+async def transform_request(
+    request: TransformRequestBody, user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
+):
     from litellm.utils import return_raw_request
 
     try:
@@ -16620,6 +16666,7 @@ async def transform_request(request: TransformRequestBody):
             general_settings=general_settings,
             llm_router=llm_router,
             model=request.request_body.get("model", ""),
+            team_id=user_api_key_dict.team_id,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail={"error": str(e)})
