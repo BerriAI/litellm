@@ -17,6 +17,7 @@ import httpx
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.gigachat.utils import convert_usage, get_api_base
@@ -38,6 +39,15 @@ else:
 
 _EMPTY_FUNCTION: Final[Mapping[str, object]] = MappingProxyType({})
 _JSON_VALUE: Final = TypeAdapter(object)
+_CONTENT_PART: Final = TypeAdapter(Mapping[str, object])
+
+
+def _file_part_data(part: Mapping[str, object]) -> str | None:
+    match part:
+        case {"type": "file", "file": {"file_data": str() as file_data}} if file_data:
+            return file_data
+        case _:
+            return None
 
 
 def is_valid_json(value: str) -> bool:
@@ -160,7 +170,10 @@ class GigaChatConfig(BaseConfig):
         drop_params: bool,
     ) -> dict:  # mutable-ok: base class contract returns dict
         """Map OpenAI parameters to GigaChat parameters."""
-        for param, value in non_default_params.items():
+        request_params: Final = tool_params_without_hosted_mcp(
+            dict(non_default_params), model=model, route="gigachat", drop_params=drop_params
+        )
+        for param, value in request_params.items():
             if param == "stream":
                 optional_params["stream"] = value
             elif param == "temperature":
@@ -295,7 +308,7 @@ class GigaChatConfig(BaseConfig):
 
     def _transform_list_content(self, content: Sequence) -> tuple[str, Sequence[object]]:
         """
-        Extract text and image attachments from a multimodal message content list.
+        Extract text, image and file attachments from a multimodal message content list.
 
         Args:
             content: List of content parts (OpenAI multimodal format)
@@ -320,6 +333,10 @@ class GigaChatConfig(BaseConfig):
                         file_id = self._upload_image(upload_url)
                         if file_id:
                             attachments.append(file_id)
+                elif (file_data := _file_part_data(_CONTENT_PART.validate_python(part))) and (
+                    uploaded_file_id := self._upload_image(file_data)
+                ):
+                    attachments.append(uploaded_file_id)
         text: Final = "\n".join(texts) if texts else ""
         return text, attachments
 

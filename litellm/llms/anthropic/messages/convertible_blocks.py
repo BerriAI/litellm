@@ -314,6 +314,76 @@ def keep_non_string_tool_result_texts(rewritten: Sequence[object], original: obj
     return [_with_user_blocks(message, partial(_restored_block, kept=kept_in_order)) for message in rewritten]
 
 
+def _url_source_url(block: object) -> str | None:
+    match as_str_mapping(block):
+        case {"type": "image" | "document", "source": {"type": "url", "url": str(url)}}:
+            return url
+        case _:
+            return None
+
+
+def _is_document(block: object) -> bool:
+    match as_str_mapping(block):
+        case {"type": "document"}:
+            return True
+        case _:
+            return False
+
+
+@dataclass(frozen=True, slots=True, order=True)
+class _UrlBlockPlace:
+    in_tool_result: bool
+    url: str
+
+
+def _url_sourced_blocks(block: object, in_tool_result: bool = False) -> tuple[tuple[_UrlBlockPlace, object], ...]:
+    url: Final = _url_source_url(block)
+    if url is not None:
+        return ((_UrlBlockPlace(in_tool_result, url), block),)
+    match as_str_mapping(block):
+        case {"type": "tool_result", "content": list() as content}:
+            in_this_tool_result: Final = partial(_url_sourced_blocks, in_tool_result=True)
+            return tuple(chain.from_iterable(map(in_this_tool_result, _list_items(content))))
+        case _:
+            return ()
+
+
+def _entry_place(entry: tuple[_UrlBlockPlace, object]) -> _UrlBlockPlace:
+    return entry[0]
+
+
+def _entry_block(entry: tuple[_UrlBlockPlace, object]) -> object:
+    return entry[1]
+
+
+def _restored_url_document(
+    block: object, originals: Mapping[_UrlBlockPlace, Iterator[object]], in_tool_result: bool = False
+) -> object:
+    url: Final = _url_source_url(block)
+    if url is not None:
+        remaining: Final = originals.get(_UrlBlockPlace(in_tool_result, url))
+        original: Final = None if remaining is None else next(remaining, None)
+        return original if _is_document(original) else block
+    match as_str_mapping(block):
+        case {"type": "tool_result", "content": list() as content} as tool_result:
+            restore: Final = partial(_restored_url_document, originals=originals, in_tool_result=True)
+            return {**tool_result, "content": list(map(restore, _list_items(content)))}
+        case _:
+            return block
+
+
+def keep_url_documents(rewritten: Sequence[object], original: object) -> Sequence[object]:
+    blocks: Final = chain.from_iterable(map(_user_content_blocks, _list_items(original)))
+    by_place: Final = tuple(sorted(chain.from_iterable(map(_url_sourced_blocks, blocks)), key=_entry_place))
+    if not any(_is_document(block) for _, block in by_place):
+        return rewritten
+    originals_in_order: Final = MappingProxyType(
+        {place: iter(tuple(map(_entry_block, group))) for place, group in groupby(by_place, key=_entry_place)}
+    )
+    restore: Final = partial(_restored_url_document, originals=originals_in_order)
+    return [_with_user_blocks(message, restore) for message in rewritten]
+
+
 def _without_non_string_text(block: object) -> object:
     match as_str_mapping(block):
         case {"type": "tool_result", "content": list()} as tool_result:

@@ -1,6 +1,8 @@
+import gc
 import importlib
 import os
 import socket
+import subprocess
 import sys
 import textwrap
 import urllib.parse
@@ -25,6 +27,23 @@ DB_ENV: Final = {
     "DATABASE_NAME": "litellm",
     "DATABASE_PASSWORD": "p@ss",
 }
+
+
+def test_a_uvicorn_worker_reimports_the_launcher_without_loading_litellm():
+    reimported: Final = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            'import runpy, sys; runpy.run_module("gateway.launch", run_name="__mp_main__", alter_sys=True); '
+            'print("litellm" in sys.modules)',
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert reimported.returncode == 0, reimported.stderr
+    assert reimported.stdout.strip() == "False"
 
 
 def _free_port() -> int:
@@ -122,7 +141,12 @@ class TestUvicornArgv:
         ):
             monkeypatch.delenv(key, raising=False)
 
-        served: Final = import_from_string(cast(str, _uvicorn_params(uvicorn_argv((), {}))["app"]))
+        params: Final = _uvicorn_params(uvicorn_argv((), {}))
+        assert params["factory"] is True
+        try:
+            served: Final = import_from_string(cast(str, params["app"]))()
+        finally:
+            gc.unfreeze()
         assert served is importlib.import_module("gateway.main").app
 
 

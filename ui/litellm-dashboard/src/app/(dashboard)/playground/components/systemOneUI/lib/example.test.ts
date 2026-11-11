@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import i18n from "@/i18n/i18n";
 import {
   DECISION_PRESETS,
   emptyPayload,
@@ -10,7 +11,7 @@ import {
 import { validateOpenAIDecisionsPayload, validateSystemOnePayload } from "./validatePayload";
 
 describe("decision presets", () => {
-  it.each(DECISION_PRESETS.map((preset) => [preset.label, preset] as const))(
+  it.each(DECISION_PRESETS.map((preset) => [i18n.t(preset.label), preset] as const))(
     "%s is a valid request on both endpoints",
     (_label, preset) => {
       expect(

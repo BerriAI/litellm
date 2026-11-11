@@ -17,9 +17,14 @@ import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
+    anthropic_inline_document,
+)
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
+    with_prompt_cache_breakpoint,
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     encrypted_reasoning_signature,
     responses_reasoning_items_from_thinking_blocks,
-    with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking,
@@ -62,6 +67,7 @@ from litellm.types.llms.openai import (
 
 REASONING_SUMMARY_PART_SEPARATOR: Final = "\n\n"
 RESPONSES_INCLUDE_ENCRYPTED_REASONING: Final = "reasoning.encrypted_content"
+_DECODED_JSON: Final = TypeAdapter(object)
 _MCP_TOOLSET_TYPE: Final = "mcp_toolset"
 _MCP_TOOLSET: Final = TypeAdapter(AnthropicMcpToolset)
 _WEB_SEARCH_FILTER_KEYS: Final = ("allowed_domains", "blocked_domains")
@@ -340,27 +346,18 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         block: Mapping[str, object],
     ) -> dict[str, str] | None:  # mutable-ok: API message payload
         """Convert an Anthropic document block to a Responses input_file part."""
+        inline_document: Final = anthropic_inline_document(block)
+        if inline_document is not None:
+            return {
+                "type": "input_file",
+                "filename": inline_document.filename,
+                "file_data": inline_document.file_data,
+            }
         raw_source: Final = block.get("source")
         if not isinstance(raw_source, Mapping):
             return None
         source: Final = cast(Mapping[str, object], raw_source)  # cast-ok: untrusted client payload
-        source_type: Final = source.get("type")
-        if source_type == "base64":
-            data: Final = source.get("data")
-            if not isinstance(data, str) or not data:
-                return None
-            raw_media_type: Final = source.get("media_type")
-            media_type: Final = (
-                raw_media_type if isinstance(raw_media_type, str) and raw_media_type else "application/pdf"
-            )
-            raw_title: Final = block.get("title")
-            filename: Final = raw_title if isinstance(raw_title, str) and raw_title else "document.pdf"
-            return {
-                "type": "input_file",
-                "filename": filename,
-                "file_data": f"data:{media_type};base64,{data}",
-            }
-        if source_type == "url":
+        if source.get("type") == "url":
             url: Final = source.get("url")
             if not isinstance(url, str) or not url:
                 return None
@@ -794,6 +791,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         output_config: dict[str, object] | None = None,
         auto_summary_level: str = "detailed",
         *,
+        model: str,
         drop_params: bool = True,
     ) -> dict[str, object] | None:
         """
@@ -815,7 +813,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             if isinstance(output_config, dict) and output_config.get("effort"):
                 effort = output_config["effort"]
         elif thinking_type == "enabled":
-            budget_effort: Final = reasoning_effort_from_thinking(thinking, drop_params=drop_params)
+            budget_effort: Final = reasoning_effort_from_thinking(thinking, model=model, drop_params=drop_params)
             if budget_effort is None:
                 return None
             effort = budget_effort
@@ -932,6 +930,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                 thinking,
                 output_config=cast(dict[str, object] | None, output_config),
                 auto_summary_level=auto_summary_level,
+                model=model,
                 drop_params=drop_params,
             )
             if reasoning:
@@ -1039,15 +1038,17 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         content.append(reasoning_block)
                 elif item_type == "function_call":
                     try:
-                        input_data = json.loads(item.get("arguments", "{}"))
+                        input_data = _DECODED_JSON.validate_python(json.loads(item.get("arguments", "{}")))
                     except (json.JSONDecodeError, TypeError):
                         input_data = {}
                     content.append(
-                        AnthropicResponseContentBlockToolUse(
-                            type="tool_use",
-                            id=item.get("call_id") or item.get("id", ""),
-                            name=item.get("name", ""),
-                            input=input_data,
+                        AnthropicResponseContentBlockToolUse.model_validate(
+                            {
+                                "type": "tool_use",
+                                "id": item.get("call_id") or item.get("id", ""),
+                                "name": item.get("name", ""),
+                                "input": input_data,
+                            }
                         ).model_dump(exclude_none=True)
                     )
                     stop_reason = "tool_use"
