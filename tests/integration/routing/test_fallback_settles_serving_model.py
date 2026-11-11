@@ -45,7 +45,7 @@ def settled_key_model_tokens(primary: str, fallback: str, total_tokens: int) -> 
     deadline: Final = time.monotonic() + SETTLEMENT_DEADLINE_SECONDS
     while True:
         charged: Final = (key_model_tokens(primary), key_model_tokens(fallback))
-        if sum(charged) >= total_tokens or time.monotonic() >= deadline:
+        if (charged[0] == 0 and charged[1] >= total_tokens) or time.monotonic() >= deadline:
             return charged
         time.sleep(0.5)
 
