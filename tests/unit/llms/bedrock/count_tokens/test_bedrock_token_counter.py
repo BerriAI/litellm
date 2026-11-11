@@ -525,6 +525,15 @@ def _sent_texts(body: Mapping[str, JsonValue]) -> tuple[tuple[JsonValue, str], .
     return tuple(chain.from_iterable(map(_role_texts, messages if isinstance(messages, list) else [])))
 
 
+def _empty_turns(body: Mapping[str, JsonValue]) -> tuple[JsonValue, ...]:
+    messages: Final = body["messages"]
+    return tuple(
+        message
+        for message in (messages if isinstance(messages, list) else [])
+        if isinstance(message, dict) and not message.get("content")
+    )
+
+
 def _sent_system_and_texts(body: Mapping[str, JsonValue]) -> tuple[tuple[JsonValue, str], ...]:
     return (*(("system prompt", text) for text in _texts(body.get("system"))), *_sent_texts(body))
 
@@ -540,6 +549,10 @@ _ANSWER: Final = {"role": "assistant", "content": "Four."}
     "between_users, modify_params, expected_sent",
     (
         (({"role": "assistant", "content": ""},), False, _DROPPED),
+        (({"role": "assistant", "content": None},), False, _DROPPED),
+        (({"role": "assistant", "content": []},), False, _DROPPED),
+        (({"role": "assistant", "content": None},), True, _CONTINUED),
+        (({"role": "assistant", "content": []},), True, _CONTINUED),
         (({"role": "assistant", "content": [{"type": "text", "text": ""}]},), False, _DROPPED),
         (
             (
@@ -570,6 +583,10 @@ _ANSWER: Final = {"role": "assistant", "content": "Four."}
     ),
     ids=(
         "empty_string",
+        "null_content",
+        "empty_content_list",
+        "modify_params_null_content",
+        "modify_params_empty_content_list",
         "empty_text_block",
         "thinking_and_empty_string",
         "modify_params_empty_string",
@@ -618,6 +635,7 @@ async def test_claude_converse_count_sends_the_texts_converse_inference_sends(
     assert result.error is False
     converse_sent: Final = _sent_texts(_JSON_BODY.validate_json(inference.requests[0].content))
     assert _sent_texts(_counted_body(bedrock.requests[0])) == converse_sent
+    assert not _empty_turns(_counted_body(bedrock.requests[0]))
     assert converse_sent == expected_sent
 
 
@@ -749,6 +767,7 @@ async def _converse_sent_and_counted(
 
     assert result is not None
     assert result.error is False
+    assert not _empty_turns(_counted_body(bedrock.requests[0]))
     return (
         _sent_system_and_texts(_JSON_BODY.validate_json(inference.requests[0].content)),
         _sent_system_and_texts(_counted_body(bedrock.requests[0])),
@@ -998,6 +1017,38 @@ async def test_claude_converse_count_follows_inference_for_an_empty_continue_mes
         [_QUESTION, _ANSWER, {"role": "user", "content": ""}], [], continue_settings={"user_continue_message": {}}
     )
 
+    assert counted == converse_sent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "blank_content",
+    ([], None, "", [{"type": "text", "text": ""}]),
+    ids=("empty_list", "null", "empty_string", "empty_text_block"),
+)
+@pytest.mark.parametrize(
+    "modify_params, sent_for_blank",
+    ((False, ()), (True, (("user", "Please continue."),))),
+    ids=("dropped", "continued"),
+)
+async def test_claude_converse_count_matches_inference_for_an_earlier_empty_user_turn(
+    blank_content: JsonValue,
+    modify_params: bool,
+    sent_for_blank: tuple[tuple[str, str], ...],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
+
+    converse_sent, counted = await _converse_sent_and_counted(
+        [_QUESTION, _ANSWER, {"role": "user", "content": blank_content}, {"role": "user", "content": "And 3+3?"}], []
+    )
+
+    assert converse_sent == (
+        ("user", "What is 2+2?"),
+        ("assistant", "Four."),
+        *sent_for_blank,
+        ("user", "And 3+3?"),
+    )
     assert counted == converse_sent
 
 

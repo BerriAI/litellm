@@ -2463,7 +2463,7 @@ def _converse_reads_content(message: Mapping[str, object]) -> bool:
 
 
 def _assistant_turn_as_converse_sends_it(message: Mapping[str, object]) -> Mapping[str, object] | None:
-    if message.get("role") != "assistant" or not carries_empty_text(message):
+    if message.get("role") != "assistant" or (message.get("content") and not carries_empty_text(message)):
         return message
     if litellm.modify_params is not False and all(map(_is_typed_block, parts_of(message.get("content")))):
         continued: Final = get_assistant_message_block_or_continue_message(
@@ -2529,13 +2529,14 @@ def _is_user_turn(message: Mapping[str, object]) -> bool:
 
 def _user_turn_as_converse_sends_it(
     message: Mapping[str, object], user_continue_message: ChatCompletionUserMessage | None
-) -> Mapping[str, object]:
+) -> Mapping[str, object] | None:
     if not _is_user_turn(message) or not (is_empty_user_message(message) or carries_empty_text(message)):
         return message
-    return get_user_message_block_or_continue_message(
+    sent: Final = get_user_message_block_or_continue_message(
         cast(ChatCompletionUserMessage, copy.deepcopy(dict(message))),  # cast-ok: a user turn, checked above
         user_continue_message,
     )
+    return sent if sent.get("content") else None
 
 
 def user_turns_as_converse_sends_them(
@@ -2552,9 +2553,8 @@ def user_turns_as_converse_sends_them(
         and all(map(is_empty_user_message, messages[tail_start:]))
     ):
         return (*messages[:tail_start], {"role": "user", "content": EMPTY_TEXT_PLACEHOLDER})
-    if user_continue_message is None and litellm.modify_params is False:
-        return tuple(messages)
-    return tuple(_user_turn_as_converse_sends_it(message, user_continue_message) for message in messages)
+    sent_turns: Final = (_user_turn_as_converse_sends_it(message, user_continue_message) for message in messages)
+    return tuple(turn for turn in sent_turns if turn is not None)
 
 
 def _with_placeholder_text(block: object) -> object:
