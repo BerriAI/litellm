@@ -286,8 +286,12 @@ async def _check_budget_of_new_customer(user_id: str) -> None:
 @pytest.mark.parametrize("fail_closed", [False, True])
 @pytest.mark.asyncio
 async def test_a_deleted_customer_recreated_under_the_same_id_is_admitted_while_others_stay_over_budget(
-    monkeypatch, mock_prisma_client, mock_user_api_key_auth, spend_counters, fail_closed
-):
+    monkeypatch: pytest.MonkeyPatch,
+    mock_prisma_client: MagicMock,
+    mock_user_api_key_auth: None,
+    spend_counters: FakeSpendCounters,
+    fail_closed: bool,
+) -> None:
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"fail_closed_budget_enforcement": fail_closed})
     _over_budget_customers(spend_counters)
     mock_prisma_client.db.litellm_endusertable.find_many = AsyncMock(
@@ -320,8 +324,12 @@ async def test_a_deleted_customer_recreated_under_the_same_id_is_admitted_while_
 )
 @pytest.mark.asyncio
 async def test_a_failed_customer_delete_keeps_its_spend_enforced(
-    mock_prisma_client, mock_user_api_key_auth, spend_counters, existing, delete_error
-):
+    mock_prisma_client: MagicMock,
+    mock_user_api_key_auth: None,
+    spend_counters: FakeSpendCounters,
+    existing: list[LiteLLM_EndUserTable],
+    delete_error: Exception | None,
+) -> None:
     _over_budget_customers(spend_counters)
     mock_prisma_client.db.litellm_endusertable.find_many = AsyncMock(return_value=existing)
     mock_prisma_client.db.litellm_endusertable.delete_many = AsyncMock(side_effect=delete_error, return_value=1)
@@ -346,8 +354,13 @@ async def test_a_failed_customer_delete_keeps_its_spend_enforced(
 @pytest.mark.parametrize("fail_closed", [False, True])
 @pytest.mark.asyncio
 async def test_a_recreated_customer_is_admitted_when_redis_rejects_the_counter_reset(
-    monkeypatch, mock_prisma_client, mock_user_api_key_auth, failing, redis_down, fail_closed
-):
+    monkeypatch: pytest.MonkeyPatch,
+    mock_prisma_client: MagicMock,
+    mock_user_api_key_auth: None,
+    failing: frozenset[str],
+    redis_down: bool,
+    fail_closed: bool,
+) -> None:
     spend: Final = FakeSpendCounters(redis={}, failing=failing, fail=redis_down)
     monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_store", spend.store())
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"fail_closed_budget_enforcement": fail_closed})
