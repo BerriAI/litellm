@@ -1,6 +1,7 @@
 import asyncio
 import base64
 from collections.abc import Mapping, Sequence
+from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -8,6 +9,7 @@ from fastapi.exceptions import HTTPException
 from httpx import ReadTimeout, Request, Response
 
 import litellm
+from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.prompt_security.prompt_security import (
     PromptSecurityGuardrail,
@@ -1247,3 +1249,54 @@ async def test_check_tool_results_enabled(monkeypatch: pytest.MonkeyPatch):
 
     assert "indirect_prompt_injection" in str(excinfo.value.detail)
 
+
+@pytest.mark.asyncio
+async def test_messages_api_pdf_reaches_file_sanitization_and_is_blocked() -> None:
+    sanitize_url: Final = "https://test.prompt.security/api/sanitizeFile"
+    upload: Final = AsyncMock(
+        return_value=Response(200, json={"jobId": "pdf-job"}, request=Request("POST", sanitize_url))
+    )
+    poll: Final = AsyncMock(
+        return_value=Response(
+            200,
+            json={"status": "done", "content": "", "metadata": {"action": "block", "violations": ["Malicious File"]}},
+            request=Request("GET", sanitize_url),
+        )
+    )
+    guardrail: Final = PromptSecurityGuardrail(
+        api_key="test-key",
+        api_base="https://test.prompt.security",
+        guardrail_name="test-guard",
+        event_hook="pre_call",
+        default_on=True,
+    )
+    guardrail.poll_interval = 0
+    pdf: Final = b"%PDF-1.4 pelican"
+    request: Final = {
+        "model": "gpt-5.6",
+        "max_tokens": 64,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "application/pdf",
+                            "data": base64.b64encode(pdf).decode(),
+                        },
+                    },
+                    {"type": "text", "text": "Summarize this PDF"},
+                ],
+            }
+        ],
+    }
+
+    with patch.object(guardrail.async_handler, "post", upload), patch.object(guardrail.async_handler, "get", poll):
+        with pytest.raises(HTTPException) as blocked:
+            await AnthropicMessagesHandler().process_input_messages(request, guardrail)
+
+    assert blocked.value.status_code == 400
+    assert "Malicious File" in str(blocked.value.detail)
+    assert upload.call_args.kwargs["files"]["file"][1] == pdf

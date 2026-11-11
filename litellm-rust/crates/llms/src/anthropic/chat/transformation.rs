@@ -1,4 +1,3 @@
-use litellm_auth::SecretValue;
 use litellm_core_utils::decline::Decline;
 use litellm_core_utils::{
     core_helpers::{finish_reason_for, unix_now, usage_from_parts},
@@ -10,6 +9,7 @@ use litellm_llms_types::{
     },
     providers::anthropic::DEFAULT_HEADERS,
 };
+use litellm_secret_value::SecretValue;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 

@@ -6,8 +6,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-secret-value.workspace = true
 base64.workspace = true
-litellm-auth-types.workspace = true
 litellm-error.workspace = true
 litellm-gateway-auth.workspace = true
 rand.workspace = true

@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
 import { useCloudZeroCreate } from "@/app/(dashboard)/hooks/cloudzero/useCloudZeroCreate";
@@ -7,6 +8,7 @@ import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Input } from "@/components/ui/input";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import i18n from "@/i18n/i18n";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { toast } from "@/lib/toast";
 
@@ -22,12 +24,13 @@ interface CloudZeroCreationModalProps {
 }
 
 const createSchema = z.object({
-  api_key: z.string().min(1, "Please enter your CloudZero API key"),
-  connection_id: z.string().min(1, "Please enter your CloudZero connection ID"),
+  api_key: z.string().min(1, { error: () => i18n.t("loggingAndAlerts.cloudZero.form.apiKeyRequired") }),
+  connection_id: z.string().min(1, { error: () => i18n.t("loggingAndAlerts.cloudZero.form.connectionIdRequired") }),
   timezone: z.string(),
 });
 
 export default function CloudZeroCreationModal({ open, onOk, onCancel }: CloudZeroCreationModalProps) {
+  const { t } = useTranslation();
   const { accessToken } = useAuthorized();
   const form = useZodForm(createSchema, { defaultValues: EMPTY_CLOUDZERO_FORM_VALUES });
   const createMutation = useCloudZeroCreate(accessToken || "");
@@ -41,12 +44,12 @@ export default function CloudZeroCreationModal({ open, onOk, onCancel }: CloudZe
   const handleSubmit = (values: CloudZeroFormValues) => {
     createMutation.mutate(buildCloudZeroPayload(values), {
       onSuccess: () => {
-        toast.success("CloudZero integration created successfully");
+        toast.success(t("loggingAndAlerts.cloudZero.createModal.toasts.created"));
         form.reset(EMPTY_CLOUDZERO_FORM_VALUES);
         onOk();
       },
       onError: (error: Error) => {
-        toast.error(error.message || "Failed to create CloudZero integration");
+        toast.error(error.message || t("loggingAndAlerts.cloudZero.createModal.toasts.createFailed"));
       },
     });
   };
@@ -60,23 +63,40 @@ export default function CloudZeroCreationModal({ open, onOk, onCancel }: CloudZe
     <Dialog open={open} onOpenChange={(open) => !open && handleCancel()}>
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Create CloudZero Integration</DialogTitle>
+          <DialogTitle>{t("loggingAndAlerts.cloudZero.createModal.title")}</DialogTitle>
         </DialogHeader>
         <TooltipProvider>
           <form onSubmit={(event) => event.preventDefault()} noValidate>
             <FieldGroup>
-              <FormField control={form.control} name="api_key" label="CloudZero API Key">
+              <FormField control={form.control} name="api_key" label={t("loggingAndAlerts.cloudZero.form.apiKey")}>
                 {({ ref, ...field }) => (
-                  <CloudZeroApiKeyInput {...field} ref={ref} placeholder="Enter your CloudZero API key" />
+                  <CloudZeroApiKeyInput
+                    {...field}
+                    ref={ref}
+                    placeholder={t("loggingAndAlerts.cloudZero.form.apiKeyPlaceholder")}
+                  />
                 )}
               </FormField>
-              <FormField control={form.control} name="connection_id" label="Connection ID">
-                {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="Enter your CloudZero connection ID" />}
+              <FormField
+                control={form.control}
+                name="connection_id"
+                label={t("loggingAndAlerts.cloudZero.form.connectionId")}
+              >
+                {({ ref, ...field }) => (
+                  <Input
+                    {...field}
+                    ref={ref}
+                    placeholder={t("loggingAndAlerts.cloudZero.form.connectionIdPlaceholder")}
+                  />
+                )}
               </FormField>
               <FormField
                 control={form.control}
                 name="timezone"
-                label={labelWithHint("Timezone", "Timezone for date handling (defaults to UTC if not provided)")}
+                label={labelWithHint(
+                  t("loggingAndAlerts.cloudZero.form.timezone"),
+                  t("loggingAndAlerts.cloudZero.form.timezoneHint"),
+                )}
               >
                 {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="UTC" />}
               </FormField>
@@ -85,14 +105,16 @@ export default function CloudZeroCreationModal({ open, onOk, onCancel }: CloudZe
         </TooltipProvider>
         <DialogFooter>
           <Button variant="outline" onClick={handleCancel} disabled={createMutation.isPending}>
-            Cancel
+            {t("loggingAndAlerts.cloudZero.createModal.cancel")}
           </Button>
           <Button
             onClick={() => void form.handleSubmit(handleSubmit)()}
             disabled={createMutation.isPending}
             aria-busy={createMutation.isPending}
           >
-            {createMutation.isPending ? "Creating..." : "Create"}
+            {createMutation.isPending
+              ? t("loggingAndAlerts.cloudZero.createModal.submitting")
+              : t("loggingAndAlerts.cloudZero.createModal.submit")}
           </Button>
         </DialogFooter>
       </DialogContent>

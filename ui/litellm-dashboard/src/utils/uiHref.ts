@@ -10,12 +10,12 @@ function uiBase(): string {
   return `${root}/ui`;
 }
 
-/** Absolute (same-origin) href for a dashboard route segment, e.g. "api-reference" -> "/ui/api-reference". */
+/** Absolute (same-origin) href for a dashboard route segment, e.g. "logs" -> "/ui/logs". */
 export function uiHref(routeSegment: string): string {
   return `${uiBase()}/${routeSegment.replace(/^\/+/, "")}`;
 }
 
-/** First route segment under the UI base, e.g. "/ui/api-reference/" -> "api-reference" and "/ui/" -> "". */
+/** First route segment under the UI base, e.g. "/ui/logs/" -> "logs" and "/ui/" -> "". */
 export function routeSegmentForPathname(pathname: string): string {
   const base = uiBase();
   const relative = pathname.startsWith(base) ? pathname.slice(base.length) : pathname;

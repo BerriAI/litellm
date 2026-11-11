@@ -160,6 +160,66 @@ describe("deployedRouterModels", () => {
     expect(models[0]).toMatchObject({ name: "group", version: [5, 5], provider: "Anthropic, Bedrock" });
   });
 
+  it.each([
+    ["a bare-star catch-all", "*", ""],
+    ["a named alias", "claude/*", "claude/"],
+  ])("suggests the Claude ids %s lists over a partial wildcard", (_label, name, prefix) => {
+    const groups = ["haiku-4-5", "opus-5-5"].map((id) => ({
+      model_group: `${prefix}${id}`,
+      mode: "chat",
+      providers: ["anthropic"],
+    }));
+    const suggest = (row: AutoRouterDeployment) =>
+      names(recommendSolverPair(deployedRouterModels(groups, [row]), "balanced", "auto"));
+    expect(suggest(deployment(name, "anthropic/claude-*"))).toEqual([`${prefix}haiku-4-5`, `${prefix}opus-5-5`]);
+    expect(suggest(deployment(name, "anthropic/claude-*", { model_info: { blocked: true } }))).toBeNull();
+  });
+
+  it.each(["team/", ""])(
+    "suggests no id whose most specific wildcard %j is paused, even when a broader one is live",
+    (prefix) => {
+      const groups = ["haiku-4-5", "opus-5-5"].map((id) => ({
+        model_group: `${prefix}${id}`,
+        mode: "chat",
+        providers: ["anthropic"],
+      }));
+      const rows = [
+        deployment(`${prefix}*`, "anthropic/claude-*"),
+        deployment(`${prefix}opus-*`, "anthropic/claude-opus-*", { model_info: { blocked: true } }),
+      ];
+      expect(names(recommendSolverPair(deployedRouterModels(groups, rows), "balanced", "auto"))).toBeNull();
+      expect(names(recommendSolverPair(deployedRouterModels(groups, rows.slice(0, 1)), "balanced", "auto"))).toEqual([
+        `${prefix}haiku-4-5`,
+        `${prefix}opus-5-5`,
+      ]);
+    },
+  );
+
+  it("takes no Claude identity for an alias the router sends to another provider", () => {
+    const [model] = deployedRouterModels(
+      [{ model_group: "sonnet-5", mode: "chat", providers: ["openai"] }],
+      [deployment("*", "anthropic/claude-*")],
+    );
+    expect(model).toEqual({ name: "sonnet-5", model: "sonnet-5", provider: "OpenAI" });
+  });
+
+  it("takes the identity of the model an alias over a listed id routes to", () => {
+    const [model] = deployedRouterModels(
+      [{ model_group: "haiku-4-5", mode: "chat", providers: ["anthropic"] }],
+      [deployment("*", "anthropic/claude-*"), deployment("corp-opus", "anthropic/claude-opus-5-5")],
+      new Map([["haiku-4-5", "corp-opus"]]),
+    );
+    expect(model).toMatchObject({ name: "haiku-4-5", line: "opus", version: [5, 5] });
+  });
+
+  it("keeps a canonical alias's own identity when the catch-all's listed id does not parse", () => {
+    const [model] = deployedRouterModels(
+      [{ model_group: "claude-opus-5-5", mode: "chat", providers: ["anthropic"] }],
+      [deployment("*", "anthropic/claude-*")],
+    );
+    expect(model).toMatchObject({ name: "claude-opus-5-5", line: "opus", version: [5, 5] });
+  });
+
   it("keeps arbitrary canonical names available without pretending an unversioned alias is latest", () => {
     expect(
       deployedRouterModels([{ model_group: "claude-opus-8-12" }, { model_group: "claude-opus-latest" }], []).map(

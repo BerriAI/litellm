@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-secret-value.workspace = true
 litellm-http.workspace = true
 tokio.workspace = true
 litellm-auth-azure.workspace = true

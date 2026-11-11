@@ -1,13 +1,13 @@
 """One Redis pipeline per backend for the pre-call reads a request makes: rate limiter Lua groups, the
-router's cooldown and usage read, auth identity and spend counters all join the request batch."""
+router's usage counter read, auth identity and spend counters all join the request batch."""
 
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from itertools import chain
 from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -17,63 +17,95 @@ import litellm.caching.dual_cache as dual_cache_module
 from litellm import Router
 from litellm._internal_context import current_service_target
 from litellm.caching.dual_cache import DualCache
-from litellm.caching.redis_batch import active_request_redis_batches, request_redis_batch_scope
+from litellm.caching.redis_batch import Batch, active_request_redis_batches, request_redis_batch_scope
 from litellm.proxy._types import LiteLLM_TeamTableCachedObj, LiteLLM_UserTable
 from litellm.proxy.auth.auth_checks import cache_team_object
 from litellm.proxy.auth.auth_object_prefetch import _CacheEntry, _write_back, prefetch_identity_keys
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-    CHECK_AND_INCREMENT_BY_N_SCRIPT,
+    PROXY_MaxParallelRequestsHandler_v3,
     RateLimitDescriptor,
     RateLimitUnverifiableError,
-    PROXY_MaxParallelRequestsHandler_v3,
 )
 from litellm.proxy.utils import InternalUsageCache
-from litellm.router_utils.cooldown_cache import ROUTER_COOLDOWNS_TARGET, CooldownCache
-from litellm.router_utils.routing_read_batch import (
-    ROUTER_COOLDOWNS_USAGE_TARGET,
-    ROUTER_USAGE_TARGET,
-    RoutingPrefetch,
-    _routing_read_target,  # pyright: ignore[reportPrivateUsage]  # the family rule under test
+from litellm.redis.stores._route import route
+from litellm.redis.stores.rate_limits import RateLimitScope
+from litellm.redis.stores.router_cooldowns import ActiveCooldowns, RouterCooldownStore
+from litellm.redis.stores.router_usage import ROUTER_USAGE_TARGET
+from litellm.router_api import RoutingContext
+from litellm.router_utils.routing_prefetch import ArmedRead, TierRead, arm_cooldowns, read_cooldowns
+from litellm.router_utils.routing_read_batch import RoutingPrefetch
+from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
+from tests.unit.redis.stores.fake_rate_limits import FakeRateLimits
+
+from .test_redis_batch import (
+    FakeClient,
+    FakeNativePending,
+    FakeNativeRequest,
+    FakeNatives,
+    FakeRedisCache,
+    fake_send,
 )
 
-from .test_redis_batch import FakeClient, FakeRedisCache, replies
+
+def _cooldown_key(model_id: str) -> str:
+    return f"deployment:{model_id}:cooldown"
+
 
 _MODEL_GROUP = "claude"
 _FAR_FUTURE = 4_102_444_800.0  # 2100-01-01, a cooldown stamped then is still active
 
 
-def sha_of(script: str) -> str:
-    return hashlib.sha1(script.encode()).hexdigest()  # noqa: S324
+_OK: Final = [0, 1, 1700000000]
 
 
-def _limiter(redis_cache: FakeRedisCache, fail_closed: bool = False) -> PROXY_MaxParallelRequestsHandler_v3:
-    dual_cache = DualCache()
-    limiter = PROXY_MaxParallelRequestsHandler_v3(
-        internal_usage_cache=InternalUsageCache(dual_cache=dual_cache),
+def _over_limit(current: int, limit: int) -> list[int]:
+    return [1, 1, current, limit]
+
+
+def _check_replies(replies: dict[str, object]) -> Callable[..., Any]:
+    """``CHECK_AND_INCREMENT_BY_N_SCRIPT`` per descriptor window: OK unless ``replies`` holds another reply or an
+    exception for it."""
+
+    async def check(keys: list[str], args: list[object]) -> object:
+        reply: Final = replies.get(keys[0], _OK)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+    return check
+
+
+def _limiter(
+    replies: dict[str, object] | None = None, fail_closed: bool = False
+) -> tuple[PROXY_MaxParallelRequestsHandler_v3, FakeRateLimits]:
+    fakes: Final = FakeRateLimits(
+        check_and_increment_by_n_script=_check_replies(replies or {}),
+        window_guarded_token_increment_script=AsyncMock(return_value=[1, 0]),
+    )
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=InternalUsageCache(dual_cache=DualCache()),
         fail_closed_resolver=lambda: fail_closed,
+        rate_limit_store=fakes.store(),
     )
-    dual_cache.attach_redis_cache(redis_cache)  # after init: the fake has no server to register scripts on
-    limiter.check_and_increment_by_n_script = AsyncMock(
-        side_effect=AssertionError("descriptor groups must ride the request pipeline")
-    )
-    limiter.window_guarded_token_increment_script = AsyncMock(return_value=[1, 0])
-    return limiter
+    return limiter, fakes
 
 
 def _descriptor(key: str, value: str, rpm: int) -> RateLimitDescriptor:
     return {"key": key, "value": value, "rate_limit": {"requests_per_unit": rpm}}
 
 
-def _refunds(limiter: PROXY_MaxParallelRequestsHandler_v3) -> list[tuple[str, float]]:
-    refund_script = limiter.window_guarded_token_increment_script
+def _refunds(fakes: FakeRateLimits) -> list[tuple[str, float]]:
+    refund_script: Final = fakes.window_guarded_token_increment_script
     assert isinstance(refund_script, AsyncMock)
     return [(call.kwargs["keys"][1], call.kwargs["args"][1]) for call in refund_script.await_args_list]
 
 
+def _declared_before_the_first_flush(natives: FakeNatives) -> list[str]:
+    events: Final = natives.built[0].events
+    return events[: events.index("flush_pre")]
+
+
 def _lua_ok_replies(command: tuple[Any, ...]) -> Any:
-    if command[0] == "EVALSHA":
-        return [0, 1, 1700000000]  # OK: one counter, new_counter=1, window_start
     if command[0] == "MGET":
         return [None for _ in command[1:]]
     if command[0] == "SET":
@@ -82,16 +114,16 @@ def _lua_ok_replies(command: tuple[Any, ...]) -> Any:
 
 
 @pytest.mark.asyncio
-async def test_descriptor_lua_calls_share_one_pipeline_and_each_keeps_its_result():
-    client = FakeClient(_lua_ok_replies)
-    limiter = _limiter(FakeRedisCache(client))
+async def test_descriptor_lua_calls_share_one_native_pipeline_and_each_keeps_its_result():
+    limiter, _fakes = _limiter()
+    natives: Final = FakeNatives()
     descriptors = [
         _descriptor("api_key", "k1", 10),
         _descriptor("model_per_key", "k1:gpt", 5),
         _descriptor("team", "t1", 20),
     ]
 
-    with request_redis_batch_scope():
+    with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
         response = await limiter.atomic_check_and_increment_by_n(
             descriptors=descriptors,
             increments=[{"requests": 1}, {"requests": 1}, {"requests": 1}],
@@ -99,23 +131,12 @@ async def test_descriptor_lua_calls_share_one_pipeline_and_each_keeps_its_result
 
     assert response["overall_code"] == "OK"
     assert [s["descriptor_key"] for s in response["statuses"]] == ["api_key", "model_per_key", "team"]
-    assert len(client.pipelines) == 1
-    evalshas = [c for c in client.pipelines[0].commands if c[0] == "EVALSHA"]
-    assert len(evalshas) == 3
-    assert {c[1] for c in evalshas} == {sha_of(CHECK_AND_INCREMENT_BY_N_SCRIPT)}
-    assert [c[3] for c in evalshas] == ["{api_key:k1}:window", "{model_per_key:k1:gpt}:window", "{team:t1}:window"]
+    assert _declared_before_the_first_flush(natives) == ["declare check_and_increment"] * 3
 
 
 @pytest.mark.asyncio
 async def test_an_over_limit_descriptor_in_the_pipeline_refunds_the_groups_that_were_applied():
-    def replies(command: tuple[Any, ...]) -> Any:
-        if command[0] == "EVALSHA" and command[3] == "{team:t1}:window":
-            return [1, 1, 21, 20]  # OVER_LIMIT on its first counter
-        return _lua_ok_replies(command)
-
-    client = FakeClient(replies)
-    redis_cache = FakeRedisCache(client)
-    limiter = _limiter(redis_cache)
+    limiter, fakes = _limiter({"{team:t1}:window": _over_limit(21, 20)})
 
     with request_redis_batch_scope():
         response = await limiter.atomic_check_and_increment_by_n(
@@ -125,20 +146,12 @@ async def test_an_over_limit_descriptor_in_the_pipeline_refunds_the_groups_that_
 
     assert response["overall_code"] == "OVER_LIMIT"
     assert response["statuses"][0]["descriptor_key"] == "team"
-    assert _refunds(limiter) == [("{api_key:k1}:requests", -1.0)]
-    assert len(client.pipelines) == 1
+    assert _refunds(fakes) == [("{api_key:k1}:requests", -1)]
 
 
 @pytest.mark.asyncio
 async def test_an_over_limit_descriptor_also_refunds_the_groups_the_pipeline_incremented_after_it():
-    def replies(command: tuple[Any, ...]) -> Any:
-        if command[0] == "EVALSHA" and command[3] == "{api_key:k1}:window":
-            return [1, 1, 11, 10]  # OVER_LIMIT on the first group; the later groups already incremented
-        return _lua_ok_replies(command)
-
-    client = FakeClient(replies)
-    redis_cache = FakeRedisCache(client)
-    limiter = _limiter(redis_cache)
+    limiter, fakes = _limiter({"{api_key:k1}:window": _over_limit(11, 10)})
 
     with request_redis_batch_scope():
         response = await limiter.atomic_check_and_increment_by_n(
@@ -152,22 +165,14 @@ async def test_an_over_limit_descriptor_also_refunds_the_groups_the_pipeline_inc
 
     assert response["overall_code"] == "OVER_LIMIT"
     assert response["statuses"][0]["descriptor_key"] == "api_key"
-    assert _refunds(limiter) == [("{team:t1}:requests", -1.0), ("{model_per_key:k1:gpt}:requests", -1.0)]
-    assert len(client.pipelines) == 1
+    assert _refunds(fakes) == [("{team:t1}:requests", -1), ("{model_per_key:k1:gpt}:requests", -1)]
 
 
 @pytest.mark.asyncio
 async def test_a_redis_denial_stands_when_another_pipelined_group_fails():
-    def replies(command: tuple[Any, ...]) -> Any:
-        if command[0] == "EVALSHA" and command[3] == "{api_key:k1}:window":
-            return [1, 1, 11, 10]  # OVER_LIMIT
-        if command[0] == "EVALSHA" and command[3] == "{team:t1}:window":
-            return ValueError("script blew up")
-        return _lua_ok_replies(command)
-
-    client = FakeClient(replies)
-    redis_cache = FakeRedisCache(client)
-    limiter = _limiter(redis_cache)
+    limiter, fakes = _limiter(
+        {"{api_key:k1}:window": _over_limit(11, 10), "{team:t1}:window": ValueError("script blew up")}
+    )
 
     with request_redis_batch_scope():
         response = await limiter.atomic_check_and_increment_by_n(
@@ -181,20 +186,12 @@ async def test_a_redis_denial_stands_when_another_pipelined_group_fails():
 
     assert response["overall_code"] == "OVER_LIMIT"  # not the in-memory fallback's verdict
     assert response["statuses"][0]["descriptor_key"] == "api_key"
-    assert _refunds(limiter) == [("{model_per_key:k1:gpt}:requests", -1.0)]
-    assert len(client.pipelines) == 1
+    assert _refunds(fakes) == [("{model_per_key:k1:gpt}:requests", -1)]
 
 
 @pytest.mark.asyncio
 async def test_one_failed_lua_group_refunds_the_other_pipelined_groups_and_falls_back_to_in_memory():
-    def replies(command: tuple[Any, ...]) -> Any:
-        if command[0] == "EVALSHA" and command[3] == "{api_key:k1}:window":
-            return ValueError("script blew up")
-        return _lua_ok_replies(command)
-
-    client = FakeClient(replies)
-    redis_cache = FakeRedisCache(client)
-    limiter = _limiter(redis_cache)
+    limiter, fakes = _limiter({"{api_key:k1}:window": ValueError("script blew up")})
 
     with request_redis_batch_scope():
         response = await limiter.atomic_check_and_increment_by_n(
@@ -204,32 +201,26 @@ async def test_one_failed_lua_group_refunds_the_other_pipelined_groups_and_falls
 
     assert response["overall_code"] == "OK"
     assert len(response["statuses"]) == 2  # in-memory enforcement covered both descriptors
-    assert _refunds(limiter) == [("{team:t1}:requests", -1.0)]
-    assert len(client.pipelines) == 1
+    assert _refunds(fakes) == [("{team:t1}:requests", -1)]
+    assert limiter.rate_limits.local((RateLimitScope("api_key", "k1").counter("requests"),)) == (1,)
 
 
 @pytest.mark.parametrize(
-    "client, refunded",
+    "replies, refunded",
     [
+        ({"{api_key:k1}:window": ValueError("script blew up")}, [("{team:t1}:requests", -1)]),
         (
-            FakeClient(
-                lambda command: (
-                    ValueError("script blew up")
-                    if command[0] == "EVALSHA" and command[3] == "{api_key:k1}:window"
-                    else _lua_ok_replies(command)
-                )
-            ),
-            [("{team:t1}:requests", -1.0)],
+            {"{api_key:k1}:window": ConnectionError("redis down"), "{team:t1}:window": ConnectionError("redis down")},
+            [],
         ),
-        (FakeClient(_lua_ok_replies, fail=ConnectionError("redis down")), []),
     ],
     ids=["one_group_failed", "pipeline_failed"],
 )
 @pytest.mark.asyncio
 async def test_fail_closed_rejects_when_a_pipelined_lua_group_cannot_be_verified(
-    client: FakeClient, refunded: list[tuple[str, float]]
+    replies: dict[str, object], refunded: list[tuple[str, float]]
 ):
-    limiter = _limiter(FakeRedisCache(client), fail_closed=True)
+    limiter, fakes = _limiter(replies, fail_closed=True)
 
     with request_redis_batch_scope(), pytest.raises(RateLimitUnverifiableError) as exc:
         await limiter.atomic_check_and_increment_by_n(
@@ -238,14 +229,14 @@ async def test_fail_closed_rejects_when_a_pipelined_lua_group_cannot_be_verified
         )
 
     assert exc.value.status_code == 503
-    assert _refunds(limiter) == refunded
-    assert len(client.pipelines) == 1
+    assert _refunds(fakes) == refunded
 
 
 @pytest.mark.asyncio
 async def test_a_pipeline_failure_refunds_nothing_and_falls_back_to_in_memory_enforcement():
-    client = FakeClient(_lua_ok_replies, fail=ConnectionError("redis down"))
-    limiter = _limiter(FakeRedisCache(client))
+    limiter, fakes = _limiter(
+        {"{api_key:k1}:window": ConnectionError("redis down"), "{team:t1}:window": ConnectionError("redis down")}
+    )
 
     with request_redis_batch_scope():
         response = await limiter.atomic_check_and_increment_by_n(
@@ -255,23 +246,67 @@ async def test_a_pipeline_failure_refunds_nothing_and_falls_back_to_in_memory_en
 
     assert response["overall_code"] == "OK"
     assert len(response["statuses"]) == 2
-    assert len(client.pipelines) == 1
+    assert _refunds(fakes) == []
 
 
 @pytest.mark.asyncio
-async def test_without_a_request_scope_descriptor_groups_run_the_script_directly_as_before():
-    client = FakeClient(_lua_ok_replies)
-    limiter = _limiter(FakeRedisCache(client))
-    limiter.check_and_increment_by_n_script = AsyncMock(return_value=[0, 1, 1700000000])
+async def test_without_a_request_scope_descriptor_groups_run_one_at_a_time_and_stop_at_the_first_denial():
+    calls: Final[list[str]] = []  # mutable-ok: one window key per script call
+
+    async def check(keys: list[str], args: list[object]) -> object:
+        calls.append(keys[0])
+        return _over_limit(11, 10) if keys[0] == "{team:t1}:window" else _OK
+
+    limiter, fakes = _limiter()
+    fakes.check_and_increment_by_n_script = check
 
     response = await limiter.atomic_check_and_increment_by_n(
-        descriptors=[_descriptor("api_key", "k1", 10), _descriptor("team", "t1", 20)],
-        increments=[{"requests": 1}, {"requests": 1}],
+        descriptors=[
+            _descriptor("api_key", "k1", 10),
+            _descriptor("team", "t1", 20),
+            _descriptor("model_per_key", "k1:gpt", 5),
+        ],
+        increments=[{"requests": 1}, {"requests": 1}, {"requests": 1}],
     )
 
+    assert response["overall_code"] == "OVER_LIMIT"
+    assert calls == ["{api_key:k1}:window", "{team:t1}:window"]
+    assert _refunds(fakes) == [("{api_key:k1}:requests", -1)]
+
+
+@dataclass
+class _FakeCooldownsHandle:
+    """A connected cooldown store whose ``active`` lands on the request's fake native batch."""
+
+    has_redis: Final = True
+
+    def active(self, model_ids: Sequence[str], send: FakeNativeRequest) -> FakeNativePending[ActiveCooldowns]:
+        send.events.append("declare cooldowns")
+        return FakeNativePending(send, lambda: ())
+
+
+@pytest.mark.asyncio
+async def test_the_admission_script_and_the_armed_cooldown_read_go_out_in_one_native_pipeline():
+    async def window(keys: list[str], args: list[object]) -> object:
+        return ["1700000000", 1]
+
+    fakes: Final = FakeRateLimits(batch_rate_limiter_script=window)
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=InternalUsageCache(dual_cache=DualCache()), rate_limit_store=fakes.store()
+    )
+    cooldowns: Final = RouterCooldownStore(_FakeCooldownsHandle())
+    natives: Final = FakeNatives()
+
+    with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
+        arm_cooldowns(cooldowns, ["dep-a"])
+        response = await limiter.should_rate_limit([_descriptor("api_key", "k1", 10)])
+        active = await read_cooldowns(cooldowns, ["dep-a"], None)
+
     assert response["overall_code"] == "OK"
-    assert limiter.check_and_increment_by_n_script.await_count == 2
-    assert client.pipelines == []
+    assert active == ()
+    assert len(natives.built) == 1
+    assert _declared_before_the_first_flush(natives) == ["declare cooldowns", "declare sliding_window"]
+    assert request.prefetched == {}
 
 
 def _deployment(deployment_id: str) -> dict:
@@ -288,71 +323,116 @@ def _router(redis_cache: FakeRedisCache, routing_strategy: str = "usage-based-ro
     return router
 
 
+_PINNED_MINUTE: Final = datetime(2026, 1, 1, 12, 0, 30, tzinfo=timezone.utc)
+_START: Final = 1_000_000.0
+_PING: Final = [{"role": "user", "content": "ping"}]
+
+
+@pytest.fixture
+def pinned_clock(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """Pins the usage counters' minute and the router cache's read throttle clock; tests move `now[0]`."""
+    now: Final = [_START]  # mutable-ok: the test advances the pinned clock
+    monkeypatch.setattr("litellm.router_strategy.lowest_tpm_rpm_v2.get_utc_datetime", lambda: _PINNED_MINUTE)
+    monkeypatch.setattr(dual_cache_module.time, "time", lambda: now[0])
+    return now
+
+
+def _counter_keys(router: Router, deployment_ids: tuple[str, ...] = ("dep-a", "dep-b")) -> frozenset[str]:
+    deployments: Final = [d for d in router.model_list if d["model_info"]["id"] in deployment_ids]
+    tpm, rpm = router.lowesttpm_logger_v2.usage_counter_keys(deployments)
+    return frozenset(tpm + rpm)
+
+
+def _tpm_key(router: Router, deployment_id: str) -> str:
+    deployment: Final = next(d for d in router.model_list if d["model_info"]["id"] == deployment_id)
+    return router.lowesttpm_logger_v2.usage_counter_keys([deployment])[0][0]
+
+
+def _counter_mgets(router: Router, client: FakeClient, redis_cache: FakeRedisCache) -> tuple[frozenset[str], ...]:
+    counters: Final = _counter_keys(router)
+    pipelined: Final = tuple(
+        frozenset(command[1:])
+        for pipeline in client.pipelines
+        for command in pipeline.commands
+        if command[0] == "MGET" and counters.intersection(command[1:])
+    )
+    alone: Final = tuple(
+        frozenset(keys) for command, keys in redis_cache.alone if command == "MGET" and counters.intersection(keys)
+    )
+    return pipelined + alone
+
+
+def _python_cooldown_reads(client: FakeClient, redis_cache: FakeRedisCache) -> tuple[str, ...]:
+    pipelined: Final = tuple(
+        key
+        for pipeline in client.pipelines
+        for command in pipeline.commands
+        if command[0] == "MGET"
+        for key in command[1:]
+    )
+    alone: Final = tuple(key for command, keys in redis_cache.alone if command == "MGET" for key in keys)
+    return tuple(key for key in pipelined + alone if key.endswith(":cooldown"))
+
+
+def _replies_with(values: dict[str, object]) -> Callable[[tuple[Any, ...]], Any]:
+    def replies(command: tuple[Any, ...]) -> Any:
+        if command[0] == "MGET":
+            return [None if values.get(key) is None else json.dumps(values[key]) for key in command[1:]]
+        return _lua_ok_replies(command)
+
+    return replies
+
+
+async def _route(router: Router) -> str:
+    deployment: Final = await router.async_get_available_deployment(
+        model=_MODEL_GROUP, messages=_PING, request_kwargs={}
+    )
+    return deployment["model_info"]["id"]
+
+
 @pytest.mark.asyncio
-async def test_armed_routing_read_rides_the_admission_pipeline_and_routing_issues_no_read_of_its_own():
+@pytest.mark.usefixtures("pinned_clock")
+async def test_armed_routing_read_is_one_pipeline_and_routing_issues_no_read_of_its_own():
     client = FakeClient(_lua_ok_replies)
     redis_cache = FakeRedisCache(client)
     router = _router(redis_cache)
-    limiter = _limiter(redis_cache)
 
     with request_redis_batch_scope():
         router.arm_routing_read_prefetch(_MODEL_GROUP, {})
-        await limiter.atomic_check_and_increment_by_n(
-            descriptors=[_descriptor("api_key", "k1", 10), _descriptor("team", "t1", 20)],
-            increments=[{"requests": 1}, {"requests": 1}],
-        )
-        deployment = await router.async_get_available_deployment(
-            model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
-        )
+        deployment = await _route(router)
 
-    assert deployment["model_info"]["id"] in {"dep-a", "dep-b"}
+    assert deployment in {"dep-a", "dep-b"}
     assert len(client.pipelines) == 1
     commands = client.pipelines[0].commands
-    assert [c[0] for c in commands] == ["MGET", "EVALSHA", "EVALSHA"]
-    mget_keys = set(commands[0][1:])
-    assert {CooldownCache.get_cooldown_cache_key("dep-a"), CooldownCache.get_cooldown_cache_key("dep-b")} <= mget_keys
-    assert any(":tpm:" in key for key in mget_keys) and any(":rpm:" in key for key in mget_keys)
+    assert [c[0] for c in commands] == ["MGET"]
+    assert frozenset(commands[0][1:]) == _counter_keys(router)
     assert redis_cache.alone == []
 
 
 @pytest.mark.asyncio
-async def test_a_cooldown_recorded_locally_after_the_prefetch_left_still_excludes_its_deployment():
-    expired = {"exception_received": "429", "status_code": "429", "timestamp": 0.0, "cooldown_time": 60}
-
-    def replies(command: tuple[Any, ...]) -> Any:
-        if command[0] == "MGET":  # Redis holds a stale cooldown for dep-b and nothing for dep-a
-            return [
-                json.dumps(expired) if key == CooldownCache.get_cooldown_cache_key("dep-b") else None
-                for key in command[1:]
-            ]
-        return _lua_ok_replies(command)
-
-    client = FakeClient(replies)
+@pytest.mark.parametrize("routing_strategy", ["simple-shuffle", "usage-based-routing-v2"])
+async def test_a_cooldown_recorded_through_the_store_excludes_its_deployment_without_a_python_cooldown_read(
+    routing_strategy: str,
+):
+    client = FakeClient(_lua_ok_replies)
     redis_cache = FakeRedisCache(client)
-    router = _router(redis_cache)
-    cooldown_store = router.cooldown_cache.cooldown_store
-    assert cooldown_store.in_memory_cache is not None
+    router = _router(redis_cache, routing_strategy=routing_strategy)
+    router.cooldown_cache.cooldown_store.put(
+        "dep-a",
+        {"exception_received": "429", "status_code": "429", "timestamp": _FAR_FUTURE, "cooldown_time": 60},
+        60,
+    )
 
     with request_redis_batch_scope():
         router.arm_routing_read_prefetch(_MODEL_GROUP, {})
-        cooldown_store.in_memory_cache.set_cache(
-            CooldownCache.get_cooldown_cache_key("dep-a"),
-            {"exception_received": "429", "status_code": "429", "timestamp": _FAR_FUTURE, "cooldown_time": 60},
-        )
-        picks = {
-            (
-                await router.async_get_available_deployment(
-                    model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
-                )
-            )["model_info"]["id"]
-            for _ in range(5)
-        }
+        picks = {await _route(router) for _ in range(5)}
 
     assert picks == {"dep-b"}
-    assert len(client.pipelines) == 1
+    assert _python_cooldown_reads(client, redis_cache) == ()
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("pinned_clock")
 async def test_a_prefetch_that_does_not_cover_the_routing_keys_is_ignored_and_routing_reads_itself():
     client = FakeClient(_lua_ok_replies)
     redis_cache = FakeRedisCache(client)
@@ -361,81 +441,58 @@ async def test_a_prefetch_that_does_not_cover_the_routing_keys_is_ignored_and_ro
     with request_redis_batch_scope() as request:
         router.arm_routing_read_prefetch(_MODEL_GROUP, {})
         armed = request.prefetched["routing_read"]
-        assert isinstance(armed, RoutingPrefetch)
-        request.prefetched["routing_read"] = RoutingPrefetch(
-            keys=frozenset({"other"}),
+        assert isinstance(armed, ArmedRead)
+        request.prefetched["routing_read"] = ArmedRead(
+            read=TierRead(armed.read.cache, ("other",)),
             fetched=armed.fetched,
             result=armed.result,
-            reservations=armed.reservations,
+            previous=armed.previous,
         )
-        deployment = await router.async_get_available_deployment(
-            model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
-        )
+        deployment = await _route(router)
         assert request.prefetched == {}
 
-    assert deployment["model_info"]["id"] in {"dep-a", "dep-b"}
-    assert len(redis_cache.alone) == 1  # the shared cooldown+usage read, one round trip as in P1
+    assert deployment in {"dep-a", "dep-b"}
+    assert [frozenset(keys) for command, keys in redis_cache.alone if command == "MGET"] == [_counter_keys(router)]
 
 
 @pytest.mark.asyncio
-async def test_a_prefetch_with_incomplete_usage_keys_releases_cooldown_reservations():
+@pytest.mark.usefixtures("pinned_clock")
+async def test_a_prefetch_with_incomplete_usage_keys_releases_its_reservations():
     client: Final = FakeClient(_lua_ok_replies)
     redis_cache: Final = FakeRedisCache(client)
     router: Final = _router(redis_cache)
-    cooldown_keys: Final = frozenset(
-        {
-            CooldownCache.get_cooldown_cache_key("dep-a"),
-            CooldownCache.get_cooldown_cache_key("dep-b"),
-        }
-    )
 
     with request_redis_batch_scope():
-        RoutingPrefetch.arm(router, router.lowesttpm_logger_v2, router.model_list[:1])
-        deployment: Final = await router.async_get_available_deployment(
-            model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
-        )
+        RoutingPrefetch.arm(RoutingContext(router), router.lowesttpm_logger_v2, router.model_list[:1])
+        deployment: Final = await _route(router)
 
-    fallback_cooldown_mgets: Final = tuple(
-        keys for command, keys in redis_cache.alone if command == "MGET" and cooldown_keys.issubset(keys)
-    )
-
-    assert deployment["model_info"]["id"] in {"dep-a", "dep-b"}
-    assert len(fallback_cooldown_mgets) == 1
+    assert deployment in {"dep-a", "dep-b"}
+    assert [frozenset(keys) for command, keys in redis_cache.alone if command == "MGET"] == [_counter_keys(router)]
 
 
 @pytest.mark.asyncio
-async def test_a_failed_prefetch_falls_back_to_the_shared_read():
+@pytest.mark.usefixtures("pinned_clock")
+async def test_a_failed_prefetch_falls_back_to_the_selectors_own_read():
     client = FakeClient(_lua_ok_replies, fail=ConnectionError("redis down"))
     redis_cache = FakeRedisCache(client)
     router = _router(redis_cache)
 
     with request_redis_batch_scope():
         router.arm_routing_read_prefetch(_MODEL_GROUP, {})
-        deployment = await router.async_get_available_deployment(
-            model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
-        )
+        deployment = await _route(router)
 
-    assert deployment["model_info"]["id"] in {"dep-a", "dep-b"}
-    assert len(redis_cache.alone) == 1
-    cooldown_keys: Final = frozenset(
-        {
-            CooldownCache.get_cooldown_cache_key("dep-a"),
-            CooldownCache.get_cooldown_cache_key("dep-b"),
-        }
-    )
-    fallback_cooldown_mgets: Final = tuple(
-        keys for command, keys in redis_cache.alone if command == "MGET" and cooldown_keys.issubset(keys)
-    )
-    assert len(fallback_cooldown_mgets) == 1
+    assert deployment in {"dep-a", "dep-b"}
+    assert [frozenset(keys) for command, keys in redis_cache.alone if command == "MGET"] == [_counter_keys(router)]
 
 
 @pytest.mark.asyncio
-async def test_the_armed_routing_read_is_declared_under_the_router_cooldowns_family():
+@pytest.mark.usefixtures("pinned_clock")
+async def test_the_armed_routing_read_is_declared_under_the_router_usage_family():
     """The prefetch is declared before routing runs under a target of its own, so the pipeline that
-    carries it renders ``redis.pipeline router_cooldowns`` instead of a bare ``redis.pipeline``."""
+    carries it renders ``redis.pipeline router_usage`` instead of a bare ``redis.pipeline``."""
     client = FakeClient(_lua_ok_replies)
     redis_cache = FakeRedisCache(client)
-    router = _router(redis_cache, routing_strategy="simple-shuffle")
+    router = _router(redis_cache)
     pipeline_targets: list[str | None] = []  # mutable-ok: filled by the recording hook
 
     async def record(**kwargs: object) -> None:
@@ -445,213 +502,85 @@ async def test_the_armed_routing_read_is_declared_under_the_router_cooldowns_fam
 
     with request_redis_batch_scope():
         router.arm_routing_read_prefetch(_MODEL_GROUP, {})
-        await router.async_get_available_deployment(
-            model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
-        )
-    await asyncio.gather(*(t for t in asyncio.all_tasks() if t is not asyncio.current_task()))
+        await _route(router)
+    async with asyncio.timeout(5):
+        while not pipeline_targets:
+            await asyncio.sleep(0.01)
 
-    assert pipeline_targets == [ROUTER_COOLDOWNS_TARGET]
+    assert pipeline_targets == [ROUTER_USAGE_TARGET]
 
 
 @pytest.mark.asyncio
-async def test_an_abandoned_prefetch_still_backfills_the_cooldown_it_read(monkeypatch):
-    clock: Final = 1_000_000.0
-    monkeypatch.setattr(dual_cache_module.time, "time", lambda: clock)
-    cooldown_key: Final = CooldownCache.get_cooldown_cache_key("dep-a")
-    active_cooldown: Final = {
-        "exception_received": "429",
-        "status_code": "429",
-        "timestamp": _FAR_FUTURE,
-        "cooldown_time": 60,
-    }
-
-    def replies(command: tuple[Any, ...]) -> Any:
-        if command[0] == "MGET":
-            return [json.dumps(active_cooldown) if key == cooldown_key else None for key in command[1:]]
-        return _lua_ok_replies(command)
-
-    client: Final = FakeClient(replies)
+@pytest.mark.usefixtures("pinned_clock")
+async def test_an_abandoned_prefetch_still_backfills_the_counters_it_read():
+    client: Final = FakeClient(_lua_ok_replies)
     redis_cache: Final = FakeRedisCache(client)
-    redis_cache.store[cooldown_key] = active_cooldown
-    router: Final = _router(redis_cache, routing_strategy="simple-shuffle")
-    limiter: Final = _limiter(redis_cache)
+    router: Final = _router(redis_cache)
+    client.reply_for = _replies_with({_tpm_key(router, "dep-a"): 100})
+
+    with request_redis_batch_scope() as request:
+        router.arm_routing_read_prefetch(_MODEL_GROUP, {})
+        await request.flush_all()
+    after_abandoned: Final = len(_counter_mgets(router, client, redis_cache))
 
     with request_redis_batch_scope():
         router.arm_routing_read_prefetch(_MODEL_GROUP, {})
-        await limiter.atomic_check_and_increment_by_n(
-            descriptors=[_descriptor("api_key", "k1", 10)],
-            increments=[{"requests": 1}],
-        )
+        deployment: Final = await _route(router)
 
-    pipeline_count: Final = len(client.pipelines)
-    first_cooldown_mgets: Final = tuple(
-        command
-        for command in chain.from_iterable(pipeline.commands for pipeline in client.pipelines[:pipeline_count])
-        if command[0] == "MGET" and cooldown_key in command[1:]
-    )
-    with request_redis_batch_scope():
-        router.arm_routing_read_prefetch(_MODEL_GROUP, {})
-        deployment: Final = await router.async_get_available_deployment(
-            model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
-        )
-        cooldowns: Final = await router.cooldown_cache.async_get_active_cooldowns(["dep-a"], parent_otel_span=None)
-
-    second_cooldown_mgets: Final = tuple(
-        command
-        for command in chain.from_iterable(pipeline.commands for pipeline in client.pipelines[pipeline_count:])
-        if command[0] == "MGET" and cooldown_key in command[1:]
-    )
-
-    assert deployment["model_info"]["id"] == "dep-b"
-    assert [model_id for model_id, _ in cooldowns] == ["dep-a"]
-    assert len(first_cooldown_mgets) == 1
-    assert second_cooldown_mgets == ()
+    assert deployment == "dep-b"
+    assert after_abandoned == 1
+    assert len(_counter_mgets(router, client, redis_cache)) == 1
     assert redis_cache.alone == []
 
 
 @pytest.mark.asyncio
-async def test_prefetch_settlement_keeps_newer_memory_values_and_backfills_misses(monkeypatch):
-    clock: Final = 1_000_000.0
-    monkeypatch.setattr(dual_cache_module.time, "time", lambda: clock)
-    dep_a_key: Final = CooldownCache.get_cooldown_cache_key("dep-a")
-    dep_b_key: Final = CooldownCache.get_cooldown_cache_key("dep-b")
-    old_cooldown: Final = {
-        "exception_received": "429",
-        "status_code": "429",
-        "timestamp": _FAR_FUTURE,
-        "cooldown_time": 60,
-    }
-    newer_memory_cooldown: Final = {
-        "exception_received": "429",
-        "status_code": "429",
-        "timestamp": _FAR_FUTURE + 1,
-        "cooldown_time": 60,
-    }
-    redis_only_cooldown: Final = {
-        "exception_received": "429",
-        "status_code": "429",
-        "timestamp": _FAR_FUTURE + 2,
-        "cooldown_time": 60,
-    }
-
-    def replies(command: tuple[Any, ...]) -> Any:
-        if command[0] == "MGET":
-            return [json.dumps(redis_cache.store[key]) if key in redis_cache.store else None for key in command[1:]]
-        return _lua_ok_replies(command)
-
-    client: Final = FakeClient(replies)
-    redis_cache: Final = FakeRedisCache(client)
-    redis_cache.store[dep_a_key] = old_cooldown
-    redis_cache.store[dep_b_key] = redis_only_cooldown
-    router: Final = _router(redis_cache, routing_strategy="simple-shuffle")
-    memory_cache: Final = router.cooldown_cache.cooldown_store.in_memory_cache
-    assert memory_cache is not None
-
-    with request_redis_batch_scope() as request:
-        router.arm_routing_read_prefetch(_MODEL_GROUP, {})
-        memory_cache.set_cache(dep_a_key, newer_memory_cooldown)
-        await request.flush_all()
-
-    prefetched_mgets: Final = tuple(command for command in client.pipelines[0].commands if command[0] == "MGET")
-
-    assert len(prefetched_mgets) == 1
-    assert frozenset(prefetched_mgets[0][1:]) == frozenset({dep_a_key, dep_b_key})
-    assert memory_cache.get_cache(dep_a_key) == newer_memory_cooldown
-    assert memory_cache.get_cache(dep_b_key) == redis_only_cooldown
-
-
-@pytest.mark.asyncio
-async def test_an_abandoned_prefetch_whose_mget_fails_releases_its_reservation(monkeypatch):
-    clock: Final = 1_000_000.0
-    monkeypatch.setattr(dual_cache_module.time, "time", lambda: clock)
-    cooldown_key: Final = CooldownCache.get_cooldown_cache_key("dep-a")
-    active_cooldown: Final = {
-        "exception_received": "429",
-        "status_code": "429",
-        "timestamp": _FAR_FUTURE,
-        "cooldown_time": 60,
-    }
-    mget_replies: Final = iter((ConnectionError("redis down"), None))
-
-    def replies(command: tuple[Any, ...]) -> Any:
-        if command[0] == "MGET":
-            response: Final = next(mget_replies)
-            if isinstance(response, Exception):
-                return response
-            return [json.dumps(active_cooldown) if key == cooldown_key else None for key in command[1:]]
-        return _lua_ok_replies(command)
-
-    client: Final = FakeClient(replies)
-    redis_cache: Final = FakeRedisCache(client)
-    redis_cache.store[cooldown_key] = active_cooldown
-    router: Final = _router(redis_cache, routing_strategy="simple-shuffle")
-
-    with request_redis_batch_scope() as request:
-        router.arm_routing_read_prefetch(_MODEL_GROUP, {})
-        await request.flush_all()
-
-    pipeline_count: Final = len(client.pipelines)
-    first_cooldown_mgets: Final = tuple(
-        command
-        for command in chain.from_iterable(pipeline.commands for pipeline in client.pipelines[:pipeline_count])
-        if command[0] == "MGET" and cooldown_key in command[1:]
-    )
-    with request_redis_batch_scope():
-        router.arm_routing_read_prefetch(_MODEL_GROUP, {})
-        deployment: Final = await router.async_get_available_deployment(
-            model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
-        )
-        cooldowns: Final = await router.cooldown_cache.async_get_active_cooldowns(["dep-a"], parent_otel_span=None)
-
-    second_cooldown_mgets: Final = tuple(
-        command
-        for command in chain.from_iterable(pipeline.commands for pipeline in client.pipelines[pipeline_count:])
-        if command[0] == "MGET" and cooldown_key in command[1:]
-    )
-
-    assert deployment["model_info"]["id"] == "dep-b"
-    assert [model_id for model_id, _ in cooldowns] == ["dep-a"]
-    assert len(first_cooldown_mgets) == 1
-    assert len(second_cooldown_mgets) == 1
-
-
-@pytest.mark.asyncio
-async def test_a_cooldown_that_leaves_memory_before_routing_is_read_again(monkeypatch):
-    clock: Final = 1_000_000.0
-    monkeypatch.setattr(dual_cache_module.time, "time", lambda: clock)
-    cooldown_key: Final = CooldownCache.get_cooldown_cache_key("dep-a")
-    active_cooldown: Final = {
-        "exception_received": "429",
-        "status_code": "429",
-        "timestamp": _FAR_FUTURE,
-        "cooldown_time": 60,
-    }
+@pytest.mark.usefixtures("pinned_clock")
+async def test_prefetch_settlement_keeps_newer_memory_values_and_backfills_misses():
     client: Final = FakeClient(_lua_ok_replies)
     redis_cache: Final = FakeRedisCache(client)
-    redis_cache.store[cooldown_key] = active_cooldown
-    router: Final = _router(redis_cache, routing_strategy="simple-shuffle")
-    cooldown_store: Final = router.cooldown_cache.cooldown_store
-    memory_cache: Final = cooldown_store.in_memory_cache
-    assert memory_cache is not None
-    memory_cache.set_cache(cooldown_key, active_cooldown)
+    router: Final = _router(redis_cache)
+    dep_a: Final = _tpm_key(router, "dep-a")
+    dep_b: Final = _tpm_key(router, "dep-b")
+    client.reply_for = _replies_with({dep_a: 5, dep_b: 7})
+    usage_cache: Final = router.lowesttpm_logger_v2.router_cache
+
+    with request_redis_batch_scope() as request:
+        router.arm_routing_read_prefetch(_MODEL_GROUP, {})
+        usage_cache.in_memory_cache.set_cache(dep_a, 50)
+        await request.flush_all()
+
+    assert await usage_cache.async_batch_get_cache([dep_a, dep_b], local_only=True) == [50, 7]
+
+
+@pytest.mark.asyncio
+async def test_an_abandoned_prefetch_whose_mget_fails_releases_its_reservation(pinned_clock: list[float]):
+    mget_replies: Final = iter((ConnectionError("redis down"), None))
+    client: Final = FakeClient(_lua_ok_replies)
+    redis_cache: Final = FakeRedisCache(client)
+    router: Final = _router(redis_cache)
+
+    def replies(command: tuple[Any, ...]) -> Any:
+        if command[0] == "MGET":
+            failure: Final = next(mget_replies)
+            if isinstance(failure, Exception):
+                return failure
+            return ["100" if key == _tpm_key(router, "dep-a") else None for key in command[1:]]
+        return _lua_ok_replies(command)
+
+    client.reply_for = replies
 
     with request_redis_batch_scope() as request:
         router.arm_routing_read_prefetch(_MODEL_GROUP, {})
         await request.flush_all()
-        memory_cache.delete_cache(cooldown_key)
-        deployment: Final = await router.async_get_available_deployment(
-            model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
-        )
+    after_failure: Final = len(_counter_mgets(router, client, redis_cache))
 
-    prefetched_mgets: Final = tuple(command for command in client.pipelines[0].commands if command[0] == "MGET")
-    fallback_cooldown_mgets: Final = tuple(
-        keys for command, keys in redis_cache.alone if command == "MGET" and cooldown_key in keys
-    )
+    with request_redis_batch_scope():
+        router.arm_routing_read_prefetch(_MODEL_GROUP, {})
+        deployment: Final = await _route(router)
 
-    assert len(prefetched_mgets) == 1
-    assert prefetched_mgets[0][1:] == (CooldownCache.get_cooldown_cache_key("dep-b"),)
-    assert deployment["model_info"]["id"] == "dep-b"
-    assert fallback_cooldown_mgets == ((cooldown_key,),)
+    assert after_failure == 1
+    assert len(_counter_mgets(router, client, redis_cache)) == 2
+    assert deployment == "dep-b"
 
 
 @pytest.mark.asyncio
@@ -663,92 +592,51 @@ async def test_arming_outside_a_request_scope_is_a_no_op():
 
 
 @pytest.mark.asyncio
-async def test_simple_shuffle_prefetches_only_its_cooldown_read_into_the_admission_pipeline():
+async def test_simple_shuffle_cooldown_prefetch_does_not_arm_usage_reads_or_read_eagerly():
     client = FakeClient(_lua_ok_replies)
     redis_cache = FakeRedisCache(client)
     router = _router(redis_cache, routing_strategy="simple-shuffle")
-    limiter = _limiter(redis_cache)
 
-    with request_redis_batch_scope():
-        router.arm_routing_read_prefetch(_MODEL_GROUP, {})
-        await limiter.atomic_check_and_increment_by_n(
-            descriptors=[_descriptor("api_key", "k1", 10)],
-            increments=[{"requests": 1}],
-        )
-        deployment = await router.async_get_available_deployment(
-            model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
-        )
-
-    assert deployment["model_info"]["id"] in {"dep-a", "dep-b"}
-    assert len(client.pipelines) == 1
-    commands = client.pipelines[0].commands
-    assert [c[0] for c in commands] == ["MGET", "EVALSHA"]
-    assert set(commands[0][1:]) == {
-        CooldownCache.get_cooldown_cache_key("dep-a"),
-        CooldownCache.get_cooldown_cache_key("dep-b"),
-    }
-    assert redis_cache.alone == []
-
-    shuffle = Router(model_list=[_deployment("dep-a")], routing_strategy="simple-shuffle")
-    shuffle.update_redis_cache(cache=redis_cache)
     with request_redis_batch_scope() as request:
-        shuffle.arm_routing_read_prefetch(_MODEL_GROUP, {})
-        armed = request.prefetched["routing_read"]
-        assert isinstance(armed, RoutingPrefetch)
-        assert armed.keys == {CooldownCache.get_cooldown_cache_key("dep-a")}  # no usage counters for shuffle
+        RoutingContext(router).arm_cooldown_prefetch()
+        assert set(request.prefetched) == {"routing_cooldowns"}
+        deployment = await _route(router)
+
+    assert deployment in {"dep-a", "dep-b"}
+    assert client.pipelines == []
+    assert redis_cache.alone == []
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("routing_strategy", ["simple-shuffle", "usage-based-routing-v2"])
-@pytest.mark.parametrize("with_limiter", [True, False])
-async def test_requests_within_the_cooldown_read_interval_read_cooldowns_from_redis_once(
-    routing_strategy: str, with_limiter: bool
-):
+@pytest.mark.usefixtures("pinned_clock")
+async def test_requests_within_the_read_interval_read_the_counters_from_redis_once():
     client = FakeClient(_lua_ok_replies)
     redis_cache = FakeRedisCache(client)
-    router = _router(redis_cache, routing_strategy=routing_strategy)
-    limiter = _limiter(redis_cache)
-    request_round_trips: list[tuple[int, int]] = []
+    router = _router(redis_cache)
+    request_round_trips: list[tuple[int, int]] = []  # mutable-ok: one entry per simulated request
 
     for _ in range(3):
         pipeline_count = len(client.pipelines)
         alone_count = len(redis_cache.alone)
         with request_redis_batch_scope():
             router.arm_routing_read_prefetch(_MODEL_GROUP, {})
-            if with_limiter:
-                await limiter.atomic_check_and_increment_by_n(
-                    descriptors=[_descriptor("api_key", "k1", 10)],
-                    increments=[{"requests": 1}],
-                )
-            await router.async_get_available_deployment(
-                model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
-            )
+            await _route(router)
         request_round_trips.append((len(client.pipelines) - pipeline_count, len(redis_cache.alone) - alone_count))
 
-    pipeline_mgets = [command for pipeline in client.pipelines for command in pipeline.commands if command[0] == "MGET"]
-    alone_mgets = [keys for command, keys in redis_cache.alone if command == "MGET"]
-    cooldown_keys = {
-        CooldownCache.get_cooldown_cache_key("dep-a"),
-        CooldownCache.get_cooldown_cache_key("dep-b"),
-    }
-    cooldown_mgets = [command[1:] for command in pipeline_mgets if cooldown_keys.intersection(command[1:])] + [
-        keys for keys in alone_mgets if cooldown_keys.intersection(keys)
-    ]
-
-    assert len(cooldown_mgets) == 1
-    if not with_limiter:
-        assert request_round_trips[1:] == [(0, 0), (0, 0)]
+    assert len(_counter_mgets(router, client, redis_cache)) == 1
+    assert request_round_trips[1:] == [(0, 0), (0, 0)]
 
 
 @pytest.mark.asyncio
-async def test_concurrent_requests_share_one_cooldown_read_per_interval():
+@pytest.mark.usefixtures("pinned_clock")
+async def test_concurrent_requests_share_one_counter_read_per_interval():
     client: Final = FakeClient(_lua_ok_replies)
     redis_cache: Final = FakeRedisCache(client)
     router: Final = _router(redis_cache)
     first_armed: Final = asyncio.Event()
     both_armed: Final = asyncio.Event()
 
-    async def route_after_both_requests_arm():
+    async def route_after_both_requests_arm() -> str:
         with request_redis_batch_scope():
             router.arm_routing_read_prefetch(_MODEL_GROUP, {})
             if first_armed.is_set():
@@ -756,127 +644,57 @@ async def test_concurrent_requests_share_one_cooldown_read_per_interval():
             else:
                 first_armed.set()
             await both_armed.wait()
-            return await router.async_get_available_deployment(
-                model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
-            )
+            return await _route(router)
 
     deployments: Final = await asyncio.gather(route_after_both_requests_arm(), route_after_both_requests_arm())
-    cooldown_keys: Final = frozenset(
-        {
-            CooldownCache.get_cooldown_cache_key("dep-a"),
-            CooldownCache.get_cooldown_cache_key("dep-b"),
-        }
-    )
-    cooldown_mgets: Final = tuple(
-        command
-        for pipeline in client.pipelines
-        for command in pipeline.commands
-        if command[0] == "MGET" and cooldown_keys.intersection(command[1:])
-    )
 
-    assert all(deployment["model_info"]["id"] in {"dep-a", "dep-b"} for deployment in deployments)
-    assert len(cooldown_mgets) == 1
+    assert set(deployments) <= {"dep-a", "dep-b"}
+    assert len(_counter_mgets(router, client, redis_cache)) == 1
 
 
 @pytest.mark.asyncio
-async def test_the_prefetch_reads_cooldowns_again_once_the_read_interval_elapses(monkeypatch):
-    first_time: Final = 1_000_000.0
-    monkeypatch.setattr(dual_cache_module.time, "time", lambda: first_time)
-    active_cooldown = {
-        "exception_received": "429",
-        "status_code": "429",
-        "timestamp": _FAR_FUTURE,
-        "cooldown_time": 60,
-    }
-    mget_results = iter((None, active_cooldown))
-
-    def replies(command: tuple[Any, ...]) -> Any:
-        if command[0] == "MGET":
-            result = next(mget_results)
-            return [
-                None if result is None or key != CooldownCache.get_cooldown_cache_key("dep-a") else json.dumps(result)
-                for key in command[1:]
-            ]
-        return _lua_ok_replies(command)
-
-    client = FakeClient(replies)
-    redis_cache = FakeRedisCache(client)
-    router = _router(redis_cache, routing_strategy="simple-shuffle")
-    cooldown_store = router.cooldown_cache.cooldown_store
-
-    with request_redis_batch_scope():
-        router.arm_routing_read_prefetch(_MODEL_GROUP, {})
-        await router.async_get_available_deployment(
-            model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
-        )
-
-    monkeypatch.setattr(
-        dual_cache_module.time,
-        "time",
-        lambda: first_time + cooldown_store.redis_batch_cache_expiry + 1,
-    )
-    with request_redis_batch_scope():
-        router.arm_routing_read_prefetch(_MODEL_GROUP, {})
-        deployment = await router.async_get_available_deployment(
-            model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
-        )
-
-    cooldown_keys = {
-        CooldownCache.get_cooldown_cache_key("dep-a"),
-        CooldownCache.get_cooldown_cache_key("dep-b"),
-    }
-    cooldown_mgets = [
-        command
-        for pipeline in client.pipelines
-        for command in pipeline.commands
-        if command[0] == "MGET" and cooldown_keys.intersection(command[1:])
-    ]
-    assert len(cooldown_mgets) == 2
-    assert deployment["model_info"]["id"] == "dep-b"
-
-
-@pytest.mark.asyncio
-async def test_the_prefetch_mget_carries_only_the_keys_whose_read_is_due(monkeypatch):
-    first_time: Final = 1_000_000.0
-    pinned: Final = datetime(2026, 1, 1, 12, 0, 30, tzinfo=timezone.utc)
-    monkeypatch.setattr(dual_cache_module.time, "time", lambda: first_time)
-    monkeypatch.setattr(
-        "litellm.router_strategy.lowest_tpm_rpm_v2.get_utc_datetime",
-        lambda: pinned,
-    )
+async def test_the_prefetch_reads_the_counters_again_once_the_read_interval_elapses(pinned_clock: list[float]):
     client = FakeClient(_lua_ok_replies)
     redis_cache = FakeRedisCache(client)
-    router = _router(redis_cache, routing_strategy="usage-based-routing-v2")
-    cooldown_store = router.cooldown_cache.cooldown_store
+    router = _router(redis_cache)
+
+    with request_redis_batch_scope():
+        router.arm_routing_read_prefetch(_MODEL_GROUP, {})
+        await _route(router)
+
+    client.reply_for = _replies_with({_tpm_key(router, "dep-a"): 100})
+    pinned_clock[0] = _START + router.lowesttpm_logger_v2.router_cache.redis_batch_cache_expiry + 1
+    with request_redis_batch_scope():
+        router.arm_routing_read_prefetch(_MODEL_GROUP, {})
+        deployment = await _route(router)
+
+    assert len(_counter_mgets(router, client, redis_cache)) == 2
+    assert deployment == "dep-b"
+
+
+@pytest.mark.asyncio
+async def test_the_prefetch_mget_carries_only_the_keys_whose_read_is_due(pinned_clock: list[float]):
+    client = FakeClient(_lua_ok_replies)
+    redis_cache = FakeRedisCache(client)
+    router = _router(redis_cache)
     usage_cache = router.lowesttpm_logger_v2.router_cache
-    time_offset = cooldown_store.redis_batch_cache_expiry + 0.5
-
-    assert time_offset < usage_cache.redis_batch_cache_expiry
 
     with request_redis_batch_scope():
         router.arm_routing_read_prefetch(_MODEL_GROUP, {})
-        await router.async_get_available_deployment(
-            model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
-        )
+        await _route(router)
 
-    monkeypatch.setattr(dual_cache_module.time, "time", lambda: first_time + time_offset)
+    for key in _counter_keys(router, ("dep-a",)):
+        usage_cache.in_memory_cache.set_cache(key, 1)
+    pinned_clock[0] = _START + usage_cache.redis_batch_cache_expiry + 1
     with request_redis_batch_scope():
         router.arm_routing_read_prefetch(_MODEL_GROUP, {})
-        await router.async_get_available_deployment(
-            model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
-        )
+        await _route(router)
 
-    cooldown_keys = frozenset(
-        {
-            CooldownCache.get_cooldown_cache_key("dep-a"),
-            CooldownCache.get_cooldown_cache_key("dep-b"),
-        }
-    )
     second_pipeline_mgets = tuple(command for command in client.pipelines[1].commands if command[0] == "MGET")
 
     assert len(client.pipelines) == 2
     assert len(second_pipeline_mgets) == 1
-    assert frozenset(second_pipeline_mgets[0][1:]) == cooldown_keys
+    assert frozenset(second_pipeline_mgets[0][1:]) == _counter_keys(router, ("dep-b",))
 
 
 @pytest.mark.asyncio
@@ -888,28 +706,6 @@ async def test_two_backends_flush_concurrently_one_pipeline_each():
         rb = request.batch(b).mget(["x"])
         await asyncio.gather(ra, rb)
     assert len(a_client.pipelines) == 1 and len(b_client.pipelines) == 1
-
-
-@pytest.mark.asyncio
-async def test_a_single_lua_group_rides_the_pipeline_with_the_armed_routing_read():
-    client = FakeClient(_lua_ok_replies)
-    redis_cache = FakeRedisCache(client)
-    router = _router(redis_cache)
-    limiter = _limiter(redis_cache)
-
-    with request_redis_batch_scope():
-        router.arm_routing_read_prefetch(_MODEL_GROUP, {})
-        await limiter.atomic_check_and_increment_by_n(
-            descriptors=[_descriptor("api_key", "k1", 10)],
-            increments=[{"requests": 1}],
-        )
-        await router.async_get_available_deployment(
-            model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
-        )
-
-    assert len(client.pipelines) == 1
-    assert [c[0] for c in client.pipelines[0].commands] == ["MGET", "EVALSHA"]
-    assert redis_cache.alone == []
 
 
 class _SameServerCache(FakeRedisCache):
@@ -954,138 +750,176 @@ def _user_entry() -> tuple[_CacheEntry, LiteLLM_UserTable]:
 
 
 @pytest.mark.asyncio
-async def test_auth_write_back_rides_the_next_round_trip_and_the_scope_drains_what_nobody_awaited():
-    client = FakeClient(_lua_ok_replies)
-    redis_cache = FakeRedisCache(client)
-    cache = UserApiKeyCache(redis_cache=redis_cache)
-    with request_redis_batch_scope() as request:
+async def test_auth_write_back_rides_the_native_pre_call_batch_and_the_scope_drains_what_nobody_awaited():
+    cache, fake = shared_cache()
+    natives: Final = FakeNatives()
+    with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
         await _write_back([_user_entry()], cache)
-        assert client.pipelines == []  # not sent yet: the SET waits for the next round trip
-        await request.batch(redis_cache).mget(["spend:key:k1"])
-        assert len(client.pipelines) == 1
-        kinds = [c[0] for c in client.pipelines[0].commands]
-        assert kinds == ["MGET", "SET"] or kinds == ["SET", "MGET"]
-        set_command = next(c for c in client.pipelines[0].commands if c[0] == "SET")
-        assert set_command[1] == "user-1" and set_command[3] == 42
-        assert json.loads(set_command[2])["user_id"] == "user-1"
-        assert cache.in_memory_cache.get_cache("user-1") is not None
-
-        await _write_back([_user_entry()], cache)
-        assert len(client.pipelines) == 1
+        assert cache.get_local("user-1")["user_id"] == "user-1"
+        assert natives.built[0].events == ["declare write_back (('user-1', 42),)"]
         await request.flush_all()
-    assert len(client.pipelines) == 2
-    assert [c[0] for c in client.pipelines[1].commands] == ["SET"]
+    assert natives.built[0].events[-1] == "flush_pre"
+    assert fake.commands == []
 
 
 @pytest.mark.asyncio
 async def test_auth_write_back_outside_a_scope_writes_through_as_before():
-    redis_cache = FakeRedisCache(FakeClient(_lua_ok_replies))
-    cache = UserApiKeyCache(redis_cache=redis_cache)
+    cache, fake = shared_cache()
     await _write_back([_user_entry()], cache)
-    assert [(op[0], [(key, ttl) for key, _value, ttl in op[1]]) for op in redis_cache.alone] == [
-        ("SET_PIPELINE", [("user-1", 42)])
-    ]
+    assert fake.commands == [("WRITE_BACK", (("user-1", 42),))]
 
 
 @pytest.mark.asyncio
-async def test_a_key_the_request_mget_read_as_absent_is_not_read_again_by_a_per_key_get():
-    client = FakeClient(_lua_ok_replies)
-    redis_cache = FakeRedisCache(client)
-    cache = UserApiKeyCache(redis_cache=redis_cache)
-    with request_redis_batch_scope() as request:
-        assert await request.batch(redis_cache).mget(["absent-key"]) == {"absent-key": None}
+async def test_a_key_the_request_read_as_absent_is_not_read_again_by_a_per_key_get():
+    cache, fake = shared_cache()
+    with request_redis_batch_scope(native_factory=FakeNatives(), native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
+        await prefetch_identity_keys(["absent-key"], cache)
         assert await cache.async_get_cache("absent-key") is None
-        assert redis_cache.alone == [] and len(client.pipelines) == 1
         await cache.async_set_cache("absent-key", {"v": 1}, ttl=5)
+        assert await cache.async_get_cache("absent-key") == {"v": 1}
         await request.flush_all()
-    assert [c[:2] for c in client.pipelines[1].commands] == [("SET", "absent-key")]
+    assert fake.commands == []
 
 
 @pytest.mark.asyncio
 async def test_management_object_writes_inside_a_request_ride_its_pipeline_and_write_through_outside():
-    client = FakeClient(_lua_ok_replies)
-    redis_cache = FakeRedisCache(client)
-    cache = UserApiKeyCache(redis_cache=redis_cache)
-    with request_redis_batch_scope() as request:
+    cache, fake = shared_cache()
+    natives: Final = FakeNatives()
+    with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
         await cache.async_set_cache("team_id:t1", {"team_id": "t1"}, ttl=60)
         await cache.async_set_cache("hashed-key-object", {"token": "hashed-key-object"}, ttl=60)
-        assert client.pipelines == []
-        assert cache.in_memory_cache.get_cache("team_id:t1") == {"team_id": "t1"}
+        assert cache.get_local("team_id:t1") == {"team_id": "t1"}
         assert await cache.async_get_cache("hashed-key-object") == {"token": "hashed-key-object"}
         await request.flush_all()
-    assert sorted((c[0], c[1], c[3]) for c in client.pipelines[0].commands) == [
-        ("SET", "hashed-key-object", 60),
-        ("SET", "team_id:t1", 60),
+    assert natives.built[0].events == [
+        "declare set team_id:t1 ttl=60.0",
+        "declare set hashed-key-object ttl=60.0",
+        "flush_pre",
     ]
     await cache.async_set_cache("team_id:t2", {"team_id": "t2"}, ttl=60)
-    assert len(client.pipelines) == 1
-    assert redis_cache.alone == [("SET", "team_id:t2", {"team_id": "t2"})]
+    assert fake.commands == [("SET", "team_id:t2", 60.0)]
 
 
 @pytest.mark.asyncio
 async def test_a_team_refresh_inside_a_request_sends_its_set_and_alias_del_in_one_pipeline_before_returning():
-    client = FakeClient(_lua_ok_replies)
-    redis_cache = FakeRedisCache(client)
-    cache = UserApiKeyCache(redis_cache=redis_cache)
+    redis_cache = FakeRedisCache(FakeClient(_lua_ok_replies))
+    cache, fake = shared_cache(connection=redis_cache)
     usage_cache = DualCache(redis_cache=redis_cache)
     usage_cache.in_memory_cache.set_cache("team_id:t1", "stale team")
     usage_cache.in_memory_cache.set_cache("team_alias:alpha", "stale alias")
-    cache.in_memory_cache.set_cache("team_alias:alpha", "stale alias")
+    cache.set_local("team_alias:alpha", "stale alias", None)
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.internal_usage_cache = InternalUsageCache(dual_cache=usage_cache)
     team = LiteLLM_TeamTableCachedObj(team_id="t1", team_alias="alpha")
-    with request_redis_batch_scope() as request:
+    natives: Final = FakeNatives()
+    with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
         await cache_team_object("t1", team, cache, proxy_logging_obj)
-        assert [c[:2] for c in client.pipelines[0].commands] == [("SET", "team_id:t1"), ("DEL", "team_alias:alpha")], (
-            "the alias DEL must reach Redis before the refresh returns, or another request can refill memory from it"
-        )
-        assert redis_cache.alone == []
+        assert natives.built[0].events == [
+            "declare set team_id:t1 ttl=60.0",
+            "declare del team_alias:alpha",
+            "flush_pre",
+        ], "the alias DEL must reach Redis before the refresh returns, or another request can refill memory from it"
         assert usage_cache.in_memory_cache.get_cache("team_id:t1") is None
         assert usage_cache.in_memory_cache.get_cache("team_alias:alpha") is None
-        assert cache.in_memory_cache.get_cache("team_alias:alpha") is None
-        assert cache.in_memory_cache.get_cache("team_id:t1")["team_id"] == "t1"
+        assert cache.get_local("team_alias:alpha") is None
+        assert cache.get_local("team_id:t1")["team_id"] == "t1"
         await request.flush_all()
-    assert len(client.pipelines) == 1 and redis_cache.alone == []
+    assert fake.commands == [] and redis_cache.alone == []
 
 
 @pytest.mark.asyncio
-async def test_a_pipelined_management_write_without_a_ttl_expires_in_redis_like_the_direct_path():
-    client = FakeClient(_lua_ok_replies)
-    redis_cache = FakeRedisCache(client)
-    cache = UserApiKeyCache(redis_cache=redis_cache)
+async def test_a_changed_default_in_memory_ttl_reaches_the_native_store():
+    cache, fake = shared_cache()
     cache.update_cache_ttl(default_in_memory_ttl=5, default_redis_ttl=None)
-    with request_redis_batch_scope() as request:
-        await cache.async_set_cache("team_id:t1", {"team_id": "t1"})
-        await request.flush_all()
-    assert [(c[0], c[1], c[3]) for c in client.pipelines[0].commands] == [("SET", "team_id:t1", 5)]
+    assert [settings.memory_ttl for settings in fake.settings] == [None, 5]
 
 
 @pytest.mark.asyncio
-async def test_identity_prefetch_is_one_mget_after_which_hits_and_misses_alike_cost_no_read():
-    client = FakeClient(replies)
-    redis_cache = FakeRedisCache(client)
-    cache = UserApiKeyCache(redis_cache=redis_cache)
-    with request_redis_batch_scope():
+async def test_identity_prefetch_is_one_read_after_which_hits_and_misses_alike_cost_no_read():
+    cache, fake = shared_cache(FakeAuthCache(redis={"key-hit": {"k": "key-hit"}}))
+    natives: Final = FakeNatives()
+    with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
         await prefetch_identity_keys(["key-hit", "end_user_id:eu-miss", "key-hit"], cache)
-        assert [c[0] for c in client.pipelines[0].commands] == ["MGET"]
-        assert sorted(client.pipelines[0].commands[0][1:]) == ["end_user_id:eu-miss", "key-hit"]
         assert await cache.async_get_cache("key-hit") == {"k": "key-hit"}
         assert await cache.async_get_cache("end_user_id:eu-miss") is None
-    assert len(client.pipelines) == 1 and redis_cache.alone == []
-    assert cache.in_memory_cache.get_cache("end_user_id:eu-miss") is None
+    assert natives.built[0].events == ["declare auth_cache end_user_id:eu-miss,key-hit", "flush_pre"]
+    assert fake.commands == []
+    assert cache.get_local("end_user_id:eu-miss") is None
 
 
-@pytest.mark.parametrize(
-    ("cooldown_keys", "usage_keys", "expected"),
-    [
-        (("cooldown:a",), (), ROUTER_COOLDOWNS_TARGET),
-        ((), ("usage:a",), ROUTER_USAGE_TARGET),
-        (("cooldown:a",), ("usage:a",), ROUTER_COOLDOWNS_USAGE_TARGET),
-    ],
-)
-def test_the_routing_read_family_follows_the_keys_that_are_actually_due(
-    cooldown_keys: tuple[str, ...], usage_keys: tuple[str, ...], expected: str
-):
-    """A routing MGET is ``router_cooldowns`` when only cooldown keys go out, ``router_usage`` when the
-    cooldowns were already in memory and only usage counters go out, and the combined family otherwise."""
-    assert _routing_read_target(cooldown_keys, usage_keys) == expected
+@pytest.mark.asyncio
+async def test_the_auth_prefetch_and_the_armed_cooldown_read_go_out_in_one_native_pipeline():
+    cache, _fake = shared_cache(FakeAuthCache(redis={"key-hit": {"k": "key-hit"}}))
+    cooldowns: Final = RouterCooldownStore(_FakeCooldownsHandle())
+    natives: Final = FakeNatives()
+
+    with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
+        await prefetch_identity_keys(["key-hit"], cache, before_read=lambda: arm_cooldowns(cooldowns, ["dep-a"]))
+        arm_cooldowns(cooldowns, ["dep-a"])
+        active = await read_cooldowns(cooldowns, ["dep-a"], None)
+        await request.flush_all()
+
+    assert active == ()
+    assert len(natives.built) == 1
+    assert _declared_before_the_first_flush(natives) == ["declare cooldowns", "declare auth_cache key-hit"]
+    assert not [event for event in natives.built[0].events[2:] if event.startswith("declare")]
+
+
+@pytest.mark.asyncio
+async def test_a_prefetch_served_from_memory_arms_no_early_cooldown_read():
+    cache, _fake = shared_cache()
+    cache.set_local("key-hit", {"k": "key-hit"}, None)
+    armed: Final[list[str]] = []  # mutable-ok: records the arming callback
+
+    with request_redis_batch_scope(native_factory=FakeNatives(), native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
+        await prefetch_identity_keys(["key-hit"], cache, before_read=lambda: armed.append("armed"))
+
+    assert armed == []
+
+
+@pytest.mark.asyncio
+async def test_awaiting_a_native_read_runs_the_native_hooks_then_flushes_the_native_pre_batch_once_per_request():
+    natives: Final = FakeNatives()
+
+    with request_redis_batch_scope(
+        post_call_deadline=7, native_factory=natives, native_send_factory=fake_send
+    ) as request:  # pyright: ignore[reportArgumentType]  # test double
+        native: Final = request.native()
+        request.add_pre_call_flush_hook(lambda: native.events.append("hook"))
+        result: Final = request.native_result(FakeNativePending(native, lambda: "answer"))
+        declared_only: Final = list(native.events)
+        answer: Final = await result
+        await request.flush_all()
+
+    assert request.native() is native
+    assert [built.post_call_deadline for built in natives.built] == [7]
+    assert declared_only == []
+    assert answer == "answer"
+    assert native.events == ["hook", "flush_pre", "resolve", "flush_pre"]
+
+
+@pytest.mark.asyncio
+async def test_a_pre_call_flush_hook_declares_on_its_own_request_whichever_request_awaits_the_flush():
+    natives: Final = FakeNatives()
+    declared_on: Final[list[object]] = []
+
+    with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send) as owner:  # pyright: ignore[reportArgumentType]  # test double
+        owner.add_pre_call_flush_hook(lambda: declared_on.append(route(Batch.PRE_CALL).send))
+        result: Final = owner.native_result(FakeNativePending(owner.native(), lambda: "answer"))
+    with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send) as other:  # pyright: ignore[reportArgumentType]  # test double
+        other.native()
+        answer: Final = await result
+
+    assert answer == "answer"
+    assert declared_on == [natives.built[0]]
+
+
+@pytest.mark.asyncio
+async def test_a_request_that_no_native_store_asks_for_builds_no_native_batches():
+    natives: Final = FakeNatives()
+
+    with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
+        await request.flush_all()
+        await request.flush_post_call()
+
+    assert natives.built == []

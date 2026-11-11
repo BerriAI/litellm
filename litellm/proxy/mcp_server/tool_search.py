@@ -10,13 +10,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from itertools import chain, islice
 from types import EllipsisType, MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, TypedDict
+from typing import TYPE_CHECKING, Final, Protocol, SupportsIndex, SupportsInt, TypedDict, runtime_checkable
 
 import anyio
 from anyio import to_process
 from anyio.lowlevel import RunVar
 from pydantic import JsonValue, SecretStr, ValidationError
-from typing_extensions import ReadOnly, Required, assert_never
+from typing_extensions import Buffer, ReadOnly, Required, assert_never
 
 import litellm
 from litellm.llms.litellm_proxy.skills.skill_search import DEFAULT_SKILL_SEARCH_TOP_K
@@ -131,7 +131,14 @@ async def _tool_argument_validation_error(
         return "Tool argument validation worker failed"
 
 
-def coerce_top_k(value: Any, default: int = 5) -> int:
+@runtime_checkable
+class _SupportsTrunc(Protocol):
+    def __trunc__(self) -> int: ...
+
+
+def coerce_top_k(value: object, default: int = 5) -> int:
+    if not isinstance(value, (str, Buffer, SupportsInt, SupportsIndex, _SupportsTrunc)):
+        return default
     try:
         return int(value)
     except (TypeError, ValueError):
@@ -699,7 +706,7 @@ async def handle_mcp_proxy_tool(
 
 async def handle_mcp_tool_call(
     tool_name: str,
-    arguments: dict[str, Any],
+    arguments: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth,
     client_ip: str | None = None,
     mcp_servers: list[str] | None = None,

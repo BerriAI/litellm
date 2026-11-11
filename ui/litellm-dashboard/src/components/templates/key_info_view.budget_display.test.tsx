@@ -424,7 +424,7 @@ describe("KeyInfoView budget reset visibility", () => {
       />,
     );
     await waitFor(() => {
-      expect(screen.getByText(/^Resets Jul 22, 2026/)).toBeInTheDocument();
+      expect(screen.getByText("Resets Jul 22, 2026 at 12:00 PM UTC")).toBeInTheDocument();
     });
   });
 

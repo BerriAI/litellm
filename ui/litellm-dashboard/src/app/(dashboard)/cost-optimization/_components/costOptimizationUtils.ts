@@ -1,3 +1,5 @@
+import type { TFunction } from "i18next";
+import i18n from "@/i18n/i18n";
 import type { KeySpendActivityRow } from "@/components/UsagePage/dailyActivityApi";
 import { DailyData, SpendMetrics } from "@/components/UsagePage/types";
 import { ToolSpendDailyEntry, ToolSpendEntry } from "@/components/networking";
@@ -11,11 +13,15 @@ export const usd = (value: number): string => {
   return `${value < 0 ? "-" : ""}$${formatNumberWithCommas(magnitude, decimals)}`;
 };
 
-export const classificationRatePer1kTurns = (classifierCost: number, turns: number): string => {
-  if (turns <= 0) return `(${usd(0)} / 1K turns)`;
+export const classificationRatePer1kTurns = (
+  classifierCost: number,
+  turns: number,
+  t: TFunction = i18n.t.bind(i18n),
+): string => {
+  if (turns <= 0) return t("costOptimization.classificationRate.perThousandTurns", { rate: usd(0) });
   const rate = (classifierCost * 1000) / turns;
-  if (rate > 0 && rate < 0.0001) return "(<$0.0001 / 1K turns)";
-  return `(${usd(rate)} / 1K turns)`;
+  if (rate > 0 && rate < 0.0001) return t("costOptimization.classificationRate.belowMinimum");
+  return t("costOptimization.classificationRate.perThousandTurns", { rate: usd(rate) });
 };
 
 export const pct = (ratio: number): string => `${formatNumberWithCommas(ratio * 100, 1)}%`;

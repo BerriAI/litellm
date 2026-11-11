@@ -1,16 +1,23 @@
+import asyncio
+import io
 import json
 import os
+import sys
 import threading
 import traceback
 import uuid
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from queue import SimpleQueue
-from typing import Callable, Final, Optional
+from typing import Awaitable, Callable, Final, Optional
 from urllib.parse import parse_qs
 from unittest.mock import ANY, MagicMock, patch
 
 import httpx
+import openai
 import pytest
+import requests
+from azure.core.pipeline.transport import RequestsTransport
 
 import litellm
 from litellm.llms.azure.common_utils import (
@@ -467,6 +474,10 @@ def test_default_max_retries_env_var_reaches_azure_sdk_client():
             "add_message",
             "arun_thread_stream",
             "aresponses",
+            "aget_responses",
+            "adelete_responses",
+            "acancel_responses",
+            "acompact_responses",
             "aresponses_websocket",
             "alist_input_items",
             "acreate_fine_tuning_job",
@@ -488,6 +499,11 @@ def test_default_max_retries_env_var_reaches_azure_sdk_client():
             "avector_store_search",
             "acreate_skill",
             "acreate_interaction",
+            "acreate_realtime_client_secret",
+            "acreate_realtime_transcription_session",
+            "acreate_realtime_translation_client_secret",
+            "arealtime_calls",
+            "arealtime_translation_calls",
         ]
     ],
 )
@@ -2492,3 +2508,487 @@ def test_an_azure_client_litellm_built_its_own_http_client_for_is_still_closed(m
     closer.reap()
 
     assert wrapper.is_closed() is True
+
+
+_ENTRA_APP_CLIENT_ID: Final = "0d08e61f-6184-4980-9cef-a2e9128f4cb2"
+_ENTRA_TRACE_ID: Final = "f0c149d3-ef20-4194-8b81-c81a5e002500"
+_ENTRA_REJECTIONS: Final = {
+    "wrong_secret": (
+        "AADSTS7000215",
+        "Authentication failed: AADSTS7000215: Invalid client secret provided. Ensure the secret being sent in the "
+        "request is the client secret value, not the client secret ID, for a secret added to app "
+        f"'{_ENTRA_APP_CLIENT_ID}'. Trace ID: {_ENTRA_TRACE_ID} Correlation ID: ecfd2c73-ec0a-474c-bba7-205be903159d "
+        "Timestamp: 2026-10-29 07:19:40Z",
+    ),
+    "expired_secret": (
+        "AADSTS7000222",
+        f"Authentication failed: AADSTS7000222: The provided client secret keys for app '{_ENTRA_APP_CLIENT_ID}' "
+        f"are expired. Visit the Azure portal to create new keys for your app. Trace ID: {_ENTRA_TRACE_ID} "
+        "Correlation ID: 354f9b57-5fed-47e4-a67d-89a7c56f6ddc Timestamp: 2026-10-29 07:19:50Z",
+    ),
+}
+
+
+def _raising_token_provider(error: Exception) -> Callable[[], str]:
+    def token_provider() -> str:
+        raise error
+
+    return token_provider
+
+
+def _azure_chat(token_provider: Callable[[], str]) -> object:
+    return litellm.completion(
+        model="azure/gpt-4.1",
+        api_base="https://litellm-qa.openai.azure.com",
+        api_version="2025-04-01-preview",
+        messages=[{"role": "user", "content": "hi"}],
+        azure_ad_token_provider=token_provider,
+        max_retries=0,
+    )
+
+
+def _azure_async_chat(token_provider: Callable[[], str]) -> object:
+    return asyncio.run(
+        litellm.acompletion(
+            model="azure/gpt-4.1",
+            api_base="https://litellm-qa.openai.azure.com",
+            api_version="2025-04-01-preview",
+            messages=[{"role": "user", "content": "hi"}],
+            azure_ad_token_provider=token_provider,
+        )
+    )
+
+
+def _azure_responses(token_provider: Callable[[], str]) -> object:
+    return litellm.responses(
+        model="azure/gpt-4.1",
+        api_base="https://litellm-qa.openai.azure.com",
+        api_version="2025-04-01-preview",
+        input="hi",
+        azure_ad_token_provider=token_provider,
+    )
+
+
+def _azure_ai_decisions(token_provider: Callable[[], str]) -> object:
+    return litellm.systemone(
+        model="azure_ai/decision-1-qa",
+        api_base="https://litellm-qa.services.ai.azure.com",
+        state={"ticket": "The login page returns a 500 error after deploy"},
+        questions={"is_bug": {"type": "noul", "instructions": "Is this a software bug report?"}},
+        azure_ad_token_provider=token_provider,
+    )
+
+
+_AZURE_CALLS: Final = {
+    "chat": _azure_chat,
+    "async_chat": _azure_async_chat,
+    "responses": _azure_responses,
+    "decisions": _azure_ai_decisions,
+}
+
+
+@pytest.fixture
+def no_azure_api_key(monkeypatch):
+    for env_var in (
+        "AZURE_API_KEY",
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_AI_API_KEY",
+        "AZURE_AD_TOKEN",
+        "AZURE_TENANT_ID",
+        "AZURE_CLIENT_ID",
+        "AZURE_CLIENT_SECRET",
+        "AZURE_USERNAME",
+        "AZURE_PASSWORD",
+    ):
+        monkeypatch.delenv(env_var, raising=False)
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "azure_key", None)
+
+
+@pytest.mark.parametrize("call", _AZURE_CALLS.values(), ids=_AZURE_CALLS.keys())
+@pytest.mark.parametrize(("aadsts_code", "entra_message"), _ENTRA_REJECTIONS.values(), ids=_ENTRA_REJECTIONS.keys())
+def test_entra_rejecting_the_credential_answers_401_with_only_the_aadsts_reason(
+    no_azure_api_key, call, aadsts_code, entra_message
+):
+    from azure.core.exceptions import ClientAuthenticationError
+
+    with pytest.raises(litellm.AuthenticationError) as excinfo:
+        call(_raising_token_provider(ClientAuthenticationError(message=entra_message)))
+
+    assert excinfo.value.status_code == 401
+    assert aadsts_code in str(excinfo.value)
+    assert _ENTRA_APP_CLIENT_ID not in str(excinfo.value)
+    assert _ENTRA_TRACE_ID not in str(excinfo.value)
+
+
+@pytest.mark.parametrize("api_version", ["2025-04-01-preview", "v1"])
+def test_entra_rejecting_an_async_token_provider_answers_401(no_azure_api_key, api_version):
+    from azure.core.exceptions import ClientAuthenticationError
+
+    aadsts_code, entra_message = _ENTRA_REJECTIONS["wrong_secret"]
+
+    async def token_provider() -> str:
+        raise ClientAuthenticationError(message=entra_message)
+
+    async_token_provider: Final[Callable[[], Awaitable[str]]] = token_provider
+
+    with pytest.raises(litellm.AuthenticationError) as excinfo:
+        asyncio.run(
+            litellm.acompletion(
+                model="azure/gpt-4.1",
+                api_base="https://litellm-qa.openai.azure.com",
+                api_version=api_version,
+                messages=[{"role": "user", "content": "hi"}],
+                azure_ad_token_provider=async_token_provider,
+            )
+        )
+
+    assert excinfo.value.status_code == 401
+    assert aadsts_code in str(excinfo.value)
+    assert _ENTRA_APP_CLIENT_ID not in str(excinfo.value)
+    assert _ENTRA_TRACE_ID not in str(excinfo.value)
+
+
+def _azure_identity_wrapped_token_provider(inner_error: Exception) -> Callable[[], str]:
+    from azure.core.exceptions import ClientAuthenticationError
+
+    def token_provider() -> str:
+        try:
+            raise inner_error
+        except Exception as error:
+            raise ClientAuthenticationError(message=f"Authentication failed: {error}") from error
+
+    return token_provider
+
+
+@pytest.mark.parametrize("call", _AZURE_CALLS.values(), ids=_AZURE_CALLS.keys())
+@pytest.mark.parametrize("failed_leg", ["request", "response"])
+def test_unreachable_entra_endpoint_stays_a_retryable_server_error(no_azure_api_key, call, failed_leg):
+    from azure.core.exceptions import ServiceRequestError, ServiceResponseError
+
+    transport_error: Final = {"request": ServiceRequestError, "response": ServiceResponseError}[failed_leg](
+        "('Unable to connect to proxy', NewConnectionError(\"Failed to establish a new connection: "
+        "[Errno 111] Connection refused\"))"
+    )
+
+    with pytest.raises(openai.APIError) as excinfo:
+        call(_azure_identity_wrapped_token_provider(transport_error))
+
+    assert not isinstance(excinfo.value, litellm.AuthenticationError)
+    assert excinfo.value.status_code != 401
+
+
+_ENTRA_TENANT_ID: Final = "5b3e1c7a-2f4d-4e8b-9a61-0c2d7f8e9b14"
+_ENTRA_SCOPE: Final = "https://cognitiveservices.azure.com/.default"
+_ENTRA_OPENID_CONFIGURATION: Final = {
+    "token_endpoint": f"https://login.microsoftonline.com/{_ENTRA_TENANT_ID}/oauth2/v2.0/token",
+    "authorization_endpoint": f"https://login.microsoftonline.com/{_ENTRA_TENANT_ID}/oauth2/v2.0/authorize",
+    "issuer": f"https://login.microsoftonline.com/{_ENTRA_TENANT_ID}/v2.0",
+}
+
+
+class _FakeEntraAdapter(requests.adapters.BaseAdapter):
+    def __init__(self, status_code: int | None, body: Mapping[str, object] | str) -> None:
+        super().__init__()
+        self.status_code: Final = status_code
+        self.body: Final = body
+
+    def send(self, request: requests.PreparedRequest, *args: object, **kwargs: object) -> requests.Response:
+        if "openid-configuration" in str(request.url):
+            return self._answer(request, 200, _ENTRA_OPENID_CONFIGURATION)
+        if self.status_code is None:
+            raise requests.exceptions.ConnectionError("Failed to establish a new connection: Connection refused")
+        return self._answer(request, self.status_code, self.body)
+
+    def close(self) -> None:
+        pass
+
+    @staticmethod
+    def _answer(
+        request: requests.PreparedRequest, status_code: int, body: Mapping[str, object] | str
+    ) -> requests.Response:
+        response: Final = requests.Response()
+        response.status_code = status_code
+        response.raw = io.BytesIO((body if isinstance(body, str) else json.dumps(body)).encode())
+        response.headers = requests.structures.CaseInsensitiveDict(
+            {"Content-Type": "application/json", "Retry-After": "0"}
+        )
+        response.url = str(request.url)
+        response.request = request
+        return response
+
+
+def _entra_answering(status_code: int | None, body: Mapping[str, object] | str = "") -> RequestsTransport:
+    session: Final = requests.Session()
+    session.mount("https://", _FakeEntraAdapter(status_code, body))
+    return RequestsTransport(session=session, session_owner=False)
+
+
+def _entra_error(aadsts_code: str, description: str) -> Mapping[str, object]:
+    return {
+        "error": "invalid_client",
+        "error_description": f"{aadsts_code}: {description} Trace ID: {_ENTRA_TRACE_ID}",
+        "error_codes": [int(aadsts_code.removeprefix("AADSTS"))],
+    }
+
+
+def _real_credential_token_provider(credential_kind: str, entra: RequestsTransport) -> Callable[[], str]:
+    from azure.identity import (
+        ChainedTokenCredential,
+        ClientAssertionCredential,
+        ClientSecretCredential,
+        get_bearer_token_provider,
+    )
+
+    client_secret: Final = ClientSecretCredential(
+        _ENTRA_TENANT_ID, _ENTRA_APP_CLIENT_ID, "wrong-secret", transport=entra, disable_instance_discovery=True
+    )
+    credentials: Final = {
+        "client_secret": client_secret,
+        "default_azure_credential_chain": ChainedTokenCredential(client_secret),
+        "workload_identity": ClientAssertionCredential(
+            _ENTRA_TENANT_ID, _ENTRA_APP_CLIENT_ID, lambda: "federated-token", transport=entra, retry_total=0
+        ),
+    }
+    return get_bearer_token_provider(credentials[credential_kind], _ENTRA_SCOPE)
+
+
+_REAL_CREDENTIAL_REJECTIONS: Final = {
+    "wrong_secret": ("client_secret", "AADSTS7000215", "Invalid client secret provided."),
+    "wrong_secret_through_a_credential_chain": (
+        "default_azure_credential_chain",
+        "AADSTS7000215",
+        "Invalid client secret provided.",
+    ),
+    "unknown_app_through_workload_identity": (
+        "workload_identity",
+        "AADSTS700016",
+        f"Application with identifier '{_ENTRA_APP_CLIENT_ID}' was not found in the directory.",
+    ),
+    "unknown_federated_subject_through_workload_identity": (
+        "workload_identity",
+        "AADSTS700213",
+        "No matching federated identity record found for presented assertion subject 'system:serviceaccount:qa:proxy'.",
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("credential_kind", "aadsts_code", "description"),
+    _REAL_CREDENTIAL_REJECTIONS.values(),
+    ids=_REAL_CREDENTIAL_REJECTIONS.keys(),
+)
+def test_entra_rejection_through_a_real_azure_identity_credential_answers_401(
+    no_azure_api_key, credential_kind, aadsts_code, description
+):
+    entra: Final = _entra_answering(401, _entra_error(aadsts_code, description))
+
+    with pytest.raises(litellm.AuthenticationError) as excinfo:
+        _azure_chat(_real_credential_token_provider(credential_kind, entra))
+
+    assert excinfo.value.status_code == 401
+    assert aadsts_code in str(excinfo.value)
+    assert _ENTRA_APP_CLIENT_ID not in str(excinfo.value)
+    assert _ENTRA_TRACE_ID not in str(excinfo.value)
+
+
+_REAL_CREDENTIAL_NON_REJECTIONS: Final = {
+    "unreachable_through_a_credential_chain": ("default_azure_credential_chain", None, ""),
+    "html_503_through_a_credential_chain": (
+        "default_azure_credential_chain",
+        503,
+        "<html><body>Service Unavailable</body></html>",
+    ),
+    "json_503_through_a_credential_chain": (
+        "default_azure_credential_chain",
+        503,
+        _entra_error("AADSTS90033", "A transient error has occurred."),
+    ),
+    "throttled_client_secret": (
+        "client_secret",
+        429,
+        _entra_error("AADSTS50196", "The server terminated an operation because it encountered a client request loop."),
+    ),
+    "tenant_throttled_client_secret": (
+        "client_secret",
+        429,
+        _entra_error("AADSTS90055", "There are too many incoming requests."),
+    ),
+    "request_budget_exceeded_client_secret": (
+        "client_secret",
+        400,
+        _entra_error("AADSTS90024", "A transient error has occurred. Try again."),
+    ),
+    "retryable_error_client_secret": (
+        "client_secret",
+        400,
+        _entra_error("AADSTS50033", "A transient error has occurred."),
+    ),
+    "external_server_retryable_client_secret": (
+        "client_secret",
+        400,
+        _entra_error("AADSTS90006", "The service is temporarily unavailable."),
+    ),
+    "graph_retryable_client_secret": (
+        "client_secret",
+        400,
+        _entra_error("AADSTS90090", "The service is temporarily unavailable."),
+    ),
+    "token_issuance_error_client_secret": (
+        "client_secret",
+        400,
+        _entra_error("AADSTS50000", "There was an error issuing a token or an issue with our sign-in service."),
+    ),
+    "throttled_without_a_code_through_a_credential_chain": (
+        "default_azure_credential_chain",
+        429,
+        {"error": "temporarily_unavailable", "error_description": "Too many requests."},
+    ),
+    "json_503_through_workload_identity": (
+        "workload_identity",
+        503,
+        _entra_error("AADSTS90033", "A transient error has occurred."),
+    ),
+    "throttled_workload_identity_naming_a_rejection_code": (
+        "workload_identity",
+        429,
+        _entra_error("AADSTS7000215", "Invalid client secret provided."),
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("credential_kind", "status_code", "body"),
+    _REAL_CREDENTIAL_NON_REJECTIONS.values(),
+    ids=_REAL_CREDENTIAL_NON_REJECTIONS.keys(),
+)
+def test_entra_outage_or_throttle_through_a_real_azure_identity_credential_stays_retryable(
+    no_azure_api_key, credential_kind, status_code, body
+):
+    with pytest.raises(openai.APIError) as excinfo:
+        _azure_chat(_real_credential_token_provider(credential_kind, _entra_answering(status_code, body)))
+
+    assert not isinstance(excinfo.value, litellm.AuthenticationError)
+    assert excinfo.value.status_code != 401
+
+
+def _azure_chat_with_oidc_token(
+    respx_mock,
+    monkeypatch,
+    entra_status_code: int,
+    entra_body: Mapping[str, object],
+    entra_headers: Mapping[str, str] | None = None,
+):
+    monkeypatch.setenv("LITELLM_QA_FEDERATED_TOKEN", "federated-token")
+    monkeypatch.delenv("AZURE_AUTHORITY_HOST", raising=False)
+    respx_mock.post(f"https://login.microsoftonline.com/{_ENTRA_TENANT_ID}/oauth2/v2.0/token").mock(
+        return_value=httpx.Response(entra_status_code, json=entra_body, headers=entra_headers)
+    )
+    return litellm.completion(
+        model="azure/gpt-4.1",
+        api_base="https://litellm-qa.openai.azure.com",
+        api_version="2025-04-01-preview",
+        messages=[{"role": "user", "content": "hi"}],
+        azure_ad_token="oidc/env/LITELLM_QA_FEDERATED_TOKEN",
+        tenant_id=_ENTRA_TENANT_ID,
+        client_id=_ENTRA_APP_CLIENT_ID,
+        max_retries=0,
+    )
+
+
+def test_entra_rejecting_an_oidc_token_answers_401_with_only_the_aadsts_reason(no_azure_api_key, respx_mock, monkeypatch):
+    rejection: Final = _entra_error(
+        "AADSTS700213", f"No matching federated identity record found for app '{_ENTRA_APP_CLIENT_ID}'."
+    )
+
+    with pytest.raises(litellm.AuthenticationError) as excinfo:
+        _azure_chat_with_oidc_token(respx_mock, monkeypatch, 400, rejection)
+
+    assert excinfo.value.status_code == 401
+    assert "AADSTS700213" in str(excinfo.value)
+    assert _ENTRA_APP_CLIENT_ID not in str(excinfo.value)
+    assert _ENTRA_TRACE_ID not in str(excinfo.value)
+
+
+def test_entra_answering_an_oidc_exchange_with_a_transient_code_keeps_its_status(
+    no_azure_api_key, respx_mock, monkeypatch
+):
+    with pytest.raises(openai.APIError) as excinfo:
+        _azure_chat_with_oidc_token(
+            respx_mock, monkeypatch, 400, _entra_error("AADSTS90024", "A transient error has occurred. Try again.")
+        )
+
+    assert excinfo.value.status_code == 400
+    assert not isinstance(excinfo.value, litellm.AuthenticationError)
+
+
+def test_entra_throttling_an_oidc_exchange_keeps_its_retry_after(no_azure_api_key, respx_mock, monkeypatch):
+    with pytest.raises(litellm.RateLimitError) as excinfo:
+        _azure_chat_with_oidc_token(
+            respx_mock,
+            monkeypatch,
+            429,
+            _entra_error("AADSTS90055", "TenantThrottlingError: There are too many pending requests."),
+            {"Retry-After": "7"},
+        )
+
+    assert excinfo.value.response.headers.get("retry-after") == "7"
+
+
+class _EntraServiceUnavailableAnswer:
+    status_code: Final = 503
+    reason: Final = "Service Unavailable"
+
+    def text(self, encoding: str | None = None) -> str:
+        return "<html><body>Service Unavailable</body></html>"
+
+
+@pytest.mark.parametrize("call", _AZURE_CALLS.values(), ids=_AZURE_CALLS.keys())
+@pytest.mark.parametrize("credential_kind", ["client_secret", "managed_identity"])
+def test_entra_answering_a_server_error_stays_a_retryable_server_error(no_azure_api_key, call, credential_kind):
+    from azure.core.exceptions import ClientAuthenticationError
+    from msal.exceptions import MsalServiceError
+
+    token_providers: Final = {
+        "client_secret": _azure_identity_wrapped_token_provider(
+            MsalServiceError("HTTP Error: 503", error=None, error_description=None)
+        ),
+        "managed_identity": _raising_token_provider(
+            ClientAuthenticationError(message="No token received.", response=_EntraServiceUnavailableAnswer())
+        ),
+    }
+
+    with pytest.raises(openai.APIError) as excinfo:
+        call(token_providers[credential_kind])
+
+    assert not isinstance(excinfo.value, litellm.AuthenticationError)
+    assert excinfo.value.status_code != 401
+
+
+def test_token_provider_error_without_azure_core_installed_keeps_the_generic_token_error(monkeypatch):
+    monkeypatch.setitem(sys.modules, "azure.core.exceptions", None)
+
+    with pytest.raises(RuntimeError, match="Failed to get Azure AD token: token service down"):
+        get_azure_ad_token(
+            GenericLiteLLMParams(azure_ad_token_provider=_raising_token_provider(ValueError("token service down")))
+        )
+
+
+def test_image_generation_with_an_api_key_ignores_a_non_callable_azure_ad_token_provider():
+    import respx
+
+    with respx.mock:
+        image_route: Final = respx.post(url__startswith="https://litellm-qa.openai.azure.com").mock(
+            return_value=httpx.Response(200, json={"created": 1, "data": [{"b64_json": "aGk="}]})
+        )
+        response: Final = litellm.image_generation(
+            model="azure/gpt-image-1",
+            prompt="a red dot",
+            api_base="https://litellm-qa.openai.azure.com",
+            api_version="2025-04-01-preview",
+            api_key="configured-key",
+            azure_ad_token_provider="not-a-callable",
+        )
+
+    assert image_route.calls.last.request.headers["api-key"] == "configured-key"
+    assert response.data[0].b64_json == "aGk="

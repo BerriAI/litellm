@@ -1,4 +1,5 @@
 import type { Member } from "@/components/networking";
+import i18n from "@/i18n/i18n";
 import { hasProxyWideSpendView, isUserTeamAdminForSingleTeam } from "@/utils/roles";
 
 export interface ClientUsageTeam {
@@ -76,23 +77,23 @@ export const resolveClientUsageScope = ({
     canChooseGlobalUser: proxyAdmin && !ownUsage && !requestedTeamId,
     error: null,
   };
-  if (!userId) return { ...base, error: "Sign in to view client usage" };
+  if (!userId) return { ...base, error: i18n.t("usage.clientUsage.errors.signIn") };
   if (ownUsage) return { ...base, scope: { userId, teamId: null } };
 
   if (requestedTeamId) {
     const selectedTeam = availableTeams.find((team) => team.team_id === requestedTeamId);
-    if (!selectedTeam) return { ...base, error: "Choose a team you administer" };
+    if (!selectedTeam) return { ...base, error: i18n.t("usage.clientUsage.errors.chooseAdministeredTeam") };
     const members = memberOptions(selectedTeam);
     const memberId = requestedUserId || null;
     if (memberId && !members.some((member) => member.value === memberId)) {
-      return { ...base, members, error: "Choose a member of the selected team" };
+      return { ...base, members, error: i18n.t("usage.clientUsage.errors.chooseTeamMember") };
     }
     return { ...base, members, scope: { teamId: selectedTeam.team_id, userId: memberId } };
   }
 
   if (proxyAdmin) return { ...base, scope: { teamId: null, userId: requestedUserId || null } };
   if (requestedUserId && requestedUserId !== userId) {
-    return { ...base, error: "Choose an administered team before viewing another member's usage" };
+    return { ...base, error: i18n.t("usage.clientUsage.errors.chooseTeamBeforeMember") };
   }
   return { ...base, scope: { teamId: null, userId } };
 };

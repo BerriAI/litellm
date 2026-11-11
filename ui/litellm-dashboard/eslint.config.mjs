@@ -5,7 +5,156 @@ import prettier from "eslint-config-prettier/flat";
 import unusedImports from "eslint-plugin-unused-imports";
 import testingLibrary from "eslint-plugin-testing-library";
 import jestDom from "eslint-plugin-jest-dom";
+import i18next from "eslint-plugin-i18next";
+import htmlEntities from "eslint-plugin-i18next/lib/options/htmlEntities.js";
 import local from "./scripts/eslint-rules/index.mjs";
+
+const rawFetchRestriction = {
+  selector: "CallExpression[callee.name='fetch']",
+  message:
+    "Raw fetch() is only allowed in src/lib/http/. Use the shared client (createApiClient / apiClient) from @/lib/http/client instead.",
+};
+
+const toastLiteralRestriction = {
+  selector:
+    "CallExpression[callee.object.name='toast'][callee.property.name=/^(success|error|warning|info)$/] > Literal.arguments:first-child",
+  message: "Pass toast a t() string, not an English literal, so the message can be translated.",
+};
+
+const noLiteralStringOptions = {
+  mode: "jsx-only",
+  "should-validate-template": true,
+  "jsx-components": { exclude: ["Trans", "code", "pre", "kbd", "Kbd", "CodeBlock", "SyntaxHighlighter"] },
+  "jsx-attributes": {
+    exclude: [
+      "className",
+      ".*ClassName",
+      "style",
+      ".*Style",
+      "key",
+      "id",
+      ".*Id",
+      ".*ID",
+      "htmlFor",
+      "name",
+      "value",
+      "defaultValue",
+      "data-.*",
+      "aria-(describedby|labelledby|controls|owns|haspopup|live|current|hidden|expanded|selected)",
+      "type",
+      "role",
+      "href",
+      "to",
+      "src",
+      "target",
+      "rel",
+      "accept",
+      "autoComplete",
+      "inputMode",
+      "step",
+      "min",
+      "max",
+      "width",
+      "height",
+      "size",
+      "color",
+      ".*Color",
+      "variant",
+      "language",
+      "index",
+      ".*Key",
+      "keys",
+      "feature",
+      "fill",
+      "stroke",
+      "scope",
+      "delay",
+      "stackId",
+      "category",
+      "categories",
+      "gridCols",
+      "defaultTheme",
+      "defaultRole",
+      "schemaComponent",
+      "storageKey",
+      "code",
+    ],
+  },
+  callees: {
+    exclude: [
+      "i18n(ext)?",
+      "t",
+      "i18n\\.t",
+      "require",
+      "addEventListener",
+      "removeEventListener",
+      "postMessage",
+      "getElementById",
+      "dispatch",
+      "commit",
+      "includes",
+      "indexOf",
+      "endsWith",
+      "startsWith",
+      "cn",
+      "clsx",
+      "cva",
+      ".*\\.(get|set|has|delete|getAll|append|getColumn|format|split|replace|closest|querySelector|getItem|setItem|removeItem|toLocaleDateString|toLocaleString|hasOwnProperty)",
+      "Object\\.hasOwn",
+      "uiHref",
+      "hasVisited",
+      "toggleKey",
+      "emitLocalStorageChange",
+      "setLocalStorageItem",
+      "removeLocalStorageItem",
+      "getLocalStorageItem",
+      "window\\.open",
+      "Error",
+      "new Error",
+    ],
+  },
+  words: {
+    exclude: [
+      "[0-9!-/:-@[-`{-~]+",
+      "[A-Z_-]+",
+      "v",
+      htmlEntities,
+      /^\p{Emoji}+$/u,
+      /^[\p{P}\p{S}\p{N}\p{M}\s]+$/u,
+      /^[a-z0-9]+(?:[_\-.:/][a-z0-9*[\]]+)+:?$/,
+      /^(?:https?:\/\/|\/|~\/|\.\/)\S*$/,
+    ],
+  },
+  "object-properties": {
+    exclude: [
+      "[A-Z_-]+",
+      "value",
+      "key",
+      "id",
+      "name",
+      "dataIndex",
+      "className",
+      "width",
+      "fontSize",
+      "maxHeight",
+      "borderRadius",
+      "bg",
+      "color",
+      "background",
+      "padding",
+      "fill",
+      "role",
+      "class",
+      "spellcheck",
+      "toast",
+      "scope",
+      "origin",
+      "classifierType",
+      "defaultValue",
+      "1",
+    ],
+  },
+};
 
 const eslintConfig = [
   {
@@ -41,14 +190,7 @@ const eslintConfig = [
       "max-depth": ["warn", 4],
       "max-params": ["error", 4],
       "max-nested-callbacks": ["error", 4],
-      "no-restricted-syntax": [
-        "error",
-        {
-          selector: "CallExpression[callee.name='fetch']",
-          message:
-            "Raw fetch() is only allowed in src/lib/http/. Use the shared client (createApiClient / apiClient) from @/lib/http/client instead.",
-        },
-      ],
+      "no-restricted-syntax": ["error", rawFetchRestriction],
       "no-restricted-imports": [
         "error",
         {
@@ -80,6 +222,26 @@ const eslintConfig = [
     rules: {
       "max-lines": ["error", { max: 800, skipBlankLines: true, skipComments: true }],
     },
+  },
+  {
+    files: ["src/**/*.{ts,tsx}"],
+    ignores: [
+      "src/**/*.test.{ts,tsx}",
+      "src/**/*.spec.{ts,tsx}",
+      "src/**/*.test-d.ts",
+      "src/**/__tests__/**",
+      "src/**/*TestHarness.tsx",
+    ],
+    languageOptions: { parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname } },
+    plugins: { i18next },
+    rules: {
+      "i18next/no-literal-string": ["error", noLiteralStringOptions],
+      "no-restricted-syntax": ["error", rawFetchRestriction, toastLiteralRestriction],
+    },
+  },
+  {
+    files: ["src/i18n/untranslated/**"],
+    rules: { "i18next/no-literal-string": "off" },
   },
   {
     files: ["src/lib/http/**"],

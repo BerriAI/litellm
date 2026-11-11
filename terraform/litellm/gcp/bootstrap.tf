@@ -7,8 +7,8 @@
 # so they don't go live until the schema is in place.
 #
 # Triggers:
-#   - re-runs if the migrations image changes (new release ships new prisma
-#     migration files).
+#   - re-runs if the image changes (new release ships new prisma migration
+#     files).
 #   - re-runs if the migration job is recreated.
 #
 # Requires `gcloud` on the machine running terraform, with user creds live
@@ -19,7 +19,7 @@ resource "terraform_data" "migration" {
 
   triggers_replace = {
     job_id    = google_cloud_run_v2_job.migrations[0].id
-    job_image = local.migrations_image
+    job_image = local.image
   }
 
   provisioner "local-exec" {

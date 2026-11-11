@@ -1,11 +1,12 @@
+import type { ParseKeys, TFunction } from "i18next";
+import i18n from "@/i18n/i18n";
+
 type Metadata = Record<string, unknown> | null | undefined;
 
 type FormValues = Record<string, unknown>;
 
 const ESTIMATE_FIELD = "default_estimated_output_tokens";
 const PER_MODEL_FIELD = "default_estimated_output_tokens_per_model";
-
-const INVALID_PER_MODEL_MESSAGE = 'Enter a JSON object of positive integers, e.g. {"gpt-4": 4096}';
 
 const perModelEstimateToText = (value: unknown): string =>
   value != null && typeof value === "object" ? JSON.stringify(value) : "";
@@ -31,34 +32,33 @@ export const estimateFields = (metadata: Metadata) => ({
   [PER_MODEL_FIELD]: perModelEstimateToText(metadata?.[PER_MODEL_FIELD]),
 });
 
-const ADMIN_ONLY_TOOLTIP =
-  "Only a proxy admin can change this. It sets how many output tokens the rate limiter reserves for a request " +
-  "that omits max_tokens, which is charged against the team and organization TPM windows.";
+const ADMIN_ONLY_TOOLTIP: ParseKeys = "keyDetail.estimatedOutputTokens.adminOnlyTooltip";
 
-export const estimateTooltips = (canEdit: boolean, entity: "key" | "team" = "key") => ({
-  estimate: canEdit
-    ? `Expected output tokens reserved for TPM limiting when a request omits max_tokens. Overrides the built-in estimate for this ${entity}.`
-    : ADMIN_ONLY_TOOLTIP,
-  perModel: canEdit
-    ? `Per-model expected output tokens reserved for TPM limiting when a request omits max_tokens. Takes precedence over the ${entity}-wide estimate.`
-    : ADMIN_ONLY_TOOLTIP,
+export const estimateTooltips = (
+  canEdit: boolean,
+  entity: "key" | "team" = "key",
+  t: TFunction = i18n.t.bind(i18n),
+) => ({
+  estimate: canEdit ? t("keyDetail.estimatedOutputTokens.estimateTooltip", { entity }) : t(ADMIN_ONLY_TOOLTIP),
+  perModel: canEdit ? t("keyDetail.estimatedOutputTokens.perModelTooltip", { entity }) : t(ADMIN_ONLY_TOOLTIP),
 });
 
 export const estimateChecks = {
   perModel: {
     isValid: (value: unknown): boolean =>
       typeof value !== "string" || value.trim() === "" ? true : parsePerModelEstimates(value) !== null,
-    message: INVALID_PER_MODEL_MESSAGE,
+    messageKey: "keyDetail.estimatedOutputTokens.invalidPerModel" as ParseKeys,
   },
   positive: {
     isValid: (value: unknown): boolean =>
       value === "" || value === null || value === undefined ? true : isPositiveInteger(Number(value)),
-    message: "Enter a positive integer",
+    messageKey: "keyDetail.estimatedOutputTokens.invalidPositive" as ParseKeys,
   },
 };
 
-const asValidatorRule = ({ isValid, message }: { isValid: (value: unknown) => boolean; message: string }) => ({
-  validator: (_: unknown, value: unknown) => (isValid(value) ? Promise.resolve() : Promise.reject(new Error(message))),
+const asValidatorRule = ({ isValid, messageKey }: { isValid: (value: unknown) => boolean; messageKey: ParseKeys }) => ({
+  validator: (_: unknown, value: unknown) =>
+    isValid(value) ? Promise.resolve() : Promise.reject(new Error(i18n.t(messageKey))),
 });
 
 export const estimateRules = {

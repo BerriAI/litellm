@@ -6,6 +6,8 @@ BEFORE a polling ID is created, so rate-limited requests get a
 synchronous error instead of a polling ID that immediately fails.
 """
 
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -83,7 +85,7 @@ class TestSkipPreCallLogic:
         ):
             try:
                 await processor.base_process_llm_request(
-                    request=MagicMock(spec=Request),
+                    request=MagicMock(spec=Request, headers={}),
                     fastapi_response=MagicMock(spec=Response),
                     user_api_key_dict=UserAPIKeyAuth(),
                     route_type="aresponses",
@@ -176,3 +178,77 @@ class TestPollingEndpointPreCallGuard:
 
         assert exc_info.value.status_code == 429
         generate_polling_id_mock.assert_not_called()
+
+
+async def _polled_background_response(
+    body: Mapping[str, object], headers: Mapping[str, str]
+) -> tuple[MagicMock, Mapping[str, object]]:
+    from litellm.proxy.response_api_endpoints.endpoints import responses_api
+    from litellm.proxy.response_polling.polling_handler import ResponsePollingHandler
+
+    generate_polling_id: Final = MagicMock(return_value="litellm_poll_test")
+    pre_call_saw: Final[list[Mapping[str, object]]] = []
+
+    async def pre_call(processor: ProxyBaseLLMRequestProcessing, **_: object) -> tuple[Mapping[str, object], MagicMock]:
+        pre_call_saw.append(dict(processor.data))
+        return processor.data, MagicMock()
+
+    request: Final = MagicMock(spec=Request)
+    request.headers = headers
+    proxy_server_patches: Final[Mapping[str, object]] = {
+        "read_request_body": AsyncMock(return_value=dict(body)),
+        "general_settings": {},
+        "llm_router": MagicMock(),
+        "native_background_mode": None,
+        "polling_cache_ttl": 3600,
+        "polling_via_cache_enabled": True,
+        "proxy_config": MagicMock(),
+        "proxy_logging_obj": AsyncMock(),
+        "redis_usage_cache": AsyncMock(),
+        "user_api_base": None,
+        "user_max_tokens": None,
+        "user_model": None,
+        "user_request_timeout": None,
+        "user_temperature": None,
+        "version": "1.0.0",
+    }
+    with (
+        patch.multiple("litellm.proxy.proxy_server", **proxy_server_patches),
+        patch("litellm.proxy.response_polling.polling_handler.should_use_polling_for_request", return_value=True),
+        patch.object(ProxyBaseLLMRequestProcessing, "common_processing_pre_call_logic", pre_call),
+        patch.object(
+            ProxyBaseLLMRequestProcessing,
+            "handle_llm_api_exception",
+            new_callable=AsyncMock,
+            side_effect=lambda e, **_: e,
+        ),
+        patch("litellm.proxy.response_api_endpoints.endpoints.raise_if_required_body_param_missing"),
+        patch.object(ResponsePollingHandler, "generate_polling_id", generate_polling_id),
+        patch("asyncio.create_task"),
+        patch.object(ResponsePollingHandler, "create_initial_state", new_callable=AsyncMock, return_value=MagicMock()),
+    ):
+        await responses_api(
+            request=request, fastapi_response=MagicMock(spec=Response), user_api_key_dict=MagicMock(spec=UserAPIKeyAuth)
+        )
+    return generate_polling_id, pre_call_saw[0] if pre_call_saw else {}
+
+
+@pytest.mark.asyncio
+async def test_a_body_total_timeout_on_a_polled_background_response_is_refused_before_a_polling_id_is_issued() -> None:
+    from litellm.proxy._types import ProxyException
+
+    with pytest.raises(ProxyException) as refused:
+        _ = await _polled_background_response({"model": "gpt-4", "background": True, "total_timeout": 10}, {})
+
+    assert refused.value.code == "400"
+    assert refused.value.param == "total_timeout"
+
+
+@pytest.mark.asyncio
+async def test_a_header_total_timeout_on_a_polled_background_response_is_dropped_and_polling_proceeds() -> None:
+    generate_polling_id, pre_call_saw = await _polled_background_response(
+        {"model": "gpt-4", "background": True, "total_timeout": "ignored"}, {"x-litellm-total-timeout": "10"}
+    )
+
+    generate_polling_id.assert_called_once()
+    assert "total_timeout" not in pre_call_saw

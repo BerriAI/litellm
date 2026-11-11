@@ -24,7 +24,7 @@ def _admin_only_error(route: str, user_id: str) -> dict[str, JsonValue]:
                 f"keys/users/teams. Route={route}. Your role=internal_user. Your user_id={masked_user_id}"
             ),
             "type": "auth_error",
-            "param": "None",
+            "param": None,
             "code": "401",
         }
     }

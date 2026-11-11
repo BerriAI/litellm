@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 from pydantic import TypeAdapter
@@ -13,20 +13,22 @@ from pydantic import TypeAdapter
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.add_retry_fallback_headers import (
+    add_fallback_headers_to_response,
+    get_fallback_error_info,
+)
 from litellm.litellm_core_utils.batch_utils import get_router_metadata_variable_name
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs, safe_deep_copy
 from litellm.litellm_core_utils.credential_accessor import reject_api_key_secret_reference
 from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
 from litellm.litellm_core_utils.litellm_logging import Logging, same_attempt_marker
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
-from litellm.router_utils.add_retry_fallback_headers import (
-    add_fallback_headers_to_response,
-    get_fallback_error_info,
-)
+from litellm.router_deprecated import renamed_router_param
 from litellm.router_utils.cooldown_handlers import (
     _first_present,  # pyright: ignore[reportPrivateUsage] - shared internal helper, used across router_utils
     cast_exception_status_to_int,
     is_advisor_orchestration_failure,
+    is_caller_entra_credential_failure,
     is_caller_scoped_auth_failure,
     is_caller_timeout_408,
     is_stream_stall,
@@ -43,11 +45,7 @@ from litellm.types.router import (
 )
 
 if TYPE_CHECKING:
-    from litellm.router import Router as _Router
-
-    LitellmRouter = _Router
-else:
-    LitellmRouter = Any
+    from litellm.router_api import RoutingContext
 
 # Status codes a generic API call's caller-supplied resource id can trigger on its own
 # (e.g. a nonexistent file/batch/thread id), independent of the selected deployment's health.
@@ -57,7 +55,7 @@ _FALLBACK_KWARGS_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
 def _trigger_cooldown_for_failed_deployment(
-    litellm_router: LitellmRouter,
+    ctx: "RoutingContext",
     kwargs: Mapping[str, object],
     exception: Exception,
     model_call_details: Mapping[str, object] = _NO_MODEL_CALL_DETAILS,
@@ -128,17 +126,25 @@ def _trigger_cooldown_for_failed_deployment(
             verbose_router_logger.debug("Cannot trigger cooldown for fallback: no failed_deployment_id on exception")
             return
 
-        deployment: Final = litellm_router.get_deployment(model_id=deployment_id)
+        deployment: Final = ctx.registry().deployment(deployment_id)
         if is_caller_scoped_auth_failure(deployment, exception_status):
             verbose_router_logger.debug(
                 "Not triggering cooldown for fallback deployment %s: caller-scoped OAuth authentication failure.",
                 deployment_id,
             )
             return
+        if is_caller_entra_credential_failure(
+            deployment, ctx.default_litellm_params(), model_call_details, exception_status, exception
+        ):
+            verbose_router_logger.debug(
+                "Not triggering cooldown for fallback deployment %s: Entra ID rejected a credential the caller sent.",
+                deployment_id,
+            )
+            return
 
         # Priority: deployment config > response header > router default, matching
         # Router.deployment_callback_on_failure's precedence for the primary path.
-        deployment_dict: Final = litellm_router.get_model_info(id=deployment_id)
+        deployment_dict: Final = ctx.registry().deployment_dict(deployment_id)
         deployment_cooldown: Final = (
             _first_present(
                 deployment_dict.get("model_info"), deployment_dict.get("litellm_params"), key="cooldown_time"
@@ -161,16 +167,16 @@ def _trigger_cooldown_for_failed_deployment(
             else (
                 header_cooldown
                 if header_cooldown is not None and header_cooldown >= 0
-                else litellm_router.cooldown_time
+                else ctx.settings().cooldown_time
             )
         )
 
         increment_deployment_failures_for_current_minute(
-            litellm_router_instance=litellm_router,
+            ctx=ctx,
             deployment_id=deployment_id,
         )
         set_cooldown_deployments(
-            litellm_router_instance=litellm_router,
+            ctx=ctx,
             exception_status=exception_status,
             original_exception=exception,
             deployment=deployment_id,
@@ -626,6 +632,8 @@ def get_fallback_model_group(
     ## check for specific model group-specific fallbacks
     for idx, item in enumerate(fallbacks):
         if isinstance(item, dict):
+            if not item:
+                continue  # an empty entry names no group: the next entries still apply
             fallback_key = next(iter(item))
             if fallback_key == model_group:  # check exact match
                 fallback_model_group = item[model_group]
@@ -697,14 +705,14 @@ def _get_fallback_target_model_group(fallback_entry: str | Mapping[str, object])
 
 
 async def _is_fallback_target_authorized(
-    litellm_router: LitellmRouter,
+    ctx: "RoutingContext",
     fallback_entry: str | Mapping[str, object],
     original_model_group: str,
     kwargs: Mapping[str, object],
     *,
     attempted: AttemptedFallbackTargets,
 ) -> bool:
-    access_check: Final = litellm_router.fallback_access_check
+    access_check: Final = ctx.settings().fallback_access_check
     target: Final = _get_fallback_target_model_group(fallback_entry)
     if (
         access_check is None
@@ -713,7 +721,7 @@ async def _is_fallback_target_authorized(
         or target == get_pre_routing_selection(kwargs)
     ):
         return True
-    if await access_check(model=target, request_kwargs=kwargs, llm_router=litellm_router):
+    if await ctx.fallback_access_allowed(model=target, request_kwargs=kwargs):
         return True
     verbose_router_logger.info(
         "Skipping fallback to model_group = %s: caller is not authorized to call it",
@@ -724,24 +732,65 @@ async def _is_fallback_target_authorized(
 
 
 async def _is_fallback_target_within_budget(
-    litellm_router: LitellmRouter,
+    ctx: "RoutingContext",
     fallback_entry: str | Mapping[str, object],
     original_model_group: str,
     kwargs: Mapping[str, object],
     *,
     attempted: AttemptedFallbackTargets,
 ) -> bool:
-    budget_check: Final = litellm_router.fallback_budget_check
+    budget_check: Final = ctx.settings().fallback_budget_check
     target: Final = _get_fallback_target_model_group(fallback_entry)
     if budget_check is None or target is None or target == original_model_group:
         return True
-    if await budget_check(model=target, request_kwargs=kwargs, llm_router=litellm_router):
+    if await ctx.fallback_budget_allowed(model=target, request_kwargs=kwargs):
         return True
     verbose_router_logger.info(
         "Skipping fallback to model_group = %s: caller is over budget",
         mask_sensitive_structure(fallback_entry),
     )
     attempted.record_skip(target, FallbackSkipReason.OVER_BUDGET)
+    return False
+
+
+async def _is_fallback_target_admitted(
+    ctx: "RoutingContext",
+    fallback_entry: str | Mapping[str, object],
+    original_model_group: str,
+    kwargs: Mapping[str, object],
+    *,
+    attempted: AttemptedFallbackTargets,
+) -> bool:
+    return (
+        await _is_fallback_target_authorized(ctx, fallback_entry, original_model_group, kwargs, attempted=attempted)
+        and await _is_fallback_target_within_budget(
+            ctx, fallback_entry, original_model_group, kwargs, attempted=attempted
+        )
+        and await _is_fallback_target_within_rate_limit(
+            ctx, fallback_entry, original_model_group, kwargs, attempted=attempted
+        )
+    )
+
+
+async def _is_fallback_target_within_rate_limit(
+    ctx: "RoutingContext",
+    fallback_entry: str | Mapping[str, object],
+    original_model_group: str,
+    kwargs: Mapping[str, object],
+    *,
+    attempted: AttemptedFallbackTargets,
+) -> bool:
+    rate_limit_check: Final = ctx.settings().fallback_rate_limit_check
+    target: Final = _get_fallback_target_model_group(fallback_entry)
+    if rate_limit_check is None or target is None or target == original_model_group:
+        return True
+    if await ctx.fallback_rate_limit_allowed(model=target, request_kwargs=kwargs):
+        return True
+    verbose_router_logger.info(
+        "Skipping fallback to model_group = %s: caller is over its per-model rate limit",
+        mask_sensitive_structure(fallback_entry),
+    )
+    attempted.record_skip(target, FallbackSkipReason.RATE_LIMITED)
     return False
 
 
@@ -779,9 +828,10 @@ def creates_provider_scoped_resource(kwargs: Mapping[str, object]) -> bool:
     return getattr(kwargs.get("original_function"), "__name__", None) in PROVIDER_SCOPED_CREATION_FUNCTION_NAMES
 
 
+@renamed_router_param("litellm_router", new="litellm_routing_ctx")
 async def run_async_fallback(
     *args: object,
-    litellm_router: LitellmRouter,
+    litellm_routing_ctx: "RoutingContext",
     fallback_model_group: list[str],
     original_model_group: str,
     original_exception: Exception,
@@ -789,7 +839,7 @@ async def run_async_fallback(
     fallback_depth: int,
     include_fallback_errors: bool = False,
     **kwargs,
-) -> Any:
+) -> object:
     """
     Loops through all the fallback model groups and calls kwargs["original_function"] with the arguments and keyword arguments provided.
 
@@ -798,7 +848,7 @@ async def run_async_fallback(
     If all fallback model groups fail, it raises the most recent exception.
 
     Args:
-        litellm_router: The litellm router instance.
+        litellm_routing_ctx: The routing context of the router running the fallbacks.
         *args: Positional arguments.
         fallback_model_group: List[str] of fallback model groups. example: ["gpt-4", "gpt-3.5-turbo"]
         original_model_group: The original model group. example: "gpt-3.5-turbo"
@@ -817,6 +867,7 @@ async def run_async_fallback(
     Raises:
         The most recent exception if all fallback model groups fail.
     """
+    ctx: Final = litellm_routing_ctx
 
     ### BASE CASE ### MAX FALLBACK DEPTH REACHED
     if fallback_depth >= max_fallbacks:
@@ -853,26 +904,20 @@ async def run_async_fallback(
                 original_model_group,
             )
             continue
-        if not await _is_fallback_target_authorized(
-            litellm_router, mg, original_model_group, kwargs, attempted=attempted
-        ):
-            continue
-        if not await _is_fallback_target_within_budget(
-            litellm_router, mg, original_model_group, kwargs, attempted=attempted
-        ):
-            continue
         attempt_key = fallback_attempt_key(mg)
+        if attempt_key is not None and attempt_key in attempted:
+            verbose_router_logger.info(
+                "Skipping fallback to model_group = %s, already attempted for this request",
+                mask_sensitive_structure(mg),
+            )
+            continue
+        if not await _is_fallback_target_admitted(ctx, mg, original_model_group, kwargs, attempted=attempted):
+            continue
         if attempt_key is not None:
-            if attempt_key in attempted:
-                verbose_router_logger.info(
-                    "Skipping fallback to model_group = %s, already attempted for this request",
-                    mask_sensitive_structure(mg),
-                )
-                continue
             attempted.record(attempt_key)
         try:
             # LOGGING
-            kwargs = litellm_router.log_retry(kwargs=kwargs, e=original_exception)
+            kwargs = ctx.log_retry(kwargs=kwargs, e=original_exception)
             verbose_router_logger.info("Falling back to model_group = %s", mask_sensitive_structure(mg))
             kwargs.pop("_target_order", None)
             if isinstance(mg, str):
@@ -894,7 +939,7 @@ async def run_async_fallback(
             if include_fallback_errors:
                 kwargs["include_fallback_errors"] = include_fallback_errors
             carry_superseded_attempt_usage(_FALLBACK_KWARGS_ADAPTER.validate_python(kwargs))
-            response = await litellm_router.async_function_with_fallbacks(*args, **kwargs)
+            response = await ctx.with_fallbacks(*args, **kwargs)
             verbose_router_logger.info("Successful fallback b/w models.")
             response = add_fallback_headers_to_response(
                 response=response,
@@ -922,7 +967,7 @@ async def run_async_fallback(
                 )
             ) is not None:
                 _trigger_cooldown_for_failed_deployment(
-                    litellm_router=litellm_router,
+                    ctx=ctx,
                     kwargs=kwargs,
                     exception=e,
                     model_call_details=failure_callbacks_blocked_logging_obj.model_call_details,

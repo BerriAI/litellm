@@ -249,6 +249,35 @@ async def test_add_new_member_links_default_team_budget_id():
     assert create_data["budget_id"] == test_default_budget_id
 
 
+@pytest.mark.asyncio
+async def test_handle_budget_for_entity_updates_with_existing_budget_id_in_request() -> None:
+    from litellm.proxy.management_helpers.utils import handle_budget_for_entity
+    from litellm.types.tag_management import TagUpdateRequest
+
+    budget_update: Final = AsyncMock()
+    prisma_client: Final = cast(
+        PrismaClient,
+        SimpleNamespace(db=SimpleNamespace(litellm_budgettable=SimpleNamespace(update=budget_update))),
+    )
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+    ):
+        budget_id: Final = await handle_budget_for_entity(
+            data=TagUpdateRequest(name="budget-tag", budget_id="budget-1", max_budget=20),
+            existing_budget_id="budget-1",
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin"),
+            prisma_client=prisma_client,
+            litellm_proxy_admin_name="admin",
+        )
+
+    assert budget_id == "budget-1"
+    budget_update.assert_awaited_once_with(
+        where={"budget_id": "budget-1"},
+        data={"budget_id": "budget-1", "max_budget": 20.0, "updated_by": "admin"},
+    )
+
+
 @pytest.mark.parametrize(
     ("request_fields", "cleared_budget_fields", "should_update", "expected_max_budget"),
     cast(

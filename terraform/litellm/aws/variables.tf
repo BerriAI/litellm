@@ -133,52 +133,33 @@ variable "azs" {
   default     = []
 }
 
-# ---------- Component images ----------
+# ---------- Image ----------
 #
 variable "image_registry" {
-  description = "Registry path prefix used to compose the four LiteLLM image URIs as `<image_registry>/litellm-<component>:<image_tag>`. Per-component overrides (`gateway_image`, `backend_image`, `ui_image`, `migrations_image`) bypass this entirely when set."
+  description = "Registry path prefix used to compose the LiteLLM image URI as `<image_registry>/litellm:<image_tag>`. `image` bypasses this entirely when set."
   type        = string
   default     = "ghcr.io/berriai"
 }
 
 variable "image_tag" {
-  description = "Tag applied to all four litellm-* images when composed from `image_registry`. A published module version ships with this stamped to its own release tag, which matches the `v`-prefixed tag published to GHCR for the same LiteLLM release. Set it to pin a different LiteLLM release. When sourcing the module from a git ref of the monorepo it has no default and must be set."
+  description = "Tag of the LiteLLM image when composed from `image_registry`. A published module version ships with this stamped to its own release tag, which matches the `v`-prefixed tag published to GHCR for the same LiteLLM release. Set it to pin a different LiteLLM release. When sourcing the module from a git ref of the monorepo it has no default and must be set. Tags older than the one a module version ships with have no component entrypoint and only run the monolithic proxy."
   type        = string
   default     = ""
   nullable    = false
 
   validation {
-    condition     = var.image_tag != "" || (var.gateway_image != "" && var.backend_image != "" && var.ui_image != "" && var.migrations_image != "")
-    error_message = "image_tag is empty. Published module versions (registry.terraform.io/modules/BerriAI/litellm) ship with it stamped to their own release. A git ref of the monorepo has no published images of its own, so set image_tag to a published LiteLLM release tag or set all four *_image URIs."
+    condition     = var.image_tag != "" || var.image != ""
+    error_message = "image_tag is empty. Published module versions (registry.terraform.io/modules/BerriAI/litellm) ship with it stamped to their own release. A git ref of the monorepo has no published images of its own, so set image_tag to a published LiteLLM release tag or set image to a full URI."
   }
 }
 
-variable "gateway_image" {
-  description = "Full image URI for the gateway (data plane, port 4000). Empty (default) composes from `image_registry` + `image_tag`."
-  type        = string
-  default     = ""
-}
-
-variable "backend_image" {
-  description = "Full image URI for the backend (management API, port 4001). Empty (default) composes from `image_registry` + `image_tag`."
-  type        = string
-  default     = ""
-}
-
-variable "ui_image" {
-  description = "Full image URI for the UI (nginx static export, port 3000). Empty (default) composes from `image_registry` + `image_tag`."
-  type        = string
-  default     = ""
-}
-
-variable "migrations_image" {
+variable "image" {
   description = <<-EOT
-    Full image URI for the one-off prisma migration task. Empty (default)
-    composes from `image_registry` + `image_tag`. Built from
-    `migrations/Dockerfile` — slim image whose ENTRYPOINT runs
-    `python3 /app/run.py` (assembles DATABASE_URL from DATABASE_* env vars
-    via DatabaseURLSettings, then runs `prisma migrate deploy`). Should track
-    the same release tag as gateway/backend/ui.
+    Full URI of the one LiteLLM image every task runs. Its entrypoint picks
+    the process from the first argument (`gateway`, `backend`, `ui`,
+    `migrations`, `metrics`, `collector`), so the gateway, backend, UI and
+    migration task definitions and the sidecars all pull this URI. Empty
+    (default) composes from `image_registry` + `image_tag`.
   EOT
   type        = string
   default     = ""
@@ -649,13 +630,11 @@ variable "gateway_metrics_port" {
   description = <<-EOT
     Serve Prometheus /metrics from a `metrics` sidecar container in the
     gateway task on this port (1-65535, not 4000), so a scrape never runs on
-    an inference worker. The sidecar runs the gateway image with
-    `python -m litellm.proxy.prometheus_metrics_server` and aggregates the
-    workers' PROMETHEUS_MULTIPROC_DIR samples over a task volume. Null (the
-    default) leaves /metrics on the gateway port only. The sidecar port has
-    no virtual-key auth and is not routed through the ALB; open it to your
-    scrapers with gateway_metrics_scrape_cidrs. Needs gateway_image v1.101.0
-    or newer.
+    an inference worker. The sidecar runs the `metrics` component of `image`
+    and aggregates the workers' PROMETHEUS_MULTIPROC_DIR samples over a task
+    volume. Null (the default) leaves /metrics on the gateway port only. The
+    sidecar port has no virtual-key auth and is not routed through the ALB;
+    open it to your scrapers with gateway_metrics_scrape_cidrs.
   EOT
   type        = number
   default     = null
@@ -764,13 +743,7 @@ variable "otel_headers_secret_arn" {
 
 # ---------- Enterprise billing metrics ----------
 #
-# License-gated request metering. Opt-in and gated entirely on
-# billing_metrics_endpoint: leave it empty (the default) and nothing
-# metering-related lands in the container env. Set it and gateway + backend
-# export billable-request counts over OTLP/HTTP, authenticating to the
-# collector with an mTLS client cert. The proxy accepts the cert, key, and CA
-# as either a file path or literal PEM content, so on Fargate they are
-# injected straight from Secrets Manager as env vars and no volume is needed.
+# License-gated request metering. The client secret is stored in Secrets Manager.
 
 variable "billing_metrics_endpoint" {
   description = <<-EOT
@@ -784,50 +757,40 @@ variable "billing_metrics_endpoint" {
   default     = ""
 }
 
-variable "billing_metrics_client_cert_pem" {
+variable "billing_metrics_client_id" {
   description = <<-EOT
-    PEM content of the mTLS client certificate issued for this deployment.
-    When billing_metrics_endpoint is set, the stack stores this in a
-    `<tenant>-litellm-<env>-billing-metrics-client-cert` Secrets Manager
-    entry, grants the task-execution role GetSecretValue on it, and exposes
-    it to gateway + backend as LITELLM_BILLING_METRICS_CLIENT_CERT. Required
-    whenever metering is enabled.
+    Cognito OAuth2 client ID exposed to the gateway and backend as
+    LITELLM_BILLING_METRICS_CLIENT_ID. Required when billing_metrics_endpoint
+    is set.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "billing_metrics_client_secret" {
+  description = <<-EOT
+    Cognito OAuth2 client secret stored in Secrets Manager and exposed to
+    the gateway and backend as LITELLM_BILLING_METRICS_CLIENT_SECRET.
+    Required when billing_metrics_endpoint is set.
   EOT
   type        = string
   default     = ""
   sensitive   = true
 }
 
-variable "billing_metrics_client_key_pem" {
+variable "billing_metrics_token_url" {
   description = <<-EOT
-    PEM content of the private key matching
-    billing_metrics_client_cert_pem. Stored in a
-    `<tenant>-litellm-<env>-billing-metrics-client-key` Secrets Manager
-    entry and exposed as LITELLM_BILLING_METRICS_CLIENT_KEY. Required
-    whenever metering is enabled.
+    Cognito OAuth2 client-credentials token endpoint exposed to gateway and
+    backend as LITELLM_BILLING_METRICS_TOKEN_URL.
   EOT
   type        = string
-  default     = ""
-  sensitive   = true
-}
-
-variable "billing_metrics_ca_cert_pem" {
-  description = <<-EOT
-    PEM content of the CA bundle used to verify the metering collector.
-    Only needed for private or test collectors whose CA is not in the
-    system trust store; telemetry.litellm.ai is publicly trusted, so leave
-    this empty for production. When set, it is exposed as
-    LITELLM_BILLING_METRICS_CA_CERT.
-  EOT
-  type        = string
-  default     = ""
-  sensitive   = true
+  default     = "https://litellm-prod.auth.us-west-1.amazoncognito.com/oauth2/token"
 }
 
 # ---------- Collector sidecar ----------
 #
 # Opt-in offload of spend tracking from the gateway's uvicorn workers to a
-# `python -m litellm.proxy.collector` sidecar in the same Fargate task (helm's
+# `collector` component sidecar in the same Fargate task (helm's
 # `gateway.collector`). Fargate awsvpc tasks share one network namespace,
 # so the sidecar listens on loopback TCP. Disabled (the default) adds nothing
 # to the task definition.

@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from itertools import groupby
+from types import TracebackType
 from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import TypeAdapter, ValidationError
@@ -32,16 +33,23 @@ class _UpsertTable(Protocol):
     def upsert(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> None: ...
 
 
-class _ModelUsageBatch(Protocol):
-    litellm_dailymodelusage: _UpsertTable
+class ModelUsageBatch(Protocol):
+    @property
+    def litellm_dailymodelusage(self) -> _UpsertTable: ...
 
     def execute_raw(self, query: LiteralString, *args: object) -> None: ...
 
 
-class _ModelUsageBatchManager(Protocol):
-    async def __aenter__(self) -> _ModelUsageBatch: ...
+class ModelUsageBatchManager(Protocol):
+    async def __aenter__(self) -> ModelUsageBatch: ...
 
-    async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> bool | None: ...
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+        /,
+    ) -> bool | None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,14 +96,14 @@ def _internal_call_origin(metadata: str) -> object:
     return decoded.get(INTERNAL_CALL_ORIGIN_METADATA_KEY)
 
 
-def _date_from_start_time(start_time: datetime | str) -> str | None:
+def date_from_start_time(start_time: datetime | str) -> str | None:
     if isinstance(start_time, datetime):
         return start_time.date().isoformat()
     return start_time[:10] if len(start_time) >= 10 else None
 
 
 def build_model_usage_transaction(payload: SpendLogsPayload) -> ModelUsageTransaction | None:
-    date: Final = _date_from_start_time(payload["startTime"])
+    date: Final = date_from_start_time(payload["startTime"])
     origin: Final = _internal_call_origin(payload["metadata"])
     if date is None or (origin and origin != BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN):
         return None
@@ -116,8 +124,8 @@ def build_model_usage_transaction(payload: SpendLogsPayload) -> ModelUsageTransa
     )
 
 
-def _model_usage_batch(prisma_client: PrismaClient) -> _ModelUsageBatchManager:
-    batch: Final[_ModelUsageBatchManager] = prisma_client.db.batch_()
+def _model_usage_batch(prisma_client: PrismaClient) -> ModelUsageBatchManager:
+    batch: Final[ModelUsageBatchManager] = prisma_client.db.batch_()
     return batch
 
 
@@ -156,26 +164,16 @@ async def flush_model_usage_transactions(
                         "custom_llm_provider": key.custom_llm_provider,
                         "task_type": key.task_type,
                     }
-                    batcher.litellm_dailymodelusage.upsert(
-                        where={"date_model_group_model_custom_llm_provider_task_type": key_fields},
-                        data={
-                            "create": {
-                                **key_fields,
-                                "spend": spend,
-                                "prompt_tokens": prompt_tokens,
-                                "completion_tokens": completion_tokens,
-                                "request_count": len(requests),
-                                "successful_requests": successful,
-                                "failed_requests": failed,
-                            },
-                            "update": {
-                                "spend": {"increment": spend},
-                                "prompt_tokens": {"increment": prompt_tokens},
-                                "completion_tokens": {"increment": completion_tokens},
-                                "request_count": {"increment": len(requests)},
-                                "successful_requests": {"increment": successful},
-                                "failed_requests": {"increment": failed},
-                            },
+                    queue_model_usage_upsert(
+                        batcher,
+                        key_fields,
+                        {
+                            "spend": spend,
+                            "prompt_tokens": prompt_tokens,
+                            "completion_tokens": completion_tokens,
+                            "request_count": len(requests),
+                            "successful_requests": successful,
+                            "failed_requests": failed,
                         },
                     )
             return
@@ -183,3 +181,15 @@ async def flush_model_usage_transactions(
             if attempt >= n_retry_times:
                 raise
             await asyncio.sleep(2.0**attempt + random.uniform(0, 1))
+
+
+def queue_model_usage_upsert(
+    batcher: ModelUsageBatch, key_fields: Mapping[str, str], increments: Mapping[str, int | float]
+) -> None:
+    batcher.litellm_dailymodelusage.upsert(
+        where={"date_model_group_model_custom_llm_provider_task_type": key_fields},
+        data={
+            "create": {**key_fields, **increments},
+            "update": {name: {"increment": value} for name, value in increments.items()},
+        },
+    )

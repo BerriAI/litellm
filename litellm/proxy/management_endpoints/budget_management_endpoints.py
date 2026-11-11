@@ -57,6 +57,8 @@ async def new_budget(
     - rpm_limit: Optional[int] - The requests per minute limit for the budget.
     - tpd_limit: Optional[int] - The tokens per day limit for the budget. Charged by batch submissions instead of tpm_limit/rpm_limit.
     - model_max_budget: Optional[dict] - Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d", "tpm_limit": 100000, "rpm_limit": 100000}}
+    - model_tpm_limit: Optional[dict] - Max tokens per minute per model, shared by everything on this budget. Example: {"gpt-4o": 400000}
+    - model_rpm_limit: Optional[dict] - Max requests per minute per model, shared by everything on this budget. Example: {"gpt-4o": 200}
     - budget_reset_at: Optional[datetime] - Datetime when the initial budget is reset. Default is now.
     """
     from prisma.errors import UniqueViolationError
@@ -141,6 +143,8 @@ async def update_budget(
     - rpm_limit: Optional[int] - The requests per minute limit for the budget.
     - tpd_limit: Optional[int] - The tokens per day limit for the budget. Charged by batch submissions instead of tpm_limit/rpm_limit.
     - model_max_budget: Optional[dict] - Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d", "tpm_limit": 100000, "rpm_limit": 100000}}
+    - model_tpm_limit: Optional[dict] - Max tokens per minute per model, shared by everything on this budget. Example: {"gpt-4o": 400000}
+    - model_rpm_limit: Optional[dict] - Max requests per minute per model, shared by everything on this budget. Example: {"gpt-4o": 200}
     - budget_reset_at: Optional[datetime] - Update the Datetime when the budget was last reset.
     """
     from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client, user_api_key_cache
@@ -287,6 +291,8 @@ async def budget_settings(
         "max_budget": {"type": "Float"},
         "soft_budget": {"type": "Float"},
         "model_max_budget": {"type": "Object"},
+        "model_tpm_limit": {"type": "Object"},
+        "model_rpm_limit": {"type": "Object"},
     }
 
     return_val: Final = []

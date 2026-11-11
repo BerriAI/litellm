@@ -3,7 +3,7 @@ use std::{convert::Infallible, sync::Arc};
 use axum::extract::FromRequestParts;
 use axum::http::{header::AUTHORIZATION, request::Parts};
 use axum_login::{AuthUser, AuthnBackend, UserId};
-use litellm_auth_types::SecretValue;
+use litellm_secret_value::SecretValue;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;

@@ -1,4 +1,5 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 import { CircleCheck, CircleX, LoaderCircle } from "lucide-react";
 
 import {
@@ -31,6 +32,7 @@ const AutoRouterConnectionTest: React.FC<AutoRouterConnectionTestProps> = ({
   jevRequest,
   onTestComplete,
 }) => {
+  const { t } = useTranslation();
   const [results, setResults] = React.useState<TargetResult[]>(() => targets.map(() => ({ status: "pending" })));
   const [jevResult, setJevResult] = React.useState<TargetResult>({ status: "pending" });
 
@@ -50,7 +52,7 @@ const AutoRouterConnectionTest: React.FC<AutoRouterConnectionTestProps> = ({
           ? { status: "success" }
           : {
               status: "error",
-              error: `OSS classifier was not reached successfully (routing cause: ${decision.cause ?? "unknown"})`,
+              error: t("addModel.autoRouterConnectionTest.ossNotReached", { cause: decision.cause ?? "unknown" }),
             },
       );
     };
@@ -77,25 +79,22 @@ const AutoRouterConnectionTest: React.FC<AutoRouterConnectionTestProps> = ({
   }, []);
 
   if (targets.length === 0 && !jevRequest) {
-    return (
-      <p className="text-sm text-muted-foreground">
-        No complexity tiers are configured yet, so there is nothing to test.
-      </p>
-    );
+    return <p className="text-sm text-muted-foreground">{t("addModel.autoRouterConnectionTest.nothingToTest")}</p>;
   }
 
   return (
     <div className="space-y-3">
-      <p className="mb-2 text-sm text-muted-foreground">
-        Test Connection sends a minimal request to every configured tier, classifier, default, and embedding model. The
-        classifier probe includes its reasoning effort override.
-      </p>
+      <p className="mb-2 text-sm text-muted-foreground">{t("addModel.autoRouterConnectionTest.intro")}</p>
       {jevRequest && (
-        <div role="status" aria-label="OSS classifier connection" className="rounded-lg border p-3 text-sm">
-          <strong>OSS Classifier</strong>
+        <div
+          role="status"
+          aria-label={t("addModel.autoRouterConnectionTest.ossConnection")}
+          className="rounded-lg border p-3 text-sm"
+        >
+          <strong>{t("addModel.autoRouterConnectionTest.ossClassifier")}</strong>
           <p>
-            {jevResult.status === "pending" && "Testing OSS classification"}
-            {jevResult.status === "success" && "OSS classification succeeded"}
+            {jevResult.status === "pending" && t("addModel.autoRouterConnectionTest.ossTesting")}
+            {jevResult.status === "success" && t("addModel.autoRouterConnectionTest.ossSucceeded")}
             {jevResult.status === "error" && jevResult.error}
           </p>
         </div>
@@ -123,7 +122,7 @@ const AutoRouterConnectionTest: React.FC<AutoRouterConnectionTestProps> = ({
               <span className="font-medium">{target.labels.join(", ")}</span>{" "}
               <span className="text-muted-foreground">
                 {"->"} {target.modelGroup}
-                {target.mode === "embedding" ? " (embedding)" : ""}
+                {target.mode === "embedding" ? t("addModel.autoRouterConnectionTest.embeddingSuffix") : ""}
               </span>
               {result.status === "error" && (
                 <p className="mt-1 text-xs text-destructive" data-testid="test-error-message">
@@ -146,16 +145,17 @@ export function AutoRouterConnectionTestDialog({
   testId,
   ...props
 }: AutoRouterConnectionTestProps & { open: boolean; onClose: () => void; testId: number }) {
+  const { t } = useTranslation();
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[700px]">
         <DialogHeader>
-          <DialogTitle>Connection Test Results</DialogTitle>
+          <DialogTitle>{t("addModel.autoRouterConnectionTest.title")}</DialogTitle>
         </DialogHeader>
         {open && <AutoRouterConnectionTest key={testId} {...props} />}
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>
-            Close
+            {t("addModel.autoRouterConnectionTest.close")}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -23,7 +23,8 @@ from litellm.llms.bedrock.passthrough.transformation import (
     BedrockPassthroughConfig,
     is_bedrock_streaming_endpoint,
 )
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.passthrough.main import AsyncPassthroughStreamingResponse, PassthroughStreamingResponse
 from litellm.types.utils import ModelResponse
 
 CONVERSE_MODEL = "anthropic.claude-sonnet-4-5-20250929-v1:0"
@@ -597,9 +598,13 @@ def _invoke_chunk(payload: dict) -> bytes:
     return _event_frame("chunk", {"bytes": base64.b64encode(json.dumps(payload).encode()).decode()})
 
 
-def _stream_logging_obj(endpoint: str, dynamic_async_success_callbacks: list[CustomLogger] | None = None) -> Logging:
+def _stream_logging_obj(
+    endpoint: str,
+    dynamic_async_success_callbacks: list[CustomLogger] | None = None,
+    model: str = CONVERSE_MODEL,
+) -> Logging:
     logging_obj = Logging(
-        model=f"bedrock/{CONVERSE_MODEL}",
+        model=f"bedrock/{model}",
         messages=[],
         stream=True,
         call_type="pass_through_endpoint",
@@ -902,6 +907,137 @@ def test_stream_collector_logs_nothing_for_an_unrecognized_endpoint():
     assert collector.build_logged_response(_converse_stream_logging_obj()) is None
 
 
+TIERED_MODEL: Final = "amazon.nova-pro-v1:0"
+TIERED_INVOKE_ENDPOINT: Final = f"/model/{TIERED_MODEL}/invoke"
+TIERED_INVOKE_STREAM_ENDPOINT: Final = f"/model/{TIERED_MODEL}/invoke-with-response-stream"
+SERVICE_TIER_HEADER: Final = "x-amzn-bedrock-service-tier"
+TIERED_PROMPT_TOKENS: Final = 25
+TIERED_COMPLETION_TOKENS: Final = 12
+SERVED_TIER_PRICES: Final = (
+    pytest.param({SERVICE_TIER_HEADER: "priority"}, "_priority", id="priority"),
+    pytest.param({}, "", id="standard"),
+)
+
+
+def _tier_priced_cost(price_suffix: str) -> float:
+    prices: Final = litellm.model_cost[TIERED_MODEL]
+    return (
+        TIERED_PROMPT_TOKENS * prices[f"input_cost_per_token{price_suffix}"]
+        + TIERED_COMPLETION_TOKENS * prices[f"output_cost_per_token{price_suffix}"]
+    )
+
+
+def _nova_invoke_text_stream(texts: list[str]) -> bytes:
+    return b"".join(
+        _invoke_chunk(event)
+        for event in (
+            {"messageStart": {"role": "assistant"}},
+            *({"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": text}}} for text in texts),
+            {"contentBlockStop": {"contentBlockIndex": 0}},
+            {"messageStop": {"stopReason": "end_turn"}},
+            {
+                "metadata": {
+                    "usage": {
+                        "inputTokens": TIERED_PROMPT_TOKENS,
+                        "outputTokens": TIERED_COMPLETION_TOKENS,
+                        "totalTokens": TIERED_PROMPT_TOKENS + TIERED_COMPLETION_TOKENS,
+                    },
+                    "metrics": {"latencyMs": 120},
+                }
+            },
+        )
+    )
+
+
+def _provider_stream_reply(reply_headers: Mapping[str, str], stream: bytes) -> httpx.Response:
+    return httpx.Response(
+        200,
+        headers={"content-type": "application/vnd.amazon.eventstream", **reply_headers},
+        content=stream,
+        request=httpx.Request("POST", f"https://bedrock-runtime.us-east-1.amazonaws.com{TIERED_INVOKE_STREAM_ENDPOINT}"),
+    )
+
+
+@pytest.mark.parametrize(("reply_headers", "price_suffix"), SERVED_TIER_PRICES)
+def test_invoke_reply_is_priced_at_the_service_tier_bedrock_served(
+    reply_headers: Mapping[str, str], price_suffix: str
+) -> None:
+    reply: Final = httpx.Response(
+        200,
+        json={
+            "output": {"message": {"role": "assistant", "content": [{"text": "Invoke response"}]}},
+            "stopReason": "end_turn",
+            "usage": {
+                "inputTokens": TIERED_PROMPT_TOKENS,
+                "outputTokens": TIERED_COMPLETION_TOKENS,
+                "totalTokens": TIERED_PROMPT_TOKENS + TIERED_COMPLETION_TOKENS,
+            },
+        },
+        headers=reply_headers,
+    )
+
+    logged: Final = BedrockPassthroughConfig().logging_non_streaming_response(
+        model=TIERED_MODEL,
+        custom_llm_provider="bedrock",
+        httpx_response=reply,
+        request_data={},
+        logging_obj=_stream_logging_obj(TIERED_INVOKE_ENDPOINT, model=TIERED_MODEL),
+        endpoint=TIERED_INVOKE_ENDPOINT,
+    )
+
+    assert litellm.completion_cost(model=f"bedrock/{TIERED_MODEL}", completion_response=logged) == pytest.approx(
+        _tier_priced_cost(price_suffix)
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("reply_headers", "price_suffix"), SERVED_TIER_PRICES)
+async def test_invoke_stream_relay_is_priced_at_the_service_tier_bedrock_served(
+    reply_headers: Mapping[str, str], price_suffix: str
+) -> None:
+    callback: Final = _CaptureAsyncSuccessCallback()
+    stream: Final = _nova_invoke_text_stream(["Invoke ", "response"])
+    reply: Final = _provider_stream_reply(reply_headers, stream)
+
+    async def provider_reply() -> httpx.Response:
+        return reply
+
+    relay: Final = AsyncPassthroughStreamingResponse(
+        response=provider_reply(),
+        litellm_logging_obj=_stream_logging_obj(TIERED_INVOKE_STREAM_ENDPOINT, [callback], model=TIERED_MODEL),
+        provider_config=BedrockPassthroughConfig(),
+    )
+    relayed: Final = b"".join([chunk async for chunk in relay])
+
+    assert relayed == stream
+    assert await relay.wait_for_spend_flush() is True
+    assert callback.kwargs is not None
+    assert callback.kwargs["response_cost"] == pytest.approx(_tier_priced_cost(price_suffix))
+
+
+class _ImmediateExecutor:
+    def submit(self, fn: Callable[..., object], /, *args: object, **kwargs: object) -> None:
+        fn(*args, **kwargs)
+
+
+@pytest.mark.parametrize(("reply_headers", "price_suffix"), SERVED_TIER_PRICES)
+def test_sync_invoke_stream_relay_is_priced_at_the_service_tier_bedrock_served(
+    reply_headers: Mapping[str, str], price_suffix: str
+) -> None:
+    logging_obj: Final = _stream_logging_obj(TIERED_INVOKE_STREAM_ENDPOINT, model=TIERED_MODEL)
+    stream: Final = _nova_invoke_text_stream(["Invoke ", "response"])
+
+    with patch("litellm.utils.executor", _ImmediateExecutor()):
+        relayed: Final = b"".join(
+            PassthroughStreamingResponse(
+                _provider_stream_reply(reply_headers, stream), logging_obj, BedrockPassthroughConfig()
+            )
+        )
+
+    assert relayed == stream
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(_tier_priced_cost(price_suffix))
+
+
 REQUEST_METADATA_HEADER = "x-amzn-bedrock-request-metadata"
 REQUEST_METADATA_FIELDS = ["user_api_key_alias", "user_api_key_team_alias", "spend_logs_metadata"]
 PROXY_IDENTITY = {
@@ -977,7 +1113,11 @@ async def test_converse_passthrough_signs_proxy_identity_into_request_metadata(
     caller_body: Final = {**CONVERSE_BODY, "requestMetadata": {"user_api_key_team_alias": "forged", "ticket": "T-42"}}
 
     request: Final = await _sent_passthrough_request(
-        action, caller_body, PROXY_IDENTITY, request_query_params=query_params
+        action,
+        caller_body,
+        PROXY_IDENTITY,
+        request_query_params=query_params,
+        request_headers={f"x-pass-{REQUEST_METADATA_HEADER.upper()}": '{"user_api_key_team_alias":"forged"}'},
     )
 
     assert json.loads(request.content) == {
@@ -1281,12 +1421,14 @@ async def test_deployment_guardrail_replaces_the_caller_converse_guardrail(
         {**CONVERSE_BODY, "guardrailConfig": caller_guardrail},
         {},
         deployment_params={"guardrailConfig": {"guardrailIdentifier": "deployment-guardrail"}},
+        request_headers=CALLER_INVOKE_GUARDRAIL_HEADERS,
     )
 
     assert json.loads(request.content) == {
         **CONVERSE_BODY,
         "guardrailConfig": {"guardrailIdentifier": "deployment-guardrail"},
     }
+    assert _invoke_guardrail_headers(request) == {}
 
 
 @pytest.mark.asyncio
@@ -1326,6 +1468,59 @@ async def test_passthrough_without_a_deployment_guardrail_sends_the_caller_guard
         "x-amzn-bedrock-guardrailversion": "9",
         "x-amzn-bedrock-trace": "DISABLED",
     }
+
+
+CALLER_GUARDRAIL_IDENTITY_HEADERS: Final[Mapping[str, str]] = {
+    "x-pass-X-Amzn-Bedrock-GuardrailIdentifier": "caller-guardrail",
+    "x-pass-X-Amzn-Bedrock-GuardrailVersion": "9",
+}
+SENT_CALLER_GUARDRAIL_IDENTITY: Final[Mapping[str, str]] = {
+    "x-amzn-bedrock-guardrailidentifier": "caller-guardrail",
+    "x-amzn-bedrock-guardrailversion": "9",
+}
+
+
+SDK_INVOKE_MODEL: Final = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+
+def _sdk_passthrough_call(
+    model: str, action: str, request_headers: Mapping[str, str], reply_body: Mapping[str, object]
+) -> tuple[httpx.Request, object]:
+    sent: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(200, json=reply_body, request=request)
+
+    response: Final = litellm.llm_passthrough_route(
+        model=f"bedrock/{model}",
+        method="POST",
+        endpoint=f"/model/{model}/{action}",
+        json=INVOKE_BODY,
+        request_headers=dict(request_headers),
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+        aws_access_key_id="AKIASDKKEY",
+        aws_secret_access_key="sdk-secret",
+        aws_region_name="us-east-1",
+    )
+    return sent[0], response
+
+
+@pytest.mark.parametrize("action", ["invoke", "invoke-with-response-stream"])
+@pytest.mark.parametrize("caller_trace", [None, "DISABLED", "enabled"])
+def test_sdk_invoke_passthrough_sends_the_caller_guardrail_trace_exactly_as_sent(
+    action: str, caller_trace: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", None)
+    caller_trace_header: Final = {} if caller_trace is None else {"x-pass-X-Amzn-Bedrock-Trace": caller_trace}
+    sent_trace_header: Final = {} if caller_trace is None else {"x-amzn-bedrock-trace": caller_trace}
+
+    request, _ = _sdk_passthrough_call(
+        SDK_INVOKE_MODEL, action, {**CALLER_GUARDRAIL_IDENTITY_HEADERS, **caller_trace_header}, {"ok": True}
+    )
+
+    assert _invoke_guardrail_headers(request) == {**SENT_CALLER_GUARDRAIL_IDENTITY, **sent_trace_header}
+    assert json.loads(request.content) == INVOKE_BODY
 
 
 @pytest.mark.asyncio
@@ -1368,3 +1563,244 @@ async def test_passthrough_leaves_actions_without_a_guardrail_field_as_sent(monk
 
     assert json.loads(request.content) == count_tokens_body
     assert _invoke_guardrail_headers(request) == {}
+
+
+GUARDRAIL_UNIT_PRICE: Final = 0.00015
+GUARDRAIL_PRICING: Final = {
+    "litellm_provider": "bedrock",
+    "mode": "guardrail",
+    "guardrail_cost_per_unit": {"topicPolicyUnits": GUARDRAIL_UNIT_PRICE, "contentPolicyUnits": GUARDRAIL_UNIT_PRICE},
+}
+_ASSESSMENT_USAGE: Final = {"invocationMetrics": {"usage": {"topicPolicyUnits": 1, "contentPolicyUnits": 1}}}
+INVOKE_GUARDRAIL_TRACE: Final = {
+    "guardrail": {
+        "input": {"caller-guardrail": _ASSESSMENT_USAGE},
+        "outputs": [{"caller-guardrail": _ASSESSMENT_USAGE}],
+        "actionReason": "No action.",
+    }
+}
+BILLED_GUARDRAIL_USAGE: Final = {"topicPolicyUnits": 2, "contentPolicyUnits": 2}
+BILLED_GUARDRAIL_COST: Final = 4 * GUARDRAIL_UNIT_PRICE
+NOVA_INVOKE_MODEL: Final = "us.amazon.nova-2-lite-v1:0"
+LLAMA_INVOKE_MODEL: Final = "meta.llama3-8b-instruct-v1:0"
+INVOKE_METRICS: Final = {
+    "inputTokenCount": 25,
+    "outputTokenCount": 12,
+    "invocationLatency": 300,
+    "firstByteLatency": 90,
+}
+
+INVOKE_REPLIES_WITH_A_GUARDRAIL_TRACE: Final = (
+    pytest.param(
+        NOVA_INVOKE_MODEL,
+        {
+            "output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 25, "outputTokens": 12, "totalTokens": 37},
+            "amazon-bedrock-guardrailAction": "NONE",
+        },
+        id="nova",
+    ),
+    pytest.param(
+        LLAMA_INVOKE_MODEL,
+        {"generation": "hi", "prompt_token_count": 25, "generation_token_count": 12, "stop_reason": "stop"},
+        id="llama",
+    ),
+    pytest.param(
+        "mistral.mistral-7b-instruct-v0:2", {"outputs": [{"text": "hi", "stop_reason": "stop"}]}, id="mistral"
+    ),
+    pytest.param(
+        CONVERSE_MODEL,
+        {
+            "id": "msg-1",
+            "type": "message",
+            "role": "assistant",
+            "model": CONVERSE_MODEL,
+            "content": [{"type": "text", "text": "hi"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 25, "output_tokens": 12},
+        },
+        id="claude",
+    ),
+)
+
+INVOKE_STREAMS_WITH_A_GUARDRAIL_TRACE: Final = (
+    pytest.param(
+        NOVA_INVOKE_MODEL,
+        (
+            {"messageStart": {"role": "assistant"}},
+            {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "hi"}}},
+            {"contentBlockStop": {"contentBlockIndex": 0}},
+            {"messageStop": {"stopReason": "end_turn"}},
+            {
+                "metadata": {
+                    "usage": {"inputTokens": 25, "outputTokens": 12, "totalTokens": 37},
+                    "metrics": {},
+                    "trace": {},
+                },
+                "amazon-bedrock-invocationMetrics": INVOKE_METRICS,
+                "amazon-bedrock-guardrailAction": "NONE",
+                "amazon-bedrock-trace": INVOKE_GUARDRAIL_TRACE,
+            },
+        ),
+        id="nova",
+    ),
+    pytest.param(
+        LLAMA_INVOKE_MODEL,
+        (
+            {"generation": "hi", "prompt_token_count": 25, "generation_token_count": 1, "stop_reason": None},
+            {
+                "generation": "",
+                "prompt_token_count": None,
+                "generation_token_count": 12,
+                "stop_reason": "stop",
+                "amazon-bedrock-invocationMetrics": INVOKE_METRICS,
+                "amazon-bedrock-trace": INVOKE_GUARDRAIL_TRACE,
+            },
+        ),
+        id="llama",
+    ),
+    pytest.param(
+        CONVERSE_MODEL,
+        (
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg-1",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": CONVERSE_MODEL,
+                    "content": [],
+                    "stop_reason": None,
+                    "usage": {"input_tokens": 25, "output_tokens": 1},
+                },
+            },
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hi"}},
+            {"type": "content_block_stop", "index": 0},
+            {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 12}},
+            {
+                "type": "message_stop",
+                "amazon-bedrock-invocationMetrics": INVOKE_METRICS,
+                "amazon-bedrock-trace": INVOKE_GUARDRAIL_TRACE,
+            },
+        ),
+        id="claude",
+    ),
+)
+
+
+def _billed_guardrails(standard_logging_object: object) -> list[tuple[object, object]]:
+    assert isinstance(standard_logging_object, dict)
+    return [
+        (entry["guardrail_usage"], entry["guardrail_cost"])
+        for entry in standard_logging_object["guardrail_information"] or []
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("model", "reply_body"), INVOKE_REPLIES_WITH_A_GUARDRAIL_TRACE)
+async def test_invoke_reply_bills_the_guardrail_bedrock_traced(
+    model: str, reply_body: Mapping[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, "bedrock/guardrails", GUARDRAIL_PRICING)
+    endpoint: Final = f"/model/{model}/invoke"
+    callback: Final = _CaptureAsyncSuccessCallback()
+    logging_obj: Final = Logging(
+        model=model,
+        messages=[],
+        stream=False,
+        call_type="allm_passthrough_route",
+        start_time=datetime(2025, 1, 1),
+        litellm_call_id="call-1",
+        function_id="fn-1",
+        dynamic_async_success_callbacks=[callback],
+    )
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={})
+    logging_obj.model_call_details["custom_llm_provider"] = "bedrock"
+    logging_obj.model_call_details["endpoint"] = endpoint
+    reply: Final = httpx.Response(
+        200,
+        json={**reply_body, "amazon-bedrock-trace": INVOKE_GUARDRAIL_TRACE},
+        request=httpx.Request("POST", f"https://bedrock-runtime.us-east-1.amazonaws.com{endpoint}"),
+    )
+
+    await logging_obj.async_success_handler(
+        result=reply, start_time=datetime(2025, 1, 1), end_time=datetime(2025, 1, 1, 0, 0, 1)
+    )
+
+    assert callback.kwargs is not None
+    assert _billed_guardrails(callback.kwargs["standard_logging_object"]) == [
+        (BILLED_GUARDRAIL_USAGE, pytest.approx(BILLED_GUARDRAIL_COST))
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("model", "events"), INVOKE_STREAMS_WITH_A_GUARDRAIL_TRACE)
+async def test_invoke_stream_relay_bills_the_guardrail_bedrock_traced(
+    model: str, events: tuple[dict[str, object], ...], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, "bedrock/guardrails", GUARDRAIL_PRICING)
+    endpoint: Final = f"/model/{model}/invoke-with-response-stream"
+    callback: Final = _CaptureAsyncSuccessCallback()
+    stream: Final = b"".join(_invoke_chunk(event) for event in events)
+
+    async def provider_reply() -> httpx.Response:
+        return _provider_stream_reply({}, stream)
+
+    relay: Final = AsyncPassthroughStreamingResponse(
+        response=provider_reply(),
+        litellm_logging_obj=_stream_logging_obj(endpoint, [callback], model=model),
+        provider_config=BedrockPassthroughConfig(),
+    )
+    relayed: Final = b"".join([chunk async for chunk in relay])
+
+    assert relayed == stream
+    assert await relay.wait_for_spend_flush() is True
+    assert callback.kwargs is not None
+    assert _billed_guardrails(callback.kwargs["standard_logging_object"]) == [
+        (BILLED_GUARDRAIL_USAGE, pytest.approx(BILLED_GUARDRAIL_COST))
+    ]
+
+
+class _CaptureSyncSuccessCallback(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.standard_logging_objects: list[object] = []
+
+    def log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.standard_logging_objects.append(kwargs.get("standard_logging_object"))
+
+
+@pytest.mark.parametrize(
+    ("model", "reply_body"),
+    [param for param in INVOKE_REPLIES_WITH_A_GUARDRAIL_TRACE if param.id in {"nova", "claude"}],
+)
+def test_sdk_invoke_passthrough_bills_the_caller_guardrail_bedrock_traced_once(
+    model: str, reply_body: Mapping[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", None)
+    monkeypatch.setitem(litellm.model_cost, "bedrock/guardrails", GUARDRAIL_PRICING)
+    callback: Final = _CaptureSyncSuccessCallback()
+    monkeypatch.setattr(litellm, "callbacks", [callback])
+    traced_reply: Final = {**reply_body, "amazon-bedrock-trace": INVOKE_GUARDRAIL_TRACE}
+
+    with patch("litellm.utils.executor", _ImmediateExecutor()):
+        request, response = _sdk_passthrough_call(
+            model,
+            "invoke",
+            {**CALLER_GUARDRAIL_IDENTITY_HEADERS, "x-pass-X-Amzn-Bedrock-Trace": "ENABLED"},
+            traced_reply,
+        )
+
+    assert isinstance(response, httpx.Response)
+    assert response.json() == traced_reply
+    assert _invoke_guardrail_headers(request) == {
+        **SENT_CALLER_GUARDRAIL_IDENTITY,
+        "x-amzn-bedrock-trace": "ENABLED",
+    }
+    assert [_billed_guardrails(logged) for logged in callback.standard_logging_objects] == [
+        [(BILLED_GUARDRAIL_USAGE, pytest.approx(BILLED_GUARDRAIL_COST))]
+    ]

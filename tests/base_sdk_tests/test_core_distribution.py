@@ -20,12 +20,21 @@ else:
 ROOT: Final = Path(__file__).resolve().parents[2]
 
 
+@pytest.mark.parametrize(
+    ("package_cli_args", "package"),
+    [
+        (("--package", "litellm-proxy"), "litellm-proxy"),
+        ((), "litellm-core"),
+    ],
+)
 @pytest.mark.parametrize("sdist_only", [False, True])
-def test_build_command_selects_requested_distributions(tmp_path: Path, sdist_only: bool) -> None:
+def test_build_command_selects_requested_distributions(
+    tmp_path: Path, sdist_only: bool, package_cli_args: tuple[str, ...], package: str
+) -> None:
     from scripts.build_core_distribution import main
 
     output: Final = tmp_path / "dist"
-    arguments: Final = ["build_core_distribution.py", "--out-dir", str(output)] + (
+    arguments: Final = ["build_core_distribution.py", *package_cli_args, "--out-dir", str(output)] + (
         ["--sdist-only"] if sdist_only else []
     )
     with (
@@ -42,6 +51,7 @@ def test_build_command_selects_requested_distributions(tmp_path: Path, sdist_onl
         assert command[command.index("--out-dir") + 1] == str(output)
         assert run.call_args.kwargs["check"] is True
         assert run.call_args.kwargs["cwd"] == stage.call_args.args[1]
+        assert stage.call_args.kwargs["package"] == package
     assert not stage.call_args.args[1].exists()
 
 
@@ -53,7 +63,10 @@ def source_repository(tmp_path: Path) -> Path:
     return source
 
 
-def test_staging_stamps_release_version_without_modifying_sources(tmp_path: Path, source_repository: Path) -> None:
+@pytest.mark.parametrize("package", ["litellm-core", "litellm-proxy"])
+def test_staging_stamps_release_version_without_modifying_sources(
+    tmp_path: Path, source_repository: Path, package: str
+) -> None:
     from scripts.build_core_distribution import SOURCES, stage_core_distribution
 
     source: Final = source_repository
@@ -61,16 +74,44 @@ def test_staging_stamps_release_version_without_modifying_sources(tmp_path: Path
         path: Final = source / name
         path.write_text(f"shared {name}")
     (source / "pyproject.toml").write_text('[project]\nname = "litellm"\nversion = "9.8.7rc1"\n')
-    manifest: Final = source / "packaging/litellm-core/pyproject.toml"
+    manifest: Final = source / "packaging" / package / "pyproject.toml"
     manifest.parent.mkdir(parents=True)
-    manifest.write_bytes((ROOT / "packaging/litellm-core/pyproject.toml").read_bytes())
+    manifest.write_bytes((ROOT / "packaging" / package / "pyproject.toml").read_bytes())
     original: Final = manifest.read_bytes()
     stage: Final = tmp_path / "stage"
-    stage_core_distribution(source, stage)
-    assert tomllib.loads((stage / "pyproject.toml").read_text())["project"]["version"] == "9.8.7rc1"
+    stage_core_distribution(source, stage, package=package)
+    staged_project: Final = tomllib.loads((stage / "pyproject.toml").read_text())
+    assert staged_project["project"]["name"] == package
+    assert staged_project["project"]["version"] == "9.8.7rc1"
+    if package == "litellm-proxy":
+        assert staged_project["tool"]["maturin"]["targets"] == [{"name": "litellm-gateway", "kind": "bin"}]
+        assert not (stage / "litellm").exists()
+        assert all(
+            (stage / name).exists()
+            for name in ("litellm-rust", ".cargo", "rust-toolchain.toml", "model_prices_and_context_window.json")
+        )
     assert manifest.read_bytes() == original
     assert (source / "pyproject.toml").read_text() == '[project]\nname = "litellm"\nversion = "9.8.7rc1"\n'
-    assert all((stage / name).read_bytes() == (source / name).read_bytes() for name in SOURCES)
+    expected: Final = tuple(name for name in SOURCES if package == "litellm-core" or name != "litellm")
+    assert all((stage / name).read_bytes() == (source / name).read_bytes() for name in expected)
+
+
+def test_gateway_staging_refuses_manifest_without_in_tree_rust_path(tmp_path: Path, source_repository: Path) -> None:
+    from scripts.build_core_distribution import SOURCES, stage_core_distribution
+
+    source: Final = source_repository
+    for name in SOURCES:
+        (source / name).write_text(f"shared {name}")
+    (source / "pyproject.toml").write_text('[project]\nname = "litellm"\nversion = "9.8.7"\n')
+    manifest: Final = source / "packaging" / "litellm-proxy" / "pyproject.toml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        (ROOT / "packaging" / "litellm-proxy" / "pyproject.toml")
+        .read_text()
+        .replace("../../litellm-rust/", "../../rust/")
+    )
+    with pytest.raises(SystemExit, match="no longer points at"):
+        stage_core_distribution(source, tmp_path / "stage", package="litellm-proxy")
 
 
 @pytest.fixture(scope="module")
@@ -99,7 +140,9 @@ def test_core_wheel_metadata_and_resources(distributions: tuple[Path, Path]) -> 
         assert metadata["Version"] == tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
         assert not metadata.get_all("Provides-Extra")
         assert not any(n.endswith(".dist-info/entry_points.txt") for n in names)
-        requirements: Final = tomllib.loads((ROOT / "packaging/litellm-core/pyproject.toml").read_text())["project"]["dependencies"]
+        requirements: Final = tomllib.loads((ROOT / "packaging/litellm-core/pyproject.toml").read_text())["project"][
+            "dependencies"
+        ]
         for python_version in ("3.10", "3.11", "3.12", "3.13", "3.14"):
             environment: Final = {"python_version": python_version, "python_full_version": python_version + ".0"}
             assert {
@@ -132,7 +175,9 @@ def test_core_artifacts_exclude_local_configuration(distributions: tuple[Path, P
             assert not any(member.name.endswith(f"/{name}") for member in archive.getmembers())
 
 
-@pytest.mark.parametrize("relative_path", ["rust-toolchain.toml", ".cargo/config.toml"])
+@pytest.mark.parametrize(
+    "relative_path", ["rust-toolchain.toml", ".cargo/config.toml", "model_prices_and_context_window.json"]
+)
 def test_core_sdist_preserves_native_build_configuration(distribution_directory: Path, relative_path: str) -> None:
     sdists: Final = tuple(distribution_directory.glob("litellm_core-*.tar.gz"))
     assert len(sdists) == 1

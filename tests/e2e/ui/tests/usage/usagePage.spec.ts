@@ -11,7 +11,7 @@ import {
   waitForSpendLog,
 } from "../../helpers/traffic";
 
-/** Covers /ui/usage. The legacy /ui/old-usage view is deprecated and deliberately not covered. */
+/** Covers /ui/usage. */
 
 const topKeysCard = (page: PlaywrightPage): Locator =>
   page.locator("section").filter({ has: page.getByRole("heading", { name: "Top Virtual Keys", exact: true }) });

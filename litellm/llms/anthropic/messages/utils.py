@@ -214,7 +214,7 @@ def normalize_reasoning_effort_value(
     if chain is None:
         return effort
 
-    from litellm.router_utils.reasoning_effort_capability import (
+    from litellm.litellm_core_utils.reasoning_effort_capability import (
         deployment_rounds_reasoning_effort,
         resolve_supported_reasoning_efforts,
     )

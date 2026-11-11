@@ -789,6 +789,22 @@ func TestGetKeyUnwrapsInfoEnvelope(t *testing.T) {
 	}
 }
 
+func TestGetKeyReturnsNilForDeletedStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"key":"hash-1","info":{"token":"hash-1","key_alias":"gone","status":"deleted","deleted_at":"2026-10-05T00:00:00Z","deleted_by":"admin"}}`))
+	}))
+	defer srv.Close()
+
+	key, err := NewClient(srv.URL, "test-key", true).GetKey("hash-1")
+	if err != nil {
+		t.Fatalf("GetKey returned error: %v", err)
+	}
+	if key != nil {
+		t.Errorf("GetKey returned %+v, want nil for deleted status", key)
+	}
+}
+
 func TestGetKeyReadsFieldsStoredInMetadata(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -897,6 +913,48 @@ func TestResourceKeyReadDropsMissingKeyFromState(t *testing.T) {
 	}
 }
 
+func TestResourceKeyReadDropsDeletedKeyFromState(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"key":"hash-1","info":{"token":"hash-1","key_alias":"gone","status":"deleted","deleted_at":"2026-10-05T00:00:00Z","deleted_by":"admin"}}`))
+	}))
+	defer srv.Close()
+
+	d := newKeyResourceData(t, map[string]interface{}{"key_alias": "gone"})
+	d.SetId("hash-1")
+
+	diags := resourceKeyRead(context.Background(), d, NewClient(srv.URL, "test-key", true))
+	if diags.HasError() {
+		t.Fatalf("read of a deleted key must not error, got: %v", diags)
+	}
+	if d.Id() != "" {
+		t.Errorf("Id = %q, want empty so Terraform plans a recreate", d.Id())
+	}
+}
+
+func TestResourceKeyReadKeepsKeyWithLiveStatus(t *testing.T) {
+	for _, status := range []string{"active", "revoked", "expired"} {
+		t.Run(status, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprintf(w, `{"key":"hash-1","info":{"token":"hash-1","status":%q}}`, status)
+			}))
+			defer srv.Close()
+
+			d := newKeyResourceData(t, map[string]interface{}{})
+			d.SetId("hash-1")
+
+			diags := resourceKeyRead(context.Background(), d, NewClient(srv.URL, "test-key", true))
+			if diags.HasError() {
+				t.Fatalf("read of a %s key returned error: %v", status, diags)
+			}
+			if d.Id() != "hash-1" {
+				t.Errorf("Id = %q, want unchanged for %s status", d.Id(), status)
+			}
+		})
+	}
+}
+
 func TestResourceKeyReadStillFailsOnNon404Errors(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -913,6 +971,109 @@ func TestResourceKeyReadStillFailsOnNon404Errors(t *testing.T) {
 	}
 	if d.Id() != "still-exists" {
 		t.Errorf("Id = %q, want unchanged on a transient error", d.Id())
+	}
+}
+
+func TestResourceKeyDeleteTreatsAlreadyDeletedKeyAsGone(t *testing.T) {
+	for _, infoStatus := range []int{http.StatusOK, http.StatusNotFound} {
+		t.Run(http.StatusText(infoStatus), func(t *testing.T) {
+			infoCalls := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/key/delete":
+					w.WriteHeader(http.StatusNotFound)
+					w.Write([]byte(`{"error":{"message":"{'error': 'No keys found'}","type":"internal_server_error","param":null,"code":"404"}}`))
+				case "/key/info":
+					infoCalls++
+					if infoStatus == http.StatusNotFound {
+						w.WriteHeader(http.StatusNotFound)
+						w.Write([]byte(keyNotFoundBody))
+						return
+					}
+					w.Write([]byte(`{"key":"hash-1","info":{"token":"hash-1","status":"deleted"}}`))
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer srv.Close()
+
+			d := newKeyResourceData(t, map[string]interface{}{})
+			d.SetId("hash-1")
+
+			diags := resourceKeyDelete(context.Background(), d, NewClient(srv.URL, "test-key", true))
+			if diags.HasError() {
+				t.Fatalf("deleting an already deleted key must not error, got: %v", diags)
+			}
+			if d.Id() != "" {
+				t.Errorf("Id = %q, want empty after confirming the key is gone", d.Id())
+			}
+			if infoCalls != 1 {
+				t.Errorf("expected one /key/info confirmation, got %d calls", infoCalls)
+			}
+		})
+	}
+}
+
+func TestResourceKeyDelete404WithLiveKeyFails(t *testing.T) {
+	infoCalls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/key/delete":
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"error":{"message":"{'error': 'No keys found'}","type":"internal_server_error","param":null,"code":"404"}}`))
+		case "/key/info":
+			infoCalls++
+			w.Write([]byte(`{"key":"hash-1","info":{"token":"hash-1","status":"active"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	d := newKeyResourceData(t, map[string]interface{}{})
+	d.SetId("hash-1")
+
+	diags := resourceKeyDelete(context.Background(), d, NewClient(srv.URL, "test-key", true))
+	if !diags.HasError() {
+		t.Fatal("a /key/delete 404 with a live key must remain an error")
+	}
+	if d.Id() != "hash-1" {
+		t.Errorf("Id = %q, want unchanged when /key/info confirms a live key", d.Id())
+	}
+	if infoCalls != 1 {
+		t.Errorf("expected one /key/info confirmation, got %d calls", infoCalls)
+	}
+}
+
+func TestResourceKeyDeleteServerErrorFailsWithoutInfoLookup(t *testing.T) {
+	infoCalls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/key/delete" {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"error":{"message":"server error"}}`))
+			return
+		}
+		if r.URL.Path == "/key/info" {
+			infoCalls++
+		}
+	}))
+	defer srv.Close()
+
+	d := newKeyResourceData(t, map[string]interface{}{})
+	d.SetId("hash-1")
+
+	diags := resourceKeyDelete(context.Background(), d, NewClient(srv.URL, "test-key", true))
+	if !diags.HasError() {
+		t.Fatal("a /key/delete 500 must remain an error")
+	}
+	if d.Id() != "hash-1" {
+		t.Errorf("Id = %q, want unchanged after a server error", d.Id())
+	}
+	if infoCalls != 0 {
+		t.Errorf("expected no /key/info lookup after a /key/delete 500, got %d calls", infoCalls)
 	}
 }
 
@@ -1135,11 +1296,12 @@ func newKeyUpdateResourceData(t *testing.T, id, oldTeamID, newTeamID string) *sc
 // turns on: what POST /key/update returns, and whether GET /key/info still
 // finds the key afterwards.
 type keyRecoveryProxy struct {
-	updateStatus  int
-	updateBody    string
-	staleKeyGone  bool
-	updateCalls   int32
-	generateCalls int32
+	updateStatus    int
+	updateBody      string
+	staleKeyGone    bool
+	staleKeyDeleted bool
+	updateCalls     int32
+	generateCalls   int32
 }
 
 const keyNotFoundBody = `{"error":{"message":"Key not found.","type":"not_found_error","param":"key","code":"404"}}`
@@ -1158,6 +1320,10 @@ func (p *keyRecoveryProxy) handler() http.HandlerFunc {
 		case "/key/info":
 			requested := r.URL.Query().Get("key")
 			if p.staleKeyGone && requested != "new-token" {
+				if p.staleKeyDeleted {
+					io.WriteString(w, `{"key":"stale-token","info":{"token":"stale-token","status":"deleted","deleted_at":"2026-10-05T00:00:00Z","deleted_by":"admin"}}`)
+					return
+				}
 				w.WriteHeader(http.StatusNotFound)
 				io.WriteString(w, keyNotFoundBody)
 				return
@@ -1207,6 +1373,26 @@ func TestResourceKeyUpdateRecreatesCascadeDeletedKey(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&proxy.updateCalls); got != 1 {
 		t.Errorf("expected 1 /key/update attempt before recovering, got %d", got)
+	}
+	if got := atomic.LoadInt32(&proxy.generateCalls); got != 1 {
+		t.Errorf("expected exactly 1 /key/generate recreate, got %d", got)
+	}
+	if d.Id() != "new-token" {
+		t.Errorf("Id = %q, want the recreated key's new-token", d.Id())
+	}
+}
+
+func TestResourceKeyUpdateRecreatesCascadeDeletedKeyWithDeletedStatus(t *testing.T) {
+	proxy := &keyRecoveryProxy{
+		updateStatus:    http.StatusNotFound,
+		updateBody:      keyNotFoundBody,
+		staleKeyGone:    true,
+		staleKeyDeleted: true,
+	}
+	d := newKeyUpdateResourceData(t, "stale-token", "team-a", "team-b")
+
+	if diags := runKeyUpdate(t, proxy, d); diags.HasError() {
+		t.Fatalf("a cascade-deleted key must be recreated, not error: %v", diags)
 	}
 	if got := atomic.LoadInt32(&proxy.generateCalls); got != 1 {
 		t.Errorf("expected exactly 1 /key/generate recreate, got %d", got)

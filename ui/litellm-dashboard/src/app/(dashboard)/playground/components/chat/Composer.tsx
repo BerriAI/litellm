@@ -2,6 +2,7 @@
 
 import { useRef, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from "react";
 import { ArrowUp, Code2, Database, Paperclip, Shield, Square } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { EndpointType } from "@/components/chat_ui/mode_endpoint_mapping";
 import MCPToolArgumentsForm, { type MCPToolArgumentsFormRef } from "@/components/mcp_tools/MCPToolArgumentsForm";
 import type { MCPTool } from "@/components/mcp_tools/types";
@@ -38,9 +39,10 @@ function AttachButton({
   capabilities: Capabilities;
   attach: (files: readonly File[]) => void;
 }) {
+  const { t } = useTranslation();
   const input = useRef<HTMLInputElement>(null);
   if (!capabilities.attach) return null;
-  const label = ATTACH_LABEL[capabilities.attach];
+  const label = t(ATTACH_LABEL[capabilities.attach]);
   return (
     <>
       <Tooltip>
@@ -69,9 +71,15 @@ function AttachButton({
 }
 
 function SendButton({ draft, disabled }: { draft: DraftState; disabled: boolean }) {
+  const { t } = useTranslation();
   if (draft.isLoading)
     return (
-      <InputGroupButton size="icon-xs" variant="default" aria-label="Stop" onClick={draft.cancel}>
+      <InputGroupButton
+        size="icon-xs"
+        variant="default"
+        aria-label={t("playground.chat.composer.stop")}
+        onClick={draft.cancel}
+      >
         <Square className="fill-current" />
       </InputGroupButton>
     );
@@ -79,7 +87,7 @@ function SendButton({ draft, disabled }: { draft: DraftState; disabled: boolean 
     <InputGroupButton
       size="icon-xs"
       variant="default"
-      aria-label="Send message"
+      aria-label={t("playground.chat.composer.send")}
       disabled={disabled}
       onClick={() => void draft.send()}
     >
@@ -115,6 +123,7 @@ export function Composer({
   settingsControl: ReactNode;
   sendDisabled: boolean;
 }) {
+  const { t } = useTranslation();
   const isDirectCall = endpoint === EndpointType.MCP;
   const isRealtime = endpoint === EndpointType.REALTIME;
   const message = useRef<HTMLTextAreaElement>(null);
@@ -138,7 +147,7 @@ export function Composer({
       {directTool ? (
         <MCPToolArgumentsForm ref={toolArgsForm} tool={directTool} className="flex flex-col gap-3" />
       ) : (
-        <p className="text-sm text-muted-foreground">Pick a server and a tool above to fill in its arguments</p>
+        <p className="text-sm text-muted-foreground">{t("playground.chat.composer.pickTool")}</p>
       )}
     </div>
   );
@@ -148,9 +157,9 @@ export function Composer({
       value={draft.text}
       onChange={(event) => draft.setText(event.target.value)}
       onKeyDown={handleKeyDown}
-      placeholder={capabilities.placeholder}
+      placeholder={t(capabilities.placeholder)}
       rows={2}
-      aria-label="Message"
+      aria-label={t("playground.chat.composer.message")}
       className="max-h-60"
     />
   );
@@ -168,21 +177,31 @@ export function Composer({
       <InputGroupAddon align="block-end" className="gap-1" onClick={focusMessage}>
         {capabilities.mcp && mcpControl}
         {capabilities.vectorStores && (
-          <ChecklistMenu label="Vector stores" icon={<Database />} emptyText="No vector stores yet" {...vectorStores} />
+          <ChecklistMenu
+            label={t("playground.chat.composer.vectorStores")}
+            icon={<Database />}
+            emptyText={t("playground.chat.composer.noVectorStores")}
+            {...vectorStores}
+          />
         )}
         {capabilities.guardrails && (
-          <ChecklistMenu label="Guardrails" icon={<Shield />} emptyText="No guardrails yet" {...guardrails} />
+          <ChecklistMenu
+            label={t("playground.chat.composer.guardrails")}
+            icon={<Shield />}
+            emptyText={t("playground.chat.composer.noGuardrails")}
+            {...guardrails}
+          />
         )}
         {capabilities.codeInterpreter && (
           <Toggle
             size="sm"
             pressed={codeInterpreter.enabled}
             onPressedChange={codeInterpreter.onToggle}
-            aria-label="Code interpreter"
+            aria-label={t("playground.chat.composer.codeInterpreter")}
             className="h-6 gap-1 px-1.5 text-xs"
           >
             <Code2 />
-            Code interpreter
+            {t("playground.chat.composer.codeInterpreter")}
           </Toggle>
         )}
         <span className="ml-auto flex items-center gap-1">

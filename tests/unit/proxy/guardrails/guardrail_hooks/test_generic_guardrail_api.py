@@ -16,12 +16,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from mcp.types import CallToolResult, TextContent
 
 import litellm
 from litellm import ModelResponse
 from litellm._version import version as litellm_version
 from litellm.exceptions import GuardrailRaisedException, Timeout
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, MaskedHTTPStatusError
+from litellm.proxy._experimental.mcp_server.guardrail_translation.handler import (
+    MCPGuardrailTranslationHandler,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     GenericGuardrailAPI,
@@ -29,6 +33,8 @@ from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.generic_guardrail_api import (
     _HEADER_PRESENT_PLACEHOLDER,
 )
+from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import Choices, GenericGuardrailAPIInputs, Message
 
 
@@ -2621,3 +2627,68 @@ class TestNumRetries:
 
         assert sent.qsize() == num_retries + 1
         assert result == {"texts": ["hi"]}
+
+
+def _mcp_guardrail(mode: str) -> GenericGuardrailAPI:
+    return GenericGuardrailAPI(api_base="http://x", guardrail_name="g", event_hook=mode, default_on=True)
+
+
+def _mock_api_response(payload: dict[str, object]) -> MagicMock:
+    response: Final = MagicMock()
+    response.json.return_value = payload
+    response.raise_for_status = MagicMock()
+    return response
+
+
+@pytest.mark.parametrize("mode", ["pre_mcp_call", "during_mcp_call", "post_mcp_call"])
+def test_mcp_call_modes_pass_event_hook_validation(mode: str) -> None:
+    guardrail: Final = _mcp_guardrail(mode)
+
+    assert guardrail.should_run_guardrail(data={}, event_type=GuardrailEventHooks(mode)) is True
+
+
+@pytest.mark.asyncio
+async def test_pre_mcp_call_blocked_raises() -> None:
+    guardrail: Final = _mcp_guardrail("pre_mcp_call")
+    response: Final = _mock_api_response({"action": "BLOCKED", "blocked_reason": "credential detected in tool input"})
+
+    with patch.object(guardrail.async_handler, "post", return_value=response):
+        with pytest.raises(GuardrailRaisedException) as exc_info:
+            await MCPGuardrailTranslationHandler().process_input_messages(
+                data={"mcp_tool_name": "t", "mcp_arguments": {"a": "secret"}},
+                guardrail_to_apply=guardrail,
+            )
+
+    assert exc_info.value.message == "credential detected in tool input"
+
+
+@pytest.mark.asyncio
+async def test_post_mcp_call_redacts_result() -> None:
+    guardrail: Final = _mcp_guardrail("post_mcp_call")
+    response: Final = _mock_api_response({"action": "GUARDRAIL_INTERVENED", "texts": ["x [R] y"]})
+    result: Final = CallToolResult(content=[TextContent(type="text", text="x secret y")], isError=False)
+
+    with patch.object(guardrail.async_handler, "post", return_value=response):
+        returned: Final = await MCPGuardrailTranslationHandler().process_output_response(
+            response=result,
+            guardrail_to_apply=guardrail,
+            request_data={"mcp_tool_name": "t"},
+        )
+
+    assert returned.content[0].text == "x [R] y"
+
+
+@pytest.mark.asyncio
+async def test_during_mcp_call_blocked_raises() -> None:
+    guardrail: Final = _mcp_guardrail("during_mcp_call")
+    response: Final = _mock_api_response({"action": "BLOCKED", "blocked_reason": "credential detected in tool input"})
+
+    with patch.object(guardrail.async_handler, "post", return_value=response):
+        with pytest.raises(GuardrailRaisedException) as exc_info:
+            await UnifiedLLMGuardrails().async_moderation_hook(
+                data={"mcp_tool_name": "t", "mcp_arguments": {"a": "secret"}, "guardrail_to_apply": guardrail},
+                user_api_key_dict=UserAPIKeyAuth(),
+                call_type="call_mcp_tool",
+            )
+
+    assert exc_info.value.message == "credential detected in tool input"

@@ -1,8 +1,8 @@
 import json
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Final
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,6 +16,27 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
 )
 
 client = TestClient(app)
+
+
+@pytest.mark.asyncio
+async def test_sso_settings_without_prisma_reports_database_not_connected(monkeypatch: pytest.MonkeyPatch) -> None:
+    import runpy
+    import sys
+
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.ui_crud_endpoints import proxy_setting_endpoints
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    with patch.dict(sys.modules, {"prisma": None, "prisma.errors": None}):
+        endpoints: Final = runpy.run_path(proxy_setting_endpoints.__file__)
+        with pytest.raises(HTTPException) as error:
+            await endpoints["update_sso_settings"](SSOConfig(), UserAPIKeyAuth())
+
+    assert error.value.status_code == 500
+    assert error.value.detail == {"error": "Database not connected. Please connect a database."}
 
 
 @pytest.mark.asyncio
@@ -689,16 +710,11 @@ class TestProxySettingEndpoints:
         # Verify settings were updated
         settings = data["settings"]
         assert settings["google_client_id"] == new_sso_settings["google_client_id"]
-        assert (
-            settings["google_client_secret"] == new_sso_settings["google_client_secret"]
-        )
+        assert settings["google_client_secret"] == "new_****************cret"
         assert (
             settings["microsoft_client_id"] == new_sso_settings["microsoft_client_id"]
         )
-        assert (
-            settings["microsoft_client_secret"]
-            == new_sso_settings["microsoft_client_secret"]
-        )
+        assert settings["microsoft_client_secret"] == "new_*******************cret"
         assert settings["proxy_base_url"] == new_sso_settings["proxy_base_url"]
         assert settings["user_email"] == new_sso_settings["user_email"]
 
@@ -721,6 +737,182 @@ class TestProxySettingEndpoints:
         # The encryption mock returns data as-is, so we verify structure
         create_sso_settings = json.loads(create_data["sso_settings"])
         assert create_sso_settings["google_client_id"] == "new_google_client_id"
+
+    def _patch_sso_settings(self, monkeypatch, stored, body, environment_variables=None):
+        """PATCH /update/sso_settings against a stored row; returns (response, saved row)."""
+        import json
+        from unittest.mock import AsyncMock, MagicMock
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        mock_prisma = MagicMock()
+        stored_record = None
+        if stored is not None:
+            stored_record = MagicMock()
+            stored_record.sso_settings = stored
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(
+            return_value=stored_record
+        )
+        mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+        env_var_entry = None
+        if environment_variables is not None:
+            env_var_entry = MagicMock()
+            env_var_entry.param_value = environment_variables
+        mock_prisma.writer_db.litellm_config.find_unique = AsyncMock(return_value=env_var_entry)
+        mock_prisma.db.litellm_config.update = AsyncMock()
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        from litellm.proxy.proxy_server import proxy_config
+
+        monkeypatch.setattr(
+            proxy_config, "encrypt_env_variables", lambda environment_variables: environment_variables
+        )
+        monkeypatch.setattr(proxy_config, "decrypt_db_variables", lambda variables: variables)
+
+        response = client.patch("/update/sso_settings", json=body)
+        upsert_kwargs = mock_prisma.db.litellm_ssoconfig.upsert.call_args.kwargs
+        return response, json.loads(upsert_kwargs["data"]["update"]["sso_settings"])
+
+    _STORED_GENERIC_SSO = {
+        "generic_client_id": "stored-client-id",
+        "generic_client_secret": "stored-client-secret",
+        "generic_authorization_endpoint": "https://idp.example.com/authorize",
+        "user_email": "admin@example.com",
+        "role_mappings": {
+            "provider": "generic",
+            "group_claim": "groups",
+            "default_role": "internal_user",
+            "roles": {"proxy_admin": ["admins"]},
+        },
+    }
+
+    def test_update_sso_settings_omitted_fields_keep_stored_values(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        monkeypatch.setenv("GENERIC_CLIENT_SECRET", "stored-client-secret")
+        new_role_mappings = {
+            "provider": "generic",
+            "group_claim": "roles",
+            "default_role": "internal_user",
+            "roles": {"proxy_admin": ["platform-admins"]},
+        }
+
+        response, saved = self._patch_sso_settings(
+            monkeypatch, self._STORED_GENERIC_SSO, {"role_mappings": new_role_mappings}
+        )
+
+        assert response.status_code == 200
+        assert saved["generic_client_secret"] == "stored-client-secret"
+        assert saved["generic_client_id"] == "stored-client-id"
+        assert saved["user_email"] == "admin@example.com"
+        assert saved["role_mappings"]["group_claim"] == "roles"
+        assert os.environ["GENERIC_CLIENT_SECRET"] == "stored-client-secret"
+
+    def test_update_sso_settings_null_clears_only_that_field(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        monkeypatch.setenv("GENERIC_CLIENT_SECRET", "stored-client-secret")
+        monkeypatch.setenv("GENERIC_CLIENT_ID", "stored-client-id")
+
+        response, saved = self._patch_sso_settings(
+            monkeypatch,
+            self._STORED_GENERIC_SSO,
+            {"generic_client_secret": None, "role_mappings": None},
+        )
+
+        assert response.status_code == 200
+        assert saved["generic_client_secret"] is None
+        assert saved["role_mappings"] is None
+        assert saved["generic_client_id"] == "stored-client-id"
+        assert "GENERIC_CLIENT_SECRET" not in os.environ
+        assert os.environ["GENERIC_CLIENT_ID"] == "stored-client-id"
+
+    def test_update_sso_settings_new_value_replaces_stored_value(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        response, saved = self._patch_sso_settings(
+            monkeypatch, self._STORED_GENERIC_SSO, {"generic_client_secret": "rotated-secret"}
+        )
+
+        assert response.status_code == 200
+        assert saved["generic_client_secret"] == "rotated-secret"
+        assert saved["generic_client_id"] == "stored-client-id"
+        assert os.environ["GENERIC_CLIENT_SECRET"] == "rotated-secret"
+
+    def test_update_sso_settings_omitted_field_leaves_env_only_value_alone(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        monkeypatch.setenv("GENERIC_CLIENT_SECRET", "env-only-secret")
+
+        response, saved = self._patch_sso_settings(
+            monkeypatch, None, {"user_email": "admin@example.com"}
+        )
+
+        assert response.status_code == 200
+        assert saved["user_email"] == "admin@example.com"
+        assert saved["generic_client_secret"] is None
+        assert os.environ["GENERIC_CLIENT_SECRET"] == "env-only-secret"
+
+    def test_update_sso_settings_response_masks_stored_secrets(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        response, saved = self._patch_sso_settings(
+            monkeypatch, self._STORED_GENERIC_SSO, {}
+        )
+
+        assert response.status_code == 200
+        assert saved["generic_client_secret"] == "stored-client-secret"
+        returned = response.json()["settings"]
+        assert returned["generic_client_id"] == "stored-client-id"
+        assert returned["generic_client_secret"] != "stored-client-secret"
+        assert "stored-client-secret" not in response.text
+
+    def test_update_sso_settings_moves_omitted_env_row_values_into_sso_row(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        import json
+
+        environment_variables = {
+            "MICROSOFT_TENANT": "env-row-tenant",
+            "MICROSOFT_CLIENT_ID": "env-row-client-id",
+            "GENERIC_CLIENT_ID": "env-row-generic-id",
+            "LANGFUSE_PUBLIC_KEY": "unrelated",
+        }
+
+        response, saved = self._patch_sso_settings(
+            monkeypatch,
+            self._STORED_GENERIC_SSO,
+            {"user_email": "new@example.com", "microsoft_client_id": None},
+            environment_variables=environment_variables,
+        )
+
+        from litellm.proxy.proxy_server import prisma_client
+
+        assert response.status_code == 200
+        assert saved["microsoft_tenant"] == "env-row-tenant"
+        assert saved["microsoft_client_id"] is None
+        assert saved["generic_client_id"] == "stored-client-id"
+        assert saved["user_email"] == "new@example.com"
+        env_row_update = prisma_client.db.litellm_config.update.call_args.kwargs
+        assert json.loads(env_row_update["data"]["param_value"]) == {"LANGFUSE_PUBLIC_KEY": "unrelated"}
+
+    def test_update_sso_settings_blank_stored_value_keeps_env_row_secret(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        import json
+
+        response, saved = self._patch_sso_settings(
+            monkeypatch,
+            {**self._STORED_GENERIC_SSO, "generic_client_secret": ""},
+            {"user_email": "new@example.com"},
+            environment_variables={"GENERIC_CLIENT_SECRET": "env-row-secret", "LANGFUSE_PUBLIC_KEY": "unrelated"},
+        )
+
+        from litellm.proxy.proxy_server import prisma_client
+
+        assert response.status_code == 200, response.text
+        assert saved["generic_client_secret"] == "env-row-secret", saved
+        env_row_update = prisma_client.db.litellm_config.update.call_args.kwargs
+        assert json.loads(env_row_update["data"]["param_value"]) == {"LANGFUSE_PUBLIC_KEY": "unrelated"}
 
     def test_update_sso_settings_maps_saml_fields_to_env_vars(
         self, mock_proxy_config, mock_auth, monkeypatch
@@ -804,7 +996,7 @@ class TestProxySettingEndpoints:
         mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
         mock_prisma.db.litellm_config = MagicMock()
-        mock_prisma.db.litellm_config.find_unique = AsyncMock(
+        mock_prisma.writer_db.litellm_config.find_unique = AsyncMock(
             side_effect=ValueError("cleanup failed")
         )
         mock_prisma.db.litellm_config.update = AsyncMock()
@@ -3306,6 +3498,89 @@ def test_update_default_team_settings_without_organization_skips_lookup(
     assert mock_proxy_config["save_call_count"]() == 1
 
 
+@pytest.fixture
+def mock_access_group_lookup(monkeypatch: pytest.MonkeyPatch) -> Callable[[frozenset[str]], AsyncMock]:
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server_module
+
+    def _install(existing_access_group_ids: frozenset[str]) -> AsyncMock:
+        async def _find_many(where: dict[str, dict[str, list[str]]]) -> list[MagicMock]:
+            return [
+                MagicMock(access_group_id=access_group_id)
+                for access_group_id in where["access_group_id"]["in"]
+                if access_group_id in existing_access_group_ids
+            ]
+
+        find_many: Final = AsyncMock(side_effect=_find_many)
+        fake_prisma: Final = MagicMock()
+        fake_prisma.writer_db.litellm_accessgrouptable.find_many = find_many
+
+        monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        monkeypatch.setattr(litellm, "default_team_params", {})
+        return find_many
+
+    return _install
+
+
+def test_update_default_team_settings_rejects_unknown_access_group(
+    mock_proxy_config: dict[str, object],
+    mock_auth: None,
+    mock_access_group_lookup: Callable[[frozenset[str]], AsyncMock],
+) -> None:
+    import litellm
+
+    mock_access_group_lookup(frozenset({"real-group"}))
+
+    resp: Final = client.patch(
+        "/update/default_team_settings",
+        json={"access_group_ids": ["real-group", "ghost-group"]},
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "ghost-group" in resp.json()["detail"]["error"]
+    assert "real-group" not in resp.json()["detail"]["error"]
+    assert mock_proxy_config["save_call_count"]() == 0
+    assert litellm.default_team_params == {}
+
+
+def test_update_default_team_settings_saves_existing_access_groups(
+    mock_proxy_config: dict[str, object],
+    mock_auth: None,
+    mock_access_group_lookup: Callable[[frozenset[str]], AsyncMock],
+) -> None:
+    import litellm
+
+    mock_access_group_lookup(frozenset({"real-group", "other-group"}))
+
+    resp: Final = client.patch(
+        "/update/default_team_settings",
+        json={"access_group_ids": ["real-group", "other-group"]},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["settings"]["access_group_ids"] == ["real-group", "other-group"]
+    assert mock_proxy_config["save_call_count"]() == 1
+    assert litellm.default_team_params["access_group_ids"] == ["real-group", "other-group"]
+
+
+def test_update_default_team_settings_with_empty_access_groups_skips_lookup(
+    mock_proxy_config: dict[str, object],
+    mock_auth: None,
+    mock_access_group_lookup: Callable[[frozenset[str]], AsyncMock],
+) -> None:
+    find_many: Final = mock_access_group_lookup(frozenset())
+
+    resp: Final = client.patch(
+        "/update/default_team_settings",
+        json={"access_group_ids": []},
+    )
+
+    assert resp.status_code == 200, resp.text
+    find_many.assert_not_awaited()
+    assert mock_proxy_config["save_call_count"]() == 1
+
+
 def test_update_mcp_semantic_filter_settings_requires_proxy_admin(monkeypatch):
     """Non-admin callers must not mutate global MCP semantic filter settings."""
     from litellm.proxy._types import UserAPIKeyAuth
@@ -4488,3 +4763,114 @@ def test_usage_default_range_reports_config_precedence(mock_auth, monkeypatch: p
     assert response.status_code == 200, response.text
     assert response.json()["values"]["usage_default_time_range"] == "month_to_date"
     assert response.json()["source"]["usage_default_time_range"] == "config"
+
+
+@pytest.fixture
+def background_chat_config(monkeypatch: pytest.MonkeyPatch):
+    from copy import deepcopy
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.caching.redis_cache import RedisCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.config_resolvers import SettingsStore
+
+    config = {
+        "litellm_settings": {
+            "callbacks": ["prometheus"],
+            "responses": {
+                "background_mode": {
+                    "polling_via_cache": False,
+                    "ttl": 7200,
+                    "native_background_mode": ["native-model"],
+                },
+            },
+        }
+    }
+    store = SettingsStore("litellm_settings")
+    monkeypatch.setattr(proxy_server.proxy_config, "litellm_settings", store)
+    monkeypatch.setattr(proxy_server.proxy_config, "_settings_stores", {"litellm_settings": store})
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "redis_usage_cache", RedisCache(host="localhost", port=6379))
+    monkeypatch.setattr(proxy_server, "polling_via_cache_enabled", False)
+    monkeypatch.setattr(proxy_server, "native_background_mode", [])
+    monkeypatch.setattr(proxy_server, "polling_cache_ttl", 3600)
+    monkeypatch.setattr(proxy_server.proxy_config, "get_config", AsyncMock(side_effect=lambda: deepcopy(config)))
+
+    async def save_config(*, new_config):
+        config.clear()
+        config.update(deepcopy(new_config))
+
+    save = AsyncMock(side_effect=save_config)
+    audit = AsyncMock()
+    monkeypatch.setattr(proxy_server.proxy_config, "save_config", save)
+    monkeypatch.setattr(proxy_server, "create_config_audit_log", audit)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    yield config, save, audit
+    app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+def test_background_chat_settings_persist_preserving_existing_options(background_chat_config, monkeypatch):
+    from litellm.proxy import proxy_server
+
+    config, _, _ = background_chat_config
+    response = client.patch("/update/background_chat_settings", json={"enabled": True})
+    assert response.status_code == 200
+    assert response.json()["enabled"] is True
+    assert proxy_server.polling_via_cache_enabled is False
+    assert config["litellm_settings"]["responses"]["background_mode"] == {
+        "polling_via_cache": "all",
+        "ttl": 7200,
+        "native_background_mode": ["native-model"],
+    }
+    assert config["litellm_settings"]["callbacks"] == ["prometheus"]
+    assert client.get("/get/background_chat_settings").json()["enabled"] is True
+    proxy_server.proxy_config._apply_litellm_settings_db_values(config["litellm_settings"])
+    assert proxy_server.polling_via_cache_enabled == "all"
+    disabled = client.patch("/update/background_chat_settings", json={"enabled": False})
+    assert disabled.status_code == 200
+    assert disabled.json()["enabled"] is False
+    proxy_server.proxy_config._apply_litellm_settings_db_values(config["litellm_settings"])
+    assert proxy_server.polling_via_cache_enabled is False
+
+
+@pytest.mark.parametrize("blocker", ["role", "redis", "config", "persistence"])
+def test_background_chat_settings_reject_unavailable_updates(background_chat_config, monkeypatch, blocker):
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    config, save, _ = background_chat_config
+    if blocker == "role":
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            user_id="viewer", user_role=LitellmUserRoles.INTERNAL_USER
+        )
+    elif blocker == "redis":
+        monkeypatch.setattr(proxy_server, "redis_usage_cache", None)
+        assert client.get("/get/background_chat_settings").json()["redis_configured"] is False
+    elif blocker == "config":
+        proxy_server.proxy_config.litellm_settings.load_yaml(config["litellm_settings"])
+        assert client.get("/get/background_chat_settings").json()["managed_by_config"] is True
+    else:
+        monkeypatch.setattr(proxy_server, "store_model_in_db", False)
+        assert client.get("/get/background_chat_settings").json()["can_save"] is False
+    response = client.patch("/update/background_chat_settings", json={"enabled": True})
+    assert response.status_code == (403 if blocker == "role" else 400)
+    save.assert_not_awaited()
+    assert config["litellm_settings"]["responses"]["background_mode"]["polling_via_cache"] is False
+
+
+def test_background_chat_settings_failed_save_does_not_enable_runtime(background_chat_config):
+    from litellm.proxy import proxy_server
+
+    _, save, audit = background_chat_config
+    save.side_effect = RuntimeError("Database write failed")
+    with pytest.raises(RuntimeError, match="Database write failed"):
+        client.patch("/update/background_chat_settings", json={"enabled": True})
+    assert client.get("/get/background_chat_settings").json()["enabled"] is False
+    assert proxy_server.polling_via_cache_enabled is False
+    audit.assert_not_awaited()

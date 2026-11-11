@@ -13,6 +13,7 @@ IMPORTED_MODULES: Final[tuple[str, ...]] = (
     "litellm.proxy.mcp_server.server",
     "litellm.proxy.mcp_server.mcp_server_manager",
     "litellm.proxy.mcp_server.rest_endpoints",
+    "litellm.proxy.proxy_server",
 )
 
 

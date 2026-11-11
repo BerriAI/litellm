@@ -3,11 +3,12 @@ Unit tests for DashScope embedding transformation.
 """
 
 import json
+import re
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
-
 
 from litellm.llms.dashscope.common_utils import DashScopeError
 from litellm.llms.dashscope.embed.transformation import (
@@ -15,6 +16,41 @@ from litellm.llms.dashscope.embed.transformation import (
     DashScopeEmbeddingConfig,
 )
 from litellm.types.utils import EmbeddingResponse
+from tests.unit.conftest import in_operator_error
+
+WORKSPACE: Final = "https://llm-abc123.cn-beijing.maas.aliyuncs.com"
+
+
+def test_get_complete_url_derives_the_compatible_base_from_any_standard_base():
+    config: Final = DashScopeEmbeddingConfig()
+
+    for api_base in (
+        WORKSPACE,
+        f"{WORKSPACE}/compatible-mode/v1",
+        f"{WORKSPACE}/apps/anthropic",
+        f"{WORKSPACE}/api/v1",
+    ):
+        url: Final = config.get_complete_url(
+            api_base=api_base,
+            api_key="sk-test",
+            model="text-embedding-v4",
+            optional_params={},
+            litellm_params={},
+        )
+
+        assert url == f"{WORKSPACE}/compatible-mode/v1/embeddings"
+
+
+def test_get_complete_url_keeps_unrecognized_hosts():
+    url: Final = DashScopeEmbeddingConfig().get_complete_url(
+        api_base="https://gateway.example.com/v1",
+        api_key="sk-test",
+        model="text-embedding-v4",
+        optional_params={},
+        litellm_params={},
+    )
+
+    assert url == "https://gateway.example.com/v1/embeddings"
 
 
 def test_validate_environment_and_url():
@@ -136,3 +172,22 @@ def test_transform_embedding_response_error():
         )
     assert exc.value.status_code == 401
     assert "Incorrect API key" in exc.value.message
+
+
+def test_transform_embedding_response_rejects_a_scalar_body():
+    raw = httpx.Response(
+        status_code=200,
+        content=b"5",
+        request=httpx.Request("POST", "https://example.com"),
+    )
+    with pytest.raises(TypeError, match=f"^{re.escape(in_operator_error(5))}$"):
+        DashScopeEmbeddingConfig().transform_embedding_response(
+            model="text-embedding-v4",
+            raw_response=raw,
+            model_response=EmbeddingResponse(),
+            logging_obj=MagicMock(),
+            api_key="sk-test",
+            request_data={"input": ["a"]},
+            optional_params={},
+            litellm_params={},
+        )

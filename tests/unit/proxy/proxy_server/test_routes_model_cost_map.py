@@ -10,7 +10,12 @@ Routes covered:
 
 from __future__ import annotations
 
+import hashlib
 import json
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -30,6 +35,35 @@ _ROOT_COST_MAP = Path(__file__).resolve().parents[4] / "model_prices_and_context
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _git_blob_id(body: bytes) -> str:
+    return hashlib.sha1(b"blob %d\0" % len(body) + body, usedforsecurity=False).hexdigest()
+
+
+@contextmanager
+def _serving(body: bytes, etag: str) -> Iterator[str]:
+    """A local HTTP server that answers every GET with ``body`` and ``etag``, so the native fetch runs for real."""
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(200)
+            self.send_header("ETag", etag)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:
+            return None
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}/model_prices_and_context_window.json"
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def _attach_litellm_config(mock_prisma):
@@ -62,17 +96,9 @@ def test_reload_model_cost_map_happy(client, auth_as, monkeypatch, mock_prisma):
     table = _attach_litellm_config(mock_prisma)
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
 
-    fake_cost_map = {"gpt-4": {"input_cost": 0.03}, "gpt-3.5": {"input_cost": 0.002}}
     monkeypatch.setattr(
         "litellm.litellm_core_utils.get_model_cost_map.refetch_model_cost_map",
-        AsyncMock(return_value=ModelCostMapReloaded(model_cost_map=fake_cost_map)),
-    )
-    monkeypatch.setattr("litellm.add_known_models", lambda model_cost_map=None: None)
-    monkeypatch.setattr("litellm.model_cost", {}, raising=False)
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server._invalidate_model_cost_lowercase_map",
-        lambda: None,
-        raising=False,
+        AsyncMock(return_value=ModelCostMapReloaded(model_count=2)),
     )
 
     async def _fake_invalidate(name):
@@ -100,10 +126,7 @@ def test_reload_model_cost_map_happy(client, auth_as, monkeypatch, mock_prisma):
 def test_reload_model_cost_map_surfaces_the_blob_id_of_the_bytes_served_on_every_status_surface(
     client, auth_as, monkeypatch, mock_prisma
 ):
-    import httpx
-
     import litellm
-    from litellm.litellm_core_utils.get_model_cost_map import _finalize_model_cost_map, git_blob_id
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
 
@@ -111,12 +134,7 @@ def test_reload_model_cost_map_surfaces_the_blob_id_of_the_bytes_served_on_every
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
     monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
     body = _ROOT_COST_MAP.read_bytes()
-    expected = {"source_revision": git_blob_id(body), "etag": _SERVED_ETAG}
-    served = httpx.Response(200, headers={"ETag": _SERVED_ETAG}, content=body)
-    monkeypatch.setattr(
-        "litellm.litellm_core_utils.get_model_cost_map._default_reload_client",
-        lambda: httpx.AsyncClient(transport=httpx.MockTransport(lambda request: served)),
-    )
+    expected = {"source_revision": _git_blob_id(body), "etag": _SERVED_ETAG}
     monkeypatch.setattr("litellm.add_known_models", lambda model_cost_map=None: None)
     monkeypatch.setattr("litellm.model_cost", {}, raising=False)
 
@@ -125,7 +143,8 @@ def test_reload_model_cost_map_surfaces_the_blob_id_of_the_bytes_served_on_every
 
     monkeypatch.setattr(ps, "invalidate_config_param", _fake_invalidate)
 
-    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+    with _serving(body, _SERVED_ETAG) as url, auth_as(LitellmUserRoles.PROXY_ADMIN):
+        monkeypatch.setattr(litellm, "model_cost_map_url", url)
         reload_response = client.post("/reload/model_cost_map")
         source_response = client.get("/model/cost_map/source")
         status_response = client.get("/schedule/model_cost_map_reload/status")
@@ -142,7 +161,7 @@ def test_reload_model_cost_map_surfaces_the_blob_id_of_the_bytes_served_on_every
     assert {key: status_response.json()[key] for key in expected} == expected
     assert public_response.status_code == 200
     assert "gpt-4o" in public_response.json()
-    assert reload_body["models_count"] == len(_finalize_model_cost_map(json.loads(body)))
+    assert reload_body["models_count"] == len(litellm.model_cost)
 
 
 def test_reload_model_cost_map_fetch_failure_502_keeps_map(

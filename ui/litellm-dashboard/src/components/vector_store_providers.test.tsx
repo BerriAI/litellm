@@ -68,6 +68,32 @@ describe("getVectorStoreProviderLogoAndName", () => {
     expect(byName("mongodb_num_candidates")).toMatchObject({ required: false });
   });
 
+  it("registers opensearch with its endpoint, optional region, proxy embedding model, and default field names", () => {
+    const fields = getProviderSpecificFields("opensearch");
+    const byName = (name: string) => fields.find((field) => field.name === name);
+
+    expect(getVectorStoreProviderLogoAndName("opensearch")).toEqual({
+      logo: expect.stringContaining("aws"),
+      displayName: VectorStoreProviders.OpenSearch,
+    });
+    expect(fields.map((field) => field.name)).toEqual([
+      "api_base",
+      "aws_region_name",
+      "embedding_model",
+      "opensearch_embedding_field",
+      "opensearch_text_field",
+      "opensearch_index_name",
+    ]);
+    expect(byName("api_base")).toMatchObject({ required: true });
+    expect(byName("aws_region_name")).toMatchObject({ required: false });
+    expect(byName("embedding_model")).toMatchObject({ type: "select", required: true });
+    expect(byName("embedding_model")).not.toHaveProperty("options");
+    expect(byName("opensearch_embedding_field")).toMatchObject({ required: false, initialValue: "embedding" });
+    expect(byName("opensearch_text_field")).toMatchObject({ required: false, initialValue: "text" });
+    expect(byName("opensearch_index_name")).toMatchObject({ required: false });
+    expect(byName("opensearch_index_name")).not.toHaveProperty("initialValue");
+  });
+
   it("registers valkey in the provider, logo, and field maps", () => {
     expect(vectorStoreProviderMap.Valkey).toBe("valkey");
     expect(vectorStoreProviderLogoMap[VectorStoreProviders.Valkey]).toContain("valkey");

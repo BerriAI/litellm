@@ -131,6 +131,52 @@ describe("ToolsSection utils", () => {
       expect(result[1].callData).toBeUndefined();
     });
 
+    it("should mark Claude server tools as called from provider_specific_fields.server_tool_calls", () => {
+      const log: Partial<LogEntry> = {
+        request_id: "test-server-tools",
+        proxy_server_request: {
+          tools: [
+            { type: "web_search_20250305", name: "web_search", max_uses: 3 },
+            { type: "function", function: { name: "get_weather", description: "Get weather" } },
+            { type: "function", function: { name: "send_email", description: "Send email" } },
+          ],
+        },
+        response: {
+          choices: [
+            {
+              message: {
+                tool_calls: [
+                  {
+                    id: "toolu_01Weather",
+                    type: "function",
+                    function: { name: "get_weather", arguments: '{"location": "Paris"}' },
+                  },
+                ],
+                provider_specific_fields: {
+                  server_tool_calls: [
+                    {
+                      id: "srvtoolu_01Search",
+                      type: "function",
+                      function: { name: "web_search", arguments: '{"query": "paris weather"}' },
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+        },
+      };
+
+      const result = parseToolsFromLog(log as LogEntry);
+
+      expect(result.map((tool) => [tool.name, tool.called, tool.callData?.id])).toEqual([
+        ["web_search", true, "srvtoolu_01Search"],
+        ["get_weather", true, "toolu_01Weather"],
+        ["send_email", false, undefined],
+      ]);
+      expect(result[0].callData?.arguments).toEqual({ query: "paris weather" });
+    });
+
     it("should handle string format request and response", () => {
       const log: Partial<LogEntry> = {
         request_id: "test-5",

@@ -5,7 +5,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import type { ParseKeys, TFunction } from "i18next";
 import { useId, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { AddButton, FormFrame, QuestionCardHeader, RemoveButton } from "./DecisionFormControls";
 import {
   blankQuestion,
@@ -27,10 +29,14 @@ import {
 import type { SystemOnePayloadValidation } from "./lib/validatePayload";
 
 const QUESTION_TYPES: readonly QuestionType[] = ["choice", "noul", "score"];
-const TYPE_LABELS: Record<QuestionType, string> = { choice: "Choice", noul: "Yes / no", score: "Score" };
-const TYPE_HELP: Record<QuestionType, string | undefined> = {
+const TYPE_LABELS: Record<QuestionType, ParseKeys> = {
+  choice: "playground.systemOne.systemOneForm.types.choice",
+  noul: "playground.systemOne.systemOneForm.types.noul",
+  score: "playground.systemOne.systemOneForm.types.score",
+};
+const TYPE_HELP: Record<QuestionType, ParseKeys | undefined> = {
   choice: undefined,
-  noul: "The model returns the probability that the answer is yes",
+  noul: "playground.systemOne.systemOneForm.typeHelp.noul",
   score: undefined,
 };
 
@@ -56,21 +62,22 @@ interface KeyInputProps {
   placeholder?: string;
 }
 
-function keyError(next: string, current: string, taken: readonly string[]): string | undefined {
+function keyError(next: string, current: string, taken: readonly string[], t: TFunction): string | undefined {
   if (next === "") {
-    return "Enter a name";
+    return t("playground.systemOne.systemOneForm.enterName");
   }
   if (next !== current && taken.includes(next)) {
-    return `"${next}" is already used`;
+    return t("playground.systemOne.systemOneForm.nameTaken", { name: next });
   }
   return undefined;
 }
 
 function KeyInput({ value, taken, onCommit, label, placeholder }: KeyInputProps) {
+  const { t } = useTranslation();
   const errorId = useId();
   const [draft, setDraft] = useState(value);
   const next = draft.trim();
-  const error = next === value ? undefined : keyError(next, value, taken);
+  const error = next === value ? undefined : keyError(next, value, taken, t);
 
   function commit() {
     if (error === undefined && next !== value) {
@@ -101,62 +108,64 @@ function KeyInput({ value, taken, onCommit, label, placeholder }: KeyInputProps)
 }
 
 function ChoiceOptions({ question, onChange }: QuestionEditorProps<ChoiceQuestion>) {
+  const { t } = useTranslation();
   const labels = Object.keys(question.criteria);
   const writeCriteria = (criteria: Record<string, string>) => onChange({ ...question, criteria });
 
   return (
     <div className="grid gap-2">
-      <span className="text-sm font-medium">Options</span>
+      <span className="text-sm font-medium">{t("playground.systemOne.systemOneForm.options")}</span>
       {Object.entries(question.criteria).map(([label, description], index) => (
         <div key={index} className="flex items-start gap-2">
           <KeyInput
             key={label}
-            label="Option label"
+            label={t("playground.systemOne.systemOneForm.optionLabel")}
             value={label}
             taken={labels}
             onCommit={(next) => writeCriteria(renameKey(question.criteria, label, next))}
           />
           <Input
-            aria-label={`Description of ${label}`}
+            aria-label={t("playground.systemOne.systemOneForm.optionDescription", { label })}
             className="flex-2"
             value={description}
-            placeholder="Optional description"
+            placeholder={t("playground.systemOne.systemOneForm.optionalDescription")}
             onChange={(event) => writeCriteria({ ...question.criteria, [label]: event.target.value })}
           />
           <RemoveButton
-            label={`Remove option ${label}`}
+            label={t("playground.systemOne.systemOneForm.removeOption", { label })}
             onClick={() => writeCriteria(withoutKey(question.criteria, label))}
           />
         </div>
       ))}
       <AddButton onClick={() => writeCriteria({ ...question.criteria, [freeName(labels, "option")]: "" })}>
-        Add option
+        {t("playground.systemOne.systemOneForm.addOption")}
       </AddButton>
     </div>
   );
 }
 
 function NoulCriteria({ question, onChange }: QuestionEditorProps<NoulQuestion>) {
+  const { t } = useTranslation();
   const yesId = useId();
   const noId = useId();
 
   return (
     <div className="grid gap-2 sm:grid-cols-2">
       <div className="grid gap-1.5">
-        <Label htmlFor={yesId}>Yes means</Label>
+        <Label htmlFor={yesId}>{t("playground.systemOne.systemOneForm.yesMeans")}</Label>
         <Input
           id={yesId}
           value={question.criteria?.true ?? ""}
-          placeholder="Optional"
+          placeholder={t("playground.systemOne.systemOneForm.optional")}
           onChange={(event) => onChange(withNoulCriterion(question, "true", event.target.value))}
         />
       </div>
       <div className="grid gap-1.5">
-        <Label htmlFor={noId}>No means</Label>
+        <Label htmlFor={noId}>{t("playground.systemOne.systemOneForm.noMeans")}</Label>
         <Input
           id={noId}
           value={question.criteria?.false ?? ""}
-          placeholder="Optional"
+          placeholder={t("playground.systemOne.systemOneForm.optional")}
           onChange={(event) => onChange(withNoulCriterion(question, "false", event.target.value))}
         />
       </div>
@@ -165,27 +174,30 @@ function NoulCriteria({ question, onChange }: QuestionEditorProps<NoulQuestion>)
 }
 
 function ScoreLevels({ question, onChange }: QuestionEditorProps<ScoreQuestion>) {
+  const { t } = useTranslation();
   const writeCriteria = (criteria: string[]) => onChange({ ...question, criteria });
 
   return (
     <div className="grid gap-2">
-      <span className="text-sm font-medium">Levels, lowest first</span>
+      <span className="text-sm font-medium">{t("playground.systemOne.systemOneForm.levels")}</span>
       {question.criteria.map((level, index) => (
         <div key={index} className="flex items-center gap-2">
           <span className="w-6 shrink-0 text-right text-xs text-muted-foreground tabular-nums">{index}</span>
           <Input
-            aria-label={`Level ${index}`}
+            aria-label={t("playground.systemOne.systemOneForm.level", { number: index })}
             value={level}
-            placeholder="What this score means"
+            placeholder={t("playground.systemOne.systemOneForm.levelPlaceholder")}
             onChange={(event) => writeCriteria(replaceAt(question.criteria, index, event.target.value))}
           />
           <RemoveButton
-            label={`Remove level ${index}`}
+            label={t("playground.systemOne.systemOneForm.removeLevel", { number: index })}
             onClick={() => writeCriteria(removeAt(question.criteria, index))}
           />
         </div>
       ))}
-      <AddButton onClick={() => writeCriteria([...question.criteria, ""])}>Add level</AddButton>
+      <AddButton onClick={() => writeCriteria([...question.criteria, ""])}>
+        {t("playground.systemOne.systemOneForm.addLevel")}
+      </AddButton>
     </div>
   );
 }
@@ -210,37 +222,45 @@ interface QuestionCardProps extends QuestionEditorProps<FormQuestion> {
 }
 
 function QuestionCard({ name, index, question, taken, onChange, onRename, onRemove }: QuestionCardProps) {
+  const { t } = useTranslation();
   const instructionsId = useId();
   const title = name === "" ? String(index + 1) : name;
 
   return (
-    <fieldset aria-label={`Question ${title}`} className="grid gap-3 rounded-lg border bg-muted/30 p-3">
-      <QuestionCardHeader index={index} onRemove={onRemove} removeLabel={`Remove question ${title}`} />
+    <fieldset
+      aria-label={t("playground.systemOne.systemOneForm.question", { title })}
+      className="grid gap-3 rounded-lg border bg-muted/30 p-3"
+    >
+      <QuestionCardHeader
+        index={index}
+        onRemove={onRemove}
+        removeLabel={t("playground.systemOne.systemOneForm.removeQuestion", { title })}
+      />
       <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_10rem]">
         <div className="grid gap-1.5">
-          <span className="text-sm font-medium">Name</span>
+          <span className="text-sm font-medium">{t("playground.systemOne.systemOneForm.name")}</span>
           <KeyInput
             key={name}
-            label="Question name"
+            label={t("playground.systemOne.systemOneForm.questionName")}
             value={name}
             taken={taken}
             onCommit={onRename}
-            placeholder="e.g. area"
+            placeholder={t("playground.systemOne.systemOneForm.questionNamePlaceholder")}
           />
         </div>
         <div className="grid gap-1.5">
-          <span className="text-sm font-medium">Answer type</span>
+          <span className="text-sm font-medium">{t("playground.systemOne.systemOneForm.answerType")}</span>
           <Select
             value={question.type}
             onValueChange={(type) => isQuestionType(type) && onChange(retype(question, type))}
           >
-            <SelectTrigger className="w-full" aria-label="Answer type">
-              <SelectValue>{TYPE_LABELS[question.type]}</SelectValue>
+            <SelectTrigger className="w-full" aria-label={t("playground.systemOne.systemOneForm.answerType")}>
+              <SelectValue>{t(TYPE_LABELS[question.type])}</SelectValue>
             </SelectTrigger>
             <SelectContent>
               {QUESTION_TYPES.map((type) => (
-                <SelectItem key={type} value={type} title={TYPE_HELP[type]}>
-                  {TYPE_LABELS[type]}
+                <SelectItem key={type} value={type} title={TYPE_HELP[type] && t(TYPE_HELP[type])}>
+                  {t(TYPE_LABELS[type])}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -248,12 +268,12 @@ function QuestionCard({ name, index, question, taken, onChange, onRename, onRemo
         </div>
       </div>
       <div className="grid gap-1.5">
-        <Label htmlFor={instructionsId}>Instructions</Label>
+        <Label htmlFor={instructionsId}>{t("playground.systemOne.systemOneForm.instructions")}</Label>
         <Textarea
           id={instructionsId}
           rows={2}
           value={question.instructions ?? ""}
-          placeholder="What should the model decide?"
+          placeholder={t("playground.systemOne.systemOneForm.instructionsPlaceholder")}
           onChange={(event) => onChange({ ...question, instructions: event.target.value })}
         />
       </div>
@@ -263,15 +283,16 @@ function QuestionCard({ name, index, question, taken, onChange, onRename, onRemo
 }
 
 export default function SystemOneForm({ value, onChange, validation, onReset }: SystemOneFormProps) {
+  const { t } = useTranslation();
   const stateId = useId();
   const form = useMemo(() => readForm(value), [value]);
 
   if (form === undefined) {
     return (
       <FormFrame validation={validation}>
-        <p className="text-sm text-muted-foreground">This request has a shape the form can&apos;t show.</p>
+        <p className="text-sm text-muted-foreground">{t("playground.systemOne.systemOneForm.unreadable")}</p>
         <Button variant="outline" className="w-fit" onClick={onReset}>
-          Reset to example
+          {t("playground.systemOne.systemOneForm.resetToExample")}
         </Button>
       </FormFrame>
     );
@@ -285,15 +306,13 @@ export default function SystemOneForm({ value, onChange, validation, onReset }: 
   return (
     <FormFrame validation={validation}>
       <div className="grid gap-1.5">
-        <Label htmlFor={stateId}>Input</Label>
-        <p className="text-xs text-muted-foreground">
-          The text the model reads before it answers, such as a support ticket or a chat message.
-        </p>
+        <Label htmlFor={stateId}>{t("playground.systemOne.systemOneForm.input")}</Label>
+        <p className="text-xs text-muted-foreground">{t("playground.systemOne.systemOneForm.inputHint")}</p>
         <Textarea
           id={stateId}
           rows={4}
           value={form.state ?? ""}
-          placeholder="Paste the text the model should decide about"
+          placeholder={t("playground.systemOne.systemOneForm.inputPlaceholder")}
           onChange={(event) => write({ ...form, state: event.target.value })}
         />
       </div>
@@ -310,7 +329,7 @@ export default function SystemOneForm({ value, onChange, validation, onReset }: 
         />
       ))}
       <AddButton onClick={() => writeQuestions({ ...questions, [freeName(names, "question")]: blankQuestion() })}>
-        Add question
+        {t("playground.systemOne.systemOneForm.addQuestion")}
       </AddButton>
     </FormFrame>
   );

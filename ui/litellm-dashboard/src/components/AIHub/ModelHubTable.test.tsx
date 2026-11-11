@@ -2,6 +2,7 @@ import * as networking from "@/components/networking";
 import userEvent from "@testing-library/user-event";
 import { act } from "@testing-library/react";
 import type { MCPServerData } from "./MCPHubTableColumns";
+import type { DeploymentPricing } from "@/components/molecules/models/deploymentPricing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, screen, testQueryClient, waitFor, within } from "../../../tests/test-utils";
 import ModelHubTable from "./ModelHubTable";
@@ -374,7 +375,7 @@ describe("ModelHubTable", () => {
 
   describe("model details usage example", () => {
     const openDetails = async (
-      model: { model_group: string; providers: string[]; mode: string },
+      model: { model_group: string; providers: string[]; mode: string; deployment_pricing?: DeploymentPricing[] },
       canOpenPlayground = true,
     ) => {
       vi.mocked(networking.modelHubCall).mockResolvedValue({ data: [model] });
@@ -423,6 +424,34 @@ describe("ModelHubTable", () => {
       expect(dialog).toHaveTextContent('"http://gateway.local:5000/v1/systemone"');
       expect(screen.getByRole("link", { name: "How to call decision models" })).toBeInTheDocument();
       expect(screen.queryByRole("link", { name: "Try it in the Playground" })).not.toBeInTheDocument();
+    });
+
+    it("shows each deployment's own prices, by service tier, in the model details", async () => {
+      const gpt5OnOpenAIAndAzure = {
+        model_group: "gpt-5",
+        providers: ["openai", "azure"],
+        mode: "chat",
+        deployment_pricing: [
+          {
+            provider: "openai",
+            costs: { input_cost_per_token: 2.5e-6, input_cost_per_token_priority: 5e-6 },
+            tiered_pricing: [],
+          },
+          { provider: "azure", costs: { input_cost_per_token: 2.75e-6 }, tiered_pricing: [] },
+        ],
+      };
+      const dialog = await openDetails(gpt5OnOpenAIAndAzure);
+
+      const openai = within(dialog).getByRole("region", { name: "OpenAI pricing" });
+      expect(within(openai).getByRole("row", { name: /Input \/ 1M tokens/ })).toHaveTextContent("$2.50$5.00");
+      expect(within(dialog).getByRole("region", { name: "Azure pricing" })).toHaveTextContent("$2.75");
+    });
+
+    it("leaves the pricing breakdown out when the proxy sends no deployment prices", async () => {
+      const dialog = await openDetails({ model_group: "gpt-5", providers: ["openai"], mode: "chat" });
+
+      expect(within(dialog).getByText("Input Cost per 1M Tokens:")).toBeInTheDocument();
+      expect(within(dialog).queryByText("Pricing by Deployment:")).not.toBeInTheDocument();
     });
 
     it("keeps the chat completions example for a chat model", async () => {

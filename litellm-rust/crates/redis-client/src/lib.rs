@@ -1,20 +1,30 @@
+mod batch;
 mod client;
-mod commands;
+pub mod commands;
 mod config;
 mod connection;
 mod error;
+mod events;
 mod namespace;
 mod pipeline;
+mod pubsub;
 mod script;
-#[cfg(test)]
-mod test_support;
 
-pub use client::{RedisClient, Ttl};
-pub use config::{
-    ClusterEndpoint, ClusterNode, DEFAULT_TIMEOUT, Endpoint, HostEndpoint, RedisConfig,
+pub use batch::{Declared, RedisBatch};
+pub use client::{RedisClient, Ttl, WeakRedisClient};
+pub use commands::{Amount, Command, Expiry};
+pub use config::{Credentials, CredentialsProvider, DEFAULT_TIMEOUT, RedisConfig, Timeouts};
+pub use error::{ConnectError, Error, KeyError};
+pub use events::{
+    CallEvent, CallTag, FailureKind, Operation, Outcome, RedisEvents, current_tag, tagged,
 };
-pub use error::{ConnectError, Error};
+pub use litellm_redis_types::{
+    Cluster, Node, RedisUrl, Sentinel, Standalone, StaticAuth, Target, TlsOptions, UnixSocket,
+};
 pub use namespace::Namespace;
 pub use pipeline::Pipeline;
-pub use redis::Value;
+pub use redis::{
+    BasicAuth, ErrorKind as RedisErrorKind, RedisError, StreamingCredentialsProvider, Value,
+    cluster_routing::Slot,
+};
 pub use script::Script;

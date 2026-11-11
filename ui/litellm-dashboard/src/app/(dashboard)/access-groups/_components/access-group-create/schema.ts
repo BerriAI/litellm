@@ -1,7 +1,9 @@
 import { z } from "zod";
 
+import i18n from "@/i18n/i18n";
+
 export const accessGroupCreateSchema = z.object({
-  name: z.string().refine((value) => value.trim() !== "", "Please enter the access group name"),
+  name: z.string().refine((value) => value.trim() !== "", { error: () => i18n.t("accessGroups.form.name.required") }),
   description: z.string(),
   modelIds: z.array(z.string()),
   mcpServerIds: z.array(z.string()),

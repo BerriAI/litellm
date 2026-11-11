@@ -5,6 +5,7 @@ Unit tests for prometheus metric labels configuration
 from typing import Final, Literal
 
 import pytest
+from pydantic import JsonValue
 
 import litellm
 from litellm.types.integrations.prometheus import (
@@ -236,6 +237,53 @@ def test_extract_api_provider_from_request_data_failure_path():
     assert extract({}) is None
     # Unmappable model name -> None, not a guess
     assert extract({"model": "some-unknown-model-xyz"}) is None
+
+
+_PASS_THROUGH_CALL_TYPE: Final = "pass_through_endpoint"
+
+
+@pytest.mark.parametrize(
+    "request_data, expected_provider",
+    [
+        ({"model": "gpt-4o-mini", "call_type": "acompletion", "custom_llm_provider": "anthropic"}, "openai"),
+        ({"model": "gpt-4o-mini", "litellm_params": {"custom_llm_provider": "humanloop"}}, "humanloop"),
+        ({"model": "gemini-3.8-flash", "call_type": _PASS_THROUGH_CALL_TYPE}, "vertex_ai"),
+        (
+            {"model": "gemini-3.8-flash", "call_type": _PASS_THROUGH_CALL_TYPE, "custom_llm_provider": "gemini"},
+            "gemini",
+        ),
+        (
+            {
+                "call_type": _PASS_THROUGH_CALL_TYPE,
+                "custom_llm_provider": "gemini",
+                "standard_logging_object": {"custom_llm_provider": "vertex_ai"},
+            },
+            "vertex_ai",
+        ),
+    ],
+)
+def test_extract_api_provider_reads_the_request_declared_provider_only_on_pass_through_failures(
+    request_data: dict[str, object], expected_provider: str
+):
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    assert PrometheusLogger._extract_api_provider_from_request_data(request_data) == expected_provider
+
+
+@pytest.mark.parametrize(
+    "declared_provider",
+    ["azure", "bedrock", "openrouter", "client-supplied-value", "", {"nested": "object"}, 42],
+)
+def test_extract_api_provider_ignores_pass_through_declared_values_outside_gemini_and_vertex(
+    declared_provider: object,
+):
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    extract = PrometheusLogger._extract_api_provider_from_request_data
+    declared = {"call_type": _PASS_THROUGH_CALL_TYPE, "custom_llm_provider": declared_provider}
+
+    assert extract({"model": "gpt-4o-mini", **declared}) == "openai"
+    assert extract({"model": "no-such-model", **declared}) is None
 
 
 def test_extract_api_provider_swallows_unknown_model_but_logs_unexpected_errors():
@@ -756,6 +804,47 @@ async def test_failure_hook_emits_api_provider_value_on_failed_requests_metric()
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("metadata_id", "request_id", "logged_id", "expected"),
+    (
+        (None, None, "logged-deployment", "logged-deployment"),
+        ("", None, "logged-deployment", "logged-deployment"),
+        ("metadata-deployment", "request-deployment", "logged-deployment", "metadata-deployment"),
+        (None, "request-deployment", "logged-deployment", "request-deployment"),
+        (None, None, None, "None"),
+    ),
+)
+async def test_failure_counters_keep_logged_deployment_attribution(
+    metadata_id: str | None, request_id: str | None, logged_id: str | None, expected: str
+) -> None:
+    from fastapi import HTTPException
+
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    request_data: Final[dict[str, JsonValue]] = {
+        "model": "metric-test-alias",
+        "metadata": {"model_info": {"id": metadata_id}},
+        "model_info": {"id": request_id},
+        "standard_logging_object": {"model_id": logged_id, "custom_llm_provider": "openai"},
+    }
+    _clear_prometheus_registry()
+    try:
+        await PrometheusLogger().async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=HTTPException(status_code=400, detail="guardrail rejected"),
+            user_api_key_dict=UserAPIKeyAuth(token="metric-test-token"),
+        )
+        for metric_name in ("litellm_proxy_failed_requests_metric_total", "litellm_proxy_total_requests_metric_total"):
+            samples: Final = _collected_samples(metric_name)
+            assert [(sample.labels["model_id"], sample.value) for sample in samples] == [
+                (expected, 1.0)
+            ]
+    finally:
+        _clear_prometheus_registry()
+
+
+@pytest.mark.asyncio
 async def test_failure_hook_labels_a_cli_session_with_the_per_user_alias_not_the_login_token():
     from litellm.integrations.prometheus import PrometheusLogger
     from litellm.proxy._types import UserAPIKeyAuth
@@ -847,6 +936,56 @@ async def test_failure_hook_prefers_request_data_provider_over_exception_provide
         },
         err,
     ) == ["azure"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call_type, custom_llm_provider, expected_requested_model",
+    [
+        (_PASS_THROUGH_CALL_TYPE, "vertex_ai", "gcp/google/gemini-2.5-flash"),
+        ("acompletion", "vertex_ai", "other"),
+        (_PASS_THROUGH_CALL_TYPE, "bedrock", "other"),
+    ],
+)
+async def test_failure_hook_labels_a_pass_through_failure_with_the_router_model_the_client_requested(
+    call_type: str, custom_llm_provider: str, expected_requested_model: str
+):
+    from unittest.mock import patch
+
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gcp/google/gemini-2.5-flash",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-flash",
+                    "vertex_project": "p",
+                    "vertex_location": "us-central1",
+                },
+            }
+        ]
+    )
+    _clear_prometheus_registry()
+    try:
+        with patch("litellm.proxy.proxy_server.llm_router", router, create=True):  # test-quality-ok: production reads proxy_server.llm_router lazily, no injection seam
+            await PrometheusLogger().async_post_call_failure_hook(
+                request_data={
+                    "model": "gemini-2.5-flash",
+                    "call_type": call_type,
+                    "custom_llm_provider": custom_llm_provider,
+                    "metadata": {},
+                    "litellm_params": {"metadata": {"model_group": "gcp/google/gemini-2.5-flash"}},
+                },
+                original_exception=Exception("upstream 400"),
+                user_api_key_dict=UserAPIKeyAuth(token="tok"),
+            )
+        assert {
+            s.labels.get("requested_model") for s in _collected_samples("litellm_proxy_failed_requests_metric_total")
+        } == {expected_requested_model}
+    finally:
+        _clear_prometheus_registry()
 
 
 def test_model_group_in_deployment_metrics():

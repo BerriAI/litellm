@@ -142,6 +142,29 @@ describe("CredentialsPanel", () => {
     expect(screen.getByText("No credentials configured")).toBeInTheDocument();
   });
 
+  it("keeps an open credential action usable when the panel renders again", async () => {
+    const user = userEvent.setup();
+    mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userRole: "Admin" });
+    mockUseCredentials.mockReturnValue({ data: { credentials }, isLoading: false, refetch: vi.fn() });
+    const client = createQueryClient();
+    const { rerender } = render(
+      <QueryClientProvider client={client}>
+        <CredentialsPanel />
+      </QueryClientProvider>,
+    );
+
+    await user.click(screen.getByTestId("credential-actions-openai-key"));
+    expect(await screen.findByTestId("credential-action-edit")).toBeVisible();
+    rerender(
+      <QueryClientProvider client={client}>
+        <CredentialsPanel />
+      </QueryClientProvider>,
+    );
+
+    await user.click(screen.getByTestId("credential-action-edit"));
+    expect(screen.getByTestId("credential-modal-edit-submit")).toBeVisible();
+  });
+
   it("shows the loading skeleton instead of the empty state while credentials load", () => {
     mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userRole: "Admin" });
     mockUseCredentials.mockReturnValue({ data: undefined, isLoading: true, refetch: vi.fn() });

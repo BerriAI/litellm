@@ -14,11 +14,14 @@ interval of increments queued elsewhere: the same lag the SpendLogs aggregate
 it replaces (and every other spend column) already has.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from types import TracebackType
 from typing import TYPE_CHECKING, Final, Protocol
 
+from pydantic import TypeAdapter
 from typing_extensions import LiteralString, ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -74,30 +77,44 @@ _OPEN_WINDOW_SPEND_SQL: Final = (
     "WHERE \"LiteLLM_BudgetWindowSpend\".window_start <= ($5::timestamptz AT TIME ZONE 'UTC')"
 )
 
+_HAS_DELIVERY: Final = 'EXISTS (SELECT 1 FROM "LiteLLM_SpendLogDelivery" delivery WHERE delivery.request_id = "LiteLLM_SpendLogs".request_id)'
+
+_SETTLED_SPEND_LOG_FILTER: Final = (
+    ' AND NOT EXISTS (SELECT 1 FROM "LiteLLM_SpendLogDelivery" delivery '
+    'WHERE delivery.request_id = "LiteLLM_SpendLogs".request_id '
+    "AND delivery.state IN ('pending', 'parked'))"
+)
+
 _SEED_FROM_SPEND_LOGS_KEY_SQL: Final = (
     "SELECT COALESCE(SUM(spend), 0.0) AS total, "
-    "COALESCE(SUM(spend) FILTER (WHERE \"startTime\" < ($3::timestamptz AT TIME ZONE 'UTC')), 0.0) AS before_batch "
+    "COALESCE(SUM(spend) FILTER (WHERE "
+    + _HAS_DELIVERY
+    + " OR \"startTime\" < ($3::timestamptz AT TIME ZONE 'UTC')), 0.0) "
+    "AS before_batch "
     'FROM "LiteLLM_SpendLogs" '
-    "WHERE api_key = $1 AND \"startTime\" >= ($2::timestamptz AT TIME ZONE 'UTC')"
+    "WHERE api_key = $1 AND \"startTime\" >= ($2::timestamptz AT TIME ZONE 'UTC')" + _SETTLED_SPEND_LOG_FILTER
 )
 
 _SEED_FROM_SPEND_LOGS_TEAM_SQL: Final = (
     "SELECT COALESCE(SUM(spend), 0.0) AS total, "
-    "COALESCE(SUM(spend) FILTER (WHERE \"startTime\" < ($3::timestamptz AT TIME ZONE 'UTC')), 0.0) AS before_batch "
+    "COALESCE(SUM(spend) FILTER (WHERE "
+    + _HAS_DELIVERY
+    + " OR \"startTime\" < ($3::timestamptz AT TIME ZONE 'UTC')), 0.0) "
+    "AS before_batch "
     'FROM "LiteLLM_SpendLogs" '
-    "WHERE team_id = $1 AND \"startTime\" >= ($2::timestamptz AT TIME ZONE 'UTC')"
+    "WHERE team_id = $1 AND \"startTime\" >= ($2::timestamptz AT TIME ZONE 'UTC')" + _SETTLED_SPEND_LOG_FILTER
 )
 
 _SEED_FROM_SPEND_LOGS_KEY_UNBOUNDED_SQL: Final = (
     "SELECT COALESCE(SUM(spend), 0.0) AS total, COALESCE(SUM(spend), 0.0) AS before_batch "
     'FROM "LiteLLM_SpendLogs" '
-    "WHERE api_key = $1 AND \"startTime\" >= ($2::timestamptz AT TIME ZONE 'UTC')"
+    "WHERE api_key = $1 AND \"startTime\" >= ($2::timestamptz AT TIME ZONE 'UTC')" + _SETTLED_SPEND_LOG_FILTER
 )
 
 _SEED_FROM_SPEND_LOGS_TEAM_UNBOUNDED_SQL: Final = (
     "SELECT COALESCE(SUM(spend), 0.0) AS total, COALESCE(SUM(spend), 0.0) AS before_batch "
     'FROM "LiteLLM_SpendLogs" '
-    "WHERE team_id = $1 AND \"startTime\" >= ($2::timestamptz AT TIME ZONE 'UTC')"
+    "WHERE team_id = $1 AND \"startTime\" >= ($2::timestamptz AT TIME ZONE 'UTC')" + _SETTLED_SPEND_LOG_FILTER
 )
 
 _UPSERT_TRANSACTION_TIMEOUT: Final = timedelta(seconds=60)
@@ -112,6 +129,10 @@ class _ExistingKeyRow(TypedDict):
     entity_type: ReadOnly[str]
     entity_id: ReadOnly[str]
     window_duration: ReadOnly[str]
+
+
+_SEED_TOTALS_ROWS: Final = TypeAdapter(tuple[_SeedTotalsRow, ...])
+_EXISTING_KEY_ROWS: Final = TypeAdapter(tuple[_ExistingKeyRow, ...])
 
 
 class _SeedTotalsQuery(Protocol):
@@ -129,17 +150,31 @@ class _UpsertBatch(Protocol):
 class _UpsertBatchManager(Protocol):
     async def __aenter__(self) -> _UpsertBatch: ...
 
-    async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> bool | None: ...
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+        /,
+    ) -> bool | None: ...
 
 
 class _UpsertTransaction(Protocol):
     def batch_(self) -> _UpsertBatchManager: ...
 
+    async def query_raw(self, query: LiteralString, *args: object) -> Sequence[Mapping[str, object]]: ...
+
 
 class _UpsertTransactionManager(Protocol):
     async def __aenter__(self) -> _UpsertTransaction: ...
 
-    async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> bool | None: ...
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+        /,
+    ) -> bool | None: ...
 
 
 def _seed_totals_query(prisma_client: "PrismaClient") -> _SeedTotalsQuery:
@@ -178,6 +213,7 @@ class WindowSpendLogsAggregate(Protocol):
         entity_id: str,
         window_start: datetime,
         batch_started_at: datetime | None,
+        query: _SeedTotalsQuery | None = None,
     ) -> WindowSeedTotals | None: ...
 
 
@@ -187,6 +223,7 @@ async def spend_logs_seed_totals(
     entity_id: str,
     window_start: datetime,
     batch_started_at: datetime | None,
+    query: _SeedTotalsQuery | None = None,
 ) -> WindowSeedTotals | None:
     """LiteLLM_SpendLogs spend for one entity since window_start, both in full
     and up to the start of the batch being flushed, in one scan.
@@ -210,11 +247,12 @@ async def spend_logs_seed_totals(
         bounded_sql, unbounded_sql = _SEED_FROM_SPEND_LOGS_TEAM_SQL, _SEED_FROM_SPEND_LOGS_TEAM_UNBOUNDED_SQL
     else:
         return None
+    read: Final = query or _seed_totals_query(prisma_client)
     async with db_span("seed_window_spend", "LiteLLM_SpendLogs"):
         rows: Final = (
-            await _seed_totals_query(prisma_client)(unbounded_sql, entity_id, window_start)
+            await read(unbounded_sql, entity_id, window_start)
             if batch_started_at is None
-            else await _seed_totals_query(prisma_client)(
+            else await read(
                 bounded_sql,
                 entity_id,
                 window_start,
@@ -246,9 +284,10 @@ def _primary_key(transaction: WindowSpendTransaction) -> tuple[str, str, str]:
 async def _existing_primary_keys(
     prisma_client: "PrismaClient",
     transactions: tuple[WindowSpendTransaction, ...],
+    query: _ExistingKeysQuery | None = None,
 ) -> frozenset[tuple[str, str, str]]:
     async with db_span("select_window_spend_rows", "LiteLLM_BudgetWindowSpend"):
-        rows: Final = await _existing_keys_query(prisma_client)(
+        rows: Final = await (query or _existing_keys_query(prisma_client))(
             _SELECT_EXISTING_ROWS_SQL,
             tuple(transaction["entity_type"] for transaction in transactions),
             tuple(transaction["entity_id"] for transaction in transactions),
@@ -262,6 +301,7 @@ async def _seed_base_for_missing_row(
     transaction: WindowSpendTransaction,
     existing_primary_keys: frozenset[tuple[str, str, str]],
     spend_logs_aggregate: WindowSpendLogsAggregate,
+    query: _SeedTotalsQuery | None = None,
 ) -> float:
     """Spend already recorded for a window that has no row yet.
 
@@ -272,12 +312,24 @@ async def _seed_base_for_missing_row(
     """
     if _primary_key(transaction) in existing_primary_keys:
         return 0.0
-    totals: Final = await spend_logs_aggregate(
-        prisma_client=prisma_client,
-        entity_type=transaction["entity_type"],
-        entity_id=transaction["entity_id"],
-        window_start=datetime.fromisoformat(transaction["window_start"]).replace(tzinfo=timezone.utc),
-        batch_started_at=_transaction_started_at(transaction),
+    window_start: Final = datetime.fromisoformat(transaction["window_start"]).replace(tzinfo=timezone.utc)
+    totals: Final = (
+        await spend_logs_aggregate(
+            prisma_client=prisma_client,
+            entity_type=transaction["entity_type"],
+            entity_id=transaction["entity_id"],
+            window_start=window_start,
+            batch_started_at=_transaction_started_at(transaction),
+        )
+        if query is None
+        else await spend_logs_aggregate(
+            prisma_client=prisma_client,
+            entity_type=transaction["entity_type"],
+            entity_id=transaction["entity_id"],
+            window_start=window_start,
+            batch_started_at=_transaction_started_at(transaction),
+            query=query,
+        )
     )
     if totals is None:
         return 0.0
@@ -324,10 +376,30 @@ def _upsert_params(
     )
 
 
+def _existing_keys_in(transaction: _UpsertTransaction) -> _ExistingKeysQuery:
+    async def query_raw(query: LiteralString, *args: object) -> Sequence[_ExistingKeyRow]:
+        return _EXISTING_KEY_ROWS.validate_python(await transaction.query_raw(query, *args))
+
+    return query_raw
+
+
+def _seed_totals_in(transaction: _UpsertTransaction) -> _SeedTotalsQuery:
+    async def query_raw(query: LiteralString, *args: object) -> Sequence[_SeedTotalsRow]:
+        return _SEED_TOTALS_ROWS.validate_python(await transaction.query_raw(query, *args))
+
+    return query_raw
+
+
+def _transaction_reads(transaction: _UpsertTransaction) -> tuple[_ExistingKeysQuery, _SeedTotalsQuery]:
+    """Reads made inside an enclosing transaction share its connection, so they cannot wait on it."""
+    return _existing_keys_in(transaction), _seed_totals_in(transaction)
+
+
 async def commit_window_spend_updates(
     prisma_client: "PrismaClient",
     transactions: Sequence[WindowSpendTransaction],
     spend_logs_aggregate: WindowSpendLogsAggregate = spend_logs_seed_totals,
+    outer_transaction: _UpsertTransaction | None = None,
 ) -> None:
     """Apply aggregated window increments to LiteLLM_BudgetWindowSpend.
 
@@ -343,9 +415,11 @@ async def commit_window_spend_updates(
         return
 
     ordered: Final = tuple(sorted(transactions, key=window_spend_group_key))
+    reads: Final = _transaction_reads(outer_transaction) if outer_transaction is not None else (None, None)
     existing_primary_keys: Final = await _existing_primary_keys(
         prisma_client=prisma_client,
         transactions=ordered,
+        query=reads[0],
     )
     seed_bases: Final = tuple(
         [
@@ -354,6 +428,7 @@ async def commit_window_spend_updates(
                 transaction=transaction,
                 existing_primary_keys=existing_primary_keys,
                 spend_logs_aggregate=spend_logs_aggregate,
+                query=reads[1],
             )
             for transaction in ordered
         ]
@@ -367,7 +442,9 @@ async def commit_window_spend_updates(
     )
     async with (
         db_span("commit_window_spend_updates", "LiteLLM_BudgetWindowSpend"),
-        _upsert_transaction(prisma_client) as db_transaction,
+        (
+            nullcontext(outer_transaction) if outer_transaction is not None else _upsert_transaction(prisma_client)
+        ) as db_transaction,
         db_transaction.batch_() as batcher,
     ):
         for transaction, seed_base in zip(ordered, seed_bases):

@@ -7,7 +7,6 @@ use std::{
 };
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use litellm_auth_types::SecretValue;
 use litellm_gateway_auth::{
     hash_token,
     keys::{KeyHash, KeyLookup, KeyStatus, verify_key},
@@ -16,6 +15,7 @@ use litellm_gateway_management::{
     Error,
     keys::{Keys, Revocation},
 };
+use litellm_secret_value::SecretValue;
 use rstest::{fixture, rstest};
 use support::{MemoryStore, Unavailable};
 

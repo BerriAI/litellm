@@ -427,6 +427,34 @@ def test_run_ends_with_a_summary_of_ran_and_skipped_blocks(tmp_path: Path) -> No
     assert "check: FAIL" not in proc.stdout
 
 
+@pytest.mark.parametrize(
+    "spec_input",
+    (
+        "litellm/tracing/generated/models.py",
+        "litellm/models/credentials.py",
+        "enterprise/litellm_enterprise/types/proxy/audit_logging_endpoints.py",
+        "pyproject.toml",
+        "uv.lock",
+    ),
+)
+def test_a_staged_spec_input_outside_proxy_and_types_runs_the_api_type_sync(tmp_path: Path, spec_input: str) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    _commit_all(repo, "base")
+    _stage_file(repo, spec_input, "x = 1\n")
+    proc = _run(repo, bin_dir, {})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "ran:     dashboard API-type sync (npm run gen:api)" in proc.stdout
+
+
+def test_a_staged_rust_crate_change_skips_the_api_type_sync(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    _commit_all(repo, "base")
+    _stage_file(repo, "litellm-rust/crates/traces/src/lib.rs", "fn main() {}\n")
+    proc = _run(repo, bin_dir, {})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "skipped: dashboard API-type sync (npm run gen:api)" in proc.stdout
+
+
 def test_staged_files_matching_no_check_print_an_explicit_noop_note_and_nonempty_log(tmp_path: Path) -> None:
     repo, bin_dir = _sandbox(tmp_path)
     _commit_all(repo, "base")

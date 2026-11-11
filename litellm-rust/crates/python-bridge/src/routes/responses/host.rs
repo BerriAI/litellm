@@ -44,12 +44,9 @@ pub(super) fn project(
             let value = match (name.as_str(), value) {
                 ("previous_response_id", serde_json::Value::String(id)) => {
                     let decoded: String = py
-                        .import("litellm.responses.utils")?
-                        .getattr("ResponsesAPIRequestUtils")?
-                        .call_method1(
-                            "decode_previous_response_id_to_original_previous_response_id",
-                            (id,),
-                        )?
+                        .import(super::ROUTE_HOST_MODULE)?
+                        .getattr("original_previous_response_id")?
+                        .call1((id,))?
                         .extract()?;
                     serde_json::Value::String(decoded)
                 }

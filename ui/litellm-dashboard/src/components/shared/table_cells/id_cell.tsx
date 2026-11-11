@@ -4,6 +4,7 @@ import { Copy } from "lucide-react";
 import * as React from "react";
 
 import { useEntityLinkClick } from "@/components/shared/EntityLink";
+import i18n from "@/i18n/i18n";
 import { cn } from "@/lib/cva.config";
 import { copyToClipboard } from "@/utils/dataUtils";
 
@@ -43,7 +44,7 @@ export function IdCell({
   href,
   onClick,
   copyable = false,
-  copyLabel = "Copy ID",
+  copyLabel = i18n.t("shared.tableCells.idCell.copyId"),
   truncate = true,
   fallback = "-",
   tooltip,

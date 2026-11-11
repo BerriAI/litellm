@@ -18,6 +18,11 @@ from typing import Final
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.litellm_core_utils.core_helpers import iter_items
+from litellm.llms.anthropic.common_utils import (
+    anthropic_server_tool_call_params,
+    changed_server_tool_call_arguments,
+    write_request_hosted_web_call_arguments,
+)
 from litellm.responses.litellm_completion_transformation.compaction_items import (
     compaction_summary,
     input_items,
@@ -407,18 +412,27 @@ def walk_user_text(
             return new_parts
         return content
 
-    messages: Final = data.get("messages")
-    for message in _object_list(messages) or ():
+    def _rewrite_call_arguments(calls: object) -> None:
+        for call in _object_list(calls) or ():
+            function = call.get("function") if isinstance(call, dict) else None
+            if isinstance(function, dict) and "arguments" in function:
+                function["arguments"] = _rewrite_arguments(function["arguments"])
+
+    messages: Final = _object_list(data.get("messages")) or ()
+    server_tool_calls_before: Final = tuple(anthropic_server_tool_call_params(message) for message in messages)
+    for message in messages:
         if (skip_tool_message and _is_tool_message(message)) or not isinstance(message, dict):
             continue
         if "content" in message:
             message["content"] = _rewrite_content(message["content"])
-        calls = message.get("tool_calls")
-        if isinstance(calls, list):
-            for call in calls:
-                function = call.get("function") if isinstance(call, dict) else None
-                if isinstance(function, dict) and "arguments" in function:
-                    function["arguments"] = _rewrite_arguments(function["arguments"])
+        _rewrite_call_arguments(message.get("tool_calls"))
+        provider_fields = message.get("provider_specific_fields")
+        if isinstance(provider_fields, dict):
+            _rewrite_call_arguments(provider_fields.get("server_tool_calls"))
+    for message, original in zip(messages, server_tool_calls_before, strict=True):
+        write_request_hosted_web_call_arguments(
+            message, changed_server_tool_call_arguments(original, anthropic_server_tool_call_params(message))
+        )
 
     if "system" in data:
         data["system"] = _rewrite_content(data["system"])  # rebind-ok: preserve the native hook's in-place contract

@@ -1,9 +1,10 @@
 use std::{future::Future, pin::Pin, sync::Arc};
 
 use litellm_core_utils::settings::Lookup;
+use litellm_secret_value::SecretValue;
 use litellm_secrets::{
     Error, ExternalSecretManager, FailurePolicy, KeyManagementSettings, KeyManagementSystem,
-    OidcResolver, Secret, SecretManager, SecretManagerState, SecretResolver, SecretValue,
+    OidcResolver, Secret, SecretManager, SecretManagerState, SecretResolver,
     secret_manager_would_be_consulted,
 };
 

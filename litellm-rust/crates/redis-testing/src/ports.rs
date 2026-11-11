@@ -42,6 +42,17 @@ pub(crate) async fn wait_for_pong(port: u16) -> Result<(), Error> {
     Err(Error::Unreachable { port })
 }
 
+pub(crate) async fn wait_for_listener(port: u16) -> Result<(), Error> {
+    let deadline = Instant::now() + READY_TIMEOUT;
+    while Instant::now() < deadline {
+        if TcpStream::connect((HOST, port)).await.is_ok() {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    Err(Error::Unreachable { port })
+}
+
 async fn ping(port: u16) -> io::Result<bool> {
     let mut stream = TcpStream::connect((HOST, port)).await?;
     stream.write_all(b"PING\r\n").await?;

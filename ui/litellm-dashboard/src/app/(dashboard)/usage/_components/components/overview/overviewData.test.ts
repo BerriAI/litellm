@@ -7,6 +7,7 @@ import {
   labelForDate,
   modelColorMap,
   OTHER_COLOR,
+  providerSpendRows,
   rollUpBreakdown,
   seriesBy,
 } from "./overviewData";
@@ -85,6 +86,34 @@ describe("bucketSeries", () => {
     expect(weekly.data.map((point) => point.date)).toEqual(["2026-10-01", "2026-10-08"]);
     expect(bucketTotals(weekly).get("2026-10-01")).toBe(3);
     expect(bucketTotals(weekly).get("2026-10-08")).toBe(4);
+  });
+});
+
+const providerDay = (date: string, providers: Record<string, Record<string, unknown>>): DailyData =>
+  ({
+    ...day(date, 0, {}),
+    breakdown: {
+      ...day(date, 0, {}).breakdown,
+      providers: Object.fromEntries(
+        Object.entries(providers).map(([name, metadata]) => [
+          name,
+          { metrics: metrics(0), metadata, api_key_breakdown: {} },
+        ]),
+      ),
+    },
+  }) as unknown as DailyData;
+
+describe("providerSpendRows", () => {
+  it("marks a provider covered by a subscription on any day of the range and leaves metered ones unmarked", () => {
+    const rows = providerSpendRows([
+      providerDay("2026-10-01", { chatgpt: {}, openai: {} }),
+      providerDay("2026-10-02", { chatgpt: { subscription_covered: true }, openai: { subscription_covered: false } }),
+    ]);
+    expect(Object.fromEntries(rows.map((row) => [row.provider, row.subscription_covered]))).toEqual({
+      chatgpt: true,
+      openai: false,
+    });
+    expect(rows.find((row) => row.provider === "chatgpt")).toEqual(expect.objectContaining({ requests: 2 }));
   });
 });
 
@@ -179,5 +208,29 @@ describe("model colors", () => {
     expect(series.labels).not.toContain("h");
     expect(colorForModel("h", colors)).toBe(client.colors[0]);
     expect(bucketTotals(series).get("2026-10-01")).toBe(55);
+  });
+});
+
+describe("daily key stacks", () => {
+  it("should preserve each day's total when truncated keys are grouped into Other", () => {
+    const first = day("2026-11-01", 10, {});
+    first.metrics.api_requests = 100;
+    first.breakdown.api_keys = {
+      "key-a": { metrics: { ...metrics(3), api_requests: 30 }, metadata: { key_alias: "Support", team_id: null } },
+      "key-b": { metrics: { ...metrics(2), api_requests: 20 }, metadata: { key_alias: "Research", team_id: null } },
+    };
+    const second = day("2026-11-02", 15, {});
+    second.metrics.api_requests = 150;
+    second.breakdown.api_keys = {
+      "key-a": { metrics: { ...metrics(1), api_requests: 10 }, metadata: { key_alias: "Support", team_id: null } },
+      "key-b": { metrics: { ...metrics(8), api_requests: 80 }, metadata: { key_alias: "Research", team_id: null } },
+    };
+    const result = seriesBy([first, second], "api_keys", "requests", 1);
+    expect(result.labels).toEqual(["key-b", "Other"]);
+    expect(result.data.map((row) => [row[result.keys[0]], row[result.keys[1]]])).toEqual([
+      [20, 80],
+      [80, 70],
+    ]);
+    expect([...bucketTotals(result).values()]).toEqual([100, 150]);
   });
 });

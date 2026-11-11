@@ -12,6 +12,7 @@ on:
     paths:
       - "terraform/provider/**"
       - "litellm/proxy/**"
+      - "enterprise/**"
       - ".github/workflows/test-terraform-provider.yml"
 
 permissions:

@@ -1,3 +1,4 @@
+import type { ParseKeys } from "i18next";
 import { EndpointType } from "@/components/chat_ui/mode_endpoint_mapping";
 
 export const OPEN_AI_VOICES = {
@@ -15,17 +16,17 @@ export const OPEN_AI_VOICES = {
 
 export type OpenAIVoice = (typeof OPEN_AI_VOICES)[keyof typeof OPEN_AI_VOICES];
 
-export const OPEN_AI_VOICE_LABELS = {
-  ALLOY: "Alloy - Professional and confident",
-  ASH: "Ash - Casual and relaxed",
-  BALAD: "Ballad - Smooth and melodic",
-  CORAL: "Coral - Warm and engaging",
-  ECHO: "Echo - Friendly and conversational",
-  FABLE: "Fable - Wise and measured",
-  NOVA: "Nova - Friendly and conversational",
-  ONYX: "Onyx - Deep and authoritative",
-  SAGE: "Sage - Wise and measured",
-  SHIMMER: "Shimmer - Bright and cheerful",
+export const OPEN_AI_VOICE_LABELS: Record<keyof typeof OPEN_AI_VOICES, ParseKeys> = {
+  ALLOY: "playground.chatUi.voices.alloy",
+  ASH: "playground.chatUi.voices.ash",
+  BALAD: "playground.chatUi.voices.ballad",
+  CORAL: "playground.chatUi.voices.coral",
+  ECHO: "playground.chatUi.voices.echo",
+  FABLE: "playground.chatUi.voices.fable",
+  NOVA: "playground.chatUi.voices.nova",
+  ONYX: "playground.chatUi.voices.onyx",
+  SAGE: "playground.chatUi.voices.sage",
+  SHIMMER: "playground.chatUi.voices.shimmer",
 };
 
 export const OPEN_AI_VOICE_SELECT_OPTIONS = Object.entries(OPEN_AI_VOICES).map(([key, voice]) => ({

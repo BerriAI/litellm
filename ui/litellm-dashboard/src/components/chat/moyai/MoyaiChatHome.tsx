@@ -1,21 +1,24 @@
 import type { ReactNode } from "react";
-import { ArrowUpRight, Bug, Clock3, Code2, ListChecks } from "lucide-react";
+import type { ParseKeys } from "i18next";
+import { Bug, Code2, ListChecks, type LucideIcon } from "lucide-react";
+import { Trans, useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
-import type { Conversation } from "../types";
 import "./moyai-chat.css";
 
-const starters = [
+const starters: { label: ParseKeys; prompt: ParseKeys; Icon: LucideIcon }[] = [
   {
-    label: "Review code",
-    detail: "Find the edge cases",
-    prompt: "Review my changes for bugs and improvements.",
+    label: "chat.moyaiHome.starters.review.label",
+    prompt: "chat.moyaiHome.starters.review.prompt",
     Icon: Code2,
   },
-  { label: "Fix a bug", detail: "Trace it to the source", prompt: "Help me investigate and fix this bug: ", Icon: Bug },
   {
-    label: "Plan a feature",
-    detail: "Make the next change clear",
-    prompt: "Help me plan and implement this feature: ",
+    label: "chat.moyaiHome.starters.fixBug.label",
+    prompt: "chat.moyaiHome.starters.fixBug.prompt",
+    Icon: Bug,
+  },
+  {
+    label: "chat.moyaiHome.starters.planFeature.label",
+    prompt: "chat.moyaiHome.starters.planFeature.prompt",
     Icon: ListChecks,
   },
 ];
@@ -23,81 +26,55 @@ const starters = [
 export default function MoyaiChatHome({
   children,
   imageMode,
+  researchMode,
   draft,
   busy,
-  conversations,
-  onSelectConversation,
   onPrompt,
 }: {
   children: ReactNode;
   imageMode: boolean;
+  researchMode: boolean;
   draft: string;
   busy: boolean;
-  conversations: Conversation[];
-  onSelectConversation: (id: string) => void;
   onPrompt: (prompt: string) => void;
 }) {
-  const recent = [...conversations].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 3);
+  const { t } = useTranslation();
   return (
     <section className="moyai-chat-home">
-      <div className="moyai-chat-space-backdrop" aria-hidden="true" />
       <div className="moyai-chat-home-content">
         <header className="moyai-chat-home-header">
           <h1>
-            {imageMode ? (
-              "What are we creating?"
-            ) : (
+            {imageMode && t("chat.moyaiHome.headingImage")}
+            {!imageMode && researchMode && (
               <>
-                What are we <span>building?</span>
+                <Trans i18nKey="chat.moyaiHome.headingResearch" components={{ highlight: <span /> }} />
+              </>
+            )}
+            {!imageMode && !researchMode && (
+              <>
+                <Trans i18nKey="chat.moyaiHome.headingChat" components={{ highlight: <span /> }} />
               </>
             )}
           </h1>
         </header>
         {children}
-        <section className="moyai-chat-home-recent" aria-labelledby="recent-chats-heading">
-          <div className="moyai-chat-home-recent-header">
-            <h2 id="recent-chats-heading">Recent chats</h2>
-          </div>
-          {recent.length === 0 && (
-            <p className="text-muted-foreground" role="status">
-              No recent chats in this browser yet.
-            </p>
-          )}
-          <ul>
-            {recent.map((conversation) => (
-              <li key={conversation.id}>
-                <Button
-                  variant="ghost"
-                  className="moyai-chat-home-recent-link"
-                  onClick={() => onSelectConversation(conversation.id)}
-                >
-                  <Clock3 className="size-3.5" />
-                  <span>{conversation.title}</span>
-                  <ArrowUpRight className="size-3.5" />
-                </Button>
-              </li>
-            ))}
-          </ul>
-        </section>
         {!imageMode && (
           <div
             className="moyai-chat-home-starters"
             role="group"
-            aria-label="Start with a prompt"
+            aria-label={t("chat.moyaiHome.startersLabel")}
             aria-hidden={Boolean(draft.trim())}
           >
-            <p className="moyai-chat-home-starters-heading">Start with a prompt</p>
-            {starters.map(({ label, detail, prompt, Icon }) => (
+            {starters.map(({ label, prompt, Icon }) => (
               <Button
                 key={label}
-                variant="ghost"
+                variant="outline"
+                className="dark:bg-transparent"
                 disabled={busy || Boolean(draft.trim())}
-                onClick={() => onPrompt(prompt)}
+                onClick={() => onPrompt(t(prompt))}
               >
                 <Icon />
-                <span className="moyai-chat-home-starter-label">{label}</span>
-                <span className="moyai-chat-home-starter-detail">{detail}</span>
-                <ArrowUpRight className="moyai-chat-home-starter-arrow" />
+                <span className="moyai-chat-home-starter-label">{t(label)}</span>
               </Button>
             ))}
           </div>

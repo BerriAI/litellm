@@ -7,6 +7,7 @@ import { copyToClipboard } from "@/utils/dataUtils";
 
 import { useState } from "react";
 import { ChevronDown, ChevronUp, MessageSquare, Mic, Settings, Volume2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { SectionHeader } from "./SectionHeader";
@@ -83,6 +84,7 @@ export function isRealtimeResponse(response: any): boolean {
 }
 
 export function RealtimePrettyView({ response, metrics }: RealtimePrettyViewProps) {
+  const { t } = useTranslation();
   const events: RealtimeEvent[] = response?.results || [];
   const usage = response?.usage;
 
@@ -115,7 +117,7 @@ export function RealtimePrettyView({ response, metrics }: RealtimePrettyViewProp
             fontSize: 13,
           }}
         >
-          No recognized realtime events found
+          {t("logs.detail.realtime.noEvents")}
         </div>
       )}
     </div>
@@ -123,6 +125,7 @@ export function RealtimePrettyView({ response, metrics }: RealtimePrettyViewProp
 }
 
 function SessionCard({ session, turnCount }: { session: RealtimeSession; turnCount: number }) {
+  const { t } = useTranslation();
   const [isCollapsed, setIsCollapsed] = useState(true);
 
   return (
@@ -163,14 +166,14 @@ function SessionCard({ session, turnCount }: { session: RealtimeSession; turnCou
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <Settings className="size-3.5 text-muted-foreground" />
-            <span style={{ fontWeight: 500, fontSize: 14 }}>Session</span>
+            <span style={{ fontWeight: 500, fontSize: 14 }}>{t("logs.detail.realtime.session")}</span>
           </div>
           <span className="text-muted-foreground" style={{ fontSize: 12 }}>
             {session.model}
           </span>
           {turnCount > 0 && (
             <Badge variant="secondary" style={{ margin: 0, fontWeight: 500 }}>
-              {turnCount} {turnCount === 1 ? "turn" : "turns"}
+              {t("logs.detail.realtime.turnCount", { count: turnCount })}
             </Badge>
           )}
           {session.voice && (
@@ -207,15 +210,23 @@ function SessionCard({ session, turnCount }: { session: RealtimeSession; turnCou
               fontSize: 13,
             }}
           >
-            <ConfigRow label="Model" value={session.model} />
-            <ConfigRow label="Voice" value={session.voice} />
-            <ConfigRow label="Temperature" value={session.temperature} />
-            <ConfigRow label="Max Output Tokens" value={session.max_response_output_tokens} />
-            <ConfigRow label="Input Audio Format" value={session.input_audio_format} />
-            <ConfigRow label="Output Audio Format" value={session.output_audio_format} />
-            {session.turn_detection && <ConfigRow label="Turn Detection" value={session.turn_detection.type} />}
+            <ConfigRow label={t("logs.detail.realtime.config.model")} value={session.model} />
+            <ConfigRow label={t("logs.detail.realtime.config.voice")} value={session.voice} />
+            <ConfigRow label={t("logs.detail.realtime.config.temperature")} value={session.temperature} />
+            <ConfigRow
+              label={t("logs.detail.realtime.config.maxOutputTokens")}
+              value={session.max_response_output_tokens}
+            />
+            <ConfigRow label={t("logs.detail.realtime.config.inputAudioFormat")} value={session.input_audio_format} />
+            <ConfigRow label={t("logs.detail.realtime.config.outputAudioFormat")} value={session.output_audio_format} />
+            {session.turn_detection && (
+              <ConfigRow label={t("logs.detail.realtime.config.turnDetection")} value={session.turn_detection.type} />
+            )}
             {session.tools && session.tools.length > 0 && (
-              <ConfigRow label="Tools" value={`${session.tools.length} tool(s)`} />
+              <ConfigRow
+                label={t("logs.detail.realtime.config.tools")}
+                value={t("logs.detail.realtime.config.toolCount", { count: session.tools.length })}
+              />
             )}
           </div>
 
@@ -231,7 +242,7 @@ function SessionCard({ session, turnCount }: { session: RealtimeSession; turnCou
                   marginBottom: 4,
                 }}
               >
-                Instructions
+                {t("logs.detail.realtime.instructions")}
               </span>
               <div
                 style={{
@@ -317,6 +328,7 @@ function ConversationCard({
 }
 
 function ResponseTurn({ response, index }: { response: RealtimeResponse; index: number }) {
+  const { t } = useTranslation();
   const outputs = response.output || [];
   const usage = response.usage;
 
@@ -338,11 +350,11 @@ function ResponseTurn({ response, index }: { response: RealtimeResponse; index: 
         }}
       >
         <Badge variant={response.status === "completed" ? "secondary" : "outline"} style={{ margin: 0 }}>
-          {response.status || "unknown"}
+          {response.status || t("logs.detail.realtime.unknownStatus")}
         </Badge>
         {usage && (
           <span className="text-muted-foreground" style={{ fontSize: 11 }}>
-            {usage.input_tokens ?? 0} in / {usage.output_tokens ?? 0} out tokens
+            {t("logs.detail.realtime.turnTokens", { input: usage.input_tokens ?? 0, output: usage.output_tokens ?? 0 })}
           </span>
         )}
         {response.conversation_id && (
@@ -351,7 +363,7 @@ function ResponseTurn({ response, index }: { response: RealtimeResponse; index: 
               <TooltipTrigger
                 render={<span className="text-muted-foreground" style={{ fontSize: 11, cursor: "help" }} />}
               >
-                conv: {response.conversation_id.slice(0, 12)}...
+                {t("logs.detail.realtime.conversation", { id: response.conversation_id.slice(0, 12) })}
               </TooltipTrigger>
               <TooltipContent>{response.conversation_id}</TooltipContent>
             </Tooltip>
@@ -365,8 +377,12 @@ function ResponseTurn({ response, index }: { response: RealtimeResponse; index: 
       ))}
 
       {/* Token breakdown if available */}
-      {usage?.input_token_details && <TokenBreakdown label="Input" details={usage.input_token_details} />}
-      {usage?.output_token_details && <TokenBreakdown label="Output" details={usage.output_token_details} />}
+      {usage?.input_token_details && (
+        <TokenBreakdown label={t("logs.detail.realtime.input")} details={usage.input_token_details} />
+      )}
+      {usage?.output_token_details && (
+        <TokenBreakdown label={t("logs.detail.realtime.output")} details={usage.output_token_details} />
+      )}
     </div>
   );
 }
@@ -441,6 +457,7 @@ function OutputMessage({ output }: { output: RealtimeOutputItem }) {
 }
 
 function TokenBreakdown({ label, details }: { label: string; details: Record<string, any> }) {
+  const { t } = useTranslation();
   const entries = Object.entries(details).filter(
     ([, v]) => typeof v === "number" || (typeof v === "object" && v !== null),
   );
@@ -453,7 +470,7 @@ function TokenBreakdown({ label, details }: { label: string; details: Record<str
         className="text-muted-foreground"
         style={{ fontSize: 10, letterSpacing: "0.5px", textTransform: "uppercase" }}
       >
-        {label} Token Breakdown
+        {t("logs.detail.realtime.tokenBreakdown", { label })}
       </span>
       <div
         style={{

@@ -23,10 +23,10 @@ tower-http = { version = "0.6.11", features = ["fs", "set-header"] }
 tower-sessions.workspace = true
 
 [dev-dependencies]
+litellm-secret-value.workspace = true
 futures-util.workspace = true
 serde_json.workspace = true
 tower = { version = "0.5", features = ["util"] }
-litellm-auth-types.workspace = true
 rstest.workspace = true
 tempfile.workspace = true
 tokio.workspace = true

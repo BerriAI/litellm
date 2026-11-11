@@ -1,6 +1,8 @@
 "use client";
 
 import { useMemo } from "react";
+import type { TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
 import { ArrowLeft, Coins } from "lucide-react";
 import { useTagSummary } from "@/app/(dashboard)/hooks/tags/useTagSummary";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
@@ -12,6 +14,7 @@ import { stackedUsageColor } from "@/components/shared/charts";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
+import i18n from "@/i18n/i18n";
 import { EMPTY_DAILY_ACTIVITY_METADATA, toDailyData } from "@/components/UsagePage/dailyActivityApi";
 import type { DailyData } from "@/components/UsagePage/types";
 import claudeLogo from "../../../../../../public/assets/logos/claude.svg";
@@ -53,7 +56,8 @@ interface ClientUsagePanelProps {
 }
 
 const dateLabel = (date: Date | null) => date?.toLocaleDateString("en-US", { month: "short", day: "numeric" }) ?? "—";
-const countLabel = (value: number | null) => (value === null ? "Unavailable" : value.toLocaleString());
+const countLabel = (value: number | null, t: TFunction) =>
+  value === null ? t("usage.clientPanel.tokenBreakdown.unavailable") : value.toLocaleString();
 
 export default function ClientUsagePanel({
   client,
@@ -63,7 +67,7 @@ export default function ClientUsagePanel({
   scopeError: accessError = null,
   teams = [],
   members = [],
-  defaultScopeLabel = "All users",
+  defaultScopeLabel = i18n.t("usage.clientPanel.scope.allUsers"),
   onTeamChange,
   onUserChange,
   onClose,
@@ -80,6 +84,7 @@ export default function ClientUsagePanel({
   summaryFailed = false,
   onRetry,
 }: ClientUsagePanelProps) {
+  const { t } = useTranslation();
   const label = client === "claude-desktop" ? "Claude Desktop" : "Claude Code";
   const scopedRequest = Boolean(userId || teamId) && !accessError;
   const personRequest = {
@@ -93,11 +98,12 @@ export default function ClientUsagePanel({
   const personUsage = useClientUsage(personRequest);
   const allUsersEnabled = canChooseUser && !scopedRequest && !accessError;
   const teamLabel = teams.find((team) => team.value === teamId)?.label ?? teamId;
-  const personLabel = members.find((member) => member.value === userId)?.label ?? "Selected user";
+  const personLabel =
+    members.find((member) => member.value === userId)?.label ?? t("usage.clientPanel.scope.selectedUser");
   const selectedScopeLabel = (() => {
-    if (teamId) return `${teamLabel} · ${userId ? personLabel : "All members"}`;
-    if (!canChooseUser) return "My usage";
-    return userId ? "Selected user" : "All users";
+    if (teamId) return `${teamLabel} · ${userId ? personLabel : t("usage.clientPanel.scope.allMembers")}`;
+    if (!canChooseUser) return t("usage.clientPanel.scope.myUsage");
+    return userId ? t("usage.clientPanel.scope.selectedUser") : t("usage.clientPanel.scope.allUsers");
   })();
   const summaryQuery = useTagSummary(startTime, endTime, allUsersEnabled && agent === null);
   const activeAgent = useMemo(
@@ -115,9 +121,9 @@ export default function ClientUsagePanel({
   const personTotals = overviewTotals(personUsage.data.metadata ?? EMPTY_DAILY_ACTIVITY_METADATA, null);
   const pending =
     !accessError && (scopedRequest ? personUsage.loading : (loading || summaryQuery.isLoading) && activeAgent === null);
-  const summaryError = summaryQuery.isError || summaryFailed ? "Could not load client totals" : null;
+  const summaryError = summaryQuery.isError || summaryFailed ? t("usage.clientPanel.errors.totalsFailed") : null;
   const scopeError =
-    accessError ?? (!canChooseUser && !scopedRequest ? "Sign in to view your client usage" : summaryError);
+    accessError ?? (!canChooseUser && !scopedRequest ? t("usage.clientPanel.errors.signIn") : summaryError);
   const error = accessError ?? (scopedRequest ? personUsage.error : scopeError);
   const summary = scopedRequest ? personTotals : agentDetail?.summary;
   const rawBreakdown = scopedRequest
@@ -152,7 +158,7 @@ export default function ClientUsagePanel({
       <SheetContent className="gap-0 data-[side=right]:w-[calc(100%-16px)] data-[side=right]:sm:max-w-[600px]">
         <SheetHeader className="shrink-0 border-b px-6 pt-5 pb-4">
           <Button variant="ghost" size="sm" className="mb-3 w-fit -ml-2 text-muted-foreground" onClick={onClose}>
-            <ArrowLeft className="size-4" /> Back to Usage
+            <ArrowLeft className="size-4" /> {t("usage.clientPanel.back")}
           </Button>
           <div className="flex items-center gap-3">
             <AgentMark agent={{ id: client, label, logo: claudeLogo.src }} />
@@ -176,11 +182,11 @@ export default function ClientUsagePanel({
           {teams.length > 0 && onTeamChange && (
             <div className="space-y-2">
               <label htmlFor="client-usage-team" className="text-xs font-medium text-muted-foreground">
-                Usage scope
+                {t("usage.clientPanel.scope.label")}
               </label>
               <SearchSelect
                 id="client-usage-team"
-                aria-label="Usage scope"
+                aria-label={t("usage.clientPanel.scope.ariaLabel")}
                 value={teamId ? `team:${teamId}` : "default"}
                 options={[
                   { value: "default", label: defaultScopeLabel },
@@ -194,14 +200,14 @@ export default function ClientUsagePanel({
           {teamId && (
             <div className="space-y-2">
               <label htmlFor="client-usage-member" className="text-xs font-medium text-muted-foreground">
-                Team member
+                {t("usage.clientPanel.member.label")}
               </label>
               <SearchSelect
                 id="client-usage-member"
-                aria-label="Team member"
+                aria-label={t("usage.clientPanel.member.ariaLabel")}
                 value={userId ? `user:${userId}` : "all"}
                 options={[
-                  { value: "all", label: "All members" },
+                  { value: "all", label: t("usage.clientPanel.member.allMembers") },
                   ...members.map((member) => ({ ...member, value: `user:${member.value}` })),
                 ]}
                 allowClear={false}
@@ -213,11 +219,11 @@ export default function ClientUsagePanel({
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-2">
                 <label htmlFor="client-usage-user" className="text-xs font-medium text-muted-foreground">
-                  Filter by person
+                  {t("usage.clientPanel.person.label")}
                 </label>
                 {userId && (
                   <Button variant="ghost" size="sm" onClick={() => onUserChange(null)}>
-                    All users
+                    {t("usage.clientPanel.person.allUsers")}
                   </Button>
                 )}
               </div>
@@ -225,13 +231,13 @@ export default function ClientUsagePanel({
             </div>
           )}
           {pending && (
-            <div role="status" aria-label="Loading client usage">
+            <div role="status" aria-label={t("usage.clientPanel.loading")}>
               <Skeleton className="h-24 w-full" />
             </div>
           )}
           {error && (
             <div role="alert" className="rounded-lg border p-4">
-              <p className="font-medium">Could not load client usage</p>
+              <p className="font-medium">{t("usage.clientPanel.errors.loadFailed")}</p>
               <p className="mt-1 text-muted-foreground">{error}</p>
               {canRetry && (
                 <Button
@@ -246,25 +252,30 @@ export default function ClientUsagePanel({
                     }
                   }}
                 >
-                  Try again
+                  {t("usage.clientPanel.tryAgain")}
                 </Button>
               )}
             </div>
           )}
           {ready && !summary && (
-            <p className="rounded-lg border p-4 text-muted-foreground">No {label} usage recorded in this date range.</p>
+            <p className="rounded-lg border p-4 text-muted-foreground">
+              {t("usage.clientPanel.noUsage", { client: label })}
+            </p>
           )}
           {ready && summary && (
             <>
               <div className="grid grid-cols-3 divide-x overflow-hidden rounded-xl border bg-card py-4">
-                <SummaryStat label="Spend" value={formatUsd(summary.spend)} />
-                <SummaryStat label="Total tokens" value={formatCompact(summary.tokens)} />
-                <SummaryStat label="Requests" value={summary.requests.toLocaleString()} />
+                <SummaryStat label={t("usage.clientPanel.summary.spend")} value={formatUsd(summary.spend)} />
+                <SummaryStat label={t("usage.clientPanel.summary.totalTokens")} value={formatCompact(summary.tokens)} />
+                <SummaryStat
+                  label={t("usage.clientPanel.summary.requests")}
+                  value={summary.requests.toLocaleString()}
+                />
               </div>
               {summary.requests === 0 ? (
                 <p className="text-sm text-muted-foreground">
-                  No {label} requests in the selected range. Try another date range.
-                  {(canChooseUser || teamId) && " You can also choose another person."}
+                  {t("usage.clientPanel.noRequests", { client: label })}
+                  {(canChooseUser || teamId) && t("usage.clientPanel.chooseAnotherPerson")}
                 </p>
               ) : (
                 <>
@@ -283,7 +294,7 @@ export default function ClientUsagePanel({
                         {chartError}
                       </p>
                       <Button variant="outline" size="sm" className="mt-3" onClick={retryModels}>
-                        Retry model breakdown
+                        {t("usage.clientPanel.retryModels")}
                       </Button>
                     </div>
                   )}
@@ -291,10 +302,8 @@ export default function ClientUsagePanel({
                 </>
               )}
               <p className="border-t pt-3 text-xs leading-5 text-muted-foreground">
-                {scopedRequest
-                  ? "Based on retained request logs within the exact selected time range."
-                  : "All-user totals use UTC daily aggregates for the selected dates. Filtering by person uses the exact selected times. Cache values are reported counts."}{" "}
-                Spend is the cost recorded by LiteLLM.
+                {scopedRequest ? t("usage.clientPanel.footnote.scoped") : t("usage.clientPanel.footnote.allUsers")}{" "}
+                {t("usage.clientPanel.footnote.spend")}
               </p>
             </>
           )}
@@ -313,20 +322,26 @@ function SummaryStat({ label, value }: { label: string; value: string }) {
 }
 
 function TokenExplanation({ total, breakdown }: { total: number; breakdown: ClientAgentDetail["tokenBreakdown"] }) {
+  const { t } = useTranslation();
   const { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens } = breakdown;
   const freshInput =
     inputTokens !== null && cacheReadTokens !== null && cacheWriteTokens !== null
       ? inputTokens - cacheReadTokens - cacheWriteTokens
       : null;
   const rows = [
-    { label: "Cache reads", value: cacheReadTokens, color: stackedUsageColor(0) },
-    { label: "Cache writes", value: cacheWriteTokens, color: stackedUsageColor(1) },
-    { label: "Uncached input", value: freshInput, color: stackedUsageColor(2) },
-    { label: "Output", value: outputTokens, color: stackedUsageColor(3) },
+    { label: t("usage.clientPanel.tokenBreakdown.cacheReads"), value: cacheReadTokens, color: stackedUsageColor(0) },
+    { label: t("usage.clientPanel.tokenBreakdown.cacheWrites"), value: cacheWriteTokens, color: stackedUsageColor(1) },
+    { label: t("usage.clientPanel.tokenBreakdown.uncachedInput"), value: freshInput, color: stackedUsageColor(2) },
+    { label: t("usage.clientPanel.tokenBreakdown.output"), value: outputTokens, color: stackedUsageColor(3) },
   ];
   const complete = rows.every((row) => row.value !== null);
   return (
-    <Panel icon={Coins} title="Token breakdown" subtitle={`${formatCompact(total)} total tokens`} bodyClassName="gap-3">
+    <Panel
+      icon={Coins}
+      title={t("usage.clientPanel.tokenBreakdown.title")}
+      subtitle={t("usage.clientPanel.tokenBreakdown.subtitle", { total: formatCompact(total) })}
+      bodyClassName="gap-3"
+    >
       {complete && total > 0 && (
         <div aria-hidden="true" className="flex h-2 overflow-hidden rounded-full bg-muted">
           {rows.map((row) => (
@@ -339,7 +354,7 @@ function TokenExplanation({ total, breakdown }: { total: number; breakdown: Clie
       )}
       {cacheReadTokens !== null && total > 0 && (
         <p className="text-xs text-muted-foreground">
-          {((cacheReadTokens / total) * 100).toFixed(1)}% of these tokens are cache reads.
+          {t("usage.clientPanel.tokenBreakdown.cacheShare", { percent: ((cacheReadTokens / total) * 100).toFixed(1) })}
         </p>
       )}
       <dl className="divide-y rounded-lg border px-3 text-xs">
@@ -349,14 +364,11 @@ function TokenExplanation({ total, breakdown }: { total: number; breakdown: Clie
               <span className="size-2 rounded-[2px]" style={{ backgroundColor: row.color }} />
               {row.label}
             </dt>
-            <dd className="font-medium tabular-nums">{countLabel(row.value)}</dd>
+            <dd className="font-medium tabular-nums">{countLabel(row.value, t)}</dd>
           </div>
         ))}
       </dl>
-      <p className="text-xs leading-5 text-muted-foreground">
-        Total tokens include input, cached input and output. Cached input is priced differently, so token count alone
-        does not explain spend. Compare the same person and dates when checking the count shown by a client.
-      </p>
+      <p className="text-xs leading-5 text-muted-foreground">{t("usage.clientPanel.tokenBreakdown.explanation")}</p>
     </Panel>
   );
 }

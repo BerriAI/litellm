@@ -17,6 +17,7 @@ from typing import List, Optional, Union
 
 from litellm._logging import verbose_logger
 from litellm.caching import DualCache
+from litellm.exceptions import MissingMessageRoleError
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -86,6 +87,8 @@ class PagerDutyAlerting(SlackAlerting):
         Record a failure event. Only send an alert to PagerDuty if the
         configured *failure* threshold is exceeded in the specified window.
         """
+        if isinstance(kwargs.get("exception"), MissingMessageRoleError):
+            return
         now = datetime.now(timezone.utc)
         standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
             "standard_logging_object"

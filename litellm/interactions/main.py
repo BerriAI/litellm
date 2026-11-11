@@ -95,6 +95,7 @@ async def acreate(
     response_mime_type: str | None = None,
     # Continuation
     previous_interaction_id: str | None = None,
+    continuation_token: str | None = None,
     # Extra params
     extra_headers: dict[str, str] | None = None,
     extra_body: Mapping[str, object] | None = None,
@@ -129,6 +130,7 @@ async def acreate(
         response_format: JSON schema for response format
         response_mime_type: MIME type of the response
         previous_interaction_id: ID of previous interaction for continuation
+        continuation_token: Token from a `requires_continuation` interaction to resume its long decode
         extra_headers: Additional headers
         extra_body: Additional body parameters
         timeout: Request timeout
@@ -164,6 +166,7 @@ async def acreate(
             response_format=response_format,
             response_mime_type=response_mime_type,
             previous_interaction_id=previous_interaction_id,
+            continuation_token=continuation_token,
             extra_headers=extra_headers,
             extra_body=extra_body,
             timeout=timeout,
@@ -224,6 +227,7 @@ def create(
     response_mime_type: str | None = None,
     # Continuation
     previous_interaction_id: str | None = None,
+    continuation_token: str | None = None,
     # Extra params
     extra_headers: dict[str, str] | None = None,
     extra_body: Mapping[str, object] | None = None,
@@ -262,6 +266,7 @@ def create(
         response_format: JSON schema for response format
         response_mime_type: MIME type of the response
         previous_interaction_id: ID of previous interaction for continuation
+        continuation_token: Token from a `requires_continuation` interaction to resume its long decode
         extra_headers: Additional headers
         extra_body: Additional body parameters
         timeout: Request timeout

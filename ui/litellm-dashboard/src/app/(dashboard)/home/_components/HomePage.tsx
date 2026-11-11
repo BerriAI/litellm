@@ -1,6 +1,7 @@
 "use client";
 
 import { ArrowRight, Plus, Rocket, Sparkles } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -8,7 +9,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Page } from "@/components/shared/Page";
 import { PageHeader, PageHeaderControls, PageHeaderTitle } from "@/components/shared/PageHeader";
 import { uiHref } from "@/utils/uiHref";
-import { LiteAdminHome } from "@/components/liteadmin/LiteAdmin";
 import { Leaderboard, useBreakdown } from "@/app/(dashboard)/usage/_components/components/overview/BreakdownChart";
 import { Panel } from "@/app/(dashboard)/usage/_components/components/overview/Primitives";
 import UsageStatStrip from "@/app/(dashboard)/usage/_components/components/overview/UsageStatStrip";
@@ -21,6 +21,7 @@ import { HOME_USAGE_DAYS, useHomeUsage } from "./useHomeUsage";
 const LEADERBOARD = { metric: "tokens", dimension: "model_groups" } as const;
 
 export default function HomePage() {
+  const { t } = useTranslation();
   const { isViewOnly } = useAuthorized();
   const usage = useHomeUsage();
   const blog = useBlogPosts();
@@ -30,25 +31,23 @@ export default function HomePage() {
   return (
     <Page>
       <PageHeader>
-        <PageHeaderTitle>Home</PageHeaderTitle>
+        <PageHeaderTitle>{t("home.page.title")}</PageHeaderTitle>
         {!isViewOnly && (
           <PageHeaderControls>
             <Button render={<a href={uiHref("api-keys?create=true")} />}>
               <Plus />
-              Create New Virtual Key
+              {t("home.page.createKey")}
             </Button>
           </PageHeaderControls>
         )}
       </PageHeader>
 
-      <LiteAdminHome />
-
-      <section aria-label={`Usage, last ${HOME_USAGE_DAYS} days`}>
+      <section aria-label={t("home.page.usageAria", { days: HOME_USAGE_DAYS })}>
         {usage.failed ? (
           <div className="flex items-center justify-between gap-2 rounded-xl border bg-card px-4 py-3 text-sm">
-            <span className="text-destructive">Failed to load usage</span>
+            <span className="text-destructive">{t("home.page.usageFailed")}</span>
             <Button variant="outline" size="sm" onClick={usage.retry}>
-              Retry
+              {t("home.page.retry")}
             </Button>
           </div>
         ) : (
@@ -69,7 +68,7 @@ export default function HomePage() {
               <div>
                 <h2 id="home-whats-new" className="flex items-center gap-2 text-lg font-semibold">
                   <Sparkles className="size-4 text-muted-foreground" />
-                  What&apos;s new in LiteLLM?
+                  {t("home.page.whatsNew")}
                 </h2>
               </div>
               <div className="grid gap-4 sm:grid-cols-3">
@@ -100,8 +99,8 @@ export default function HomePage() {
           )}
 
           <Panel
-            title="Leaderboard"
-            subtitle={`Share of tokens over the last ${HOME_USAGE_DAYS} days, with the change between the first and second half of the period`}
+            title={t("home.page.leaderboard.title")}
+            subtitle={t("home.page.leaderboard.subtitle", { days: HOME_USAGE_DAYS })}
             testId="home-leaderboard"
           >
             <Leaderboard

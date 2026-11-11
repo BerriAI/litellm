@@ -30,7 +30,8 @@ from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from functools import cache
 from importlib.resources import files
-from typing import Final, TypeAlias
+from typing import Final, Literal, TypeAlias
+from urllib.parse import urlparse
 
 import httpx
 from pydantic import TypeAdapter
@@ -46,6 +47,10 @@ _BETA_HEADERS_CONFIG_LOADER: Final = ThreadPoolExecutor(max_workers=1, thread_na
 BetaHeadersConfig: TypeAlias = Mapping[str, str | Mapping[str, str | None]]
 _BETA_HEADERS_CONFIG_ADAPTER: Final = TypeAdapter(BetaHeadersConfig)
 _DECODED_JSON: Final = TypeAdapter(object)
+
+BetaPlacement: TypeAlias = Literal["header", "body"]
+UnlistedBetas: TypeAlias = Literal["drop", "forward"]
+_HEADER_ONLY_COLUMN_SUFFIX: Final = "_header_only"
 
 
 class GetAnthropicBetaHeadersConfig:
@@ -193,7 +198,6 @@ def _load_beta_headers_config() -> dict:
         if _BETA_HEADERS_CONFIG is not None:
             return _BETA_HEADERS_CONFIG
 
-        # Get the URL from environment or use default
         from litellm import anthropic_beta_headers_url
 
         _BETA_HEADERS_CONFIG = get_beta_headers_config(url=anthropic_beta_headers_url)
@@ -241,21 +245,57 @@ def get_provider_name(provider: str) -> str:
     return aliases.get(provider, provider)
 
 
+def _beta_column(name: str) -> Mapping[str, str | None]:
+    column: Final[Mapping[str, str | None]] = _load_beta_headers_config().get(name, {})
+    return column
+
+
+def _header_only_column(canonical_provider: str) -> Mapping[str, str | None]:
+    return _beta_column(f"{canonical_provider}{_HEADER_ONLY_COLUMN_SUFFIX}")
+
+
+def _provider_beta_mapping(provider: str, placement: BetaPlacement) -> Mapping[str, str | None]:
+    canonical_provider: Final = get_provider_name(provider)
+    column: Final = _beta_column(canonical_provider)
+    header_only: Final = _header_only_column(canonical_provider)
+    match placement:
+        case "header":
+            return {**column, **header_only}
+        case "body":
+            return {beta: name for beta, name in column.items() if beta not in header_only}
+
+
+def get_header_only_betas(provider: str) -> frozenset[str]:
+    header_only: Final = _header_only_column(get_provider_name(provider))
+    return frozenset(beta for beta, name in header_only.items() if name is not None)
+
+
+def has_beta_headers_config(provider: str) -> bool:
+    config: Final = _bundled_beta_headers_config()
+    aliases: Final = config.get("provider_aliases", {})
+    canonical_provider: Final = (aliases.get(provider) if isinstance(aliases, Mapping) else None) or provider
+    return canonical_provider in config
+
+
 def filter_and_transform_beta_headers(
     beta_headers: list[str],
     provider: str,
+    placement: BetaPlacement = "header",
+    unlisted: UnlistedBetas = "drop",
 ) -> list[str]:
     """
     Filter and transform beta headers based on provider's mapping configuration.
 
     This function:
-    1. Only allows headers that are present in the provider's mapping keys
+    1. Only allows headers that are present in the provider's mapping keys, unless ``unlisted`` is "forward"
     2. Filters out headers with null values (unsupported)
     3. Maps headers to provider-specific names (e.g., advanced-tool-use -> tool-search-tool)
 
     Args:
         beta_headers: List of Anthropic beta header values
         provider: Provider name (e.g., "anthropic", "bedrock", "vertex_ai")
+        placement: Whether the betas travel as the anthropic-beta header or the anthropic_beta body field
+        unlisted: Whether a beta missing from the mapping is dropped or forwarded as sent
 
     Returns:
         List of filtered and transformed beta headers for the provider
@@ -263,16 +303,16 @@ def filter_and_transform_beta_headers(
     if not beta_headers:
         return []
 
-    config: Final = _load_beta_headers_config()
-    provider = get_provider_name(provider)
-
-    # Get the header mapping for this provider
-    provider_mapping: Final = config.get(provider, {})
+    provider_mapping: Final = _provider_beta_mapping(provider, placement)
 
     filtered_headers: Final[set[str]] = set()
 
     for header in beta_headers:
         header = header.strip()
+
+        if header not in provider_mapping and unlisted == "forward":
+            filtered_headers.add(header)
+            continue
 
         # Check if header is in the mapping
         if header not in provider_mapping:
@@ -355,9 +395,39 @@ def get_provider_beta_header(
     return provider_mapping[anthropic_beta_header]
 
 
+FOUNDRY_API_BASE_HOST_SUFFIXES: Final[tuple[str, ...]] = (
+    "services.ai.azure.com",
+    "openai.azure.com",
+    "cognitiveservices.azure.com",
+)
+
+
+def is_foundry_api_base(api_base: str | None) -> bool:
+    """Whether ``api_base`` points at an Azure AI Foundry host, where Claude is served by Microsoft."""
+    if not api_base:
+        return False
+    host: Final = urlparse(api_base if "://" in api_base else f"https://{api_base}").hostname or ""
+    return any(host == suffix or host.endswith(f".{suffix}") for suffix in FOUNDRY_API_BASE_HOST_SUFFIXES)
+
+
+def resolve_beta_provider(provider: str, api_base: str | None = None) -> str:
+    """
+    Pick the beta allowlist row for one deployment, not one provider string.
+
+    An ``anthropic`` deployment whose ``api_base`` is a Foundry host is served by Microsoft and
+    gets the ``azure_ai`` row, since Foundry accepts a different set of betas than api.anthropic.com.
+    """
+    if provider == "anthropic" and is_foundry_api_base(api_base):
+        return "azure_ai"
+    return provider
+
+
 def update_headers_with_filtered_beta(
     headers: dict,
     provider: str,
+    api_base: str | None = None,
+    unlisted: UnlistedBetas = "drop",
+    keep: frozenset[str] = frozenset(),
 ) -> dict:
     """
     Update headers dict by filtering and transforming anthropic-beta header values.
@@ -366,6 +436,9 @@ def update_headers_with_filtered_beta(
     Args:
         headers: Request headers dict (will be modified in place)
         provider: Provider name
+        api_base: Deployment api_base, used to pick the allowlist row (Foundry hosts use ``azure_ai``)
+        unlisted: Whether a beta missing from the row is dropped or forwarded as sent
+        keep: Betas the routed model accepts, forwarded as sent whatever the row says
 
     Returns:
         Updated headers dict
@@ -375,12 +448,20 @@ def update_headers_with_filtered_beta(
         return headers
 
     # Parse existing beta headers
-    beta_values: Final = [b.strip() for b in existing_beta.split(",") if b.strip()]
+    beta_values: Final[tuple[str, ...]] = tuple(b.strip() for b in existing_beta.split(",") if b.strip())
 
     # Filter and transform based on provider
-    filtered_beta_values: Final = filter_and_transform_beta_headers(
-        beta_headers=beta_values,
-        provider=provider,
+    filtered_beta_values: Final = tuple(
+        dict.fromkeys(
+            [
+                *filter_and_transform_beta_headers(
+                    beta_headers=[b for b in beta_values if b not in keep],
+                    provider=resolve_beta_provider(provider, api_base),
+                    unlisted=unlisted,
+                ),
+                *(b for b in beta_values if b in keep),
+            ]
+        )
     )
 
     # Update or remove the header
@@ -397,7 +478,8 @@ def update_request_with_filtered_beta(
     headers: dict,
     request_data: dict,
     provider: str,
-) -> tuple[dict, dict]:
+    api_base: str | None = None,
+) -> tuple[dict[str, str], dict[str, object]]:
     """
     Update both headers and request body beta fields based on provider support.
     Modifies both dicts in place and returns them.
@@ -406,11 +488,12 @@ def update_request_with_filtered_beta(
         headers: Request headers dict (will be modified in place)
         request_data: Request body dict (will be modified in place)
         provider: Provider name
+        api_base: Deployment api_base, used to pick the allowlist row (Foundry hosts use ``azure_ai``)
 
     Returns:
         Tuple of (updated headers, updated request_data)
     """
-    headers = update_headers_with_filtered_beta(headers=headers, provider=provider)
+    headers = update_headers_with_filtered_beta(headers=headers, provider=provider, api_base=api_base)
 
     existing_body_betas: Final = request_data.get("anthropic_beta")
     if not existing_body_betas:
@@ -418,7 +501,8 @@ def update_request_with_filtered_beta(
 
     filtered_body_betas: Final = filter_and_transform_beta_headers(
         beta_headers=existing_body_betas,
-        provider=provider,
+        provider=resolve_beta_provider(provider, api_base),
+        placement="body",
     )
 
     if filtered_body_betas:

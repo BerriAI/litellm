@@ -39,9 +39,6 @@ function ChatLayoutContent({ children }: { children: React.ReactNode }) {
 
   return (
     <ThemeProvider accessToken={accessToken}>
-      <link rel="preconnect" href="https://api.fontshare.com" />
-      <link rel="preconnect" href="https://cdn.fontshare.com" crossOrigin="anonymous" />
-      <link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=general-sans@1&display=swap" />
       <div className="flex h-dvh flex-col">
         <div className="min-h-0 flex-1">
           <ChatShellProvider

@@ -2,6 +2,8 @@ import "@testing-library/jest-dom";
 import { cleanup } from "@testing-library/react";
 import { afterEach, vi } from "vitest";
 
+import "@/i18n/i18n";
+
 const ensureTestLocalStorage = () => {
   if (typeof window === "undefined" || typeof window.Storage === "undefined") {
     return;
@@ -254,6 +256,9 @@ if (typeof HTMLElement !== "undefined") {
       return this.dataset.slot === "inspector-table" ? 720 : 0;
     },
   });
+}
+if (typeof Element !== "undefined" && typeof Element.prototype.scrollIntoView !== "function") {
+  Element.prototype.scrollIntoView = () => {};
 }
 if (typeof document !== "undefined" && !("elementFromPoint" in document)) {
   Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => null });

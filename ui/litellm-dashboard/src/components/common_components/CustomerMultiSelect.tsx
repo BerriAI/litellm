@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useCustomerLookups, useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import { PaginatedMultiSelect } from "@/components/shared/PaginatedMultiSelect";
 import type { SearchSelectOption } from "@/components/shared/SearchSelect";
@@ -10,6 +11,7 @@ interface CustomerMultiSelectProps {
 }
 
 export default function CustomerMultiSelect({ value, onChange, disabled }: CustomerMultiSelectProps) {
+  const { t } = useTranslation();
   const [search, setSearch] = useState("");
   const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading, isError } = useCustomers(20, search);
   const loadedCustomers = useMemo(() => (data?.pages ?? []).flat(), [data]);
@@ -27,9 +29,9 @@ export default function CustomerMultiSelect({ value, onChange, disabled }: Custo
     ).values(),
   );
   const lookupError = selectedCustomers.some((result) => result.isError)
-    ? "Unable to load selected customers"
+    ? t("usage.customerSelect.lookupError")
     : undefined;
-  const errorText = isError ? "Unable to load customers" : lookupError;
+  const errorText = isError ? t("usage.customerSelect.loadError") : lookupError;
 
   return (
     <div>
@@ -42,11 +44,11 @@ export default function CustomerMultiSelect({ value, onChange, disabled }: Custo
         hasNextPage={hasNextPage}
         isLoading={isLoading}
         isFetchingNextPage={isFetchingNextPage}
-        placeholder="Search customers by ID or alias..."
-        emptyText="No customers found"
+        placeholder={t("usage.customerSelect.placeholder")}
+        emptyText={t("usage.customerSelect.empty")}
         errorText={errorText}
-        loadingText="Loading customers..."
-        clearAllLabel="Clear all customers"
+        loadingText={t("usage.customerSelect.loading")}
+        clearAllLabel={t("usage.customerSelect.clearAll")}
         disabled={disabled}
       />
       {errorText && (

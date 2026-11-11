@@ -35,6 +35,7 @@ fn generated_registry_schema_validates_checked_in_catalog() {
 #[case(json!({"example": {"litellm_provider": "test"}}))]
 #[case(json!({"example": {"litellm_provider": "test", "future_field": true}}))]
 #[case(json!({"sample_spec": {"litellm_provider": "placeholder"}}))]
+#[case(json!({"example": {"litellm_provider": "test"}, "example-latest": {"alias_of": "example"}}))]
 fn generated_registry_schema_keeps_reader_compatibility(#[case] document: Value) {
     assert!(registry_validator().is_valid(&document));
 }
@@ -54,6 +55,9 @@ fn generated_registry_schema_keeps_reader_compatibility(#[case] document: Value)
 #[case::empty_windows(json!({"litellm_provider": "test", "off_peak_pricing": {"windows": []}}))]
 #[case::invalid_weekday(json!({"litellm_provider": "test", "off_peak_pricing": {"windows": [{"hours_utc": "00:00-01:00", "weekdays": [0]}]}}))]
 #[case::invalid_aliases(json!({"litellm_provider": "test", "aliases": "wrong"}))]
+#[case::alias_of_on_a_model(json!({"litellm_provider": "test", "alias_of": "other"}))]
+#[case::alias_row_with_other_fields(json!({"alias_of": "other", "mode": "chat"}))]
+#[case::alias_of_not_a_string(json!({"alias_of": 4}))]
 #[case::non_object_model(json!(4))]
 fn generated_registry_schema_rejects_invalid_entries(#[case] entry: Value) {
     assert!(!registry_validator().is_valid(&json!({"example": entry})));

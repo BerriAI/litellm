@@ -13,6 +13,7 @@ const { router, route } = vi.hoisted(() => ({
 vi.mock("next/navigation", () => ({
   useRouter: () => router,
   usePathname: () => route.pathname,
+  useSearchParams: () => new URLSearchParams(),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
@@ -86,9 +87,9 @@ describe("Chat layout product navigation", () => {
     ["public light and local dark", [LIGHT_LOGO, null], [false, true], [LIGHT_LOGO, "/get_image?theme=dark"]],
     ["local light and public dark", [null, DARK_LOGO], [true, false], ["/get_image", DARK_LOGO]],
     ["public light only", [LIGHT_LOGO, null], [false, false], [LIGHT_LOGO, LIGHT_LOGO]],
-    ["public dark only", [null, DARK_LOGO], [false, false], [DARK_LOGO, DARK_LOGO]],
+    ["public dark only", [null, DARK_LOGO], [false, false], ["/get_image", DARK_LOGO]],
     ["local light only", [null, null], [true, false], ["/get_image", "/get_image"]],
-    ["local dark only", [null, null], [false, true], ["/get_image?theme=dark", "/get_image?theme=dark"]],
+    ["local dark only", [null, null], [false, true], ["/get_image", "/get_image?theme=dark"]],
   ] as const)(
     "should render %s organization logos from the theme response",
     async (
@@ -106,8 +107,9 @@ describe("Chat layout product navigation", () => {
       );
 
       await user.click(screen.getByRole("button", { name: "Open chat navigation" }));
-      const logo = await screen.findByRole("img", { name: "Organization logo" });
-      const [light, dark] = within(logo).getAllByAltText("");
+      const logo = await screen.findByRole("link", { name: "Chat home" });
+      const light = within(logo).getByAltText("LiteLLM");
+      const dark = within(logo).getByAltText("");
       const source = (path: string) => (path.startsWith("/") ? `${getProxyBaseUrl()}${path}` : path);
       expect(light).toHaveAttribute("src", source(lightSource));
       expect(dark).toHaveAttribute("src", source(darkSource));
@@ -116,7 +118,7 @@ describe("Chat layout product navigation", () => {
     },
   );
 
-  it("should omit organization branding when no logo is configured", async () => {
+  it("should use the bundled logo when no organization logo is configured", async () => {
     const user = userEvent.setup();
     renderWithProviders(
       <ChatLayout>
@@ -126,7 +128,7 @@ describe("Chat layout product navigation", () => {
 
     await user.click(screen.getByRole("button", { name: "Open chat navigation" }));
     expect(await screen.findByRole("dialog", { name: "LiteLLM Chat" })).toBeInTheDocument();
-    expect(screen.queryByRole("img", { name: "Organization logo" })).not.toBeInTheDocument();
+    expect(screen.getByAltText("LiteLLM")).toHaveAttribute("src", `${getProxyBaseUrl()}/get_image`);
   });
 
   it.each([
@@ -145,6 +147,7 @@ describe("Chat layout product navigation", () => {
       );
 
       expect(screen.getByRole("heading", { name: "Chat content" })).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "Open chat navigation" }));
       await user.click(screen.getByRole("button", { name: "Switch workspace, current: Chat" }));
       expect(await screen.findByRole("menuitem", { name: "Observability" })).toBeInTheDocument();
       expect(localStorage.getItem("litellm_plugin_mode")).toBe(plugin.name);
@@ -178,6 +181,7 @@ describe("Chat layout product navigation", () => {
       );
 
       expect(screen.getByRole("heading", { name: "Chat content" })).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "Open chat navigation" }));
       await user.click(screen.getByRole("button", { name: "Switch workspace, current: Chat" }));
       expect(await screen.findByRole("menuitem", { name: "Observability" })).toBeInTheDocument();
       await user.click(screen.getByRole("menuitem", { name: "AI Gateway", exact: true }));

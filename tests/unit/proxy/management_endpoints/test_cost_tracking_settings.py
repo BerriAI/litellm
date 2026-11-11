@@ -378,7 +378,7 @@ class TestResolveModelForCostLookup:
         )
 
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             {
                 "model_name": "gpt-5.3-codex",
                 "litellm_params": {
@@ -400,7 +400,7 @@ class TestResolveModelForCostLookup:
             resolved = _resolve_model_for_cost_lookup("gpt-5.3-codex")
 
         assert resolved.model == "azure/gpt-4o"
-        mock_router.get_model_list.assert_called_once_with(model_name="gpt-5.3-codex")
+        mock_router.registry.return_value.deployments.assert_called_once_with("gpt-5.3-codex")
 
     def test_falls_back_to_litellm_params_model_when_no_base_model(self):
         """
@@ -411,7 +411,7 @@ class TestResolveModelForCostLookup:
         )
 
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             {
                 "model_name": "gpt-4",
                 "litellm_params": {
@@ -441,7 +441,7 @@ class TestResolveModelForCostLookup:
         )
 
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             {
                 "model_name": "my-azure-model",
                 "litellm_params": {
@@ -487,7 +487,7 @@ class TestResolveModelForCostLookup:
         )
 
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             {
                 "model_name": "my-azure-model",
                 "litellm_params": {
@@ -513,7 +513,7 @@ class TestResolveModelForCostLookup:
         )
 
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             {
                 "model_name": "gpt-4",
                 "litellm_params": {
@@ -539,7 +539,7 @@ class TestResolveModelForCostLookup:
         )
 
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             {
                 "model_name": "my-azure-model",
                 "model_info": {"base_model": "azure/gpt-4o"},
@@ -561,7 +561,7 @@ class TestResolveModelForCostLookup:
         )
 
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             {
                 "model_name": "gpt-4",
                 "litellm_params": {"model": "openai/gpt-4"},
@@ -599,7 +599,7 @@ class TestEstimateCostOnPremProvider:
         )
 
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             {
                 "model_name": "nvidia/zai-org/glm-5.2",
                 "litellm_params": {
@@ -652,7 +652,7 @@ class TestEstimateCostOnPremProvider:
         )
 
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             {
                 "model_name": "nvidia/zai-org/glm-5.2",
                 "litellm_params": {
@@ -696,7 +696,7 @@ class TestEstimateCostOnPremProvider:
         )
 
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             {
                 "model_name": "nvidia/zai-org/glm-5.2",
                 "litellm_params": {
@@ -736,7 +736,7 @@ class TestEstimateCostOnPremProvider:
         )
 
         mock_router = MagicMock()
-        mock_router.get_model_list.return_value = [
+        mock_router.registry.return_value.deployments.return_value = [
             {
                 "model_name": "nvidia/zai-org/glm-5.2",
                 "litellm_params": {
@@ -869,7 +869,7 @@ OUTPUT_TOKENS = 500
 
 def _router_pricing(model: str = AN_UNDERLYING_MODEL, **pricing: float) -> MagicMock:
     mock_router = MagicMock()
-    mock_router.get_model_list.return_value = [
+    mock_router.registry.return_value.deployments.return_value = [
         {
             "model_name": AN_ALIAS,
             "litellm_params": {

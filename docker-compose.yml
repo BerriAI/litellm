@@ -1,52 +1,71 @@
+# LiteLLM plus a Postgres database that stores models, virtual keys and spend
+# logs. Used by https://docs.litellm.ai/docs/proxy/docker_quick_start
+#
+#   curl -sSLO https://github.com/BerriAI/litellm/raw/main/docker-compose.yml
+#   printf 'LITELLM_MASTER_KEY=sk-%s\nLITELLM_SALT_KEY=sk-%s\n' "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" > .env
+#   docker compose up -d
+#
+# `docker compose up` runs the published image. From a checkout of the repo,
+# `docker compose up --build` builds the Dockerfile next to this file instead.
+# `docker compose --profile monitoring up -d` also starts Prometheus on 9090.
+#
+# Compose reads .env from this directory. Keep it: regenerating LITELLM_SALT_KEY
+# makes credentials already stored in the database unreadable. A database
+# created without LITELLM_SALT_KEY encrypted them with the master key, so when
+# upgrading one, write only LITELLM_MASTER_KEY (the existing one) to .env. For anything
+# beyond local evaluation, pin the image to a specific release tag.
 services:
   litellm:
+    image: docker.litellm.ai/berriai/litellm:main-stable
     build:
       context: .
-      args:
-        target: runtime
-    image: docker.litellm.ai/berriai/litellm:main-stable
-    #########################################
-    ## Uncomment these lines to start proxy with a config.yaml file ##
-    # volumes:
-    #  - ./config.yaml:/app/config.yaml
-    # command:
-    #  - "--config=/app/config.yaml"
-    ##############################################
+      target: runtime
+    pull_policy: missing
     ports:
-      - "4000:4000" # Map the container port to the host, change the host port if necessary
+      - "4000:4000"
+    # The same image runs every component. The first word of `command` picks
+    # it: proxy (default), gateway, backend, ui, migrations, metrics,
+    # collector. See docker/README.md
+    # command: ["--config", "/app/config.yaml"]
+    # volumes:
+    #   - ./config.yaml:/app/config.yaml:ro
     environment:
-      DATABASE_URL: "postgresql://llmproxy:dbpassword9090@db:5432/litellm"
-      # Optional: route read-only queries (find_*, count, group_by, query_raw/_first)
-      # to a separate reader endpoint, e.g. an Aurora reader. Leave unset for
-      # single-DB deployments. With IAM_TOKEN_DB_AUTH enabled, the reader URL
-      # is auto-refreshed alongside the writer.
-      # DATABASE_URL_READ_REPLICA: "postgresql://llmproxy:dbpassword9090@db-reader:5432/litellm"
-      STORE_MODEL_IN_DB: "True" # allows adding models to proxy via UI
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?set it in .env, see the header of this file}
+      LITELLM_MIGRATION_DIR: /tmp/litellm-migrations
+      DATABASE_URL: postgresql://llmproxy:dbpassword9090@db:5432/litellm
+      STORE_MODEL_IN_DB: "True"
     env_file:
-      - .env # Load local .env file
+      - path: .env
+        required: false
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+      - /app/.cache:rw,noexec,nosuid,nodev,size=128m,mode=1777
     depends_on:
-      - db  # Indicates that this service depends on the 'db' service, ensuring 'db' starts first
-    healthcheck:  # Defines the health check configuration for the container
+      db:
+        condition: service_healthy
+    healthcheck:
       test:
         - CMD-SHELL
-        - python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')"  # Command to execute for health check
-      interval: 30s  # Perform health check every 30 seconds
-      timeout: 10s   # Health check command times out after 10 seconds
-      retries: 3     # Retry up to 3 times if health check fails
-      start_period: 40s  # Wait 40 seconds after container start before beginning health checks
+        - python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
   db:
     image: postgres:16
     restart: always
-    container_name: litellm_db
     environment:
       POSTGRES_DB: litellm
       POSTGRES_USER: llmproxy
       POSTGRES_PASSWORD: dbpassword9090
-    ports:
-      - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data # Persists Postgres data across container restarts
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -d litellm -U llmproxy"]
       interval: 1s
@@ -55,6 +74,8 @@ services:
 
   prometheus:
     image: prom/prometheus
+    profiles:
+      - monitoring
     volumes:
       - prometheus_data:/prometheus
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
@@ -68,6 +89,5 @@ services:
 
 volumes:
   prometheus_data:
-    driver: local
   postgres_data:
-    name: litellm_postgres_data # Named volume for Postgres data persistence
+    name: litellm_postgres_data

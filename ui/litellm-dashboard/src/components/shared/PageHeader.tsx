@@ -1,6 +1,7 @@
 "use client";
 
 import type { ComponentProps } from "react";
+import { useTranslation } from "react-i18next";
 
 import { cn } from "@/lib/cva.config";
 
@@ -25,10 +26,11 @@ export function PageHeaderDescription({ className, ...props }: ComponentProps<"p
 }
 
 export function PageHeaderControls({ className, ...props }: ComponentProps<"div">) {
+  const { t } = useTranslation();
   return (
     <div
       role="group"
-      aria-label="Page controls"
+      aria-label={t("shell.pageHeader.controls")}
       className={cn("mt-5 flex min-h-9 items-center gap-2", className)}
       {...props}
     />

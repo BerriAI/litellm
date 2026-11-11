@@ -137,7 +137,7 @@ impl VertexAiOcrConfig {
                 connection
                     .api_key
                     .as_ref()
-                    .map(litellm_auth::SecretValue::expose),
+                    .map(litellm_secret_value::SecretValue::expose),
                 config,
                 &|name: &str| connection.secret(name),
             )

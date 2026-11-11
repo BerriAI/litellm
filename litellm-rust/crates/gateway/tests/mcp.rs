@@ -424,7 +424,7 @@ impl litellm_secrets::source::SecretSource for NoSecrets {
         _: &'a str,
     ) -> futures_util::future::BoxFuture<
         'a,
-        Result<Option<litellm_auth_types::SecretValue>, litellm_secrets::Error>,
+        Result<Option<litellm_secret_value::SecretValue>, litellm_secrets::Error>,
     > {
         Box::pin(async { Ok(None) })
     }

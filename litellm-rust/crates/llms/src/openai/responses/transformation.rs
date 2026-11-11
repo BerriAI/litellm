@@ -3,7 +3,8 @@ use litellm_llms_types::formats::responses::{
 };
 use serde_json::{Map, Value};
 
-use litellm_auth::{CredentialPlacement, SecretValue};
+use litellm_auth::CredentialPlacement;
+use litellm_secret_value::SecretValue;
 
 use crate::{
     Error, ErrorDetail,

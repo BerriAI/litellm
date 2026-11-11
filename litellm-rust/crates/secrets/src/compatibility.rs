@@ -3,9 +3,10 @@ use litellm_python_compat::{Value, literal::literal_eval};
 use litellm_secrets_types::PythonSecretRead;
 
 use crate::{
-    Error, KeyManagementSettings, KeyManagementSystem, Secret, SecretManager, SecretValue,
+    Error, KeyManagementSettings, KeyManagementSystem, Secret, SecretManager,
     get_secret_from_manager,
 };
+use litellm_secret_value::SecretValue;
 
 pub async fn get_secret_from_python_manager(
     manager: &SecretManager,

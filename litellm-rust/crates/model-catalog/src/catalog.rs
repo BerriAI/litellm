@@ -5,14 +5,15 @@ use indexmap::IndexMap;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::error::{Error, Loaded, Rejects, Repr};
+use crate::error::{Error, Loaded, Rejects, Repr, pointer_child, pointer_for_key};
 use crate::fallback::{FallbackGeneralizations, FallbackRule};
 use crate::model::Model;
 use crate::store::{Rows, Store};
 use crate::wire::{EntryWire, Fields};
 
 const SAMPLE_SPEC: &str = "sample_spec";
-const FALLBACK_GENERALIZATIONS: &str = "fallback_generalizations";
+/// The top-level key of the rules block, which is never a model row
+pub const FALLBACK_GENERALIZATIONS: &str = "fallback_generalizations";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct IntegrityLimits {
@@ -111,6 +112,11 @@ impl Rows for CatalogRows {
 }
 
 impl IntegrityLimits {
+    pub const UNCHECKED: Self = Self {
+        min_model_count: 0,
+        min_reference_ratio: 0.0,
+    };
+
     pub fn new(min_model_count: usize, min_reference_ratio: f64) -> Option<Self> {
         (0.0..=1.0).contains(&min_reference_ratio).then_some(Self {
             min_model_count,
@@ -142,6 +148,7 @@ impl Catalog {
         let mut sections = Vec::new();
         let mut entries = IndexMap::with_capacity(document.len());
         let mut alias_lists = Vec::new();
+        let mut pointer_rows = Vec::new();
         for (index, (name, value)) in document.into_iter().enumerate() {
             let fields = match value {
                 Value::Object(fields) if !is_section(&name) => fields,
@@ -157,16 +164,34 @@ impl Catalog {
                     continue;
                 }
             };
-            let (model, aliases, row_problems) = read_row(&fields);
+            let row = read_row(&fields);
+            let readable = row.problems.is_empty();
             problems.extend(
-                row_problems
+                row.problems
                     .into_iter()
                     .map(|problem| problem.prepend(&name)),
             );
-            if let Some(aliases) = aliases {
+            if let Some(target) = row.alias_of {
+                if readable {
+                    pointer_rows.push((name.clone(), target));
+                }
+                sections.push(Section {
+                    index,
+                    key: name,
+                    value: Value::Object(fields),
+                });
+                continue;
+            }
+            if let Some(aliases) = row.aliases {
                 alias_lists.push((name.clone(), aliases));
             }
-            entries.insert(name, ModelEntry { fields, model });
+            entries.insert(
+                name,
+                ModelEntry {
+                    fields,
+                    model: row.model,
+                },
+            );
         }
         if entries.is_empty() {
             return Err(Error::new("", Repr::Empty));
@@ -190,6 +215,21 @@ impl Catalog {
                 }
             }
         }
+        for (alias, target) in pointer_rows {
+            if !entries.contains_key(&target) {
+                problems.push(Error::from_key(&alias, Repr::AliasTargetMissing { target }));
+            } else if let Some(taken_by) = aliases.get(&alias) {
+                problems.push(Error::from_key(
+                    &alias,
+                    Repr::AliasTaken {
+                        alias: alias.clone(),
+                        taken_by: taken_by.clone(),
+                    },
+                ));
+            } else {
+                aliases.insert(alias, target);
+            }
+        }
 
         let fallback_generalizations = sections
             .iter()
@@ -211,9 +251,39 @@ impl Catalog {
         })
     }
 
-    pub fn row_errors(model: &str, fields: &Fields) -> Vec<Error> {
-        let (_, _, errors) = read_row(fields);
+    pub fn problems(body: &[u8]) -> Vec<Error> {
+        let Loaded {
+            value: catalog,
+            errors,
+        } = match Self::parse(body) {
+            Ok(loaded) => loaded,
+            Err(fatal) => return vec![fatal],
+        };
+        let unread = catalog.rows().entries.iter().flat_map(|(model, entry)| {
+            EntryWire::read(entry.fields())
+                .unknown
+                .into_iter()
+                .map(move |(key, _)| {
+                    Error::new(
+                        pointer_child(&pointer_for_key(model), &key),
+                        Repr::UnreadField,
+                    )
+                })
+        });
+        let no_fallback_rules = catalog
+            .fallback_rules()
+            .is_none_or(<[_]>::is_empty)
+            .then(|| Error::from_key(FALLBACK_GENERALIZATIONS, Repr::NoFallbackRules));
         errors
+            .into_iter()
+            .chain(unread)
+            .chain(no_fallback_rules)
+            .collect()
+    }
+
+    pub fn row_errors(model: &str, fields: &Fields) -> Vec<Error> {
+        read_row(fields)
+            .problems
             .into_iter()
             .map(|error| error.prepend(model))
             .collect()
@@ -225,7 +295,13 @@ impl Catalog {
         (0..self.rows().entries.len() + self.sections.len()).map_while(move |index| match sections
             .next_if(|section| section.index == index)
         {
-            Some(section) => Some((section.key.as_str(), Written::Section(&section.value))),
+            Some(section) => Some((
+                section.key.as_str(),
+                match &section.value {
+                    Value::Object(fields) if !is_section(&section.key) => Written::Entry(fields),
+                    value => Written::Section(value),
+                },
+            )),
             None => entries
                 .next()
                 .map(|(name, entry)| (name.as_str(), Written::Entry(&entry.fields))),
@@ -348,6 +424,20 @@ impl Catalog {
         })
     }
 
+    /// The row under an exact model or alias key, an alias reading its owner's row
+    pub fn get(&self, key: &str) -> Option<&Fields> {
+        self.rows().fields(key)
+    }
+
+    /// A top-level value that is not a model row, such as `sample_spec`
+    pub fn section(&self, key: &str) -> Option<&Value> {
+        self.sections
+            .iter()
+            .filter(|section| is_section(&section.key))
+            .find(|section| section.key == key)
+            .map(|section| &section.value)
+    }
+
     pub fn model_count(&self) -> usize {
         self.rows().entries.len()
     }
@@ -376,16 +466,41 @@ impl Catalog {
     }
 }
 
-fn read_row(fields: &Fields) -> (Option<Model>, Option<Vec<String>>, Vec<Error>) {
+struct RowRead {
+    model: Option<Model>,
+    aliases: Option<Vec<String>>,
+    alias_of: Option<String>,
+    problems: Vec<Error>,
+}
+
+fn read_row(fields: &Fields) -> RowRead {
     let wire = EntryWire::read(fields);
+    if let Some(target) = wire.attributes.alias_of.clone() {
+        let other_fields = fields
+            .keys()
+            .filter(|key| *key != "alias_of")
+            .map(|key| Error::from_key(key, Repr::AliasRowField));
+        return RowRead {
+            model: None,
+            aliases: None,
+            alias_of: Some(target),
+            problems: wire.problems.into_iter().chain(other_fields).collect(),
+        };
+    }
     let aliases = wire.attributes.aliases.clone();
     let timezone_error = unknown_timezone(&wire);
-    match Model::try_from(wire) {
-        Ok(model) => (Some(model), aliases, timezone_error.into_iter().collect()),
+    let (model, problems) = match Model::try_from(wire) {
+        Ok(model) => (Some(model), timezone_error.into_iter().collect()),
         Err(mut errors) => {
             errors.extend(timezone_error);
-            (None, aliases, errors)
+            (None, errors)
         }
+    };
+    RowRead {
+        model,
+        aliases,
+        alias_of: None,
+        problems,
     }
 }
 
@@ -403,4 +518,86 @@ fn unknown_timezone(wire: &EntryWire) -> Option<Error> {
             },
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    const RULES: &str = r#""fallback_generalizations":{"rules":[{"name":"family","pattern":"^new-","model_info":{"mode":"chat"}}]}"#;
+
+    #[rstest]
+    #[case::clean(format!(r#"{{{RULES},"m":{{"litellm_provider":"test"}}}}"#), vec![])]
+    #[case::not_json("{".to_owned(), vec![("", "json")])]
+    #[case::row_error(format!(r#"{{{RULES},"m":{{}}}}"#), vec![("/m/litellm_provider", "missing_provider")])]
+    #[case::unread_key(
+        format!(r#"{{{RULES},"m":{{"litellm_provider":"test","typo_cost":1}}}}"#),
+        vec![("/m/typo_cost", "unread_field")]
+    )]
+    #[case::empty_model_key(
+        format!(r#"{{{RULES},"":{{"litellm_provider":"test","future_field":true}}}}"#),
+        vec![("//future_field", "unread_field")]
+    )]
+    #[case::unread_key_on_invalid_row(
+        format!(r#"{{{RULES},"m":{{"typo_cost":1}}}}"#),
+        vec![("/m/litellm_provider", "missing_provider"), ("/m/typo_cost", "unread_field")]
+    )]
+    #[case::escaped_unread_key_on_invalid_row(
+        format!(r#"{{{RULES},"open/router~v1":{{"typo/cost~":1}}}}"#),
+        vec![("/open~1router~0v1/litellm_provider", "missing_provider"), ("/open~1router~0v1/typo~1cost~0", "unread_field")]
+    )]
+    #[case::no_rules(
+        r#"{"m":{"litellm_provider":"test"}}"#.to_owned(),
+        vec![("/fallback_generalizations", "no_fallback_rules")]
+    )]
+    #[case::empty_rules(
+        r#"{"fallback_generalizations":{"rules":[]},"m":{"litellm_provider":"test"}}"#.to_owned(),
+        vec![("/fallback_generalizations", "no_fallback_rules")]
+    )]
+    fn problems_list_what_a_cost_map_change_must_fix(
+        #[case] body: String,
+        #[case] expected: Vec<(&str, &str)>,
+    ) {
+        let problems: Vec<_> = Catalog::problems(body.as_bytes())
+            .iter()
+            .map(|problem| (problem.path().to_owned(), <&str>::from(problem.kind())))
+            .collect();
+        let expected: Vec<_> = expected
+            .into_iter()
+            .map(|(path, kind)| (path.to_owned(), kind))
+            .collect();
+        assert_eq!(problems, expected);
+    }
+
+    #[rstest]
+    fn runtime_parsing_preserves_custom_fields_and_recovers_valid_rows() {
+        let body = br#"{
+            "good":{"litellm_provider":"test","custom_metadata":true},
+            "bad":{"litellm_provider":"test","input_cost_per_token":"wrong"}
+        }"#;
+        let loaded = Catalog::parse(body).unwrap();
+        assert_eq!(loaded.errors.len(), 1);
+        assert_eq!(loaded.errors[0].path(), "/bad/input_cost_per_token");
+        let (catalog, rejected) = loaded.value.without_rejected(&loaded.errors);
+        assert_eq!(rejected.len(), 1);
+        assert!(catalog.lookup("bad").is_none());
+        let good = catalog.lookup("good").unwrap();
+        assert!(good.entry.model().is_some());
+        assert_eq!(
+            good.entry.field("custom_metadata"),
+            Some(&Value::Bool(true))
+        );
+        assert!(
+            Catalog::problems(body)
+                .iter()
+                .any(|problem| problem.kind() == crate::ErrorKind::UnreadField)
+        );
+        assert!(
+            Catalog::problems(body)
+                .iter()
+                .any(|problem| problem.kind() == crate::ErrorKind::NoFallbackRules)
+        );
+    }
 }

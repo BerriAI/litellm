@@ -8,14 +8,12 @@ describe("AriaAvatar", () => {
     setServerRootPath("/");
   });
 
-  it.each(["/", "/litellm"])("loads the bundled image when the server root is %s", (root) => {
+  it.each(["/", "/litellm"])("renders a decorative icon without an image request under server root %s", (root) => {
     setServerRootPath(root);
 
     render(<AriaAvatar />);
+    expect(screen.getByRole("presentation", { hidden: true })).toHaveAttribute("aria-hidden", "true");
 
-    expect(screen.getByRole("presentation", { hidden: true })).toHaveAttribute(
-      "src",
-      "/_next/static/media/aria-agent.png",
-    );
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
   });
 });

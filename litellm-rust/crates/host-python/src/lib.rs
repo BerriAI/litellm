@@ -36,8 +36,8 @@ pub use marshal::{
 pub use owned::PythonOwned;
 pub use runtime::{
     ForkedAfterNativeRuntimeStarted, ProcessReservedForForking, enter_native, poll_async_value,
-    ready_future, reserve_process_for_forking, run_async, run_async_value, run_sync,
-    run_sync_value, runtime_started,
+    ready_future, reserve_process_for_forking, run_async, run_async_value, run_isolated, run_sync,
+    run_sync_value, runtime_handle, runtime_started,
 };
 pub use services::PythonHostCalls;
 

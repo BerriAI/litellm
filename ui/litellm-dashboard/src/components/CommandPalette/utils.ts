@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { labelText, routeOf, sectionText, type MenuGroup } from "@/components/leftnav";
 import { keepTerminology, type Term } from "@/lib/terminology";
+import i18n from "@/i18n/i18n";
 
 export type PaletteScope = "keys" | "global";
 
@@ -57,4 +58,6 @@ export const matchNavItems = (items: readonly PaletteNavItem[], query: string): 
 };
 
 export const shortcutLabel = (platform: string, userAgent: string): string =>
-  [platform, userAgent].some((value) => value.toLowerCase().includes("mac")) ? "⌘K" : "Ctrl K";
+  [platform, userAgent].some((value) => value.toLowerCase().includes("mac"))
+    ? "⌘K"
+    : i18n.t("shell.commandPaletteUtils.ctrlShortcut");

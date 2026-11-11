@@ -273,7 +273,7 @@ class CheckResponsesCost:
 
     def _resolve_deployment(self, response_id: str) -> Deployment | None:
         model_id: str | None = ResponsesAPIRequestUtils.get_model_id_from_response_id(response_id)
-        return self.llm_router.get_deployment(model_id=model_id) if model_id is not None else None
+        return self.llm_router.registry().deployment(model_id) if model_id is not None else None
 
     async def _get_response(
         self,
@@ -415,7 +415,7 @@ class CheckResponsesCost:
         if target.deployment is None or not isinstance(requested, str):
             return MappingProxyType({})
         routed: Final = _ROUTED_DEPLOYMENTS.validate_python(
-            self.llm_router.get_model_list(model_name=requested, team_id=team_id) or ()
+            self.llm_router.registry().deployments(requested, team_id=team_id) or ()
         )
         serving_id: Final = target.deployment.model_info.id
         return MappingProxyType(

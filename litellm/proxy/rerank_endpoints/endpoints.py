@@ -6,6 +6,7 @@ from typing import Final
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import ORJSONResponse
+from pydantic import TypeAdapter
 
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -20,8 +21,10 @@ from litellm.proxy.common_utils.openai_error_payload import (
     openai_error_param,
     openai_error_type,
 )
+from litellm.types.utils import CallTypes
 
 router: Final = APIRouter()
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 @router.post(
@@ -84,7 +87,7 @@ async def rerank(
             llm_router=llm_router,
             user_model=user_model,
         )
-        response: Final = await llm_call
+        response: Final = _DECODED_JSON.validate_python(await llm_call)
 
         ### ALERTING ###
         asyncio.create_task(proxy_logging_obj.update_request_status(litellm_call_id=litellm_call_id, status="success"))
@@ -114,7 +117,10 @@ async def rerank(
         return response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=data,
+            dispatched_call_type=CallTypes.arerank.value,
         )
         log_llm_api_exception(e, litellm_call_id)
         if isinstance(e, HTTPException):

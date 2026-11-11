@@ -9,16 +9,16 @@ afterEach(() => {
 
 describe("uiHref", () => {
   it("builds a /ui-rooted path when serverRootPath is /", () => {
-    expect(uiHref("api-reference")).toBe("/ui/api-reference");
+    expect(uiHref("logs")).toBe("/ui/logs");
   });
 
   it("prefixes a non-root serverRootPath without duplicating slashes", () => {
     setServerRootPath("/team-x/");
-    expect(uiHref("api-reference")).toBe("/team-x/ui/api-reference");
+    expect(uiHref("logs")).toBe("/team-x/ui/logs");
   });
 
   it("tolerates a leading slash in the route segment", () => {
-    expect(uiHref("/api-reference")).toBe("/ui/api-reference");
+    expect(uiHref("/logs")).toBe("/ui/logs");
   });
 
   it("stays root-relative under next dev, which serves the app at /", () => {
@@ -29,8 +29,8 @@ describe("uiHref", () => {
 
 describe("routeSegmentForPathname", () => {
   it("strips the /ui base and any trailing slash", () => {
-    expect(routeSegmentForPathname("/ui/api-reference")).toBe("api-reference");
-    expect(routeSegmentForPathname("/ui/api-reference/")).toBe("api-reference");
+    expect(routeSegmentForPathname("/ui/logs")).toBe("logs");
+    expect(routeSegmentForPathname("/ui/logs/")).toBe("logs");
   });
 
   it("returns an empty segment for the dashboard root", () => {

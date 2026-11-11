@@ -50,42 +50,47 @@ async fn messages_cache_identity_includes_provider_native_parameters(
     #[case] original: Value,
     #[case] changed: Value,
 ) {
-    use litellm_inference_messages::route::Messages;
+    use litellm_inference_messages::{MessagesBody, route::Messages};
     use litellm_llms_types::formats::messages::MessagesResponse;
 
     let calls = AtomicUsize::new(0);
     for (value, expected_call) in [(original.clone(), 0), (changed, 1), (original, 0)] {
-        let response =
-            execute_unary::<Messages, _, _>(
-                CacheRequest::from_wire(
-                    ProviderIdentity {
-                        model: "test".into(),
-                        provider: "anthropic".into(),
-                    },
-                    Some(&WireRequest {
-                        url: "https://example.test/v1/messages".into(),
-                        headers: vec![],
-                        body: json!({
-                            "model":"test", "messages":[{"role":"user","content":"hello"}],
-                            "max_tokens":32, (field):value
-                        }),
-                    }),
-                ),
-                Some(cache.clone()),
-                Some(CacheOptions::new(CacheScope::Shared)),
-                &(),
-                None,
-                || async {
-                    let call = calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(Box::new(serde_json::from_value::<MessagesResponse>(json!({
-                    "id":call.to_string(), "type":"message", "role":"assistant", "model":"test",
-                    "content":[{"type":"text","text":format!("answer {call}")}],
-                    "stop_reason":"end_turn", "stop_sequence":null
-                })).unwrap()))
+        let response = execute_unary::<Messages, _, _>(
+            CacheRequest::from_wire(
+                ProviderIdentity {
+                    model: "test".into(),
+                    provider: "anthropic".into(),
                 },
-            )
-            .await
-            .unwrap();
+                Some(&WireRequest {
+                    url: "https://example.test/v1/messages".into(),
+                    headers: vec![],
+                    body: json!({
+                        "model":"test", "messages":[{"role":"user","content":"hello"}],
+                        "max_tokens":32, (field):value
+                    }),
+                }),
+            ),
+            Some(cache.clone()),
+            Some(CacheOptions::new(CacheScope::Shared)),
+            &(),
+            None,
+            || async {
+                let call = calls.fetch_add(1, Ordering::SeqCst);
+                Ok(MessagesBody::Message(Box::new(
+                    serde_json::from_value::<MessagesResponse>(json!({
+                        "id":call.to_string(), "type":"message", "role":"assistant", "model":"test",
+                        "content":[{"type":"text","text":format!("answer {call}")}],
+                        "stop_reason":"end_turn", "stop_sequence":null
+                    }))
+                    .unwrap(),
+                )))
+            },
+        )
+        .await
+        .unwrap();
+        let MessagesBody::Message(response) = response else {
+            panic!("expected a message");
+        };
         assert_eq!(response.id, expected_call.to_string());
         assert_eq!(
             response.content[0]["text"],
@@ -107,7 +112,7 @@ impl litellm_secrets::source::SecretSource for ChangingSecrets {
         name: &'a str,
     ) -> futures_util::future::BoxFuture<
         'a,
-        Result<Option<litellm_secrets::SecretValue>, litellm_secrets::Error>,
+        Result<Option<litellm_secret_value::SecretValue>, litellm_secrets::Error>,
     > {
         Box::pin(async move {
             let revision = self.revision.load(Ordering::SeqCst);
@@ -121,7 +126,7 @@ impl litellm_secrets::source::SecretSource for ChangingSecrets {
             } else {
                 None
             };
-            Ok(value.map(litellm_secrets::SecretValue::new))
+            Ok(value.map(litellm_secret_value::SecretValue::new))
         })
     }
 }
@@ -253,7 +258,7 @@ async fn provider_reported_cost_is_delivered_once_and_never_charged_for_a_cache_
     #[case] cost: Value,
     #[case] expected: Option<f64>,
 ) {
-    use litellm_inference_messages::{MessagesCall, MessagesCallResponse};
+    use litellm_inference_messages::{MessagesBody, MessagesCall, MessagesCallResponse};
     let response = json!({"id": "msg_cost", "type": "message", "role": "assistant", "model": "native-test",
         "content": [{"type": "text", "text": "answer"}], "stop_reason": "end_turn", "stop_sequence": null,
         "usage": {"input_tokens": 3, "output_tokens": 2}, "cost": cost});
@@ -277,6 +282,9 @@ async fn provider_reported_cost_is_delivered_once_and_never_charged_for_a_cache_
         panic!("expected Messages responses");
     };
     assert_eq!(first, second);
+    let MessagesBody::Message(first) = first else {
+        panic!("expected a message");
+    };
     assert_eq!(first.extra.get("cost"), Some(&cost));
     assert_eq!(support::received(&upstream).await.len(), 1);
     let facts = hooks.facts.lock().unwrap();

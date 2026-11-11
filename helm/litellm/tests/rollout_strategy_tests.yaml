@@ -64,3 +64,39 @@ tests:
       - notExists:
           path: spec.strategy
         template: ui/deployment.yaml
+
+  - it: leaves minReadySeconds to the Kubernetes default when unset
+    asserts:
+      - notExists:
+          path: spec.minReadySeconds
+
+  - it: renders the configured minReadySeconds on each deployment
+    set:
+      gateway.minReadySeconds: 60
+      backend.minReadySeconds: 30
+      ui.minReadySeconds: 10
+    asserts:
+      - equal:
+          path: spec.minReadySeconds
+          value: 60
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.minReadySeconds
+          value: 30
+        template: backend/deployment.yaml
+      - equal:
+          path: spec.minReadySeconds
+          value: 10
+        template: ui/deployment.yaml
+
+  - it: renders an explicit minReadySeconds of 0 instead of dropping it
+    set:
+      gateway.minReadySeconds: 0
+    asserts:
+      - equal:
+          path: spec.minReadySeconds
+          value: 0
+        template: gateway/deployment.yaml
+      - notExists:
+          path: spec.minReadySeconds
+        template: backend/deployment.yaml

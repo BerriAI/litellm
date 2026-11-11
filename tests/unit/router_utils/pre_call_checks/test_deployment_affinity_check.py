@@ -440,41 +440,18 @@ async def test_async_user_parameter_does_not_trigger_deployment_affinity():
     model_group = "azure-sdk-test"
     user_id = "sdk-user-123"
 
-    choice_calls = {"count": 0}
-
-    def deterministic_choice(seq):
-        choice_calls["count"] += 1
-        if choice_calls["count"] == 1:
-            return seq[0]
-        return seq[1] if len(seq) > 1 else seq[0]
-
-    with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-            new_callable=AsyncMock,
-        ) as mock_post,
-        patch(
-            "litellm.router_strategy.simple_shuffle.random.choice",
-            side_effect=deterministic_choice,
-        ),
-    ):
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
         mock_post.return_value = MockResponse(mock_response_data, 200)
 
-        # First call with 'user' parameter (end-user id)
-        first_response = await router.aresponses(
-            model=model_group,
-            input="Hi",
-            user=user_id,
-        )
-        first_model_id = first_response._hidden_params["model_id"]
-
-        # Second call with same 'user' parameter should NOT be pinned by affinity
-        second_response = await router.aresponses(
-            model=model_group,
-            input="Follow-up",
-            user=user_id,
-        )
-        assert second_response._hidden_params["model_id"] != first_model_id
+        # Repeated calls with the same 'user' parameter must keep spreading across the group
+        model_ids = set()
+        for _ in range(20):
+            response = await router.aresponses(model=model_group, input="Hi", user=user_id)
+            model_ids.add(response._hidden_params["model_id"])
+        assert len(model_ids) == 2
 
 
 @pytest.mark.asyncio
@@ -839,61 +816,29 @@ async def test_model_group_affinity_config_only_applies_to_configured_group():
     )
 
     user_api_key_hash = "test-per-group-key"
-    choice_calls = {"count": 0}
 
-    def deterministic_choice(seq):
-        choice_calls["count"] += 1
-        if choice_calls["count"] == 1:
-            return seq[0]
-        return seq[1] if len(seq) > 1 else seq[0]
+    async def served_model_ids(model: str) -> set[str]:
+        model_ids = set()
+        for _ in range(20):
+            response = await router.aresponses(
+                model=model,
+                input="Hello",
+                truncation="auto",
+                litellm_metadata={"user_api_key_hash": user_api_key_hash},
+            )
+            model_ids.add(response._hidden_params["model_id"])
+        return model_ids
 
-    with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-            new_callable=AsyncMock,
-        ) as mock_post,
-        patch(
-            "litellm.router_strategy.simple_shuffle.random.choice",
-            side_effect=deterministic_choice,
-        ),
-    ):
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
         mock_post.return_value = MockResponse(mock_response_data, 200)
 
-        # gpt-4: affinity should work — second request pinned to same deployment
-        first = await router.aresponses(
-            model="gpt-4",
-            input="Hello",
-            truncation="auto",
-            litellm_metadata={"user_api_key_hash": user_api_key_hash},
-        )
-        first_model_id = first._hidden_params["model_id"]
-
-        second = await router.aresponses(
-            model="gpt-4",
-            input="Follow-up",
-            truncation="auto",
-            litellm_metadata={"user_api_key_hash": user_api_key_hash},
-        )
-        assert second._hidden_params["model_id"] == first_model_id
-
-        # claude-3: no affinity configured — should NOT be pinned
-        choice_calls["count"] = 0
-        first_claude = await router.aresponses(
-            model="claude-3",
-            input="Hello",
-            truncation="auto",
-            litellm_metadata={"user_api_key_hash": user_api_key_hash},
-        )
-        first_claude_id = first_claude._hidden_params["model_id"]
-
-        second_claude = await router.aresponses(
-            model="claude-3",
-            input="Follow-up",
-            truncation="auto",
-            litellm_metadata={"user_api_key_hash": user_api_key_hash},
-        )
-        # With deterministic choice and len>1, second call picks seq[1]
-        assert second_claude._hidden_params["model_id"] != first_claude_id
+        # gpt-4: affinity pins every request from the key to one deployment
+        assert len(await served_model_ids("gpt-4")) == 1
+        # claude-3: no affinity configured, so requests keep spreading across the group
+        assert len(await served_model_ids("claude-3")) == 2
 
 
 @pytest.mark.asyncio

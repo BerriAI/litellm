@@ -1,17 +1,54 @@
+import type { ParseKeys } from "i18next";
+import { useTranslation } from "react-i18next";
 import { BarChart } from "@/components/shared/charts/bar_chart";
 import { LineChart } from "@/components/shared/charts/line_chart";
 import { STACKED_USAGE_PALETTE } from "@/components/shared/charts/StackedUsageChart";
 import { formatUsageChartValue, type UsageChart } from "./usageChart";
 
+const CHART_TITLES: Record<string, ParseKeys> = {
+  "Daily spend": "aria.chart.titles.dailySpend",
+  "Daily requests": "aria.chart.titles.dailyRequests",
+  "Daily tokens": "aria.chart.titles.dailyTokens",
+  "Spend by model": "aria.chart.titles.spendByModel",
+  "Spend by provider": "aria.chart.titles.spendByProvider",
+  "Token breakdown": "aria.chart.titles.tokenBreakdown",
+};
+
+const CHART_SCOPES: Record<string, ParseKeys> = {
+  "Gateway usage": "aria.chart.scopes.gateway",
+  "All teams": "aria.chart.scopes.allTeams",
+  "All tags": "aria.chart.scopes.allTags",
+  "Your usage": "aria.chart.scopes.yours",
+};
+
+const CHART_LABELS: Record<string, ParseKeys> = {
+  Unknown: "aria.chart.labels.unknown",
+  Other: "aria.chart.labels.other",
+  Prompt: "aria.chart.labels.prompt",
+  Completion: "aria.chart.labels.completion",
+  "Cache read": "aria.chart.labels.cacheRead",
+  "Cache creation": "aria.chart.labels.cacheCreation",
+};
+
+const CHART_NOTES: Record<string, ParseKeys> = {
+  "Up to six leading entries. Other includes remaining recorded spend.": "aria.chart.notes.otherRemainder",
+  "Cache counts are reported separately. Do not add them to total tokens.": "aria.chart.notes.cacheSeparate",
+};
+
 export function UsageAnswerChart({ chart }: { chart: UsageChart }) {
+  const { t } = useTranslation();
+  const display = (keys: Record<string, ParseKeys>, text: string) => (Object.hasOwn(keys, text) ? t(keys[text]) : text);
+  const title = display(CHART_TITLES, chart.title);
   const formatValue = (value: number) => formatUsageChartValue(value, chart.unit);
-  const unavailable = chart.data.filter((point) => point.value == null).map((point) => point.label);
-  const data = chart.data.map((point) => ({ label: point.label, [chart.unit]: point.value }));
+  const unavailable = chart.data
+    .filter((point) => point.value == null)
+    .map((point) => display(CHART_LABELS, point.label));
+  const data = chart.data.map((point) => ({ label: display(CHART_LABELS, point.label), [chart.unit]: point.value }));
   return (
-    <figure aria-label={chart.title} className="space-y-3 rounded-xl border bg-card p-4">
+    <figure aria-label={title} className="space-y-3 rounded-xl border bg-card p-4">
       <figcaption className="space-y-1">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-sm font-medium">{chart.title}</p>
+          <p className="text-sm font-medium">{title}</p>
           <p className="text-xl font-semibold tracking-tight tabular-nums">
             {formatUsageChartValue(chart.total, chart.unit)}
             {chart.unit !== "usd" && (
@@ -20,7 +57,7 @@ export function UsageAnswerChart({ chart }: { chart: UsageChart }) {
           </p>
         </div>
         <p className="text-xs text-muted-foreground">
-          {chart.scope} · {chart.period}
+          {display(CHART_SCOPES, chart.scope)} · {chart.period}
         </p>
       </figcaption>
       {chart.kind === "bar" ? (
@@ -51,17 +88,17 @@ export function UsageAnswerChart({ chart }: { chart: UsageChart }) {
           className="h-40"
         />
       )}
-      <table className="sr-only" aria-label={`${chart.title} values`}>
+      <table className="sr-only" aria-label={t("aria.chart.valuesLabel", { title })}>
         <thead>
           <tr>
-            <th scope="col">Category</th>
+            <th scope="col">{t("aria.chart.category")}</th>
             <th scope="col">{chart.unit}</th>
           </tr>
         </thead>
         <tbody>
           {chart.data.map((point, index) => (
             <tr key={`${point.label}-${index}`}>
-              <th scope="row">{point.label}</th>
+              <th scope="row">{display(CHART_LABELS, point.label)}</th>
               <td>{formatUsageChartValue(point.value, chart.unit)}</td>
             </tr>
           ))}
@@ -69,8 +106,8 @@ export function UsageAnswerChart({ chart }: { chart: UsageChart }) {
       </table>
       {(chart.note || unavailable.length > 0) && (
         <p className="text-xs leading-relaxed text-muted-foreground">
-          {chart.note}
-          {unavailable.length > 0 && ` Values unavailable for: ${unavailable.join(", ")}.`}
+          {chart.note && display(CHART_NOTES, chart.note)}
+          {unavailable.length > 0 && ` ${t("aria.chart.valuesUnavailable", { labels: unavailable.join(", ") })}`}
         </p>
       )}
     </figure>

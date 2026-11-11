@@ -371,8 +371,7 @@ class TestLoggingObjExcludedFromFollowUp:
 
 class TestFollowUpErrorScenarios:
     """Regression tests: the agentic loop must surface errors properly and
-    not silently swallow them (except at the _call_agentic_completion_hooks
-    level which intentionally catches to return the initial response)."""
+    not silently swallow them."""
 
     @pytest.mark.asyncio
     async def test_followup_400_raises(self):

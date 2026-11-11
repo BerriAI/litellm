@@ -1,10 +1,13 @@
+import type { TFunction } from "i18next";
+import i18n from "@/i18n/i18n";
+
 /**
  * Helper function to simplify /key/generate permission errors
  * Extracts a user-friendly error message from team member permission errors
  * @param error - The error object or message
  * @returns A simplified error message string
  */
-export const simplifyKeyGenerateError = (error: any): string => {
+export const simplifyKeyGenerateError = (error: any, t: TFunction = i18n.t.bind(i18n)): string => {
   // Handle plain objects by stringifying them first
   let errorString: string;
   if (error && typeof error === "object" && !(error instanceof Error)) {
@@ -15,7 +18,7 @@ export const simplifyKeyGenerateError = (error: any): string => {
 
   // Check if this is a /key/generate team member permission error
   if (!errorString.includes("/key/generate") && !errorString.includes("KeyManagementRoutes.KEY_GENERATE")) {
-    return `Error creating the key: ${error}`;
+    return t("createKey.errors.createFailed", { error: String(error) });
   }
 
   // Try to parse JSON if the message contains JSON or extract from object
@@ -48,9 +51,9 @@ export const simplifyKeyGenerateError = (error: any): string => {
     errorMessage.includes("Team member does not have permissions")
   ) {
     // Return the simplified message
-    return "Team member does not have permission to generate key for this team. Ask your proxy admin to configure the team member permission settings.";
+    return t("createKey.errors.teamMemberPermission");
   }
 
   // If it's not a permission error, return the original error message
-  return `Error creating the key: ${error}`;
+  return t("createKey.errors.createFailed", { error: String(error) });
 };

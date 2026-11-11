@@ -5,7 +5,7 @@ Provides create, list, get, and delete operations for skills
 
 import asyncio
 import contextvars
-from collections.abc import Coroutine, Mapping
+from collections.abc import Coroutine, Mapping, Sequence
 from functools import partial
 from typing import Any, Final
 
@@ -14,6 +14,7 @@ import httpx
 import litellm
 from litellm.constants import request_timeout
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.llms.anthropic_skills import (
@@ -45,15 +46,15 @@ def _get_user_api_key_auth_from_kwargs(kwargs: Mapping[str, object]) -> Any | No
 
 def _get_skill_request_metadata(
     kwargs: Mapping[str, object],
-    extra_body: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    if extra_body and isinstance(extra_body.get("metadata"), dict):
-        return extra_body["metadata"]
+    extra_body: Mapping[str, object] | None,
+) -> dict[str, object] | None:
+    extra_body_metadata: Final = extra_body.get("metadata") if extra_body else None
+    if is_str_keyed_dict(extra_body_metadata):
+        return extra_body_metadata
 
     metadata: Final = kwargs.get("metadata")
-    if isinstance(metadata, dict) and isinstance(metadata.get("requester_metadata"), dict):
-        return metadata["requester_metadata"]
-    return None
+    requester_metadata: Final = metadata.get("requester_metadata") if is_str_keyed_dict(metadata) else None
+    return requester_metadata if is_str_keyed_dict(requester_metadata) else None
 
 
 def _get_litellm_skills_handler():
@@ -70,7 +71,7 @@ def _get_litellm_skills_handler():
 
 @client
 async def acreate_skill(
-    files: list[Any] | None = None,
+    files: Sequence[object] | None = None,
     display_title: str | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_query: Mapping[str, object] | None = None,
@@ -133,7 +134,7 @@ async def acreate_skill(
 
 @client
 def create_skill(
-    files: list[Any] | None = None,
+    files: Sequence[object] | None = None,
     display_title: str | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_query: Mapping[str, object] | None = None,

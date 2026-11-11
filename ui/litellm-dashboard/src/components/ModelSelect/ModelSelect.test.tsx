@@ -775,6 +775,39 @@ describe("ModelSelect", () => {
     expect(mockOnChange).toHaveBeenCalledWith(["gpt-4"]);
   });
 
+  it.each([
+    { value: "all-proxy-models", label: "All Proxy Models", includeSpecialOptions: true },
+    { value: "no-default-models", label: "No Default Models", includeSpecialOptions: false },
+  ])(
+    "should label retained $value without offering it again after removal",
+    async ({ value, label, includeSpecialOptions }) => {
+      const user = userEvent.setup();
+      mockUseOrganization.mockReturnValue({
+        data: createMockOrganization(["gpt-4"]),
+        isLoading: false,
+      } as unknown as ReturnType<typeof useOrganization>);
+      const props = {
+        onChange: mockOnChange,
+        context: "team" as const,
+        organizationID: "org-1",
+        options: { includeSpecialOptions },
+      };
+      const { rerender } = renderWithProviders(<ModelSelect {...props} value={[value]} />);
+
+      expect(screen.getByLabelText(label)).toBeInTheDocument();
+      await openModelList(user);
+      const retainedGroup = within(screen.getByRole("listbox")).getAllByRole("group")[0];
+      expect(within(retainedGroup).getByText("Unavailable")).toBeInTheDocument();
+      await user.click(within(retainedGroup).getByRole("option", { name: label }));
+      expect(mockOnChange).toHaveBeenCalledWith([]);
+
+      rerender(<ModelSelect {...props} value={[]} />);
+      expectNotOffered(label);
+      expectNotOffered("claude-3");
+      expectOffered("gpt-4");
+    },
+  );
+
   it("should keep the other selections when removing one unavailable model alongside a special option", async () => {
     const user = userEvent.setup();
     renderWithProviders(

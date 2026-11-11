@@ -25,6 +25,7 @@ tokio-tungstenite.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+litellm-secret-value.workspace = true
 litellm-http = { workspace = true, features = ["test-support"] }
 litellm-cache.workspace = true
 litellm-cache-memory.workspace = true

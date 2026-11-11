@@ -7,10 +7,12 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SimpleTooltip } from "@/components/ui/tooltip";
+import { UserReference } from "@/components/shared/UserReference";
 import { applyPtuModelInfo } from "../utils/ptuModelInfo";
 import { usePtuCostAttributionEnabled } from "@/app/(dashboard)/hooks/uiSettings/usePtuCostAttributionEnabled";
 import { ArrowLeft, CheckIcon, CopyIcon, Info } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
 import { stripMaskedSecrets } from "../utils/maskedSecretUtils";
 import { editableModelExtraParams, parseModelExtraParams } from "../utils/modelEditParams";
@@ -43,7 +45,7 @@ import {
   tagListCall,
   testConnectionRequest,
 } from "./networking";
-import { Logo } from "@/components/molecules/logo/Logo";
+import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
 import { ModelPricingSummary } from "@/components/molecules/models/ModelPricingSummary";
 import UpdateModelCredentialsModal from "./update_model_credentials_modal";
 import ModelInfoEditForm, { type ModelEditSubmitValues, type TouchedPricingField } from "./ModelInfoEditForm";
@@ -51,6 +53,7 @@ import { Tag } from "./tag_management/types";
 import { getDisplayModelName } from "./view_model/model_name_display";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import KubernetesPodsCard from "./model_info/KubernetesPodsCard";
+import { modelKeys } from "@/app/(dashboard)/hooks/models/useModels";
 
 interface ModelInfoViewProps {
   modelId: string;
@@ -73,6 +76,7 @@ export default function ModelInfoView({
   onModelUpdate,
   modelAccessGroups,
 }: ModelInfoViewProps) {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [localModelData, setLocalModelData] = useState<any>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -158,7 +162,9 @@ export default function ModelInfoView({
   // Broader than the editor check: adaptive and quality routers equally have no upstream
   // credential, so the credential actions are meaningless for every auto-router strategy.
   const isAnyAutoRouter = isAutoRouterDeployment(modelData?.litellm_params);
-  const deleteLabel = isAnyAutoRouter ? "Delete Auto-Router" : "Delete Model";
+  const deleteLabel = isAnyAutoRouter
+    ? t("modelInfoView.deleteLabel.autoRouter")
+    : t("modelInfoView.deleteLabel.model");
   const isComplexityRouterModel = isComplexityRouterParams(modelData?.litellm_params);
 
   const usingExistingCredential =
@@ -245,9 +251,9 @@ export default function ModelInfoView({
         custom_llm_provider: localModelData.litellm_params?.custom_llm_provider,
       },
     };
-    toast.info("Storing credential..");
+    toast.info(t("modelInfoView.toasts.storingCredential"));
     let credentialResponse = await credentialCreateCall(accessToken, credentialItem);
-    toast.success("Credential stored successfully");
+    toast.success(t("modelInfoView.toasts.credentialStored"));
   };
 
   const handleModelUpdate = async (
@@ -260,7 +266,7 @@ export default function ModelInfoView({
 
       const parsedExtraParams = parseModelExtraParams(values.litellm_extra_params);
       if (parsedExtraParams === null) {
-        toast.fromError("LiteLLM Params must be a valid JSON object");
+        toast.fromError(t("modelInfoView.toasts.invalidLitellmParams"));
         return;
       }
 
@@ -349,7 +355,7 @@ export default function ModelInfoView({
         if (values.team_id) updatedModelInfo = { ...updatedModelInfo, team_id: values.team_id };
         updatedModelInfo = applyPtuModelInfo(updatedModelInfo, values, ptuCostAttributionEnabled);
       } catch (e) {
-        toast.fromError("Invalid JSON in Model Info");
+        toast.fromError(t("modelInfoView.toasts.invalidModelInfo"));
         return;
       }
 
@@ -393,11 +399,11 @@ export default function ModelInfoView({
         onModelUpdate(updatedModelData);
       }
 
-      toast.success("Model settings updated successfully");
+      toast.success(t("modelInfoView.toasts.updateSuccess"));
       setIsEditing(false);
     } catch (error) {
       console.error("Error updating model:", error);
-      toast.fromError("Failed to update model settings");
+      toast.fromError(error);
     } finally {
       setIsSaving(false);
     }
@@ -409,9 +415,9 @@ export default function ModelInfoView({
       <div className="p-4">
         <Button variant="ghost" onClick={onClose} className="mb-4">
           <ArrowLeft className="size-4" />
-          Back to Models
+          {t("modelInfoView.backToModels")}
         </Button>
-        <p className="text-sm">Loading...</p>
+        <p className="text-sm">{t("modelInfoView.loading")}</p>
       </div>
     );
   }
@@ -422,9 +428,9 @@ export default function ModelInfoView({
       <div className="p-4">
         <Button variant="ghost" onClick={onClose} className="mb-4">
           <ArrowLeft className="size-4" />
-          Back to Models
+          {t("modelInfoView.backToModels")}
         </Button>
-        <p className="text-sm">Model not found</p>
+        <p className="text-sm">{t("modelInfoView.notFound")}</p>
       </div>
     );
   }
@@ -434,7 +440,7 @@ export default function ModelInfoView({
     if (isComplexityRouterModel) {
       const targets = buildComplexityRouterTestTargets(localModelData ?? modelData);
       if (targets.length === 0) {
-        toast.warning("No complexity tiers are configured yet, so there is nothing to test.");
+        toast.warning(t("modelInfoView.toasts.noComplexityTiers"));
         return;
       }
       setAutoRouterTestTargets(targets);
@@ -443,7 +449,7 @@ export default function ModelInfoView({
       return;
     }
     try {
-      toast.info("Testing connection...");
+      toast.info(t("modelInfoView.toasts.testingConnection"));
       const response = await testConnectionRequest(
         accessToken,
         {
@@ -462,15 +468,15 @@ export default function ModelInfoView({
       );
 
       if (response.status === "success") {
-        toast.success("Connection test successful!");
+        toast.success(t("modelInfoView.toasts.connectionSuccess"));
       } else {
         throw new Error(response?.result?.error || response?.message || "Unknown error");
       }
     } catch (error) {
       if (error instanceof Error) {
-        toast.error("Error testing connection: " + truncateString(error.message, 100));
+        toast.error(t("modelInfoView.toasts.connectionError", { error: truncateString(error.message, 100) }));
       } else {
-        toast.error("Error testing connection: " + String(error));
+        toast.error(t("modelInfoView.toasts.connectionError", { error: String(error) }));
       }
     }
   };
@@ -480,7 +486,7 @@ export default function ModelInfoView({
       setDeleteLoading(true);
       if (!accessToken) return;
       await modelDeleteCall(accessToken, modelId);
-      toast.success("Model deleted successfully");
+      toast.success(t("modelInfoView.toasts.deleteSuccess"));
 
       if (onModelUpdate) {
         onModelUpdate({
@@ -492,7 +498,7 @@ export default function ModelInfoView({
       onClose();
     } catch (error) {
       console.error("Error deleting the model:", error);
-      toast.fromError("Failed to delete model");
+      toast.fromError(t("modelInfoView.toasts.deleteFailed"));
     } finally {
       setDeleteLoading(false);
       setIsDeleteModalOpen(false);
@@ -531,15 +537,17 @@ export default function ModelInfoView({
         <div>
           <Button variant="ghost" onClick={onClose} className="mb-4">
             <ArrowLeft className="size-4" />
-            Back to Models
+            {t("modelInfoView.backToModels")}
           </Button>
-          <h2 className="text-xl font-semibold">Public Model Name: {getDisplayModelName(modelData)}</h2>
+          <h2 className="text-xl font-semibold">
+            {t("modelInfoView.header.publicModelName", { name: getDisplayModelName(modelData) })}
+          </h2>
           <div className="flex items-center cursor-pointer">
             <span className="text-sm text-muted-foreground font-mono">{modelData.model_info.id}</span>
             <Button
               variant="ghost"
               size="icon-xs"
-              aria-label="Copy model ID"
+              aria-label={t("modelInfoView.header.copyModelId")}
               onClick={() => copyToClipboard(modelData.model_info.id, "model-id")}
               className={`left-2 z-raised transition-all duration-200 ${
                 copiedStates["model-id"]
@@ -560,7 +568,7 @@ export default function ModelInfoView({
               data-testid="test-connection-button"
             >
               <RefreshIcon className="h-4 w-4" />
-              Test Connection
+              {t("modelInfoView.header.testConnection")}
             </Button>
           )}
 
@@ -574,7 +582,7 @@ export default function ModelInfoView({
                 data-testid="update-api-key-button"
               >
                 <KeyIcon className="h-4 w-4" />
-                Update API Key
+                {t("modelInfoView.header.updateApiKey")}
               </Button>
 
               <Button
@@ -585,7 +593,7 @@ export default function ModelInfoView({
                 data-testid="reuse-credentials-button"
               >
                 <KeyIcon className="h-4 w-4" />
-                Re-use Credentials
+                {t("modelInfoView.header.reuseCredentials")}
               </Button>
             </>
           )}
@@ -605,10 +613,10 @@ export default function ModelInfoView({
       <Tabs defaultValue="overview">
         <TabsList variant="line" className="mb-6 h-auto w-full justify-start rounded-none border-b p-0">
           <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
-            Overview
+            {t("modelInfoView.tabs.overview")}
           </TabsTrigger>
           <TabsTrigger value="raw" className="flex-none rounded-none px-4 py-2">
-            Raw JSON
+            {t("modelInfoView.tabs.rawJson")}
           </TabsTrigger>
         </TabsList>
 
@@ -617,24 +625,33 @@ export default function ModelInfoView({
             {/* Overview Grid */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-6">
               <Card className="block p-6">
-                <p className="text-sm">Provider</p>
+                <p className="text-sm">{t("modelInfoView.overview.provider")}</p>
                 <div className="mt-2 flex items-center space-x-2">
-                  {modelData.provider && <Logo provider={modelData.provider} className="w-4 h-4" />}
-                  <h3 className="text-lg font-medium">{modelData.provider || "Not Set"}</h3>
+                  {modelData.provider && (
+                    <ProviderLogo
+                      provider={modelData.provider}
+                      logoUrl={modelData.model_info.logo_url}
+                      className="w-4 h-4"
+                    />
+                  )}
+                  <h3 className="text-lg font-medium">{modelData.provider || t("modelInfoView.notSet")}</h3>
                 </div>
               </Card>
               <Card className="block p-6">
-                <p className="text-sm">LiteLLM Model</p>
+                <p className="text-sm">{t("modelInfoView.overview.litellmModel")}</p>
                 <div className="mt-2 overflow-hidden">
-                  <SimpleTooltip content={modelData.litellm_model_name || "Not Set"} className="w-full min-w-0">
+                  <SimpleTooltip
+                    content={modelData.litellm_model_name || t("modelInfoView.notSet")}
+                    className="w-full min-w-0"
+                  >
                     <div className="break-all text-sm font-medium leading-relaxed cursor-pointer">
-                      {modelData.litellm_model_name || "Not Set"}
+                      {modelData.litellm_model_name || t("modelInfoView.notSet")}
                     </div>
                   </SimpleTooltip>
                 </div>
               </Card>
               <Card className="block p-6">
-                <p className="text-sm">Pricing</p>
+                <p className="text-sm">{t("modelInfoView.overview.pricing")}</p>
                 <ModelPricingSummary model={modelData} />
               </Card>
             </div>
@@ -650,14 +667,14 @@ export default function ModelInfoView({
                     d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
                   />
                 </svg>
-                Created At{" "}
+                {t("modelInfoView.audit.createdAt")}{" "}
                 {modelData.model_info.created_at
                   ? new Date(modelData.model_info.created_at).toLocaleDateString("en-US", {
                       month: "short",
                       day: "numeric",
                       year: "numeric",
                     })
-                  : "Not Set"}
+                  : t("modelInfoView.notSet")}
               </div>
               <div className="flex items-center gap-x-2">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -668,7 +685,12 @@ export default function ModelInfoView({
                     d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
                   />
                 </svg>
-                Created By {modelData.model_info.created_by || "Not Set"}
+                {t("modelInfoView.audit.createdBy")}{" "}
+                {modelData.model_info.created_by ? (
+                  <UserReference userId={modelData.model_info.created_by} />
+                ) : (
+                  t("modelInfoView.notSet")
+                )}
               </div>
             </div>
 
@@ -681,21 +703,21 @@ export default function ModelInfoView({
             {/* Settings Card */}
             <Card className="block p-6">
               <div className="flex justify-between items-center mb-4">
-                <h3 className="text-lg font-medium">Model Settings</h3>
+                <h3 className="text-lg font-medium">{t("modelInfoView.settings.title")}</h3>
                 <div className="flex gap-2">
                   {isAutoRouterModel && canEditRouter && !isEditing && (
                     <Button onClick={() => setIsAutoRouterModalOpen(true)} className="flex items-center">
-                      Edit Auto Router
+                      {t("modelInfoView.settings.editAutoRouter")}
                     </Button>
                   )}
                   {canEditModel ? (
                     !isEditing && (
                       <Button onClick={() => setIsEditing(true)} className="flex items-center">
-                        Edit Settings
+                        {t("modelInfoView.settings.editSettings")}
                       </Button>
                     )
                   ) : (
-                    <SimpleTooltip content="Only DB models can be edited. You must be an admin or the creator of the model to edit it.">
+                    <SimpleTooltip content={t("modelInfoView.settings.readOnlyHint")}>
                       <Info className="size-4 text-muted-foreground" />
                     </SimpleTooltip>
                   )}
@@ -724,7 +746,7 @@ export default function ModelInfoView({
                   teams={assignableTeams}
                 />
               ) : (
-                <p className="text-sm">Loading...</p>
+                <p className="text-sm">{t("modelInfoView.loading")}</p>
               )}
             </Card>
           </TabsContent>
@@ -742,25 +764,29 @@ export default function ModelInfoView({
       <DeleteResourceModal
         isOpen={isDeleteModalOpen}
         title={deleteLabel}
-        alertMessage="This action cannot be undone."
-        message={`Are you sure you want to delete this ${isAnyAutoRouter ? "auto-router" : "model"}?`}
-        resourceInformationTitle="Model Information"
+        alertMessage={t("modelInfoView.deleteModal.alert")}
+        message={t("modelInfoView.deleteModal.message", {
+          resource: isAnyAutoRouter
+            ? t("modelInfoView.deleteModal.resourceAutoRouter")
+            : t("modelInfoView.deleteModal.resourceModel"),
+        })}
+        resourceInformationTitle={t("modelInfoView.deleteModal.infoTitle")}
         resourceInformation={[
           {
-            label: "Model Name",
-            value: modelData?.model_name || "Not Set",
+            label: t("modelInfoView.deleteModal.modelName"),
+            value: modelData?.model_name || t("modelInfoView.notSet"),
           },
           {
-            label: "LiteLLM Model Name",
-            value: modelData?.litellm_model_name || "Not Set",
+            label: t("modelInfoView.deleteModal.litellmModelName"),
+            value: modelData?.litellm_model_name || t("modelInfoView.notSet"),
           },
           {
-            label: "Provider",
-            value: modelData?.provider || "Not Set",
+            label: t("modelInfoView.deleteModal.provider"),
+            value: modelData?.provider || t("modelInfoView.notSet"),
           },
           {
-            label: "Created By",
-            value: modelData?.model_info?.created_by || "Not Set",
+            label: t("modelInfoView.deleteModal.createdBy"),
+            value: modelData?.model_info?.created_by || t("modelInfoView.notSet"),
           },
         ]}
         onCancel={() => setIsDeleteModalOpen(false)}
@@ -780,7 +806,7 @@ export default function ModelInfoView({
         <Dialog open={isCredentialModalOpen} onOpenChange={(open) => !open && setIsCredentialModalOpen(false)}>
           <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
             <DialogHeader>
-              <DialogTitle>Using Existing Credential</DialogTitle>
+              <DialogTitle>{t("modelInfoView.existingCredentialDialog.title")}</DialogTitle>
             </DialogHeader>
             <CredentialIdentity
               className="text-sm"
@@ -791,7 +817,7 @@ export default function ModelInfoView({
             />
             <DialogFooter>
               <Button variant="outline" onClick={() => setIsCredentialModalOpen(false)}>
-                Cancel
+                {t("modelInfoView.existingCredentialDialog.cancel")}
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -805,7 +831,7 @@ export default function ModelInfoView({
           accessToken={accessToken}
           modelId={modelId}
           onUpdated={() => {
-            queryClient.invalidateQueries({ queryKey: ["models", "list"] });
+            queryClient.invalidateQueries({ queryKey: modelKeys.lists() });
           }}
         />
       )}
@@ -824,7 +850,7 @@ export default function ModelInfoView({
       <Dialog open={isAutoRouterTestModalOpen} onOpenChange={(open) => !open && setIsAutoRouterTestModalOpen(false)}>
         <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[700px]">
           <DialogHeader>
-            <DialogTitle>Connection Test Results</DialogTitle>
+            <DialogTitle>{t("modelInfoView.connectionTestDialog.title")}</DialogTitle>
           </DialogHeader>
           {isAutoRouterTestModalOpen && accessToken && (
             <AutoRouterConnectionTest
@@ -840,7 +866,7 @@ export default function ModelInfoView({
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsAutoRouterTestModalOpen(false)}>
-              Close
+              {t("modelInfoView.connectionTestDialog.close")}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -1,15 +1,17 @@
-export const ERROR_CODE_OPTIONS: { label: string; value: string }[] = [
-  { label: "400 - Bad Request", value: "400" },
-  { label: "401 - Invalid Authentication", value: "401" },
-  { label: "403 - Permission Denied", value: "403" },
-  { label: "404 - Not Found", value: "404" },
-  { label: "408 - Request Timeout", value: "408" },
-  { label: "422 - Unprocessable Entity", value: "422" },
-  { label: "429 - Rate Limited", value: "429" },
-  { label: "500 - Internal Server Error", value: "500" },
-  { label: "502 - Bad Gateway", value: "502" },
-  { label: "503 - Service Unavailable", value: "503" },
-  { label: "529 - Overloaded", value: "529" },
+import type { ParseKeys } from "i18next";
+
+export const ERROR_CODE_OPTIONS: { labelKey: ParseKeys; value: string }[] = [
+  { labelKey: "logs.common.errorCodes.badRequest", value: "400" },
+  { labelKey: "logs.common.errorCodes.invalidAuthentication", value: "401" },
+  { labelKey: "logs.common.errorCodes.permissionDenied", value: "403" },
+  { labelKey: "logs.common.errorCodes.notFound", value: "404" },
+  { labelKey: "logs.common.errorCodes.requestTimeout", value: "408" },
+  { labelKey: "logs.common.errorCodes.unprocessableEntity", value: "422" },
+  { labelKey: "logs.common.errorCodes.rateLimited", value: "429" },
+  { labelKey: "logs.common.errorCodes.internalServerError", value: "500" },
+  { labelKey: "logs.common.errorCodes.badGateway", value: "502" },
+  { labelKey: "logs.common.errorCodes.serviceUnavailable", value: "503" },
+  { labelKey: "logs.common.errorCodes.overloaded", value: "529" },
 ];
 
 /** Call types that represent MCP tool invocations (shared across columns, index, drawer). */
@@ -21,29 +23,29 @@ export const AGENT_CALL_TYPES = ["asend_message"];
 /** Call types that represent Batch API operations (creation and retrieval, sync and async). */
 export const BATCH_CALL_TYPES = ["acreate_batch", "create_batch", "aretrieve_batch", "retrieve_batch"];
 
-export const SPAN_TYPE_LABELS: Record<string, string> = {
-  llm: "LLM",
-  agent: "Agent",
-  mcp: "MCP",
-  batch: "Batch",
+export const SPAN_TYPE_LABELS: Record<string, ParseKeys> = {
+  llm: "logs.common.spanTypes.llm",
+  agent: "logs.common.spanTypes.agent",
+  mcp: "logs.common.spanTypes.mcp",
+  batch: "logs.common.spanTypes.batch",
 };
 
-export const CREDENTIAL_LABELS: Record<string, string> = {
-  true: "Client OAuth token",
-  false: "Configured key",
+export const CREDENTIAL_LABELS: Record<string, ParseKeys> = {
+  true: "logs.common.credentials.clientOauthToken",
+  false: "logs.common.credentials.configuredKey",
 };
 
 export const KUBERNETES_POD_ROUTING_LABELS = {
-  round_robin: "Round robin",
-  session_affinity: "Session affinity",
-  session_affinity_retry: "Session affinity (retry)",
+  round_robin: "logs.common.podRouting.roundRobin",
+  session_affinity: "logs.common.podRouting.sessionAffinity",
+  session_affinity_retry: "logs.common.podRouting.sessionAffinityRetry",
 } as const;
 
-export const QUICK_SELECT_OPTIONS: { label: string; value: number; unit: string }[] = [
-  { label: "Last Minute", value: 1, unit: "minutes" },
-  { label: "Last 15 Minutes", value: 15, unit: "minutes" },
-  { label: "Last Hour", value: 1, unit: "hours" },
-  { label: "Last 4 Hours", value: 4, unit: "hours" },
-  { label: "Last 24 Hours", value: 24, unit: "hours" },
-  { label: "Last 7 Days", value: 7, unit: "days" },
+export const QUICK_SELECT_OPTIONS: { labelKey: ParseKeys; value: number; unit: string }[] = [
+  { labelKey: "logs.common.quickSelect.lastMinute", value: 1, unit: "minutes" },
+  { labelKey: "logs.common.quickSelect.last15Minutes", value: 15, unit: "minutes" },
+  { labelKey: "logs.common.quickSelect.lastHour", value: 1, unit: "hours" },
+  { labelKey: "logs.common.quickSelect.last4Hours", value: 4, unit: "hours" },
+  { labelKey: "logs.common.quickSelect.last24Hours", value: 24, unit: "hours" },
+  { labelKey: "logs.common.quickSelect.last7Days", value: 7, unit: "days" },
 ];

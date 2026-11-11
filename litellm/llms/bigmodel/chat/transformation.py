@@ -26,6 +26,10 @@ class BigModelChatConfig(ZAIChatConfig):
     def custom_llm_provider(self) -> str:
         return "bigmodel"
 
+    @property
+    def prompts_unsupported_json_schema(self) -> bool:
+        return False
+
     def get_openai_compatible_provider_info(self, api_base: str | None, api_key: str | None) -> tuple[str, str | None]:
         return get_bigmodel_url(api_base, "chat"), get_bigmodel_api_key(api_key)
 

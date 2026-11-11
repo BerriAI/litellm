@@ -13,6 +13,8 @@ pub(crate) enum PythonSettings {
     UrlPolicy,
     #[strum(serialize = "provider_defaults")]
     ProviderDefaults,
+    #[strum(serialize = "router_tiers")]
+    RouterTiers,
     #[strum(serialize = "secret_manager")]
     SecretManager,
     #[strum(serialize = "secret_manager_binding")]
@@ -24,9 +26,14 @@ pub(crate) struct Snapshot<'py> {
     value: Bound<'py, PyAny>,
 }
 
-impl Snapshot<'_> {
+impl<'py> Snapshot<'py> {
     pub(crate) fn read<T>(&self, spec: &FieldSpec<T>) -> Result<T, ProjectionError> {
         spec.read(&self.value, self.group.into())
+    }
+
+    pub(crate) fn attribute(&self, name: &str) -> PyResult<Option<Bound<'py, PyAny>>> {
+        let value = self.value.getattr(name)?;
+        Ok((!value.is_none()).then_some(value))
     }
 }
 

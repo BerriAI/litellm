@@ -6,14 +6,19 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+backon.workspace = true
+bytes.workspace = true
+litellm-error.workspace = true
 litellm-http.workspace = true
-litellm-model-catalog.workspace = true
+litellm-s3.workspace = true
+litellm-tracing.workspace = true
+reqwest.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["time"] }
 url.workspace = true
 
 [dev-dependencies]
-litellm-error.workspace = true
+aws-credential-types = "1.3.0"
 litellm-http = { workspace = true, features = ["test-support"] }
-reqwest.workspace = true
 rstest.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

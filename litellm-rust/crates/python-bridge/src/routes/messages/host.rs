@@ -24,34 +24,27 @@ use crate::{
         ArgumentError, optional_timeout, project_optional_fields, public_response,
         python_timeout_seconds,
     },
-    python_settings::missing_module,
+    python_settings::PythonSettings,
     routes::RequestView,
 };
 
 const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.host.routes.messages";
+const MODEL_CAPABILITIES_MODULE: &str = "litellm.rust_bridge.host.model_capabilities";
 
 fn merge_headers(
     forwarded: Option<Map<String, Value>>,
     extra_headers: Option<Map<String, Value>>,
 ) -> Option<Map<String, Value>> {
-    let merged: Map<String, Value> = forwarded
-        .into_iter()
-        .flatten()
-        .chain(extra_headers.into_iter().flatten())
-        .collect();
+    let merged = litellm_inference_messages::merge_messages_header_sources(
+        forwarded.into_iter().chain(extra_headers),
+    );
     (!merged.is_empty()).then_some(merged)
 }
 
-/// Reads `litellm.<name>`, the module global a param spec names, the way
-/// `VertexBase.get_vertex_ai_project` reads `litellm.vertex_project`.
 fn module_global<'py>(py: Python<'py>, name: &str) -> PyResult<Option<Bound<'py, PyAny>>> {
-    let module = match py.import("litellm") {
-        Ok(module) => module,
-        Err(error) if missing_module(py, &error, "litellm")? => return Ok(None),
-        Err(error) => return Err(error),
-    };
-    let value = module.getattr(name)?;
-    Ok((!value.is_none()).then_some(value))
+    PythonSettings::ProviderDefaults
+        .read_or_unset(py)?
+        .map_or(Ok(None), |defaults| defaults.attribute(name))
 }
 
 /// The caller's litellm params, read from the kwargs by the names the typed params declare,
@@ -107,10 +100,19 @@ impl MessagesPythonHost {
             .map(|value| python_timeout_seconds(py, value.unbind()))
             .transpose()?
             .flatten();
-        let custom_llm_provider = string("custom_llm_provider")?;
-        let shaping = self.shaping(py, &model, custom_llm_provider.as_deref(), arguments)?;
         let api_key = string("api_key")?;
         let api_base = string("api_base")?;
+        // Python's handler resolves a bare model name (`claude-sonnet-4-5`) through
+        // `get_llm_provider`'s model lists, which the native prefix lookup does not carry.
+        let custom_llm_provider = match string("custom_llm_provider")? {
+            Some(provider) => Some(provider),
+            None => py
+                .import(ROUTE_HOST_MODULE)?
+                .getattr("inferred_provider")?
+                .call1((&model, api_base.as_deref()))?
+                .extract()?,
+        };
+        let shaping = self.shaping(py, &model, custom_llm_provider.as_deref(), arguments)?;
         let extra_headers = self.merged_headers(py, arguments)?;
         let provider_specific_header = self.provider_specific_header(py, arguments)?;
         let litellm_params = project_litellm_params(argument, |name| module_global(py, name))?;
@@ -166,7 +168,7 @@ impl MessagesPythonHost {
     ) -> PyResult<MessagesShaping> {
         let module = py.import(ROUTE_HOST_MODULE)?;
         let capabilities: MessagesModelCapabilities = from_py(
-            &py.import("litellm.rust_bridge.host.model_capabilities")?
+            &py.import(MODEL_CAPABILITIES_MODULE)?
                 .getattr("anthropic_model_capabilities")?
                 .call1((model, custom_llm_provider))?,
         )?;
@@ -232,9 +234,13 @@ impl PythonBinding for MessagesPythonHost {
     fn encode_response(
         &mut self,
         py: Python<'_>,
-        response: Box<litellm_llms_types::formats::messages::MessagesResponse>,
+        response: litellm_inference_messages::MessagesBody,
     ) -> PyResult<Py<PyAny>> {
-        public_response(py, ROUTE_HOST_MODULE, response.as_ref())
+        public_response(py, ROUTE_HOST_MODULE, &response)
+    }
+
+    fn deliver_response(&mut self, py: Python<'_>, response: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.cache.store_response(py, response)
     }
 
     fn encode_stream_head(

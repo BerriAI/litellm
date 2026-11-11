@@ -4,23 +4,19 @@
 
 LiteLLM maintains a security announcements mailing list that is open to anyone. Subscribers receive advance notice, typically one to two days, before we release a fix for a particularly severe vulnerability or for any vulnerability exploitable by an unauthenticated attacker. This notice is provided on a best-effort basis
 
-To subscribe, visit [https://berriai.github.io/security-announce-signup/](https://berriai.github.io/security-announce-signup/)
+To subscribe, visit [https://security.litellm.ai/mailinglist/](https://security.litellm.ai/mailinglist/)
 
 ## Security Vulnerability Reporting Guidelines
 
-> [!WARNING]
-> Reports that do not include a video demonstrating the exploit will be closed without review. See [Reproduction Video Requirement](#reproduction-video-requirement) below.
 
-We value the security community's role in protecting our systems and users. To report a security vulnerability:
+We value the security community's role in protecting our systems and users.
+To report a security vulnerability, please submit a report through our vulnerability disclosure form:
 
-- File a private vulnerability report on GitHub: [Report a vulnerability](https://github.com/BerriAI/litellm/security/advisories/new)
-- Include steps to reproduce the issue
-- Include a video or screen recording demonstrating the full exploit against a live LiteLLM instance, from initial access through to impact. A terminal recording (for example asciinema) is fine for CLI-only exploits.
-- Provide any relevant additional information
+[LiteLLM VDP](https://security.litellm.ai/vdp/)
 
-### Reproduction Video Requirement
+These reports are submitted to HackerOne and are triaged there, though no account is needed.
 
-A video demonstrating the exploit is required for every report. AI tools have made it easy to produce plausible-sounding vulnerability reports that do not reproduce in practice, and triaging them takes time away from real issues. Reports submitted without a working reproduction video will be closed without review. If you add a video to a closed report, we will reopen and triage it.
+**Please do not submit vulnerabilities as draft GHSAs. As of 2026-11-11 new GHSA submissions will be closed.**
 
 ### Vulnerability Categories
 
@@ -55,7 +51,9 @@ To qualify for a bounty, reports must include clear reproduction steps, a reprod
 
 ### Known Non-Issues
 
-- Attacks that require a misconfiguration on setup (e.g not setting a `master_key` on the proxy configuration), are **explicitly not in scope** and are not considered vulnerable.
+- **Misconfigurations:** attacks that require misconfiguration of the application (e.g. not setting a `master_key` on the proxy configuration).
+- **Insecure configurations:** attacks that require deliberate configuration changes to disable security functionality. (e.g. IDOR on response IDs requiring configuration of `disable_responses_id_security` to `true`)
+- **Social engineering:** attacks that rely on social engineering as their primary mechanism (e.g. convincing a user's agent to install a malicious package we did not publish).
 
 ## Security Measures
 

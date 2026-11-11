@@ -36,6 +36,7 @@ const baseMetrics = (overrides: Partial<SpendMetrics>): components["schemas"]["S
   prompt_caching_savings_spend: 0,
   gateway_injected_caching_savings_spend: 0,
   autorouter_savings_spend: 0,
+  guardrail_spend: 0,
   total_response_time_ms: 0,
   timed_requests: 0,
   ...overrides,

@@ -1,6 +1,7 @@
 import { useTerminology } from "@/contexts/TerminologyContext";
 import React, { useState, useEffect } from "react";
 import { Info, Plus } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { getAgentsList, deleteAgentCall } from "@/components/networking";
 import AddAgentForm from "./add_agent_form";
 import { isAdminRole } from "@/utils/roles";
@@ -33,6 +34,7 @@ interface AgentsResponse {
 
 const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams }) => {
   const term = useTerminology();
+  const { t } = useTranslation();
   const [agentsList, setAgentsList] = useState<Agent[]>([]);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -122,11 +124,11 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
     setIsDeleting(true);
     try {
       await deleteAgentCall(accessToken, agentToDelete.id);
-      toast.success(`Agent "${agentToDelete.name}" deleted successfully`);
+      toast.success(t("agents.panel.toasts.deleted", { name: agentToDelete.name }));
       await refetchAgents(healthCheckEnabled);
     } catch (error) {
       console.error("Error deleting agent:", error);
-      toast.fromError("Failed to delete agent");
+      toast.fromError(t("agents.panel.toasts.deleteFailed"));
     } finally {
       setIsDeleting(false);
       setAgentToDelete(null);
@@ -140,25 +142,18 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
   return (
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
       <div className="flex flex-col gap-2 mb-4">
-        <h1 className="text-2xl font-bold">Agents</h1>
-        <p className="text-sm text-muted-foreground">
-          {term(
-            "List of A2A-spec agents that are available to be used in your organization. Go to AI Hub, to make agents public.",
-          )}
-        </p>
+        <h1 className="text-2xl font-bold">{t("agents.panel.title")}</h1>
+        <p className="text-sm text-muted-foreground">{term(t("agents.panel.description"))}</p>
         <Alert className="mb-3">
           <Info />
-          <AlertTitle>How do agents authenticate?</AlertTitle>
-          <AlertDescription>
-            Agents can authenticate with a virtual key or a trusted identity provider using JWT. Configure an identity
-            binding when adding or editing an agent. JWT authentication does not require a virtual key.
-          </AlertDescription>
+          <AlertTitle>{t("agents.panel.authAlert.title")}</AlertTitle>
+          <AlertDescription>{t("agents.panel.authAlert.description")}</AlertDescription>
         </Alert>
         {isAdmin && (
           <div className="mt-2 flex items-center gap-4">
             <Button onClick={handleAddAgent} disabled={!accessToken}>
               <Plus />
-              Add New Agent
+              {t("agents.panel.addAgent")}
             </Button>
           </div>
         )}
@@ -201,15 +196,15 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
         >
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Delete Agent</AlertDialogTitle>
+              <AlertDialogTitle>{t("agents.panel.deleteDialog.title")}</AlertDialogTitle>
               <AlertDialogDescription>
-                Are you sure you want to delete agent: {agentToDelete.name}? This action cannot be undone.
+                {t("agents.panel.deleteDialog.description", { name: agentToDelete.name })}
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogCancel>{t("agents.panel.deleteDialog.cancel")}</AlertDialogCancel>
               <Button variant="destructive" onClick={handleDeleteConfirm} disabled={isDeleting}>
-                Delete
+                {t("agents.panel.deleteDialog.confirm")}
               </Button>
             </AlertDialogFooter>
           </AlertDialogContent>

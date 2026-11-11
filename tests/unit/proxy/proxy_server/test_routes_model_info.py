@@ -12,23 +12,24 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+import respx
 from fastapi.testclient import TestClient
 
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy import proxy_server
-from litellm.proxy._types import LiteLLM_ProxyModelTable
-from litellm.utils import _invalidate_model_cost_lowercase_map
+from litellm.proxy._types import LiteLLM_ProxyModelTable, UserAPIKeyAuth
+from litellm.litellm_core_utils.model_cost_table import publish
 
-from .conftest import normalize  # type: ignore[import-not-found]
+from .conftest import normalize, route_entry_points_to_stubs  # type: ignore[import-not-found]
 
 
 @pytest.mark.parametrize(
@@ -75,7 +76,7 @@ async def test_discovery_preserves_model_info_fallbacks(
             "fallback-deployment": {"litellm_provider": "openai", "mode": "chat"},
         },
     )
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     monkeypatch.setattr(proxy_server, "llm_router", router)
     handler: Final = AsyncHTTPHandler()
     await handler.client.aclose()
@@ -116,7 +117,7 @@ async def test_discovery_preserves_model_info_fallbacks(
         assert info["input_cost_per_token"] == builtin["input_cost_per_token"]
         assert info["output_cost_per_token"] == builtin["output_cost_per_token"]
         assert info["mode"] is None
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 async def test_upstream_limits_reach_model_info_routes(
@@ -162,7 +163,7 @@ async def test_upstream_limits_reach_model_info_routes(
             group_response: Final = client.get("/model_group/info")
             assert group_response.status_code == 200, group_response.text
             assert group_response.json()["data"][0]["max_input_tokens"] == 4096
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +173,7 @@ async def test_upstream_limits_reach_model_info_routes(
 
 @pytest.fixture
 def empty_router(monkeypatch):
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.model_list = []
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "llm_model_list", [])
@@ -306,7 +307,7 @@ def configured_router(monkeypatch):
             "model_info": {"id": "abc", "db_model": False},
         }
     )
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_deployment = MagicMock(return_value=deployment)
     router.get_model_names = MagicMock(return_value=["gpt-4"])
     router.get_model_access_groups = MagicMock(return_value={})
@@ -314,7 +315,7 @@ def configured_router(monkeypatch):
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "llm_model_list", [{"model_name": "gpt-4"}])
     monkeypatch.setattr(proxy_server, "user_model", None)
-    monkeypatch.setattr(proxy_server, "_get_proxy_model_info", lambda model: model)
+    monkeypatch.setattr(proxy_server, "_get_proxy_model_info", lambda model, caller_aliases: model)
     yield router
 
 
@@ -422,7 +423,7 @@ def test_v2_model_info_reports_pricing_overrides_to_the_admin_ui(client, auth_as
             "model_info": {"id": "dep-synced", "db_model": True},
         },
     ]
-    router: Final = MagicMock()
+    router: Final = route_entry_points_to_stubs(MagicMock())
     router.model_list = model_list
     router.get_discovered_model_info = MagicMock(return_value={})
     monkeypatch.setattr(proxy_server, "llm_router", router)
@@ -489,6 +490,51 @@ def test_model_info_reports_null_cost_for_unpriced_deployment_and_zero_for_decla
     assert input_cost > 0 and output_cost > 0
 
 
+@pytest.mark.parametrize(
+    ("deployment_model_info", "native"),
+    [
+        ({}, True),
+        ({"supports_bedrock_native_structured_output": False}, False),
+        ({"supports_native_structured_output": True, "supports_bedrock_native_structured_output": False}, True),
+    ],
+    ids=["native-by-default", "bedrock-opt-out", "explicit-generic-flag"],
+)
+def test_model_info_reports_a_deployment_bedrock_native_output_opt_out(
+    local_model_cost_map: None, deployment_model_info: dict[str, object], native: bool
+) -> None:
+    info: Final = proxy_server._enrich_model_info_with_litellm_data(
+        {
+            "model_name": "sonnet",
+            "litellm_params": {"model": "bedrock/us.anthropic.claude-sonnet-5"},
+            "model_info": {"id": "sonnet-deployment", **deployment_model_info},
+        }
+    )["model_info"]
+
+    assert info["supports_native_structured_output"] is native
+
+
+@pytest.mark.parametrize(
+    ("model", "by_default"),
+    [("bedrock/us.anthropic.claude-opus-4-7", True), ("bedrock/us.anthropic.claude-sonnet-5", False)],
+    ids=["set-on-a-model-the-cost-map-leaves-on-the-json-tool", "unset-on-a-model-the-cost-map-makes-native"],
+)
+def test_model_info_ignores_a_deployment_by_default_key_the_router_reads_only_from_the_cost_map(
+    local_model_cost_map: None, model: str, by_default: bool
+) -> None:
+    def reported_native(deployment_model_info: dict[str, object]) -> object:
+        return proxy_server._enrich_model_info_with_litellm_data(
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": model},
+                "model_info": {"id": "claude-deployment", **deployment_model_info},
+            }
+        )["model_info"]["supports_native_structured_output"]
+
+    assert reported_native({"supports_bedrock_native_structured_output_by_default": by_default}) is reported_native(
+        {}
+    )
+
+
 def test_model_info_id_lookup_reports_the_same_cost_as_the_list(
     client: TestClient,
     auth_as: Callable[[], AbstractContextManager[object]],
@@ -536,7 +582,12 @@ def test_model_info_id_lookup_reports_the_same_cost_as_the_list(
         "vllm-priced-id": (declared["input_cost_per_token"], declared["output_cost_per_token"]),
     }
     assert by_id == listed
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
+
+
+def _discoverable_models(monkeypatch: pytest.MonkeyPatch, models: Mapping[str, list[str]]) -> None:
+    for provider, provider_models in models.items():
+        monkeypatch.setitem(litellm.models_by_provider, provider, provider_models)
 
 
 async def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monkeypatch):
@@ -550,15 +601,12 @@ async def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monke
 
     deployment = {
         "model_name": "*",
-        "litellm_params": {"model": "openai/*"},
+        "litellm_params": {"model": "openai/*", "api_key": "sk-star"},
     }
-    router = MagicMock()
-    router.get_model_access_groups = MagicMock(return_value={})
-    router.get_model_names = MagicMock(return_value=["*"])
-    router.get_model_list = MagicMock(return_value=[deployment])
+    router = litellm.Router(model_list=[deployment])
     monkeypatch.setattr(model_checks, "get_provider_models", fake_get_provider_models)
 
-    expanded_deployments = proxy_server.expand_wildcard_deployments_for_model_info([deployment])
+    expanded_deployments = proxy_server.expand_wildcard_deployments_for_model_info(router.get_model_list(), router)
     allowed_model_names = await proxy_server._get_v1_model_info_allowed_model_names_with_access_groups(
         user_api_key_dict=UserAPIKeyAuth(
             api_key="sk-test",
@@ -575,7 +623,890 @@ async def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monke
         allowed_model_names=allowed_model_names,
     )
 
-    assert [model["model_name"] for model in result] == ["openai/gpt-4o"]
+    assert [(model["model_name"], model["litellm_params"]["model"]) for model in result] == [("gpt-4o", "openai/gpt-4o")]
+    assert router.registry().names("gpt-4o", kind="wildcard") == frozenset({"openai/gpt-4o"})
+
+
+@pytest.mark.parametrize(
+    ("key_models", "expected_names", "expected_listings"),
+    [(["qwen-open"], ["qwen-open"], 0), (["hosted_vllm/*"], ["hosted_vllm/qwen2.5"], 1)],
+    ids=["key-without-the-wildcard", "key-granted-the-wildcard"],
+)
+def test_v1_model_info_asks_a_wildcard_server_only_for_keys_that_can_call_it(
+    client, auth_as, monkeypatch, request, key_models, expected_names, expected_listings
+):
+    from litellm.proxy._types import LitellmUserRoles
+
+    wildcard_server: Final = f"http://vllm-{request.node.callspec.id}.test:8000/v1"
+    other_alias_server: Final = f"http://vllm-secure-{request.node.callspec.id}.test:8000/v1"
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "qwen-open",
+                "litellm_params": {"model": "hosted_vllm/qwen2.5", "api_base": "http://vllm-open.test:8000/v1"},
+            },
+            {"model_name": "hosted_vllm/*", "litellm_params": {"model": "hosted_vllm/*", "api_base": wildcard_server}},
+            {
+                "model_name": "vllm-secure/*",
+                "litellm_params": {"model": "hosted_vllm/*", "api_base": other_alias_server},
+            },
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+
+    with respx.mock(assert_all_called=False) as upstream:
+        listing: Final = upstream.get(f"{wildcard_server}/models").mock(
+            return_value=httpx.Response(200, json={"data": [{"id": "qwen2.5"}]})
+        )
+        other_alias_listing: Final = upstream.get(f"{other_alias_server}/models").mock(
+            return_value=httpx.Response(200, json={"data": [{"id": "qwen2.5"}]})
+        )
+        with auth_as(role=LitellmUserRoles.INTERNAL_USER, models=key_models):
+            response: Final = client.get("/v1/model/info")
+
+    assert response.status_code == 200, response.text
+    assert (
+        [model["model_name"] for model in response.json()["data"]],
+        listing.call_count,
+        other_alias_listing.call_count,
+    ) == (expected_names, expected_listings, 0)
+
+
+def test_model_info_prices_expanded_wildcard_rows_as_the_model_their_calls_route_to(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    local_model_cost_map: None,
+) -> None:
+    """A catch-all over Fireworks lists ``acme-chat``, which also names a DeepSeek entry, and a
+    prefixed OpenAI wildcard lists ``my-openai/gpt-acme``, which names no entry at all. Each row must
+    show the provider and price its calls are billed at."""
+
+    catalog: Final = {
+        "fireworks_ai/accounts/fireworks/models/acme-chat": {
+            "input_cost_per_token": 1e-07,
+            "output_cost_per_token": 2e-07,
+            "litellm_provider": "fireworks_ai",
+            "mode": "chat",
+        },
+        "acme-chat": {
+            "input_cost_per_token": 9e-07,
+            "output_cost_per_token": 9e-06,
+            "litellm_provider": "deepseek",
+            "mode": "chat",
+        },
+        "gpt-acme": {
+            "input_cost_per_token": 3e-07,
+            "output_cost_per_token": 4e-07,
+            "litellm_provider": "openai",
+            "mode": "chat",
+        },
+    }
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, **catalog})
+    publish(litellm.model_cost)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "*",
+                "litellm_params": {"model": "fireworks_ai/accounts/fireworks/models/*", "api_key": "x"},
+                "model_info": {"id": "fireworks-wildcard"},
+            },
+            {
+                "model_name": "my-openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "x"},
+                "model_info": {"id": "openai-wildcard"},
+            },
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    _discoverable_models(
+        monkeypatch,
+        {
+            "fireworks_ai": ["fireworks_ai/accounts/fireworks/models/acme-chat"],
+            "openai": ["gpt-acme"],
+        },
+    )
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+
+    with auth_as():
+        response: Final = client.get("/model/info")
+
+    assert response.status_code == 200, response.text
+    listed: Final = {
+        row["model_name"]: (
+            row["litellm_params"]["model"],
+            row["model_info"].get("litellm_provider"),
+            row["model_info"].get("input_cost_per_token"),
+            row["model_info"].get("output_cost_per_token"),
+        )
+        for row in response.json()["data"]
+    }
+    assert listed == {
+        "acme-chat": ("fireworks_ai/accounts/fireworks/models/acme-chat", "fireworks_ai", 1e-07, 2e-07),
+        "my-openai/gpt-acme": ("openai/gpt-acme", "openai", 3e-07, 4e-07),
+    }
+    calls: Final = {
+        model_name: router.completion(
+            model=model_name, messages=[{"role": "user", "content": "hi"}], mock_response="hello there"
+        )
+        for model_name in listed
+    }
+    assert {model_name: call._hidden_params["response_cost"] for model_name, call in calls.items()} == pytest.approx(
+        {
+            model_name: listed[model_name][2] * call.usage.prompt_tokens
+            + listed[model_name][3] * call.usage.completion_tokens
+            for model_name, call in calls.items()
+        }
+    )
+    publish(litellm.model_cost)
+
+
+def test_model_info_prices_a_wildcard_row_as_the_other_deployment_its_calls_reach(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    local_model_cost_map: None,
+) -> None:
+    """``acme-pro`` is an alias of the ``acme-lite`` deployment and ``acme-max`` is a routing group over it, so
+    calls to those names never reach the catch-all, which still lists them. Such a row shows the provider and
+    price of the deployment its calls reach, even where another provider's model goes by the listed name."""
+
+    catalog: Final = {
+        "fireworks_ai/accounts/fireworks/models/acme-lite": {
+            "input_cost_per_token": 5e-07,
+            "output_cost_per_token": 6e-07,
+            "litellm_provider": "fireworks_ai",
+            "mode": "chat",
+        },
+        "fireworks_ai/accounts/fireworks/models/acme-pro": {
+            "input_cost_per_token": 1.5e-07,
+            "output_cost_per_token": 2.5e-07,
+            "litellm_provider": "fireworks_ai",
+            "mode": "chat",
+        },
+        "fireworks_ai/accounts/fireworks/models/acme-max": {
+            "input_cost_per_token": 3.5e-07,
+            "output_cost_per_token": 4.5e-07,
+            "litellm_provider": "fireworks_ai",
+            "mode": "chat",
+        },
+        "deepseek/acme-lite": {
+            "input_cost_per_token": 7e-07,
+            "output_cost_per_token": 8e-07,
+            "litellm_provider": "deepseek",
+            "mode": "chat",
+        },
+        "acme-pro": {
+            "input_cost_per_token": 9e-07,
+            "output_cost_per_token": 1e-06,
+            "litellm_provider": "deepseek",
+            "mode": "chat",
+        },
+        "acme-max": {
+            "input_cost_per_token": 1.1e-06,
+            "output_cost_per_token": 1.2e-06,
+            "litellm_provider": "deepseek",
+            "mode": "chat",
+        },
+    }
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, **catalog})
+    publish(litellm.model_cost)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "*",
+                "litellm_params": {"model": "fireworks_ai/accounts/fireworks/models/*", "api_key": "x"},
+                "model_info": {"id": "fireworks-wildcard"},
+            },
+            {
+                "model_name": "acme-lite",
+                "litellm_params": {"model": "deepseek/acme-lite", "api_key": "x"},
+                "model_info": {"id": "deepseek-acme-lite"},
+            },
+        ],
+        model_group_alias={"acme-pro": "acme-lite"},
+        routing_groups=[{"group_name": "acme-max", "models": ["acme-lite"], "routing_strategy": "simple-shuffle"}],
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    _discoverable_models(
+        monkeypatch,
+        {
+            "fireworks_ai": [
+                "fireworks_ai/accounts/fireworks/models/acme-lite",
+                "fireworks_ai/accounts/fireworks/models/acme-pro",
+                "fireworks_ai/accounts/fireworks/models/acme-max",
+            ],
+        },
+    )
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+
+    with auth_as():
+        response: Final = client.get("/model/info")
+
+    assert response.status_code == 200, response.text
+    listed: Final = {
+        (row["model_info"]["id"], row["model_name"]): (
+            row["model_info"].get("input_cost_per_token"),
+            row["model_info"].get("output_cost_per_token"),
+        )
+        for row in response.json()["data"]
+        if "*" not in row["model_name"]
+    }
+    assert sorted(listed) == [
+        ("deepseek-acme-lite", "acme-lite"),
+        ("deepseek-acme-lite", "acme-pro"),
+        ("fireworks-wildcard", "acme-max"),
+        ("fireworks-wildcard", "acme-pro"),
+    ]
+    shown_models: Final = {
+        (row["model_info"]["id"], row["model_name"]): (
+            row["model_info"].get("litellm_provider"),
+            row["model_info"].get("key"),
+        )
+        for row in response.json()["data"]
+        if "*" not in row["model_name"] and row["model_info"]["id"] != "deepseek-acme-lite"
+    }
+    assert {provider for provider, _ in shown_models.values()} == {"deepseek"}
+    assert listed[("deepseek-acme-lite", "acme-lite")] == (7e-07, 8e-07)
+    assert {key: prices for key, prices in listed.items() if key[0] != "deepseek-acme-lite"} == {
+        ("fireworks-wildcard", "acme-max"): (7e-07, 8e-07),
+        ("fireworks-wildcard", "acme-pro"): (7e-07, 8e-07),
+    }
+    calls: Final = {
+        model_name: router.completion(
+            model=model_name, messages=[{"role": "user", "content": "hi"}], mock_response="hello there"
+        )
+        for _, model_name in listed
+    }
+    assert {key: calls[key[1]]._hidden_params["response_cost"] for key in listed} == pytest.approx(
+        {
+            key: input_cost * calls[key[1]].usage.prompt_tokens + output_cost * calls[key[1]].usage.completion_tokens
+            for key, (input_cost, output_cost) in listed.items()
+        }
+    )
+    publish(litellm.model_cost)
+
+
+def _catch_all_and_shadowed_wildcard_router(monkeypatch: pytest.MonkeyPatch) -> litellm.Router:
+
+    catalog: Final = {
+        "gpt-5.6-acme": {
+            "input_cost_per_token": 3e-07,
+            "output_cost_per_token": 4e-07,
+            "litellm_provider": "openai",
+            "mode": "chat",
+        },
+        "fireworks_ai/accounts/fireworks/models/acme-pro": {
+            "input_cost_per_token": 1.5e-07,
+            "output_cost_per_token": 2.5e-07,
+            "litellm_provider": "fireworks_ai",
+            "mode": "chat",
+        },
+        "fireworks_ai/accounts/fireworks/models/acme-max": {
+            "input_cost_per_token": 9e-07,
+            "output_cost_per_token": 9.5e-07,
+            "litellm_provider": "fireworks_ai",
+            "mode": "chat",
+        },
+        "fireworks_ai/accounts/fireworks/models/acme-mini": {
+            "input_cost_per_token": 5e-08,
+            "output_cost_per_token": 6e-08,
+            "litellm_provider": "fireworks_ai",
+            "mode": "chat",
+        },
+        "deepseek/acme-lite": {
+            "input_cost_per_token": 7e-07,
+            "output_cost_per_token": 8e-07,
+            "litellm_provider": "deepseek",
+            "mode": "chat",
+        },
+    }
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, **catalog})
+    publish(litellm.model_cost)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "*",
+                "litellm_params": {"model": "openai/*", "api_key": "x"},
+                "model_info": {"id": "openai-catch-all"},
+            },
+            {
+                "model_name": "my-fw/*",
+                "litellm_params": {"model": "fireworks_ai/accounts/fireworks/models/*", "api_key": "x"},
+                "model_info": {"id": "fireworks-wildcard"},
+            },
+            {
+                "model_name": "acme-lite",
+                "litellm_params": {"model": "deepseek/acme-lite", "api_key": "x"},
+                "model_info": {"id": "deepseek-acme-lite"},
+            },
+        ],
+        model_group_alias={"my-fw/acme-pro": "acme-lite", "my-fw/acme-max": "my-fw/acme-mini"},
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    _discoverable_models(
+        monkeypatch,
+        {
+            "openai": ["gpt-5.6-acme"],
+            "fireworks_ai": [
+                "fireworks_ai/accounts/fireworks/models/acme-pro",
+                "fireworks_ai/accounts/fireworks/models/acme-max",
+                "fireworks_ai/accounts/fireworks/models/acme-mini",
+            ],
+        },
+    )
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    return router
+
+
+def _expanded_wildcard_rows(client: TestClient) -> dict[str, dict[str, object]]:
+    response: Final = client.get("/model/info")
+    assert response.status_code == 200, response.text
+    return {
+        row["model_name"]: row
+        for row in response.json()["data"]
+        if row["model_info"]["id"] != "deepseek-acme-lite" and "*" not in row["model_name"]
+    }
+
+
+def test_model_info_prices_a_wildcard_row_aliased_to_a_sibling_name_as_the_alias_target(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    local_model_cost_map: None,
+) -> None:
+    """An alias from ``my-fw/acme-max`` to ``my-fw/acme-mini`` still reaches the same wildcard, but calls run
+    ``acme-mini``, so the ``my-fw/acme-max`` row must show the price those calls are billed at."""
+    router: Final = _catch_all_and_shadowed_wildcard_router(monkeypatch)
+
+    with auth_as():
+        rows: Final = _expanded_wildcard_rows(client)
+
+    shown: Final = rows["my-fw/acme-max"]["model_info"]
+    call: Final = router.completion(
+        model="my-fw/acme-max", messages=[{"role": "user", "content": "hi"}], mock_response="hello there"
+    )
+    assert call._hidden_params["response_cost"] == pytest.approx(
+        shown["input_cost_per_token"] * call.usage.prompt_tokens
+        + shown["output_cost_per_token"] * call.usage.completion_tokens
+    )
+    publish(litellm.model_cost)
+
+
+def test_model_info_prices_a_wildcard_row_the_proxy_renames_as_the_model_its_calls_reach(
+    client: TestClient,
+    auth_as: Callable[..., AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    local_model_cost_map: None,
+) -> None:
+    """The proxy renames a requested model through the global ``model_alias_map``, the key's ``aliases`` and the
+    key's ``router_settings.model_group_alias`` before the router sees it. A row renamed to another deployment
+    shows that deployment's price and provider, and a row renamed to a sibling name of its own wildcard shows
+    that sibling's price."""
+    _catch_all_and_shadowed_wildcard_router(monkeypatch)
+    monkeypatch.setattr(litellm, "model_alias_map", {"my-fw/acme-max": "acme-lite"})
+
+    with auth_as(
+        aliases={"gpt-5.6-acme": "acme-lite"},
+        router_settings={"model_group_alias": {"my-fw/acme-pro": "my-fw/acme-mini"}},
+    ):
+        rows: Final = _expanded_wildcard_rows(client)
+
+    shown: Final = {
+        name: (
+            row["model_info"].get("input_cost_per_token"),
+            row["model_info"].get("output_cost_per_token"),
+            row["model_info"].get("litellm_provider"),
+        )
+        for name, row in rows.items()
+    }
+    assert shown == {
+        "my-fw/acme-max": (7e-07, 8e-07, "deepseek"),
+        "my-fw/acme-mini": (5e-08, 6e-08, "fireworks_ai"),
+        "my-fw/acme-pro": (5e-08, 6e-08, "fireworks_ai"),
+        "gpt-5.6-acme": (7e-07, 8e-07, "deepseek"),
+    }
+    publish(litellm.model_cost)
+
+
+def test_model_info_prices_a_wildcard_row_whose_team_alias_targets_a_deleted_team_deployment(
+    client: TestClient,
+    auth_as: Callable[..., AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    local_model_cost_map: None,
+) -> None:
+    """Calls skip a team alias whose target team deployment was deleted, so the row that alias names keeps the
+    price its calls through the wildcard are billed at, while the team's live aliases still apply."""
+    from litellm.proxy.litellm_pre_call_utils import _update_model_if_team_alias_exists
+
+    _catch_all_and_shadowed_wildcard_router(monkeypatch)
+    caller: Final = {
+        "team_id": "team-a",
+        "team_model_aliases": {"my-fw/acme-mini": "model_name_team-a_deleted", "gpt-5.6-acme": "my-fw/acme-mini"},
+    }
+
+    with auth_as(**caller):
+        rows: Final = _expanded_wildcard_rows(client)
+
+    stale_request: Final = {"model": "my-fw/acme-mini"}
+    live_request: Final = {"model": "gpt-5.6-acme"}
+    _update_model_if_team_alias_exists(data=stale_request, user_api_key_dict=UserAPIKeyAuth(**caller))
+    _update_model_if_team_alias_exists(data=live_request, user_api_key_dict=UserAPIKeyAuth(**caller))
+    shown: Final = rows["my-fw/acme-mini"]["model_info"]
+    live_alias_row: Final = rows["gpt-5.6-acme"]["model_info"]
+    assert (stale_request["model"], live_request["model"]) == ("my-fw/acme-mini", "my-fw/acme-mini")
+    assert (
+        shown.get("input_cost_per_token"),
+        shown.get("output_cost_per_token"),
+        shown.get("litellm_provider"),
+    ) == (5e-08, 6e-08, "fireworks_ai")
+    assert (live_alias_row.get("input_cost_per_token"), live_alias_row.get("litellm_provider")) == (
+        5e-08,
+        "fireworks_ai",
+    )
+    publish(litellm.model_cost)
+
+
+def _fireworks_wildcard_rows(client: TestClient) -> dict[str, dict[str, object]]:
+    response: Final = client.get("/model/info")
+    assert response.status_code == 200, response.text
+    return {
+        row["model_name"]: row["model_info"]
+        for row in response.json()["data"]
+        if row["model_info"]["id"] == "fireworks-wildcard" and "*" not in row["model_name"]
+    }
+
+
+_FIREWORKS_WILDCARD: Final = {
+    "model_name": "my-fw/*",
+    "litellm_params": {"model": "fireworks_ai/accounts/fireworks/models/*", "api_key": "x"},
+    "model_info": {"id": "fireworks-wildcard"},
+}
+
+
+def test_model_info_prices_a_wildcard_row_as_the_deployment_the_callers_team_publishes_under_its_name(
+    client: TestClient,
+    auth_as: Callable[..., AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    local_model_cost_map: None,
+) -> None:
+    """Team ``team-a`` publishes ``my-fw/acme-mini`` on its own DeepSeek deployment, so a team-a key's calls to that
+    name skip the global wildcard and the wildcard's row shows that key the DeepSeek price, while a key outside
+    the team still sees the Fireworks price its calls bill."""
+    _catch_all_and_shadowed_wildcard_router(monkeypatch)
+    router: Final = litellm.Router(
+        model_list=[
+            _FIREWORKS_WILDCARD,
+            {
+                "model_name": "model_name_team-a_acme-mini",
+                "litellm_params": {"model": "deepseek/acme-lite", "api_key": "x"},
+                "model_info": {"id": "team-deepseek", "team_id": "team-a", "team_public_model_name": "my-fw/acme-mini"},
+            },
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    _discoverable_models(monkeypatch, {"fireworks_ai": ["fireworks_ai/accounts/fireworks/models/acme-mini"]})
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
+
+    with auth_as(team_id="team-a"):
+        team_rows: Final = _fireworks_wildcard_rows(client)
+    with auth_as():
+        other_rows: Final = _fireworks_wildcard_rows(client)
+
+    assert team_rows["my-fw/acme-mini"].get("input_cost_per_token") == 7e-07
+    assert other_rows["my-fw/acme-mini"].get("input_cost_per_token") == 5e-08
+    publish(litellm.model_cost)
+
+
+def _call_cost_at_row_rates(call: litellm.ModelResponse, row: Mapping[str, float]) -> float:
+    return (
+        row["input_cost_per_token"] * call.usage.prompt_tokens
+        + row["output_cost_per_token"] * call.usage.completion_tokens
+    )
+
+
+@pytest.mark.parametrize(
+    ("wildcards", "row_ids"),
+    [
+        pytest.param(
+            (("gpt-*", "openai/gpt-*", "narrow"), ("*", "openai/*", "catch-all")),
+            {"narrow", "catch-all"},
+            id="catch_all_row_a_narrower_wildcard_serves",
+        ),
+        pytest.param(
+            (("oa/*", "openai/*", "wide"), ("oa/gpt-*", "openai/gpt-*", "narrow")),
+            {"wide", "narrow"},
+            id="overlapping_wildcards",
+        ),
+    ],
+)
+def test_model_info_keeps_the_price_and_limits_of_a_row_another_wildcard_serves(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    local_model_cost_map: None,
+    wildcards: tuple[tuple[str, str, str], ...],
+    row_ids: set[str],
+) -> None:
+    """Two wildcards can list one name while calls reach only one of them. Each row keeps the price and limits of
+    the model those calls bill, so a client that reads the first row by name still gets them."""
+    entry: Final = {
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 4e-07,
+        "max_input_tokens": 4321,
+        "litellm_provider": "openai",
+        "mode": "chat",
+    }
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, "gpt-5.6-acme": entry})
+    publish(litellm.model_cost)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": model_name,
+                "litellm_params": {"model": litellm_model, "api_key": "x"},
+                "model_info": {"id": model_id},
+            }
+            for model_name, litellm_model, model_id in wildcards
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    _discoverable_models(monkeypatch, {"openai": ["gpt-5.6-acme"]})
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+
+    with auth_as():
+        response: Final = client.get("/model/info")
+
+    assert response.status_code == 200, response.text
+    rows: Final = [row for row in response.json()["data"] if "*" not in row["model_name"]]
+    assert {row["model_info"]["id"] for row in rows} == row_ids
+    assert {(row["model_info"]["input_cost_per_token"], row["model_info"]["max_input_tokens"]) for row in rows} == {
+        (3e-07, 4321)
+    }
+    call: Final = router.completion(
+        model=rows[0]["model_name"], messages=[{"role": "user", "content": "hi"}], mock_response="hello there"
+    )
+    assert call._hidden_params["response_cost"] == pytest.approx(_call_cost_at_row_rates(call, rows[0]["model_info"]))
+    publish(litellm.model_cost)
+
+
+def test_model_info_prices_an_aliased_wildcard_row_as_the_model_the_other_wildcard_bills(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    local_model_cost_map: None,
+) -> None:
+    """``based/gpt-5.6-acme`` is aliased to a name another wildcard serves, so its row shows the price of the model
+    the other wildcard fills in from the name, which is what its calls bill."""
+    catalog: Final = {
+        "gpt-5.6-acme": {
+            "input_cost_per_token": 3e-07,
+            "output_cost_per_token": 4e-07,
+            "litellm_provider": "openai",
+            "mode": "chat",
+        },
+        "gpt-5.6-acme-mini": {
+            "input_cost_per_token": 3e-08,
+            "output_cost_per_token": 4e-08,
+            "litellm_provider": "openai",
+            "mode": "chat",
+        },
+    }
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, **catalog})
+    publish(litellm.model_cost)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": name_pattern,
+                "litellm_params": {"model": "openai/*", "api_key": "x"},
+                "model_info": {"id": name_pattern},
+            }
+            for name_pattern in ("based/*", "other/*")
+        ],
+        model_group_alias={"based/gpt-5.6-acme": "other/gpt-5.6-acme-mini"},
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    _discoverable_models(monkeypatch, {"openai": ["gpt-5.6-acme"]})
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+
+    with auth_as():
+        response: Final = client.get("/model/info")
+
+    assert response.status_code == 200, response.text
+    aliased: Final = next(row for row in response.json()["data"] if row["model_name"] == "based/gpt-5.6-acme")
+    call: Final = router.completion(
+        model="based/gpt-5.6-acme", messages=[{"role": "user", "content": "hi"}], mock_response="hello there"
+    )
+    assert aliased["model_info"]["input_cost_per_token"] == 3e-08
+    assert call._hidden_params["response_cost"] == pytest.approx(_call_cost_at_row_rates(call, aliased["model_info"]))
+    publish(litellm.model_cost)
+
+
+def test_model_info_keeps_the_price_of_a_wildcard_row_whose_listed_name_no_route_serves(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    local_model_cost_map: None,
+) -> None:
+    """``my-*`` expands to provider-prefixed names no route matches, so nothing says the row's price is wrong and
+    the row keeps the price of the model it lists."""
+    entry: Final = {
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 4e-07,
+        "litellm_provider": "openai",
+        "mode": "chat",
+    }
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, "gpt-5.6-acme": entry})
+    publish(litellm.model_cost)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-*",
+                "litellm_params": {"model": "openai/*", "api_key": "x"},
+                "model_info": {"id": "my-wildcard"},
+            }
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    _discoverable_models(monkeypatch, {"openai": ["gpt-5.6-acme"]})
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+
+    with auth_as():
+        response: Final = client.get("/model/info")
+
+    assert response.status_code == 200, response.text
+    assert {
+        row["model_info"].get("input_cost_per_token") for row in response.json()["data"] if "*" not in row["model_name"]
+    } == {3e-07}
+    publish(litellm.model_cost)
+
+
+@pytest.mark.parametrize(
+    "targets",
+    [
+        pytest.param(
+            (
+                {
+                    "litellm_params": {"model": "deepseek/acme-lite", "api_key": "x", "input_cost_per_token": 9e-06},
+                    "model_info": {"id": "target"},
+                },
+            ),
+            id="target_with_its_own_rate",
+        ),
+        pytest.param(
+            (
+                {"litellm_params": {"model": "deepseek/acme-lite", "api_key": "x"}, "model_info": {"id": "target-a"}},
+                {"litellm_params": {"model": "deepseek/acme-big", "api_key": "x"}, "model_info": {"id": "target-b"}},
+            ),
+            id="targets_that_bill_different_models",
+        ),
+    ],
+)
+def test_model_info_shows_no_wildcard_price_when_the_cost_map_cannot_say_what_calls_bill(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    local_model_cost_map: None,
+    targets: tuple[Mapping[str, object], ...],
+) -> None:
+    """An alias sends ``my-fw/acme-mini`` to a group whose bill the cost map cannot state as one price, so the
+    wildcard's row shows no price rather than one calls are not billed at."""
+    catalog: Final = {
+        "deepseek/acme-lite": {
+            "input_cost_per_token": 7e-07,
+            "output_cost_per_token": 8e-07,
+            "litellm_provider": "deepseek",
+            "mode": "chat",
+        },
+        "deepseek/acme-big": {
+            "input_cost_per_token": 1.7e-06,
+            "output_cost_per_token": 1.8e-06,
+            "litellm_provider": "deepseek",
+            "mode": "chat",
+        },
+    }
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, **catalog})
+    publish(litellm.model_cost)
+    router: Final = litellm.Router(
+        model_list=[_FIREWORKS_WILDCARD, *({"model_name": "acme-target", **target} for target in targets)],
+        model_group_alias={"my-fw/acme-mini": "acme-target"},
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    _discoverable_models(monkeypatch, {"fireworks_ai": ["fireworks_ai/accounts/fireworks/models/acme-mini"]})
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+
+    with auth_as():
+        rows: Final = _fireworks_wildcard_rows(client)
+
+    assert rows["my-fw/acme-mini"].get("input_cost_per_token") is None
+    publish(litellm.model_cost)
+
+
+def test_model_info_prices_a_wildcard_row_aliased_to_an_aliased_group_as_the_group_its_calls_reach(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    local_model_cost_map: None,
+) -> None:
+    """``my-fw/acme-mini`` is aliased to ``acme-target``, a group that is itself aliased onward. Calls follow one
+    alias and reach ``acme-target``'s deployment, so the row shows that deployment's price, not the onward one's."""
+    catalog: Final = {
+        "deepseek/acme-lite": {
+            "input_cost_per_token": 7e-07,
+            "output_cost_per_token": 8e-07,
+            "litellm_provider": "deepseek",
+            "mode": "chat",
+        },
+        "deepseek/acme-big": {
+            "input_cost_per_token": 1.7e-06,
+            "output_cost_per_token": 1.8e-06,
+            "litellm_provider": "deepseek",
+            "mode": "chat",
+        },
+    }
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, **catalog})
+    publish(litellm.model_cost)
+    router: Final = litellm.Router(
+        model_list=[
+            _FIREWORKS_WILDCARD,
+            {
+                "model_name": "acme-target",
+                "litellm_params": {"model": "deepseek/acme-lite", "api_key": "x"},
+                "model_info": {"id": "target"},
+            },
+            {
+                "model_name": "acme-onward",
+                "litellm_params": {"model": "deepseek/acme-big", "api_key": "x"},
+                "model_info": {"id": "onward"},
+            },
+        ],
+        model_group_alias={"my-fw/acme-mini": "acme-target", "acme-target": "acme-onward"},
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    _discoverable_models(monkeypatch, {"fireworks_ai": ["fireworks_ai/accounts/fireworks/models/acme-mini"]})
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+
+    with auth_as():
+        rows: Final = _fireworks_wildcard_rows(client)
+
+    call: Final = router.completion(
+        model="my-fw/acme-mini", messages=[{"role": "user", "content": "hi"}], mock_response="hello there"
+    )
+    assert rows["my-fw/acme-mini"].get("input_cost_per_token") is not None
+    assert call._hidden_params["response_cost"] == pytest.approx(_call_cost_at_row_rates(call, rows["my-fw/acme-mini"]))
+    publish(litellm.model_cost)
+
+
+def test_model_info_prices_a_wildcard_row_aliased_to_another_deployment_as_that_deployment_not_the_wildcards_base_model(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    local_model_cost_map: None,
+) -> None:
+    """The wildcard declares a ``base_model`` for its own calls, but ``my-fw/acme-mini`` is aliased to another
+    deployment, so the row shows the price that deployment bills."""
+    catalog: Final = {
+        "deepseek/acme-lite": {
+            "input_cost_per_token": 7e-07,
+            "output_cost_per_token": 8e-07,
+            "litellm_provider": "deepseek",
+            "mode": "chat",
+        },
+        "deepseek/acme-base": {
+            "input_cost_per_token": 9e-06,
+            "output_cost_per_token": 9.5e-06,
+            "litellm_provider": "deepseek",
+            "mode": "chat",
+        },
+    }
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, **catalog})
+    publish(litellm.model_cost)
+    router: Final = litellm.Router(
+        model_list=[
+            {**_FIREWORKS_WILDCARD, "model_info": {"id": "fireworks-wildcard", "base_model": "deepseek/acme-base"}},
+            {
+                "model_name": "acme-target",
+                "litellm_params": {"model": "deepseek/acme-lite", "api_key": "x"},
+                "model_info": {"id": "target"},
+            },
+        ],
+        model_group_alias={"my-fw/acme-mini": "acme-target"},
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    _discoverable_models(monkeypatch, {"fireworks_ai": ["fireworks_ai/accounts/fireworks/models/acme-mini"]})
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+
+    with auth_as():
+        rows: Final = _fireworks_wildcard_rows(client)
+
+    call: Final = router.completion(
+        model="my-fw/acme-mini", messages=[{"role": "user", "content": "hi"}], mock_response="hello there"
+    )
+    assert rows["my-fw/acme-mini"].get("input_cost_per_token") is not None
+    assert call._hidden_params["response_cost"] == pytest.approx(_call_cost_at_row_rates(call, rows["my-fw/acme-mini"]))
+    publish(litellm.model_cost)
+
+
+def test_saving_a_replayed_model_info_wildcard_row_stores_none_of_its_shown_metadata(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    local_model_cost_map: None,
+) -> None:
+    """An API client that saves a ``/model/info`` row back unchanged, apart from one edit, must not pin the
+    cost-map metadata the row showed onto the wildcard, whether the row is a catch-all name or a name an alias
+    sends to a sibling name or to another deployment."""
+    from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo, updateDeployment
+
+    router: Final = _catch_all_and_shadowed_wildcard_router(monkeypatch)
+    with auth_as():
+        rows: Final = _expanded_wildcard_rows(client)
+
+    assert sorted(rows) == ["gpt-5.6-acme", "my-fw/acme-max", "my-fw/acme-mini", "my-fw/acme-pro"]
+    sources: Final = {
+        deployment["model_info"]["id"]: deployment for deployment in router.get_model_list() or []
+    }
+    stored: Final = {
+        name: json.loads(
+            update_db_model(
+                db_model=Deployment(
+                    model_name=sources[row["model_info"]["id"]]["model_name"],
+                    litellm_params=LiteLLM_Params(model=sources[row["model_info"]["id"]]["litellm_params"]["model"]),
+                    model_info=ModelInfo(id=row["model_info"]["id"]),
+                ),
+                updated_patch=updateDeployment(
+                    model_name=name, model_info=ModelInfo(**{**row["model_info"], "access_groups": ["prod"]})
+                ),
+                llm_router=router,
+            )["model_info"]
+        )
+        for name, row in rows.items()
+    }
+    shown_metadata: Final = {
+        name: set(row["model_info"]) - set(sources[row["model_info"]["id"]]["model_info"]) for name, row in rows.items()
+    }
+    assert sorted(name for name, row in rows.items() if row["model_info"].get("key")) == [
+        "gpt-5.6-acme",
+        "my-fw/acme-max",
+        "my-fw/acme-mini",
+        "my-fw/acme-pro",
+    ]
+    assert {name: info["access_groups"] for name, info in stored.items()} == dict.fromkeys(rows, ["prod"])
+    assert {name: shown_metadata[name] & set(info) for name, info in stored.items()} == dict.fromkeys(rows, set())
+    publish(litellm.model_cost)
 
 
 # ---------------------------------------------------------------------------
@@ -606,7 +1537,7 @@ def byok_team_router(monkeypatch):
         },
     }
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.model_list = [byok_deployment]
     router.get_model_list_from_model_alias = MagicMock(return_value=[])
     router.get_model_names = MagicMock(return_value=[])
@@ -872,7 +1803,7 @@ def model_group_info_router(monkeypatch):
     from litellm.types.proxy.management_endpoints.model_management_endpoints import ModelGroupInfoProxy
 
     model_names = ["gpt-4", "claude-3"]
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_names.return_value = model_names
     router.get_model_access_groups.return_value = {}
     router.get_model_list.return_value = []
@@ -989,6 +1920,111 @@ def test_model_group_info_lists_batch_only_to_the_team_that_owns_the_batch_deplo
     assert ("/v1/batch" in (groups["gpt-mixed"]["supported_endpoints"] or ())) is lists_batch
 
 
+@pytest.mark.parametrize(("team_id", "efforts"), [(_BYOK_TEAM_ID, ["low", "high", "max"]), ("team-other", None)])
+def test_model_group_info_describes_a_team_model_under_the_public_name_its_team_calls(
+    client, auth_as, monkeypatch, team_id: str, efforts: list[str] | None
+):
+    """A team's own model is listed under its public name, so its row must describe the team's deployment
+    behind that name instead of a placeholder, and only for the team that owns it."""
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.agent_endpoints import model_list_helpers
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": _BYOK_INTERNAL_NAME,
+                "litellm_params": {"model": "hosted_vllm/qa-local-coder", "api_base": "https://vllm.example/v1"},
+                "model_info": {
+                    "team_id": _BYOK_TEAM_ID,
+                    "team_public_model_name": _BYOK_PUBLIC_NAME,
+                    "supports_reasoning": True,
+                    "reasoning_effort_levels": ["low", "high", "max"],
+                },
+            }
+        ]
+    )
+
+    async def append_agents_to_model_group(*, model_groups, user_api_key_dict):
+        return model_groups
+
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.model_list)
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(
+        model_list_helpers, "append_agents_to_model_group", AsyncMock(side_effect=append_agents_to_model_group)
+    )
+
+    with auth_as(LitellmUserRoles.INTERNAL_USER, user_id=None, team_id=team_id, team_models=[_BYOK_PUBLIC_NAME]):
+        response: Final = client.get("/model_group/info")
+
+    assert response.status_code == 200
+    groups: Final = {group["model_group"]: group for group in response.json()["data"]}
+    assert groups[_BYOK_PUBLIC_NAME]["supported_reasoning_efforts"] == efforts
+
+
+@pytest.mark.parametrize(
+    ("team_id", "providers", "efforts", "custom_tags"),
+    [
+        (_BYOK_TEAM_ID, ["fireworks_ai"], ["low", "high", "max"], ["team-tag"]),
+        ("team-other", ["openai"], [], ["global-tag"]),
+    ],
+)
+def test_model_group_info_describes_the_deployments_a_shared_name_routes_the_team_to(
+    client, auth_as, monkeypatch, team_id: str, providers: list[str], efforts: list[str], custom_tags: list[str]
+):
+    """A team model whose public name is also a global model's name routes the team's requests to the
+    team's deployment, so the team's row must describe that deployment in every field, while another
+    team still sees the global model."""
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.agent_endpoints import model_list_helpers
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": _BYOK_PUBLIC_NAME,
+                "litellm_params": {"model": "openai/gpt-4.1-mini"},
+                "model_info": {"supports_reasoning": False, "custom_tags": ["global-tag"]},
+            },
+            {
+                "model_name": _BYOK_INTERNAL_NAME,
+                "litellm_params": {"model": "fireworks_ai/accounts/fireworks/models/kimi-k3"},
+                "model_info": {
+                    "team_id": _BYOK_TEAM_ID,
+                    "team_public_model_name": _BYOK_PUBLIC_NAME,
+                    "supports_reasoning": True,
+                    "reasoning_effort_levels": ["low", "high", "max"],
+                    "custom_tags": ["team-tag"],
+                },
+            },
+        ]
+    )
+
+    async def append_agents_to_model_group(*, model_groups, user_api_key_dict):
+        return model_groups
+
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.model_list)
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(
+        model_list_helpers, "append_agents_to_model_group", AsyncMock(side_effect=append_agents_to_model_group)
+    )
+
+    with auth_as(LitellmUserRoles.INTERNAL_USER, user_id=None, team_id=team_id, team_models=[_BYOK_PUBLIC_NAME]):
+        response: Final = client.get("/model_group/info")
+
+    assert response.status_code == 200
+    group: Final = {group["model_group"]: group for group in response.json()["data"]}[_BYOK_PUBLIC_NAME]
+    assert (group["providers"], group["supported_reasoning_efforts"], group["custom_tags"]) == (
+        providers,
+        efforts,
+        custom_tags,
+    )
+
+
 # ---------------------------------------------------------------------------
 # GET /v2/model/info?exclude_auto_routers
 # ---------------------------------------------------------------------------
@@ -1026,7 +2062,7 @@ def mixed_auto_router_router(monkeypatch):
     ]
     from unittest.mock import AsyncMock
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.model_list = model_list
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "llm_model_list", model_list)
@@ -1122,7 +2158,7 @@ def routing_status_router(monkeypatch):
     ]
     from unittest.mock import AsyncMock
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.model_list = model_list
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "llm_model_list", model_list)
@@ -1231,7 +2267,7 @@ def test_v2_model_info_search_matches_litellm_model_name(client, auth_as, monkey
     ]
     from unittest.mock import AsyncMock
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.model_list = model_list
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "llm_model_list", model_list)
@@ -1323,7 +2359,7 @@ def access_group_router(monkeypatch):
     ]
     from unittest.mock import AsyncMock
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.model_list = model_list
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "llm_model_list", model_list)

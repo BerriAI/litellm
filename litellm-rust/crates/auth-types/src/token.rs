@@ -5,7 +5,8 @@ use std::time::SystemTime;
 
 use veil::Redact;
 
-use crate::{Error, SecretValue};
+use crate::Error;
+use litellm_secret_value::SecretValue;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ResolvedCredential {

@@ -11,15 +11,43 @@ import {
   resolveLitellmProviderSlug,
 } from "./provider_info_helpers";
 
-const PROVIDER_CREATE_FIELDS: { provider: string; litellm_provider: string }[] = JSON.parse(
-  readFileSync(resolve(__dirname, "../../../../litellm/proxy/public_endpoints/provider_create_fields.json"), "utf8"),
-);
+const PROVIDER_CREATE_FIELDS: { provider: string; provider_display_name: string; litellm_provider: string }[] =
+  JSON.parse(
+    readFileSync(resolve(__dirname, "../../../../litellm/proxy/public_endpoints/provider_create_fields.json"), "utf8"),
+  );
 
 const BUNDLED_MODEL_MAP: Record<string, { litellm_provider?: string }> = JSON.parse(
   readFileSync(resolve(__dirname, "../../../../model_prices_and_context_window.json"), "utf8"),
 );
 
 describe("provider_info_helpers", () => {
+  it("should identify the upstream LiteLLM Gateway consistently with provider metadata", () => {
+    const metadata = PROVIDER_CREATE_FIELDS.find((provider) => provider.provider === "LITELLM_PROXY");
+    expect(resolveLitellmProviderSlug("LITELLM_PROXY")).toBe(metadata?.litellm_provider);
+    expect(Providers.LITELLM_PROXY).toBe(metadata?.provider_display_name);
+    expect(getProviderLogoAndName("litellm_proxy")).toEqual({
+      displayName: Providers.LITELLM_PROXY,
+      logo: providerLogoMap[Providers.LITELLM_PROXY],
+    });
+    expect(providerLogoMap[Providers.LITELLM_PROXY]).toContain("litellm_monogram");
+  });
+
+  it("resolves Meta Model API separately from Meta Llama and isolates their bundled models", () => {
+    expect(resolveLitellmProviderSlug("META")).toBe("meta");
+    expect(getPlaceholder(Providers.META)).toBe("meta/muse-spark-1.1");
+    expect(getProviderLogoAndName("meta").displayName).toBe("Meta Model API");
+    const metaModels = Object.keys(BUNDLED_MODEL_MAP).filter(
+      (key) => BUNDLED_MODEL_MAP[key]?.litellm_provider === "meta",
+    );
+    const llamaModels = Object.keys(BUNDLED_MODEL_MAP).filter(
+      (key) => BUNDLED_MODEL_MAP[key]?.litellm_provider === "meta_llama",
+    );
+    expect(metaModels).toContain("meta/muse-spark-1.1");
+    expect(llamaModels.length).toBeGreaterThan(0);
+    expect(getProviderModels("META", BUNDLED_MODEL_MAP).sort()).toEqual(metaModels.sort());
+    expect(getProviderModels("LLAMA", BUNDLED_MODEL_MAP).sort()).toEqual(llamaModels.sort());
+  });
+
   it("resolves BigModel metadata, name, logo and model placeholder", () => {
     const metadata = PROVIDER_CREATE_FIELDS.find((provider) => provider.provider === "BIGMODEL");
     expect(provider_map.BIGMODEL).toBe(metadata?.litellm_provider);
@@ -30,6 +58,18 @@ describe("provider_info_helpers", () => {
     expect(getProviderLogoAndName("BIGMODEL")).toEqual(getProviderLogoAndName("bigmodel"));
     expect(providerLogoMap[Providers.BIGMODEL]).toContain("bigmodel");
     expect(getPlaceholder(Providers.BIGMODEL)).toMatch(/^bigmodel\//);
+  });
+
+  it("resolves ai& metadata, name, logo and model placeholder", () => {
+    const metadata = PROVIDER_CREATE_FIELDS.find((provider) => provider.provider === "AIAND");
+    expect(provider_map.AIAND).toBe(metadata?.litellm_provider);
+    expect(getProviderLogoAndName("aiand")).toEqual({
+      displayName: "ai&",
+      logo: providerLogoMap[Providers.AIAND],
+    });
+    expect(getProviderLogoAndName("AIAND")).toEqual(getProviderLogoAndName("aiand"));
+    expect(providerLogoMap[Providers.AIAND]).toContain("aiand");
+    expect(getPlaceholder(Providers.AIAND)).toBe("aiand/openai/gpt-oss-120b");
   });
 
   it("maps Microsoft 365 Copilot to its chat model provider and placeholder", () => {
@@ -45,6 +85,12 @@ describe("provider_info_helpers", () => {
   });
 
   describe("getProviderLogoAndName", () => {
+    it("shows the Parallel AI logo for the parallel_ai slug", () => {
+      const { logo, displayName } = getProviderLogoAndName("parallel_ai");
+      expect(displayName).toBe(Providers.PARALLEL_AI);
+      expect(logo).toContain("parallel_ai");
+    });
+
     it("should return empty logo and dash display name when providerValue is empty", () => {
       const result = getProviderLogoAndName("");
       expect(result).toEqual({ logo: "", displayName: "-" });
@@ -218,6 +264,7 @@ describe("provider_info_helpers", () => {
         Providers.DATAROBOT,
         Providers.DOCKER_MODEL_RUNNER,
         Providers.DOTPROMPT,
+        Providers.EMPIRIOLABS,
         Providers.EMPOWER,
         Providers.GALADRIEL,
         Providers.GradientAI,
@@ -549,6 +596,16 @@ describe("provider_info_helpers", () => {
       expect(getProviderModels("Sail" as Providers, modelMap)).toEqual(["sail/openai/gpt-oss-120b"]);
     });
 
+    it("lists Parallel decision models with their provider and model placeholder", () => {
+      const modelMap = {
+        "parallel_ai/decision": { litellm_provider: "parallel_ai", mode: "evaluation" },
+      };
+
+      expect(getProviderModels("PARALLEL_AI", modelMap)).toEqual(["parallel_ai/decision"]);
+      expect(getProviderLogoAndName("parallel_ai").displayName).toBe("Parallel AI");
+      expect(getPlaceholder("PARALLEL_AI")).toBe("parallel_ai/decision");
+    });
+
     it("lists Nace decision models and resolves the provider name and model placeholder", () => {
       const modelMap = {
         "nace/drex-latest": { litellm_provider: "nace", mode: "evaluation" },
@@ -570,6 +627,24 @@ describe("provider_info_helpers", () => {
         "typesafe/jev-latest",
         "typesafe/jev-preview",
       ]);
+    });
+
+    it("should list EmpirioLabs AI chat and decision models for the 'EMPIRIOLABS' provider key", () => {
+      const modelMap = {
+        "empiriolabs/aplomb-1": {
+          litellm_provider: "empiriolabs",
+          mode: "chat",
+          supported_endpoints: ["/v1/chat/completions", "/v1/decisions"],
+        },
+        "empiriolabs/qwen3-7-plus": { litellm_provider: "empiriolabs", mode: "chat" },
+        "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
+      };
+      expect(getProviderModels("EMPIRIOLABS" as Providers, modelMap)).toEqual([
+        "empiriolabs/aplomb-1",
+        "empiriolabs/qwen3-7-plus",
+      ]);
+      expect(getProviderLogoAndName("empiriolabs").displayName).toBe("EmpirioLabs AI");
+      expect(getPlaceholder("EMPIRIOLABS")).toBe("empiriolabs/aplomb-1");
     });
 
     it("should list only strands_decider models for the 'StrandsDecider' provider key", () => {

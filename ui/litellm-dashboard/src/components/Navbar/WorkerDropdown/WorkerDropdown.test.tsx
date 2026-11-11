@@ -163,4 +163,22 @@ describe("WorkerDropdown", () => {
     });
     expect(screen.getByText("Worker 3")).toBeInTheDocument();
   });
+
+  it("lets users search and switch workers from the compact picker", async () => {
+    mockUseWorker.mockReturnValue({
+      isControlPlane: true,
+      selectedWorker: workers[1],
+      workers,
+    });
+    const user = userEvent.setup();
+
+    render(<WorkerDropdown compact onWorkerSwitch={mockOnWorkerSwitch} />);
+    await user.click(screen.getByRole("combobox", { name: "Switch worker, current: Worker 2" }));
+    expect(await screen.findByRole("option", { name: "Worker 2" })).toHaveAttribute("aria-disabled", "true");
+    await user.type(screen.getByRole("combobox", { name: "Search workers" }), "Worker 3");
+    expect(screen.queryByRole("option", { name: "Worker 1" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("option", { name: "Worker 3" }));
+
+    expect(mockOnWorkerSwitch).toHaveBeenCalledExactlyOnceWith("w3");
+  });
 });

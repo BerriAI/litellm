@@ -1,3 +1,5 @@
+import type { ParseKeys, TFunction } from "i18next";
+import i18n from "@/i18n/i18n";
 import type { components } from "@/lib/http/schema";
 
 export type KillSwitchConfig = components["schemas"]["AgentKillSwitchConfig"];
@@ -6,11 +8,11 @@ export type KillSwitchMethod = NonNullable<KillSwitchConfig["method"]>;
 export type KillSwitchAuthType = KillSwitchAuth["type"] | "none";
 
 export const KILL_SWITCH_METHODS: readonly KillSwitchMethod[] = ["POST", "PUT", "PATCH", "DELETE", "GET"];
-export const KILL_SWITCH_AUTH_TYPES: readonly { value: KillSwitchAuthType; label: string }[] = [
-  { value: "none", label: "None" },
-  { value: "bearer", label: "Bearer token" },
-  { value: "api_key", label: "API key header" },
-  { value: "basic", label: "Basic auth" },
+export const KILL_SWITCH_AUTH_TYPES: readonly { value: KillSwitchAuthType; labelKey: ParseKeys }[] = [
+  { value: "none", labelKey: "agents.killSwitchConfig.authTypes.none" },
+  { value: "bearer", labelKey: "agents.killSwitchConfig.authTypes.bearer" },
+  { value: "api_key", labelKey: "agents.killSwitchConfig.authTypes.apiKey" },
+  { value: "basic", labelKey: "agents.killSwitchConfig.authTypes.basic" },
 ];
 
 export interface KeyValueFormValue {
@@ -61,12 +63,12 @@ export const parseKillSwitchBody = (text: string | undefined): Record<string, un
   return parsed as Record<string, unknown>;
 };
 
-export const validateKillSwitchBody = (text: string | undefined): true | string => {
+export const validateKillSwitchBody = (text: string | undefined, t: TFunction = i18n.t.bind(i18n)): true | string => {
   try {
     parseKillSwitchBody(text);
     return true;
   } catch (error) {
-    return error instanceof Error ? error.message : "Body must be valid JSON";
+    return error instanceof Error ? error.message : t("agents.killSwitchConfig.errors.invalidJson");
   }
 };
 

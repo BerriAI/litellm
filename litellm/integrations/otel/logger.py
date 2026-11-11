@@ -66,6 +66,7 @@ from litellm.integrations.otel.plumbing.context import (
     resolve_request_span_context,
     resolve_service_span_context,
     set_request_baggage,
+    set_request_metadata,
     set_request_root_span,
 )
 from litellm.integrations.otel.plumbing.events import GenAIEventRecorder
@@ -198,6 +199,7 @@ class OpenTelemetryV2(CustomLogger):
         tracer_provider: TracerProvider | None = None,
         logger_provider: LoggerProvider | None = None,
         meter_provider: "MeterProvider | None" = None,
+        console_default: bool = False,
         **kwargs: Unpack[_CustomLoggerOptions],
     ) -> None:
         super().__init__(**kwargs)
@@ -206,7 +208,7 @@ class OpenTelemetryV2(CustomLogger):
         self._tracer_provider: TracerProvider = (
             tracer_provider
             if tracer_provider is not None
-            else build_tracer_provider(self.config, tenant_overrides=True)
+            else build_tracer_provider(self.config, tenant_overrides=True, console_default=console_default)
         )
         self.tracer: Tracer = get_tracer(self._tracer_provider, LITELLM_TRACER_NAME)
         self._metrics_recorder = self._init_metrics(meter_provider)
@@ -217,7 +219,9 @@ class OpenTelemetryV2(CustomLogger):
             mappers=resolve_mappers(self.config.mapper_names),
             event_recorder=self._init_events(logger_provider),
         )
-        self._tenant_tracers = TenantTracerCache(self.config, callback_name, LITELLM_TRACER_NAME)
+        self._tenant_tracers = TenantTracerCache(
+            self.config, callback_name, LITELLM_TRACER_NAME, console_default=console_default
+        )
         self._open_llm_calls: OrderedDict[str, _LLMCallSpan] = OrderedDict()
         self._init_otel_logger_on_litellm_proxy()
 
@@ -541,9 +545,7 @@ class OpenTelemetryV2(CustomLogger):
         # gate rejection carries ``is_no_upstream_call`` and gets no span. A cache
         # hit never hands off to a provider, so ``cache_hit`` substitutes for the
         # upstream stamp, since the payload proves the call completed.
-        if carrier is None and (
-            call.is_no_upstream_call or call.payload is None or (not call.upstream_started and not call.cache_hit)
-        ):
+        if carrier is None and not call.reached_a_provider:
             return None
         try:
             return self._finish_carrier(carrier, call, start_time, end_time)
@@ -747,6 +749,7 @@ class OpenTelemetryV2(CustomLogger):
         """
         try:
             identity: Final = RequestIdentity.from_user_api_key_auth(user_api_key_dict, request_metadata)
+            set_request_metadata(identity.metadata)
             bag: Final = promoted_baggage(
                 identity,
                 model,
@@ -1033,10 +1036,12 @@ def emit_guardrail_span(entry: "StandardLoggingGuardrailInformation") -> None:
         pass
 
 
-def seed_request_identity(user_api_key_dict: object, model: str | None = None) -> None:
+def seed_request_identity(user_api_key_dict: object, model: str | None = None, request_data: object = None) -> None:
     logger: Final = _registered_v2_logger()
     if logger is not None:
-        logger.seed_request_identity(user_api_key_dict, model=model)
+        logger.seed_request_identity(
+            user_api_key_dict, model=model, request_metadata=metadata_from_request_data(request_data)
+        )
 
 
 def fan_out_provider() -> ApiTracerProvider:
@@ -1091,6 +1096,7 @@ def build_otel_v2_logger(
     logger_provider: LoggerProvider | None = None,
     meter_provider: "MeterProvider | None" = None,
     settings: Mapping[str, object] = MappingProxyType({}),
+    console_default: bool = False,
 ) -> OpenTelemetryV2:
     return _logger_class(config)(
         config=config,
@@ -1098,6 +1104,7 @@ def build_otel_v2_logger(
         tracer_provider=tracer_provider,
         logger_provider=logger_provider,
         meter_provider=meter_provider,
+        console_default=console_default,
         **settings,
     )
 

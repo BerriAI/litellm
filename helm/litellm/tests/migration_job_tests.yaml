@@ -91,7 +91,7 @@ tests:
             app.kubernetes.io/name: litellm
             app.kubernetes.io/instance: RELEASE-NAME
             app.kubernetes.io/managed-by: Helm
-            helm.sh/chart: litellm-0.1.0
+            helm.sh/chart: litellm-1.0.0
             app.kubernetes.io/component: migrations
 
   - it: renders pod-level and container-level securityContext in their own scopes
@@ -254,3 +254,76 @@ tests:
           path: spec.template.spec.nodeSelector
       - isNull:
           path: spec.template.spec.tolerations
+
+  - it: sets jobLabels and jobAnnotations on the Job metadata
+    set:
+      migrationJob.jobLabels:
+        environment: production
+      migrationJob.jobAnnotations:
+        example.com/cost-center: "1234"
+    asserts:
+      - equal:
+          path: metadata.labels.environment
+          value: production
+      - equal:
+          path: metadata.annotations['example.com/cost-center']
+          value: "1234"
+      - equal:
+          path: metadata.annotations['helm.sh/hook']
+          value: pre-install,pre-upgrade
+
+  - it: renders jobAnnotations when both hooks are off
+    set:
+      migrationJob.hooks.helm.enabled: false
+      migrationJob.jobAnnotations:
+        example.com/cost-center: "1234"
+    asserts:
+      - equal:
+          path: metadata.annotations
+          value:
+            example.com/cost-center: "1234"
+
+  - it: runs the image entrypoint with the migrations component by default
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].command
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value: [migrations]
+
+  - it: overrides the container command and args
+    set:
+      migrationJob.command: [sh]
+      migrationJob.args: [-c, echo migrating]
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value: [sh]
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value: [-c, echo migrating]
+
+  - it: clears the container args when only command is set
+    set:
+      migrationJob.command: [sh]
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value: [sh]
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value: []
+
+  - it: puts migrationJob.annotations on the Job pod, as litellm-helm did
+    set:
+      migrationJob.annotations:
+        sidecar.istio.io/inject: "false"
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations
+          value:
+            sidecar.istio.io/inject: "false"
+  - it: renders no pod annotations by default
+    asserts:
+      - notExists:
+          path: spec.template.metadata.annotations

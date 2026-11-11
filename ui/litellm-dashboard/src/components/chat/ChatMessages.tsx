@@ -9,18 +9,46 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import React, { useEffect, useRef, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 
 import { useSyntaxTheme } from "@/hooks/useSyntaxTheme";
+import i18n from "@/i18n/i18n";
 import ReasoningContent from "@/components/chat_ui/ReasoningContent";
 import MCPEventsDisplay from "@/components/chat_ui/MCPEventsDisplay";
 import ResponseMetrics from "@/components/chat_ui/ResponseMetrics";
 import { ChatAttachment, ChatImageAttachment, ChatMessage } from "./types";
 import ChatFileChip from "./ChatFileChip";
 import { isChatImageUrl } from "./imageHelpers";
+
+const THINKING_PULSE_CSS = `
+        @keyframes thinking-pulse {
+          0%, 100% { opacity: 0.4; }
+          50% { opacity: 1; }
+        }
+        .chat-thinking-text {
+          animation: thinking-pulse 1.4s ease-in-out infinite;
+        }
+      `;
+
+const TYPING_DOTS_CSS = `
+        @keyframes chat-typing-bounce {
+          0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+          30% { transform: translateY(-4px); opacity: 1; }
+        }
+        .chat-dot {
+          width: 7px;
+          height: 7px;
+          border-radius: 50%;
+          background-color: var(--color-muted-foreground);
+          animation: chat-typing-bounce 1.2s ease-in-out infinite;
+        }
+        .chat-dot:nth-child(2) { animation-delay: 0.2s; }
+        .chat-dot:nth-child(3) { animation-delay: 0.4s; }
+      `;
 
 const REDACTED_KEY_PATTERNS = /token|key|secret|password|auth/i;
 
@@ -72,6 +100,9 @@ function MarkdownCodeRenderer({
 
 const markdownComponents: Components = {
   code: MarkdownCodeRenderer,
+  a: ({ node, ...props }) => (
+    <a className="text-primary underline underline-offset-2" target="_blank" rel="noopener noreferrer" {...props} />
+  ),
   pre: ({ node, ...props }) => <pre className="max-w-full overflow-x-auto" {...props} />,
   h1: ({ node, ...props }) => <h1 className="mt-6 mb-2 text-xl font-semibold tracking-tight first:mt-0" {...props} />,
   h2: ({ node, ...props }) => <h2 className="mt-6 mb-2 text-lg font-semibold tracking-tight first:mt-0" {...props} />,
@@ -90,16 +121,17 @@ const markdownComponents: Components = {
 
 const markdownWithoutImages: Components = {
   ...markdownComponents,
-  img: ({ alt }) => <span>{alt || "Image omitted"}</span>,
+  img: ({ alt }) => <span>{alt || i18n.t("chat.messages.imageOmitted")}</span>,
 };
 
 function ChatImage({ image, allowImages }: { image: ChatImageAttachment; allowImages: boolean }) {
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const { t } = useTranslation();
   if (!allowImages) return <span className="text-sm text-muted-foreground">{image.name}</span>;
   if (!isChatImageUrl(image.url) || failedUrl === image.url) {
     return (
       <div className="rounded-xl border bg-muted p-4 text-sm text-muted-foreground">
-        {image.name} — image unavailable. Start a new chat and attach a saved copy to use it again.
+        <Trans i18nKey="chat.messages.imageUnavailable" components={{ name: <>{image.name}</> }} />
       </div>
     );
   }
@@ -122,7 +154,7 @@ function ChatImage({ image, allowImages }: { image: ChatImageAttachment; allowIm
         role="link"
         render={<a href={image.url} target="_blank" rel="noopener noreferrer" download={image.name} />}
       >
-        Open image
+        {t("chat.messages.openImage")}
       </Button>
     </figure>
   );
@@ -151,6 +183,7 @@ interface UserBubbleProps {
 }
 
 function UserBubble({ message, allowImages, onEdit, isStreaming }: UserBubbleProps) {
+  const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState(message.content);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -201,7 +234,7 @@ function UserBubble({ message, allowImages, onEdit, isStreaming }: UserBubblePro
           ) : null}
           <Textarea
             ref={textareaRef}
-            aria-label="Edit message"
+            aria-label={t("chat.messages.editMessage")}
             value={editValue}
             onChange={(e) => setEditValue(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -216,10 +249,10 @@ function UserBubble({ message, allowImages, onEdit, isStreaming }: UserBubblePro
                 setEditing(false);
               }}
             >
-              Cancel
+              {t("chat.messages.cancel")}
             </Button>
             <Button size="sm" onClick={handleSave} disabled={!editValue.trim() && !message.attachments?.length}>
-              Save & Send
+              {t("chat.messages.saveAndSend")}
             </Button>
           </div>
         </div>
@@ -238,7 +271,7 @@ function UserBubble({ message, allowImages, onEdit, isStreaming }: UserBubblePro
                   <Button
                     variant="ghost"
                     size="icon-xs"
-                    aria-label="Edit message"
+                    aria-label={t("chat.messages.editMessage")}
                     onClick={() => {
                       setEditValue(message.content);
                       setEditing(true);
@@ -250,7 +283,7 @@ function UserBubble({ message, allowImages, onEdit, isStreaming }: UserBubblePro
                 }
               />
               <TooltipContent>
-                <p>Edit message</p>
+                <p>{t("chat.messages.editMessage")}</p>
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
@@ -286,6 +319,7 @@ function AssistantBubble({
   mcpEvents,
   actions,
 }: AssistantBubbleProps) {
+  const { t } = useTranslation();
   const [reasoningKey, setReasoningKey] = useState(0);
   const prevStreamingRef = useRef<boolean>(isStreaming);
 
@@ -305,12 +339,18 @@ function AssistantBubble({
       return (
         <div role="status" className="w-full max-w-sm space-y-3">
           <Skeleton className="aspect-square w-full rounded-2xl" />
-          <p className="text-sm text-muted-foreground">Creating your image…</p>
+          <p className="text-sm text-muted-foreground">{t("chat.messages.creatingImage")}</p>
         </div>
       );
     }
     return (
       <div className="flex flex-col items-start">
+        {message.research && (
+          <p role="status" className="text-sm text-muted-foreground">
+            {t("chat.messages.deepResearch")}
+            {message.webSearchCount ? t("chat.messages.webSearches", { searches: message.webSearchCount }) : "…"}
+          </p>
+        )}
         <div className="flex items-center gap-1 px-1 py-2.5">
           <TypingDots />
         </div>
@@ -342,7 +382,30 @@ function AssistantBubble({
         >
           {mainContent}
         </ReactMarkdown>
-        {stoppedSuffix && <span className="text-muted-foreground italic"> [stopped]</span>}
+        {message.citations && message.citations.length > 0 && (
+          <div aria-label={t("chat.messages.sources")} className="mt-4 border-t pt-3 text-sm">
+            <p className="font-medium">{t("chat.messages.sources")}</p>
+            <ol className="mt-2 list-decimal space-y-1 pl-5">
+              {message.citations
+                .filter((citation) => /^https?:\/\//i.test(citation.url))
+                .map((citation) => (
+                  <li key={citation.url}>
+                    <Button
+                      variant="link"
+                      size="sm"
+                      nativeButton={false}
+                      role="link"
+                      className="h-auto whitespace-normal p-0 text-left"
+                      render={<a href={citation.url} target="_blank" rel="noopener noreferrer" />}
+                    >
+                      {citation.title}
+                    </Button>
+                  </li>
+                ))}
+            </ol>
+          </div>
+        )}
+        {stoppedSuffix && <span className="text-muted-foreground italic">{t("chat.messages.stopped")}</span>}
       </BubbleContent>
 
       {actions ?? (mainContent.trim() && <CopyButton text={mainContent} />)}
@@ -362,6 +425,7 @@ function AssistantBubble({
 }
 
 function CopyButton({ text }: { text: string }) {
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
 
   const handleCopy = () => {
@@ -383,7 +447,7 @@ function CopyButton({ text }: { text: string }) {
               <Button
                 variant="ghost"
                 size="icon-xs"
-                aria-label={copied ? "Copied message" : "Copy message"}
+                aria-label={copied ? t("chat.messages.copiedMessage") : t("chat.messages.copyMessage")}
                 onClick={handleCopy}
                 className={copied ? "text-success" : "text-muted-foreground hover:text-foreground"}
               >
@@ -392,7 +456,7 @@ function CopyButton({ text }: { text: string }) {
             }
           />
           <TooltipContent>
-            <p>{copied ? "Copied!" : "Copy"}</p>
+            <p>{copied ? t("chat.messages.copied") : t("chat.messages.copy")}</p>
           </TooltipContent>
         </Tooltip>
       </TooltipProvider>
@@ -401,19 +465,12 @@ function CopyButton({ text }: { text: string }) {
 }
 
 function ThinkingPlaceholder() {
+  const { t } = useTranslation();
   return (
     <>
-      <style>{`
-        @keyframes thinking-pulse {
-          0%, 100% { opacity: 0.4; }
-          50% { opacity: 1; }
-        }
-        .chat-thinking-text {
-          animation: thinking-pulse 1.4s ease-in-out infinite;
-        }
-      `}</style>
+      <style>{THINKING_PULSE_CSS}</style>
       <div className="inline-flex items-center gap-1.5 px-2.5 mb-2 bg-muted/50 border rounded-lg text-xs text-muted-foreground">
-        <span className="chat-thinking-text py-1">Thinking...</span>
+        <span className="chat-thinking-text py-1">{t("chat.messages.thinking")}</span>
       </div>
     </>
   );
@@ -422,21 +479,7 @@ function ThinkingPlaceholder() {
 function TypingDots() {
   return (
     <>
-      <style>{`
-        @keyframes chat-typing-bounce {
-          0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
-          30% { transform: translateY(-4px); opacity: 1; }
-        }
-        .chat-dot {
-          width: 7px;
-          height: 7px;
-          border-radius: 50%;
-          background-color: var(--color-muted-foreground);
-          animation: chat-typing-bounce 1.2s ease-in-out infinite;
-        }
-        .chat-dot:nth-child(2) { animation-delay: 0.2s; }
-        .chat-dot:nth-child(3) { animation-delay: 0.4s; }
-      `}</style>
+      <style>{TYPING_DOTS_CSS}</style>
       <div className="chat-dot" />
       <div className="chat-dot" />
       <div className="chat-dot" />
@@ -449,6 +492,7 @@ interface ToolCardProps {
 }
 
 function ToolCard({ message }: ToolCardProps) {
+  const { t } = useTranslation();
   const redactedArgs = message.toolArgs ? redactSensitiveValues(message.toolArgs) : undefined;
   const [open, setOpen] = useState(false);
 
@@ -457,13 +501,13 @@ function ToolCard({ message }: ToolCardProps) {
       <Collapsible open={open} onOpenChange={setOpen}>
         <CollapsibleTrigger className="flex items-center gap-1.5 text-[13px] px-3 py-2 border rounded-lg bg-muted/50 hover:bg-muted transition-colors w-full text-left">
           <Wrench className="h-3.5 w-3.5 text-muted-foreground" />
-          <span className="font-medium text-foreground">{message.toolName ?? "Tool call"}</span>
+          <span className="font-medium text-foreground">{message.toolName ?? t("chat.messages.toolCall")}</span>
         </CollapsibleTrigger>
         <CollapsibleContent className="border border-t-0 rounded-b-lg px-3 py-2 bg-muted/30">
           {redactedArgs !== undefined && (
             <div className={message.toolResult ? "mb-3" : ""}>
               <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">
-                Arguments
+                {t("chat.messages.arguments")}
               </div>
               <pre className="m-0 p-2 bg-muted rounded-md text-xs font-mono whitespace-pre-wrap break-words text-foreground">
                 {JSON.stringify(redactedArgs, null, 2)}
@@ -473,7 +517,7 @@ function ToolCard({ message }: ToolCardProps) {
           {message.toolResult && (
             <div>
               <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">
-                Result
+                {t("chat.messages.result")}
               </div>
               <div className="text-[13px] text-foreground whitespace-pre-wrap break-words font-mono">
                 {message.toolResult}

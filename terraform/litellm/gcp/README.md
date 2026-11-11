@@ -15,7 +15,7 @@ Deploys the componentized LiteLLM proxy on GCP:
 - **Secret Manager** entries for `LITELLM_MASTER_KEY` and `DATABASE_PASSWORD`
 - **Cloud Run v2** services for `gateway` (port 4000), `backend` (port 4001),
   and `ui` (port 3000), all using a shared runtime service account
-- **Cloud Run Job** (`litellm-migrations`) that runs `prisma migrate deploy` from the dedicated `ghcr.io/berriai/litellm-migrations` image
+- **Cloud Run Job** (`litellm-migrations`) that runs `prisma migrate deploy` through the `migrations` component of the same image
 - **External global HTTP(S) load balancer** with serverless NEGs and a URL
   map mirroring the helm-chart ingress path routing:
   - LLM data-plane prefixes → `gateway`
@@ -24,18 +24,18 @@ Deploys the componentized LiteLLM proxy on GCP:
 
 ## Image pulls
 
-There are four images: `litellm-gateway`, `litellm-backend`, `litellm-ui`,
-and `litellm-migrations` (slim image used only by the one-off Cloud Run
-Job — runs `prisma migrate deploy` against the writer DB and exits).
-Bump them together when bumping LiteLLM.
+Every Cloud Run service, sidecar and the migrations Job runs the one
+`litellm` image and picks its process through the entrypoint's first
+argument (`gateway`, `backend`, `ui`, `migrations`, `metrics`,
+`collector`), so bumping LiteLLM is a single `image_tag` change.
 
 **Required override.** The `image_registry` default (`ghcr.io/berriai`)
 does **not** work as-is — Cloud Run only accepts images from Artifact
 Registry, `[region.]gcr.io`, or `docker.io`, and rejects `ghcr.io` URIs
 at apply time. Every deploy (including HCP Terraform 1-click) must
 supply either `image_registry` pointed at an Artifact Registry remote
-repo backed by GHCR, or full per-component `*_image` URIs against
-images you've already mirrored. The default is present only so
+repo backed by GHCR, or a full `image` URI for a copy you've already
+mirrored. The default is present only so
 `terraform plan` succeeds during local iteration.
 
 **One-time setup (per project):** create a remote repo and let Cloud Run
@@ -56,15 +56,22 @@ Then point the stack at it via `image_registry`:
 image_registry = "us-central1-docker.pkg.dev/my-gcp-project/litellm/berriai"
 ```
 
-The four `litellm-<component>:${image_tag}` URIs are composed from
-`image_registry` and `image_tag`. A published module version (Terraform
-Registry `BerriAI/litellm/google`) ships with `image_tag` stamped to its
-own release tag, so bumping the module version bumps all four images with
-it. A git ref of this monorepo has no published images of its own, so
-there `image_tag` is required. Set `image_tag` to pin a different LiteLLM
-release. Set `gateway_image` / `backend_image` / `ui_image` /
-`migrations_image` only if you need a per-component override (custom
-build, different tag).
+The `<image_registry>/litellm:<image_tag>` URI is composed from those two
+vars. A published module version (Terraform Registry `BerriAI/litellm/google`)
+ships with `image_tag` stamped to its own release tag, so bumping the module
+version bumps every workload with it. A git ref of this monorepo has no
+published images of its own, so there `image_tag` is required. Set `image`
+only if you need a full override (custom build, digest pin).
+
+A tag older than the one this module version ships with has no component
+entrypoint and only knows how to run the monolithic proxy, so pinning one
+fails at container start.
+
+Migrating from the retired `gateway_image`, `backend_image`, `ui_image`
+and `migrations_image` inputs: drop them and set `image_registry` +
+`image_tag` (or `image`) once. Terraform rejects the old names at plan
+time, so a stale `.tfvars` cannot silently keep pulling the per-component
+images.
 
 Two further notes:
 
@@ -210,33 +217,23 @@ Behavior matches the AWS stack 1:1; the only naming differences are
 
 ### Enterprise billing metrics
 
-License-gated request metering is opt-in and gated entirely on
-`billing_metrics_endpoint`. Empty (default) and no billing env is added to
-the container, so existing deployments are unchanged. Set it and both
-gateway and backend export billable-request counts over OTLP/HTTP,
-authenticating to the collector with the mTLS client certificate issued for
-your deployment.
-
-The proxy accepts the certificate, key, and CA bundle as either a file path
-or literal PEM content. This stack takes the PEM, writes each one to its own
-Secret Manager entry, grants the runtime service account
-`roles/secretmanager.secretAccessor` on them, and injects them as Cloud Run
-secret env vars `LITELLM_BILLING_METRICS_CLIENT_CERT` / `_CLIENT_KEY` (and
-`_CA_CERT` when set), so no volume mount is needed.
+License-gated request metering uses Cognito bearer authentication. Set the
+endpoint, client ID, and token URL as plain values, and provide the client
+secret through the sensitive Terraform variable. The client secret is stored
+in Secret Manager and injected into both gateway and backend services
 
 ```hcl
 billing_metrics_endpoint = "https://telemetry.litellm.ai/v1/metrics"
+billing_metrics_client_id = "cognito-client-id"
+billing_metrics_token_url = "https://litellm-prod.auth.us-west-1.amazoncognito.com/oauth2/token"
 ```
 
 ```bash
-export TF_VAR_billing_metrics_client_cert_pem="$(cat client.crt)"
-export TF_VAR_billing_metrics_client_key_pem="$(cat client.key)"
+export TF_VAR_billing_metrics_client_secret="cognito-client-secret"
 ```
 
-`billing_metrics_ca_cert_pem` is only for private or test collectors whose
-CA is not in the system trust store; leave it empty against
-`telemetry.litellm.ai`. Metering requires an enterprise license, so pair
-this with `litellm_license`. To tune the export cadence, set
+The client ID and client secret are required when the endpoint is set
+Metering also requires an enterprise license. To tune the export cadence, set
 `LITELLM_BILLING_METRICS_EXPORT_INTERVAL_MS` through `gateway_extra_env` /
 `backend_extra_env`
 
@@ -258,8 +255,7 @@ stack also adds Google's
 Secret Manager that scrapes `localhost:<port>/metrics` every 30s and writes to
 Cloud Monitoring as `prometheus.googleapis.com/...` metrics. Enabling it grants
 the runtime service account `roles/monitoring.metricWriter` and
-`roles/logging.logWriter` on the project. Needs `gateway_image` v1.101.0 or
-newer. See [Prometheus metrics](https://docs.litellm.ai/docs/proxy/prometheus)
+`roles/logging.logWriter` on the project. See [Prometheus metrics](https://docs.litellm.ai/docs/proxy/prometheus)
 for the metrics themselves
 
 ```hcl

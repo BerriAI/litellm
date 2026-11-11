@@ -7,7 +7,9 @@ use crate::{
 };
 use futures_util::StreamExt;
 use litellm_auth::AwsParams;
-use litellm_auth::{CredentialPlacement, SecretValue};
+use litellm_auth::CredentialPlacement;
+use litellm_secret_value::SecretValue;
+
 use litellm_auth_aws::{
     AwsCredentialSource, bedrock_model_id_and_region,
     constants::{
