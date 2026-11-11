@@ -378,6 +378,12 @@ class MCPServer(LiteLLMBaseModel):
         return self.is_true_passthrough or self.is_oauth_delegate
 
     @property
+    def reauthorizes_in_client(self) -> bool:
+        """True when a caller can fix an upstream 401 by authenticating again: the client-forwarded
+        token modes and gateway-vaulted per-user OAuth."""
+        return self.is_client_forwarded_token or (self.is_gateway_managed_oauth2 and self.needs_user_oauth_token)
+
+    @property
     def is_dcr_bridge(self) -> bool:
         """True when this client-forwarded-token server serves the gateway-hosted DCR front door
         (gateway-self protected-resource and authorization-server metadata plus the register,
