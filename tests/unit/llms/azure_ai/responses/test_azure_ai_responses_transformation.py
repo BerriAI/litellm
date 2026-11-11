@@ -340,6 +340,25 @@ async def test_aresponses_sends_a_model_router_to_the_project_responses_api_by_d
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_acompact_responses_sends_a_model_router_on_a_project_by_deployment_name():
+    route: Final = respx.post(url__regex=r".*/responses/compact(\?.*)?$").mock(
+        return_value=httpx.Response(200, json=_responses_payload("FW-GLM-5.3-Flash"))
+    )
+
+    await litellm.acompact_responses(
+        model="azure_ai/model_router/model-router",
+        input="What is the weather in SF?",
+        api_base=f"{FOUNDRY_PROJECT_BASE}/openai/v1",
+        api_key="fake-key",
+    )
+
+    request: Final = route.calls.last.request
+    assert str(request.url) == f"{FOUNDRY_RESPONSES_URL}/compact"
+    assert json.loads(request.content)["model"] == "model-router"
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_aresponses_streams_a_model_router_on_a_project_as_it_answers():
     completed: Final = _responses_payload("FW-GLM-5.3-Flash")
     deltas: Final = tuple(
