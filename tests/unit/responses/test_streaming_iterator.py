@@ -9,7 +9,7 @@ import gc
 import json
 import threading
 import weakref
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from datetime import datetime
 from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -289,7 +289,7 @@ _HEARTBEATS_SENT: Final = 1000
 
 async def _async_upstream(
     trailing: Exception | None, release: asyncio.Event | None = None, heartbeats: Iterator[bytes] = iter(())
-):
+) -> AsyncIterator[bytes]:
     for event in _COMPLETE_STREAM_EVENTS:
         yield event
     for heartbeat in heartbeats:
@@ -302,7 +302,7 @@ async def _async_upstream(
 
 def _sync_upstream(
     trailing: Exception | None, release: threading.Event | None = None, heartbeats: Iterator[bytes] = iter(())
-):
+) -> Iterator[bytes]:
     yield from _COMPLETE_STREAM_EVENTS
     yield from heartbeats
     if release is not None and not release.wait(timeout=5):
@@ -315,7 +315,7 @@ def _heartbeats() -> Iterator[bytes]:
     return iter([b": keep-alive\n\n"] * _HEARTBEATS_SENT)
 
 
-def _async_stream_over(upstream) -> tuple[ResponsesAPIStreamingIterator, asyncio.Event]:
+def _async_stream_over(upstream: AsyncIterator[bytes]) -> tuple[ResponsesAPIStreamingIterator, asyncio.Event]:
     closed: Final = asyncio.Event()
     mock_response: Final = Mock()
     mock_response.headers = {}
@@ -332,7 +332,7 @@ def _async_stream_over(upstream) -> tuple[ResponsesAPIStreamingIterator, asyncio
     return iterator, closed
 
 
-def _sync_stream_over(upstream) -> tuple[SyncResponsesAPIStreamingIterator, threading.Event]:
+def _sync_stream_over(upstream: Iterator[bytes]) -> tuple[SyncResponsesAPIStreamingIterator, threading.Event]:
     closed: Final = threading.Event()
     mock_response: Final = Mock()
     mock_response.headers = {}
@@ -369,7 +369,7 @@ async def test_stream_ends_at_completed_event_while_upstream_holds_the_socket_op
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("trailing", _UPSTREAM_TAILS_AFTER_COMPLETED)
-async def test_upstream_is_closed_after_the_stream_ends_at_completed_event(trailing):
+async def test_upstream_is_closed_after_the_stream_ends_at_completed_event(trailing: Exception | None):
     iterator, closed = _async_stream_over(_async_upstream(trailing))
 
     seen: Final = await asyncio.wait_for(_event_types(iterator), timeout=5)
@@ -392,7 +392,7 @@ def test_sync_stream_ends_at_completed_event_while_upstream_holds_the_socket_ope
 
 
 @pytest.mark.parametrize("trailing", _UPSTREAM_TAILS_AFTER_COMPLETED)
-def test_sync_upstream_is_closed_after_the_stream_ends_at_completed_event(trailing):
+def test_sync_upstream_is_closed_after_the_stream_ends_at_completed_event(trailing: Exception | None):
     iterator, closed = _sync_stream_over(_sync_upstream(trailing))
 
     seen: Final = [event.type for event in iterator]
@@ -471,7 +471,7 @@ def test_sync_upstreams_held_open_after_completed_event_drain_in_a_bounded_numbe
 async def test_stream_ends_at_incomplete_event_while_upstream_holds_the_socket_open():
     release: Final = asyncio.Event()
 
-    async def upstream():
+    async def upstream() -> AsyncIterator[bytes]:
         for event in (*_COMPLETE_STREAM_EVENTS[:-1], _sse_event({"type": "response.incomplete"})):
             yield event
         await release.wait()
@@ -485,7 +485,7 @@ async def test_stream_ends_at_incomplete_event_while_upstream_holds_the_socket_o
     await asyncio.wait_for(closed.wait(), timeout=5)
 
 
-async def _async_events(events: list[bytes]):
+async def _async_events(events: list[bytes]) -> AsyncIterator[bytes]:
     for event in events:
         yield event
 
