@@ -1789,13 +1789,13 @@ async def _listing_through_the_gateway(
     agent_permission: LiteLLM_ObjectPermissionTable | None = None,
     servers: Sequence[MCPServer] = GATEWAY_SERVERS,
 ) -> tuple[list[MCPTool], list[str]]:
-    async def upstream_listing(_client: object, server_name: str) -> list[MCPTool]:
-        return list(UPSTREAM_TOOLS[server_name])
+    async def upstream_listing(_client: object, server_name: str) -> ListToolsResult:
+        return ListToolsResult(tools=list(UPSTREAM_TOOLS[server_name]))
 
     manager: Final = MCPServerManager()
     manager.registry = {server.server_id: server for server in servers}
     manager.config_mcp_servers = dict(manager.registry)
-    manager.create_mcp_client = AsyncMock(return_value=object())
+    manager.create_mcp_client = AsyncMock(return_value=_listing_client())
     manager._fetch_tools_with_timeout = AsyncMock(side_effect=upstream_listing)
     tables: Final = types.SimpleNamespace(litellm_mcptoolsettable=toolset_table or _toolset_table())
     monkeypatch.setattr("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", manager)
