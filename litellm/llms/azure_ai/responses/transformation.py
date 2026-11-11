@@ -100,6 +100,24 @@ class AzureAIResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
     def get_stripped_model_name(self, model: str) -> str:
         return AzureFoundryModelInfo.get_base_model(super().get_stripped_model_name(model))
 
+    def transform_compact_response_api_request(
+        self,
+        model: str,
+        input: str | ResponseInputParam,
+        response_api_optional_request_params: dict[str, object],  # mutable-ok: signature fixed by the override contract
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict[str, str],  # mutable-ok: same
+    ) -> tuple[str, dict[str, object]]:  # mutable-ok: return type fixed by the override contract
+        return super().transform_compact_response_api_request(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # parent types the body as a bare dict
+            model=self.get_stripped_model_name(model),
+            input=input,
+            response_api_optional_request_params=response_api_optional_request_params,
+            api_base=api_base,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
     def should_fake_stream(
         self, model: str | None, stream: bool | None, custom_llm_provider: str | None = None
     ) -> bool:
