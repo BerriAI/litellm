@@ -4654,6 +4654,7 @@ export interface paths {
          *     - alias: Optional[str] = None  # human-friendly alias
          *     - blocked: bool = False  # allow/disallow requests for this end-user
          *     - max_budget: Optional[float] = None
+         *     - budget_duration: Optional[str] = None  # budget reset period ("30d", "1h", etc.)
          *     - budget_id: Optional[str] = None  # give either a budget_id or max_budget
          *     - allowed_model_region: Optional[AllowedModelRegion] = (
          *         None  # require all user requests to use models in this specific region
@@ -5333,6 +5334,7 @@ export interface paths {
          *     - alias: Optional[str] = None  # human-friendly alias
          *     - blocked: bool = False  # allow/disallow requests for this end-user
          *     - max_budget: Optional[float] = None
+         *     - budget_duration: Optional[str] = None  # budget reset period ("30d", "1h", etc.)
          *     - budget_id: Optional[str] = None  # give either a budget_id or max_budget
          *     - allowed_model_region: Optional[AllowedModelRegion] = (
          *         None  # require all user requests to use models in this specific region
@@ -50224,6 +50226,8 @@ export interface components {
              * @default false
              */
             blocked: boolean;
+            /** Budget Duration */
+            budget_duration?: string | null;
             /** Budget Id */
             budget_id?: string | null;
             /** Default Model */

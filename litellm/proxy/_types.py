@@ -1917,6 +1917,7 @@ class UpdateCustomerRequest(LiteLLMPydanticObjectBase):
     alias: str | None = None  # human-friendly alias
     blocked: bool = False  # allow/disallow requests for this end-user
     max_budget: float | None = None
+    budget_duration: str | None = None  # budget reset period ("30d", "1h", etc.)
     budget_id: str | None = None  # give either a budget_id or max_budget
     allowed_model_region: AllowedModelRegion | None = (
         None  # require all user requests to use models in this specific region
