@@ -26,6 +26,7 @@ from litellm.repositories.alert_repository import record_alerts
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
+KEY_DATE_INDEX: Final = "LiteLLM_DailyUserSpend_api_key_date_idx"
 _STATEMENT_TIMED_OUT: Final = "`57014`"
 _STATEMENT_TIMEOUT: Final = "2s"
 _TRANSACTION_TIMEOUT: Final = timedelta(seconds=5)
@@ -159,6 +160,7 @@ SET day = $2, scope = $3, resume_after = $4, wrapped = $5, checked = $6, skipped
 WHERE id = 1 AND owner = $1"""
 _ACCOUNTING_PENDING: Final = """SELECT 1 AS resource_id FROM "LiteLLM_SpendLogDelivery"
 WHERE state = 'pending' AND created_at < $1::timestamp LIMIT 1"""
+_INDEX_READY: Final = """SELECT 1 AS resource_id FROM pg_index WHERE indexrelid = to_regclass($1) AND indisvalid"""
 
 
 def is_statement_timeout(error: Exception) -> bool:
@@ -197,6 +199,14 @@ class PerformanceAlertRepository:
         day_end: Final = datetime.combine(day + timedelta(days=1), time.min, timezone.utc)
         async with self._transaction() as transaction:
             return bool(await transaction.query_raw(_ACCOUNTING_PENDING, day_end.replace(tzinfo=None).isoformat()))
+
+    async def key_index_ready(self) -> bool:
+        async with self._transaction() as transaction:
+            return bool(await transaction.query_raw(_INDEX_READY, f'"{KEY_DATE_INDEX}"'))
+
+    async def save(self, owner: str, state: SweepState) -> None:
+        async with self._transaction() as transaction:
+            await self._save(transaction, owner, state)
 
     async def evaluate_page(self, owner: str, state: SweepState, limit: int) -> SweepState:
         """Evaluate the next `limit` resources and save their alerts together with the new position."""

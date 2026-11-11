@@ -10,6 +10,7 @@ from typing import Final
 import psycopg
 import pytest
 import pytest_asyncio
+from litellm_proxy_extras.request_log_indexes import ensure_request_log_indexes
 from psycopg import sql
 
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -144,6 +145,7 @@ async def fixture() -> AsyncIterator[Fixture]:
 async def test_a_full_sweep_saves_one_alert_per_real_change_and_nothing_for_normal_or_new_usage(
     fixture: Fixture,
 ) -> None:
+    assert ensure_request_log_indexes(os.environ["DATABASE_URL"], "public")
     p: Final = fixture.prefix
     _seed("team", f"{p}-team-spike", Day(spend=10.0), Day(spend=100.0))
     _seed("team", f"{p}-team-steady", STEADY, STEADY)

@@ -12,8 +12,10 @@ from litellm.models.performance_alert import (
     SweepOwnershipLostError,
     SweepState,
     new_sweep,
+    next_scope,
     target_day,
 )
+from litellm.repositories.performance_alert_repository import KEY_DATE_INDEX
 
 RUN_INTERVAL: Final = timedelta(minutes=5)
 RUN_BUDGET_SECONDS: Final = 10.0
@@ -73,8 +75,14 @@ async def run_performance_alerts(
         if started is None or started.completed:
             return
         deadline: Final = clock() + RUN_BUDGET_SECONDS
+        keys_ready: Final = await store.key_index_ready()
         state = started  # rebind-ok: each page returns the next saved position
         while not state.completed and clock() < deadline:
+            if state.scope == "key" and not keys_ready:
+                verbose_proxy_logger.info("Performance alerts skipping keys until %s is built", KEY_DATE_INDEX)
+                state = next_scope(state)
+                await store.save(claim.owner, state)
+                continue
             state = await _step(store, claim.owner, state)
             await sleep(PAUSE_SECONDS)
         if state.completed:
