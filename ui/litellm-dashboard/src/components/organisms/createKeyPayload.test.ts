@@ -50,6 +50,16 @@ it("merges the budget alert rows into the metadata JSON box content", () => {
   });
 });
 
+it("drops a recipient map typed into the metadata JSON box, since the rows are its only editor", () => {
+  const result = build({
+    metadata: JSON.stringify({ cost_center: "ops", max_budget_alert_emails: { "500": "typed@example.com" } }),
+    max_budget_alert_emails: [],
+  });
+  expect(result.kind).toBe("ok");
+  if (result.kind !== "ok") throw new Error(result.kind);
+  expect(JSON.parse(String(result.payload.metadata))).toEqual({ cost_center: "ops" });
+});
+
 const payloadOf = (result: KeyPayloadResult): Record<string, unknown> => {
   expect(result.kind).toBe("ok");
   if (result.kind !== "ok") throw new Error("unreachable");

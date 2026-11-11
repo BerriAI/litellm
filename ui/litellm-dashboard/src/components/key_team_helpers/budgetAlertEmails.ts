@@ -27,8 +27,9 @@ const splitEmails = (emails: string): readonly string[] =>
   );
 
 const storedRecipients = (value: unknown): readonly string[] | null => {
+  if (value === null) return [];
   if (typeof value === "string") return splitEmails(value);
-  if (Array.isArray(value) && value.every((email) => typeof email === "string")) return value;
+  if (Array.isArray(value)) return value.filter((email): email is string => typeof email === "string");
   return null;
 };
 

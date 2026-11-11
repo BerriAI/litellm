@@ -112,7 +112,12 @@ const buildMetadataJson = (values: Record<string, unknown>, input: KeyCreateInpu
     values[KEY_MAX_BUDGET_ALERT_EMAILS_KEY] as readonly BudgetAlertRow[] | undefined,
     KEY_MAX_BUDGET_ALERT_EMAILS_KEY,
   );
-  return JSON.stringify(Object.keys(alertEmails).length > 0 ? { ...(disabled as object), ...alertEmails } : disabled);
+  if (typeof disabled !== "object" || disabled === null || Array.isArray(disabled)) return JSON.stringify(disabled);
+  const { [KEY_MAX_BUDGET_ALERT_EMAILS_KEY]: _typedAlertEmails, ...withoutTypedAlertEmails } = disabled as Record<
+    string,
+    unknown
+  >;
+  return JSON.stringify({ ...withoutTypedAlertEmails, ...alertEmails });
 };
 
 interface PermissionSources {

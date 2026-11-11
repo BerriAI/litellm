@@ -2376,7 +2376,7 @@
     },
     "maxBudgetAlertEmails": {
       "budgetAlertThresholds": "Budget Alert Thresholds",
-      "budgetAlertThresholdsHint": "Thresholds are a percentage of the key's max budget and the key owner's email is always included. Add comma-separated addresses, such as a shared mailbox or distribution list, to notify others as well. Requires email alerting to be configured on the proxy.",
+      "budgetAlertThresholdsHint": "Thresholds are a percentage of the key's max budget and replace the default 80% alert. The key owner's email is always included. Add comma-separated addresses, such as a shared mailbox or distribution list, to notify others as well. Requires email alerting to be configured on the proxy.",
       "thresholdPlaceholder": "% of budget",
       "recipientsPlaceholder": "Additional recipients, e.g. finance@example.com",
       "removeThreshold": "Remove budget alert threshold",

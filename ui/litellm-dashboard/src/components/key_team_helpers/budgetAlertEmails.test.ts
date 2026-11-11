@@ -22,11 +22,25 @@ describe("budgetAlertRowsFromMetadata", () => {
 
   it("drops non-numeric thresholds and non-email recipients instead of crashing", () => {
     const metadata = {
-      team_member_max_budget_alert_emails: { fifty: [], "90": [1], "95": null, "100": ["a@b.c"] },
+      team_member_max_budget_alert_emails: { fifty: [], "90": { a: 1 }, "100": ["a@b.c"] },
     };
     expect(budgetAlertRowsFromMetadata(metadata, TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY)).toEqual([
       { threshold: 100, emails: "a@b.c" },
     ]);
+  });
+
+  it("loads a null recipient list as an owner-only row and keeps the strings of a mixed list", () => {
+    const metadata = { max_budget_alert_emails: { "75": null, "80": ["b@example.com", null, 3] } };
+    expect(budgetAlertRowsFromMetadata(metadata, KEY_MAX_BUDGET_ALERT_EMAILS_KEY)).toEqual([
+      { threshold: 75, emails: "" },
+      { threshold: 80, emails: "b@example.com" },
+    ]);
+  });
+
+  it("lists API-stored string recipients in the team member summary", () => {
+    expect(teamMemberBudgetAlertSummary({ team_member_max_budget_alert_emails: { "80": "a@x.com, b@x.com" } })).toEqual(
+      ["80%: member, a@x.com, b@x.com"],
+    );
   });
 
   it("keeps API-stored comma-separated string recipients, which the backend also accepts", () => {
