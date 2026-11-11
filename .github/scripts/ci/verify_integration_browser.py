@@ -31,7 +31,7 @@ def main() -> None:
     result: Final = json.loads(Path(sys.argv[1]).read_text())
     assert not result.get("errors"), result.get("errors")
     expected: Final = json.loads(
-        (Path(__file__).resolve().parents[2] / "tests/e2e/ui/tests/integrationCritical/expected.json").read_text()
+        (Path(__file__).resolve().parents[3] / "tests/e2e/ui/tests/integrationCritical/expected.json").read_text()
     )
     assert expected and result["stats"]["expected"] == len(expected)
     assert all(result["stats"][name] == 0 for name in ("unexpected", "flaky", "skipped"))
@@ -41,7 +41,7 @@ def main() -> None:
 
     suites: Final = TypeAdapter(list[BrowserSuite]).validate_python(result["suites"], strict=True)
     specs: Final = tuple(spec for suite in suites for spec in cases(suite))
-    repository: Final = Path(__file__).resolve().parents[2]
+    repository: Final = Path(__file__).resolve().parents[3]
     report_root: Final = Path(result["config"]["rootDir"])
     assert report_root.is_absolute(), "Playwright rootDir must be explicit"
     observed: Final = tuple(
