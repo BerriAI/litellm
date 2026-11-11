@@ -1311,6 +1311,8 @@ async def test_key_model_allowlist_applies_to_the_model_selected_by_the_url(
     from litellm.proxy.auth.user_api_key_auth import enforce_key_and_fallback_model_access
 
     monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", None)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_model", None)
     router: Final = litellm.Router(
         model_list=[
             {"model_name": name, "litellm_params": {"model": f"openai/{name}", "api_key": "sk-fake"}}
