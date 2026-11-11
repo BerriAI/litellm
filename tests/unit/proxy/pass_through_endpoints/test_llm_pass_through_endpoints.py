@@ -7256,6 +7256,136 @@ class TestAnthropicProxyRoute:
         assert thread_ids and thread_ids[0] != threading.get_ident()
 
 
+_HAIKU_PRICING: Final = MappingProxyType({"input_cost_per_token": 1e-07, "output_cost_per_token": 5e-07})
+
+
+def _anthropic_deployment(
+    deployment_id: str,
+    model_name: str = "claude-haiku-5-5",
+    backend: str = "anthropic/claude-haiku-5-5",
+    model_info_pricing: Mapping[str, float] = _HAIKU_PRICING,
+    params_pricing: Mapping[str, float] = MappingProxyType({}),
+) -> dict[str, object]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {"model": backend, "api_key": "sk-ant-test", **params_pricing},
+        "model_info": {"id": deployment_id, **model_info_pricing},
+    }
+
+
+def _passthrough_pricing(
+    monkeypatch: pytest.MonkeyPatch, *deployments: dict[str, object]
+) -> Mapping[str, object] | None:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        anthropic_deployment_pricing_model_info,
+    )
+
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    router: Final = litellm.Router(model_list=[*deployments])
+    return anthropic_deployment_pricing_model_info(router, {"model": "claude-haiku-5-5"}, None)
+
+
+def test_anthropic_passthrough_prices_with_the_one_deployment_serving_the_requested_model(monkeypatch):
+    model_info: Final = _passthrough_pricing(monkeypatch, _anthropic_deployment("haiku-dep"))
+
+    assert model_info is not None
+    assert model_info["id"] == "haiku-dep"
+    assert {key: model_info[key] for key in _HAIKU_PRICING} == _HAIKU_PRICING
+
+
+def test_anthropic_passthrough_reads_custom_pricing_set_in_litellm_params(monkeypatch):
+    model_info: Final = _passthrough_pricing(
+        monkeypatch,
+        _anthropic_deployment("haiku-dep", model_info_pricing=MappingProxyType({}), params_pricing=_HAIKU_PRICING),
+    )
+
+    assert model_info is not None
+    assert model_info["id"] == "haiku-dep"
+    assert {key: model_info[key] for key in _HAIKU_PRICING} == _HAIKU_PRICING
+
+
+@pytest.mark.parametrize(
+    "deployments",
+    [
+        pytest.param(
+            (
+                _anthropic_deployment("haiku-dep-a"),
+                _anthropic_deployment("haiku-dep-b", model_info_pricing={"input_cost_per_token": 9e-07}),
+            ),
+            id="two-deployments-could-bill-either-price",
+        ),
+        pytest.param(
+            (_anthropic_deployment("opus-dep", backend="anthropic/claude-opus-5-5"),),
+            id="group-serves-a-different-upstream-model",
+        ),
+        pytest.param(
+            (_anthropic_deployment("bedrock-dep", backend="bedrock/claude-haiku-5-5"),),
+            id="deployment-is-not-anthropic",
+        ),
+        pytest.param(
+            (_anthropic_deployment("other-group-dep", model_name="haiku-alias"),),
+            id="model-group-not-requested",
+        ),
+        pytest.param(
+            (_anthropic_deployment("unpriced-dep", model_info_pricing=MappingProxyType({})),),
+            id="deployment-has-no-custom-pricing",
+        ),
+    ],
+)
+def test_anthropic_passthrough_attaches_no_deployment_pricing_without_one_priced_match(monkeypatch, deployments):
+    assert _passthrough_pricing(monkeypatch, *deployments) is None
+
+
+@pytest.mark.asyncio
+async def test_anthropic_proxy_route_hands_the_deployment_pricing_to_the_passthrough_request(monkeypatch):
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+        LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
+    )
+
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router", litellm.Router(model_list=[_anthropic_deployment("haiku-dep")])
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    body: Final = b'{"model":"claude-haiku-5-5","messages":[{"role":"user","content":"hi"}]}'
+
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/anthropic/v1/messages",
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json")],
+            "state": {},
+        },
+        receive,
+    )
+    seen: Final = []
+
+    async def relay(request: Request, *_: object) -> dict[str, bool]:
+        seen.append(getattr(request.state, LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY, None))
+        return {"ok": True}
+
+    with patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+        return_value=relay,
+    ):
+        await anthropic_proxy_route(
+            endpoint="v1/messages",
+            request=request,
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-caller-virtual-key"),
+        )
+
+    (model_info,) = seen
+    assert model_info is not None
+    assert model_info["id"] == "haiku-dep"
+    assert {key: model_info[key] for key in _HAIKU_PRICING} == _HAIKU_PRICING
+
+
 class TestAnthropicProxyRouteCallerAuthHeaders:
     """Regression for a caller credential riding upstream next to a server-owned one.
 

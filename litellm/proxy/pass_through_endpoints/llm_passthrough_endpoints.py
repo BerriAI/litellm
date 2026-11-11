@@ -53,6 +53,7 @@ from litellm.integrations.custom_guardrail import guardrail_request_data_with_st
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, attribute_or_none
 from litellm.litellm_core_utils.fallback_generalizations import match_routing_generalization
+from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
 from litellm.llms.anthropic.common_utils import (
     AnthropicModelInfo,
     anthropic_pass_through_api_base,
@@ -188,7 +189,7 @@ from litellm.types.passthrough_endpoints.tinyfish import (
 )
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 from litellm.types.router import LiteLLMParamsTypedDict
-from litellm.types.utils import CallTypes, LlmProviders
+from litellm.types.utils import CallTypes, CustomPricingLiteLLMParams, LlmProviders
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore, LiteLLM_ManagedVectorStoreIndex
 from litellm.utils import ProviderConfigManager, with_named_credential
 
@@ -246,6 +247,46 @@ def _models_served_by_group(llm_router: litellm.Router, model_group: str) -> fro
     return frozenset(
         _deployment_model_name(row["litellm_params"]) for row in llm_router.registry().deployments(model_group) or ()
     )
+
+
+def _serves_anthropic_model(litellm_params: LiteLLMParamsTypedDict, model: str) -> bool:
+    try:
+        backend_model, provider, _, _ = get_llm_provider(
+            model=litellm_params.get("model", ""), custom_llm_provider=litellm_params.get("custom_llm_provider")
+        )
+    except litellm.BadRequestError:
+        return False
+    return provider == LlmProviders.ANTHROPIC.value and backend_model == model
+
+
+def anthropic_deployment_pricing_model_info(
+    llm_router: litellm.Router | None, request_body: Mapping[str, object], team_id: str | None
+) -> Mapping[str, object] | None:
+    """
+    The pass-through forwards the body unchanged, so no deployment is selected for the call. Only a single
+    deployment in the requested model group serving that exact Anthropic model can say what it costs: with
+    several, any pick could bill another deployment's negotiated price.
+    """
+    model: Final = request_body.get("model")
+    if llm_router is None or not isinstance(model, str) or not model:
+        return None
+    matches: Final = tuple(
+        deployment
+        for deployment in llm_router.registry().deployments(model, team_id=team_id) or ()
+        if _serves_anthropic_model(deployment["litellm_params"], model)
+    )
+    if len(matches) != 1:
+        return None
+    deployment_params: Final[Mapping[str, object]] = matches[0]["litellm_params"]
+    model_info: Final = {
+        **(as_str_mapping(matches[0].get("model_info")) or {}),
+        **{
+            field: value
+            for field in CustomPricingLiteLLMParams.model_fields
+            if (value := deployment_params.get(field)) is not None
+        },
+    }
+    return model_info if use_custom_pricing_for_model({"metadata": {"model_info": model_info}}) else None
 
 
 def is_passthrough_request_streaming(request_body: object) -> bool:
@@ -1235,6 +1276,16 @@ async def anthropic_proxy_route(
 
     ## check for streaming
     is_streaming_request: Final = await is_streaming_request_fn(request)
+
+    from litellm.proxy.proxy_server import llm_router
+
+    deployment_model_info: Final = (
+        anthropic_deployment_pricing_model_info(llm_router, await read_request_body(request), user_api_key_dict.team_id)
+        if request.method == "POST"
+        else None
+    )
+    if deployment_model_info is not None:
+        setattr(request.state, LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY, deployment_model_info)
 
     ## CREATE PASS-THROUGH
     auth_header: Final = await AnthropicModelInfo.aget_auth_header(
