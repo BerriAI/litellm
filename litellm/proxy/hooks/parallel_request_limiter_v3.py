@@ -3347,6 +3347,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     headers={
                         "retry-after": str(self.window_size),
                         "rate_limit_type": str(status["rate_limit_type"]),
+                        "rate_limited_by": descriptor_key,
                         "reset_at": reset_time_formatted,
                     },
                     rate_limit_type=map_v3_rate_limit_type(status["rate_limit_type"]),
