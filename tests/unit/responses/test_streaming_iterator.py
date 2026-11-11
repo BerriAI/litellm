@@ -30,12 +30,14 @@ from litellm.responses.streaming_iterator import (
     ResponsesAPIStreamingIterator,
     SyncResponsesAPIStreamingIterator,
     _MAX_CHUNKS_READ_AFTER_TERMINAL_EVENT,
+    _MAX_CONCURRENT_SYNC_UPSTREAM_RELEASES,
     _UPSTREAM_RELEASE_TIMEOUT_SECONDS,
     _estimate_usage_from_text,
 )
 from litellm.types.llms.openai import (
     ResponseAPIUsage,
     ResponseCompletedEvent,
+    ResponseIncompleteEvent,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
     ResponsesAPIStreamingResponse,
@@ -68,6 +70,11 @@ def _mock_config() -> Mock:
         if evt_type == "response.completed":
             return ResponseCompletedEvent(
                 type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                response=mock_responses_api_response,
+            )
+        if evt_type == "response.incomplete":
+            return ResponseIncompleteEvent(
+                type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
                 response=mock_responses_api_response,
             )
         stub = Mock()
@@ -437,6 +444,45 @@ def test_sync_upstream_heartbeats_after_completed_event_are_cut_off_and_closed()
     assert seen[-1] == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
     assert closed.wait(timeout=5)
     assert _HEARTBEATS_SENT - len(list(heartbeats)) <= _MAX_CHUNKS_READ_AFTER_TERMINAL_EVENT
+
+
+def test_sync_upstreams_held_open_after_completed_event_drain_in_a_bounded_number_of_threads():
+    releases: Final = tuple(threading.Event() for _ in range(_MAX_CONCURRENT_SYNC_UPSTREAM_RELEASES + 1))
+    streams: Final = tuple(_sync_stream_over(_sync_upstream(None, release)) for release in releases)
+
+    last_events: Final = tuple([event.type for event in iterator][-1] for iterator, _ in streams)
+    closed_at_once: Final = tuple(closed.is_set() for _, closed in streams)
+    for release in releases:
+        release.set()
+
+    assert set(last_events) == {ResponsesAPIStreamEvents.RESPONSE_COMPLETED}
+    assert any(closed_at_once), "every held-open upstream got its own draining thread"
+    assert all(closed.wait(timeout=5) for _, closed in streams)
+
+    late_release: Final = threading.Event()
+    late, late_closed = _sync_stream_over(_sync_upstream(None, late_release))
+    assert [event.type for event in late][-1] == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    assert not late_closed.is_set(), "a finished drain did not free its thread slot"
+    late_release.set()
+    assert late_closed.wait(timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_stream_ends_at_incomplete_event_while_upstream_holds_the_socket_open():
+    release: Final = asyncio.Event()
+
+    async def upstream():
+        for event in (*_COMPLETE_STREAM_EVENTS[:-1], _sse_event({"type": "response.incomplete"})):
+            yield event
+        await release.wait()
+
+    iterator, closed = _async_stream_over(upstream())
+
+    seen: Final = await asyncio.wait_for(_event_types(iterator), timeout=5)
+
+    assert seen[-1] == ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE
+    release.set()
+    await asyncio.wait_for(closed.wait(), timeout=5)
 
 
 async def _async_events(events: list[bytes]):

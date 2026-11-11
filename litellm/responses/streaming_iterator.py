@@ -244,6 +244,8 @@ async def drain_logging_tasks(timeout: float = 5.0) -> None:
 _MAX_CHUNKS_READ_AFTER_TERMINAL_EVENT: Final = 8
 _UPSTREAM_RELEASE_TIMEOUT_SECONDS: Final = 1.0
 _UPSTREAM_RELEASE_TASKS: Final[set[asyncio.Task[object]]] = set()  # mutable-ok: strong refs to upstream release tasks
+_MAX_CONCURRENT_SYNC_UPSTREAM_RELEASES: Final = 8
+_SYNC_UPSTREAM_RELEASE_SLOTS: Final = threading.BoundedSemaphore(_MAX_CONCURRENT_SYNC_UPSTREAM_RELEASES)
 
 
 async def _drain_after_terminal_event(upstream_bytes: AsyncIterator[bytes]) -> None:
@@ -280,6 +282,7 @@ def _release_upstream_after_terminal_event_sync(upstream_bytes: Iterator[bytes],
     else:
         verbose_logger.debug("Upstream Responses stream kept sending after its terminal event, closing it")
     finally:
+        _SYNC_UPSTREAM_RELEASE_SLOTS.release()
         with contextlib.suppress(httpx.HTTPError, httpx.StreamError):
             response.close()
 
@@ -297,6 +300,11 @@ def _spawn_upstream_release(upstream_bytes: AsyncIterator[bytes], response: http
 
 
 def _start_upstream_release_sync(upstream_bytes: Iterator[bytes], response: httpx.Response) -> None:
+    if not _SYNC_UPSTREAM_RELEASE_SLOTS.acquire(blocking=False):
+        verbose_logger.debug("Too many upstream Responses streams are still draining, closing this one now")
+        with contextlib.suppress(httpx.HTTPError, httpx.StreamError):
+            response.close()
+        return
     threading.Thread(
         target=_release_upstream_after_terminal_event_sync,
         args=(upstream_bytes, response),
