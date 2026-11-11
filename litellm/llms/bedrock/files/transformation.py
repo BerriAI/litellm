@@ -38,6 +38,7 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     split_configured_cloud_bucket_name,
     validate_managed_cloud_file_id,
 )
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_file_data,
     text_completion_prompt_to_messages,
@@ -1025,7 +1026,9 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
 
         messages: Final = map_developer_role_to_system_role(openai_request_body.get("messages", []))
         optional_params: Final = {k: v for k, v in openai_request_body.items() if k not in ["model", "messages"]}
-        drop_unsupported_params: Final = drop_params or optional_params.get("drop_params") is True
+        drop_unsupported_params: Final = (
+            drop_params or normalize_drop_params(optional_params.get("drop_params")) is True
+        )
         requested_service_tier: Final = REQUEST_PARAMS.validate_python(optional_params).get("service_tier")
 
         # --- Anthropic: use existing AmazonAnthropicClaudeConfig ---
@@ -1204,10 +1207,11 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             openai_jsonl_content = [json.loads(line) for line in original_file_content.splitlines() if line.strip()]
             litellm_params_model: Final = litellm_params.get("model")
             target_model: Final = model or (litellm_params_model if isinstance(litellm_params_model, str) else "")
+            deployment_drop_params: Final = REQUEST_PARAMS.validate_python(litellm_params).get("drop_params")
             bedrock_jsonl_content = self._transform_openai_jsonl_content_to_bedrock_jsonl_content(
                 openai_jsonl_content,
                 target_model=target_model,
-                drop_params=REQUEST_PARAMS.validate_python(litellm_params).get("drop_params") is True,
+                drop_params=normalize_drop_params(deployment_drop_params) is True,
             )
             file_content = "\n".join(json.dumps(item) for item in bedrock_jsonl_content)
         elif isinstance(extracted_file_data_content, bytes):
