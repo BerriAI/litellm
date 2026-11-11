@@ -1,10 +1,10 @@
 import json
+from pathlib import Path
 from typing import Final, Literal
-from unittest.mock import MagicMock, patch
 
 import pytest
 
-
+from litellm.integrations.custom_guardrail import GuardrailSetupError
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import CustomCodeCompilationError
 from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
@@ -605,3 +605,73 @@ def test_init_guardrails_v2_publishes_initialized_guardrail_to_the_proxy_router(
         "callback": registered,
         "id": "aporia-1",
     }
+
+
+_CUSTOM_CALLBACKS_MODULE: Final = """from litellm.integrations.custom_logger import CustomLogger
+
+
+class MyCustomHandler(CustomLogger):
+    pass
+
+
+proxy_handler_instance = MyCustomHandler()
+"""
+
+
+def _custom_guardrail_entry(guardrail_path: str) -> dict:
+    return {
+        "guardrail_name": "my-guard",
+        "litellm_params": {
+            "guardrail": guardrail_path,
+            "mode": "pre_call",
+        },
+    }
+
+
+def test_init_guardrails_v2_fails_startup_when_custom_guardrail_names_an_instance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    Regression (BerriAI/litellm#50788): a guardrail entry whose dotted path names an
+    instance (the shape litellm_settings.callbacks wants) used to be skipped at startup
+    with a logged TypeError, so the proxy came up looking healthy and never ran the hook.
+    Startup must fail with an error naming the entry, showing the class-shaped YAML,
+    and pointing at the instance-shaped callbacks list.
+    """
+    from litellm.proxy.guardrails import guardrail_registry
+
+    (tmp_path / "custom_callbacks.py").write_text(_CUSTOM_CALLBACKS_MODULE)
+    monkeypatch.setattr(guardrail_registry, "IN_MEMORY_GUARDRAIL_HANDLER", InMemoryGuardrailHandler())
+
+    with pytest.raises(GuardrailSetupError) as excinfo:
+        init_guardrails_v2(
+            all_guardrails=[_custom_guardrail_entry("custom_callbacks.proxy_handler_instance")],
+            config_file_path=str(tmp_path / "config.yaml"),
+        )
+
+    message: Final = str(excinfo.value)
+    assert "my-guard" in message, message
+    assert "custom_callbacks.proxy_handler_instance" in message, message
+    assert "guardrail: custom_callbacks.MyCustomHandler" in message, message
+    assert "litellm_settings.callbacks" in message, message
+
+
+def test_init_guardrails_v2_accepts_custom_guardrail_named_as_a_class(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The class-shaped dotted path from the same issue must keep working."""
+    from litellm.proxy.guardrails import guardrail_registry
+
+    (tmp_path / "custom_callbacks.py").write_text(_CUSTOM_CALLBACKS_MODULE)
+    handler: Final = InMemoryGuardrailHandler()
+    monkeypatch.setattr(guardrail_registry, "IN_MEMORY_GUARDRAIL_HANDLER", handler)
+
+    init_guardrails_v2(
+        all_guardrails=[_custom_guardrail_entry("custom_callbacks.MyCustomHandler")],
+        config_file_path=str(tmp_path / "config.yaml"),
+    )
+
+    registered: Final = handler.IN_MEMORY_GUARDRAILS
+    assert "my-guard" in {guardrail["guardrail_name"] for guardrail in registered.values()}
+    callback: Final = next(iter(handler.guardrail_id_to_custom_guardrail.values()))
+    assert type(callback).__name__ == "MyCustomHandler"

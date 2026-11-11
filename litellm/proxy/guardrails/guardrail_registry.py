@@ -16,7 +16,7 @@ from litellm import Router
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH, GUARDRAIL_ROTATION_ATTEMPTS
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import CustomGuardrail, GuardrailSetupError
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
@@ -904,6 +904,16 @@ class InMemoryGuardrailHandler:
         _guardrail_class: Final[Callable[..., CustomGuardrail]] = get_instance_fn(
             guardrail_type, config_file_path=config_file_path
         )
+
+        if not isinstance(_guardrail_class, type):
+            resolved_type: Final = type(_guardrail_class)
+            raise GuardrailSetupError(
+                f"Guardrail '{guardrail['guardrail_name']}' names '{guardrail_type}' in `guardrail`, but that dotted "
+                f"path resolved to a {resolved_type.__name__} object, not a class. The proxy builds the guardrail "
+                f"from the class with guardrail_name, mode and extra params, so point `guardrail` at the class, "
+                f"e.g. `guardrail: {resolved_type.__module__}.{resolved_type.__qualname__}`. The instance belongs "
+                f"in `litellm_settings.callbacks`, e.g. `callbacks: [{guardrail_type}]`."
+            )
 
         mode: Final = litellm_params.mode
         if mode is None:
