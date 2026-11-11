@@ -515,6 +515,8 @@ class PydanticAITransformation:
                             "contextId": context_id,
                             "kind": "artifact-update",
                             "taskId": task_id,
+                            "append": i > 0,
+                            "lastChunk": is_last_chunk,
                             "artifact": {
                                 "artifactId": artifact_id,
                                 "parts": [

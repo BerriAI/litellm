@@ -3,7 +3,8 @@ import json
 import re
 import time
 import traceback
-from collections.abc import Mapping, Sequence
+from collections.abc import Generator, Iterable, Iterator, Mapping, Sequence
+from types import MappingProxyType
 from typing import Final, Literal, cast
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
@@ -11,15 +12,20 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.constants import (
+    RESPONSE_FORMAT_TOOL_NAME,
+    STREAM_CHUNK_CHOICE_FIELDS,
+    STREAM_FINISH_CHOICE_FIELDS,
+    VLLM_CHOICE_FIELDS,
+)
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     extract_reasoning_content,
 )
 from litellm.llms.ollama.common_utils import OllamaResponseIdNormalizer
 from litellm.types.llms.databricks import DatabricksTool
 from litellm.types.llms.openai import (
-    ChatCompletionReasoningItem,
+    ChatCompletionAnnotation,
     ChatCompletionThinkingBlock,
     ImageURLListItem,
     OpenAIModerationResponse,
@@ -57,6 +63,31 @@ from .get_headers import get_response_headers
 _MESSAGE_FIELDS: Final[frozenset] = frozenset(Message.model_fields.keys())
 _CHOICES_FIELDS: Final[frozenset] = frozenset(Choices.model_fields.keys())
 _MODEL_RESPONSE_FIELDS: Final[frozenset] = frozenset(ModelResponse.model_fields.keys()) | {"usage"}
+
+
+_ANNOTATION_ENTRIES: Final = TypeAdapter(tuple[object, ...])
+
+
+def _is_provider_specific_annotation(annotation: object) -> bool:
+    match annotation:
+        case {"type": "url_citation"}:
+            return False
+        case {"type": _}:
+            return True
+        case _:
+            return False
+
+
+def _annotation_entries(annotations: object) -> tuple[object, ...]:
+    return _ANNOTATION_ENTRIES.validate_python(annotations) if isinstance(annotations, list) else ()
+
+
+def partition_annotations(annotations: object) -> tuple[object, tuple[object, ...]]:
+    entries: Final = _annotation_entries(annotations)
+    others: Final = tuple(annotation for annotation in entries if _is_provider_specific_annotation(annotation))
+    if not others:
+        return annotations, ()
+    return [annotation for annotation in entries if not _is_provider_specific_annotation(annotation)] or None, others
 
 
 def _normalize_images_for_message(
@@ -145,31 +176,112 @@ def _split_assembled_content_for_replay(content: str | None) -> list[str]:
     return _REPLAY_CONTENT_SLICE_RE.findall(content)
 
 
-def _clear_later_replay_slice_metadata(choice: StreamingChoices) -> None:
-    # Rebuild the delta as content-only so every accumulate-able field (role,
-    # tool_calls, reasoning_content, thinking_blocks, audio, images,
-    # annotations, ...) is dropped on later slices instead of an enumerated
-    # subset; repeating any of them makes downstream handlers that accumulate
-    # streamed deltas collect it once per slice, and a field added to Delta
-    # later can't silently re-introduce the duplication.
-    choice.delta = Delta(content=choice.delta.content)
-    choice.logprobs = None
-    if hasattr(choice, "enhancements"):
-        del choice.enhancements
+def _drop_choice_fields(choice: StreamingChoices, fields: Iterable[str]) -> None:
+    for field in fields:
+        if hasattr(choice, field):
+            delattr(choice, field)
 
 
-def _first_replay_delta(
-    message: Mapping[str, object], reasoning_items: Sequence[ChatCompletionReasoningItem] | None
-) -> Delta:
-    return Delta(
-        content=message.get("content"),
-        role=message["role"],
-        function_call=message.get("function_call"),
-        tool_calls=message.get("tool_calls"),
-        reasoning_items=None if reasoning_items is None else list(reasoning_items),
-        provider_specific_fields=_cached_provider_specific_fields(
-            _CACHED_MESSAGE_PROVIDER_FIELDS.validate_python(message)
-        ),
+def _vllm_choice_fields(choice: Mapping[str, object]) -> Mapping[str, object]:
+    cached_fields: Final = _choice_provider_specific_fields(choice)
+    return MappingProxyType(
+        {
+            field: choice[field] if field in choice else cached_fields[field]
+            for field in VLLM_CHOICE_FIELDS
+            if field in choice or field in cached_fields
+        }
+    )
+
+
+def _choice_provider_specific_fields(choice: Mapping[str, object]) -> Mapping[str, object]:
+    fields: Final = choice.get("provider_specific_fields")
+    return _FIELD_MAP.validate_python(fields) if isinstance(fields, dict) else MappingProxyType({})
+
+
+_REPLAY_REASONING_FIELDS: Final = frozenset({"reasoning_content", "thinking_blocks", "reasoning_items"})
+_REPLAY_LEAD_FIELDS: Final = _REPLAY_REASONING_FIELDS | {"role", "provider_specific_fields"}
+_REPLAY_TOOL_FIELDS: Final = frozenset({"tool_calls", "function_call"})
+_REPLAY_TEXT_FIELDS: Final = frozenset({"content", "annotations"})
+
+
+def _fields_in(fields: Mapping[str, object], keys: frozenset[str]) -> dict[str, object]:
+    return {key: value for key, value in fields.items() if key in keys}
+
+
+def _replay_deltas(delta: Delta) -> tuple[Delta, ...]:
+    fields: Final[dict[str, object]] = delta.model_dump(exclude_none=True)
+    lead: Final = _fields_in(fields, _REPLAY_LEAD_FIELDS) if _REPLAY_REASONING_FIELDS.intersection(fields) else {}
+    pieces: Final = _split_assembled_content_for_replay(delta.content) or ([delta.content] if delta.content else [])
+    if not pieces and not lead:
+        return (delta,)
+    if not pieces:
+        held_back: Final = lead.keys() | {"content"}
+        rest: Final = {key: value for key, value in fields.items() if key not in held_back}
+        return (Delta.model_validate(lead),) + ((Delta.model_validate(rest),) if rest else ())
+    tools: Final = _fields_in(fields, _REPLAY_TOOL_FIELDS)
+    annotations: Final = _fields_in(fields, frozenset({"annotations"}))
+    moved: Final = lead.keys() | _REPLAY_TOOL_FIELDS | _REPLAY_TEXT_FIELDS
+    first_slice: Final = {key: value for key, value in fields.items() if key not in moved}
+    last_index: Final = len(pieces) - 1
+    return (
+        ((Delta.model_validate(lead),) if lead else ())
+        + tuple(
+            Delta.model_validate(
+                {
+                    **(first_slice if index == 0 else {}),
+                    "content": piece,
+                    **(annotations if index == last_index else {}),
+                }
+            )
+            for index, piece in enumerate(pieces)
+        )
+        + ((Delta.model_validate(tools),) if tools else ())
+    )
+
+
+def _replay_frame(
+    response: ModelResponseStream, delta: Delta, finish_reason: str | None, keeps_choice_metadata: bool
+) -> ModelResponseStream:
+    frame: Final = response.model_copy(deep=True)
+    choice: Final = frame.choices[0]
+    choice.delta = delta
+    choice.finish_reason = finish_reason
+    if not keeps_choice_metadata:
+        choice.logprobs = None
+        _drop_choice_fields(choice, ("enhancements", *STREAM_CHUNK_CHOICE_FIELDS))
+    if finish_reason is None:
+        _drop_choice_fields(choice, STREAM_FINISH_CHOICE_FIELDS)
+    return frame
+
+
+def _replay_frames(response: ModelResponseStream) -> Iterator[ModelResponseStream]:
+    if len(response.choices) != 1:
+        yield response
+        return
+    usage: Final = getattr(response, "usage", None)
+    if usage is not None:
+        delattr(response, "usage")
+    choice: Final = response.choices[0]
+    deltas: Final = _replay_deltas(choice.delta)
+    first_text: Final = next((index for index, delta in enumerate(deltas) if delta.content), 0)
+    for index, delta in enumerate(deltas):
+        yield _replay_frame(response, delta, finish_reason=None, keeps_choice_metadata=index == first_text)
+    finish_frame: Final = _replay_frame(
+        response, Delta(), finish_reason=choice.finish_reason, keeps_choice_metadata=False
+    )
+    if usage is not None:
+        setattr(finish_frame, "usage", usage)
+    yield finish_frame
+
+
+def _first_replay_delta(message: Mapping[str, object]) -> Delta:
+    return Delta.model_validate(
+        {
+            **message,
+            "provider_specific_fields": _cached_provider_specific_fields(
+                _CACHED_MESSAGE_PROVIDER_FIELDS.validate_python(message)
+            ),
+        }
     )
 
 
@@ -234,7 +346,7 @@ async def convert_to_streaming_response_async(
                     t["index"] = index
                 pydantic_tool_calls.append(ChatCompletionDeltaToolCall(**t))
             choice["message"]["tool_calls"] = pydantic_tool_calls
-        delta = _first_replay_delta(choice["message"], choice["message"].get("reasoning_items"))
+        delta = _first_replay_delta(choice["message"])
         finish_reason = choice.get("finish_reason", None)
 
         if finish_reason is None:
@@ -242,7 +354,9 @@ async def convert_to_streaming_response_async(
 
         logprobs = choice.get("logprobs", None)
 
-        choice = StreamingChoices(finish_reason=finish_reason, index=idx, delta=delta, logprobs=logprobs)
+        choice = StreamingChoices(
+            finish_reason=finish_reason, index=idx, delta=delta, logprobs=logprobs, **_vllm_choice_fields(choice)
+        )
         choice_list.append(choice)
 
     model_response_object.choices = choice_list
@@ -266,41 +380,14 @@ async def convert_to_streaming_response_async(
     if "model" in response_object:
         model_response_object.model = response_object["model"]
 
-    # Replay cached content with per-word cadence so stream=true cache hits
-    # don't arrive as a single SSE frame. Multi-choice (n>1) responses and
-    # unsplittable content (None/empty/whitespace-free) keep the original
-    # single-yield behavior.
-    slices: list[str] = []
-    if len(model_response_object.choices) == 1:
-        slices = _split_assembled_content_for_replay(model_response_object.choices[0].delta.content)
-    if len(slices) <= 1:
-        yield model_response_object
-        await asyncio.sleep(0)
-        return
-
-    # Detach usage from the base object so we can re-attach it only to the
-    # final slice chunk. A non-None usage always lives in __pydantic_extra__
-    # here (set via setattr above), so delattr cannot fail.
-    original_usage: Final = getattr(model_response_object, "usage", None)
-    if original_usage is not None:
-        delattr(model_response_object, "usage")
-    original_finish_reason: Final = model_response_object.choices[0].finish_reason
-    last_idx: Final = len(slices) - 1
-    for i, piece in enumerate(slices):
-        slice_chunk = model_response_object.model_copy(deep=True)
-        slice_chunk.choices[0].delta.content = piece
-        if i > 0:
-            _clear_later_replay_slice_metadata(slice_chunk.choices[0])
-        slice_chunk.choices[0].finish_reason = original_finish_reason if i == last_idx else None
-        if i == last_idx and original_usage is not None:
-            setattr(slice_chunk, "usage", original_usage)
-        yield slice_chunk
+    for frame in _replay_frames(model_response_object):
+        yield frame
         await asyncio.sleep(0)
 
 
 def convert_to_streaming_response(
     response_object: dict | None = None,
-):
+) -> Generator[ModelResponseStream, None, None]:
     # used for yielding Cache hits when stream == True
     if response_object is None:
         raise Exception("Error in response object format")
@@ -332,6 +419,7 @@ def convert_to_streaming_response(
             delta=delta,
             logprobs=logprobs,
             enhancements=enhancements,
+            **_vllm_choice_fields(choice),
         )
 
         choice_list.append(choice)
@@ -356,30 +444,7 @@ def convert_to_streaming_response(
     if "model" in response_object:
         model_response_object.model = response_object["model"]
 
-    # Replay cached content with per-word cadence on sync cache-hit paths
-    # (S3Cache, sync completion()). See convert_to_streaming_response_async
-    # for the full rationale — this mirrors its tail.
-    slices: list[str] = []
-    if len(model_response_object.choices) == 1:
-        slices = _split_assembled_content_for_replay(model_response_object.choices[0].delta.content)
-    if len(slices) <= 1:
-        yield model_response_object
-        return
-
-    original_usage: Final = getattr(model_response_object, "usage", None)
-    if original_usage is not None:
-        delattr(model_response_object, "usage")
-    original_finish_reason: Final = model_response_object.choices[0].finish_reason
-    last_idx: Final = len(slices) - 1
-    for i, piece in enumerate(slices):
-        slice_chunk = model_response_object.model_copy(deep=True)
-        slice_chunk.choices[0].delta.content = piece
-        if i > 0:
-            _clear_later_replay_slice_metadata(slice_chunk.choices[0])
-        slice_chunk.choices[0].finish_reason = original_finish_reason if i == last_idx else None
-        if i == last_idx and original_usage is not None:
-            setattr(slice_chunk, "usage", original_usage)
-        yield slice_chunk
+    yield from _replay_frames(model_response_object)
 
 
 from collections import defaultdict
@@ -787,6 +852,9 @@ def convert_to_model_response_object(
                     provider_specific_fields = dict(choice["message"].get("provider_specific_fields", None) or {})
                     for f in choice["message"].keys() - _MESSAGE_FIELDS:
                         provider_specific_fields[f] = choice["message"][f]
+                    annotations, other_annotations = partition_annotations(choice["message"].get("annotations", None))
+                    if other_annotations:
+                        provider_specific_fields["annotations"] = list(other_annotations)
 
                     # Handle reasoning models that display `reasoning_content` within `content`
                     reasoning_content, content = extract_reasoning_content(choice["message"])
@@ -809,7 +877,9 @@ def convert_to_model_response_object(
                         reasoning_content=reasoning_content,
                         thinking_blocks=thinking_blocks,
                         reasoning_items=choice["message"].get("reasoning_items", None),
-                        annotations=choice["message"].get("annotations", None),
+                        annotations=cast(  # cast-ok: provider annotation dicts pass through whole, keeping keys such as url_citation.content
+                            list[ChatCompletionAnnotation] | None, annotations
+                        ),
                         images=_normalize_images_for_message(choice["message"].get("images", None)),
                     )
                     finish_reason = choice.get("finish_reason", None)
@@ -834,6 +904,7 @@ def convert_to_model_response_object(
                     logprobs=logprobs,
                     enhancements=enhancements,
                     provider_specific_fields=provider_specific_fields,
+                    **_vllm_choice_fields(choice),
                 )
                 if provider_sent_logprobs and logprobs is None:
                     choice.logprobs = None
@@ -899,9 +970,11 @@ def convert_to_model_response_object(
             model_response_object.data = response_object["data"]
 
             if "usage" in response_object and response_object["usage"] is not None:
-                model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)
-                model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)
-                model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0)
+                embedding_usage: Final = model_response_object.usage or Usage()
+                embedding_usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)
+                embedding_usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)
+                embedding_usage.total_tokens = response_object["usage"].get("total_tokens", 0)
+                model_response_object.usage = embedding_usage
 
             if start_time is not None and end_time is not None:
                 model_response_object._response_ms = (
@@ -943,6 +1016,10 @@ def convert_to_model_response_object(
             for key in optional_keys:  # not guaranteed to be in response
                 if key in response_object:
                     setattr(model_response_object, key, response_object[key])
+
+            detected_languages: Final = TranscriptionResponse.detected_languages(response_object.get("languages"))
+            if detected_languages is not None:
+                model_response_object.languages = detected_languages
 
             if "usage" in response_object and response_object["usage"] is not None:
                 tr_usage_object: TranscriptionUsageDurationObject | TranscriptionUsageTokensObject | None = None
@@ -995,13 +1072,18 @@ def convert_to_model_response_object(
         if isinstance(e, APIError):
             raise
 
+        hide_reply: Final = response_type == "audio_transcription"
         received_args: Final = dict(
-            response_object=response_object,
-            model_response_object=model_response_object,
+            response_object="<hidden>" if hide_reply else response_object,
+            model_response_object="<hidden>" if hide_reply else model_response_object,
             response_type=response_type,
             stream=stream,
             start_time=start_time,
             end_time=end_time,
             convert_tool_call_to_json_mode=convert_tool_call_to_json_mode,
         )
-        raise Exception(f"Invalid response object {traceback.format_exc()}\n\nreceived_args={received_args}")
+        # The conversion's own traceback, without the errors being handled when it ran: a router
+        # retry runs inside the handler of the attempt before it, and that attempt's error text
+        # (a rate limit) would otherwise decide how this one is classified.
+        own_traceback: Final = "".join(traceback.format_exception(type(e), e, e.__traceback__, chain=False))
+        raise Exception(f"Invalid response object {own_traceback}\n\nreceived_args={received_args}")

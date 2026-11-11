@@ -1,7 +1,8 @@
 # ruff: noqa: T201
 import functools
-import importlib
+import importlib.metadata
 import json
+import logging.config
 import os
 import random
 import re
@@ -10,17 +11,19 @@ import sys
 import urllib.parse as urlparse
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Annotated, Any, Final
 
 import click
 import httpx
 from click.core import ParameterSource
 from dotenv import load_dotenv
-from pydantic import ConfigDict
+from pydantic import BeforeValidator, ConfigDict, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
-from litellm._logging import print_startup_message
-from litellm.constants import DEFAULT_NUM_WORKERS_LITELLM_PROXY
+from litellm._logging import StartupOutputSettings, print_startup_message, print_startup_warning, terminal_text
+from litellm.constants import DEFAULT_MAX_REQUEST_HEADER_SIZE, DEFAULT_NUM_WORKERS_LITELLM_PROXY
 from litellm.proxy.db.pgbouncer import (
     PgBouncerError,
     PgBouncerSettings,
@@ -28,10 +31,14 @@ from litellm.proxy.db.pgbouncer import (
     start_in_container_pgbouncer,
 )
 from litellm.proxy.db.query_engine_reaper import start_query_engine_reaper
+from litellm.proxy.server_listener import PrivateListener, gunicorn_overrides
 from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
+
+    from litellm.proxy.rust_forward.peer import ASGIApp
+    from litellm.proxy.rust_forward.server import PythonServer
 else:
     FastAPI = Any
 
@@ -205,7 +212,7 @@ def deprecated_v2_flag_passed_on_cli() -> bool:
 
 
 def _print_enforce_prisma_migration_check_notice() -> None:
-    print_startup_message(
+    print_startup_warning(
         "\033[1;33mLiteLLM Proxy: --enforce_prisma_migration_check is "
         "deprecated and has no effect, because the proxy always exits "
         "when database setup fails at startup. You can safely remove it.\033[0m",
@@ -227,6 +234,43 @@ def _print_or_hold_enforce_prisma_migration_check_notice(
     return print_once
 
 
+def _empty_as_none(value: object) -> object:
+    return value or None
+
+
+class _ConfigStartupOutputSettings(TypedDict, total=False):
+    litellm_settings: ReadOnly[Annotated[StartupOutputSettings | None, BeforeValidator(_empty_as_none)]]
+
+
+_CONFIG_STARTUP_OUTPUT_SETTINGS: Final = TypeAdapter(_ConfigStartupOutputSettings)
+
+
+def _apply_config_suppress_startup_output(litellm_settings: StartupOutputSettings | None) -> None:
+    if litellm_settings is None or litellm_settings.get("suppress_startup_output") is not True:
+        return
+    litellm.suppress_startup_output = True
+    os.environ["LITELLM_SUPPRESS_STARTUP_OUTPUT"] = "true"
+
+
+def _apply_config_logging_settings(litellm_settings: StartupOutputSettings | None) -> None:
+    """Turn on the config's json_logs and suppress_startup_output before any worker starts. Workers that
+    uvicorn or granian spawn import litellm afresh and read both from the env at import, so they log JSON
+    and stay quiet from their first line instead of from when load_config reaches the key."""
+    _apply_config_suppress_startup_output(litellm_settings)
+    if litellm_settings is None or litellm_settings.get("json_logs") is not True:
+        return
+    litellm.json_logs = True
+    os.environ["JSON_LOGS"] = "true"
+    litellm.turn_on_json()
+
+
+WORKER_APP: Final = "litellm_cli.main:proxy_worker_app"
+WORKER_LOG_CONFIG_ENV: Final = "LITELLM_WORKER_LOG_CONFIG"
+_LOG_CONFIG: Final = TypeAdapter[str | Mapping[str, object]](str | Mapping[str, object])
+_LOG_CONFIG_FILE: Final = TypeAdapter[Mapping[str, object]](Mapping[str, object])
+_DECODED_JSON: Final = TypeAdapter[object](object)
+
+
 class ProxyInitializationHelpers:
     @staticmethod
     def echo_litellm_version():
@@ -245,18 +289,19 @@ class ProxyInitializationHelpers:
 
     @staticmethod
     def run_migration_data_check(use_migrate: bool) -> int:
-        """`--check_migrations_against_existing_data`: the pre-migration row check against DATABASE_URL, nothing applied.
-        0 when the pending schema changes fit the rows, 2 with the refusal when they do not."""
+        """`--check_migrations_against_existing_data`: the pending migrations applied to DATABASE_URL inside one
+        transaction that is rolled back, so Postgres reports what the upgrade would hit. 0 when they all apply,
+        2 with Postgres's error when one does not."""
         if os.getenv("DATABASE_URL") is None:
             raise click.UsageError("--check_migrations_against_existing_data requires DATABASE_URL")
         from litellm.proxy.db.prisma_client import PrismaManager
 
-        refusal: Final[str | None] = PrismaManager.migration_data_check_report(use_migrate=use_migrate)  # pyright: ignore[reportUnknownVariableType]  # litellm-proxy-extras is an optional install
-        if refusal is None:
-            print("LiteLLM Proxy: the pending migrations and indexes can be applied to the rows this database has.")
+        ok, summary = PrismaManager.migration_dry_run_summary(use_migrate=use_migrate)
+        if ok:
+            print(f"LiteLLM Proxy: {summary}")
             return 0
         print(
-            f"\033[1;31mLiteLLM Proxy: Database migration cannot proceed. {refusal}\033[0m", file=sys.stderr, flush=True
+            f"\033[1;31mLiteLLM Proxy: Database migration cannot proceed. {summary}\033[0m", file=sys.stderr, flush=True
         )
         return 2
 
@@ -334,12 +379,42 @@ class ProxyInitializationHelpers:
     _run_test_chat_completion = run_test_chat_completion
 
     @staticmethod
+    def apply_log_config(log_config: str | Mapping[str, object]) -> None:
+        if not isinstance(log_config, str):
+            logging.config.dictConfig(dict(log_config))
+        elif log_config.endswith(".json"):
+            logging.config.dictConfig(dict(_LOG_CONFIG_FILE.validate_json(Path(log_config).read_bytes())))
+        elif log_config.endswith((".yaml", ".yml")):
+            import yaml
+
+            logging.config.dictConfig(
+                dict(_LOG_CONFIG_FILE.validate_python(yaml.safe_load(Path(log_config).read_text())))
+            )
+        else:
+            logging.config.fileConfig(log_config, disable_existing_loggers=False)
+
+    @staticmethod
+    def child_process_uvicorn_overrides(log_config: object) -> Mapping[str, object]:
+        if log_config is None:
+            return MappingProxyType({"app": WORKER_APP, "factory": True})
+        ProxyInitializationHelpers.apply_log_config(_LOG_CONFIG.validate_python(log_config))
+        os.environ[WORKER_LOG_CONFIG_ENV] = json.dumps(log_config)
+        return MappingProxyType({"app": WORKER_APP, "factory": True, "log_config": None})
+
+    @staticmethod
+    def apply_worker_log_config(environ: Mapping[str, str]) -> None:
+        log_config: Final = environ.get(WORKER_LOG_CONFIG_ENV)
+        if log_config is not None:
+            ProxyInitializationHelpers.apply_log_config(_LOG_CONFIG.validate_json(log_config))
+
+    @staticmethod
     def get_default_unvicorn_init_args(
         host: str,
         port: int,
         log_config: str | None = None,
         keepalive_timeout: int | None = None,
         timeout_worker_healthcheck: int | None = None,
+        max_request_header_size: int | None = None,
     ) -> dict:
         """
         Get the arguments for `uvicorn` worker
@@ -358,6 +433,9 @@ class ProxyInitializationHelpers:
             "port": port,
             "server_header": False,
             "timeout_graceful_shutdown": GracefulShutdownManager.get_timeout(),
+            "h11_max_incomplete_event_size": (
+                max_request_header_size if max_request_header_size is not None else DEFAULT_MAX_REQUEST_HEADER_SIZE
+            ),
         }
         if log_config is not None:
             print_startup_message(f"Using log_config: {log_config}")
@@ -373,7 +451,7 @@ class ProxyInitializationHelpers:
             if "timeout_worker_healthcheck" in inspect.signature(uvicorn.Config.__init__).parameters:
                 uvicorn_args["timeout_worker_healthcheck"] = timeout_worker_healthcheck
             else:
-                print_startup_message(
+                print_startup_warning(
                     f"\033[1;33mLiteLLM Proxy: --timeout_worker_healthcheck "
                     f"requires uvicorn>=0.37.0, but installed uvicorn=={uvicorn.__version__}. "
                     f"Ignoring the flag.\033[0m",
@@ -396,7 +474,7 @@ class ProxyInitializationHelpers:
         import uvicorn
 
         if max_requests_before_restart is None:
-            print_startup_message(
+            print_startup_warning(
                 "\033[1;33mLiteLLM Proxy: --max_requests_before_restart_jitter "
                 "has no effect without --max_requests_before_restart\033[0m\n",
             )
@@ -404,7 +482,7 @@ class ProxyInitializationHelpers:
         if "limit_max_requests_jitter" in inspect.signature(uvicorn.Config.__init__).parameters:
             uvicorn_args["limit_max_requests_jitter"] = jitter
         else:
-            print_startup_message(
+            print_startup_warning(
                 f"\033[1;33mLiteLLM Proxy: --max_requests_before_restart_jitter "
                 f"requires uvicorn>=0.41.0, but installed uvicorn=={uvicorn.__version__}. "
                 f"Ignoring the flag.\033[0m",
@@ -433,7 +511,7 @@ class ProxyInitializationHelpers:
         )
 
     @staticmethod
-    def _get_reload_options(config_path: str | None) -> dict:
+    def _get_reload_options(config_path: str | None) -> Mapping[str, object]:
         """Build uvicorn reload kwargs so --reload also reacts to .env and YAML edits."""
         cwd: Final = os.path.abspath(os.getcwd())
         reload_dirs: Final = [cwd]
@@ -482,7 +560,7 @@ class ProxyInitializationHelpers:
             original_iter: Final = StatReload.iter_py_files
             patched_paths = set()
 
-            def _iter_with_extra(self):
+            def _iter_with_extra(self: StatReload):
                 yield from original_iter(self)
                 for path in StatReload._litellm_patched_config_paths:
                     if path.exists():
@@ -571,12 +649,12 @@ class ProxyInitializationHelpers:
 
         print_startup_message(f"\033[1;32mLiteLLM Proxy: Starting server on {host}:{port} using Granian\033[0m\n")
         if max_requests_before_restart is not None:
-            print_startup_message(
+            print_startup_warning(
                 "\033[1;33mLiteLLM: --max_requests_before_restart is not supported by Granian "
                 "(Granian uses workers_lifetime in seconds, not a per-request limit).\033[0m\n",
             )
         if ciphers is not None:
-            print_startup_message("\033[1;33mLiteLLM: --ciphers is not applied when using --run_granian.\033[0m\n")
+            print_startup_warning("\033[1;33mLiteLLM: --ciphers is not applied when using --run_granian.\033[0m\n")
 
         kwargs: Final[dict[str, object]] = {
             "target": "litellm.proxy.proxy_server:app",
@@ -605,12 +683,14 @@ class ProxyInitializationHelpers:
     def run_gunicorn_server(
         host: str,
         port: int,
-        app: FastAPI,
+        app: "ASGIApp",
         num_workers: int,
         ssl_certfile_path: str,
         ssl_keyfile_path: str,
         max_requests_before_restart: int | None = None,
         max_requests_before_restart_jitter: int | None = None,
+        max_request_header_size: int | None = None,
+        private_listener: PrivateListener | None = None,
     ):
         """
         Run litellm with `gunicorn`
@@ -685,12 +765,13 @@ class ProxyInitializationHelpers:
         gunicorn_options: Final = {
             "bind": f"{host}:{port}",
             "workers": num_workers,  # default is 1
-            "worker_class": build_graceful_shutdown_uvicorn_worker(graceful_shutdown_timeout),
+            "worker_class": build_graceful_shutdown_uvicorn_worker(graceful_shutdown_timeout, max_request_header_size),
             "graceful_timeout": math.ceil(graceful_shutdown_timeout) + GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS,
             "preload": True,  # Add the preload flag,
             "accesslog": "-",  # Log to stdout
             "timeout": 600,  # default to very high number, bedrock/anthropic.claude-v2:1 can take 30+ seconds for the 1st chunk to come in
             "access_log_format": '%(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s',
+            **gunicorn_overrides(private_listener),
         }
 
         # Optional: recycle workers after N requests to mitigate memory growth
@@ -698,7 +779,7 @@ class ProxyInitializationHelpers:
             gunicorn_options["max_requests"] = max_requests_before_restart
         if max_requests_before_restart_jitter is not None:
             if max_requests_before_restart is None:
-                print_startup_message(
+                print_startup_warning(
                     "\033[1;33mLiteLLM Proxy: --max_requests_before_restart_jitter "
                     "has no effect without --max_requests_before_restart\033[0m\n",
                 )
@@ -739,20 +820,83 @@ class ProxyInitializationHelpers:
             with open(os.devnull, "w") as devnull:
                 subprocess.Popen(command, stdout=devnull, stderr=devnull)
         except Exception as e:
-            print_startup_message(f"""
+            print_startup_warning(f"""
                 LiteLLM Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
             """)
 
     _run_ollama_serve = run_ollama_serve
 
     @staticmethod
-    def is_port_in_use(port):
+    def is_port_in_use(port: int):
         import socket
 
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             return s.connect_ex(("localhost", port)) == 0
 
     _is_port_in_use = is_port_in_use
+
+    @staticmethod
+    def serving_port(port: int) -> int:
+        return random.randint(1024, 49152) if port == 4000 and ProxyInitializationHelpers.is_port_in_use(port) else port
+
+    @staticmethod
+    def python_server(
+        host: str,
+        port: int,
+        keepalive_timeout: int | None,
+        run_gunicorn: bool,
+        run_hypercorn: bool,
+        run_granian: bool,
+        tls: bool,
+    ) -> "PythonServer":
+        """``run_gunicorn_server`` never hands ``--keepalive_timeout`` or forwarded IPs to gunicorn, so its workers keep
+        gunicorn's keep-alive and gunicorn's trusted proxies, which include ``::1`` where uvicorn's do not."""
+        import uvicorn
+
+        from litellm.proxy.rust_forward.server import Listener, PythonServer, Server, uvicorn_trusted_proxies
+        from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+
+        server: Final = (
+            Server.HYPERCORN
+            if run_hypercorn
+            else Server.GRANIAN
+            if run_granian
+            else Server.GUNICORN
+            if run_gunicorn
+            else Server.UVICORN
+        )
+        keepalive, trusted_proxies = (
+            ProxyInitializationHelpers.gunicorn_keepalive_and_trusted_proxies()
+            if server is Server.GUNICORN
+            else (
+                uvicorn.Config(app="", log_config=None).timeout_keep_alive
+                if keepalive_timeout is None
+                else keepalive_timeout,
+                uvicorn_trusted_proxies(None),
+            )
+        )
+        return PythonServer(
+            server=server,
+            listener=Listener.TLS if tls else Listener.TCP,
+            host=host,
+            port=ProxyInitializationHelpers.serving_port(port),
+            keepalive_seconds=keepalive,
+            graceful_timeout_seconds=GracefulShutdownManager.get_timeout(),
+            trusted_proxies=trusted_proxies,
+        )
+
+    @staticmethod
+    def gunicorn_keepalive_and_trusted_proxies() -> tuple[int, str]:
+        """Loaded only when gunicorn is the server, because gunicorn imports ``fcntl``, which Windows lacks."""
+        from gunicorn.config import Config as GunicornConfig
+
+        config: Final = GunicornConfig()
+        keepalive: Final[object] = config.keepalive
+        forwarded_allow_ips: Final[object] = config.forwarded_allow_ips
+        return (
+            TypeAdapter(int).validate_python(keepalive),
+            ",".join(TypeAdapter(list[str]).validate_python(forwarded_allow_ips)),
+        )
 
     @staticmethod
     def get_loop_type():
@@ -1028,8 +1172,9 @@ class ProxyInitializationHelpers:
     "--check_migrations_against_existing_data",
     is_flag=True,
     default=False,
-    help="Check, read-only, that the rows in DATABASE_URL can take this version's pending migrations and indexes, "
-    "print what would block them, then exit without applying anything. Exit code 2 when something blocks.",
+    help="Dry-run this version's pending migrations on DATABASE_URL: the real SQL inside one transaction that is "
+    "rolled back, so Postgres reports the row or schema that would make the upgrade fail, then exit. Holds the same "
+    "locks the upgrade will. Exit code 2 when a migration fails.",
 )
 @click.option(
     "--keepalive_timeout",
@@ -1037,6 +1182,18 @@ class ProxyInitializationHelpers:
     type=int,
     help="Set the uvicorn keepalive timeout in seconds (uvicorn timeout_keep_alive parameter)",
     envvar="KEEPALIVE_TIMEOUT",
+)
+@click.option(
+    "--max_request_header_size",
+    default=None,
+    show_default=f"{DEFAULT_MAX_REQUEST_HEADER_SIZE} bytes with h11",
+    type=click.IntRange(min=1),
+    help=(
+        "Maximum bytes buffered for an incomplete HTTP request header block. "
+        "Applies when uvicorn or --run_gunicorn uses h11. Parser selection is unchanged; httptools ignores this setting. "
+        "Ignored under --run_hypercorn / --run_granian."
+    ),
+    envvar="MAX_REQUEST_HEADER_SIZE",
 )
 @click.option(
     "--timeout_worker_healthcheck",
@@ -1123,7 +1280,7 @@ class ProxyInitializationHelpers:
     "--reload",
     is_flag=True,
     default=False,
-    help="Enable uvicorn hot reload (dev only). Also reloads when the --config YAML file changes. Incompatible with --num_workers>1, --run_gunicorn, and --run_hypercorn.",
+    help="Enable uvicorn hot reload (dev only), including every --num_workers worker on uvicorn>=0.50.0 outside Windows. Also reloads when the --config YAML or .env changes. Incompatible with --run_gunicorn, --run_hypercorn, and --run_granian.",
 )
 @click.option(
     "--prometheus_metrics_port",
@@ -1140,8 +1297,8 @@ class ProxyInitializationHelpers:
 )
 def run_server(
     cli_args,
-    host,
-    port,
+    host: str,
+    port: int,
     api_base,
     api_version,
     model,
@@ -1181,8 +1338,9 @@ def run_server(
     skip_server_startup,
     validate_config: bool,
     check_migrations_against_existing_data: bool,
-    keepalive_timeout,
+    keepalive_timeout: int | None,
     timeout_worker_healthcheck,
+    max_request_header_size: int | None,
     max_requests_before_restart: int | None,
     max_requests_before_restart_jitter: int | None,
     limit_concurrency: int | None,
@@ -1209,6 +1367,49 @@ def run_server(
 
         run_setup_wizard()
         return
+
+    from pydantic import ValidationError
+
+    from litellm.proxy.rust_forward.mode import (
+        Mode,
+        environment_error,
+        private_listener,
+        rust_forward_mode,
+        stop_with_supervisor,
+        uvicorn_options,
+    )
+
+    try:
+        forward_mode: Final = rust_forward_mode(os.environ)
+    except ValidationError as error:
+        raise click.ClickException(environment_error(error)) from None
+    stop_with_supervisor(forward_mode)
+    runs_one_command: Final = (
+        version is True
+        or validate_config
+        or health is True
+        or test is True
+        or skip_server_startup is True
+        or check_migrations_against_existing_data
+    )
+    if forward_mode is Mode.SUPERVISOR and not runs_one_command:
+        from litellm.proxy.rust_forward.supervisor import supervise
+        from litellm.proxy.rust_forward.supervisor.preflight import StartupError
+
+        server: Final = ProxyInitializationHelpers.python_server(
+            host,
+            port,
+            keepalive_timeout,
+            run_gunicorn=run_gunicorn is True,
+            run_hypercorn=run_hypercorn is True,
+            run_granian=run_granian is True,
+            tls=None not in (ssl_keyfile_path, ssl_certfile_path),
+        )
+        if prometheus_metrics_port == server.port:
+            raise click.UsageError("--prometheus_metrics_port must differ from --port")
+        supervised: Final = supervise(server)
+        if not isinstance(supervised, StartupError):
+            raise SystemExit(supervised)
 
     args: Final = locals()
     try:
@@ -1244,8 +1445,7 @@ def run_server(
         ProxyInitializationHelpers.run_test_chat_completion(host, port, model, test)
         return
     else:
-        if headers:
-            headers = json.loads(headers)
+        worker_headers: Final = _DECODED_JSON.validate_python(json.loads(headers) if headers else headers)
         save_worker_config(
             model=model,
             alias=alias,
@@ -1259,7 +1459,7 @@ def run_server(
             max_budget=max_budget,
             drop_params=drop_params,
             add_function_to_prompt=add_function_to_prompt,
-            headers=headers,
+            headers=worker_headers,
             save=save,
             config=config,
             use_queue=use_queue,
@@ -1325,6 +1525,19 @@ def run_server(
                 os.environ[k] = v
 
         litellm_settings = None
+        env_config_file: Final = os.environ.get("CONFIG_FILE_PATH")
+        if (
+            env_config_file
+            and os.environ.get("LITELLM_CONFIG_BUCKET_NAME") is None
+            and ProxyConfig().is_yaml(config_file_path=env_config_file)
+        ):
+            import asyncio
+
+            _apply_config_suppress_startup_output(
+                _CONFIG_STARTUP_OUTPUT_SETTINGS.validate_python(
+                    asyncio.run(ProxyConfig().read_config_file(config_file_path=env_config_file))
+                ).get("litellm_settings")
+            )
         if config is not None:
             """
             Allow user to pass in db url via config
@@ -1342,17 +1555,9 @@ def run_server(
 
             ### LITELLM SETTINGS ###
             litellm_settings = _config.get("litellm_settings", None)
-            if (
-                litellm_settings is not None
-                and "json_logs" in litellm_settings
-                and litellm_settings["json_logs"] is True
-            ):
-                import litellm
-
-                litellm.json_logs = True
-                os.environ["JSON_LOGS"] = "true"
-
-                litellm.turn_on_json()
+            _apply_config_logging_settings(
+                _CONFIG_STARTUP_OUTPUT_SETTINGS.validate_python(_config).get("litellm_settings")
+            )
             if held_prisma_notice is not None:
                 held_prisma_notice()
             ### GENERAL SETTINGS ###
@@ -1450,7 +1655,9 @@ def run_server(
                 _bad_scheme = unsupported_db_scheme(_candidate_url)
                 if _bad_scheme is not None:
                     print(
-                        f"\033[1;31mLiteLLM Proxy: {unsupported_db_scheme_message(_db_env, _bad_scheme)}\033[0m",
+                        terminal_text(
+                            f"\033[1;31mLiteLLM Proxy: {unsupported_db_scheme_message(_db_env, _bad_scheme)}\033[0m"
+                        ),
                         file=sys.stderr,
                         flush=True,
                     )
@@ -1553,7 +1760,7 @@ def run_server(
                         env_value=os.getenv("USE_V2_MIGRATION_RESOLVER"),
                     )
                     if deprecated_v2_flag_passed_on_cli() and use_v2_resolver:
-                        print_startup_message(
+                        print_startup_warning(
                             "\033[1;33mLiteLLM Proxy: --use_v2_migration_resolver is "
                             "deprecated and has no effect, because the v2 migration "
                             "resolver is now the default. You can safely remove it. To "
@@ -1561,7 +1768,7 @@ def run_server(
                             "--use_legacy_migration_resolver.\033[0m",
                         )
                     if not use_v2_resolver:
-                        print_startup_message(
+                        print_startup_warning(
                             "\033[1;33mLiteLLM Proxy: Using the legacy (v1) migration "
                             "resolver. It performs the diff-and-force recovery that can "
                             "cause schema thrashing during rolling deploys where two "
@@ -1583,22 +1790,26 @@ def run_server(
                         # issues, and any `prisma db push` against a
                         # partitioned LiteLLM_SpendLogs.
                         print(
-                            f"\033[1;31mLiteLLM Proxy: Database migration cannot proceed. {e}\033[0m",
+                            terminal_text(f"\033[1;31mLiteLLM Proxy: Database migration cannot proceed. {e}\033[0m"),
                             file=sys.stderr,
                             flush=True,
                         )
                         sys.exit(2)
                     if not setup_ok:
                         print(
-                            "\033[1;31mLiteLLM Proxy: Database setup failed after multiple retries. "
-                            "The proxy cannot start safely. Please check your database connection and migration status.\033[0m"
+                            terminal_text(
+                                "\033[1;31mLiteLLM Proxy: Database setup failed after multiple retries. "
+                                "The proxy cannot start safely. Please check your database connection and migration status.\033[0m"
+                            )
                         )
                         sys.exit(1)
             else:
                 print(
-                    "\033[1;31mLiteLLM Proxy: a database URL is set but the prisma CLI is neither on PATH nor importable "
-                    "as a package, so the database cannot be set up. Install it with `pip install 'litellm[extra_proxy]'` "
-                    "or run a shipped LiteLLM image.\033[0m"
+                    terminal_text(
+                        "\033[1;31mLiteLLM Proxy: a database URL is set but the prisma CLI is neither on PATH nor importable "
+                        "as a package, so the database cannot be set up. Install it with `pip install 'litellm[extra_proxy]'` "
+                        "or run a shipped LiteLLM image.\033[0m"
+                    )
                 )
                 sys.exit(1)
         pgbouncer_settings: Final = PgBouncerSettings()
@@ -1609,15 +1820,16 @@ def run_server(
             )
             if isinstance(pooled_database_url, PgBouncerError):
                 print(
-                    f"\033[1;31mLiteLLM Proxy: LITELLM_PGBOUNCER_ENABLED is set but the in-container pgbouncer "
-                    f"could not start: {pooled_database_url.reason}\033[0m",
+                    terminal_text(
+                        f"\033[1;31mLiteLLM Proxy: LITELLM_PGBOUNCER_ENABLED is set but the in-container pgbouncer "
+                        f"could not start: {pooled_database_url.reason}\033[0m"
+                    ),
                     file=sys.stderr,
                     flush=True,
                 )
                 sys.exit(1)
             export_pooled_database_url(pooled_database_url)
-        if port == 4000 and ProxyInitializationHelpers.is_port_in_use(port):
-            port = random.randint(1024, 49152)
+        port = ProxyInitializationHelpers.serving_port(port)
         if prometheus_metrics_port == port:
             raise click.UsageError("--prometheus_metrics_port must differ from --port")
 
@@ -1664,7 +1876,10 @@ def run_server(
             log_config=log_config,
             keepalive_timeout=keepalive_timeout,
             timeout_worker_healthcheck=(timeout_worker_healthcheck if running_uvicorn else None),
+            max_request_header_size=max_request_header_size,
         )
+        for option, value in uvicorn_options(forward_mode, WORKER_APP).items():
+            uvicorn_args[option] = value
         # Optional: recycle uvicorn workers after N requests
         if max_requests_before_restart is not None:
             uvicorn_args["limit_max_requests"] = max_requests_before_restart
@@ -1675,7 +1890,7 @@ def run_server(
                 run_gunicorn=run_gunicorn is True,
             )
             if single_worker_warning is not None:
-                print_startup_message(f"\033[1;33m{single_worker_warning}\033[0m\n")
+                print_startup_warning(f"\033[1;33m{single_worker_warning}\033[0m\n")
         if run_gunicorn is False and run_hypercorn is False and run_granian is False:
             if limit_concurrency is not None:
                 uvicorn_args["limit_concurrency"] = limit_concurrency
@@ -1701,20 +1916,47 @@ def run_server(
 
             if num_workers > 1:
                 start_query_engine_reaper()
+            if num_workers > 1 or reload:
+                worker_overrides: Final = ProxyInitializationHelpers.child_process_uvicorn_overrides(
+                    uvicorn_args.get("log_config")
+                )
+                if reload and num_workers > 1:
+                    from litellm.proxy.dev_reload import (
+                        RELOAD_OPTIONS,
+                        multi_worker_reload_supported,
+                        run_multi_worker_reload,
+                    )
+
+                    if multi_worker_reload_supported():
+                        run_multi_worker_reload(
+                            RELOAD_OPTIONS.validate_python(uvicorn_args),
+                            workers=TypeAdapter(int).validate_python(num_workers),
+                            worker_overrides=worker_overrides,
+                        )
+                        return
+                    print(
+                        "\033[1;33mLiteLLM Proxy: --reload with --num_workers>1 requires uvicorn>=0.50.0 "
+                        "and an OS other than Windows, so only a single worker reloads.\033[0m"
+                    )
+                uvicorn_args.update(worker_overrides)
             uvicorn.run(
                 **uvicorn_args,
                 workers=num_workers,
             )
         elif run_gunicorn is True:
+            from litellm.proxy.rust_forward.peer import wrap
+
             ProxyInitializationHelpers.run_gunicorn_server(
                 host=host,
                 port=port,
-                app=app,
+                app=wrap(app, forward_mode),
                 num_workers=num_workers,
                 ssl_certfile_path=ssl_certfile_path,
                 ssl_keyfile_path=ssl_keyfile_path,
                 max_requests_before_restart=max_requests_before_restart,
                 max_requests_before_restart_jitter=max_requests_before_restart_jitter,
+                max_request_header_size=max_request_header_size,
+                private_listener=private_listener(forward_mode),
             )
         elif run_hypercorn is True:
             ProxyInitializationHelpers.init_hypercorn_server(

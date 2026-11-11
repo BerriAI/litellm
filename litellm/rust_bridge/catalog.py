@@ -39,7 +39,7 @@ class Feature(str, Enum):
     PROXY_MCP_TOOLS = "proxy_mcp_tools"
     """litellm_proxy MCP tools that Python expands and may auto-execute."""
     CALLER_CLIENT = "caller_client"
-    """A caller-supplied HTTP client or shared session that Python sends through."""
+    """A caller-supplied HTTP client that Python sends through."""
     TIMEOUT_VARIANTS = "timeout_variants"
     """request_timeout, stream_timeout or httpx.Timeout phases beyond a plain timeout."""
     DROP_PARAMS = "drop_params"
@@ -66,6 +66,8 @@ class Feature(str, Enum):
     """Extra body fields that Python transforms and merges into the provider request."""
     PROVIDER_AFFINITY = "provider_affinity"
     """A provider affinity header that Python validates and populates from the session id."""
+    FOUNDRY_BETA_ROW = "foundry_beta_row"
+    """A Foundry api_base, where Python drops the anthropic-beta values Foundry rejects."""
     PRE_REQUEST_HOOK = "pre_request_hook"
     """A logger overriding async_pre_request_hook, which may rewrite the request."""
     WEBSEARCH_INTERCEPTION = "websearch_interception"
@@ -93,9 +95,13 @@ class Feature(str, Enum):
     CACHE_CONTROL_INJECTION = "cache_control_injection"
     """Prompt caching injection that Python applies to messages and system."""
     STREAM_COST_INJECTION = "stream_cost_injection"
-    """litellm.include_cost_in_streaming_usage, where Python adds cost to streamed usage."""
+    """litellm.include_cost_in_streaming_usage or the x-litellm-include-cost-in-streaming-usage header, where Python adds cost to streamed usage."""
     THINKING_SIGNATURE_RETRY = "thinking_signature_retry"
     """Replayed thinking blocks, which Python strips and retries once if Anthropic rejects their signature."""
+    TOOL_CUSTOM_FIELD = "tool_custom_field"
+    """Tools carrying a non-spec custom object, which Python drops or hoists for the provider."""
+    STRICT_TOOLS_RETRY = "strict_tools_retry"
+    """Strict tools under drop_params, which Python sends again without strict if Claude rejects their limits."""
     CLIENT_HEADERS = "client_headers"
     """Proxy-forwarded headers that Python merges into extra_headers."""
     DEPLOYMENT_HOOK = "deployment_hook"
@@ -104,6 +110,7 @@ class Feature(str, Enum):
     """A model_list that Python fans out across its deployments."""
     MODEL_ALIAS_MAP = "model_alias_map"
     """A model that litellm.model_alias_map rewrites before the call."""
+    LATEST_ALIAS = "latest_alias"
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,6 +154,7 @@ COMMON_PYTHON_FEATURES: Final = frozenset(
         Feature.TIMEOUT_VARIANTS,
         Feature.AGENTIC_LOOP_HOOK,
         Feature.TLS_POLICY,
+        Feature.LATEST_ALIAS,
     }
 )
 
@@ -164,8 +172,9 @@ CHAT_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {
     Feature.MODEL_ALIAS_MAP,
 }
 
-MESSAGES_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {
+MESSAGES_PYTHON_FEATURES: Final = (COMMON_PYTHON_FEATURES - {Feature.TIMEOUT_VARIANTS}) | {
     Feature.PROVIDER_AFFINITY,
+    Feature.FOUNDRY_BETA_ROW,
     Feature.SAFEGUARDS_CLASSIFIER,
     Feature.PRE_REQUEST_HOOK,
     Feature.WEBSEARCH_INTERCEPTION,
@@ -176,6 +185,8 @@ MESSAGES_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {
     Feature.CACHE_CONTROL_INJECTION,
     Feature.STREAM_COST_INJECTION,
     Feature.THINKING_SIGNATURE_RETRY,
+    Feature.TOOL_CUSTOM_FIELD,
+    Feature.STRICT_TOOLS_RETRY,
 }
 
 RESPONSES_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {

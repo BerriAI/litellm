@@ -1,9 +1,114 @@
 {{/*
-Common naming + label helpers shared by gateway, backend, and ui templates.
+Common naming + label helpers shared by gateway, backend, ui, and monolith templates.
 */}}
 
 {{- define "litellm.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{/*
+The one image reference every container in the chart uses. `repository:tag`,
+or `repository:tag@digest` when image.digest is set; the tag falls back to
+the chart appVersion.
+*/}}
+{{- define "litellm.image" -}}
+{{- $tag := .Values.image.tag | default .Chart.AppVersion -}}
+{{- if .Values.image.digest -}}
+{{- printf "%s:%s@%s" .Values.image.repository $tag .Values.image.digest -}}
+{{- else -}}
+{{- printf "%s:%s" .Values.image.repository $tag -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Componentized mode renders the gateway / backend / ui Deployments only when
+monolith mode is off.
+*/}}
+{{- define "litellm.gateway.render" -}}
+{{- if and .Values.gateway.enabled (not .Values.monolith.enabled) -}}true{{- end -}}
+{{- end -}}
+
+{{- define "litellm.backend.render" -}}
+{{- if and .Values.backend.enabled (not .Values.monolith.enabled) -}}true{{- end -}}
+{{- end -}}
+
+{{- define "litellm.ui.render" -}}
+{{- if and .Values.ui.enabled (not .Values.monolith.enabled) -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+The proxy Deployment (monolith mode) and the gateway Deployment
+(componentized mode) are the same pod spec fed by .Values.gateway, so the
+templates that serve both (HPA, KEDA, PDB, metrics Service, ServiceMonitor)
+resolve their name, component label and selector through these.
+*/}}
+{{- define "litellm.proxy.fullname" -}}
+{{- include "litellm.fullname" . -}}
+{{- end -}}
+
+{{- define "litellm.proxy.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "litellm.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: proxy
+{{- end -}}
+
+{{- define "litellm.workload.componentName" -}}
+{{- if .Values.monolith.enabled -}}proxy{{- else -}}gateway{{- end -}}
+{{- end -}}
+
+{{- define "litellm.workload.fullname" -}}
+{{- if .Values.monolith.enabled -}}
+{{- include "litellm.proxy.fullname" . -}}
+{{- else -}}
+{{- include "litellm.gateway.fullname" . -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "litellm.workload.selectorLabels" -}}
+{{- if .Values.monolith.enabled -}}
+{{- include "litellm.proxy.selectorLabels" . -}}
+{{- else -}}
+{{- include "litellm.gateway.selectorLabels" . -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "litellm.workload.render" -}}
+{{- if or .Values.monolith.enabled .Values.gateway.enabled -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+Container arguments for the proxy (monolith) container. The image entrypoint
+dispatches on the first argument.
+*/}}
+{{- define "litellm.proxy.args" -}}
+- proxy
+- --port
+- "4000"
+{{- if .Values.gateway.config.create }}
+- --config
+- /app/config/config.yaml
+{{- end }}
+{{- with .Values.monolith.extraArgs }}
+{{ toYaml . }}
+{{- end }}
+{{- end -}}
+
+{{/*
+Master key Secret reference. `masterKey.secretName` when set, otherwise the
+Secret the chart generates when `masterKey.generate` is true.
+*/}}
+{{- define "litellm.masterKey.generatedSecretName" -}}
+{{- printf "%s-masterkey" (include "litellm.fullname" .) -}}
+{{- end -}}
+
+{{- define "litellm.masterKey.secretName" -}}
+{{- if .Values.masterKey.secretName -}}
+{{- .Values.masterKey.secretName -}}
+{{- else if .Values.masterKey.generate -}}
+{{- include "litellm.masterKey.generatedSecretName" . -}}
+{{- else -}}
+{{- fail "masterKey.secretName is required (the chart never accepts an inline master key); set it to an existing Secret or set masterKey.generate: true" -}}
+{{- end -}}
 {{- end -}}
 
 {{- define "litellm.fullname" -}}
@@ -58,56 +163,27 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- end -}}
 
-{{/*
-Enterprise billable-request metering. Wired into gateway and backend, not the
-migrations job. The gateway serves nearly all billable traffic, but the backend
-keeps the named-server MCP transport (/{mcp_server_name}/mcp), which writes a
-SpendLogs row, so metering only the gateway would silently drop that traffic.
-The client certificate identifies the deployment to LiteLLM's collector, so it is
-mounted read-only from an existing Secret rather than passed through the
-environment.
-*/}}
-{{- define "litellm.billingMetrics.certDir" -}}/etc/litellm/billing-mtls{{- end -}}
-{{- define "litellm.billingMetrics.caDir" -}}/etc/litellm/billing-mtls-ca{{- end -}}
-
 {{- define "litellm.billingMetricsEnv" -}}
 - name: LITELLM_BILLING_METRICS_ENDPOINT
   value: {{ required "billingMetrics.endpoint is required when billingMetrics.enabled is true" .Values.billingMetrics.endpoint | quote }}
-- name: LITELLM_BILLING_METRICS_CLIENT_CERT
-  value: {{ printf "%s/tls.crt" (include "litellm.billingMetrics.certDir" .) | quote }}
-- name: LITELLM_BILLING_METRICS_CLIENT_KEY
-  value: {{ printf "%s/tls.key" (include "litellm.billingMetrics.certDir" .) | quote }}
-{{- if .Values.billingMetrics.caSecretName }}
-- name: LITELLM_BILLING_METRICS_CA_CERT
-  value: {{ printf "%s/ca.crt" (include "litellm.billingMetrics.caDir" .) | quote }}
-{{- end }}
+- name: LITELLM_BILLING_METRICS_TOKEN_URL
+  value: {{ required "billingMetrics.tokenUrl is required when billingMetrics.enabled is true" .Values.billingMetrics.tokenUrl | quote }}
+- name: LITELLM_BILLING_METRICS_CLIENT_ID
+  valueFrom:
+    secretKeyRef:
+      name: {{ required "billingMetrics.secretName is required when billingMetrics.enabled is true" .Values.billingMetrics.secretName }}
+      key: client-id
+- name: LITELLM_BILLING_METRICS_CLIENT_SECRET
+  valueFrom:
+    secretKeyRef:
+      name: {{ required "billingMetrics.secretName is required when billingMetrics.enabled is true" .Values.billingMetrics.secretName }}
+      key: client-secret
 {{- with .Values.billingMetrics.exportIntervalMs }}
 - name: LITELLM_BILLING_METRICS_EXPORT_INTERVAL_MS
   value: {{ . | quote }}
 {{- end }}
 {{- end -}}
 
-{{- define "litellm.billingMetricsVolumes" -}}
-- name: billing-metrics-mtls
-  secret:
-    secretName: {{ required "billingMetrics.secretName is required when billingMetrics.enabled is true (an existing Secret with tls.crt and tls.key)" .Values.billingMetrics.secretName }}
-{{- if .Values.billingMetrics.caSecretName }}
-- name: billing-metrics-mtls-ca
-  secret:
-    secretName: {{ .Values.billingMetrics.caSecretName }}
-{{- end }}
-{{- end -}}
-
-{{- define "litellm.billingMetricsVolumeMounts" -}}
-- name: billing-metrics-mtls
-  mountPath: {{ include "litellm.billingMetrics.certDir" . }}
-  readOnly: true
-{{- if .Values.billingMetrics.caSecretName }}
-- name: billing-metrics-mtls-ca
-  mountPath: {{ include "litellm.billingMetrics.caDir" . }}
-  readOnly: true
-{{- end }}
-{{- end -}}
 
 {{/*
 Per-component selector labels — used in both Service selectors and Deployment matchLabels.
@@ -137,6 +213,7 @@ Each component (gateway, backend, ui) has its own SA config under
 .Values.serviceAccounts.<component>. When `create` is true and `name` is
 empty the chart defaults to "<release>-litellm-<component>". When `create`
 is false the chart uses the provided name, or the namespace `default` SA.
+The monolith pod runs as the gateway ServiceAccount.
 */}}
 {{- define "litellm.gateway.serviceAccountName" -}}
 {{- if .Values.serviceAccounts.gateway.create -}}
@@ -216,6 +293,22 @@ by the controller rather than declared, so nothing there can collide.
 {{- end -}}
 
 {{/*
+LITELLM_MASTER_KEY, and PROXY_MASTER_KEY for configs copied from litellm-helm,
+for the app containers only. The migrations Job runs as a
+pre-install hook, before the chart's generated master key Secret exists, and
+migrations/run.py never reads the key, so the Job must not reference it.
+*/}}
+{{- define "litellm.masterKeyEnv" -}}
+{{- range list "LITELLM_MASTER_KEY" "PROXY_MASTER_KEY" }}
+- name: {{ . }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "litellm.masterKey.secretName" $ }}
+      key: {{ $.Values.masterKey.secretKey | default "master-key" }}
+{{- end }}
+{{- end -}}
+
+{{/*
 Master-key + database + redis env block — shared by gateway, backend, and the
 migrations Job.
 
@@ -258,11 +351,6 @@ IAM_TOKEN_DB_AUTH / AZURE_POSTGRESQL_AUTH toggle that only the writer sets.
 {{- define "litellm.serverEnv" -}}
 {{- $root := .root -}}
 {{- $component := .component -}}
-- name: LITELLM_MASTER_KEY
-  valueFrom:
-    secretKeyRef:
-      name: {{ required "masterKey.secretName is required (the chart no longer accepts an inline master key)" $root.Values.masterKey.secretName }}
-      key: {{ $root.Values.masterKey.secretKey | default "master-key" }}
 {{- if $component.logLevel }}
 - name: LITELLM_LOG
   value: {{ $component.logLevel | quote }}
@@ -304,6 +392,11 @@ IAM_TOKEN_DB_AUTH / AZURE_POSTGRESQL_AUTH toggle that only the writer sets.
   valueFrom:
     secretKeyRef:
       name: {{ required "database.writer.passwordSecret.name is required" .passwordSecret.name }}
+      key: {{ .passwordSecret.usernameKey | default "username" }}
+- name: DATABASE_USERNAME
+  valueFrom:
+    secretKeyRef:
+      name: {{ .passwordSecret.name }}
       key: {{ .passwordSecret.usernameKey | default "username" }}
 - name: DATABASE_NAME
   value: {{ required "database.writer.dbname is required" .dbname | quote }}
@@ -502,7 +595,7 @@ harmless no-op for the Job and authoritative for the app pods.
 {{- end -}}
 
 {{/*
-In-container PgBouncer env for the gateway container. Under IAM or Entra auth the pooler mints and renews the database token itself.
+In-container PgBouncer env for the gateway and proxy containers. Under IAM or Entra auth the pooler mints and renews the database token itself.
 */}}
 {{- define "litellm.connectionPoolEnv" -}}
 {{- with .Values.database.connectionPool -}}
@@ -539,7 +632,7 @@ than silently replaced by the fallback.
 {{- $max := $component.pdb.maxUnavailable -}}
 {{- $minSet := not (or (kindIs "invalid" $min) (eq (printf "%v" $min) "")) -}}
 {{- $maxSet := not (or (kindIs "invalid" $max) (eq (printf "%v" $max) "")) -}}
-{{- if and $component.enabled $component.pdb $component.pdb.enabled }}
+{{- if and .enabled $component.pdb $component.pdb.enabled }}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
@@ -597,6 +690,16 @@ ImplementationSpecific
 {{- end -}}
 {{- end -}}
 
+{{/*
+Service spec fields shared by the component and monolith Services.
+Invoke with the component's `service` dict.
+*/}}
+{{- define "litellm.service.extras" -}}
+{{- if and (eq .type "LoadBalancer") .loadBalancerClass -}}
+loadBalancerClass: {{ .loadBalancerClass | quote }}
+{{- end }}
+{{- end -}}
+
 {{- define "litellm.gateway.prometheusMultiprocDir" -}}/tmp/litellm_prometheus_multiproc{{- end -}}
 
 {{/*
@@ -604,10 +707,6 @@ Directory of the collector's unix socket, shared by the gateway and
 collector containers through an emptyDir. Empty when the sidecar is off
 or gateway.collector.address is a tcp://127.0.0.1:<port> address.
 */}}
-{{- define "litellm.lensWorker.image" -}}
-{{- include "lens.image" (dict "Values" .Values.lensWorker "Chart" .Subcharts.lens.Chart) -}}
-{{- end -}}
-
 {{- define "litellm.gateway.collectorSocketDir" -}}
 {{- if and .Values.gateway.collector.enabled (hasPrefix "unix://" .Values.gateway.collector.address) -}}
 {{- dir (trimPrefix "unix://" .Values.gateway.collector.address) -}}
@@ -635,93 +734,51 @@ shutdown drain window.
 {{- end -}}
 
 {{- define "litellm.lensConnectionEnv" -}}
-{{- $mode := include "litellm.lens.mode" . -}}
-{{- if ne $mode "disabled" }}
-{{- if and (eq $mode "external") (not .Values.lensWorker.serviceTokenSecret.name) -}}
-{{- fail "lensWorker.serviceTokenSecret.name is required for external Lens" -}}
+{{- with .Values.lensWorker }}
+{{- if or .enabled (and .mode (ne .mode "disabled")) }}
+{{- fail "lensWorker was removed; deploy Lens from its own chart and set lens.* instead, see the chart README" }}
 {{- end }}
-{{- if and (eq $mode "external") (not .Values.lensWorker.gateway.secretName) -}}
-{{- fail "lensWorker.gateway.secretName is required for external Lens" -}}
-{{- end -}}
+{{- end }}
+{{- with .Values.lens }}
+{{- if .enabled }}
 - name: LITELLM_LENS_URL
-  value: {{ if eq $mode "external" }}{{ required "lensWorker.externalUrl is required for external Lens" .Values.lensWorker.externalUrl | quote }}{{ else }}{{ printf "http://%s-lens-worker:%v" (include "litellm.fullname" .) .Values.lensWorker.service.port | quote }}{{ end }}
+  value: {{ required "lens.url is required when lens.enabled is true" .url | quote }}
 - name: LITELLM_LENS_PUBLIC_URL
-  value: {{ include "litellm.lensWorker.publicUrl" . | quote }}
+  value: {{ required "lens.publicUrl is required when lens.enabled is true" .publicUrl | quote }}
 - name: LENS_GATEWAY_SECRET
   valueFrom:
     secretKeyRef:
-      name: {{ include "litellm.lensWorker.gatewaySecretName" . | quote }}
-      key: {{ .Values.lensWorker.gateway.secretKey | quote }}
+      name: {{ required "lens.gatewaySecret.name is required when lens.enabled is true" .gatewaySecret.name | quote }}
+      key: {{ .gatewaySecret.key | quote }}
 - name: LITELLM_LENS_SERVICE_TOKEN
   valueFrom:
     secretKeyRef:
-      name: {{ include "litellm.lensWorker.serviceTokenSecretName" . | quote }}
-      key: {{ .Values.lensWorker.serviceTokenSecret.key | quote }}
+      name: {{ required "lens.serviceTokenSecret.name is required when lens.enabled is true" .serviceTokenSecret.name | quote }}
+      key: {{ .serviceTokenSecret.key | quote }}
+{{- end }}
 {{- end }}
 {{- end -}}
-
-{{- define "litellm.lensWorker.labels" -}}
-{{- $labels := include "litellm.commonLabels" . | fromYaml -}}
-{{- $_ := set $labels "app.kubernetes.io/name" (printf "%s-lens-worker" (include "litellm.name" . | trunc 51 | trimSuffix "-")) -}}
-{{- toYaml $labels -}}
-{{- end -}}
-
-{{- define "litellm.lensWorker.serviceTokenSecretName" -}}
-{{- .Values.lensWorker.serviceTokenSecret.name | default (printf "%s-lens-service" (include "litellm.fullname" .)) -}}
-{{- end -}}
-
-{{- define "litellm.lensWorker.gatewaySecretName" -}}
-{{- .Values.lensWorker.gateway.secretName | default (printf "%s-lens-gateway" (include "litellm.fullname" . | trunc 50 | trimSuffix "-")) -}}
-{{- end -}}
-
-{{- define "litellm.lensWorker.bundledClickhouse" -}}
-{{- if and (eq (include "litellm.lens.mode" .) "bundled") .Values.lensWorker.clickhouse.enabled (not .Values.lensWorker.clickhouseSecret.name) -}}true{{- end -}}
-{{- end -}}
-
-{{- define "litellm.lensWorker.publicUrl" -}}
-{{- if .Values.lensWorker.publicUrl -}}
-{{- .Values.lensWorker.publicUrl -}}
-{{- else if eq (include "litellm.lens.mode" .) "external" -}}
-{{- fail "lensWorker.publicUrl is required for external Lens" -}}
-{{- else if .Values.lensWorker.ingress.enabled -}}
-{{- $tls := or (not (empty .Values.lensWorker.ingress.tls)) (hasKey .Values.lensWorker.ingress.annotations "alb.ingress.kubernetes.io/certificate-arn") -}}
-{{- printf "%s://%s" (ternary "https" "http" $tls) (required "lensWorker.ingress.host is required" .Values.lensWorker.ingress.host) -}}
-{{- else if and .Values.ingress.enabled .Values.ingress.host -}}
-{{- $tls := or (not (empty .Values.ingress.tls)) (hasKey .Values.ingress.annotations "alb.ingress.kubernetes.io/certificate-arn") -}}
-{{- printf "%s://%s/lens-ingest" (ternary "https" "http" $tls) .Values.ingress.host -}}
-{{- else -}}
-{{- fail "lensWorker.publicUrl is required when there is no single ingress hostname" -}}
-{{- end -}}
-{{- end -}}
-
-{{- define "litellm.lensWorker.clickhouseName" -}}
-{{- printf "%s-lens-clickhouse" (include "litellm.fullname" . | trunc 47 | trimSuffix "-") -}}
-{{- end -}}
-
-{{- define "litellm.lens.mode" -}}
-{{- $mode := .Values.lensWorker.mode | default (ternary "bundled" "disabled" .Values.lensWorker.enabled) -}}
-{{- if not (has $mode (list "bundled" "external" "disabled")) -}}
-{{- fail "lensWorker.mode must be bundled, external or disabled" -}}
-{{- end -}}
-{{- $mode -}}
-{{- end -}}
-
-{{- define "litellm.lens.render" -}}
+{{- define "litellm.liteadminEnv" -}}
 {{- $root := .root -}}
-{{- $values := mergeOverwrite (deepCopy $root.Subcharts.lens.Values) (deepCopy $root.Values.lensWorker) -}}
-{{- $_ := set $values "fullnameOverride" (printf "%s-lens-worker" (include "litellm.fullname" $root)) -}}
-{{- $_ := set $values "component" "lens-worker" -}}
-{{- $_ := set $values "nameOverride" (printf "%s-lens-worker" (include "litellm.name" $root | trunc 51 | trimSuffix "-")) -}}
-{{- $_ := set $values "imagePullSecrets" $root.Values.imagePullSecrets -}}
-{{- $_ := set $values.gateway "enabled" true -}}
-{{- $_ := set $values.gateway "generatedName" (include "litellm.lensWorker.gatewaySecretName" $root) -}}
-{{- $_ := set $values.clickhouse "nameOverride" (include "litellm.lensWorker.clickhouseName" $root) -}}
-{{- $_ := set $values.serviceTokenSecret "generatedName" (include "litellm.lensWorker.serviceTokenSecretName" $root) -}}
-{{- $_ := set $values "publicUrl" ($root.Values.lensWorker.standaloneUrl | default $root.Subcharts.lens.Values.publicUrl) -}}
-{{- if and (eq .resource "deployment") (or $root.Values.lensWorker.publicUrl $root.Values.lensWorker.ingress.enabled $root.Values.ingress.enabled) -}}
-{{- $ingestion := include "litellm.lensWorker.publicUrl" $root -}}
-{{- $_ := set $values "ingestionUrl" $ingestion -}}
-{{- $_ := set $values "publicUrl" ($root.Values.lensWorker.standaloneUrl | default (trimSuffix "/lens-ingest" $ingestion)) -}}
-{{- end -}}
-{{- include (printf "lens.%s" .resource) (dict "Values" $values "Release" $root.Release "Chart" $root.Subcharts.lens.Chart "Capabilities" $root.Capabilities) -}}
+{{- with $root.Values.liteadmin }}
+{{- if .enabled }}
+- name: LITELLM_ADMIN_AGENT_URL
+  value: {{ printf "http://%s-liteadmin:10000" (include "litellm.fullname" $root | trunc 53 | trimSuffix "-") | quote }}
+- name: ADMIN_AGENT_SERVICE_TOKEN
+  valueFrom:
+    secretKeyRef:
+      name: {{ required "liteadmin.existingSecret is required" .existingSecret }}
+      key: ADMIN_AGENT_SERVICE_TOKEN
+{{- $hasProxyBaseUrl := false }}
+{{- range $.component.extraEnv }}
+{{- if eq .name "PROXY_BASE_URL" }}
+{{- $hasProxyBaseUrl = true }}
+{{- end }}
+{{- end }}
+{{- if not $hasProxyBaseUrl }}
+- name: PROXY_BASE_URL
+  value: {{ required "liteadmin.gatewayUrl is required" .gatewayUrl | quote }}
+{{- end }}
+{{- end }}
+{{- end }}
 {{- end -}}
