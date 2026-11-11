@@ -11,7 +11,6 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 
 AZURE_AI_GPT_IMAGE_EDIT_DEFAULT_API_VERSION: Final = "2025-04-01-preview"
-CALLER_AUTH_HEADER_NAMES: Final = frozenset({"api-key", "authorization"})
 
 
 class AzureFoundryGPTImageEditConfig(AzureImageEditConfig):
@@ -32,8 +31,6 @@ class AzureFoundryGPTImageEditConfig(AzureImageEditConfig):
         litellm_params: Mapping[str, object] | None = None,
         api_base: str | None = None,
     ) -> dict[str, str]:  # mutable-ok: llm_http_handler adds extra_headers to the returned dict in place
-        if any(name.lower() in CALLER_AUTH_HEADER_NAMES for name in headers):
-            return {**headers}
         params: Final = GenericLiteLLMParams(**(litellm_params or {}))
         return {
             **headers,
