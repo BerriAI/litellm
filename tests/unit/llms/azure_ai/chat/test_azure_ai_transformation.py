@@ -1,5 +1,6 @@
 import json
 import traceback
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -58,6 +59,8 @@ async def test_get_openai_compatible_provider_info():
         ("azure_ai/gpt-4o", "https://my-resource.openai.azure.com/openai/v1/", "azure_ai"),
         ("azure_ai/gpt-4o", "https://apim.example.com/api/projects/p", "azure_ai"),
         ("azure_ai/gpt-4o", "https://apim.example.com/foundry/api/projects/p", "azure_ai"),
+        ("azure_ai/gpt-4o", "https://gateway.example.com/v1", "azure"),
+        ("azure_ai/gpt-4o", "https://my-resource.openai.azure.com/openai/v1/extra", "azure"),
     ],
 )
 def test_foundry_base_keeps_azure_ai_provider(model: str, api_base: str, expected_provider: str):
@@ -251,7 +254,7 @@ def test_azure_ai_completion_routes_flexible_api_base(
     ],
 )
 def test_azure_ai_completion_sends_the_key_in_the_header_the_base_accepts(
-    respx_mock: respx.MockRouter, api_base: str, expected_headers: dict[str, str]
+    respx_mock: respx.MockRouter, api_base: str, expected_headers: Mapping[str, str]
 ) -> None:
     route: Final = respx_mock.post(
         host="example-resource.services.ai.azure.com", path__regex=r"/openai/v1/chat/completions$"
@@ -272,9 +275,9 @@ def test_azure_ai_completion_sends_the_key_in_the_header_the_base_accepts(
     }
 
 
-@pytest.mark.parametrize("api_version", [None, "preview"])
+@pytest.mark.parametrize(("api_version", "expected_query"), [(None, b""), ("preview", b"api-version=preview")])
 def test_azure_ai_completion_keeps_azure_openai_host_v1_base_on_azure_ai(
-    respx_mock: respx.MockRouter, api_version: str | None
+    respx_mock: respx.MockRouter, api_version: str | None, expected_query: bytes
 ) -> None:
     route: Final = respx_mock.post(host="example-resource.openai.azure.com", path="/openai/v1/chat/completions").mock(
         return_value=Response(200, json=CHAT_COMPLETION_PAYLOAD)
@@ -289,6 +292,7 @@ def test_azure_ai_completion_keeps_azure_openai_host_v1_base_on_azure_ai(
     )
 
     assert route.calls.last.request.headers["api-key"] == "azure-ai-test-key"
+    assert route.calls.last.request.url.query == expected_query
     assert response.choices[0].message.content == "42"
     assert response._hidden_params["custom_llm_provider"] == "azure_ai"
 
@@ -341,9 +345,7 @@ def test_azure_ai_completion_mints_the_service_principal_token_for_the_base_scop
         host="example-resource.services.ai.azure.com", path__regex=r"/openai/v1/chat/completions$"
     ).mock(return_value=Response(200, json=CHAT_COMPLETION_PAYLOAD))
 
-    with (
-        patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id") as mock_entra_id
-    ):  # test-quality-ok: stubs the Entra token fetch to assert the scope a chat entry requests and the bearer it sends; live service principal path proven by the PR's Foundry e2e QA
+    with patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id") as mock_entra_id:
         mock_entra_id.return_value = lambda: "foundry-sp-token"
         litellm.completion(
             model="azure_ai/gpt-4.1-mini",
