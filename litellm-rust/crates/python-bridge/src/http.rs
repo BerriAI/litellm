@@ -112,8 +112,6 @@ pub(crate) fn call_config(
     Ok(resolved(py, settings))
 }
 
-/// The client config under the process environment, layered with the host's configured HTTP settings when
-/// `use_http_settings` is set
 pub(crate) fn settings_config(
     py: Python<'_>,
     use_http_settings: bool,

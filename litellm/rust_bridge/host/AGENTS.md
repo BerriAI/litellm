@@ -8,7 +8,8 @@ Python behavior Rust needs but does not own, behind one module per question. Rus
   - The one exception is `litellm.rust_bridge.execution`, the driver's step classes. It is runtime protocol, not Python state, and the Python entrypoints import it too
 - Only Rust calls these modules. No Python module outside `host/` imports one. Tests may, to set up the Python state Rust reads
   - Logic both sides need lives with its Python owner (`public_call`, `secret_managers`, the route's types), and the host module calls it
-- A Python call that reproduces Python behavior goes through a host function, including standard library and third-party calls: error text built from `httpx`, `OSError` or `litellm.exceptions`, `huggingface_hub` downloads, the process `random` generator, `os.environ`
+- A Python call that reproduces Python behavior goes through a host function, including standard library and third-party calls: error text built from `httpx`, `OSError` or `litellm.exceptions`, `huggingface_hub` downloads, the process `random` generator
+  - Rust reads the process environment itself (`ProcessEnvironment`). CPython's `os.environ` writes through to it, so there is nothing to ask Python for
   - Rust imports a module directly only to get a type or a Python builtin it applies itself: `isinstance` checks (`os.PathLike`, `ssl.SSLContext`), exception classes it raises (`redis.exceptions`), `builtins.object` and `inspect.getattr_static` for Python attribute semantics
   - `litellm-host-python` is the generic runtime and keeps its own `asyncio`, `contextvars` and `json` imports
 - Check these invariants by review whenever a Rust file adds a `py.import`, an `import_exception!` or a `*_MODULE` constant, or a Python file imports from `litellm.rust_bridge.host`
@@ -29,7 +30,7 @@ Python behavior Rust needs but does not own, behind one module per question. Rus
   - `tokenizers`: bundled tiktoken files and Hugging Face tokenizer downloads
   - `randomness`: the process `random` generator the Python router draws from
   - `redis_events`: reporting native Redis calls and breaker transitions to `ServiceLogging`
-  - `redis_credentials`: what a caller's redis-py `CredentialProvider` authenticates with, and the environment redis-py reads
+  - `redis_credentials`: what a caller's redis-py `CredentialProvider` authenticates with
   - `model_cost`: where a `register_model` entry lands in the published table and the row it writes
 - `routes/<route>.py` holds the questions one route asks, under the same function names on every route (`response`, `map_failure`, `connection_defaults`), so Rust names only the module. A question two routes ask goes in a top-level module here instead
 - Each module reuses the Python implementation the Python route runs (`AnthropicModelInfo`, `Logging`). Do not re-derive those rules here or in Rust; one resolver, two callers

@@ -20,7 +20,6 @@ pub(crate) struct NativeCostMapSource {
 
 #[pymethods]
 impl NativeCostMapSource {
-    /// `use_http_settings` layers the configured HTTP settings over the environment, which alone applies otherwise
     #[new]
     #[pyo3(signature = (url, *, use_http_settings))]
     fn new(py: Python<'_>, url: String, use_http_settings: bool) -> PyResult<Self> {

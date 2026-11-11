@@ -41,8 +41,6 @@ fn merge_headers(
     (!merged.is_empty()).then_some(merged)
 }
 
-/// Reads the module global a param spec names from the host's provider defaults, the way
-/// `VertexBase.get_vertex_ai_project` reads `litellm.vertex_project`.
 fn module_global<'py>(py: Python<'py>, name: &str) -> PyResult<Option<Bound<'py, PyAny>>> {
     PythonSettings::ProviderDefaults
         .read_or_unset(py)?
