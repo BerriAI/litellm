@@ -1,3 +1,4 @@
+import re
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Final, Literal
 from urllib.parse import urlsplit
@@ -26,6 +27,14 @@ else:
     LiteLLMLoggingObj = Any
 
 _DECODED_JSON: Final = TypeAdapter(object)
+_FOUNDRY_PROJECT_V1_RESPONSES_PATH: Final = re.compile(r"/api/projects/[^/]+/openai/v1/responses$")
+
+
+def _without_api_version_on_foundry_project_v1(url: str) -> str:
+    parsed_url: Final = httpx.URL(url)
+    if not _FOUNDRY_PROJECT_V1_RESPONSES_PATH.search(parsed_url.path):
+        return url
+    return str(parsed_url.copy_with(params=parsed_url.params.remove("api-version")))
 
 
 class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -188,11 +197,13 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         path: Final = parsed_base.path.rstrip("/")
         explicit_v1_base: Final = path.endswith(("/openai/v1", "/openai/v1/responses"))
         responses_path: Final = f"{path}/responses" if path.endswith("/openai/v1") else path
-        return BaseAzureLLM.get_base_azure_url(
-            api_base=parsed_base._replace(path=responses_path).geturl() if explicit_v1_base else resolved_api_base,
-            litellm_params=litellm_params,
-            route="/openai/v1/responses" if explicit_v1_base else "/openai/responses",
-            default_api_version=AZURE_DEFAULT_RESPONSES_API_VERSION,
+        return _without_api_version_on_foundry_project_v1(
+            BaseAzureLLM.get_base_azure_url(
+                api_base=parsed_base._replace(path=responses_path).geturl() if explicit_v1_base else resolved_api_base,
+                litellm_params=litellm_params,
+                route="/openai/v1/responses" if explicit_v1_base else "/openai/responses",
+                default_api_version=AZURE_DEFAULT_RESPONSES_API_VERSION,
+            )
         )
 
     def supports_native_websocket(self) -> bool:
