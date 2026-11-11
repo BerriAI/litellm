@@ -43,7 +43,9 @@ to refresh their cached blog response. The public `/public/litellm_blog_posts` e
 option is enabled, so neither remote RSS nor bundled fallback posts are loaded. Direct navigation to the home
 page still shows the rest of the dashboard. This is a display option, not an authorization rule.
 
-The default is false. Unset the variable or set it to `false` to preserve the existing behavior. The option takes
+Only `true` enables this option (case-insensitive, with surrounding whitespace ignored). Values such as `1`,
+`yes` and `on` do not enable it. The default is false. Unset the variable or set it to `false` to preserve the
+existing behavior. The option takes
 precedence over `LITELLM_BLOG_POSTS_URL` and `LITELLM_LOCAL_BLOG_POSTS`. The notification menu also hides latest posts, its Blog link, Auto Router promotion and release announcements.
 Model deprecation alerts, deployment health, static documentation and community links remain available. Other pages
 are unaffected. This option does not require an Admin UI build-time environment variable or a database setting.
