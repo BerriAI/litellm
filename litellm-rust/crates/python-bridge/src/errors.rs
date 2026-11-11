@@ -3,7 +3,7 @@ use std::error::Error as StdError;
 use litellm_error::Report;
 use litellm_inference::Error;
 use pyo3::{
-    exceptions::{PyRuntimeError, PyValueError},
+    exceptions::{PyRuntimeError, PyTypeError, PyValueError},
     prelude::*,
 };
 use reqwest::header::HeaderMap;
@@ -36,6 +36,9 @@ const MESSAGES_MISSING_CREDENTIAL: &str = "messages_missing_credential";
 /// Python refuses the request only once its logger knows the resolved model and provider (the
 /// provider config's request transform), so the failure logs them.
 const MESSAGES_LATE_REJECTION: &str = "messages_late_rejection";
+/// Python's request transform raises a builtin exception (`TypeError`) that its handler does not
+/// map, so the caller gets the native exception as it is.
+const MESSAGES_PYTHON_RAISED: &str = "messages_python_raised";
 /// The text of a refusal Python's provider config raises from its request transform, which its
 /// HTTP handler maps as a provider error.
 const MESSAGES_PROVIDER_REJECTION: &str = "messages_provider_rejection";
@@ -129,6 +132,18 @@ pub(crate) fn route_failure(
         return public(upstream_error(py, status, body, &headers)?);
     }
     let native = match (marker, error.rejected_request()) {
+        (RequestMarker::Messages, Some(rejection))
+            if matches!(
+                rejection.downcast_ref::<litellm_llms::ErrorDetail>(),
+                Some(litellm_llms::ErrorDetail::UnorderableTypes { .. })
+            ) =>
+        {
+            let native = PyTypeError::new_err(rejection.to_string());
+            let value = native.value(py);
+            value.setattr(MESSAGES_LATE_REJECTION, true)?;
+            value.setattr(MESSAGES_PYTHON_RAISED, true)?;
+            native
+        }
         (RequestMarker::Messages, Some(rejection)) => {
             let native = PyValueError::new_err(Report::new(rejection).to_string());
             let value = native.value(py);
@@ -388,6 +403,33 @@ mod tests {
                 .unwrap()
                 .map(|value| value.extract::<String>().unwrap());
             assert_eq!(text.as_deref(), expected);
+        });
+    }
+
+    #[test]
+    fn an_unorderable_comparison_raises_python_type_error_as_it_is() {
+        Python::initialize();
+        Python::attach(|py| {
+            let error = Error::invalid_request(litellm_llms::ErrorDetail::UnorderableTypes {
+                op: "<=",
+                left: "str",
+                right: "int",
+            });
+            let native = route_failure(py, error, RequestMarker::Messages, Ok).unwrap();
+            assert!(native.is_instance_of::<PyTypeError>(py));
+            let value = native.value(py);
+            assert_eq!(
+                value.str().unwrap().to_string(),
+                "'<=' not supported between instances of 'str' and 'int'"
+            );
+            assert!(value.getattr_opt(MESSAGES_PYTHON_RAISED).unwrap().is_some());
+            assert!(
+                value
+                    .getattr_opt(MESSAGES_LATE_REJECTION)
+                    .unwrap()
+                    .is_some()
+            );
+            assert!(value.getattr_opt(MESSAGES_REQUEST_ERROR).unwrap().is_none());
         });
     }
 

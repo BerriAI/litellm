@@ -759,6 +759,10 @@ def map_failure(error: Exception, request: Mapping[str, object], request_provide
         error.__context__ = chained  # rebind-ok: Python chains the transport timeout as the exception context
     if getattr(error, "messages_late_rejection", False):
         _log_resolved_call(request, request_provider)
+    if getattr(error, "messages_python_raised", False):
+        # Python's request transform raises this builtin exception unmapped, e.g. the TypeError
+        # of comparing a string max_tokens while capping the thinking budget.
+        return error
     if getattr(error, "messages_request_error", False):
         return _rejection(error, request, request_provider)
     if getattr(error, "messages_missing_credential", False):

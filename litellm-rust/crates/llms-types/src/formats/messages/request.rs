@@ -338,9 +338,17 @@ pub struct MessagesOptionalParams {
     pub stop_sequences: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<Recognized<bool>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::recognized::exact_float"
+    )]
     pub temperature: Option<Recognized<f64>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::recognized::exact_float"
+    )]
     pub top_p: Option<Recognized<f64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub top_k: Option<Recognized<i64>>,

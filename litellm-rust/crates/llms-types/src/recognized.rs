@@ -17,6 +17,37 @@ where
     <Recognized<T> as serde::Deserialize<'de>>::deserialize(deserializer).map(Some)
 }
 
+/// `deserialize_with` for an optional float Python forwards as the caller sent it: an integer a
+/// float cannot hold exactly (`float(n) != n`, so beyond 2**53) stays `Unrecognized` with its
+/// exact digits, as Python sends and logs it, and `null` stays absent as before.
+pub fn exact_float<'de, D>(deserializer: D) -> Result<Option<Recognized<f64>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = <Value as serde::Deserialize>::deserialize(deserializer)?;
+    if value.is_null() {
+        return Ok(None);
+    }
+    if inexact_as_float(&value) {
+        return Ok(Some(Recognized::Unrecognized(value)));
+    }
+    serde_json::from_value(value)
+        .map(Some)
+        .map_err(serde::de::Error::custom)
+}
+
+fn inexact_as_float(value: &Value) -> bool {
+    let Value::Number(number) = value else {
+        return false;
+    };
+    if let Some(int) = number.as_i64() {
+        return (int as f64) as i128 != i128::from(int);
+    }
+    number
+        .as_u64()
+        .is_some_and(|int| (int as f64) as u128 != u128::from(int))
+}
+
 impl<T> Recognized<T> {
     pub fn known(&self) -> Option<&T> {
         match self {
@@ -132,6 +163,34 @@ mod tests {
         assert_eq!(
             map_known_runs(Vec::<Recognized<u64>>::new(), |run| run),
             vec![]
+        );
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Sampling {
+        #[serde(default, deserialize_with = "exact_float")]
+        temperature: Option<Recognized<f64>>,
+    }
+
+    #[rstest]
+    #[case::float(json!({"temperature": 0.5}), Some(Recognized::Known(0.5)))]
+    #[case::small_int(json!({"temperature": 2}), Some(Recognized::Known(2.0)))]
+    #[case::largest_exact_int(json!({"temperature": 9_007_199_254_740_992_i64}), Some(Recognized::Known(9_007_199_254_740_992.0)))]
+    #[case::inexact_int(json!({"temperature": 1_152_921_504_606_846_977_i64}), Some(Recognized::Unrecognized(json!(1_152_921_504_606_846_977_i64))))]
+    #[case::inexact_negative_int(json!({"temperature": -9_223_372_036_854_775_807_i64}), Some(Recognized::Unrecognized(json!(-9_223_372_036_854_775_807_i64))))]
+    #[case::inexact_unsigned_int(json!({"temperature": 18_446_744_073_709_551_615_u64}), Some(Recognized::Unrecognized(json!(18_446_744_073_709_551_615_u64))))]
+    #[case::string(json!({"temperature": "0.5"}), Some(Recognized::Unrecognized(json!("0.5"))))]
+    #[case::null(json!({"temperature": null}), None)]
+    #[case::absent(json!({}), None)]
+    fn integers_a_float_cannot_hold_keep_their_digits(
+        #[case] value: Value,
+        #[case] expected: Option<Recognized<f64>>,
+    ) {
+        assert_eq!(
+            serde_json::from_value::<Sampling>(value)
+                .unwrap()
+                .temperature,
+            expected
         );
     }
 

@@ -187,6 +187,14 @@ pub enum ErrorDetail {
         "thinking.budget_tokens must be a number, got {actual}. To drop it, set `litellm.drop_params=True`, or `drop_params: true` under `litellm_settings` on the proxy"
     )]
     NonNumericThinkingBudget { actual: &'static str },
+    /// Python's comparison of two operands it cannot order, which raises `TypeError` with this
+    /// text before any request is sent.
+    #[error("'{op}' not supported between instances of '{left}' and '{right}'")]
+    UnorderableTypes {
+        op: &'static str,
+        left: &'static str,
+        right: &'static str,
+    },
     #[error(
         "Missing API Base - A call is being made to LLM Provider but no api base is set either in the environment variables ({{LLM_PROVIDER}}_API_KEY) or via params"
     )]

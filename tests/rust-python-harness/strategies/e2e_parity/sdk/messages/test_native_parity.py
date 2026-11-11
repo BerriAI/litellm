@@ -779,6 +779,13 @@ INPUT_VALUE_CASES: Final = (
     Case("max_tokens_beyond_64_bits", _kw(max_tokens=2**64)),
     Case("reasoning_effort_with_fractional_max_tokens", _kw(reasoning_effort="high", max_tokens=1500.5)),
     Case("temperature_numeric_string", _kw(temperature="0.5")),
+    Case("temperature_integer_beyond_float_precision", _kw(temperature=2**60 + 1)),
+    Case("top_p_integer_beyond_float_precision", _kw(top_p=-9223372036854775807)),
+    Case(
+        "reasoning_effort_with_numeric_string_max_tokens",
+        _kw(reasoning_effort="high", max_tokens="8192"),
+        upstream=(),
+    ),
     Case("top_k_beyond_64_bits", _kw(top_k=2**70)),
     Case("messages_mapping", _kw(messages={"role": "user", "content": "hi"})),
     Case("messages_string", _kw(messages="hi")),

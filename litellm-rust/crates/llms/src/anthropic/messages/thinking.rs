@@ -80,19 +80,21 @@ fn output_effort(effort: ReasoningEffort) -> Option<EffortLevel> {
     }
 }
 
+/// `cap_thinking_budget_to_max_tokens`, whose first comparison (`max_tokens <= 1024`) raises
+/// `TypeError` for a `max_tokens` Python cannot order against an int, such as a string.
 fn fit_budget_to_max_tokens(
     budget_tokens: u64,
     max_tokens: Option<&Recognized<u64>>,
-) -> Option<Recognized<u64>> {
+) -> Result<Option<Recognized<u64>>, Error> {
     let max_tokens = match max_tokens {
-        None => return Some(Recognized::Known(budget_tokens)),
+        None => return Ok(Some(Recognized::Known(budget_tokens))),
         Some(Recognized::Known(max_tokens)) => *max_tokens,
         Some(Recognized::Unrecognized(other)) => {
             return fit_budget_to_python_number(budget_tokens, other);
         }
     };
-    (max_tokens > ANTHROPIC_MIN_THINKING_BUDGET_TOKENS)
-        .then(|| Recognized::Known(budget_tokens.min(max_tokens - 1)))
+    Ok((max_tokens > ANTHROPIC_MIN_THINKING_BUDGET_TOKENS)
+        .then(|| Recognized::Known(budget_tokens.min(max_tokens - 1))))
 }
 
 fn enabled_thinking(budget_tokens: Recognized<u64>) -> ThinkingConfig {
@@ -102,20 +104,32 @@ fn enabled_thinking(budget_tokens: Recognized<u64>) -> ThinkingConfig {
     })
 }
 
-fn fit_budget_to_python_number(budget_tokens: u64, max_tokens: &Value) -> Option<Recognized<u64>> {
+fn fit_budget_to_python_number(
+    budget_tokens: u64,
+    max_tokens: &Value,
+) -> Result<Option<Recognized<u64>>, Error> {
     let Some(max_tokens) = python_number(max_tokens) else {
-        return Some(Recognized::Known(budget_tokens));
+        if max_tokens.is_null() {
+            return Ok(Some(Recognized::Known(budget_tokens)));
+        }
+        return Err(Error::InvalidRequest(
+            crate::ErrorDetail::UnorderableTypes {
+                op: "<=",
+                left: python_type_name(max_tokens),
+                right: "int",
+            },
+        ));
     };
     if max_tokens <= ANTHROPIC_MIN_THINKING_BUDGET_TOKENS as f64 {
-        return None;
+        return Ok(None);
     }
     if (budget_tokens as f64) < max_tokens {
-        return Some(Recognized::Known(budget_tokens));
+        return Ok(Some(Recognized::Known(budget_tokens)));
     }
-    Some(Recognized::Unrecognized(
+    Ok(Some(Recognized::Unrecognized(
         serde_json::Number::from_f64(max_tokens - 1.0)
             .map_or_else(|| Value::String(raw_json::encode("NaN")), Value::Number),
-    ))
+    )))
 }
 
 fn known_thinking(request: &MessagesRequest) -> Option<&ThinkingConfig> {
@@ -232,7 +246,7 @@ fn translate_reasoning_effort(
             ..request
         });
     }
-    let Some(budget) = fit_budget_to_max_tokens(budget, request.params.max_tokens.as_ref()) else {
+    let Some(budget) = fit_budget_to_max_tokens(budget, request.params.max_tokens.as_ref())? else {
         return Ok(request);
     };
     let enabled = enabled_thinking(budget);
@@ -425,13 +439,14 @@ fn translate_adaptive_effort_for_non_adaptive_model(
     } else {
         None
     };
+    let thinking = match budget {
+        Some(budget) => fit_budget_to_max_tokens(budget, request.params.max_tokens.as_ref())?
+            .map(|budget| Recognized::Known(enabled_thinking(budget))),
+        None => None,
+    };
     Ok(MessagesRequest {
         params: MessagesOptionalParams {
-            thinking: budget
-                .and_then(|budget| {
-                    fit_budget_to_max_tokens(budget, request.params.max_tokens.as_ref())
-                })
-                .map(|budget| Recognized::Known(enabled_thinking(budget))),
+            thinking,
             output_config: without_effort(request.params.output_config),
             ..request.params
         },
@@ -1462,6 +1477,34 @@ mod tests {
             translate_thinking(request(fields), &legacy_context(true, false)),
             Ok(request(
                 json!({"max_tokens": 8192, "thinking": {"type": "adaptive"}})
+            ))
+        );
+    }
+
+    #[rstest]
+    #[case::reasoning_effort(json!({"max_tokens": "8192", "reasoning_effort": "high"}), "str")]
+    #[case::caller_thinking(
+        json!({"max_tokens": "8192", "reasoning_effort": "low", "thinking": {"type": "enabled", "budget_tokens": 2048}}),
+        "str"
+    )]
+    #[case::adaptive_interface(
+        json!({"max_tokens": "8192", "thinking": {"type": "adaptive"}, "output_config": {"effort": "high"}}),
+        "str"
+    )]
+    #[case::list(json!({"max_tokens": [8192], "reasoning_effort": "high"}), "list")]
+    fn an_unorderable_max_tokens_raises_python_type_error_while_capping_the_budget(
+        haiku_4_5: MessagesModelCapabilities,
+        #[case] fields: Value,
+        #[case] left: &'static str,
+    ) {
+        assert_eq!(
+            translate(haiku_4_5, fields),
+            Err(Error::InvalidRequest(
+                crate::ErrorDetail::UnorderableTypes {
+                    op: "<=",
+                    left,
+                    right: "int",
+                }
             ))
         );
     }
