@@ -1519,6 +1519,12 @@ def test_beta_detection_preserves_unrecognized_thinking(thinking: object) -> Non
             id="own-row-first",
         ),
         pytest.param(
+            {"claude-unit-test": 4321, "vertex_ai/claude-unit-test@20990101": 1234},
+            {},
+            4321,
+            id="unversioned-row-before-vertex-row",
+        ),
+        pytest.param(
             {"vertex_ai/claude-unit-test@20990101": 1234},
             {"model_info": {"max_output_tokens": 500}},
             500,

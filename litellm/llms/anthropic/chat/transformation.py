@@ -689,15 +689,20 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     @staticmethod
     def get_max_tokens_for_model(model: str | None = None, custom_llm_provider: str | None = None) -> int:
         """
-        Get the max output tokens for a given model from its own cost-map row, else from the
-        serving host's row (e.g. vertex_ai/claude-haiku-4-5@20251001).
-        Falls back to DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS (configurable via env var) if neither row exists.
+        Get the max output tokens for a given model from its own cost-map row, then from its
+        unversioned id's row (claude-sonnet-4-6@default reads claude-sonnet-4-6), else from the
+        serving host's row (e.g. vertex_ai/claude-3-5-haiku@20241022).
+        Falls back to DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS (configurable via env var) if no row exists.
         """
         if model is None:
             return DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
         own_max_tokens: Final = _own_max_output_tokens(model)
         if own_max_tokens is not None:
             return own_max_tokens
+        unversioned_model, version_separator, _ = model.partition("@")
+        unversioned_max_tokens: Final = _own_max_output_tokens(unversioned_model) if version_separator else None
+        if unversioned_max_tokens is not None:
+            return unversioned_max_tokens
         host_max_tokens: Final = (
             None if custom_llm_provider is None else mapped_max_output_tokens(f"{custom_llm_provider}/{model}")
         )
