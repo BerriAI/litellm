@@ -548,6 +548,7 @@ class PassThroughEndpointLogging:
         request_body: dict,
         passthrough_logging_payload: PassthroughStandardLoggingPayload,
         custom_llm_provider: str | None = None,
+        tripo_billing_model: str | None = None,
         finalize_before_dispatch: bool = False,
         **kwargs,
     ) -> None:
@@ -562,6 +563,7 @@ class PassThroughEndpointLogging:
                 request_body=request_body,
                 dispatch=self._log_dispatch,
                 kwargs=kwargs,
+                billing_model=tripo_billing_model,
             )
             if task_scheduled:
                 return

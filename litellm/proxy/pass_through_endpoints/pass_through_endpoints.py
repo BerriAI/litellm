@@ -1288,6 +1288,7 @@ async def pass_through_request(
     stream: bool | None = None,
     cost_per_request: float | None = None,
     custom_llm_provider: str | None = None,
+    tripo_billing_model: str | None = None,
     guardrails_config: dict | None = None,
     timeout: float | None = None,
     upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
@@ -2077,6 +2078,7 @@ async def pass_through_request(
                 cache_hit=False,
                 request_body=_parsed_body or {},
                 custom_llm_provider=custom_llm_provider,
+                tripo_billing_model=tripo_billing_model,
                 **kwargs,
             )
             bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
