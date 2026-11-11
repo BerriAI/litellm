@@ -761,10 +761,36 @@ async def test_custom_content_stream_without_stream_hook_fails_before_streaming(
     native_content_handler: NativeContentLLM, is_async: bool
 ) -> None:
     request: Final = dict(model="native_image_test/image-model", contents=[])
-    with pytest.raises(litellm.InternalServerError, match="astreaming" if is_async else "streaming") as error:
+    with pytest.raises(litellm.APIConnectionError, match="astreaming" if is_async else "streaming") as error:
         _ = await agenerate_content_stream(**request) if is_async else generate_content_stream(**request)
     assert error.value.status_code == 500
     assert native_content_handler.requests == ()
+
+
+@pytest.mark.asyncio
+async def test_custom_content_stream_without_stream_hook_keeps_router_legs_serving_chat(
+    native_content_handler: NativeContentLLM, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        litellm, "custom_provider_map", [{"provider": "native_image_test", "custom_handler": CompletionContentLLM()}]
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "chat-group",
+                "litellm_params": {"model": f"native_image_test/{leg}", "order": order},
+                "model_info": {"id": leg},
+            }
+            for order, leg in enumerate(("leg-a", "leg-b"), start=1)
+        ],
+        num_retries=0,
+        allowed_fails=0,
+    )
+    for _ in range(2):
+        with pytest.raises(litellm.APIConnectionError, match="astreaming"):
+            _ = await router.agenerate_content_stream(model="chat-group", contents=[{"parts": [{"text": "hi"}]}])
+    response: Final = await router.acompletion(model="chat-group", messages=[{"role": "user", "content": "hi"}])
+    assert response.choices[0].message.content == "adapter result"
 
 
 class CamelCaseContentResponse(BaseModel):
@@ -948,6 +974,37 @@ async def test_custom_content_adapter_rejects_generation_config_it_cannot_send(
         assert b"stream adapter" in b"".join(result)
     else:
         assert result["candidates"][0]["content"]["parts"] == [{"text": "adapter result"}]
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_custom_content_adapter_accepts_generation_config_it_already_satisfies(
+    native_content_handler: NativeContentLLM, monkeypatch: pytest.MonkeyPatch, is_async: bool
+) -> None:
+    monkeypatch.setattr(
+        litellm, "custom_provider_map", [{"provider": "native_image_test", "custom_handler": AdapterOnlyContentLLM()}]
+    )
+    request: Final = dict(
+        model="native_image_test/chat-model", contents=[{"parts": [{"text": "hi"}]}],
+        config={"responseModalities": ["TEXT"], "candidateCount": 1},
+    )
+    result: Final = await litellm.agenerate_content(**request) if is_async else litellm.generate_content(**request)
+    assert result["candidates"][0]["content"]["parts"] == [{"text": "adapter result"}]
+
+
+@pytest.mark.parametrize("config", [{"responseModalities": ["TEXT", "IMAGE"]}, {"candidateCount": 2}])
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_custom_content_adapter_rejects_generation_config_values_it_cannot_satisfy(
+    native_content_handler: NativeContentLLM, monkeypatch: pytest.MonkeyPatch,
+    is_async: bool, config: dict[str, object],
+) -> None:
+    monkeypatch.setattr(
+        litellm, "custom_provider_map", [{"provider": "native_image_test", "custom_handler": AdapterOnlyContentLLM()}]
+    )
+    request: Final = dict(model="native_image_test/chat-model", contents=[{"parts": [{"text": "hi"}]}], config=config)
+    with pytest.raises(litellm.BadRequestError, match=next(iter(config))):
+        _ = await litellm.agenerate_content(**request) if is_async else litellm.generate_content(**request)
 
 
 @pytest.mark.parametrize("is_async", [False, True])
