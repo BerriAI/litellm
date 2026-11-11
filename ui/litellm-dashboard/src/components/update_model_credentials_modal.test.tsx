@@ -68,6 +68,18 @@ describe("UpdateModelCredentialsModal", () => {
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
+  it("shows the server's reason when the update is rejected", async () => {
+    const rejection = new Error("A strategy router cannot route to itself");
+    mockModelPatchUpdateCall.mockRejectedValueOnce(rejection);
+    const user = userEvent.setup();
+    renderModal();
+
+    fireEvent.change(screen.getByLabelText(/new api key/i), { target: { value: "sk-rotated-1" } });
+    await user.click(screen.getByRole("button", { name: /update api key/i }));
+
+    await waitFor(() => expect(mockToast.fromError).toHaveBeenCalledWith(rejection));
+  });
+
   it("does not call the update API when the field is left blank", async () => {
     const user = userEvent.setup();
     renderModal();

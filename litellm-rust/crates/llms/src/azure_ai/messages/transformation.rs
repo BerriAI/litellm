@@ -68,7 +68,7 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
                     .capabilities
                     .supports_mid_conversation_system,
             )),
-            context,
+            &context.keeping_display_updates(),
         )
     }
 

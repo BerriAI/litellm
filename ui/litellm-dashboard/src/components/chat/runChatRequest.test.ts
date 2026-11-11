@@ -1,5 +1,6 @@
 import OpenAI from "openai";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import i18n from "@/i18n/i18n";
 import { makeOpenAIResponsesRequest } from "@/components/llm_calls/responses_api";
 import { generateChatImages } from "./imageHelpers";
 import { toResponsesMessages } from "./attachmentHelpers";
@@ -191,5 +192,68 @@ describe("runChatRequest", () => {
     await runChatRequest(options);
     expect(options.onUpdate).toHaveBeenCalledExactlyOnceWith({ content: " [stopped]" });
     expect(options.onResponseId).toHaveBeenCalledWith(null);
+  });
+
+  describe("when the UI language is not English", () => {
+    beforeEach(async () => {
+      i18n.addResourceBundle(
+        "de",
+        "translation",
+        {
+          chat: {
+            runChatRequest: { genericError: "Fehler", fileInputHint: " Hinweis", researchNeedsBackground: "Hinweis" },
+          },
+        },
+        true,
+        true,
+      );
+      await i18n.changeLanguage("de");
+    });
+
+    afterEach(async () => {
+      await i18n.changeLanguage("en");
+      i18n.removeResourceBundle("de", "translation");
+    });
+
+    it("should keep the generic error in English because it is sent back to the model", async () => {
+      const options = requestOptions();
+      vi.mocked(makeOpenAIResponsesRequest).mockRejectedValue("offline");
+      await runChatRequest(options, i18n.t.bind(i18n));
+      expect(options.onUpdate).toHaveBeenLastCalledWith({ content: "Something went wrong. Please try again." });
+    });
+
+    it("should keep the file input hint in English because it is sent back to the model", async () => {
+      const options = requestOptions({
+        messages: [
+          {
+            role: "user",
+            content: "Read the report",
+            attachments: [
+              {
+                id: "report",
+                kind: "file",
+                name: "report.pdf",
+                mimeType: "application/pdf",
+                url: "data:application/pdf;base64,JVBERg==",
+              },
+            ],
+          },
+        ],
+      });
+      const error = new OpenAI.APIError(400, { message: "Provider detail" }, "Provider detail", new Headers());
+      vi.mocked(makeOpenAIResponsesRequest).mockRejectedValue(error);
+      await runChatRequest(options, i18n.t.bind(i18n));
+      expect(options.onUpdate).toHaveBeenLastCalledWith({
+        content: error.message + " Try a model that supports file inputs, or paste the relevant text.",
+      });
+    });
+
+    it("should keep the deep research notice in English because it is sent back to the model", async () => {
+      const options = requestOptions({ research: true });
+      await runChatRequest(options, i18n.t.bind(i18n));
+      expect(options.onUpdate).toHaveBeenCalledExactlyOnceWith({
+        content: "Enable background chats before starting deep research.",
+      });
+    });
   });
 });

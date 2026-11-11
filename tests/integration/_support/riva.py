@@ -15,6 +15,8 @@ from typing import Final
 import grpc
 from riva.client.proto import riva_asr_pb2, riva_asr_pb2_grpc
 
+from tests.integration._support.ports import allocate_port
+
 SAMPLE_RATE_HZ: Final = 16000
 OFFLINE_ONLY_REFUSAL: Final = (
     "Error: Unavailable model requested given these parameters: language_code=en-US; sample_rate=16000; type=online;"
@@ -39,6 +41,7 @@ class RivaCall:
     rpc: Rpc
     audio: bytes
     cancelled: bool
+    authorization: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +69,10 @@ def pcm_wav(seconds: float) -> bytes:
 
 def pcm_bytes(seconds: float) -> int:
     return int(seconds * SAMPLE_RATE_HZ) * 2
+
+
+def _authorization(context: grpc.ServicerContext) -> tuple[str, ...]:
+    return tuple(str(value) for key, value in context.invocation_metadata() if key == "authorization")
 
 
 def carries_clip(audio: bytes, seconds: float) -> bool:
@@ -100,9 +107,9 @@ class _Asr(riva_asr_pb2_grpc.RivaSpeechRecognitionServicer):
             released: Final = threading.Event()
             context.add_callback(released.set)
             released.wait(timeout=_STALL_LIMIT_SECONDS)
-            self._calls.put(RivaCall(Rpc.RECOGNIZE, request.audio, cancelled=not context.is_active()))
+            self._calls.put(RivaCall(Rpc.RECOGNIZE, request.audio, not context.is_active(), _authorization(context)))
             return riva_asr_pb2.RecognizeResponse()
-        self._calls.put(RivaCall(Rpc.RECOGNIZE, request.audio, cancelled=False))
+        self._calls.put(RivaCall(Rpc.RECOGNIZE, request.audio, False, _authorization(context)))
         return riva_asr_pb2.RecognizeResponse(
             results=[riva_asr_pb2.SpeechRecognitionResult(alternatives=[self._alternative(request.config)])]
         )
@@ -111,13 +118,12 @@ class _Asr(riva_asr_pb2_grpc.RivaSpeechRecognitionServicer):
         self, request_iterator: Iterable[riva_asr_pb2.StreamingRecognizeRequest], context: grpc.ServicerContext
     ) -> Iterator[riva_asr_pb2.StreamingRecognizeResponse]:
         if self._offline_only:
-            self._calls.put(RivaCall(Rpc.STREAMING, b"", cancelled=False))
+            self._calls.put(RivaCall(Rpc.STREAMING, b"", False, _authorization(context)))
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, OFFLINE_ONLY_REFUSAL)
         requests: Final = tuple(request_iterator)
         config: Final = requests[0].streaming_config.config if requests else riva_asr_pb2.RecognitionConfig()
-        self._calls.put(
-            RivaCall(Rpc.STREAMING, b"".join(request.audio_content for request in requests), cancelled=False)
-        )
+        audio: Final = b"".join(request.audio_content for request in requests)
+        self._calls.put(RivaCall(Rpc.STREAMING, audio, False, _authorization(context)))
         yield riva_asr_pb2.StreamingRecognizeResponse(
             results=[riva_asr_pb2.StreamingRecognitionResult(alternatives=[self._alternative(config)], is_final=True)]
         )
@@ -135,7 +141,7 @@ def riva_server(
     options: Final = () if max_receive_bytes is None else (("grpc.max_receive_message_length", max_receive_bytes),)
     server: Final = grpc.server(futures.ThreadPoolExecutor(max_workers=8), options=options)
     riva_asr_pb2_grpc.add_RivaSpeechRecognitionServicer_to_server(_Asr(words, offline_only, stall, calls), server)
-    port: Final = server.add_insecure_port("127.0.0.1:0")
+    port: Final = server.add_insecure_port(f"127.0.0.1:{allocate_port()}")
     server.start()
     try:
         yield RivaServer(f"127.0.0.1:{port}", calls)

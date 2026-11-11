@@ -21,6 +21,7 @@ from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
+    LitellmUserRoles,
     ProxyException,
     SpecialHeaders,
     SpecialMCPServerNames,
@@ -32,6 +33,7 @@ from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import (
     _agent_capped_servers,
     is_mcp_admitted_user_subject,
 )
+from litellm.proxy.utils import InternalUsageCache
 from litellm.types.agents import AgentCaller
 
 
@@ -9088,7 +9090,7 @@ class TestUserSubjectTeamUnion:
         assert billed is not None and billed.team_id == "t1", "throttling and billing pick the same source"
 
         descriptors: list = []
-        limiter = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=MagicMock())
+        limiter = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
         limiter._add_mcp_per_team_rate_limit_descriptor(auth, "srv1", descriptors)
         charged = {d["value"]: d["rate_limit"]["requests_per_unit"] for d in descriptors}
         assert charged == {"t1:srv1": 5}, "only the attributing team's bucket is charged"
@@ -12451,7 +12453,6 @@ async def test_personal_key_display_name_billing_uses_original_tool_grant(
 async def test_personal_key_display_name_billing_uses_allowed_servers(
     monkeypatch: pytest.MonkeyPatch, personal_key_owner_teams: UserAPIKeyAuth
 ) -> None:
-    from litellm.proxy import proxy_server
     from litellm.proxy.auth import auth_checks
     from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
     from litellm.types.mcp import MCPTransport
@@ -12844,7 +12845,7 @@ async def test_personal_key_team_mcp_rpm_limit_charges_granting_team(
 
     stamped: Final = personal_key_owner_teams.model_copy(update={"mcp_source_team_rpm_limits": limits})
     descriptors: list[RateLimitDescriptor] = []
-    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=MagicMock())
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
     limiter._add_mcp_per_team_rate_limit_descriptor(stamped, server_b.name, descriptors)
     assert len(descriptors) == 1
     assert descriptors[0]["key"] == "mcp_per_team"
@@ -13196,3 +13197,58 @@ async def test_personal_key_mcp_access_is_denied_when_owner_teams_cannot_be_read
     assert await MCPRequestHandler.get_allowed_mcp_servers(personal_key_owner_teams) == []
     assert await MCPRequestHandler.get_allowed_tools_for_server("srv-a", personal_key_owner_teams) == []
     assert await MCPRequestHandler.get_allowed_tools_for_server("srv-open", personal_key_owner_teams) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [("team-a",)], indirect=True)
+@pytest.mark.parametrize(
+    "owner_role",
+    [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY],
+    ids=["proxy_admin", "proxy_admin_viewer"],
+)
+@pytest.mark.parametrize(
+    ("key_team_id", "expected_servers"),
+    [("team-a", {"srv-a", "srv-open"}), ("team-without-mcp", {"srv-open"})],
+    ids=["team_grants_one_server", "team_grants_no_server"],
+)
+@pytest.mark.parametrize(
+    "credential_shape",
+    [{"is_session_token": False}, {"is_session_token": True}, {"api_key": None, "jwt_claims": {"sub": "admin"}}],
+    ids=["virtual_key", "cli_session", "jwt"],
+)
+async def test_admin_owned_team_key_reaches_only_its_team_mcp_servers(
+    monkeypatch: pytest.MonkeyPatch,
+    personal_key_owner_teams: UserAPIKeyAuth,
+    owner_role: LitellmUserRoles,
+    key_team_id: str,
+    expected_servers: set[str],
+    credential_shape: dict[str, object],
+) -> None:
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    async def _get_team_object(team_id: str, **_: object) -> LiteLLM_TeamTable:
+        return _personal_key_team(team_id) if team_id in _PERSONAL_KEY_TEAMS else LiteLLM_TeamTable(team_id=team_id)
+
+    monkeypatch.setattr(auth_checks, "get_team_object", _get_team_object)
+    team_key: Final = personal_key_owner_teams.model_copy(
+        update={"team_id": key_team_id, "user_role": owner_role, **credential_shape}
+    )
+
+    assert set(await global_mcp_server_manager.get_allowed_mcp_servers(team_key)) == expected_servers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("personal_key_owner_teams", [("team-a",)], indirect=True)
+async def test_admin_dashboard_session_keeps_the_whole_mcp_registry(
+    personal_key_owner_teams: UserAPIKeyAuth,
+) -> None:
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    dashboard_session: Final = personal_key_owner_teams.model_copy(
+        update={"team_id": UI_TEAM_ID, "user_role": LitellmUserRoles.PROXY_ADMIN}
+    )
+
+    assert set(await global_mcp_server_manager.get_allowed_mcp_servers(dashboard_session)) == set(
+        global_mcp_server_manager.get_registry()
+    )

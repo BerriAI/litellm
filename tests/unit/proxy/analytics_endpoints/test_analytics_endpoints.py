@@ -26,6 +26,7 @@ from litellm.proxy.analytics_endpoints.cache_activity import (
 
 ADMIN: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user")
 INTERNAL_USER: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user-1")
+from tests.unit.proxy.db.fake_prisma_engine import statement_timeout_error, statement_timeout_reads
 
 
 async def _no_teams(auth: UserAPIKeyAuth) -> tuple[str, ...]:
@@ -70,8 +71,13 @@ MODEL_ROWS = [{"model": "gpt-5.1"}]
 
 def build_prisma(query_raw: AsyncMock) -> MagicMock:
     prisma = MagicMock()
-    prisma.db.query_raw = query_raw
+    statement_timeout_reads(prisma, query_raw)
     return prisma
+
+
+def _spend_log_reads(prisma: MagicMock) -> AsyncMock:
+    """The raw reads the cache dashboard ran under the statement timeout."""
+    return prisma.read_db.tx.return_value.query_raw
 
 
 def dispatching_query_raw() -> AsyncMock:
@@ -120,7 +126,9 @@ async def test_filters_are_passed_to_sql_as_json_arrays(mock_prisma: MagicMock):
     await _activity(ADMIN, key_aliases=["my-key"], models=["gpt-5.1", "claude-opus-4-8"])
 
     filtered_calls = [
-        call for call in mock_prisma.db.query_raw.call_args_list if call.args[0] in (GROUPS_SQL, ERROR_BREAKDOWN_SQL)
+        call
+        for call in _spend_log_reads(mock_prisma).call_args_list
+        if call.args[0] in (GROUPS_SQL, ERROR_BREAKDOWN_SQL)
     ]
     assert len(filtered_calls) == 2
     for call in filtered_calls:
@@ -135,7 +143,9 @@ async def test_every_query_excludes_the_same_info_routes(mock_prisma: MagicMock)
     the SQL does with it is covered against Postgres in tests/integration/spend/test_cache_activity.py."""
     await _activity(ADMIN)
 
-    exclusions_by_query = {call.args[0]: json.loads(call.args[-4]) for call in mock_prisma.db.query_raw.call_args_list}
+    exclusions_by_query = {
+        call.args[0]: json.loads(call.args[-4]) for call in _spend_log_reads(mock_prisma).call_args_list
+    }
     assert set(exclusions_by_query) == {GROUPS_SQL, ERROR_BREAKDOWN_SQL, KEY_ALIAS_OPTIONS_SQL, MODEL_OPTIONS_SQL}
     for excluded_call_types in exclusions_by_query.values():
         assert excluded_call_types == LiteLLMRoutes.info_routes.value
@@ -147,7 +157,7 @@ async def test_every_query_excludes_the_same_info_routes(mock_prisma: MagicMock)
 async def test_admin_queries_grant_all_rows(mock_prisma: MagicMock):
     await _activity(ADMIN)
 
-    scope_by_query = {call.args[0]: call.args[-3:] for call in mock_prisma.db.query_raw.call_args_list}
+    scope_by_query = {call.args[0]: call.args[-3:] for call in _spend_log_reads(mock_prisma).call_args_list}
     assert set(scope_by_query) == {GROUPS_SQL, ERROR_BREAKDOWN_SQL, KEY_ALIAS_OPTIONS_SQL, MODEL_OPTIONS_SQL}
     for scope_args in scope_by_query.values():
         assert scope_args == (True, None, "[]")
@@ -157,7 +167,7 @@ async def test_admin_queries_grant_all_rows(mock_prisma: MagicMock):
 async def test_internal_user_queries_are_scoped_to_own_and_team_rows(mock_prisma: MagicMock):
     await _activity(INTERNAL_USER, team_lookup=_team_nine)
 
-    scope_by_query = {call.args[0]: call.args[-3:] for call in mock_prisma.db.query_raw.call_args_list}
+    scope_by_query = {call.args[0]: call.args[-3:] for call in _spend_log_reads(mock_prisma).call_args_list}
     assert set(scope_by_query) == {GROUPS_SQL, ERROR_BREAKDOWN_SQL, KEY_ALIAS_OPTIONS_SQL, MODEL_OPTIONS_SQL}
     for scope_args in scope_by_query.values():
         assert scope_args == (False, "user-1", json.dumps(["team-9"]))
@@ -168,7 +178,7 @@ async def test_key_without_user_id_grants_no_rows(mock_prisma: MagicMock):
     no_user = UserAPIKeyAuth(user_role=LitellmUserRoles.TEAM, user_id=None)
     await _activity(no_user)
 
-    for call in mock_prisma.db.query_raw.call_args_list:
+    for call in _spend_log_reads(mock_prisma).call_args_list:
         assert call.args[-3:] == (False, None, "[]")
 
 
@@ -178,7 +188,27 @@ async def test_rejects_malformed_dates_with_400(mock_prisma: MagicMock):
         await _activity(ADMIN, start_date="07/01/2026")
 
     assert exc_info.value.status_code == 400
-    mock_prisma.db.query_raw.assert_not_called()
+    _spend_log_reads(mock_prisma).assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_every_cache_activity_read_is_cancelled_by_postgres_after_30s(mock_prisma: MagicMock):
+    await _activity(ADMIN)
+
+    transaction = mock_prisma.read_db.tx.return_value
+    assert transaction.statements == ("SET LOCAL statement_timeout = 30000",) * 4
+
+
+@pytest.mark.asyncio
+async def test_cancelled_cache_activity_read_is_reported_as_503_with_a_date_range_hint(monkeypatch: pytest.MonkeyPatch):
+    prisma = build_prisma(AsyncMock(side_effect=statement_timeout_error()))
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _activity(ADMIN)
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == {"error": "Cache activity took longer than 30s. Pick a shorter date range"}
 
 
 def test_totals_ratio_is_zero_without_requests():
