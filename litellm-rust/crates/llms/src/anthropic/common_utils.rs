@@ -110,7 +110,13 @@ pub fn get_api_key(
 }
 
 pub fn get_auth_token(env_lookup: &dyn Fn(&str) -> Option<String>) -> Option<String> {
-    resolve_non_empty(None, env_lookup, &[ANTHROPIC_AUTH_TOKEN_ENV])
+    env_lookup(ANTHROPIC_AUTH_TOKEN_ENV)
+        .map(|token| {
+            token
+                .trim_matches(|c: char| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c))
+                .to_owned()
+        })
+        .filter(|token| !token.is_empty())
 }
 
 /// Python's `AnthropicModelInfo.get_auth_header`, naming the credential instead of building
@@ -1778,6 +1784,11 @@ mod tests {
         &[("ANTHROPIC_AUTH_TOKEN", "env-token")],
         Some(("Authorization", "env-token")),
     )]
+    #[case::auth_token_stripped_of_whitespace(
+        None,
+        &[("ANTHROPIC_AUTH_TOKEN", "  env-token \t\n\u{1f}")],
+        Some(("Authorization", "env-token")),
+    )]
     #[case::auth_token_when_the_env_key_is_blank(
         None,
         &[("ANTHROPIC_API_KEY", " \t"), ("ANTHROPIC_AUTH_TOKEN", "env-token")],
@@ -1790,6 +1801,7 @@ mod tests {
         Some(("Authorization", OAUTH_TOKEN)),
     )]
     #[case::no_credentials(None, &[], None)]
+    #[case::separator_only_auth_token(None, &[("ANTHROPIC_AUTH_TOKEN", "\u{1c}\u{1f}")], None)]
     #[case::blank_everything(Some(""), &[("ANTHROPIC_API_KEY", "  "), ("ANTHROPIC_AUTH_TOKEN", " \t")], None)]
     fn auth_header_prefers_the_key_then_the_auth_token(
         #[case] api_key: Option<&str>,

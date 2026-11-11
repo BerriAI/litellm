@@ -145,6 +145,7 @@ class MessagesSettings:
     stream_cost_model: str | None = None
     extra_headers: Mapping[str, object] | None = None
     mcp_gateway: bool = False
+    ascii_response_headers: bool = False
 
 
 def response(value: Mapping[str, object]) -> AnthropicMessagesResponse:
@@ -448,7 +449,7 @@ def stream_hidden_params(headers: Sequence[tuple[str, str]]) -> Mapping[str, obj
         anthropic_messages_stream_hidden_params,
     )
 
-    return MessagesStreamHead(anthropic_messages_stream_hidden_params(httpx.Headers(list(headers))))
+    return MessagesStreamHead(anthropic_messages_stream_hidden_params(callbacks_legacy_python.wire_headers(headers)))
 
 
 _UPSTREAM_ARGS: Final = TypeAdapter(tuple[int, str])
@@ -704,7 +705,7 @@ def map_failure(error: Exception, request: Mapping[str, object], request_provide
     if getattr(error, "messages_timeout", None) == "Body":
         # Python reads a stream's body outside its HTTP client's error mapping, so the transport's
         # own timeout reaches the caller unmapped.
-        return httpx.ReadTimeout(_BODY_READ_TIMEOUT)
+        return httpx.ReadTimeout(_BODY_READ_TIMEOUT if http_transport.uses_aiohttp_transport() else "")
     body_cut: Final = getattr(error, "messages_body_cut", None)
     if body_cut is not None and request.get("stream") is True:
         # Python reads a stream's body outside its HTTP client's error mapping, so a body the
@@ -764,6 +765,7 @@ def settings(kwargs: Mapping[str, object], request: Mapping[str, object] | None 
         additional_drop_params=handler.additional_drop_paths(kwargs),
         request_timeout=get_configured_request_timeout(),
         drops_unsupported_params=drops_unsupported_params(kwargs.get("drop_params")),
+        ascii_response_headers=http_transport.uses_aiohttp_transport(),
     )
     return asdict(
         configured if request is None else _with_call_settings(configured, request, kwargs.get("litellm_logging_obj"))
@@ -1055,9 +1057,18 @@ def transport_handler(request: Mapping[str, object]) -> AsyncHTTPHandler | None:
     client: Final = request.get("client")
     if isinstance(client, AsyncHTTPHandler):
         return client
-    if not http_transport.sends_through_python(client):
+    if not http_transport.sends_through_python(client, request.get("timeout")):
         return None
     return get_async_httpx_client(llm_provider=litellm.LlmProviders.ANTHROPIC)
+
+
+def unencodable_header(value: bytes, received: bool) -> Exception:
+    text: Final = value.decode("utf-8", "surrogateescape" if received else "surrogatepass")
+    try:
+        text.encode("ascii")
+    except UnicodeEncodeError as unencodable:
+        return unencodable
+    return ValueError(text)
 
 
 async def transport_send(

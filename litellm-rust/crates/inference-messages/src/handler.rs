@@ -30,7 +30,8 @@ use serde_json::{Map, Value};
 
 use super::{
     Delivered, Error, HostAnswer, MessagesBody, MessagesCall, MessagesCallResponse, MessagesRoute,
-    Transport, TransportBody, TransportRequest, TransportResponse, WorkloadIdentity,
+    Transport, TransportBody, TransportRequest, TransportResponse, UnencodableHeader,
+    WorkloadIdentity,
     common_utils::{MessagesProvider, merge_messages_header_sources, string_headers},
     constants::{
         MESSAGES_HTTP_ERROR_ATTEMPTS, MESSAGES_STREAM_ERROR_BODY_READ_SECS, MESSAGES_TIMEOUT_SECS,
@@ -53,6 +54,8 @@ struct ProviderCall {
     stream: bool,
     whole_sse_frames: bool,
     transform_context: MessagesTransformContext,
+    ascii_response_headers: bool,
+    unencodable_request_header: Option<Vec<u8>>,
 }
 
 impl ProviderCall {
@@ -373,6 +376,8 @@ async fn provider_call(
         stream,
         whole_sse_frames: shaping.settings.whole_sse_frames,
         transform_context,
+        ascii_response_headers: shaping.settings.ascii_response_headers,
+        unencodable_request_header: shaping.settings.unencodable_request_header,
     })
 }
 
@@ -488,7 +493,7 @@ async fn call_provider(
     let config = provider.config();
     let head = ResponseHead {
         status: response.status().as_u16(),
-        headers: litellm_http::request::header_pairs(response.headers()),
+        headers: super::encoding::header_pairs(response.headers()),
     };
     if stream {
         context
@@ -622,6 +627,9 @@ async fn send_recovering(
     let mut attempt = 1;
     loop {
         log_request_body(request.provider.as_str(), request.stream, &body);
+        if let Some(value) = &request.unencodable_request_header {
+            return Err(Error::transport(UnencodableHeader::Sent(value.clone())));
+        }
         let authenticated = Authenticated {
             headers: request.wire.headers.clone(),
             signer: request.signer.clone(),
@@ -641,6 +649,12 @@ async fn send_recovering(
                     .await?,
             ),
         };
+        if let Upstream::Native(response) = &response
+            && request.ascii_response_headers
+            && let Some(unencodable) = UnencodableHeader::received(response.headers())
+        {
+            return Err(Error::transport(unencodable));
+        }
         let failure = match response {
             Upstream::Native(response) if response.status().is_success() => {
                 return Ok(Upstream::Native(response));
@@ -771,7 +785,7 @@ async fn provider_failure(
     stream: bool,
 ) -> Result<ProviderFailure, Error> {
     let status = response.status().as_u16();
-    let headers = litellm_http::request::header_pairs(response.headers());
+    let headers = super::encoding::header_pairs(response.headers());
     let text = if stream {
         tokio::time::timeout(
             Duration::from_secs(MESSAGES_STREAM_ERROR_BODY_READ_SECS),
@@ -847,11 +861,7 @@ fn streaming_response(
     provider: &'static str,
     timeout: Duration,
 ) -> MessagesCallResponse {
-    let headers = response
-        .headers()
-        .iter()
-        .filter_map(|(name, value)| Some((name.to_string(), value.to_str().ok()?.to_string())))
-        .collect();
+    let headers = super::encoding::header_pairs(response.headers());
     let chunks = timed_chunks(response, timeout)
         .inspect_ok(move |chunk| log_chunk(provider, "provider_response", chunk));
     let chunks = match decoder {

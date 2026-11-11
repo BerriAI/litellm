@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Final
+
 
 def uses_aiohttp_transport() -> bool:
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -7,8 +9,19 @@ def uses_aiohttp_transport() -> bool:
     return AsyncHTTPHandler.should_use_aiohttp_transport()
 
 
-def sends_through_python(client: object) -> bool:
+def _non_positive_timeout(timeout: object) -> bool:
+    import httpx
+
+    seconds: Final = (
+        (timeout.connect, timeout.read, timeout.write, timeout.pool)
+        if isinstance(timeout, httpx.Timeout)
+        else (timeout,)
+    )
+    return any(isinstance(value, int | float) and value <= 0 for value in seconds)
+
+
+def sends_through_python(client: object, timeout: object = None) -> bool:
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
     from litellm.rust_bridge import detectors
 
-    return isinstance(client, AsyncHTTPHandler) or detectors.unsupported_tls()
+    return isinstance(client, AsyncHTTPHandler) or detectors.unsupported_tls() or _non_positive_timeout(timeout)

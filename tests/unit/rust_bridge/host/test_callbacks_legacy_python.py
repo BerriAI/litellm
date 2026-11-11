@@ -326,6 +326,14 @@ def test_native_provider_response_is_recorded_for_logging_replay() -> None:
     assert logger.model_call_details["response_headers"]["request-id"] == "req_native"
 
 
+def test_a_non_ascii_provider_header_is_recorded_as_httpx_decodes_it() -> None:
+    logger: Final = _messages_logger()
+
+    legacy.record_response(logger, 200, (("x-fz-unicode", "caf\u00e9"),), '{"id": "msg_native"}', None)
+
+    assert logger.model_call_details["response_headers"]["x-fz-unicode"] == "caf\u00e9"
+
+
 _HTTPX_RESPONSE: Final = TypeAdapter(httpx.Response, config={"arbitrary_types_allowed": True})
 _SENT_HEADERS: Final = MappingProxyType({"x-api-key": "sk-ant", "anthropic-beta": "message-threads-2026-08-12"})
 

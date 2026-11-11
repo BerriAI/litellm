@@ -185,8 +185,9 @@ impl LegacyLogging {
 
     fn times_provider_exchange(&self, py: Python<'_>) -> PyResult<bool> {
         let client = self.call.lookup(py, "client")?;
+        let timeout = self.call.lookup(py, "timeout")?;
         Logging::TimesProviderExchange
-            .call(py, (client,))?
+            .call(py, (client, timeout))?
             .extract()
     }
 

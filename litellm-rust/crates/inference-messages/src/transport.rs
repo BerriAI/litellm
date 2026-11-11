@@ -28,6 +28,29 @@ pub struct TransportResponse {
     pub delivered: Delivered,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UnencodableHeader {
+    Sent(Vec<u8>),
+    Received(Vec<u8>),
+}
+
+impl std::fmt::Display for UnencodableHeader {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a header value is not ASCII, which Python's HTTP client cannot encode")
+    }
+}
+
+impl std::error::Error for UnencodableHeader {}
+
+impl UnencodableHeader {
+    pub(crate) fn received(headers: &reqwest::header::HeaderMap) -> Option<Self> {
+        headers
+            .values()
+            .find(|value| !value.as_bytes().is_ascii())
+            .map(|value| Self::Received(value.as_bytes().to_vec()))
+    }
+}
+
 pub trait Transport: Send + Sync {
     fn send(
         &self,
