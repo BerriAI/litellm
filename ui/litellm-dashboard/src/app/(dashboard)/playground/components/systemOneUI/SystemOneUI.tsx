@@ -30,6 +30,7 @@ import SystemOneForm from "./SystemOneForm";
 import OpenAIDecisionsForm from "./OpenAIDecisionsForm";
 import { validateSystemOnePayload, validateOpenAIDecisionsPayload, errorCount } from "./lib/validatePayload";
 import { useDecisionModels, type ApiKeySource } from "./useDecisionModels";
+import { productNames } from "@/i18n/untranslated/productNames";
 
 interface SystemOneUIProps {
   accessToken: string | null;
@@ -67,7 +68,7 @@ function ExamplesMenu({ onPick }: { onPick: (id: string) => void }) {
       <DropdownMenuContent align="end" className="w-48">
         {DECISION_PRESETS.map((preset) => (
           <DropdownMenuItem key={preset.id} onClick={() => onPick(preset.id)}>
-            {preset.label}
+            {t(preset.label)}
           </DropdownMenuItem>
         ))}
       </DropdownMenuContent>
@@ -272,7 +273,7 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
             <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
               <TabsList aria-label={t("playground.systemOne.systemOneUi.requestEditorView")}>
                 <TabsTrigger value="form">{t("playground.systemOne.systemOneUi.formTab")}</TabsTrigger>
-                <TabsTrigger value="curl">cURL</TabsTrigger>
+                <TabsTrigger value="curl">{productNames.curl}</TabsTrigger>
               </TabsList>
               <div className="flex items-center gap-2">
                 <ExamplesMenu onPick={handlePresetPick} />

@@ -65,6 +65,7 @@ from litellm.types.utils import (
 from litellm.utils import provider_rejectable_params
 
 if TYPE_CHECKING:
+    from litellm.caching.redis_cache import RedisCache
     from litellm.router_python_host import PythonHost
     from litellm.router_rust.surface.registry import HostRegistry
     from litellm.router_strategy.auto_router.auto_router import PreRoutingHookResponse
@@ -196,9 +197,13 @@ class PreRoutingStrategies:
     def quality(self) -> StrategyRegistry:
         return self._hosted._core_quality_routers  # pyright: ignore[reportPrivateUsage]  # see above
 
+    @property
+    def switchyard(self) -> StrategyRegistry:
+        return self._hosted._core_switchyard_routers  # pyright: ignore[reportPrivateUsage]  # see above
+
     def all(self) -> tuple[StrategyRegistry, ...]:
         """In the order ``_select_pre_routing_strategy`` searches them."""
-        return (self.auto, self.complexity, self.adaptive, self.quality)
+        return (self.switchyard, self.auto, self.complexity, self.adaptive, self.quality)
 
     def any_registered(self) -> bool:
         return any(self.all())
@@ -210,6 +215,7 @@ class PreRoutingStrategies:
         self._hosted._core_quality_routers = {}  # pyright: ignore[reportPrivateUsage]  # see above
         self._hosted._core_complexity_routers = {}  # pyright: ignore[reportPrivateUsage]  # see above
         self._hosted._core_auto_routers = {}  # pyright: ignore[reportPrivateUsage]  # see above
+        self._hosted._core_switchyard_routers = {}  # pyright: ignore[reportPrivateUsage]  # see above
 
     def register(self, deployment: Deployment) -> None:
         """The end of ``_add_deployment``: an auto, complexity or quality marker registers its router
@@ -221,6 +227,8 @@ class PreRoutingStrategies:
                 self._init_complexity_router(deployment)
             case "quality":
                 self._init_quality_router(deployment)
+            case "switchyard":
+                self._init_switchyard_router(deployment)
             case _:
                 pass
 
@@ -230,7 +238,7 @@ class PreRoutingStrategies:
             return
         model_name: Final = deployment.model_name
         tags: Final = _deployment_tags(deployment)
-        for registry in (self.auto, self.complexity, self.quality):
+        for registry in (self.auto, self.complexity, self.quality, self.switchyard):
             _ = _unregister(registry, model_name, tags)
         if _unregister(self.adaptive, model_name, tags):
             self._sync_adaptive_router_hooks()
@@ -406,6 +414,13 @@ class PreRoutingStrategies:
         if router._uses_deployment_pin:  # pyright: ignore[reportPrivateUsage]  # the Python router reads the same flag
             self._ensure_deployment_affinity_callback()
 
+    def hand_over_affinity(self, adopt: Callable[[object], None]) -> None:
+        """Give the affinity check registered while the deployments were built, before the optional
+        checks existed, to those checks: they own it from then on, as ``optional_callbacks``."""
+        if self._affinity is not None:
+            adopt(self._affinity)
+            self._affinity = None
+
     def _ensure_deployment_affinity_callback(self) -> None:
         """``_ensure_deployment_affinity_callback``: the affinity check (every global flag off) a
         complexity router's session pin needs, registered once."""
@@ -454,6 +469,32 @@ class PreRoutingStrategies:
             quality_router_config=config,
         )
         self._register(self.quality, deployment, router, "Quality-router")
+
+    def _init_switchyard_router(self, deployment: Deployment) -> None:
+        from litellm.router_strategy.switchyard_router.config import SwitchyardRouterConfig, build_algorithm
+        from litellm.router_strategy.switchyard_router.switchyard_router import SwitchyardRouter
+        from litellm.types.decisions import OpenAIDecisionResponse
+        from litellm.types.utils import ModelResponse
+
+        config: Final = SwitchyardRouterConfig.model_validate(deployment.litellm_params.switchyard_router_config)
+        if deployment.model_name in (config.models.capable, config.models.efficient, config.models.judge):
+            raise ValueError("Switchyard cannot route to itself")
+        ctx: Final = self._ctx
+
+        async def complete_judge(request: Mapping[str, object]) -> ModelResponse:
+            result: Final = await ctx.acompletion(**request)  # pyright: ignore[reportAttributeAccessIssue]  # the core's RoutingContext
+            if not isinstance(result, ModelResponse):
+                raise TypeError("Switchyard judge must return a non-streaming completion")
+            return result
+
+        async def decide(request: Mapping[str, object]) -> OpenAIDecisionResponse:
+            result: Final = await ctx.adecisions(**request)  # pyright: ignore[reportAttributeAccessIssue]  # see above
+            if not isinstance(result, OpenAIDecisionResponse):
+                raise TypeError("Switchyard decision judge must return an OpenAI-shaped decision response")
+            return result
+
+        router: Final = SwitchyardRouter(deployment.model_name, config, build_algorithm(config), complete_judge, decide)
+        self._register(self.switchyard, deployment, router, "Switchyard")
 
     def _init_adaptive_router(self, deployment: Deployment) -> None:
         from litellm.router_strategy.adaptive_router.adaptive_router import AdaptiveRouter
@@ -568,7 +609,9 @@ def _record_routing_decision(
     )
 
 
-def _as_output_cap(value: object) -> int | None:
+def as_output_cap(value: object) -> int | None:
+    """A client-sent output cap coerced to an int: ints, floats and numeric strings, never bools
+    or negatives."""
     if isinstance(value, bool) or not isinstance(value, int | float | str):
         return None
     try:
@@ -578,7 +621,8 @@ def _as_output_cap(value: object) -> int | None:
     return cap if cap >= 0 else None
 
 
-def _stamped_client_ceiling(request_kwargs: Mapping[str, object]) -> Mapping[str, int] | None:
+def stamped_client_ceiling(request_kwargs: Mapping[str, object]) -> Mapping[str, int] | None:
+    """None means unstamped; an empty mapping means the original caller supplied no limit."""
     stamped: Final = next(
         (
             bucket.get(CLIENT_OUTPUT_CEILING_METADATA_KEY)
@@ -593,7 +637,7 @@ def _stamped_client_ceiling(request_kwargs: Mapping[str, object]) -> Mapping[str
         {
             str(carrier): cap
             for carrier, value in stamped.items()
-            if carrier in OUTPUT_TOKEN_CEILING_PARAMS and (cap := _as_output_cap(value)) is not None
+            if carrier in OUTPUT_TOKEN_CEILING_PARAMS and (cap := as_output_cap(value)) is not None
         }
     )
 
@@ -601,7 +645,7 @@ def _stamped_client_ceiling(request_kwargs: Mapping[str, object]) -> Mapping[str
 def _restore_client_output_ceiling(
     request_kwargs: MutableMapping[str, object],  # mutable-ok: the request kwargs, restored in place
 ) -> None:
-    callers_ceiling: Final = _stamped_client_ceiling(request_kwargs)
+    callers_ceiling: Final = stamped_client_ceiling(request_kwargs)
     if callers_ceiling is None:
         return
     for carrier in OUTPUT_TOKEN_CEILING_PARAMS:
@@ -710,6 +754,10 @@ class PreRouter:
         self._ctx: Final = ctx
         self._session_cache: Final = DualCache(redis_cache=routing_cache.redis_cache, in_memory_cache=InMemoryCache())
 
+    def attach_redis_cache(self, redis_cache: "RedisCache") -> None:
+        """``update_redis_cache``: the Claude Code session bindings are shared through it from now on."""
+        self._session_cache.attach_redis_cache(redis_cache)
+
     # -- the step --------------------------------------------------------------------------------
 
     async def pre_route(
@@ -726,6 +774,7 @@ class PreRouter:
         public_router: object,
         run_plugins: Callable[[str], Awaitable[None]] | None = None,
         pass_through: bool = False,
+        call_type: str | None = None,
     ) -> str | None:
         """The start of ``_async_get_available_deployment``: run the hook, record its pick and pin the
         tier's litellm_params. The model group to resolve, or ``None`` to resolve ``model`` itself.
@@ -744,6 +793,7 @@ class PreRouter:
             match_any=match_any,
             public_router=public_router,
             run_plugins=run_plugins,
+            call_type=call_type,
         )
         routed: Final = response.model if response is not None else model
         if response is not None:
@@ -767,6 +817,7 @@ class PreRouter:
         match_any: bool,
         public_router: object,
         run_plugins: Callable[[str], Awaitable[None]] | None,
+        call_type: str | None,
     ) -> "PreRoutingHookResponse | None":
         _restore_client_output_ceiling(request_kwargs)
         _record_routing_decision(request_kwargs, None)
@@ -846,6 +897,7 @@ class PreRouter:
             messages=routing_messages if routing_messages is not None else messages,  # pyright: ignore[reportArgumentType]  # the request's messages, as given
             input=input,  # pyright: ignore[reportArgumentType]  # the request's input, as given
             specific_deployment=False,
+            call_type=call_type,
         )
         hooked: Final[PreRoutingHookResponse | None] = routed
         traced: Final = (
@@ -1104,4 +1156,4 @@ def _allowlist(params: Mapping[str, object]) -> frozenset[str]:
     return frozenset(entry for entry in declared if isinstance(entry, str))
 
 
-__all__ = ["PreRouter", "PreRoutingStrategies", "is_strategy_marker"]
+__all__ = ["PreRouter", "PreRoutingStrategies", "as_output_cap", "is_strategy_marker", "stamped_client_ceiling"]

@@ -104,36 +104,27 @@ export const DEFAULT_CLASSIFICATION_RUBRIC: ClassificationRubric = "legacy";
  */
 export const NEW_CLASSIFIER_CLASSIFICATION_RUBRIC: ClassificationRubric = "agentic";
 
-export const CLASSIFICATION_RUBRIC_DESCRIPTIONS: Record<ClassificationRubric, { label: string; description: string }> =
-  {
-    legacy: {
-      label: "Legacy (uncalibrated)",
-      description:
-        "The rubric as it shipped before calibration examples, with no worked examples at all. Routers created " +
-        "before this setting existed use it, so their tier decisions and spend are unchanged. It over-routes " +
-        "ordinary engineering to the most expensive tier.",
-    },
-    agentic: {
-      label: "Agentic",
-      description:
-        "Anchors routine installs, builds, multi-file edits, and standard debugging at " +
-        "Medium, so ordinary engineering does not route to your most expensive tier. Suits agent, terminal, and " +
-        "coding-assistant traffic, and mixed traffic.",
-    },
-    chat: {
-      label: "Chat",
-      description:
-        "Drops the engineering examples, for a router serving only conversational traffic that never sees those " +
-        "requests.",
-    },
-    business: {
-      label: "Business",
-      description:
-        "Business and sales examples plus business-oriented tier definitions: routine drafting and summarizing " +
-        "stay at Medium, data-determined analysis is Complex, and only decisions under conflicting tradeoffs " +
-        "reach Reasoning. Suits sales, support, and go-to-market traffic.",
-    },
-  };
+export const CLASSIFICATION_RUBRIC_DESCRIPTIONS: Record<
+  ClassificationRubric,
+  { labelKey: ParseKeys; descriptionKey: ParseKeys }
+> = {
+  legacy: {
+    labelKey: "addModel.complexityRouterConfig.rubrics.legacy.label",
+    descriptionKey: "addModel.complexityRouterConfig.rubrics.legacy.description",
+  },
+  agentic: {
+    labelKey: "addModel.complexityRouterConfig.rubrics.agentic.label",
+    descriptionKey: "addModel.complexityRouterConfig.rubrics.agentic.description",
+  },
+  chat: {
+    labelKey: "addModel.complexityRouterConfig.rubrics.chat.label",
+    descriptionKey: "addModel.complexityRouterConfig.rubrics.chat.description",
+  },
+  business: {
+    labelKey: "addModel.complexityRouterConfig.rubrics.business.label",
+    descriptionKey: "addModel.complexityRouterConfig.rubrics.business.description",
+  },
+};
 
 export const CLASSIFICATION_RUBRIC_KEYS = Object.keys(CLASSIFICATION_RUBRIC_DESCRIPTIONS) as ClassificationRubric[];
 
@@ -204,7 +195,9 @@ const rowOrigin = (row: TierRow, editing: boolean, t: TFunction = i18n.t.bind(i1
     : t("addModel.complexityRouterConfig.rowOrigin.custom");
 };
 
-const builtInTierInfo = (rowId: string): { label: string; description: ParseKeys; examples: ParseKeys } | undefined => {
+const builtInTierInfo = (
+  rowId: string,
+): { labelKey: ParseKeys; description: ParseKeys; examples: ParseKeys } | undefined => {
   const builtIn = ALL_BUILT_IN_TIERS.find((tier) => tier === rowId);
   return builtIn ? TIER_DESCRIPTIONS[builtIn] : undefined;
 };
@@ -531,30 +524,35 @@ interface ComplexityRouterConfigProps {
 
 export const TIER_DESCRIPTIONS: Record<
   keyof ComplexityTiers,
-  { label: string; description: ParseKeys; examples: ParseKeys }
+  { label: string; labelKey: ParseKeys; description: ParseKeys; examples: ParseKeys }
 > = {
   NON_REASONING: {
     label: "Non-reasoning",
+    labelKey: "addModel.complexityRouterConfig.tiers.nonReasoning.label",
     description: "addModel.complexityRouterConfig.tiers.nonReasoning.description",
     examples: "addModel.complexityRouterConfig.tiers.nonReasoning.examples",
   },
   SIMPLE: {
     label: "Simple",
+    labelKey: "addModel.complexityRouterConfig.tiers.simple.label",
     description: "addModel.complexityRouterConfig.tiers.simple.description",
     examples: "addModel.complexityRouterConfig.tiers.simple.examples",
   },
   MEDIUM: {
     label: "Medium",
+    labelKey: "addModel.complexityRouterConfig.tiers.medium.label",
     description: "addModel.complexityRouterConfig.tiers.medium.description",
     examples: "addModel.complexityRouterConfig.tiers.medium.examples",
   },
   COMPLEX: {
     label: "Complex",
+    labelKey: "addModel.complexityRouterConfig.tiers.complex.label",
     description: "addModel.complexityRouterConfig.tiers.complex.description",
     examples: "addModel.complexityRouterConfig.tiers.complex.examples",
   },
   REASONING: {
     label: "Reasoning",
+    labelKey: "addModel.complexityRouterConfig.tiers.reasoning.label",
     description: "addModel.complexityRouterConfig.tiers.reasoning.description",
     examples: "addModel.complexityRouterConfig.tiers.reasoning.examples",
   },
@@ -564,6 +562,12 @@ export const TIER_KEYS = Object.keys(TIER_DESCRIPTIONS) as Array<keyof Complexit
 
 export const effectiveTierLabel = (tier: keyof ComplexityTiers, tierLabels: ComplexityTierLabels | undefined): string =>
   tierLabels?.[tier]?.trim() || TIER_DESCRIPTIONS[tier].label;
+
+export const effectiveTierDisplayLabel = (
+  tier: keyof ComplexityTiers,
+  tierLabels: ComplexityTierLabels | undefined,
+  t: TFunction = i18n.t.bind(i18n),
+): string => tierLabels?.[tier]?.trim() || t(TIER_DESCRIPTIONS[tier].labelKey);
 
 export const DEFAULT_HEURISTIC_FIRST_MAX_TIER = "SIMPLE";
 
@@ -797,10 +801,10 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                               handleTierLabelChange(row.id as keyof ComplexityTiers, event.target.value)
                             }
                             placeholder={t("addModel.complexityRouterConfig.displayName.placeholder", {
-                              label: tierInfo.label,
+                              label: t(tierInfo.labelKey),
                             })}
                             aria-label={t("addModel.complexityRouterConfig.displayName.aria", {
-                              label: tierInfo.label,
+                              label: t(tierInfo.labelKey),
                             })}
                           />
                           {value.tier_labels?.[row.id as keyof ComplexityTiers] && (
@@ -808,7 +812,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                               <InputGroupButton
                                 size="icon-xs"
                                 aria-label={t("addModel.complexityRouterConfig.displayName.clearAria", {
-                                  label: tierInfo.label,
+                                  label: t(tierInfo.labelKey),
                                 })}
                                 onClick={() => handleTierLabelChange(row.id as keyof ComplexityTiers, "")}
                               >

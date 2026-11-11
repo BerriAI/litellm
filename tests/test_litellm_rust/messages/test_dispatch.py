@@ -2,10 +2,12 @@ import inspect
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Final, cast  # noqa: TID251  # narrows legacy callable signatures for inspect
 
+import httpx
 import pytest
 
 import litellm
 from litellm.caching.caching import Cache
+from litellm.constants import COMPLETION_HTTP_FALLBACK_SECONDS
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.websearch_interception.handler import WebSearchInterceptionLogger
 from litellm.llms.anthropic.messages.native import handler as python_messages
@@ -172,8 +174,25 @@ def test_native_receives_normalized_request_and_original_call_shape() -> None:
     assert call_kwargs["litellm_metadata"] is metadata
 
 
-@pytest.mark.parametrize("stream, expected_timeout", ((True, 0.5), (False, 30.0)))
-def test_native_streams_are_bounded_by_stream_timeout(stream: bool, expected_timeout: float) -> None:
+@pytest.mark.parametrize(
+    ("kwargs", "expected_timeout"),
+    (
+        pytest.param({"stream": True, "timeout": 30.0, "stream_timeout": 0.5}, 0.5, id="stream-timeout-bounds-stream"),
+        pytest.param(
+            {"stream": False, "timeout": 30.0, "stream_timeout": 0.5}, 30.0, id="stream-timeout-ignored-unary"
+        ),
+        pytest.param({"request_timeout": 5}, 5.0, id="request-timeout"),
+        pytest.param({"timeout": 30.0, "request_timeout": 5}, 30.0, id="timeout-before-request-timeout"),
+        pytest.param(
+            {"stream": True, "request_timeout": 5, "stream_timeout": 0.5}, 0.5, id="stream-timeout-over-request"
+        ),
+        pytest.param({"timeout": httpx.Timeout(60.0, connect=2.0)}, 60.0, id="httpx-timeout-read"),
+        pytest.param(
+            {"timeout": httpx.Timeout(None, connect=2.0)}, COMPLETION_HTTP_FALLBACK_SECONDS, id="httpx-timeout-no-read"
+        ),
+    ),
+)
+def test_native_timeout_resolves_like_python(kwargs: Mapping[str, object], expected_timeout: float) -> None:
     captured: Final[list[NativeCall]] = []
 
     def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: rejected fallback
@@ -185,7 +204,7 @@ def test_native_streams_are_bounded_by_stream_timeout(stream: bool, expected_tim
 
     _ = _DISPATCH.run(
         (16, MESSAGES, "anthropic/claude-sonnet-4-5"),
-        {"stream": stream, "timeout": 30.0, "stream_timeout": 0.5},
+        kwargs,
         python=python,
         binding=messages_binding(native),
         native=lambda hook, request, call_args, call_kwargs: hook(request),
@@ -456,7 +475,6 @@ STRICT_TOOL: Final = {"name": "a", "input_schema": {"type": "object"}, "strict":
             {},
         ),
         (Feature.CALLER_CLIENT, "anthropic/claude-sonnet-4-5", {"client": object()}, {}),
-        (Feature.TIMEOUT_VARIANTS, "anthropic/claude-sonnet-4-5", {"request_timeout": 5}, {}),
         (Feature.AGENTIC_LOOP_HOOK, "anthropic/claude-sonnet-4-5", {}, {"callbacks": [_Agentic()]}),
         (Feature.RESPONSE_CACHE, "anthropic/claude-sonnet-4-5", {}, {"cache": Cache()}),
         (Feature.TLS_POLICY, "anthropic/claude-sonnet-4-5", {}, {"ssl_security_level": "DEFAULT@SECLEVEL=1"}),
@@ -526,6 +544,38 @@ def test_each_detected_feature_reaches_its_rule(
     for name, value in settings.items():
         monkeypatch.setattr(litellm, name, value)
     assert served(kwargs) is python_result
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    (
+        pytest.param({"shared_session": object()}, id="proxy-shared-session"),
+        pytest.param({"stream": True, "timeout": 600.0, "stream_timeout": 600.0}, id="proxy-stream-timeout"),
+        pytest.param({"request_timeout": 5}, id="request-timeout"),
+        pytest.param({"timeout": httpx.Timeout(60.0, connect=2.0)}, id="httpx-timeout"),
+    ),
+)
+def test_proxy_request_shape_stays_native(kwargs: Mapping[str, object]) -> None:
+    rules: Final[Rules] = (
+        RouteRule(
+            Route.MESSAGES, Rollout.PYTHON_ONLY, features=frozenset({Feature.CALLER_CLIENT, Feature.TIMEOUT_VARIANTS})
+        ),
+        RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),
+    )
+    native_result: Final = response()
+
+    def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: rejected fallback
+        pytest.fail("A proxy-shaped request must not fall back to Python")
+
+    served: Final = _DISPATCH.run(
+        (16, MESSAGES, "anthropic/claude-sonnet-4-5"),
+        kwargs,
+        python=python,
+        binding=messages_binding(lambda request: native_result),
+        native=lambda hook, request, call_args, native_kwargs: hook(request),
+        rules=rules,
+    )
+    assert served is native_result
 
 
 @pytest.mark.asyncio

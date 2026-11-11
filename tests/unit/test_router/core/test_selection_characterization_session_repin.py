@@ -73,7 +73,7 @@ async def test_a_failover_success_repins_the_session_only_with_repin_on_failover
     assert await _pinned(check) == {"model_id": "b" if repin else "a"}
 
     # Once the first deployment is healthy again, the session goes where it is pinned.
-    core.health().cooldowns.cooldown_store.flush_cache()  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+    core.health().cooldowns.cooldown_store.evict_local("a")
     await _complete(core)
 
     assert host.deployments_called("acompletion")[-1] == next_served_by

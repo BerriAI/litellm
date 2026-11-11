@@ -9,6 +9,7 @@ import {
   ComboboxItem,
   ComboboxList,
 } from "@/components/ui/combobox";
+import { InputGroupAddon } from "@/components/ui/input-group";
 import i18n from "@/i18n/i18n";
 
 export interface SearchSelectOption {
@@ -45,6 +46,11 @@ const matchesQuery = (option: SearchSelectOption, query: string): boolean => {
   const q = query.trim().toLowerCase();
   if (!q) return true;
   return option.label.toLowerCase().includes(q) || (option.sublabel?.toLowerCase().includes(q) ?? false);
+};
+
+const SelectedOptionIcon = ({ option }: { option: SearchSelectOption | null }) => {
+  if (!option?.icon) return null;
+  return <InputGroupAddon align="inline-start">{option.icon}</InputGroupAddon>;
 };
 
 export function SearchSelect({
@@ -91,7 +97,9 @@ export function SearchSelect({
         placeholder={placeholder}
         showClear={allowClear && value != null && value !== ""}
         className={`h-8 w-full text-sm ${className ?? ""}`}
-      />
+      >
+        <SelectedOptionIcon option={selected} />
+      </ComboboxInput>
       <ComboboxContent side="bottom" collisionAvoidance={{ side: "shift", align: "shift", fallbackAxisSide: "none" }}>
         <ComboboxEmpty>{emptyText}</ComboboxEmpty>
         <ComboboxList>

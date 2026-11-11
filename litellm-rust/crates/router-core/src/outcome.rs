@@ -28,6 +28,10 @@ pub struct OutcomeCallbacks {
     pub failure: bool,
     /// The attempt runs through `make_call`, which counts its usage whatever the callbacks do.
     pub make_call: bool,
+    /// The request's attempts log on one logging object the caller passed (`litellm_logging_obj`),
+    /// which logs one success a request, the response that serves it: an attempt whose blocked
+    /// response is raised for a fallback counts no success.
+    pub shared_logging: bool,
 }
 
 impl Default for OutcomeCallbacks {
@@ -36,6 +40,7 @@ impl Default for OutcomeCallbacks {
             success: true,
             failure: true,
             make_call: true,
+            shared_logging: false,
         }
     }
 }
@@ -78,21 +83,25 @@ mod tests {
         success: true,
         failure: true,
         make_call: true,
+        shared_logging: false,
     };
     const UNBOUND: OutcomeCallbacks = OutcomeCallbacks {
         success: false,
         failure: false,
         make_call: true,
+        shared_logging: false,
     };
     const UNBOUND_WITHOUT_MAKE_CALL: OutcomeCallbacks = OutcomeCallbacks {
         success: false,
         failure: false,
         make_call: false,
+        shared_logging: false,
     };
     const BOUND_SYNC: OutcomeCallbacks = OutcomeCallbacks {
         success: false,
         failure: true,
         make_call: true,
+        shared_logging: false,
     };
 
     #[rstest]

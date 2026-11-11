@@ -1,6 +1,8 @@
 import asyncio
+import contextlib
 import gzip
 import importlib
+import inspect
 import json
 import os
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -40,7 +42,7 @@ from litellm.types.utils import (
     PromptTokensDetails,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.utils import _invalidate_model_cost_lowercase_map
+from litellm.litellm_core_utils.model_cost_table import publish
 from openai.types.beta.assistant import Assistant
 from openai.types.beta.assistant_deleted import AssistantDeleted
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
@@ -225,6 +227,52 @@ async def test_acompletion_returns_prompt_cache_details_over_injected_transport(
     prompt_tokens_details: Final = response.usage.prompt_tokens_details
     assert isinstance(prompt_tokens_details, PromptTokensDetails)
     assert prompt_tokens_details.cached_tokens == 7
+
+
+_SDK_READS_OPENAI_ADMIN_KEY: Final = "admin_api_key" in inspect.signature(AsyncOpenAI.__init__).parameters
+
+
+@pytest.mark.skipif(not _SDK_READS_OPENAI_ADMIN_KEY, reason="openai<3 has no OPENAI_ADMIN_KEY fallback to leak")
+@pytest.mark.asyncio
+async def test_acompletion_never_sends_the_openai_admin_key_for_a_deployment_without_a_key(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_ADMIN_KEY", "sk-admin-only")
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+    outbound: Final = asyncio.Queue()
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        outbound.put_nowait(request.headers.get("authorization"))
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-no-admin-key",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-5.4-mini",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+        monkeypatch.setattr(litellm, "aclient_session", http_client)
+        with contextlib.suppress(litellm.AuthenticationError, litellm.InternalServerError):
+            await asyncio.wait_for(
+                litellm.acompletion(
+                    model="openai/gpt-5.4-mini",
+                    api_key="",
+                    messages=[{"role": "user", "content": "who signs this request"}],
+                    num_retries=0,
+                    max_retries=0,
+                ),
+                timeout=10,
+            )
+
+    sent: Final = tuple(outbound.get_nowait() for _ in range(outbound.qsize()))
+    assert all(authorization is None for authorization in sent), sent
 
 
 
@@ -1782,7 +1830,7 @@ def isolate_litellm_state():
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 _SCALAR_DEFAULTS = {

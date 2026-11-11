@@ -140,7 +140,8 @@ function CommandPaletteContent({ setOpen }: { setOpen: (open: boolean) => void }
     const pagesGroups = pages.length > 0 ? [{ heading: t("shell.commandPalette.groups.pages"), entries: pages }] : [];
 
     if (scope === "global") {
-      const showSearchKeysAction = !trimmedQuery || "search virtual keys".includes(trimmedQuery.toLowerCase());
+      const showSearchKeysAction =
+        !trimmedQuery || t("shell.commandPalette.searchKeys.title").toLowerCase().includes(trimmedQuery.toLowerCase());
       const searchKeysAction: PaletteEntry = {
         id: "action:search-keys",
         kind: "search-keys",

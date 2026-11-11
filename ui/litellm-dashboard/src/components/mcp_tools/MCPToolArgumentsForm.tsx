@@ -19,9 +19,9 @@ const argumentValues = (schema: InputSchema, values: ToolFormValues): Record<str
 
 const STRING_SCHEMA_MESSAGES: Readonly<Record<string, ParseKeys>> = { input: "mcpToolArguments.stringSchemaRequired" };
 
-const BOOLEAN_ITEMS = [
-  { value: true, label: "True" },
-  { value: false, label: "False" },
+const BOOLEAN_ITEMS: readonly { value: boolean; label: ParseKeys }[] = [
+  { value: true, label: "mcpToolArguments.booleanTrue" },
+  { value: false, label: "mcpToolArguments.booleanFalse" },
 ];
 
 const isBlank = (value: unknown): boolean => value === undefined || value === null || value === "";
@@ -403,8 +403,11 @@ const MCPToolArgumentsForm = forwardRef<MCPToolArgumentsFormRef, MCPToolArgument
                         <Select
                           items={
                             required
-                              ? BOOLEAN_ITEMS
-                              : [{ value: null, label: t("mcpToolArguments.selectKey", { key }) }, ...BOOLEAN_ITEMS]
+                              ? BOOLEAN_ITEMS.map((item) => ({ ...item, label: t(item.label) }))
+                              : [
+                                  { value: null, label: t("mcpToolArguments.selectKey", { key }) },
+                                  ...BOOLEAN_ITEMS.map((item) => ({ ...item, label: t(item.label) })),
+                                ]
                           }
                           value={field.value ?? null}
                           onValueChange={field.onChange}
@@ -421,8 +424,8 @@ const MCPToolArgumentsForm = forwardRef<MCPToolArgumentsFormRef, MCPToolArgument
                             {!required && (
                               <SelectItem value={null}>{t("mcpToolArguments.selectKey", { key })}</SelectItem>
                             )}
-                            <SelectItem value={true}>True</SelectItem>
-                            <SelectItem value={false}>False</SelectItem>
+                            <SelectItem value={true}>{t("mcpToolArguments.booleanTrue")}</SelectItem>
+                            <SelectItem value={false}>{t("mcpToolArguments.booleanFalse")}</SelectItem>
                           </SelectContent>
                         </Select>
                       );

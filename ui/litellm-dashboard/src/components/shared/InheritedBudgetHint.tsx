@@ -1,5 +1,6 @@
 "use client";
 
+import type { ParseKeys, TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 
 import { SimpleTooltip } from "@/components/ui/tooltip";
@@ -141,8 +142,15 @@ export const keyOwnerBudgetSource = (
   applyUserBudgetToTeamKeys: boolean,
 ): UserBudgetSource | null => (!key.team_id || applyUserBudgetToTeamKeys ? key.user ?? null : null);
 
-const formatGate = (gate: InheritedBudgetGate): string =>
-  `${gate.scope} ${gate.alias}: $${formatNumberWithCommas(gate.maxBudget, 2)}${gate.budgetDuration ? ` / ${gate.budgetDuration}` : ""}`;
+const SCOPE_LABELS: Record<InheritedBudgetGate["scope"], ParseKeys> = {
+  Team: "shared.inheritedBudgetHint.scopes.team",
+  "Team member": "shared.inheritedBudgetHint.scopes.teamMember",
+  Organization: "shared.inheritedBudgetHint.scopes.organization",
+  User: "shared.inheritedBudgetHint.scopes.user",
+};
+
+const formatGate = (gate: InheritedBudgetGate, t: TFunction): string =>
+  `${t(SCOPE_LABELS[gate.scope])} ${gate.alias}: $${formatNumberWithCommas(gate.maxBudget, 2)}${gate.budgetDuration ? ` / ${gate.budgetDuration}` : ""}`;
 
 interface InheritedBudgetHintProps {
   gates: readonly InheritedBudgetGate[];
@@ -157,7 +165,7 @@ export function InheritedBudgetHint({ gates }: InheritedBudgetHintProps) {
         <div data-testid="inherited-budget-hint" className="flex flex-col gap-1">
           <span>{t("shared.inheritedBudgetHint.intro")}</span>
           {gates.map((gate) => (
-            <span key={gate.scope}>{formatGate(gate)}</span>
+            <span key={gate.scope}>{formatGate(gate, t)}</span>
           ))}
         </div>
       }

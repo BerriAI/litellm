@@ -1,6 +1,8 @@
 "use client";
 
 import { useMemo } from "react";
+import type { TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
 import { useQueryStates } from "nuqs";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
@@ -13,7 +15,11 @@ import { backgroundFetchClient } from "@/lib/http/api";
 import type { components } from "@/lib/http/schema";
 import { keyDetailHref, modelGroupHref } from "@/utils/entityLinks";
 import { copyToClipboard } from "@/utils/dataUtils";
-import { AlertStatus, effectiveAlertStatus } from "@/components/ModelDeprecationAlerts/migrationState";
+import {
+  ALERT_STATUS_LABEL_KEYS,
+  AlertStatus,
+  effectiveAlertStatus,
+} from "@/components/ModelDeprecationAlerts/migrationState";
 import { migrationUrlParsers } from "./migrationRoute";
 import type { DeprecationAlert, deprecationUsageRange } from "@/components/ModelDeprecationAlerts/deprecationAlerts";
 import RecommendedReplacement from "@/components/ModelDeprecationAlerts/RecommendedReplacement";
@@ -25,11 +31,11 @@ import { affectedTeams } from "./migrationData";
 const TABLE_STATE = { sortFields: [], defaultSort: { id: "", desc: false }, defaultPageSize: 50, filterColumns: [] };
 type KeyRow = components["schemas"]["KeySpendActivityRow"];
 
-function migrationHeading(alert: DeprecationAlert, status: AlertStatus): string {
-  if (status === AlertStatus.Resolved) return "Migration marked resolved";
-  if (status === AlertStatus.Dismissed) return "Model deprecation dismissed";
-  if (alert.model.status === "deprecated") return "Migration needed: model is deprecated";
-  return `Migration due ${alert.model.deprecation_date}`;
+function migrationHeading(alert: DeprecationAlert, status: AlertStatus, t: TFunction): string {
+  if (status === AlertStatus.Resolved) return t("alerts.migrationDetail.headings.resolved");
+  if (status === AlertStatus.Dismissed) return t("alerts.migrationDetail.headings.dismissed");
+  if (alert.model.status === "deprecated") return t("alerts.migrationDetail.headings.deprecated");
+  return t("alerts.migrationDetail.headings.due", { date: alert.model.deprecation_date });
 }
 
 function migrationFollowUp(
@@ -52,6 +58,7 @@ export default function MigrationDetail({
   range: ReturnType<typeof deprecationUsageRange>;
   isViewOnly: boolean;
 }) {
+  const { t } = useTranslation();
   const [params, setParams] = useQueryStates(migrationUrlParsers);
   const { data: teams = [] } = useTeams();
   const teamNames = useMemo(
@@ -144,27 +151,30 @@ export default function MigrationDetail({
     () => [
       {
         id: "key",
-        header: "Virtual key",
+        header: t("alerts.migrationDetail.columns.key"),
         cell: ({ row }) => (
           <a href={keyDetailHref(row.original.api_key)} className="font-medium text-primary hover:underline">
-            {row.original.metadata.key_alias || "Unnamed key"}
+            {row.original.metadata.key_alias || t("alerts.migrationDetail.unnamedKey")}
           </a>
         ),
       },
       {
         id: "team",
-        header: "Team",
+        header: t("alerts.migrationDetail.columns.team"),
         cell: ({ row }) =>
-          teamNames.get(row.original.metadata.team_id ?? "") || row.original.metadata.team_id || "No team",
+          teamNames.get(row.original.metadata.team_id ?? "") ||
+          row.original.metadata.team_id ||
+          t("alerts.migrationDetail.noTeam"),
       },
       {
         id: "owner",
-        header: "Owner",
-        cell: ({ row }) => row.original.metadata.user_email || row.original.metadata.user_id || "Not recorded",
+        header: t("alerts.migrationDetail.columns.owner"),
+        cell: ({ row }) =>
+          row.original.metadata.user_email || row.original.metadata.user_id || t("alerts.migrationDetail.notRecorded"),
       },
       {
         id: "tags",
-        header: "Usage tags",
+        header: t("alerts.migrationDetail.columns.tags"),
         cell: ({ row }) => (
           <UsageTags
             tags={tagsByKey.get(row.original.api_key) ?? []}
@@ -175,15 +185,19 @@ export default function MigrationDetail({
       },
       {
         id: "requests",
-        header: "Requests · 30d",
+        header: t("alerts.migrationDetail.columns.requests"),
         cell: ({ row }) => <span className="tabular-nums">{row.original.metrics.api_requests.toLocaleString()}</span>,
       },
-      { id: "spend", header: "Spend · 30d", cell: ({ row }) => `$${row.original.metrics.spend.toFixed(2)}` },
+      {
+        id: "spend",
+        header: t("alerts.migrationDetail.columns.spend"),
+        cell: ({ row }) => `$${row.original.metrics.spend.toFixed(2)}`,
+      },
     ],
-    [teamNames, tagsByKey, tagQuery.isPending, tagQuery.isError],
+    [teamNames, tagsByKey, tagQuery.isPending, tagQuery.isError, t],
   );
   const status = effectiveAlertStatus(selected);
-  const heading = migrationHeading(selected, status);
+  const heading = migrationHeading(selected, status, t);
   const copyFollowUp = () => {
     const teamName = params.team ? teamNames.get(params.team) || params.team : "Team owners";
     const count = keyQuery.data?.total_api_keys;
@@ -192,23 +206,28 @@ export default function MigrationDetail({
       : selected.lastUsedDate;
     const context = { team: teamName, count, lastSeen, url: window.location.href };
     const message = migrationFollowUp(selected, context);
-    void copyToClipboard(message, "Follow-up copied");
+    void copyToClipboard(message, t("alerts.migrationDetail.followUpCopied"));
   };
   return (
     <>
       <section className="flex flex-wrap items-start justify-between gap-3 rounded-xl border bg-card p-3">
         <div>
-          <span className="rounded-full border px-2 py-0.5 text-xs capitalize">{status}</span>
+          <span className="rounded-full border px-2 py-0.5 text-xs capitalize">
+            {t(ALERT_STATUS_LABEL_KEYS[status])}
+          </span>
           <h2 className="mt-3 text-lg font-semibold">{heading}</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Last seen {selected.lastUsedDate} UTC · {selected.requests.toLocaleString()} requests in the last 30 days
+            {t("alerts.migrationDetail.lastSeen", {
+              date: selected.lastUsedDate,
+              requests: selected.requests.toLocaleString(),
+            })}
           </p>
           <RecommendedReplacement recommendation={selected.model} />
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={copyFollowUp}>
             <Copy />
-            Copy follow-up
+            {t("alerts.migrationDetail.copyFollowUp")}
           </Button>
           {!isViewOnly && (
             <>
@@ -219,7 +238,7 @@ export default function MigrationDetail({
                     onClick={() => statusMutation.mutate(AlertStatus.Resolved)}
                   >
                     <Check />
-                    Mark resolved
+                    {t("alerts.migrationDetail.markResolved")}
                   </Button>
                   <Button
                     variant="ghost"
@@ -227,46 +246,48 @@ export default function MigrationDetail({
                     onClick={() => statusMutation.mutate(AlertStatus.Dismissed)}
                   >
                     <X />
-                    Dismiss
+                    {t("alerts.migrationDetail.dismiss")}
                   </Button>
                 </>
               ) : (
                 <Button disabled={statusMutation.isPending} onClick={() => statusMutation.mutate(AlertStatus.Open)}>
                   <RotateCcw />
-                  Reopen
+                  {t("alerts.migrationDetail.reopen")}
                 </Button>
               )}
             </>
           )}
           {modelGroupHref(selected.model.model_name) && (
             <a className={buttonVariants({ variant: "outline" })} href={modelGroupHref(selected.model.model_name)}>
-              Model routing <ArrowUpRight size={14} />
+              {t("alerts.migrationDetail.modelRouting")} <ArrowUpRight size={14} />
             </a>
           )}
         </div>
       </section>
-      <p className="text-xs text-muted-foreground">
-        Resolve across all teams once owners confirm migration. New traffic reopens the alert.
-      </p>
+      <p className="text-xs text-muted-foreground">{t("alerts.migrationDetail.resolveHint")}</p>
       {statusMutation.isError && (
         <p role="alert" className="text-destructive">
-          Could not save alert status. Please retry.
+          {t("alerts.migrationDetail.saveError")}
         </p>
       )}
       <ModelUsageChart model={model} team={params.team} scope={scope} range={range} />
       <div className="grid shrink-0 grid-cols-3 divide-x rounded-xl border bg-card">
         <div className="p-3">
-          <p className="text-xs text-muted-foreground">{params.team ? "Keys in this team" : "Affected keys"}</p>
+          <p className="text-xs text-muted-foreground">
+            {params.team
+              ? t("alerts.migrationDetail.summary.teamKeys")
+              : t("alerts.migrationDetail.summary.affectedKeys")}
+          </p>
           <p className="mt-1 text-xl font-semibold tabular-nums">
             {keyQuery.data?.total_api_keys.toLocaleString() ?? "—"}
           </p>
         </div>
         <div className="p-3">
-          <p className="text-xs text-muted-foreground">Teams using this model</p>
+          <p className="text-xs text-muted-foreground">{t("alerts.migrationDetail.summary.teams")}</p>
           <p className="mt-1 text-xl font-semibold tabular-nums">{teamQuery.data?.length ?? "—"}</p>
         </div>
         <div className="p-3">
-          <p className="text-xs text-muted-foreground">Deprecation</p>
+          <p className="text-xs text-muted-foreground">{t("alerts.migrationDetail.summary.deprecation")}</p>
           <p className="mt-1 text-lg font-semibold">
             <DeprecationTiming alert={selected} />
           </p>
@@ -276,14 +297,12 @@ export default function MigrationDetail({
         <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
           <div>
             <h2 className="font-medium">
-              Affected keys{" "}
+              {t("alerts.migrationDetail.keysTable.title")}{" "}
               <span className="ml-1 text-muted-foreground">
                 {keyQuery.data?.total_api_keys.toLocaleString() ?? "…"}
               </span>
             </h2>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Keys and owners that used this model in the last 30 days. Tags show actual usage with this model.
-            </p>
+            <p className="mt-1 text-xs text-muted-foreground">{t("alerts.migrationDetail.keysTable.description")}</p>
           </div>
           <Select
             value={params.team ?? "__all"}
@@ -292,14 +311,21 @@ export default function MigrationDetail({
               table.onPaginationChange({ ...table.pagination, pageIndex: 0 });
             }}
           >
-            <SelectTrigger className="min-w-52" aria-label="Filter affected keys by team">
-              <SelectValue>{params.team ? teamNames.get(params.team) || params.team : "All teams"}</SelectValue>
+            <SelectTrigger className="min-w-52" aria-label={t("alerts.migrationDetail.keysTable.teamFilter")}>
+              <SelectValue>
+                {params.team
+                  ? teamNames.get(params.team) || params.team
+                  : t("alerts.migrationDetail.keysTable.allTeams")}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="__all">All teams</SelectItem>
+              <SelectItem value="__all">{t("alerts.migrationDetail.keysTable.allTeams")}</SelectItem>
               {(teamQuery.data ?? []).map((team) => (
                 <SelectItem key={team.id} value={team.id}>
-                  {teamNames.get(team.id) || team.id} · {team.keys} keys
+                  {t("alerts.migrationDetail.keysTable.teamOption", {
+                    team: teamNames.get(team.id) || team.id,
+                    keys: team.keys,
+                  })}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -307,9 +333,9 @@ export default function MigrationDetail({
         </div>
         {keyQuery.isError ? (
           <div className="p-5">
-            <p>Could not load affected keys.</p>
+            <p>{t("alerts.migrationDetail.keysTable.loadError")}</p>
             <Button variant="outline" onClick={() => void keyQuery.refetch()}>
-              Retry
+              {t("alerts.migrationDetail.keysTable.retry")}
             </Button>
           </div>
         ) : (
@@ -327,9 +353,7 @@ export default function MigrationDetail({
           />
         )}
       </section>
-      {teamQuery.isError && (
-        <p role="alert">Could not load team filters. The keys table still includes all matching teams.</p>
-      )}
+      {teamQuery.isError && <p role="alert">{t("alerts.migrationDetail.teamsError")}</p>}
     </>
   );
 }

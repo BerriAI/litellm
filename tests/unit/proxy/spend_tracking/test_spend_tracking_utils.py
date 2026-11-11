@@ -8,6 +8,7 @@ from typing import Any, Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import Request
 from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
@@ -32,10 +33,14 @@ from litellm.constants import (
     MANAGED_BACKGROUND_RESPONSE_METADATA_KEY,
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.ocr.transformation import OCRResponse, OCRUsageInfo
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsMetadataFields, SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import get_passthrough_router_request_metadata
+from litellm.proxy.pass_through_endpoints.pass_through_endpoints import HttpPassThroughEndpointHelpers
+from litellm.types.passthrough_endpoints.pass_through_endpoints import PassthroughStandardLoggingPayload
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _extract_usage_for_ocr_call,
@@ -75,6 +80,8 @@ from litellm.types.utils import (
     StandardLoggingModelInformation,
     StandardLoggingPayload,
     StandardLoggingPayloadErrorInformation,
+    StandardLoggingGuardrailInformation,
+    StandardLoggingVectorStoreRequest,
 )
 
 
@@ -207,6 +214,178 @@ def test_classifier_audit_spend_storage_obeys_privacy_and_truncation(monkeypatch
         assert stored["originating_request_masked"]["input"] == "source-only"
         assert stored["model"] == "classifier"
         assert audit["classifier_input"]["system"] == "rubric" * 1000
+
+
+_TENANT_PROMPT: Final = "tenant-private-prompt"
+_TENANT_RESPONSE: Final = "tenant-private-response"
+
+
+def _tenant_settings(setting: bool | str | None) -> dict[str, object]:
+    return {} if setting is None else {"store_prompts_in_spend_logs": setting}
+
+
+def _spend_log_for(litellm_params: Mapping[str, object]) -> tuple[SpendLogsPayload, dict[str, object]]:
+    now: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
+    messages: Final = [{"role": "user", "content": _TENANT_PROMPT}]
+    kwargs: Final[dict[str, object]] = {
+        "model": "gpt-4o-mini",
+        "litellm_params": {**litellm_params, "proxy_server_request": {"body": {"messages": messages}}},
+        "standard_logging_object": {
+            "call_type": "_arealtime",
+            "model_map_information": None,
+            "messages": messages,
+            "response": {"choices": [{"message": {"content": _TENANT_RESPONSE}}]},
+            "metadata": {},
+        },
+    }
+    response: Final = litellm.ModelResponse(
+        id="tenant-storage",
+        choices=[{"message": {"role": "assistant", "content": _TENANT_RESPONSE}}],
+        usage=litellm.Usage(prompt_tokens=3, completion_tokens=2, total_tokens=5),
+    )
+    return get_logging_payload(kwargs=kwargs, response_obj=response, start_time=now, end_time=now), kwargs
+
+
+def _stores_tenant_content(payload: SpendLogsPayload) -> tuple[bool, bool, bool]:
+    return (
+        _TENANT_PROMPT in payload["messages"],
+        _TENANT_PROMPT in payload["proxy_server_request"],
+        _TENANT_RESPONSE in payload["response"],
+    )
+
+
+@pytest.mark.parametrize("storage_mode", [None, "latest_turn"])
+@pytest.mark.parametrize(
+    ("key_setting", "team_setting", "global_store", "stored"),
+    [
+        (False, None, True, False),
+        (None, False, True, False),
+        (True, False, True, False),
+        (False, True, True, False),
+        (None, "false", True, False),
+        (None, None, True, True),
+        (True, True, True, True),
+        (True, True, False, False),
+    ],
+)
+def test_tenant_prompt_storage_policy_decides_what_spend_logs_keep(
+    monkeypatch: pytest.MonkeyPatch,
+    key_setting: bool | str | None,
+    team_setting: bool | str | None,
+    global_store: bool,
+    stored: bool,
+    storage_mode: str | None,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(
+        proxy_server,
+        "general_settings",
+        {"store_prompts_in_spend_logs": global_store, "spend_logs_prompt_storage": storage_mode},
+    )
+    monkeypatch.delenv("STORE_PROMPTS_IN_SPEND_LOGS", raising=False)
+    payload, kwargs = _spend_log_for(
+        {
+            "metadata": {
+                "user_api_key_metadata": _tenant_settings(key_setting),
+                "user_api_key_team_metadata": _tenant_settings(team_setting),
+                "store_prompts_in_spend_logs": True,
+                "headers": {"litellm-disable-message-redaction": "true"},
+            }
+        }
+    )
+    assert _stores_tenant_content(payload) == (stored, stored, stored)
+    assert kwargs["standard_logging_object"]["messages"] == [{"role": "user", "content": _TENANT_PROMPT}]
+    assert kwargs["standard_logging_object"]["response"] == {"choices": [{"message": {"content": _TENANT_RESPONSE}}]}
+
+
+def _passthrough_logging_params(auth: UserAPIKeyAuth, request: Request) -> Mapping[str, object]:
+    context: Final = HttpPassThroughEndpointHelpers.init_kwargs_for_pass_through_endpoint(
+        request=request,
+        user_api_key_dict=auth,
+        passthrough_logging_payload=PassthroughStandardLoggingPayload(url="https://api.openai.com/v1/chat/completions"),
+        logging_obj=LiteLLMLoggingObj(
+            model="test-model",
+            messages=[],
+            stream=False,
+            call_type="pass_through_endpoint",
+            start_time=datetime.datetime(2026, 1, 1, tzinfo=timezone.utc),
+            litellm_call_id="tenant-storage",
+            function_id="tenant-storage",
+        ),
+        _parsed_body={
+            "messages": [{"role": "user", "content": _TENANT_PROMPT}],
+            "metadata": {
+                "user_api_key_metadata": {"store_prompts_in_spend_logs": True},
+                "user_api_key_team_metadata": {"store_prompts_in_spend_logs": True},
+            },
+        },
+    )
+    return TypeAdapter[Mapping[str, object]](Mapping[str, object]).validate_python(context["litellm_params"])
+
+
+def _router_passthrough_logging_params(auth: UserAPIKeyAuth, request: Request) -> Mapping[str, object]:
+    return {"litellm_metadata": dict(get_passthrough_router_request_metadata(auth, request))}
+
+
+@pytest.mark.parametrize("logging_params_for", [_passthrough_logging_params, _router_passthrough_logging_params])
+@pytest.mark.parametrize(
+    ("key_setting", "team_setting", "stored"),
+    [(False, None, False), (None, False, False), (True, False, False), (None, None, True)],
+)
+def test_passthrough_spend_logs_follow_the_authenticated_tenant_storage_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    logging_params_for: Callable[[UserAPIKeyAuth, Request], Mapping[str, object]],
+    key_setting: bool | None,
+    team_setting: bool | None,
+    stored: bool,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    monkeypatch.delenv("STORE_PROMPTS_IN_SPEND_LOGS", raising=False)
+    auth: Final = UserAPIKeyAuth(
+        api_key="test-storage-key", metadata=_tenant_settings(key_setting), team_metadata=_tenant_settings(team_setting)
+    )
+    request: Final = Request(
+        {"type": "http", "method": "POST", "path": "/openai/v1/chat/completions", "headers": [], "query_string": b""}
+    )
+    payload, _ = _spend_log_for(logging_params_for(auth, request))
+    assert _stores_tenant_content(payload) == (stored, stored, stored)
+
+
+@pytest.mark.parametrize("tenant_field", ["user_api_key_metadata", "user_api_key_team_metadata"])
+def test_tenant_prompt_restriction_redacts_ancillary_fields_without_mutating_callbacks(
+    monkeypatch: pytest.MonkeyPatch, tenant_field: str
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    metadata: Final = {tenant_field: {"store_prompts_in_spend_logs": False}}
+    guardrails: Final = [{"guardrail_name": "test", "guardrail_request": "private-guardrail"}]
+    vectors: Final = [
+        {"vector_store_search_response": {"data": [{"content": [{"text": "private-vector", "type": "text"}]}]}}
+    ]
+    error: Final = {
+        "error_message": 'bad request {"messages": [{"role": "user", "content": "private-error"}]}',
+        "error_class": "BadRequestError",
+    }
+    cleaned: Final = _get_spend_logs_metadata(
+        metadata=metadata, guardrail_information=guardrails, vector_store_request_metadata=vectors
+    )
+    assert "private-guardrail" not in json.dumps(cleaned["guardrail_information"])
+    assert "private-vector" not in json.dumps(cleaned["vector_store_request_metadata"])
+    assert guardrails == [{"guardrail_name": "test", "guardrail_request": "private-guardrail"}]
+    assert vectors[0]["vector_store_search_response"]["data"][0]["content"][0]["text"] == "private-vector"
+    assert "private-error" not in json.dumps(sanitize_error_information_for_spend_logs(error, metadata=metadata))
+    assert "private-error" in error["error_message"]
+
+
+def test_request_body_metadata_cannot_disable_spend_prompt_storage(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    assert should_store_prompts_and_responses_in_spend_logs({"store_prompts_in_spend_logs": False}) is True
 
 
 def test_get_logging_payload_maps_openai_cached_tokens_to_cache_read_input_tokens():
@@ -7321,6 +7500,418 @@ def test_spend_logs_payload_with_prompts_enabled(monkeypatch: pytest.MonkeyPatch
     )
     assert payload_disabled["messages"] == "{}"
     assert payload_disabled["response"] == "{}"
+
+
+_LATEST_TURN_SETTINGS: Final = {"store_prompts_in_spend_logs": True, "spend_logs_prompt_storage": "latest_turn"}
+_PRIOR_CHAT_TURNS: Final = (
+    {"role": "system", "content": "system prompt"},
+    {"role": "user", "content": "earlier user turn"},
+    {"role": "assistant", "content": "earlier answer"},
+)
+_STORED_JSON: Final = TypeAdapter(object)
+_FULL_CHAT_ROW: Final = TypeAdapter(dict[str, list[dict[str, str]]])
+
+
+def _user_turn(text: str) -> list[dict[str, str]]:
+    return [{"role": "user", "content": text}]
+
+
+def _stored_request_json(body: Mapping[str, object]) -> str:
+    return _get_proxy_server_request_for_spend_logs_payload(
+        metadata={}, litellm_params={"proxy_server_request": {"body": body}}
+    )
+
+
+def _stored_request(body: Mapping[str, object]) -> object:
+    return _STORED_JSON.validate_json(_stored_request_json(body))
+
+
+_STATELESS_CASES: Final[tuple[tuple[dict[str, object], dict[str, object]], ...]] = (
+    (
+        {"model": "gpt-4o-mini", "messages": [*_PRIOR_CHAT_TURNS, {"role": "user", "content": "latest"}]},
+        {"model": "gpt-4o-mini", "messages": _user_turn("latest")},
+    ),
+    (
+        {
+            "system": "system prompt",
+            "tools": [{"name": "lookup"}],
+            "messages": [
+                {"role": "user", "content": "earlier user turn"},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "describe"},
+                        {"type": "image", "source": {"type": "base64", "data": "AAAA"}},
+                        {"type": "document", "source": {"type": "base64", "data": "AAAA"}},
+                    ],
+                },
+            ],
+        },
+        {"messages": _user_turn("describe\n[image omitted]\n[file omitted]")},
+    ),
+    (
+        {"messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:,"}}]}]},
+        {"messages": _user_turn("[image omitted]")},
+    ),
+    (
+        {"instructions": "system prompt", "input": "plain responses input"},
+        {"input": _user_turn("plain responses input")},
+    ),
+    (
+        {
+            "input": [
+                {"role": "user", "content": "earlier user turn"},
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "summarize"},
+                        {"type": "input_file", "file_id": "file-1"},
+                    ],
+                },
+            ]
+        },
+        {"input": _user_turn("summarize\n[file omitted]")},
+    ),
+    (
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": ""},
+                        {"type": "thinking", "thinking": "hidden"},
+                        {"type": "text", "text": "keep"},
+                    ],
+                }
+            ]
+        },
+        {"messages": _user_turn("keep")},
+    ),
+    (
+        {"model": "m", "messages": [*_PRIOR_CHAT_TURNS, {"role": "tool", "tool_call_id": "c", "content": "out"}]},
+        {"model": "m"},
+    ),
+    (
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "t", "content": "tool out"},
+                        {"type": "text", "text": "reminder next to a tool result"},
+                    ],
+                }
+            ]
+        },
+        {},
+    ),
+    ({"input": [{"role": "user", "content": "q"}, {"type": "function_call_output", "output": "out"}]}, {}),
+    ({"messages": [{"role": "user", "content": "q"}, {"role": "assistant", "content": "prefill"}]}, {}),
+    (
+        {"messages": [{"role": "user", "content": ["plain part", {"type": "text", "text": "block part"}]}]},
+        {"messages": _user_turn("plain part\nblock part")},
+    ),
+    (
+        {"messages": [{"role": "user", "content": [{"type": []}, {"type": {}}, {"type": "text", "text": "latest"}]}]},
+        {"messages": _user_turn("latest")},
+    ),
+    ({"messages": [{"role": "user", "content": ""}]}, {}),
+    ({"messages": []}, {}),
+    ({"model": "gpt-4o-mini"}, {"model": "gpt-4o-mini"}),
+)
+
+
+@pytest.mark.parametrize(("body", "expected"), _STATELESS_CASES)
+def test_latest_turn_mode_stores_only_the_model_and_the_latest_user_text_of_a_stateless_request(
+    monkeypatch: pytest.MonkeyPatch, body: Mapping[str, object], expected: dict[str, object]
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", _LATEST_TURN_SETTINGS)
+    assert _stored_request(body) == expected
+
+
+_CONTINUATION_BODIES: Final[tuple[dict[str, object], ...]] = (
+    {
+        "model": "gpt-4o-mini",
+        "previous_response_id": "resp_earlier",
+        "instructions": "system prompt",
+        "input": [{"type": "function_call_output", "call_id": "call_1", "output": "tool out"}],
+    },
+    {"model": "gpt-4o-mini", "conversation": "conv_1", "input": "next question"},
+)
+_NATIVE_RESPONSES_PAYLOAD: Final = {"call_type": "aresponses", "response": {"object": "response", "output": []}}
+
+
+@pytest.mark.parametrize("body", _CONTINUATION_BODIES)
+def test_latest_turn_mode_keeps_the_whole_request_when_a_responses_call_continues_a_stored_conversation(
+    monkeypatch: pytest.MonkeyPatch, body: Mapping[str, object]
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", _LATEST_TURN_SETTINGS)
+    assert _stored_request_with_payload(body, _NATIVE_RESPONSES_PAYLOAD) == body
+
+
+@pytest.mark.parametrize(
+    ("body", "call_type", "expected"),
+    [
+        (
+            {
+                "model": "gpt-4o-mini",
+                "previous_response_id": "resp_earlier",
+                "messages": [*_PRIOR_CHAT_TURNS, {"role": "user", "content": "latest"}],
+            },
+            "acompletion",
+            {"model": "gpt-4o-mini", "messages": _user_turn("latest")},
+        ),
+        (
+            {
+                "model": "claude",
+                "conversation": "conv_1",
+                "system": "system prompt",
+                "messages": [*_PRIOR_CHAT_TURNS, {"role": "user", "content": "latest"}],
+            },
+            "anthropic_messages",
+            {"model": "claude", "messages": _user_turn("latest")},
+        ),
+        (_CONTINUATION_BODIES[0], None, {"model": "gpt-4o-mini"}),
+    ],
+)
+def test_latest_turn_mode_trims_a_request_whose_continuation_keys_are_not_on_a_responses_call(
+    monkeypatch: pytest.MonkeyPatch, body: Mapping[str, object], call_type: str | None, expected: dict[str, object]
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", _LATEST_TURN_SETTINGS)
+    standard_payload: Final = {"call_type": call_type, "response": {"choices": [{"message": {"content": "a"}}]}}
+    assert _stored_request_with_payload(body, standard_payload) == expected
+
+
+_BRIDGED_RESPONSES_BODY: Final = {
+    "model": "claude",
+    "instructions": "system prompt",
+    "input": [{"role": "user", "content": "earlier user turn"}, {"role": "user", "content": "latest"}],
+}
+
+
+def _stored_request_with_payload(body: Mapping[str, object], standard_payload: Mapping[str, object]) -> object:
+    return _STORED_JSON.validate_json(
+        _get_proxy_server_request_for_spend_logs_payload(
+            metadata={},
+            litellm_params={"proxy_server_request": {"body": body}},
+            kwargs={"standard_logging_object": standard_payload},
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("standard_payload", "expected"),
+    [
+        (
+            {"call_type": "aresponses", "response": {"choices": [{"message": {"content": "bridged answer"}}]}},
+            _BRIDGED_RESPONSES_BODY,
+        ),
+        (
+            {"call_type": "aresponses", "response": {"object": "response", "output": []}},
+            {"model": "claude", "input": _user_turn("latest")},
+        ),
+        (
+            {"call_type": "acompletion", "response": {"choices": [{"message": {"content": "chat answer"}}]}},
+            {"model": "claude", "input": _user_turn("latest")},
+        ),
+        ({"call_type": "aresponses", "response": None}, {"model": "claude", "input": _user_turn("latest")}),
+    ],
+)
+def test_latest_turn_mode_keeps_the_whole_request_of_a_responses_turn_served_by_the_chat_bridge(
+    monkeypatch: pytest.MonkeyPatch, standard_payload: Mapping[str, object], expected: dict[str, object]
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", _LATEST_TURN_SETTINGS)
+    assert _stored_request_with_payload(_BRIDGED_RESPONSES_BODY, standard_payload) == expected
+
+
+def test_latest_turn_mode_stores_a_classifier_row_as_the_trimmed_originating_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    originating: Final = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {"role": "system", "content": "caller system prompt"},
+            *_PRIOR_CHAT_TURNS,
+            {"role": "user", "content": "route me"},
+        ],
+    }
+    composed_ask: Final = "Caller system prompt, quoted as task context:\ncaller system prompt\nRecent conversation:\n[1] earlier\nCurrent ask:\nroute me"
+    classifier_input: Final = {
+        "model": "classifier",
+        "messages": [{"role": "system", "content": "rubric"}, {"role": "user", "content": composed_ask}],
+    }
+    standard_payload: Final = {
+        "call_type": "acompletion",
+        "classifier_input": classifier_input,
+        "originating_request_masked": originating,
+        "response": {"choices": [{"message": {"content": "simple"}}]},
+    }
+    monkeypatch.setattr(proxy_server, "general_settings", _LATEST_TURN_SETTINGS)
+    stored: Final = _stored_request_with_payload(classifier_input, standard_payload)
+    assert stored == {
+        "model": "classifier",
+        "messages": _user_turn("route me"),
+        "originating_request_masked": {"model": "gpt-4o-mini", "messages": _user_turn("route me")},
+    }
+    assert "caller system prompt" not in json.dumps(stored)
+
+
+def test_latest_turn_mode_keeps_message_redaction_on_a_classifier_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    originating: Final = {
+        "model": "gpt-4o-mini",
+        "messages": [*_PRIOR_CHAT_TURNS, {"role": "user", "content": "route me"}],
+    }
+    classifier_body: Final = {
+        "model": "classifier",
+        "messages": [{"role": "user", "content": "Current ask:\nroute me"}],
+    }
+    standard_payload: Final = {
+        "call_type": "acompletion",
+        "classifier_input": classifier_body,
+        "originating_request_masked": originating,
+        "response": {"choices": [{"message": {"content": "simple"}}]},
+    }
+    monkeypatch.setattr(proxy_server, "general_settings", _LATEST_TURN_SETTINGS)
+    stored: Final = json.loads(
+        _get_proxy_server_request_for_spend_logs_payload(
+            metadata={},
+            litellm_params={"proxy_server_request": {"body": classifier_body}},
+            kwargs={
+                "standard_logging_object": standard_payload,
+                "standard_callback_dynamic_params": {"turn_off_message_logging": True},
+            },
+        )
+    )
+    assert stored["model"] == "classifier"
+    assert "route me" not in json.dumps(stored)
+    assert "originating_request_masked" not in stored
+
+
+def test_latest_turn_mode_ignores_an_originating_request_supplied_by_the_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    body: Final = {
+        "model": "gpt-4o-mini",
+        "originating_request_masked": {"messages": [{"role": "user", "content": "forged prompt"}]},
+        "messages": [*_PRIOR_CHAT_TURNS, {"role": "user", "content": "latest"}],
+    }
+    standard_payload: Final = {"call_type": "acompletion", "response": {"choices": [{"message": {"content": "a"}}]}}
+    monkeypatch.setattr(proxy_server, "general_settings", _LATEST_TURN_SETTINGS)
+    assert _stored_request_with_payload(body, standard_payload) == {
+        "model": "gpt-4o-mini",
+        "messages": _user_turn("latest"),
+    }
+
+
+def test_latest_turn_mode_redacts_a_copy_of_the_vector_store_search_results(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.spend_tracking.spend_tracking_utils import _get_vector_store_request_for_spend_logs_payload
+
+    shared: Final = [
+        {
+            "vector_store_id": "vs_1",
+            "vector_store_search_response": {"data": [{"content": [{"type": "text", "text": "secret passage"}]}]},
+        }
+    ]
+    monkeypatch.setattr(proxy_server, "general_settings", _LATEST_TURN_SETTINGS)
+    stored: Final = _get_vector_store_request_for_spend_logs_payload(shared)
+    assert stored is not None
+    assert stored[0]["vector_store_search_response"]["data"][0]["content"][0]["text"] == REDACTED_BY_LITELM_STRING
+    assert shared[0]["vector_store_search_response"]["data"][0]["content"][0]["text"] == "secret passage"
+
+
+@pytest.mark.parametrize("value", ["latest_trun", "Latest_Turn", "full", True])
+def test_spend_logs_prompt_storage_rejects_values_other_than_latest_turn(value: object) -> None:
+    from pydantic import ValidationError
+
+    from litellm.proxy._types import ConfigGeneralSettings
+
+    assert ConfigGeneralSettings.model_validate({"spend_logs_prompt_storage": "latest_turn"}).spend_logs_prompt_storage
+    with pytest.raises(ValidationError):
+        ConfigGeneralSettings.model_validate({"spend_logs_prompt_storage": value})
+
+
+def test_latest_turn_mode_keeps_the_existing_string_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.delenv("MAX_STRING_LENGTH_PROMPT_IN_DB", raising=False)
+    chat_body: Final = {"messages": [{"role": "user", "content": "a" * 1500 + "b" * 1500}]}
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    capped_content: Final = _FULL_CHAT_ROW.validate_json(_stored_request_json(chat_body))["messages"][0]["content"]
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in capped_content, capped_content
+    monkeypatch.setattr(proxy_server, "general_settings", _LATEST_TURN_SETTINGS)
+    assert _stored_request(chat_body) == {"messages": _user_turn(capped_content)}
+
+
+def test_latest_turn_mode_keeps_the_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    payload: Final = cast(StandardLoggingPayload, {"response": {"choices": [{"message": {"content": "answer"}}]}})
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    stored_today: Final = _get_response_for_spend_logs_payload(payload)
+    assert _STORED_JSON.validate_json(stored_today) == payload["response"]
+    monkeypatch.setattr(proxy_server, "general_settings", _LATEST_TURN_SETTINGS)
+    assert _get_response_for_spend_logs_payload(payload) == stored_today
+
+
+def test_latest_turn_mode_keeps_prompt_text_out_of_spend_log_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    prompt: Final = "earlier turn the row must not keep"
+    guardrail_information: Final = cast(
+        list[StandardLoggingGuardrailInformation],
+        [
+            {
+                "guardrail_name": "pii",
+                "guardrail_request": {"messages": [{"role": "user", "content": prompt}]},
+                "guardrail_response": prompt,
+                "match_details": [{"snippet": prompt}],
+                "classification": {"reason": prompt},
+            }
+        ],
+    )
+    error_information: Final = cast(
+        StandardLoggingPayloadErrorInformation,
+        {"error_message": f"BadRequestError: {{'messages': [{{'role': 'user', 'content': '{prompt}'}}]}}"},
+    )
+    vector_store_request: Final = cast(
+        list[StandardLoggingVectorStoreRequest],
+        [{"vector_store_search_response": {"data": [{"content": [{"type": "text", "text": prompt}]}]}}],
+    )
+    monkeypatch.setattr(proxy_server, "general_settings", _LATEST_TURN_SETTINGS)
+
+    stored: Final = json.dumps(
+        [
+            _sanitize_guardrail_information_for_spend_logs(guardrail_information),
+            sanitize_error_information_for_spend_logs(error_information),
+            _get_vector_store_request_for_spend_logs_payload(vector_store_request),
+        ]
+    )
+
+    assert prompt not in stored, stored
+
+
+def test_latest_turn_mode_unset_stores_the_full_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    body: Final = {"messages": [*_PRIOR_CHAT_TURNS, {"role": "user", "content": "latest"}]}
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    assert _stored_request(body) == body
 
 
 @pytest.mark.parametrize(

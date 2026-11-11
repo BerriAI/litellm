@@ -205,6 +205,7 @@ const ALWAYS_ON_ITEMS: { labelKey: ParseKeys; value: boolean }[] = [
 ];
 
 const DEFAULT_MODES = ["pre_call", "during_call", "post_call", "logging_only"];
+const REALTIME_VIOLATION_ACTIONS = ["warn", "end_session"] as const;
 
 const CALL_TYPE_ITEMS = [{ label: "/v1/realtime", value: "realtime" }];
 
@@ -1171,7 +1172,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
                     {t("guardrails.addForm.endpoint.realtime.onViolation.label")}
                   </label>
                   <div className="space-y-2">
-                    {(["warn", "end_session"] as const).map((opt) => (
+                    {REALTIME_VIOLATION_ACTIONS.map((opt) => (
                       <label key={opt} className="flex items-start gap-2 cursor-pointer">
                         <input
                           type="radio"

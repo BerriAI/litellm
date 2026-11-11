@@ -10,16 +10,28 @@ methods; richer repositories live in their own modules.
 from collections.abc import Mapping, Sequence
 from datetime import timedelta
 from itertools import groupby
-from typing import TYPE_CHECKING, Any, Final, Generic
+from typing import TYPE_CHECKING, Any, Final, Generic, Protocol
 
 from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.models.access_group import LiteLLM_AccessGroupTable
 from litellm.repositories.accounting_delivery_repository import LedgerDatabase, LedgerTransaction
 from litellm.repositories.prisma_protocols import RowT_co, TableActions
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models  # noqa: F401  # used by quoted base-class subscripts
+
+
+class _PrismaReaderClientView(Protocol):
+    @property
+    def db(self) -> object: ...
+
+
+class _PrismaWriterClientView(Protocol):
+    @property
+    def writer_db(self) -> object: ...
 
 
 class PrismaTableRepository(Generic[RowT_co]):
@@ -31,19 +43,26 @@ class PrismaTableRepository(Generic[RowT_co]):
         self._prisma_client = prisma_client
         self._use_writer = use_writer
 
-    @property
-    def prisma_client(self) -> Any:
+    def _connected_client(self) -> object:
         if self._prisma_client is None:
             raise RuntimeError("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
         return self._prisma_client
 
     @property
+    def prisma_client(self) -> Any:
+        return self._connected_client()
+
+    def _selected_database(self) -> object:
+        client: Final = self._connected_client()
+        if self._use_writer:
+            return require_attributes(client, _PrismaWriterClientView, "writer_db").writer_db
+        return require_attributes(client, _PrismaReaderClientView, "db").db
+
+    @property
     def table(self) -> TableActions[RowT_co]:
         from litellm.proxy.common_utils.config_sync_pubsub import wrap_table_actions_for_config_sync
 
-        actions: Final[TableActions[RowT_co]] = getattr(
-            self.prisma_client.writer_db if self._use_writer else self.prisma_client.db, self.table_name
-        )
+        actions: Final[TableActions[RowT_co]] = getattr(self._selected_database(), self.table_name)
         return wrap_table_actions_for_config_sync(actions=actions, table_name=self.table_name)
 
 
@@ -282,6 +301,10 @@ class ModelTableRepository(PrismaTableRepository["prisma_models.LiteLLM_ModelTab
 class AccessGroupRepository(PrismaTableRepository["prisma_models.LiteLLM_AccessGroupTable"]):
     table_name = "litellm_accessgrouptable"
 
+    async def find_by_name(self, name: str) -> LiteLLM_AccessGroupTable | None:
+        row: Final = await self.table.find_unique(where={"access_group_name": name})
+        return LiteLLM_AccessGroupTable.model_validate(row, from_attributes=True) if row is not None else None
+
 
 class SSOConfigRepository(PrismaTableRepository["prisma_models.LiteLLM_SSOConfig"]):
     table_name = "litellm_ssoconfig"
@@ -385,5 +408,15 @@ class BackgroundInteractionSettlementRepository(
     table_name = "litellm_backgroundinteractionsettlement"
 
 
+class BackgroundResponseSettlementRepository(
+    PrismaTableRepository["prisma_models.LiteLLM_BackgroundResponseSettlement"]
+):
+    table_name = "litellm_backgroundresponsesettlement"
+
+
 class RetiredAgentRepository(PrismaTableRepository["prisma_models.LiteLLM_RetiredAgent"]):
     table_name = "litellm_retiredagent"
+
+
+class DailyUserSpendRepository(PrismaTableRepository["prisma_models.LiteLLM_DailyUserSpend"]):
+    table_name = "litellm_dailyuserspend"

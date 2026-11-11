@@ -11,7 +11,7 @@ import openaiAgentsLogo from "../../../../../../../public/assets/logos/openai-ag
 import opencodeLogo from "../../../../../../../public/assets/moyai/logos/opencode.svg";
 import pydanticAiLogo from "../../../../../../../public/assets/logos/pydantic-ai-color.svg";
 import xaiLogo from "../../../../../../../public/assets/logos/xai.svg";
-import type { ParseKeys } from "i18next";
+import type { ParseKeys, TFunction } from "i18next";
 import type { components } from "@/lib/http/schema";
 import i18n from "@/i18n/i18n";
 import type { DailyData, SpendMetrics } from "@/components/UsagePage/types";
@@ -239,6 +239,13 @@ const FAMILIES: readonly AgentFamily[] = [
     match: /^curl\b/i,
   },
 ];
+
+const AGENT_LABEL_KEYS: Readonly<Record<string, ParseKeys>> = {
+  "Claude (unspecified)": "usage.agentCatalog.labels.claudeUnspecified",
+};
+
+export const agentDisplayLabel = (label: string, t: TFunction): string =>
+  Object.hasOwn(AGENT_LABEL_KEYS, label) ? t(AGENT_LABEL_KEYS[label]) : label;
 
 const USER_AGENT_PREFIX = /^user[- ]agent:\s*/i;
 

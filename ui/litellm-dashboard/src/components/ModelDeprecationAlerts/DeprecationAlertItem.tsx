@@ -1,6 +1,7 @@
 "use client";
 
 import { ArrowUpRight } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { DeprecationModel, DeprecationTiming } from "./DeprecationModel";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/cva.config";
@@ -9,10 +10,11 @@ import RecommendedReplacement from "./RecommendedReplacement";
 import type { DeprecationAlert } from "./deprecationAlerts";
 
 export default function DeprecationAlertItem({ alert }: { alert: DeprecationAlert }) {
+  const { t } = useTranslation();
   const retired = alert.model.status === "deprecated";
   const title = retired
-    ? `${alert.usageModel} is deprecated`
-    : `${alert.usageModel} retires in ${alert.model.days_until_deprecation} days`;
+    ? t("alerts.alertItem.deprecatedTitle", { model: alert.usageModel })
+    : t("alerts.alertItem.retiresTitle", { model: alert.usageModel, days: alert.model.days_until_deprecation });
   return (
     <article aria-label={title} className="flex flex-col gap-3">
       <div className="flex items-start gap-2.5">
@@ -22,13 +24,13 @@ export default function DeprecationAlertItem({ alert }: { alert: DeprecationAler
             <DeprecationTiming alert={alert} />
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
-            {alert.requests.toLocaleString()} requests in the last 30 days · Last seen {alert.lastUsedDate} UTC
+            {t("alerts.alertItem.usage", { requests: alert.requests.toLocaleString(), date: alert.lastUsedDate })}
           </p>
           <RecommendedReplacement recommendation={alert.model} />
         </div>
       </div>
       <a className={cn(buttonVariants({ size: "sm" }), "self-start")} href={migrationHref(alert.usageModel)}>
-        Review migration <ArrowUpRight className="size-3.5" />
+        {t("alerts.alertItem.reviewMigration")} <ArrowUpRight className="size-3.5" />
       </a>
     </article>
   );
