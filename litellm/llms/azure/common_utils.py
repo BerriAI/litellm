@@ -595,7 +595,7 @@ class BaseAzureLLM(BaseOpenAILLM):
                 v1_trimmed if v1_trimmed.endswith("/openai/v1") else f"{v1_trimmed.removesuffix('/openai')}/openai/v1"
             )
             v1_params: Final[_AzureV1ClientParams] = {
-                "api_key": v1_api_key,
+                "api_key": v1_api_key or "",
                 "base_url": f"{v1_root}/",
                 "default_query": dict(v1_base.params.remove("api-version")),
             }
