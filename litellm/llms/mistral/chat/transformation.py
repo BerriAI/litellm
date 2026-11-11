@@ -398,16 +398,9 @@ class MistralConfig(OpenAIGPTConfig):
     def get_models(
         self, api_key: str | None = None, api_base: str | None = None
     ) -> list[str]:  # mutable-ok: matches BaseConfig contract
-        resolved_base, resolved_key = self._get_openai_compatible_provider_info(api_base, api_key)
-        if not resolved_key:
-            raise ValueError(
-                "MISTRAL_API_KEY or api_key parameter is not set. Please set the environment variable to query "
-                "Mistral's `/v1/models` endpoint."
-            )
-        return [
-            f"mistral/{model_id}"
-            for model_id in self._fetch_model_ids(api_base=resolved_base, bearer_token=resolved_key)
-        ]
+        from litellm.utils import bundled_provider_models
+
+        return list(bundled_provider_models(self.custom_llm_provider))
 
     def _get_openai_compatible_provider_info(self, api_base: str | None, api_key: str | None) -> tuple[str, str | None]:
         return get_mistral_chat_credentials(api_base, api_key)

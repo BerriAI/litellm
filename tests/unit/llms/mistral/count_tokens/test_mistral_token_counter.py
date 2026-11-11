@@ -4,11 +4,13 @@ from typing import Final
 import httpx
 import pytest
 import respx
+from pydantic import JsonValue
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.llms.mistral.count_tokens.token_counter import MistralTokenCounter
 from litellm.llms.mistral.count_tokens.transformation import MistralCountTokensConfig
+from litellm.types.utils import TokenCountResponse
 
 COUNT_URL: Final = "https://api.mistral.ai/v1/responses/input_tokens"
 
@@ -491,18 +493,17 @@ def test_mistral_model_info_key_and_base_match_chat(monkeypatch: pytest.MonkeyPa
     assert (model_info.get_api_base(), model_info.get_api_key()) == (chat_base, chat_key)
 
 
-def test_mistral_config_get_models_lists_ids_that_route_to_mistral():
-    from litellm.llms.mistral.chat.transformation import MistralConfig
+def test_check_provider_endpoint_lists_the_bundled_mistral_models_without_calling_mistral(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.utils import get_valid_models
 
+    monkeypatch.setenv("MISTRAL_API_KEY", "test-key")
     with respx.mock:
-        route: Final = respx.get("https://api.mistral.ai/v1/models").mock(
-            return_value=httpx.Response(200, json={"data": [{"id": "mistral-large-4"}, {"id": "codestral-2508"}]})
-        )
-        models: Final = MistralConfig().get_models(api_key="test-key")
+        listed: Final = get_valid_models(check_provider_endpoint=True, custom_llm_provider="mistral")
 
-    assert route.calls.last.request.headers["Authorization"] == "Bearer test-key"
-    assert models == ["mistral/mistral-large-4", "mistral/codestral-2508"]
-    assert {litellm.get_llm_provider(model=model)[1] for model in models} == {"mistral"}
+    assert listed
+    assert listed == get_valid_models(check_provider_endpoint=False, custom_llm_provider="mistral")
 
 
 @pytest.mark.asyncio
@@ -677,8 +678,30 @@ async def test_count_tokens_counts_reasoning_only_where_mistral_chat_replays_it(
     ]
 
 
+_IMAGE_URL: Final = "https://example.com/cat.png"
+
+
+@pytest.mark.parametrize(
+    ("sibling_blocks", "sibling_parts"),
+    [
+        ([], []),
+        (
+            [{"type": "image_url", "image_url": {"url": _IMAGE_URL}}],
+            [{"type": "input_image", "image_url": _IMAGE_URL, "detail": "auto"}],
+        ),
+        (
+            [{"type": "file", "file": {"filename": "notes.txt", "file_data": "data:text/plain;base64,aGk="}}],
+            [{"type": "input_file", "filename": "notes.txt", "file_data": "data:text/plain;base64,aGk="}],
+        ),
+    ],
+    ids=["text_only", "with_image", "with_inline_file"],
+)
 @pytest.mark.asyncio
-async def test_count_tokens_counts_files_sent_by_file_id(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_count_tokens_counts_files_sent_by_file_id(
+    monkeypatch: pytest.MonkeyPatch,
+    sibling_blocks: list[dict[str, object]],
+    sibling_parts: list[dict[str, object]],
+) -> None:
     sent_input: Final = await _sent_count_input(
         monkeypatch,
         "mistral-large-4",
@@ -687,6 +710,7 @@ async def test_count_tokens_counts_files_sent_by_file_id(monkeypatch: pytest.Mon
                 "role": "user",
                 "content": [
                     {"type": "text", "text": "Summarize both"},
+                    *sibling_blocks,
                     {"type": "file", "file": {"file_id": "file-openai-shape"}},
                     {"type": "file", "file_id": "file-mistral-shape"},
                 ],
@@ -699,6 +723,7 @@ async def test_count_tokens_counts_files_sent_by_file_id(monkeypatch: pytest.Mon
             "role": "user",
             "content": [
                 {"type": "input_text", "text": "Summarize both"},
+                *sibling_parts,
                 {"type": "input_file", "file_id": "file-openai-shape"},
                 {"type": "input_file", "file_id": "file-mistral-shape"},
             ],
@@ -710,3 +735,72 @@ def test_get_mistral_count_tokens_endpoint_other_path() -> None:
     config: Final = MistralCountTokensConfig()
     endpoint: Final = config.get_mistral_count_tokens_endpoint("https://custom.mistral.ai/api")
     assert endpoint == "https://custom.mistral.ai/api/v1/responses/input_tokens"
+
+
+async def _count_with(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    deployment_params: dict[str, object],
+    count_response: dict[str, object],
+    chat_params: dict[str, JsonValue] | None = None,
+) -> tuple[TokenCountResponse | None, list[httpx.Request]]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json=count_response))
+        result: Final = await MistralTokenCounter().count_tokens(
+            model_to_use=model,
+            messages=[{"role": "user", "content": "Give me a city as JSON"}],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "test-key", **deployment_params}},
+            request_model=f"mistral/{model}",
+            chat_params=chat_params or {},
+        )
+    return result, [call.request for call in route.calls]
+
+
+_COUNTED: Final = {"object": "response.input_tokens", "input_tokens": 166}
+
+
+@pytest.mark.asyncio
+async def test_count_tokens_sends_the_bridged_response_format_as_text_format(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    schema: Final = {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+    result, requests = await _count_with(
+        monkeypatch,
+        "mistral-large-4",
+        {},
+        _COUNTED,
+        {"response_format": {"type": "json_schema", "json_schema": {"name": "city", "schema": schema, "strict": True}}},
+    )
+
+    assert result is not None and result.total_tokens == 166
+    (request,) = requests
+    assert json.loads(request.content)["text"] == {
+        "format": {"type": "json_schema", "name": "city", "schema": schema, "strict": True}
+    }
+
+
+@pytest.mark.parametrize("model", ["mistral-embed", "mistral-ocr-latest"])
+@pytest.mark.asyncio
+async def test_count_tokens_leaves_models_mistral_cannot_count_to_the_local_estimate(
+    monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    result, requests = await _count_with(monkeypatch, model, {}, _COUNTED)
+
+    assert (result, requests) == (None, [])
+
+
+@pytest.mark.asyncio
+async def test_count_tokens_uses_the_deployment_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    _, requests = await _count_with(monkeypatch, "mistral-large-4", {"timeout": 7}, _COUNTED)
+
+    (request,) = requests
+    assert request.extensions["timeout"]["read"] == 7.0
+
+
+@pytest.mark.asyncio
+async def test_count_tokens_falls_back_when_mistral_answers_without_a_count(monkeypatch: pytest.MonkeyPatch) -> None:
+    result, requests = await _count_with(monkeypatch, "mistral-large-4", {}, {"object": "response.input_tokens"})
+
+    assert (result, len(requests)) == (None, 1)

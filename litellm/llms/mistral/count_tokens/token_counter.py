@@ -11,7 +11,11 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, decoded_json_object
+from litellm.completion_extras.litellm_responses_transformation.transformation import (
+    LiteLLMResponsesTransformationHandler,
+)
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import parts_of
 from litellm.llms.anthropic.messages.context_management import AnthropicContextManagementError
 from litellm.llms.anthropic.messages.convertible_blocks import deployment_drops_params, unconvertible_blocks_error
 from litellm.llms.anthropic.messages.responses_adapters.handler import count_view_messages
@@ -30,9 +34,12 @@ from litellm.llms.openai.responses.count_tokens.transformation import (
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import CountContextManagement, LlmProviders, TokenCountMessagesFormat, TokenCountResponse
+from litellm.utils import catalog_with_runtime_registrations
 
 mistral_count_tokens_handler: Final = MistralCountTokensHandler()
 _MISTRAL_CHAT_CONFIG: Final = MistralConfig()
+_CHAT_TO_RESPONSES: Final = LiteLLMResponsesTransformationHandler()
+_MODES_MISTRAL_COUNTS: Final = frozenset({"chat", "responses"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +84,27 @@ def _count_credential(
     return _MistralCountCredential(api_key=resolved_key, api_base=api_base)
 
 
+def _counts_on_mistral(model: str) -> bool:
+    cost_entry: Final = catalog_with_runtime_registrations().get(
+        model if model.startswith("mistral/") else f"mistral/{model}"
+    )
+    mode: Final = None if cost_entry is None else cost_entry.get("mode")
+    return mode is None or mode in _MODES_MISTRAL_COUNTS
+
+
+def _deployment_timeout(deployment: Mapping[str, object] | None) -> float | httpx.Timeout | None:
+    litellm_params: Final = as_str_mapping(None if deployment is None else deployment.get("litellm_params")) or {}
+    match litellm_params.get("timeout"):
+        case bool():
+            return None
+        case httpx.Timeout() as timeout:
+            return timeout
+        case int(seconds) | float(seconds):
+            return float(seconds)
+        case _:
+            return None
+
+
 def _count_error(model_to_use: str, request_model: str, message: str, status_code: int) -> TokenCountResponse:
     return TokenCountResponse(
         total_tokens=0,
@@ -100,8 +128,8 @@ def _file_id(block: object) -> str | None:
 
 
 def _file_id_parts(message: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
-    blocks: Final = as_object_list(message.get("content")) if message.get("role") == "user" else None
-    file_ids: Final = tuple(file_id for file_id in map(_file_id, blocks or ()) if file_id is not None)
+    blocks: Final = parts_of(message.get("content")) if message.get("role") == "user" else ()
+    file_ids: Final = tuple(file_id for file_id in map(_file_id, blocks) if file_id is not None)
     return tuple({"type": "input_file", "file_id": file_id} for file_id in file_ids)
 
 
@@ -129,7 +157,7 @@ def _input_content_parts(content: object) -> tuple[object, ...]:
         case str(text) if text:
             return ({"type": "input_text", "text": text},)
         case _:
-            return tuple(as_object_list(content) or ())
+            return parts_of(content)
 
 
 def _chat_message_items(
@@ -232,7 +260,7 @@ class MistralTokenCounter(BaseTokenCounter):
         context_management: CountContextManagement | None = None,
         chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
     ) -> TokenCountResponse | None:
-        if not messages:
+        if not messages or not _counts_on_mistral(model_to_use):
             return None
 
         malformed_error: Final = (
@@ -287,6 +315,12 @@ class MistralTokenCounter(BaseTokenCounter):
 
         if not input_items:
             return None
+        counted_text: Final = (
+            text
+            if text is not None
+            else _CHAT_TO_RESPONSES.transform_response_format_to_text_format(chat_params.get("response_format"))
+        )
+        timeout: Final = _deployment_timeout(deployment)
 
         return await self._counted(
             resolved,
@@ -295,9 +329,10 @@ class MistralTokenCounter(BaseTokenCounter):
                 input=input_items,
                 api_key=api_key,
                 api_base=api_base,
+                timeout=timeout,
                 tools=counted_tools,
                 instructions=instructions,
-                text=text,
+                text=counted_text,
             ),
             model_to_use,
             request_model,
@@ -322,14 +357,16 @@ class MistralTokenCounter(BaseTokenCounter):
             verbose_logger.warning("Error calling Mistral CountTokens API: %s", e)
             return _count_error(model_to_use, request_model, str(e), 500)
         else:
-            if result is not None:
-                return TokenCountResponse.model_validate(
-                    {
-                        "total_tokens": decoded_json_object(result).get("input_tokens", 0),
-                        "request_model": request_model,
-                        "model_used": model_to_use,
-                        "tokenizer_type": "mistral_api",
-                        "original_response": result,
-                    }
-                )
-            return None
+            input_tokens: Final = None if result is None else decoded_json_object(result).get("input_tokens")
+            if not isinstance(input_tokens, int) or isinstance(input_tokens, bool):
+                verbose_logger.warning("Mistral count response had no input_tokens, falling back to local: %s", result)
+                return None
+            return TokenCountResponse.model_validate(
+                {
+                    "total_tokens": input_tokens,
+                    "request_model": request_model,
+                    "model_used": model_to_use,
+                    "tokenizer_type": "mistral_api",
+                    "original_response": result,
+                }
+            )

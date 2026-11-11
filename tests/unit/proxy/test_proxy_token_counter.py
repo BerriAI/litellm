@@ -15,7 +15,7 @@ from collections.abc import Callable, Coroutine, Mapping
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 from typing import Final, NoReturn
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -5417,6 +5417,15 @@ def _input_texts(item: JsonValue) -> list[str]:
     return [str(part["text"]) for part in content if isinstance(part, dict) and "text" in part]
 
 
+class _SpendLogsTable:
+    def __init__(self, rows: tuple[Mapping[str, object], ...]) -> None:
+        self.rows: Final = rows
+
+    async def query_raw(self, query: str, request_ids: list[str]) -> list[Mapping[str, object]]:
+        sessions: Final = {row["session_id"] for row in self.rows if row["request_id"] in request_ids}
+        return [row for row in self.rows if row["session_id"] in sessions]
+
+
 @pytest.mark.asyncio
 async def test_responses_count_on_mistral_counts_the_turns_previous_response_id_replays(
     monkeypatch: pytest.MonkeyPatch,
@@ -5450,18 +5459,11 @@ async def test_responses_count_on_mistral_counts_the_turns_previous_response_id_
         bodies.append(json.loads(request.content))
         return httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 41}, request=request)
 
-    with (
-        patch.object(
-            ResponsesSessionHandler,
-            "get_all_spend_logs_for_previous_response_id",
-            new_callable=AsyncMock,
-            return_value=[stored_turn],
-        ),
-        patch.object(
-            mistral_count_tokens_http,
-            "get_async_httpx_client",
-            return_value=AsyncHTTPHandler(transport=httpx.MockTransport(count_peer)),
-        ),
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", SimpleNamespace(db=_SpendLogsTable((stored_turn,))))
+    with patch.object(
+        mistral_count_tokens_http,
+        "get_async_httpx_client",
+        return_value=AsyncHTTPHandler(transport=httpx.MockTransport(count_peer)),
     ):
         result: Final = await count_request_tokens(
             request=TokenCountRequest(model="mistral-counted", messages=[{"role": "user", "content": "And in 1999?"}]),
