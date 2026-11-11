@@ -4,6 +4,7 @@ import copy
 import json
 from collections.abc import Iterator, Mapping
 from concurrent.futures import Future
+from datetime import datetime
 from itertools import chain
 from typing import Final
 from unittest.mock import MagicMock
@@ -15,6 +16,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.openrouter.chat.transformation import (
@@ -1146,9 +1148,99 @@ async def test_openrouter_non_streaming_failure_raises(
         await complete()
     assert exc_info.value.status_code == expected_status
     assert "provider failed" in str(exc_info.value).lower()
-    payload: Final = await asyncio.wait_for(asyncio.wrap_future(recorder.payload), timeout=10)
+    payload: Final = await asyncio.wrap_future(recorder.payload)
     assert payload["status"] == "failure"
     assert payload["prompt_tokens"] == 10
     assert payload["completion_tokens"] == 5
     assert payload["total_tokens"] == 15
     assert payload["response_cost"] == pytest.approx(reported_cost)
+
+
+class _SuccessUsageRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.payload: Final[Future[Mapping[str, object]]] = Future()
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.payload.set_result(TypeAdapter(Mapping[str, object]).validate_python(kwargs["standard_logging_object"]))
+
+
+def _openrouter_body(finish_reason: str, content: str, usage: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        "id": "gen-1",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "openai/gpt-4o",
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": finish_reason,
+                "message": {"role": "assistant", "content": content},
+                **({"error": {"code": 502, "message": "Provider failed"}} if finish_reason == "error" else {}),
+            }
+        ],
+        "usage": usage,
+    }
+
+
+@pytest.mark.parametrize(
+    ("model_list", "router_settings"),
+    [
+        (
+            [{"model_name": "or", "litellm_params": {"model": "openrouter/openai/gpt-4o", "api_key": "sk-test"}}],
+            {"num_retries": 1},
+        ),
+        (
+            [
+                {"model_name": "or", "litellm_params": {"model": "openrouter/openai/gpt-4o", "api_key": "sk-test"}},
+                {"model_name": "or-backup", "litellm_params": {"model": "openrouter/openai/gpt-4o", "api_key": "sk-test"}},
+            ],
+            {"num_retries": 0, "fallbacks": [{"or": ["or-backup"]}]},
+        ),
+    ],
+    ids=["retry", "fallback"],
+)
+@pytest.mark.asyncio
+async def test_openrouter_recovered_failure_bills_the_failed_attempt(
+    model_list: list[dict[str, object]], router_settings: dict[str, object]
+) -> None:
+    bodies: Final = iter(
+        (
+            _openrouter_body(
+                "error", "partial answer", {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15, "cost": 0.001}
+            ),
+            _openrouter_body(
+                "stop", "full answer", {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10, "cost": 0.002}
+            ),
+        )
+    )
+    recorder: Final = _SuccessUsageRecorder()
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=next(bodies))))
+    messages: Final = [{"role": "user", "content": "hi"}]
+    request_logging: Final = LiteLLMLogging(
+        model="or",
+        messages=messages,
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.now(),
+        litellm_call_id="recovered-openrouter-failure",
+        function_id="recovered-openrouter-failure",
+        dynamic_async_success_callbacks=[recorder],
+    )
+    try:
+        response: Final = await litellm.Router(model_list=model_list, **router_settings).acompletion(
+            model="or",
+            messages=messages,
+            client=client,
+            litellm_logging_obj=request_logging,
+        )
+    finally:
+        await client.close()
+
+    assert response.choices[0].message.content == "full answer"
+    payload: Final = await asyncio.wrap_future(recorder.payload)
+    assert payload["status"] == "success"
+    assert payload["total_tokens"] == 25
+    assert payload["response_cost"] == pytest.approx(0.003)

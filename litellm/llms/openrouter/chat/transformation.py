@@ -34,8 +34,7 @@ _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_i
 _RESPONSE_CHOICES: Final = TypeAdapter(tuple[Mapping[str, object], ...], config=ConfigDict(hide_input_in_errors=True))
 
 
-def _non_streaming_error(raw_response: httpx.Response) -> OpenRouterException | None:
-    response: Final = _JSON_OBJECT.validate_python(raw_response.json())
+def _non_streaming_error(response: Mapping[str, object], headers: httpx.Headers) -> OpenRouterException | None:
     choices: Final = _RESPONSE_CHOICES.validate_python(response.get("choices") or ())
     choice: Final = next(
         (choice for choice in choices if choice.get("finish_reason") == "error" or choice.get("error")), None
@@ -53,7 +52,7 @@ def _non_streaming_error(raw_response: httpx.Response) -> OpenRouterException | 
             if isinstance(message, str) and message
             else "OpenRouter returned finish_reason 'error': the provider failed during generation"
         ),
-        headers=raw_response.headers,
+        headers=headers,
         body=dict(response),
     )
 
@@ -237,8 +236,8 @@ class OpenrouterConfig(OpenAIGPTConfig):
 
         # Extract cost from OpenRouter response body
         # OpenRouter returns cost information in the usage object when usage.include=true
+        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
         try:
-            response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
             response_provider: Final = response_json.get("provider")
             if isinstance(response_provider, str) and response_provider:
                 set_hidden_params(
@@ -270,9 +269,10 @@ class OpenrouterConfig(OpenAIGPTConfig):
             # If we can't extract cost, continue without it - don't fail the response
             pass
 
-        response_error: Final = _non_streaming_error(raw_response)
+        response_error: Final = _non_streaming_error(response_json, raw_response.headers)
         if response_error is not None:
-            logging_obj.record_assembled_response_for_failure(model_response)
+            failed_attempt: Final = logging_obj.served_round(model_response)
+            logging_obj.record_served_rounds_for_failure(() if failed_attempt is None else (failed_attempt,))
             raise response_error
 
         return model_response
