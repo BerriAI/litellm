@@ -54,7 +54,8 @@ _MEDIA_URI_KEYS: Final = frozenset({"url", "image_url", "file_id", "file_url", "
 _ENCODED_FILE_ID_PREFIXES: Final = ("file-", "batch_")
 _EMBEDDED_S3_URI: Final = re.compile(r"s3://[^;]*")
 _MODEL_FILE_ID_MAPPING_KEY: Final = "model_file_id_mapping"
-_KEYS_THAT_MAY_HIDE_AN_S3_URI: Final = frozenset({"file_id", _MODEL_FILE_ID_MAPPING_KEY})
+_KEYS_THAT_MAY_HOLD_A_FILE_ID: Final = frozenset({"file_id", "file_url", "file_uri", "fileUri"})
+_KEYS_THAT_MAY_HIDE_AN_S3_URI: Final = _KEYS_THAT_MAY_HOLD_A_FILE_ID | {_MODEL_FILE_ID_MAPPING_KEY}
 
 
 def is_s3_uri(value: str) -> bool:
@@ -116,13 +117,13 @@ def _string_leaf(node: _BodyNode) -> str | None:
 
 
 def _media_file_id(node: _BodyNode) -> str | None:
-    return _string_leaf(node) if node.inside_media_part and node.key == "file_id" else None
+    return _string_leaf(node) if node.inside_media_part and node.key in _KEYS_THAT_MAY_HOLD_A_FILE_ID else None
 
 
 def _media_uri_candidates(trusted_file_ids: frozenset[str], node: _BodyNode) -> Iterator[str]:
     if not node.inside_media_part or not isinstance(node.value, str):
         return iter(())
-    if node.key == "file_id":
+    if node.key in _KEYS_THAT_MAY_HOLD_A_FILE_ID:
         return iter((node.value,)) if node.value in trusted_file_ids else _with_embedded_s3_uris(node.value)
     return iter((node.value,) if node.key in _MEDIA_URI_KEYS else ())
 
