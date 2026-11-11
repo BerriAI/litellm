@@ -2804,6 +2804,9 @@ WIKI_TOOL_USE_RESPONSE: Final[Mapping[str, JsonValue]] = MappingProxyType(
         "stop_reason": "tool_use",
     }
 )
+UNSERVED_TOOL_USE_RESPONSE: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {**WIKI_TOOL_USE_RESPONSE, "content": [{**WIKI_TOOL_CALL, "name": "not_served_anywhere"}]}
+)
 WIKI_TOOL_STREAM: Final = _events(
     _message_start("msg_01ParityWikiStream"),
     (
@@ -2936,6 +2939,14 @@ MCP_CASES: Final = (
         upstream=(_ok(WIKI_TOOL_USE_RESPONSE), _ok(), _ok(WIKI_TOOL_USE_RESPONSE), _ok()),
         cache=Cache,
         gateway=True,
+    ),
+    Case(
+        "mcp_unserved_tool_name_reads_before_writes",
+        _wiki(),
+        upstream=(_ok(UNSERVED_TOOL_USE_RESPONSE), _ok(), _ok(UNSERVED_TOOL_USE_RESPONSE), _ok()),
+        cache=lambda: _ordered_cache(),
+        gateway=True,
+        racy=SHARED_LOGGER_RACE,
     ),
     Case("mcp_sync", _wiki(), upstream=(), sync=True, gateway=True),
     Case("mcp_mock_answers_first", _wiki(mock_response="Hi from the mock"), upstream=(), gateway=True),

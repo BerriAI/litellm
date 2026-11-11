@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+import contextvars
 import weakref
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # bounded cast of the served response
 
 from pydantic import TypeAdapter
@@ -17,6 +19,15 @@ _HEADERS: Final = TypeAdapter(dict[str, object])
 _EVENTS: Final = TypeAdapter(list[str])
 _HITS: Final[weakref.WeakKeyDictionary[Logging, Mapping[str, object]]] = weakref.WeakKeyDictionary()
 _UNCLAMPED: Final[weakref.WeakKeyDictionary[Logging, object]] = weakref.WeakKeyDictionary()
+# The unary writes of the native call in progress on this task, scheduled once that call has returned to its
+# caller, as `@client` schedules its write at its own end
+_WRITES: Final[contextvars.ContextVar[list[Callable[[], Awaitable[None]]] | None]] = contextvars.ContextVar(
+    "litellm_rust_messages_cache_writes", default=None
+)
+# A native call that shares its Logging with an earlier call (the MCP gateway's follow-up calls) and has not read
+# the cache yet. Python's `@client` reaches its cache read without yielding to the loop, so an earlier call's
+# pending write lands after that read; the native call yields on the way, so the write waits for the read here
+_UNREAD: Final[weakref.WeakKeyDictionary[Logging, asyncio.Event]] = weakref.WeakKeyDictionary()
 
 
 def configured_cache() -> Cache | None:
@@ -46,15 +57,16 @@ def store_response(
     /,
     **kwargs: object,  # kwargs-ok: the cache call's own arguments
 ) -> None:
-    from litellm.caching.caching_handler import create_cache_write_task, is_response_without_output
+    from litellm.caching.caching_handler import is_response_without_output
 
     if is_response_without_output(response):
         return
-    create_cache_write_task(
+    _schedule(
+        kwargs.get("litellm_logging_obj"),
         lambda: cache.async_add_cache(  # pyright: ignore[reportUnknownMemberType]  # Cache.async_add_cache leaves its result untyped
             _python_entry(response),
             **kwargs,  # pyright: ignore[reportArgumentType]  # the cache call's own keyword arguments, as Python passes them
-        )
+        ),
     )
 
 
@@ -64,16 +76,70 @@ def store_verbatim(
     /,
     **kwargs: object,  # kwargs-ok: the cache call's own arguments
 ) -> None:
-    from litellm.caching.caching_handler import create_cache_write_task, is_response_without_output
+    from litellm.caching.caching_handler import is_response_without_output
 
     if is_response_without_output(response):
         return
-    create_cache_write_task(
+    _schedule(
+        kwargs.get("litellm_logging_obj"),
         lambda: cache.async_add_cache(  # pyright: ignore[reportUnknownMemberType]  # Cache.async_add_cache leaves its result untyped
             response,
             **kwargs,  # pyright: ignore[reportArgumentType]  # the cache call's own keyword arguments, as Python passes them
-        )
+        ),
     )
+
+
+def _schedule(logging_obj: object, write: Callable[[], Awaitable[None]]) -> None:
+    from litellm.caching.caching_handler import create_cache_write_task
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    async def after_follow_up_read() -> None:
+        unread: Final = _UNREAD.get(logging_obj) if isinstance(logging_obj, Logging) else None
+        if unread is not None:
+            await unread.wait()
+        await write()
+
+    pending: Final = _WRITES.get()
+    if pending is None:
+        create_cache_write_task(after_follow_up_read)
+    else:
+        pending.append(after_follow_up_read)
+
+
+def _read_done(logging_obj: object, unread: asyncio.Event | None = None) -> None:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    if unread is not None:
+        unread.set()
+    if not isinstance(logging_obj, Logging):
+        return
+    current: Final = _UNREAD.get(logging_obj)
+    if current is not None and (unread is None or current is unread):
+        del _UNREAD[logging_obj]
+        current.set()
+
+
+async def scheduling_writes(
+    call: Awaitable[object],
+    kwargs: Mapping[str, object],  # kwargs-ok: the native call's own keyword arguments
+) -> object:
+    """Await one async native Messages call, then schedule the unary cache writes it queued, as `@client` does."""
+    from litellm.caching.caching_handler import create_cache_write_task
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj: Final = kwargs.get("litellm_logging_obj")
+    unread: Final = asyncio.Event()
+    if isinstance(logging_obj, Logging):
+        _UNREAD[logging_obj] = unread
+    pending: Final[list[Callable[[], Awaitable[None]]]] = []  # mutable-ok: the writes the call queues
+    token: Final = _WRITES.set(pending)
+    try:
+        return await call
+    finally:
+        _WRITES.reset(token)
+        _read_done(logging_obj, unread)
+        for write in pending:
+            create_cache_write_task(write)
 
 
 async def store_stream(
@@ -158,11 +224,14 @@ async def lookup(
     logging_obj: Final = kwargs.get("litellm_logging_obj")
     if not isinstance(logging_obj, Logging):
         return None
-    return await _read(
-        original_function,
-        logging_obj,
-        {**kwargs, "max_tokens": _UNCLAMPED.pop(logging_obj)} if logging_obj in _UNCLAMPED else kwargs,
-    )
+    try:
+        return await _read(
+            original_function,
+            logging_obj,
+            {**kwargs, "max_tokens": _UNCLAMPED.pop(logging_obj)} if logging_obj in _UNCLAMPED else kwargs,
+        )
+    finally:
+        _read_done(logging_obj)
 
 
 async def _read(

@@ -61,7 +61,9 @@ def _amessages_binding(value: object) -> NativeAmessages | None:
     native: Final = execution.asynchronous(value, _open_stream)
 
     def amessages(request: NativeCall) -> Awaitable[object]:
-        return _delivered(native(request))
+        from litellm.rust_bridge.host.cache import scheduling_writes
+
+        return scheduling_writes(_delivered(native(request)), request.kwargs)
 
     return cast("NativeAmessages", amessages)  # cast-ok: the execution adapter returns the route's result
 
