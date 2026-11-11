@@ -23,7 +23,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 import litellm
 from litellm._uuid import uuid
-from litellm.exceptions import APIError, InternalServerError, MidStreamFallbackError
+from litellm.exceptions import APIError, GuardrailRaisedException, InternalServerError, MidStreamFallbackError
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.anthropic_interface.exceptions import AnthropicErrorSseFrame, anthropic_error_sse_frame
 from litellm.caching.caching import DualCache
@@ -8073,6 +8073,54 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
         assert processor.data["model"] == fallback_model
         assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_guardrail_block_on_a_fallback_model_keeps_the_prompt_out_of_the_restored_request_body(self):
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+
+        primary_model = "gpt-4"
+        messages = [{"role": "user", "content": "my token is sk-live-abcd1234efgh"}]
+        processor = ProxyBaseLLMRequestProcessing(
+            data={
+                "model": primary_model,
+                "messages": messages,
+                "proxy_server_request": {"body": {"model": primary_model, "messages": messages}},
+            }
+        )
+
+        async def rate_limited_then_blocked(**kwargs):
+            if processor.data["model"] == primary_model:
+                raise ProxyRateLimitError(detail="TPM limit exceeded", headers={"retry-after": "30"})
+            raise GuardrailRaisedException(guardrail_name="block-secrets", message="blocked", blocked_content=True)
+
+        mock_router = route_entry_points_to_stubs(MagicMock())
+        mock_router.fallbacks = [{primary_model: ["gpt-3.5-turbo"]}]
+
+        with (
+            patch.object(processor, "common_processing_pre_call_logic", side_effect=rate_limited_then_blocked),
+            pytest.raises(GuardrailRaisedException),
+        ):
+            await processor._pre_call_with_fallbacks(
+                request=MagicMock(),
+                general_settings={},
+                proxy_logging_obj=MagicMock(),
+                user_api_key_dict=MagicMock(router_settings=None),
+                version=None,
+                proxy_config=MagicMock(),
+                user_model=None,
+                user_temperature=None,
+                user_request_timeout=None,
+                user_max_tokens=None,
+                user_api_base=None,
+                model=primary_model,
+                route_type="acompletion",
+                llm_router=mock_router,
+            )
+
+        assert processor.data["proxy_server_request"]["body"] == {
+            "model": primary_model,
+            "redacted": "blocked by guardrail",
+        }
 
     @pytest.mark.asyncio
     async def test_local_rate_limit_fallback_skips_an_aliased_embedding_only_model(self):
