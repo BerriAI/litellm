@@ -8,6 +8,7 @@ import functools
 import gc
 import json
 import threading
+import time
 import warnings
 import weakref
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
@@ -427,6 +428,22 @@ def test_stream_read_to_the_end_leaves_nothing_running_on_a_loop_the_caller_then
     assert upstream_closed_by_the_end
     loop_error_handler.assert_not_called()
     assert not [warning for warning in caught if issubclass(warning.category, RuntimeWarning)]
+
+
+@pytest.mark.asyncio
+async def test_reading_past_the_end_again_does_not_wait_for_a_stalled_upstream_again():
+    release: Final = asyncio.Event()
+    iterator, _ = _async_stream_over(_async_upstream(None, release))
+    await _event_types(iterator)
+
+    started: Final = time.monotonic()
+    for _ in range(4):
+        with pytest.raises(StopAsyncIteration):
+            await iterator.__anext__()
+    waited: Final = time.monotonic() - started
+
+    release.set()
+    assert waited < _UPSTREAM_RELEASE_GRACE_SECONDS
 
 
 def test_sync_stream_ends_at_completed_event_while_upstream_holds_the_socket_open():

@@ -1318,6 +1318,7 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     """
 
     _upstream_release: asyncio.Task[None] | None = None
+    _waited_for_upstream_release: bool = False
 
     def __init__(
         self,
@@ -1357,8 +1358,10 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             raise
 
     async def _wait_briefly_for_upstream_release(self) -> None:
-        if self._upstream_release is not None:
-            await asyncio.wait((self._upstream_release,), timeout=_UPSTREAM_RELEASE_GRACE_SECONDS)
+        if self._upstream_release is None or self._waited_for_upstream_release:
+            return
+        self._waited_for_upstream_release = True
+        await asyncio.wait((self._upstream_release,), timeout=_UPSTREAM_RELEASE_GRACE_SECONDS)
 
     async def aclose(self) -> None:
         release: Final = self._upstream_release
