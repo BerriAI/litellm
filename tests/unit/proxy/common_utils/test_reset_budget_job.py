@@ -153,6 +153,7 @@ class MockBatcher:
 
 class MockDB:
     def __init__(self):
+        self.litellm_budgettable = MockTable()
         self.litellm_teammembership = MockTable()
         self.litellm_verificationtoken = MockTable()
         self.litellm_endusertable = MockTable()
@@ -3667,8 +3668,13 @@ class _EndUserLedger:
         }
         self.fail_commit: int | None = None
         self.commits = 0
+        self.advances = 0
+        self.stale_due_budgets: list[types.SimpleNamespace] | None = None
         self.client = types.SimpleNamespace(
             db=types.SimpleNamespace(
+                litellm_budgettable=types.SimpleNamespace(
+                    update_many=self._update_budgets, find_many=self._find_budgets
+                ),
                 litellm_endusertable=self,
                 litellm_teammembership=MockTable(),
                 litellm_verificationtoken=MockTable(),
@@ -3691,10 +3697,25 @@ class _EndUserLedger:
         self.rows[user_id]["spend"] = cast(float, self.rows[user_id]["spend"]) + amount
 
     async def _due_budgets(self, table_name: str, query_type: str, reset_at: datetime, limit: int):
+        if self.stale_due_budgets is not None:
+            return self.stale_due_budgets
         return [
-            budget
+            types.SimpleNamespace(**vars(budget))
             for budget in self.budgets.values()
             if budget.budget_reset_at is None or budget.budget_reset_at < reset_at
+        ]
+
+    async def _update_budgets(self, where: dict[str, object], data: dict[str, object]) -> int:
+        matching = [budget for budget in self.budgets.values() if _row_matches(vars(budget), where)]
+        for budget in matching:
+            budget.budget_reset_at = data["budget_reset_at"]
+        return len(matching)
+
+    async def _find_budgets(self, where: dict[str, object]):
+        return [
+            types.SimpleNamespace(**vars(budget))
+            for budget in self.budgets.values()
+            if _row_matches(vars(budget), where)
         ]
 
     async def find_many(self, where: dict[str, object], order: dict[str, str], take: int):
@@ -3720,6 +3741,7 @@ class _EndUserLedger:
     def _apply(self, call: dict[str, Any]) -> None:
         if call["table"] == "budget":
             self.budgets[call["where"]["budget_id"]].budget_reset_at = call["data"]["budget_reset_at"]
+            self.advances += 1
             return
         if call["table"] != "enduser":
             return
@@ -3733,6 +3755,7 @@ class _EndUserLedger:
 _OTHER_TIER_WINDOW: Final = _CLOSED_WINDOW - timedelta(hours=6)
 
 
+@pytest.mark.parametrize("capped_window", [_CLOSED_WINDOW, None], ids=["reset-time-set", "no-reset-time"])
 @pytest.mark.parametrize(
     "failing_commit, spend_after_failure",
     [
@@ -3742,7 +3765,7 @@ _OTHER_TIER_WINDOW: Final = _CLOSED_WINDOW - timedelta(hours=6)
     ids=["window-advance-fails", "second-page-fails"],
 )
 def test_retried_budget_reset_never_resets_an_end_user_twice_in_one_window(
-    rollover_enabled, monkeypatch, failing_commit, spend_after_failure
+    rollover_enabled, monkeypatch, failing_commit, spend_after_failure, capped_window
 ):
     """#50898: end-user pages commit before the window advance. When a later
     commit fails the tier stays due, and the retry must leave the rows an
@@ -3751,7 +3774,7 @@ def test_retried_budget_reset_never_resets_an_end_user_twice_in_one_window(
     _make_counter_invalidation_job(monkeypatch)
     monkeypatch.setattr(reset_budget_job_module, "RESET_BUDGET_JOB_BATCH_SIZE", 2)
     ledger: Final = _EndUserLedger(
-        budgets={"capped": (10.0, _CLOSED_WINDOW), "uncapped": (None, _OTHER_TIER_WINDOW)},
+        budgets={"capped": (10.0, capped_window), "uncapped": (None, _OTHER_TIER_WINDOW)},
         endusers={
             "capless": ("uncapped", 4.0, None),
             "double-cap": ("capped", 25.0, None),
@@ -3763,9 +3786,7 @@ def test_retried_budget_reset_never_resets_an_end_user_twice_in_one_window(
     job: Final = ResetBudgetJob(proxy_logging_obj=MockProxyLogging(), prisma_client=ledger.client)
 
     asyncio.run(job.reset_budget_for_litellm_budget_table())
-    assert ledger.window_ends() == {"capped": _CLOSED_WINDOW, "uncapped": _OTHER_TIER_WINDOW}, (
-        "the failed tick must leave both tiers due"
-    )
+    assert ledger.advances == 0, "the failed tick must leave both tiers due"
     assert ledger.spend() == spend_after_failure
 
     ledger.add_spend("capless", 3.0)
@@ -3819,6 +3840,27 @@ def test_end_users_are_reset_again_when_the_next_window_closes(
     asyncio.run(job.reset_budget_for_litellm_budget_table())
 
     assert ledger.spend() == {"over-cap": 12.0}
+
+
+def test_a_sweep_that_read_an_unset_reset_time_resets_in_the_window_another_sweep_pinned(
+    rollover_enabled, monkeypatch
+):
+    """Without a pod lock every pod sweeps. A pod that read the tier before
+    another pinned its reset time must stamp the pinned window, or it resets
+    the end users the other pod already reset."""
+    _make_counter_invalidation_job(monkeypatch)
+    ledger: Final = _EndUserLedger(budgets={"capped": (10.0, None)}, endusers={"over-cap": ("capped", 15.0, None)})
+    read_before_the_pin: Final = [types.SimpleNamespace(**vars(budget)) for budget in ledger.budgets.values()]
+    ledger.fail_commit = 2
+    job: Final = ResetBudgetJob(proxy_logging_obj=MockProxyLogging(), prisma_client=ledger.client)
+    asyncio.run(job.reset_budget_for_litellm_budget_table())
+    assert ledger.spend() == {"over-cap": 5.0}
+
+    ledger.stale_due_budgets = read_before_the_pin
+    asyncio.run(job.reset_budget_for_litellm_budget_table())
+
+    assert ledger.advances == 1
+    assert ledger.spend() == {"over-cap": 5.0}
 
 
 def test_budget_cascade_zeroes_everything_when_rollover_disabled(reset_budget_job, mock_prisma_client, monkeypatch):
@@ -4139,7 +4181,8 @@ def _wire_cascade_reads_for_test(prisma_client, endusers=()):
 
     End users are read by the paged reset and the post-commit invalidation
     walk rather than by ``get_data``, so callers that care about them pass
-    them here.
+    them here. Tiers with no reset time get one pinned before the cascade
+    reads, so the budget table needs awaitable writes and reads too.
     """
     for table in (
         "litellm_teammembership",
@@ -4148,6 +4191,8 @@ def _wire_cascade_reads_for_test(prisma_client, endusers=()):
         "litellm_tagtable",
     ):
         getattr(prisma_client.db, table).find_many = AsyncMock(return_value=[])
+    prisma_client.db.litellm_budgettable.update_many = AsyncMock(return_value=0)
+    prisma_client.db.litellm_budgettable.find_many = AsyncMock(return_value=[])
     prisma_client.db.litellm_endusertable.find_many = AsyncMock(return_value=list(endusers))
 
 

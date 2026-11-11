@@ -72,6 +72,7 @@ from litellm.redis.stores.spend_counters import (
     team_window_counter,
     user_counter,
 )
+from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import PrismaBatch, SpendLinkedTable
 from litellm.repositories.project_repository import ProjectRepository
@@ -768,6 +769,34 @@ class ResetBudgetJob:
             return _EndUserWalk(cursor=None, invalidated=walked)
         return _EndUserWalk(cursor=rows[-1].user_id, invalidated=walked)
 
+    async def _closing_windows(
+        self, budgets_to_reset: Sequence[LiteLLM_BudgetTableFull], now: datetime
+    ) -> Mapping[str, datetime]:
+        """The window each tier closes, which its end-user resets stamp. A tier
+        with no reset time gets one pinned before any page commits, so the retry
+        after a failed window advance reads back the same window."""
+        unset: Final = tuple(
+            b.budget_id for b in budgets_to_reset if b.budget_id is not None and b.budget_reset_at is None
+        )
+        pinned: Final[Mapping[str, datetime]] = (
+            await self._with_db_retry(
+                lambda: BudgetRepository(self.prisma_client).pin_unset_reset_times(unset, at=now),
+                reason="reset_budget_pin_windows_failure",
+            )
+            if unset
+            else MappingProxyType({})
+        )
+        return MappingProxyType(
+            {
+                **{
+                    b.budget_id: b.budget_reset_at
+                    for b in budgets_to_reset
+                    if b.budget_id is not None and b.budget_reset_at is not None
+                },
+                **pinned,
+            }
+        )
+
     async def _fetch_enduser_page(self, where: Mapping[str, object], cursor: str) -> tuple[_EndUserRow, ...]:
         """One keyset page of customers, ordered by primary key so the cursor never repeats a row."""
         return tuple(
@@ -781,7 +810,9 @@ class ResetBudgetJob:
             )
         )
 
-    async def _collect_budget_cascade(self, budgets_to_reset: Sequence[LiteLLM_BudgetTableFull]) -> _BudgetCascade:
+    async def _collect_budget_cascade(
+        self, budgets_to_reset: Sequence[LiteLLM_BudgetTableFull], now: datetime
+    ) -> _BudgetCascade:
         """Resolve every row the expiring budget tiers gate, before any write.
 
         Keys carrying their own budget_duration are left out: they run on their
@@ -791,6 +822,7 @@ class ResetBudgetJob:
         budget_ids: Final = tuple(b.budget_id for b in budgets_to_reset if b.budget_id is not None)
         if not budget_ids:
             return _EMPTY_CASCADE
+        windows: Final = await self._closing_windows(budgets_to_reset, now)
 
         team_memberships: Final[tuple[_TeamMembershipRow, ...]] = await self._fetch_linked_rows(
             table=TeamMembershipRepository(self.prisma_client).table,
@@ -857,13 +889,7 @@ class ResetBudgetJob:
                 *((_project_counter_key(row), _row_carried_spend(row, rollover_caps)) for row in projects),
             ),
             rollover_caps=rollover_caps,
-            windows=MappingProxyType(
-                {
-                    b.budget_id: b.budget_reset_at
-                    for b in budgets_to_reset
-                    if b.budget_id is not None and b.budget_reset_at is not None
-                }
-            ),
+            windows=windows,
             cache_keys=(
                 *(key for row in team_memberships for key in _team_membership_cache_keys(row)),
                 *(key for row in keys for key in _key_cache_keys(row)),
@@ -968,7 +994,7 @@ class ResetBudgetJob:
                 ),
                 reason="reset_budget_read_budgets_failure",
             )
-            cascade: Final = await self._collect_budget_cascade(budgets_to_reset or ())
+            cascade: Final = await self._collect_budget_cascade(budgets_to_reset or (), now)
         except Exception as e:
             return _BudgetCascadeFailed(cascade=_EMPTY_CASCADE, error=e)
 

@@ -194,7 +194,7 @@ class EndUserSpendResetWrites:
     replays them. Each reset stamps the tier window it closes and skips rows
     already stamped with it: replaying the cap predicate would zero a carried
     overage, and replaying the zero would erase spend accrued since. A tier
-    that has never reset has no window to stamp, so its resets stay unguarded."""
+    deleted mid-sweep has no window, so its resets stay unguarded."""
 
     table: BatchTable
 

@@ -2,7 +2,9 @@
 Budget repository for database operations on LiteLLM_BudgetTable.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from datetime import datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from litellm.models.budget import LiteLLM_BudgetTable
@@ -101,6 +103,17 @@ class BudgetRepository(BaseRepository[LiteLLM_BudgetTable]):
             data["allowed_models"] = allowed_models
 
         return await self.update(budget_id, data, id_field="budget_id")
+
+    async def pin_unset_reset_times(self, budget_ids: Sequence[str], at: datetime) -> Mapping[str, datetime]:
+        """Set ``budget_reset_at`` to ``at`` on the tiers that have none, then
+        return every tier's stored reset time. Only empty reset times are
+        written, so sweeps racing on the same tier all read back the first pin."""
+        await self.table.update_many(
+            where={"budget_id": {"in": [*budget_ids]}, "budget_reset_at": None},
+            data={"budget_reset_at": at},
+        )
+        rows: Final = await self.table.find_many(where={"budget_id": {"in": [*budget_ids]}})
+        return MappingProxyType({row.budget_id: row.budget_reset_at for row in rows if row.budget_reset_at is not None})
 
     async def delete_budget(self, budget_id: str) -> LiteLLM_BudgetTable | None:
         """Delete a budget record."""
