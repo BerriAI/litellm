@@ -29,12 +29,14 @@ const performanceAlert = {
 };
 let openAlerts = [performanceAlert];
 let rejectAlerts = false;
+let rejectDeprecations = false;
 
 beforeEach(() => {
   role = "proxy_admin";
   alertRequests.length = 0;
   openAlerts = [performanceAlert];
   rejectAlerts = false;
+  rejectDeprecations = false;
   localStorage.clear();
   vi.stubGlobal(
     "fetch",
@@ -44,6 +46,7 @@ beforeEach(() => {
         return Response.json({ user_id: "example-admin", user_role: role });
       }
       if (url.endsWith("/model/deprecations?warn_within_days=30")) {
+        if (rejectDeprecations) return Response.json({ detail: "Unavailable" }, { status: 503 });
         return Response.json({ deprecated: [], imminent: [] });
       }
       if (url.includes("/alerts?")) {
@@ -183,6 +186,23 @@ describe("header performance notifications", () => {
     await client.invalidateQueries({ queryKey: ["alerts"] });
     expect(await screen.findByText("Could not load performance alerts.")).toBeVisible();
     expect(screen.queryByRole("link", { name: /Spend on Research/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("No open alerts.")).not.toBeInTheDocument();
+    client.clear();
+  });
+
+  it.each([false, true])("reports deprecation failures with performance failure %s", async (performanceFails) => {
+    openAlerts = [];
+    rejectAlerts = performanceFails;
+    const { user, client } = renderHeader("example-session");
+    await user.click(screen.getByRole("button", { name: /Notifications/ }));
+    if (performanceFails) {
+      expect(await screen.findByText("Could not load performance alerts.")).toBeVisible();
+    } else {
+      expect(await screen.findByText("No open alerts.")).toBeVisible();
+    }
+    rejectDeprecations = true;
+    await client.invalidateQueries({ queryKey: ["deprecationAlerts"] });
+    expect(await screen.findByText("Could not load model deprecations.")).toBeVisible();
     expect(screen.queryByText("No open alerts.")).not.toBeInTheDocument();
     client.clear();
   });

@@ -121,6 +121,7 @@ interface NotificationsBellViewProps {
   deprecationAlerts?: readonly DeprecationAlert[];
   performanceAlerts?: readonly SavedAlert[];
   performanceError?: boolean;
+  deprecationError?: boolean;
   deploymentHealthLink?: React.ReactNode;
   currentVersion: string | null | undefined;
   latestRelease: LatestReleaseInfo | null | undefined;
@@ -133,6 +134,7 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
   deprecationAlerts,
   performanceAlerts,
   performanceError,
+  deprecationError,
 }) => {
   const { t } = useTranslation();
   const upgrade = upgradeAnnouncement(currentVersion, latestRelease);
@@ -165,7 +167,8 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
       return { id: `${item.source}:${alert.id}`, title: alert.title, description, href };
     });
   const hasAlerts = openAlerts.length > 0;
-  const showAlerts = Boolean(deprecationAlerts || performanceAlerts || performanceError);
+  const hasError = performanceError || deprecationError;
+  const showAlerts = Boolean(deprecationAlerts || performanceAlerts || hasError);
   const announcementLabel =
     unreadCount > 0
       ? t("shell.notifications.bell.triggerUnread", { unread: unreadCount })
@@ -218,10 +221,13 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
                     </li>
                   ))}
                 </ul>
+                {deprecationError && (
+                  <p className="mt-2 text-xs text-muted-foreground">{t("alerts.unified.deprecationsError")}</p>
+                )}
                 {performanceError && (
                   <p className="mt-2 text-xs text-muted-foreground">{t("alerts.unified.performanceError")}</p>
                 )}
-                {!hasAlerts && !performanceError && (
+                {!hasAlerts && !hasError && (
                   <p className="mt-2 text-xs text-muted-foreground">{t("shell.notifications.bell.noOpenAlerts")}</p>
                 )}
               </section>
@@ -268,6 +274,7 @@ export const NotificationsBell: React.FC<{ accessToken: string | null; deploymen
       deprecationAlerts={deprecations.isError ? undefined : deprecations.data}
       performanceAlerts={allowed && !performance.isError ? performance.data?.pages[0]?.data : undefined}
       performanceError={allowed && performance.isError}
+      deprecationError={deprecations.isError}
       deploymentHealthLink={deploymentHealthLink}
     />
   );
