@@ -537,7 +537,7 @@ def test_trace_id_and_session_id_cannot_be_injected_with_no_active_context(monke
     assert "session_id" not in cap.records[0]
 
 
-def test_message_dict_keys_never_override_fields_the_logger_sets():
+def test_message_dict_keys_never_override_fields_the_logger_sets() -> None:
     lg, cap = _make_capture_logger("test.message_dict_precedence")
     embedded: Final = {
         "component": "forged-component",

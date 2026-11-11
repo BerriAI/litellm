@@ -12584,6 +12584,25 @@ class TestErrorLogCarriesCallId:
         assert line["litellm_call_id"] == _DICT_SHAPED_CALL_ID
         assert "injected" not in line
 
+    def test_error_detail_fields_reach_the_json_error_line_without_replacing_proxy_fields(
+        self, proxy_json_log_lines: Callable[[], tuple[dict[str, object], ...]]
+    ) -> None:
+        call_id: Final = str(uuid.uuid4())
+        detail: Final = {
+            "error": "Invalid model name",
+            "message": "forged",
+            "component": "forged",
+            "litellm_call_id": "forged",
+        }
+
+        log_llm_api_exception(HTTPException(status_code=400, detail=detail), call_id)
+
+        (line,) = proxy_json_log_lines()
+        assert line["error"] == "Invalid model name"
+        assert line["component"] == verbose_proxy_logger.name
+        assert line["litellm_call_id"] == call_id
+        assert "_handle_llm_api_exception(): Exception occured" in str(line["message"])
+
 
 class TestAnthropicMessagesStreamErrorFrame:
     """A ``/v1/messages`` stream that fails after the headers are out has to say so with an

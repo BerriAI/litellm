@@ -36,7 +36,7 @@ from starlette.types import Receive, Scope, Send
 from typing_extensions import Never
 
 import litellm
-from litellm._logging import redact_internal_details_from_client_message, verbose_proxy_logger
+from litellm._logging import json_log_fields, redact_internal_details_from_client_message, verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.anthropic_interface.exceptions import AnthropicErrorSseFrame, anthropic_error_sse_frame
 from litellm.constants import (
@@ -2125,7 +2125,12 @@ def log_llm_api_exception(e: Exception, litellm_call_id: str | None) -> None:
         "litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - litellm_call_id=%s - %s",
         litellm_call_id,
         e,
-        extra=MappingProxyType({"litellm_call_id": litellm_call_id}),
+        extra=MappingProxyType(
+            {
+                **json_log_fields(e.detail if isinstance(e, StarletteHTTPException) else None),
+                "litellm_call_id": litellm_call_id,
+            }
+        ),
     )
 
 

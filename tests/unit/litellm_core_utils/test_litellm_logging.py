@@ -8773,15 +8773,18 @@ def test_debugging_log_with_json_logs_tolerates_missing_headers(logging_obj, mon
     assert "https://api.openai.com/v1" in warning.call_args.kwargs["extra"]["api_base"]
 
 
+@pytest.mark.parametrize("request_debug", [True, False], ids=["litellm_request_debug", "debug_logging"])
 def test_debugging_log_keeps_client_header_names_out_of_the_line_fields(
-    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch
+    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch, request_debug: bool
 ) -> None:
     monkeypatch.setattr(litellm, "json_logs", True)
-    logging_obj.litellm_request_debug = True
+    logging_obj.litellm_request_debug = request_debug
     stream: Final = StringIO()
     handler: Final = logging.StreamHandler(stream)
     handler.setFormatter(JsonFormatter())
+    previous_level: Final = verbose_logger.level
     verbose_logger.addHandler(handler)
+    verbose_logger.setLevel(logging.DEBUG)
     try:
         logging_obj._print_llm_call_debugging_log(
             api_base="https://api.openai.com/v1",
@@ -8790,6 +8793,7 @@ def test_debugging_log_keeps_client_header_names_out_of_the_line_fields(
         )
     finally:
         verbose_logger.removeHandler(handler)
+        verbose_logger.setLevel(previous_level)
 
     (line,) = (json.loads(text) for text in stream.getvalue().splitlines())
     assert line["component"] == verbose_logger.name

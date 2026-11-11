@@ -9,7 +9,7 @@ import sys
 from collections.abc import Iterator, Mapping
 from datetime import datetime
 from logging import Formatter
-from types import FrameType
+from types import FrameType, MappingProxyType
 from typing import Final, TextIO
 from urllib.parse import unquote
 
@@ -739,7 +739,7 @@ def _try_parse_json_message(message: str) -> dict[str, object] | None:
 
 # Standard LogRecord attribute names - used to identify 'extra' fields.
 # Derived at runtime so we automatically include version-specific attrs (e.g. taskName).
-def _get_standard_record_attrs() -> frozenset:
+def _get_standard_record_attrs() -> frozenset[str]:
     """Standard LogRecord attribute names - excludes extra keys from logger.debug(..., extra={...})."""
     return frozenset(logging.LogRecord("", 0, "", 0, "", (), None).__dict__.keys())
 
@@ -748,6 +748,25 @@ _STANDARD_RECORD_ATTRS: Final = _get_standard_record_attrs()
 _NON_EXTRA_RECORD_ATTRS: Final = _STANDARD_RECORD_ATTRS | {_REDACTED_RECORD_ATTR}
 
 _UNPROMOTABLE_MESSAGE_KEYS: Final = frozenset(("trace_id", "session_id", "litellm_call_id", "stacktrace"))
+_RESERVED_JSON_LOG_KEYS: Final = (
+    _NON_EXTRA_RECORD_ATTRS
+    | _UNPROMOTABLE_MESSAGE_KEYS
+    | frozenset(("message", "asctime", "level", "timestamp", "component", "logger"))
+)
+
+
+def _object_mapping(source: object) -> Mapping[object, object]:
+    return source if isinstance(source, Mapping) else MappingProxyType({})
+
+
+def json_log_fields(source: object) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            key: value
+            for key, value in _object_mapping(source).items()
+            if isinstance(key, str) and key not in _RESERVED_JSON_LOG_KEYS
+        }
+    )
 
 
 class JsonFormatter(Formatter):
