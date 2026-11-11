@@ -16,6 +16,7 @@ from litellm.constants import request_timeout
 from litellm.google_genai.adapters.handler import CUSTOM_PRICING_PARAMS, GenerateContentToCompletionHandler
 from litellm.google_genai.adapters.transformation import ADAPTER_GENERATION_CONFIG_KEYS
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.litellm_core_utils.per_call_pricing import per_call_model_info
 from litellm.llms.base_llm.google_genai.transformation import (
     GENERATE_CONTENT_REQUEST_TOP_LEVEL_FIELDS,
@@ -334,23 +335,24 @@ def _gemini_wire_value(value: object, camel_case_keys: bool) -> JsonValue:
             return _JSON_VALUE.validate_python(to_jsonable_python(value, fallback=str))
 
 
-def _custom_generate_content_logging_body(response: object) -> Mapping[str, JsonValue]:
-    logged: Final = _gemini_wire_value(
+def _custom_generate_content_wire_body(response: object) -> Mapping[str, JsonValue]:
+    wire_body: Final = _gemini_wire_value(
         _GENERATE_CONTENT_RESULT.validate_python(
             _GENERATE_CONTENT_RESULT.dump_python(response, by_alias=True, exclude_none=True)
         ),
         camel_case_keys=True,
     )
-    return {"usageMetadata": {}, **(logged if isinstance(logged, dict) else {})}
+    return wire_body if isinstance(wire_body, dict) else {}
 
 
 def _log_custom_generate_content_response(
     response: object, logging_obj: LiteLLMLoggingObj, contents: object, api_key: str | None
 ) -> object:
-    raw_response: Final = httpx.Response(status_code=200, json=_custom_generate_content_logging_body(response))
+    wire_body: Final = _custom_generate_content_wire_body(response)
+    raw_response: Final = httpx.Response(status_code=200, json={"usageMetadata": {}, **wire_body})
     logging_obj.model_call_details["httpx_response"] = raw_response  # rebind-ok: success logging needs raw response
     logging_obj.post_call(input=contents, api_key=api_key, original_response=raw_response.text)  # pyright: ignore[reportUnknownMemberType]  # legacy logging interface is untyped
-    return response
+    return response if is_str_keyed_dict(response) else wire_body
 
 
 async def _await_custom_generate_content_response(
