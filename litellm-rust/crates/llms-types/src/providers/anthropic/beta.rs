@@ -317,10 +317,14 @@ impl AnthropicBeta {
                 BetaProvider::VertexAi,
                 BetaProvider::Databricks,
             ],
+            Self::Compact20260904 => &[
+                BetaProvider::BedrockConverse,
+                BetaProvider::BedrockMantle,
+                BetaProvider::Databricks,
+            ],
             Self::AfkMode20260131
             | Self::CePlugins20260901
             | Self::CeUserManagement20260713
-            | Self::Compact20260904
             | Self::Dreaming20260421
             | Self::ExperimentalClaudeTag20261021
             | Self::ExtendedCacheTtl20250411

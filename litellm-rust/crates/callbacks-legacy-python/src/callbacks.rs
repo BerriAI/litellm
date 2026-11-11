@@ -3,12 +3,18 @@
 //! duplication. All of it expires with the legacy callback contract.
 
 use litellm_host::interceptors::{RequestContext, WireRequest};
-use litellm_host_python::to_py;
+use litellm_host_python::json_to_py;
 use pyo3::{exceptions::PyBaseException, prelude::*, types::PyDict};
 use serde_json::Value;
 
 use crate::logger::PythonLogger;
 use crate::python::{Logging, Wrapper};
+
+pub struct SentRequest<'a> {
+    pub url: &'a str,
+    pub headers: &'a Py<PyDict>,
+    pub body: &'a Py<PyDict>,
+}
 
 pub trait LegacyCallbacks {
     /// `Logging.update_from_kwargs`: what the logger is told about the request it is
@@ -41,6 +47,7 @@ pub trait LegacyCallbacks {
         status: u16,
         headers: &[(String, String)],
         body: &str,
+        request: Option<SentRequest<'_>>,
     ) -> PyResult<()>;
 
     /// Records one provider HTTP exchange's window, as Python's timed `AsyncHTTPHandler.post`
@@ -117,9 +124,7 @@ impl LegacyCallbacks for PythonLogger {
         let redacted_kwargs = redact(py, kwargs, &secret_fields)?;
         let optional_params = redact(
             py,
-            &to_py(py, &context.optional_params)?
-                .into_bound(py)
-                .cast_into::<PyDict>()?,
+            &json_to_py(py, &context.optional_params)?.cast_into::<PyDict>()?,
             &secret_fields,
         )?;
         let params = PyDict::new(py);
@@ -138,7 +143,7 @@ impl LegacyCallbacks for PythonLogger {
             }
         }
         for (name, value) in request_params.into_iter().flatten() {
-            params.set_item(name, to_py(py, value)?)?;
+            params.set_item(name, json_to_py(py, value)?)?;
         }
         Logging::Update.call(
             py,
@@ -177,8 +182,13 @@ impl LegacyCallbacks for PythonLogger {
         status: u16,
         headers: &[(String, String)],
         body: &str,
+        request: Option<SentRequest<'_>>,
     ) -> PyResult<()> {
-        Logging::RecordResponse.call(py, (self.object(py), status, headers.to_vec(), body))?;
+        let request = request.map(|sent| (sent.url, sent.headers.bind(py), sent.body.bind(py)));
+        Logging::RecordResponse.call(
+            py,
+            (self.object(py), status, headers.to_vec(), body, request),
+        )?;
         Ok(())
     }
 
