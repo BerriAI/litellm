@@ -362,16 +362,14 @@ class BaseAWSLLM(SignsRequestsWithAWS):
 
     @staticmethod
     def _is_auth_with_access_key_and_secret_key(
-        aws_access_key_id: str | None,
-        aws_secret_access_key: str | None,
-        aws_region_name: str | None,
+        aws_access_key_id: str | None, aws_secret_access_key: str | None
     ) -> bool:
-        return aws_access_key_id is not None and aws_secret_access_key is not None and aws_region_name is not None
+        return aws_access_key_id is not None and aws_secret_access_key is not None
 
     @staticmethod
     def _env_session_token_for_key_pair(aws_access_key_id: str | None, aws_secret_access_key: str | None) -> str | None:
         env_access_key_id: Final = os.getenv("AWS_ACCESS_KEY_ID")
-        if env_access_key_id is not None and (aws_access_key_id, aws_secret_access_key) != (
+        if env_access_key_id and (aws_access_key_id, aws_secret_access_key) != (
             env_access_key_id,
             os.getenv("AWS_SECRET_ACCESS_KEY"),
         ):
@@ -535,17 +533,13 @@ class BaseAWSLLM(SignsRequestsWithAWS):
                 aws_session_token=cast(str, session_token),
             )
             return credentials
-        elif self._is_auth_with_access_key_and_secret_key(
-            aws_access_key_id,
-            aws_secret_access_key,
-            aws_region_name,
-        ):
+        elif self._is_auth_with_access_key_and_secret_key(aws_access_key_id, aws_secret_access_key):
             return self._get_or_set_cached_credentials(
                 args,
                 lambda: self._auth_with_access_key_and_secret_key(
                     aws_access_key_id=cast(str, aws_access_key_id),
                     aws_secret_access_key=cast(str, aws_secret_access_key),
-                    aws_region_name=cast(str, aws_region_name),
+                    aws_region_name=aws_region_name,
                 ),
             )
         else:
