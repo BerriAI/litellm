@@ -3,12 +3,12 @@
 import copy
 import logging
 import re
-from collections.abc import Collection, Iterable, Iterator, Mapping
+from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, runtime_checkable
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import InstanceOf, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
@@ -55,6 +55,16 @@ _DROP_PARAMS_BOOL: Final = TypeAdapter(bool)
 
 def as_str_mapping(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, Mapping) else None
+
+
+_OBJECT_LIST: Final = TypeAdapter(InstanceOf[list[object]])
+
+
+def as_object_list(value: object) -> Sequence[object] | None:
+    try:
+        return _OBJECT_LIST.validate_python(value)
+    except ValidationError:
+        return None
 
 
 @runtime_checkable

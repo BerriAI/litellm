@@ -8,7 +8,10 @@ calls so routed requests do not hit a custom api_base /v1/responses endpoint.
 
 import json
 from importlib import import_module
+from collections.abc import Mapping
 from typing import Final
+
+from pydantic import JsonValue
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -18,6 +21,7 @@ import respx
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.responses.bridge_check import bridge_reasoning_effort, responses_api_bridge_check
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
@@ -645,3 +649,79 @@ class TestUseResponsesApiBridgeFlag:
 
         assert exc_info.value.param == "stream_chunk_size"
         send.assert_not_called()
+
+
+_FUNCTION_TOOL: Final[dict[str, JsonValue]] = {
+    "type": "function",
+    "function": {"name": "lookup", "parameters": {"type": "object", "properties": {}}},
+}
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure"])
+@pytest.mark.parametrize(("effort", "mode"), ((None, "chat"), ("medium", "responses")))
+def test_gpt_5_4_function_tools_route_by_explicit_effort(
+    custom_llm_provider: str, effort: str | None, mode: str
+) -> None:
+    info, model = responses_api_bridge_check(
+        model="gpt-5.4",
+        custom_llm_provider=custom_llm_provider,
+        tools=[_FUNCTION_TOOL],
+        reasoning_effort=effort,
+        api_base="https://example.openai.azure.com" if custom_llm_provider == "azure" else None,
+    )
+    assert (info["mode"], model) == (mode, "gpt-5.4")
+
+
+@pytest.mark.parametrize("provider", ("openai", "azure"))
+@pytest.mark.parametrize(
+    ("model", "effort", "extra_body", "expected"),
+    (
+        ("gpt-5.4-mini", None, None, "chat"),
+        ("gpt-5.4-nano", None, None, "chat"),
+        ("gpt-5.5", None, None, "chat"),
+        ("gpt-5.6", None, None, "responses"),
+        ("gpt-6.1-sol", None, None, "responses"),
+        ("gpt-5.4-mini", "none", None, "chat"),
+        ("gpt-5.4-mini", "medium", None, "responses"),
+        ("gpt-5.4-mini", {"effort": "medium"}, None, "responses"),
+        ("gpt-5.4-mini", None, {"reasoning_effort": "medium"}, "responses"),
+    ),
+)
+def test_function_tools_bridge_only_when_chat_rejects_the_effective_effort(
+    provider: str,
+    model: str,
+    effort: str | Mapping[str, object] | None,
+    extra_body: Mapping[str, object] | None,
+    expected: str,
+) -> None:
+    info, _ = responses_api_bridge_check(
+        model=model,
+        custom_llm_provider=provider,
+        tools=[_FUNCTION_TOOL],
+        reasoning_effort=bridge_reasoning_effort(effort, extra_body),
+        api_base="https://api.openai.com/v1",
+    )
+    assert info.get("mode") == expected
+
+
+@pytest.mark.parametrize("region", ("us", "eu"))
+@pytest.mark.parametrize("model", ("gpt-5.4-mini", "gpt-5.4-nano"))
+def test_regional_azure_default_none_function_tools_stay_on_chat(region: str, model: str) -> None:
+    info, _ = responses_api_bridge_check(
+        model=f"{region}/{model}", custom_llm_provider="azure", tools=[_FUNCTION_TOOL]
+    )
+    assert info.get("mode") == "chat"
+    assert info.get("default_reasoning_effort") == litellm.model_cost[f"azure/{model}"]["default_reasoning_effort"]
+
+
+def test_registered_gpt_5_6_default_none_function_tools_stay_on_chat(monkeypatch: pytest.MonkeyPatch) -> None:
+    model: Final = "gpt-5.6-test-default-none"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {**litellm.model_cost["gpt-5.6"], "default_reasoning_effort": "none"},
+    )
+    info, _ = responses_api_bridge_check(
+        model=model, custom_llm_provider="openai", tools=[_FUNCTION_TOOL], api_base="https://api.openai.com/v1"
+    )
+    assert info.get("mode") == "chat"

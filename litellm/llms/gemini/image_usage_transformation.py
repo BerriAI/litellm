@@ -1,5 +1,7 @@
 from typing import Final
 
+from pydantic import TypeAdapter
+
 from litellm.types.utils import ImageUsage, ImageUsageInputTokensDetails
 
 
@@ -34,12 +36,12 @@ def _sum_modality_token_details(usage_metadata: dict, *details_keys: str) -> Ima
     return tokens_details
 
 
-def transform_gemini_image_usage(usage_metadata: dict) -> ImageUsage:
+def transform_gemini_image_usage(usage_metadata: dict[str, object]) -> ImageUsage:
     """
     Transform Gemini usageMetadata to ImageUsage format.
     """
     input_tokens_details = _sum_modality_token_details(usage_metadata, "promptTokensDetails", "prompt_tokens_details")
-    output_tokens: Final = usage_metadata.get("candidatesTokenCount", 0)
+    output_tokens: Final = TypeAdapter(int).validate_python(usage_metadata.get("candidatesTokenCount", 0))
     output_tokens_details: Final = _sum_modality_token_details(
         usage_metadata, "candidatesTokensDetails", "candidates_tokens_details"
     )
