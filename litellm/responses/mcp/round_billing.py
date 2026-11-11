@@ -1,6 +1,7 @@
 from asyncio import CancelledError
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, TypeVar
 
@@ -8,6 +9,7 @@ from pydantic import BaseModel, TypeAdapter
 from pydantic_core import to_jsonable_python
 
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, served_from_cache, set_hidden_params
+from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
@@ -98,6 +100,10 @@ def _repeated_fixed_margin(
         return 0.0
     if served_from_cache(first) or served_from_cache(final):
         return 0.0
+    return _fixed_margin_of_both(first_breakdown, final_breakdown)
+
+
+def _fixed_margin_of_both(first_breakdown: CostBreakdown, final_breakdown: CostBreakdown) -> float:
     return min(first_breakdown.get("margin_fixed_amount", 0.0), final_breakdown.get("margin_fixed_amount", 0.0))
 
 
@@ -106,6 +112,14 @@ def _less_repeated_fixed_margin(summed: Mapping[str, object], repeated: float) -
         {key: total - repeated for key in _TOTALS_WITH_FIXED_MARGIN if isinstance(total := summed.get(key), float)}
     )
     return MappingProxyType({**summed, **charged_once})
+
+
+def _breakdowns_summed(
+    first_breakdown: CostBreakdown, final_breakdown: CostBreakdown, repeated_fixed_margin: float
+) -> CostBreakdown:
+    return _COST_BREAKDOWN.validate_python(
+        _less_repeated_fixed_margin(_summed_mapping(first_breakdown, final_breakdown), repeated_fixed_margin)
+    )
 
 
 def breakdown_less_repeated_fixed_margin(
@@ -132,11 +146,8 @@ def summed_cost_breakdown(
         return final_breakdown
     if first_breakdown is None or final_breakdown is None:
         return None
-    return _COST_BREAKDOWN.validate_python(
-        _less_repeated_fixed_margin(
-            _summed_mapping(first_breakdown, final_breakdown),
-            _repeated_fixed_margin(first, first_breakdown, final, final_breakdown),
-        )
+    return _breakdowns_summed(
+        first_breakdown, final_breakdown, _repeated_fixed_margin(first, first_breakdown, final, final_breakdown)
     )
 
 
@@ -164,15 +175,68 @@ def billed_for_every_round(
     return billed
 
 
+@dataclass(frozen=True, slots=True)
+class _FailureSpend:
+    usage: object
+    cost: object
+    cost_breakdown: CostBreakdown | None
+
+
+def _failure_spend(logging_obj: LiteLLMLoggingObj) -> _FailureSpend:
+    return _FailureSpend(
+        logging_obj.model_call_details.get("combined_usage_object"),
+        logging_obj.model_call_details.get("response_cost"),
+        logging_obj.cost_breakdown,
+    )
+
+
+def _spend_the_failed_round_recorded(recorded: _FailureSpend, before: _FailureSpend) -> BilledRoundsSpend | None:
+    if recorded.usage is before.usage or not isinstance(recorded.usage, Usage):
+        return None
+    return BilledRoundsSpend(
+        recorded.usage,
+        float(recorded.cost) if isinstance(recorded.cost, (int, float)) else 0.0,
+        None if recorded.cost_breakdown is before.cost_breakdown else recorded.cost_breakdown,
+    )
+
+
+def _spend_of_both_rounds(first: BilledRoundsSpend, failed: BilledRoundsSpend) -> BilledRoundsSpend:
+    usage: Final = merged_chat_usage(first.usage, failed.usage)
+    if first.cost_breakdown is None or failed.cost_breakdown is None:
+        return BilledRoundsSpend(usage, first.cost + failed.cost, None)
+    repeated_fixed_margin: Final = _fixed_margin_of_both(first.cost_breakdown, failed.cost_breakdown)
+    return BilledRoundsSpend(
+        usage,
+        first.cost + failed.cost - repeated_fixed_margin,
+        _breakdowns_summed(first.cost_breakdown, failed.cost_breakdown, repeated_fixed_margin),
+    )
+
+
+def _bill_every_round_on_failure(
+    logging_obj: LiteLLMLoggingObj, first: ResponsesAPIResponse | ModelResponse, before: _FailureSpend
+) -> None:
+    first_usage: Final = _chat_usage(first)
+    if first_usage is None or served_from_cache(first):
+        return
+    first_cost: Final = _response_cost(first)
+    first_spend: Final = BilledRoundsSpend(
+        first_usage, float(first_cost) if isinstance(first_cost, (int, float)) else 0.0, before.cost_breakdown
+    )
+    failed: Final = _spend_the_failed_round_recorded(_failure_spend(logging_obj), before)
+    if failed is None:
+        logging_obj.record_partial_usage_for_failure(first_spend.usage, first_spend.cost)
+        return
+    logging_obj.record_billed_rounds_for_failure(_spend_of_both_rounds(first_spend, failed))
+
+
 @contextmanager
-def first_round_billed_on_failure(logging_obj: object, first: ResponsesAPIResponse | ModelResponse) -> Generator[None]:
+def every_round_billed_on_failure(logging_obj: object, first: ResponsesAPIResponse | ModelResponse) -> Generator[None]:
+    if not isinstance(logging_obj, LiteLLMLoggingObj):
+        yield
+        return
+    before: Final = _failure_spend(logging_obj)
     try:
         yield
     except (Exception, CancelledError):
-        first_cost: Final = _response_cost(first)
-        first_usage: Final = _chat_usage(first)
-        if isinstance(logging_obj, LiteLLMLoggingObj) and first_usage is not None and not served_from_cache(first):
-            logging_obj.record_partial_usage_for_failure(
-                first_usage, float(first_cost) if isinstance(first_cost, (int, float)) else 0.0
-            )
+        _bill_every_round_on_failure(logging_obj, first, before)
         raise

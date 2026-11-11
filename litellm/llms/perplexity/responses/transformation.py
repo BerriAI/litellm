@@ -4,7 +4,6 @@ Perplexity Responses API — OpenAI-compatible.
 The only provider quirks:
 - cost returned as dict → handled by ResponseAPIUsage.parse_cost validator
 - preset models (preset/pro-search) → handled by transform_responses_api_request
-- HTTP 200 with status:"failed" → raised as exception in transform_response_api_response
 
 Ref: https://docs.perplexity.ai/api-reference/responses-post
 """
@@ -12,21 +11,14 @@ Ref: https://docs.perplexity.ai/api-reference/responses-post
 from types import MappingProxyType
 from typing import Any, Final
 
-import httpx
-from pydantic import TypeAdapter
-
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.url_utils import join_api_base
-from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.responses.transformation import STANDARD_MODE_REASONING_FIELD_VALUES, ReasoningFieldValues
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig, drops_params
-from litellm.responses.streaming_iterator import stream_error_status_and_message
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIResponse
+from litellm.types.llms.openai import ResponseInputParam
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
-_DECODED_JSON: Final = TypeAdapter(object)
 PERPLEXITY_REASONING_FIELD_VALUES: Final[ReasoningFieldValues] = MappingProxyType(
     {**STANDARD_MODE_REASONING_FIELD_VALUES, "context": frozenset({"auto", "current_turn", "all_turns"})}
 )
@@ -103,28 +95,6 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
             response_api_optional_request_params=response_api_optional_request_params,
             litellm_params=litellm_params,
             headers=headers,
-        )
-
-    def transform_response_api_response(
-        self,
-        model: str,
-        raw_response: httpx.Response,
-        logging_obj: LiteLLMLoggingObj,
-    ) -> ResponsesAPIResponse:
-        """Check for Perplexity's status:'failed' on HTTP 200 before delegating to base."""
-        try:
-            raw_response_json = _DECODED_JSON.validate_python(raw_response.json())
-        except Exception:
-            raw_response_json = None
-
-        if isinstance(raw_response_json, dict) and raw_response_json.get("status") == "failed":
-            status_code, message = stream_error_status_and_message(raw_response_json.get("error"))
-            raise BaseLLMException(status_code=status_code, message=message)
-
-        return super().transform_response_api_response(
-            model=model,
-            raw_response=raw_response,
-            logging_obj=logging_obj,
         )
 
     def supports_native_websocket(self) -> bool:

@@ -24,7 +24,7 @@ from litellm.responses.mcp.litellm_proxy_mcp_handler import (
 from litellm.responses.mcp.request_context import MCPRequestContext
 from litellm.responses.mcp.round_billing import (
     billed_for_every_round,
-    first_round_billed_on_failure,
+    every_round_billed_on_failure,
     summed_cost_breakdown,
 )
 from litellm.types.utils import Message, ModelResponse, Usage
@@ -696,7 +696,7 @@ async def acompletion_with_mcp(
         )
         return initial_response
 
-    with first_round_billed_on_failure(logging_obj, initial_response):
+    with every_round_billed_on_failure(logging_obj, initial_response):
         tool_results: Final = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
             tool_server_map=tool_server_map,
             tool_calls=tool_calls,

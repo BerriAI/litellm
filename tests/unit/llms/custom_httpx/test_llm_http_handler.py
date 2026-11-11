@@ -7033,6 +7033,28 @@ async def test_a_failed_response_bills_the_usage_the_provider_reported(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_a_failed_response_with_usage_litellm_cannot_read_still_raises_the_provider_error(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    recorder: Final = _FailureCostRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    failed_with_unreadable_usage: Final = _failed_with(
+        _INVALID_PROMPT, usage={"input_tokens": 5, "output_tokens": 3, "total_tokens": 8, "reasoning_tokens": "many"}
+    )
+
+    with pytest.raises(litellm.BadRequestError, match="the prompt was rejected"):
+        await litellm.aresponses(
+            input="hello",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(failed_with_unreadable_usage)),
+            input_cost_per_token=0.001,
+            output_cost_per_token=0.002,
+            **_HOSTED_VLLM_PARAMS,
+        )
+
+    assert not await asyncio.wait_for(recorder.failure_costs.get(), timeout=5)
+
+
+@pytest.mark.asyncio
 async def test_router_retries_a_response_the_provider_failed_with_a_server_error(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):

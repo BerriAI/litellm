@@ -11,14 +11,20 @@ Coverage:
   H1-H17 emulated_handler unit tests
 """
 
+import asyncio
 import base64
+import json
 import logging
 from importlib import import_module
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Final, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
+import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     _decode_vector_store_ids_in_tools,
     update_responses_tools_with_model_file_ids,
@@ -1047,3 +1053,87 @@ class TestEmulatedFileSearchHandler:
         assert set(searched_ids) == {"vs_two"}, (
             "A request-listed id the model picks should narrow the search to that store only"
         )
+
+
+_ROUND_FAILED_ERROR: Final = {"code": "server_error", "message": "The model stopped mid-answer"}
+
+
+def _fireworks_round(
+    status: str, output: list[dict[str, object]], input_tokens: int, output_tokens: int
+) -> httpx.Response:
+    return httpx.Response(
+        200,
+        content=json.dumps(
+            {
+                "id": f"resp_{status}",
+                "object": "response",
+                "created_at": 1788550000,
+                "status": status,
+                "model": "accounts/fireworks/models/kimi-k3",
+                "output": output,
+                "error": _ROUND_FAILED_ERROR if status == "failed" else None,
+                "usage": {
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "total_tokens": input_tokens + output_tokens,
+                },
+            }
+        ),
+    )
+
+
+_FILE_SEARCH_CALL: Final = {
+    "type": "function_call",
+    "id": "fc_search",
+    "call_id": "call_search",
+    "name": "litellm_file_search",
+    "arguments": '{"queries": ["what is X?"]}',
+    "status": "completed",
+}
+
+
+class _FailureRowRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failure_rows: Final[asyncio.Queue[tuple[object, object, object]]] = asyncio.Queue()
+
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        row: Final = kwargs.get("standard_logging_object")
+        assert isinstance(row, dict)
+        billed: Final = (kwargs.get("response_cost"), row.get("prompt_tokens"), row.get("completion_tokens"))
+        self.failure_rows.put_nowait(billed)
+
+
+@pytest.mark.asyncio
+async def test_emulated_file_search_bills_both_rounds_when_the_follow_up_answers_status_failed(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    recorder: Final = _FailureRowRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    respx_mock.post("https://api.fireworks.ai/inference/v1/responses").mock(
+        side_effect=(
+            _fireworks_round("completed", [_FILE_SEARCH_CALL], input_tokens=100, output_tokens=10),
+            _fireworks_round("failed", [], input_tokens=300, output_tokens=0),
+        )
+    )
+
+    with (
+        patch("litellm.vector_stores.main.asearch", new=AsyncMock(return_value={"data": []})),
+        pytest.raises(litellm.InternalServerError, match="The model stopped mid-answer"),
+    ):
+        await litellm.aresponses(
+            model="fireworks_ai/kimi-k3",
+            input="what is X?",
+            tools=[{"type": "file_search", "vector_store_ids": ["vs_kb"]}],
+            api_key="fw-test-key",
+            input_cost_per_token=0.001,
+            output_cost_per_token=0.002,
+        )
+
+    response_cost, prompt_tokens, completion_tokens = await asyncio.wait_for(recorder.failure_rows.get(), timeout=5)
+    assert response_cost == pytest.approx((100 * 0.001 + 10 * 0.002) + 300 * 0.001)
+    assert (prompt_tokens, completion_tokens) == (100 + 300, 10)

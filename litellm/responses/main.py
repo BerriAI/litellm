@@ -68,7 +68,7 @@ from litellm.responses.litellm_completion_transformation.transformation import (
 from litellm.responses.mcp.request_context import MCPRequestContext
 from litellm.responses.mcp.round_billing import (
     billed_for_every_round,
-    first_round_billed_on_failure,
+    every_round_billed_on_failure,
     summed_cost_breakdown,
 )
 from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
@@ -472,7 +472,7 @@ async def aresponses_api_with_mcp(
     # If auto-execute tools is True, then we need to execute the tool calls
     #########################################################
     if should_auto_execute and isinstance(response, ResponsesAPIResponse):
-        with first_round_billed_on_failure(logging_obj, response):
+        with every_round_billed_on_failure(logging_obj, response):
             tool_calls: Final = LiteLLM_Proxy_MCP_Handler.tool_calls_to_run(
                 LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_response(response=response),
                 tool_choice_in_effect,

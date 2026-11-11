@@ -1683,11 +1683,11 @@ def _echo_tool_served(tool_result: str) -> Iterator[None]:
 
 
 async def _auto_execute(
-    logging_obj: Logging, mcp_tool: Mapping[str, object], tool_result: str
+    logging_obj: Logging, mcp_tool: Mapping[str, object], tool_result: str, model: str = "openai/gpt-5.6"
 ) -> ResponsesAPIResponse:
     with _echo_tool_served(tool_result):
         response: Final = await litellm.aresponses(
-            model="openai/gpt-5.6",
+            model=model,
             input="Call echo with PING",
             tools=[dict(mcp_tool)],
             api_key="sk-mcp-rounds",
@@ -2167,6 +2167,90 @@ async def test_non_stream_auto_execute_bills_the_paid_first_round_when_the_follo
     tool_logging_obj: Final = call_tool.await_args.kwargs["litellm_logging_obj"]
     assert tool_logging_obj.litellm_call_id == f"{recorder.failed[0]['id']}_call_echo"
     assert tool_logging_obj.litellm_trace_id == recorder.failed[0]["trace_id"]
+
+
+_FAILED_ROUND_TWO_BODY: Final = MappingProxyType(
+    {
+        **_ROUND_TWO_BODY,
+        "status": "failed",
+        "output": (),
+        "error": MappingProxyType({"code": "server_error", "message": "The model stopped mid-answer"}),
+    }
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fixed_margin", [pytest.param(0.0, id="without a fixed margin"), pytest.param(0.001, id="with a fixed margin")]
+)
+async def test_non_stream_auto_execute_bills_both_rounds_when_the_follow_up_answers_status_failed(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, fixed_margin: float
+):
+    monkeypatch.setattr(litellm, "cost_margin_config", {"openai": {"fixed_amount": fixed_margin}})
+    _serve_rounds(respx_mock, monkeypatch, (_ROUND_ONE_BODY, _FAILED_ROUND_TWO_BODY))
+    recorder: Final = _RoundRecorder()
+
+    with pytest.raises(litellm.InternalServerError, match="The model stopped mid-answer"):
+        await _auto_execute(_rounds_logging_obj(recorder, "mcp-rounds-follow-up-status-failed"), _ECHO_MCP_TOOL, "PING")
+    await _settle(lambda: len(recorder.failed) > 0)
+
+    assert recorder.logged == ()
+    assert len(recorder.failed) == 1
+    both_rounds: Final = _round_cost(_ROUND_ONE_BODY) + _round_cost(_FAILED_ROUND_TWO_BODY) - fixed_margin
+    assert _round_cost(_FAILED_ROUND_TWO_BODY) > fixed_margin
+    assert (recorder.failed[0]["prompt_tokens"], recorder.failed[0]["completion_tokens"]) == (71 + 149, 19 + 5)
+    assert recorder.failed[0]["metadata"]["usage_object"]["prompt_tokens_details"]["cached_tokens"] == 32 + 64
+    assert recorder.failed[0]["response_cost"] == pytest.approx(both_rounds)
+    assert recorder.failed[0]["cost_breakdown"]["total_cost"] == pytest.approx(both_rounds)
+
+
+@pytest.mark.asyncio
+async def test_non_stream_auto_execute_bills_only_the_paid_round_when_a_cached_first_round_is_followed_by_status_failed(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "cache", litellm.Cache(type="local"))
+    _serve_rounds(respx_mock, monkeypatch, (_ROUND_ONE_BODY, _ROUND_TWO_BODY, _FAILED_ROUND_TWO_BODY))
+    warm: Final = _RoundRecorder()
+    await _auto_execute(_rounds_logging_obj(warm, "mcp-cache-warm-before-a-failure"), _ECHO_MCP_TOOL, "PING")
+    await _settle(lambda: len(warm.logged) > 0)
+    recorder: Final = _RoundRecorder()
+
+    with pytest.raises(litellm.InternalServerError, match="The model stopped mid-answer"):
+        await _auto_execute(
+            _rounds_logging_obj(recorder, "mcp-cached-first-round-then-failed"),
+            {**_ECHO_MCP_TOOL, "server_description": "echo server"},
+            "PONG",
+        )
+    await _settle(lambda: len(recorder.failed) > 0)
+
+    assert len(recorder.failed) == 1
+    assert (recorder.failed[0]["prompt_tokens"], recorder.failed[0]["completion_tokens"]) == (149, 5)
+    assert recorder.failed[0]["response_cost"] == pytest.approx(_round_cost(_FAILED_ROUND_TWO_BODY))
+
+
+@pytest.mark.asyncio
+async def test_non_stream_auto_execute_counts_every_rounds_tokens_when_an_unpriced_model_answers_status_failed(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    unpriced_model: Final = "mcp-rounds-unpriced-model"
+    _serve_rounds(
+        respx_mock,
+        monkeypatch,
+        ({**_ROUND_ONE_BODY, "model": unpriced_model}, {**_FAILED_ROUND_TWO_BODY, "model": unpriced_model}),
+    )
+    recorder: Final = _RoundRecorder()
+
+    with pytest.raises(litellm.InternalServerError, match="The model stopped mid-answer"):
+        await _auto_execute(
+            _rounds_logging_obj(recorder, "mcp-unpriced-follow-up-status-failed"),
+            _ECHO_MCP_TOOL,
+            "PING",
+            model=f"openai/{unpriced_model}",
+        )
+    await _settle(lambda: len(recorder.failed) > 0)
+
+    assert len(recorder.failed) == 1
+    assert (recorder.failed[0]["prompt_tokens"], recorder.failed[0]["completion_tokens"]) == (71 + 149, 19 + 5)
 
 
 _RETRIED_ROUND_ONE: Final = MappingProxyType(

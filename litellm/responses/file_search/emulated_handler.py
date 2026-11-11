@@ -21,6 +21,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._internal_context import is_internal_call
 from litellm._logging import verbose_logger
+from litellm.responses.mcp.round_billing import every_round_billed_on_failure
 from litellm.types.llms.openai import ResponseOutputItem, ResponsesAPIResponse
 from litellm.types.vector_stores import VectorStoreSearchResult
 
@@ -581,37 +582,38 @@ async def aresponses_with_emulated_file_search(
             message_output=_build_message_output(response_text, []),
         )
 
-    # 4. Execute each file_search tool call
-    file_search_call_id: Final = f"fs_{uuid.uuid4().hex[:24]}"
-    tool_results, all_queries, all_results = await _execute_file_search_tool_calls(
-        file_search_calls=file_search_calls,
-        all_vs_ids=all_vs_ids,
-        input=input,
-        file_search_call_id=file_search_call_id,
-    )
-
-    # 5. Build follow-up input: original messages + ALL first-response output items + tool results
-    follow_up_input: Final = _build_follow_up_input(
-        input=input,
-        first_response=first_response,
-        tool_results=tool_results,
-    )
-
-    # 6. Follow-up call — provider writes the final answer given search results.
-    # Also an internal sub-call; billing is suppressed so the outer call fires once.
-    is_internal_call.set(True)
-    try:
-        final_response: Final[ResponsesAPIResponse] = cast(
-            ResponsesAPIResponse,
-            await _call_aresponses(
-                input=follow_up_input,
-                model=model,
-                tools=None,  # no tools needed for the answer step
-                **call_kwargs,
-            ),
+    with every_round_billed_on_failure(call_kwargs.get("litellm_logging_obj"), first_response):
+        # 4. Execute each file_search tool call
+        file_search_call_id: Final = f"fs_{uuid.uuid4().hex[:24]}"
+        tool_results, all_queries, all_results = await _execute_file_search_tool_calls(
+            file_search_calls=file_search_calls,
+            all_vs_ids=all_vs_ids,
+            input=input,
+            file_search_call_id=file_search_call_id,
         )
-    finally:
-        is_internal_call.set(_prev_internal)
+
+        # 5. Build follow-up input: original messages + ALL first-response output items + tool results
+        follow_up_input: Final = _build_follow_up_input(
+            input=input,
+            first_response=first_response,
+            tool_results=tool_results,
+        )
+
+        # 6. Follow-up call — provider writes the final answer given search results.
+        # Also an internal sub-call; billing is suppressed so the outer call fires once.
+        is_internal_call.set(True)
+        try:
+            final_response: Final[ResponsesAPIResponse] = cast(
+                ResponsesAPIResponse,
+                await _call_aresponses(
+                    input=follow_up_input,
+                    model=model,
+                    tools=None,  # no tools needed for the answer step
+                    **call_kwargs,
+                ),
+            )
+        finally:
+            is_internal_call.set(_prev_internal)
 
     # 7. Synthesize OpenAI-format output
     response_text = _extract_text_from_responses_output(final_response)

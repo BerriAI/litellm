@@ -7,6 +7,7 @@ transformations for the Agent API (Responses API).
 Source: litellm/llms/perplexity/responses/transformation.py
 """
 
+import asyncio
 import json
 from typing import Final
 
@@ -16,8 +17,8 @@ import respx
 
 import litellm
 
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.perplexity.responses.transformation import PerplexityResponsesConfig
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
@@ -464,41 +465,6 @@ class TestPerplexityResponsesTransformation:
         assert isinstance(config, PerplexityResponsesConfig)
         assert config.custom_llm_provider == LlmProviders.PERPLEXITY
 
-    def test_failed_status_raises_exception(self):
-        """Perplexity HTTP 200 with status:'failed' must raise BaseLLMException"""
-        config = PerplexityResponsesConfig()
-
-        failed_body = {
-            "status": "failed",
-            "error": {"message": "Model quota exceeded"},
-        }
-
-        raw_response = httpx.Response(
-            status_code=200,
-            json=failed_body,
-            request=httpx.Request("POST", "https://api.perplexity.ai/v1/responses"),
-        )
-
-        logging_obj = LiteLLMLoggingObj(
-            model="perplexity/openai/gpt-5.2",
-            messages=[],
-            stream=False,
-            call_type="responses",
-            start_time=None,
-            litellm_call_id="test",
-            function_id="test",
-        )
-
-        with pytest.raises(BaseLLMException) as exc_info:
-            config.transform_response_api_response(
-                model="perplexity/openai/gpt-5.2",
-                raw_response=raw_response,
-                logging_obj=logging_obj,
-            )
-
-        assert "Model quota exceeded" in str(exc_info.value.message)
-        assert 400 <= exc_info.value.status_code <= 599
-
     def test_successful_response_passes_through(self):
         """Normal completed response delegates to base OpenAI handler"""
         config = PerplexityResponsesConfig()
@@ -629,3 +595,51 @@ async def test_aresponses_rejects_moderation_for_perplexity_without_drop_params(
         )
 
     assert upstream.call_count == 0
+
+
+class _FailureCostRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failure_costs: Final[asyncio.Queue[object]] = asyncio.Queue()
+
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.failure_costs.put_nowait(kwargs.get("response_cost"))
+
+
+@pytest.mark.asyncio
+async def test_a_failed_perplexity_response_raises_the_shared_failure_with_its_request_id_and_bills_its_usage(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    recorder: Final = _FailureCostRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    respx_mock.post("https://api.perplexity.ai/v1/responses").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                **_SUCCESS_RESPONSE,
+                "status": "failed",
+                "error": None,
+                "usage": {"input_tokens": 5, "output_tokens": 3, "total_tokens": 8},
+            },
+            headers={"x-request-id": "req_perplexity_failed"},
+        )
+    )
+
+    with pytest.raises(litellm.InternalServerError, match="The provider reported a failed response") as raised:
+        await litellm.aresponses(
+            model="perplexity/openai/gpt-5.2",
+            api_base="https://api.perplexity.ai",
+            api_key="fake-api-key",
+            input="hi",
+            input_cost_per_token=0.001,
+            output_cost_per_token=0.002,
+        )
+
+    response_headers: Final[object] = getattr(raised.value, "litellm_response_headers", None)
+    assert isinstance(response_headers, httpx.Headers)
+    assert response_headers.get("x-request-id") == "req_perplexity_failed"
+    assert await asyncio.wait_for(recorder.failure_costs.get(), timeout=5) == pytest.approx(5 * 0.001 + 3 * 0.002)
