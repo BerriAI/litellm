@@ -285,7 +285,11 @@ def _read_index_mappings(mapping: httpx.Response) -> Mapping[str, _IndexMapping]
     if not mapping.is_success:
         return BaseLLMException(
             status_code=mapping.status_code,
-            message=f"OpenSearch refused the index mapping read that string filters need: {mapping.text}",
+            message=(
+                f"OpenSearch answered {mapping.status_code} to the index mapping read that string filters need. "
+                "That read needs aoss:DescribeIndex on Serverless or es:ESHttpGet on a domain. "
+                "Set drop_params to drop the filters instead."
+            ),
             headers=mapping.headers,
         )
     try:

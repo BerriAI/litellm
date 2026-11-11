@@ -863,7 +863,8 @@ async def test_a_refused_index_mapping_read_keeps_its_status_and_sends_no_search
         await _search(asynchronous, respond, executor, {"filters": {"type": "eq", "key": "tenant", "value": "acme"}})
 
     assert error.value.status_code == status
-    assert "no mapping for you" in str(error.value)
+    assert "es:ESHttpGet" in str(error.value)
+    assert "no mapping for you" not in str(error.value)
     assert not _searches(respond)
     executor.call.assert_not_called()
 
