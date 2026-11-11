@@ -344,3 +344,16 @@ def test_outerlabs_cache_control_marks_reach_upstream(monkeypatch: pytest.Monkey
 
     body: Final = json.loads(route.calls.last.request.content)
     assert body["messages"][0]["content"] == [system_block]
+
+
+def test_outerlabs_missing_key_never_falls_back_to_the_openai_key(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("OUTERLABS_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-secret")
+    monkeypatch.setenv("OPENAI_ORGANIZATION", "org-openai-secret")
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(_CHAT_COMPLETIONS_URL).respond(200, json=_CHAT_COMPLETION)
+        with pytest.raises(litellm.AuthenticationError, match="OUTERLABS_API_KEY"):
+            litellm.completion(model="outerlabs/claude-sonnet-5", messages=[{"role": "user", "content": "Say hello"}])
+    assert route.call_count == 0
