@@ -1118,7 +1118,13 @@ def _assistant_with_thinking(placement: str, block: dict[str, object]) -> dict[s
 @pytest.mark.parametrize("use_async", [False, True])
 @pytest.mark.parametrize("placement", ["thinking_blocks", "content"])
 @pytest.mark.parametrize(
-    "signature", ["claude-signature", encrypted_reasoning_signature("gAAAA_1")], ids=["claude", "encrypted"]
+    "signature",
+    [
+        "claude-signature",
+        encrypted_reasoning_signature("gAAAA_1"),
+        f"litellm_thought_signature:EoUMCoIMAWkUfRNAt6WiTWGx73C1==",
+    ],
+    ids=["claude", "encrypted", "gemini"],
 )
 @pytest.mark.parametrize(
     ("model", "base_model"),
@@ -1176,6 +1182,47 @@ async def test_bedrock_converse_keeps_signed_thinking_for_a_target_that_may_be_c
     assert assistant_content == [
         {"reasoningContent": {"reasoningText": {"text": "private plan", "signature": "claude-signature"}}},
         {"text": "hello"},
+    ]
+
+
+def test_bedrock_converse_and_anthropic_pt_drop_gemini_bridge_blocks_and_keep_claude_blocks() -> None:
+    from litellm.litellm_core_utils.prompt_templates.reasoning_utils import gemini_thought_signature
+
+    gemini_thinking: Final = {
+        "type": "thinking",
+        "thinking": "Gemini plan",
+        "signature": gemini_thought_signature("EoUMCoIMAWkUfRNA=="),
+    }
+    gemini_redacted: Final = {
+        "type": "redacted_thinking",
+        "data": gemini_thought_signature("EscLCsQLAWkUfRP4=="),
+    }
+    claude_thinking: Final = {"type": "thinking", "thinking": "Claude plan", "signature": "claude-signature"}
+
+    for to_claude in (True, False):
+        converse_blocks = BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
+            [gemini_thinking, gemini_redacted, claude_thinking],
+            to_claude=to_claude,
+        )
+        assert converse_blocks == [
+            {"reasoningContent": {"reasoningText": {"text": "Claude plan", "signature": "claude-signature"}}}
+        ]
+
+    chat_translated: Final = anthropic_messages_pt(
+        model="claude-sonnet-5-5",
+        messages=[
+            {"role": "user", "content": "Hello"},
+            {
+                "role": "assistant",
+                "content": "Final answer.",
+                "thinking_blocks": [gemini_thinking, gemini_redacted, claude_thinking],
+            },
+        ],
+        llm_provider="anthropic",
+    )
+    assert chat_translated[1]["content"] == [
+        {"type": "thinking", "thinking": "Claude plan", "signature": "claude-signature"},
+        {"type": "text", "text": "Final answer."},
     ]
 
 

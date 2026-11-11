@@ -27,8 +27,14 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.exceptions import ContextWindowExceededError, MidStreamFallbackError
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_items
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, attribute_items
 from litellm.litellm_core_utils.hidden_params import set_hidden_params
+from litellm.litellm_core_utils.prompt_templates.factory import THOUGHT_SIGNATURE_SEPARATOR
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    gemini_thought_signature,
+    is_real_gemini_thought_signature,
+    tool_call_thought_signature,
+)
 from litellm.llms.anthropic.messages.safeguards import StreamedSafeguardResults
 from litellm.llms.anthropic.messages.utils import anthropic_sse_frame
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -157,6 +163,40 @@ def _optional_int_attr(obj: object, name: str, *, default: int) -> int:
     return value if isinstance(value, int) else default
 
 
+def _harvest_gemini_thought_signature(chunk: "ModelResponseStream") -> str | None:
+    choices: Final = _optional_attr_sequence(chunk, "choices")
+    if len(choices) != 1:
+        return None
+    delta: Final = _optional_attr(choices[0], "delta")
+    if delta is None:
+        return None
+    for tool_call in _optional_attr_sequence(delta, "tool_calls"):
+        sig = tool_call_thought_signature(tool_call, id_separator=THOUGHT_SIGNATURE_SEPARATOR)
+        if sig is not None:
+            return sig
+    fields: Final = as_str_mapping(_optional_attr(delta, "provider_specific_fields"))
+    if fields is not None:
+        raw_sigs: Final = as_object_list(fields.get("thought_signatures"))
+        if raw_sigs is not None:
+            from_delta: Final = next(
+                (sig for sig in reversed(raw_sigs) if isinstance(sig, str) and is_real_gemini_thought_signature(sig)),
+                None,
+            )
+            if from_delta is not None:
+                return from_delta
+    return None
+
+
+def _chunk_has_tool_calls(chunk: "ModelResponseStream") -> bool:
+    choices: Final = _optional_attr_sequence(chunk, "choices")
+    return len(choices) == 1 and bool(_optional_attr(_optional_attr(choices[0], "delta"), "tool_calls"))
+
+
+def _chunk_has_finish_reason(chunk: "ModelResponseStream") -> bool:
+    choices: Final = _optional_attr_sequence(chunk, "choices")
+    return len(choices) == 1 and _optional_attr(choices[0], "finish_reason") is not None
+
+
 @dataclass(frozen=True, slots=True)
 class _ToolCallPart:
     index: int
@@ -164,6 +204,7 @@ class _ToolCallPart:
     call_type: str | None
     name: str | None
     arguments: str
+    thought_signature: str | None = None
 
     @staticmethod
     def from_entries(index: int, entries: Sequence[object]) -> "_ToolCallPart":
@@ -174,6 +215,13 @@ class _ToolCallPart:
             call_type=next(filter(None, (_optional_str_attr(entry, "type") for entry in entries)), None),
             name=next(filter(None, (_optional_str_attr(function, "name") for function in functions)), None),
             arguments="".join(_optional_str_attr(function, "arguments") or "" for function in functions),
+            thought_signature=next(
+                filter(
+                    None,
+                    (tool_call_thought_signature(entry, id_separator=THOUGHT_SIGNATURE_SEPARATOR) for entry in entries),
+                ),
+                None,
+            ),
         )
 
     def extended(self, parts: "Sequence[_ToolCallPart]") -> "_ToolCallPart":
@@ -182,12 +230,15 @@ class _ToolCallPart:
         )
 
     def to_tool_call(self) -> ChatCompletionDeltaToolCall:
-        return ChatCompletionDeltaToolCall(
+        tool_call: Final = ChatCompletionDeltaToolCall(
             id=self.call_id,
             type=self.call_type,
             function=Function(name=self.name, arguments=self.arguments),
             index=self.index,
         )
+        if self.thought_signature is not None:
+            tool_call["provider_specific_fields"] = {"thought_signature": self.thought_signature}
+        return tool_call
 
 
 @dataclass(frozen=True, slots=True)
@@ -260,6 +311,12 @@ class _CombinedChunkSplitter:
         self._unsigned_thinking = io.StringIO()
         self._unsigned_thinking_length = 0
         self._thinking_index: int | None = None
+        self._pending_gemini_raw_signature: str | None = None
+        self._last_emitted_gemini_raw_signature: str | None = None
+        self._saw_thinking_in_turn = False
+        self._saw_tool_calls_in_turn = False
+        self._in_gemini_thinking_block = False
+        self._last_chunk_template: ModelResponseStream | None = None
         self._closed = False
 
     async def aclose(self) -> None:
@@ -513,14 +570,97 @@ class _CombinedChunkSplitter:
         unfinished.choices[0].finish_reason = None
         return unfinished
 
+    def _gemini_carrier_chunk(
+        self,
+        template: "ModelResponseStream",
+        block: ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock,
+    ) -> "ModelResponseStream":
+        carrier: Final = self._with_thinking_block(template, block, keep_role=False)
+        carrier.choices[0].finish_reason = None
+        self._clear_usage(carrier)
+        return carrier
+
+    def _consume_gemini_signature(self) -> str | None:
+        raw: Final = self._pending_gemini_raw_signature
+        if raw is None or raw == self._last_emitted_gemini_raw_signature:
+            return None
+        self._pending_gemini_raw_signature = None
+        self._last_emitted_gemini_raw_signature = raw
+        return gemini_thought_signature(raw)
+
+    def _gemini_pending_carrier(
+        self, template: "ModelResponseStream", *, allow_redacted: bool
+    ) -> "ModelResponseStream | None":
+        if self._in_gemini_thinking_block:
+            self._in_gemini_thinking_block = False
+            wrapped: Final = self._consume_gemini_signature()
+            if wrapped is None:
+                return None
+            return self._gemini_carrier_chunk(
+                template,
+                ChatCompletionThinkingBlock(type="thinking", thinking="", signature=wrapped),
+            )
+        if allow_redacted and (self._saw_thinking_in_turn or self._saw_tool_calls_in_turn):
+            wrapped_redacted: Final = self._consume_gemini_signature()
+            if wrapped_redacted is None:
+                return None
+            return self._gemini_carrier_chunk(
+                template,
+                ChatCompletionRedactedThinkingBlock(type="redacted_thinking", data=wrapped_redacted),
+            )
+        return None
+
+    def _attach_gemini_signature(self, chunk: "ModelResponseStream") -> "tuple[ModelResponseStream, ...]":
+        if _optional_attr_sequence(chunk, "choices"):
+            self._last_chunk_template = chunk
+        piece: Final = _ThinkingPiece.of(chunk)
+        if piece is not None:
+            self._saw_thinking_in_turn = True
+            self._in_gemini_thinking_block = True
+            if (
+                piece.signature
+                and self._pending_gemini_raw_signature is not None
+                and piece.signature == self._pending_gemini_raw_signature
+            ):
+                wrapped: Final = self._consume_gemini_signature()
+                if wrapped is not None:
+                    keep_role: Final = bool(_optional_attr(chunk.choices[0].delta, "role"))
+                    return (
+                        self._with_thinking_block(
+                            chunk, piece.block(text=piece.text, signature=wrapped), keep_role=keep_role
+                        ),
+                    )
+            return (chunk,)
+        if not _optional_attr_sequence(chunk, "choices"):
+            return (chunk,)
+        carrier: Final = self._gemini_pending_carrier(
+            chunk,
+            allow_redacted=(_chunk_has_tool_calls(chunk) or _chunk_has_finish_reason(chunk)),
+        )
+        return (carrier, chunk) if carrier is not None else (chunk,)
+
+    def _flush_end_of_stream(self) -> "tuple[ModelResponseStream, ...]":
+        template: Final = self._last_chunk_template
+        carrier: Final = self._gemini_pending_carrier(template, allow_redacted=True) if template is not None else None
+        pending: Final = (carrier,) if carrier is not None else ()
+        return (*pending, *self._end_thinking_run(), *self._release_held_calls())
+
     def _expand(self, chunk: "ModelResponseStream") -> "tuple[ModelResponseStream, ...]":
+        if _chunk_has_tool_calls(chunk):
+            self._saw_tool_calls_in_turn = True
+        harvested_sig: Final = _harvest_gemini_thought_signature(chunk)
+        if harvested_sig is not None and harvested_sig != self._last_emitted_gemini_raw_signature:
+            self._pending_gemini_raw_signature = harvested_sig
         split_chunks: Final = tuple(
             split_chunk
             for combined_chunk in self._split(self._without_sibling_finish(chunk))
             for split_chunk in self._split_by_payload_kind(combined_chunk)  # comprehension-ok: flattens nested splits
         )
         block_chunks: Final = tuple(itertools.chain.from_iterable(map(self._split_thinking_blocks, split_chunks)))
-        signed_chunks: Final = tuple(itertools.chain.from_iterable(map(self._defer_signature, block_chunks)))
+        gemini_signed_chunks: Final = tuple(
+            itertools.chain.from_iterable(map(self._attach_gemini_signature, block_chunks))
+        )
+        signed_chunks: Final = tuple(itertools.chain.from_iterable(map(self._defer_signature, gemini_signed_chunks)))
         return tuple(itertools.chain.from_iterable(map(self._route_tool_calls, signed_chunks)))
 
     def _end_thinking_run(self) -> "tuple[ModelResponseStream, ...]":
@@ -593,7 +733,7 @@ class _CombinedChunkSplitter:
             try:
                 chunk = next(self._sync_iter)
             except StopIteration:
-                self._buffer.extend((*self._end_thinking_run(), *self._release_held_calls()))
+                self._buffer.extend(self._flush_end_of_stream())
                 if not self._buffer:
                     raise
                 break
@@ -612,7 +752,7 @@ class _CombinedChunkSplitter:
             try:
                 chunk = await self._async_iter.__anext__()
             except StopAsyncIteration:
-                self._buffer.extend((*self._end_thinking_run(), *self._release_held_calls()))
+                self._buffer.extend(self._flush_end_of_stream())
                 if not self._buffer:
                     raise
                 break

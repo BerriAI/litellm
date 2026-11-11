@@ -667,6 +667,31 @@ def check_if_part_exists_in_parts(parts: list[PartType], part: PartType, exclude
     return False
 
 
+def _first_unclaimed_message_thought_signature(
+    assistant_msg: ChatCompletionAssistantMessage,
+) -> str | None:
+    """First message-level `thoughtSignature` not already carried by a tool-call part.
+
+    A signature that is already carried by one of this message's tool-call parts must
+    not be attached to the text part too: Gemini bills every replayed copy as the
+    previous turn's full reasoning token count on gemini-3 and newer models.
+    """
+    from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
+
+    provider_specific_fields: Final = as_str_mapping(assistant_msg.get("provider_specific_fields"))
+    if provider_specific_fields is None:
+        return None
+    thought_signatures: Final = as_object_list(provider_specific_fields.get("thought_signatures"))
+    if not thought_signatures:
+        return None
+    first_signature: Final = thought_signatures[0]
+    if not isinstance(first_signature, str) or not first_signature:
+        return None
+    if first_signature in _collect_tool_call_thought_signatures(assistant_msg):
+        return None
+    return first_signature
+
+
 def _collect_tool_call_thought_signatures(
     assistant_msg: ChatCompletionAssistantMessage,
 ) -> frozenset[str]:
@@ -853,7 +878,7 @@ def gemini_convert_messages_with_history(
                         PartType(text=" ")
                     )  # add a blank text, to ensure Gemini doesn't fail the request.
                 contents.append(ContentType(role="user", parts=user_content))
-            assistant_content = []
+            assistant_content: list[PartType] = []  # mutable-ok: accumulated per assistant turn
             ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
             while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
                 if isinstance(messages[msg_i], BaseModel):
@@ -863,8 +888,24 @@ def gemini_convert_messages_with_history(
                 assistant_msg = ChatCompletionAssistantMessage(**msg_dict)
                 _message_content = assistant_msg.get("content", None)
                 reasoning_content = assistant_msg.get("reasoning_content", None)
+                unclaimed_signature = _first_unclaimed_message_thought_signature(assistant_msg)
+                text_claims_signature = isinstance(_message_content, str) or (
+                    isinstance(_message_content, list)
+                    and any(
+                        (m := as_str_mapping(el)) is not None and m.get("type") == "text" for el in _message_content
+                    )
+                )
                 if reasoning_content is not None:
-                    assistant_content.append(PartType(thought=True, text=reasoning_content))
+                    thought_part = (
+                        PartType(
+                            thought=True,
+                            text=reasoning_content,
+                            thoughtSignature=unclaimed_signature,
+                        )
+                        if unclaimed_signature is not None and not text_claims_signature
+                        else PartType(thought=True, text=reasoning_content)
+                    )
+                    assistant_content.append(thought_part)
                 if _message_content is not None and isinstance(_message_content, list):
                     _parts = []
                     for element in _message_content:
@@ -879,32 +920,28 @@ def gemini_convert_messages_with_history(
                             ) is not None:
                                 _parts.append(media_part)
 
+                    if unclaimed_signature is not None:
+                        last_text_idx = next(
+                            (idx for idx in range(len(_parts) - 1, -1, -1) if "text" in _parts[idx]),
+                            None,
+                        )
+                        if last_text_idx is not None:
+                            part_text = _parts[last_text_idx].get("text")
+                            if isinstance(part_text, str):
+                                _parts[last_text_idx] = PartType(
+                                    text=part_text,
+                                    thoughtSignature=unclaimed_signature,
+                                )
+
                     assistant_content.extend(_parts)
                 elif _message_content is not None and isinstance(_message_content, str):
                     assistant_text = _message_content
-                    # Check if message has thought_signatures in provider_specific_fields
-                    provider_specific_fields = assistant_msg.get("provider_specific_fields")
-                    thought_signatures = None
-                    if provider_specific_fields and isinstance(provider_specific_fields, dict):
-                        thought_signatures = provider_specific_fields.get("thought_signatures")
-
-                    # A signature that is already carried by one of this message's
-                    # tool-call parts must not be attached to the text part too:
-                    # Gemini bills every replayed copy as the previous turn's full
-                    # reasoning token count on gemini-3 and newer models
-                    tool_call_signatures = _collect_tool_call_thought_signatures(assistant_msg)
-
-                    if (
-                        thought_signatures
-                        and isinstance(thought_signatures, list)
-                        and len(thought_signatures) > 0
-                        and thought_signatures[0] not in tool_call_signatures
-                    ):
+                    if unclaimed_signature is not None:
                         # Use the first signature for the text part (Gemini expects one signature per part)
                         assistant_content.append(
                             PartType(
                                 text=assistant_text,
-                                thoughtSignature=thought_signatures[0],
+                                thoughtSignature=unclaimed_signature,
                             )
                         )
                     else:

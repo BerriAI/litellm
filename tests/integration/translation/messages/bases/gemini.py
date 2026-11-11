@@ -126,7 +126,7 @@ GEMINI_3_8_FLASH_TEST_CASE: Final = TranslationTestCase(
             {
                 "type": "thinking",
                 "thinking": GEMINI_3_8_FLASH_THOUGHT,
-                "signature": "",
+                "signature": f"litellm_thought_signature:{GEMINI_3_8_FLASH_THOUGHT_SIGNATURE}",
             },
             {
                 "type": "text",
@@ -260,7 +260,7 @@ GEMINI_3_1_PRO_PREVIEW_TEST_CASE: Final = TranslationTestCase(
             {
                 "type": "thinking",
                 "thinking": GEMINI_3_1_PRO_PREVIEW_THOUGHT,
-                "signature": "",
+                "signature": f"litellm_thought_signature:{GEMINI_3_1_PRO_PREVIEW_THOUGHT_SIGNATURE}",
             },
             {
                 "type": "text",
@@ -390,7 +390,7 @@ GEMINI_4_ARGON_TEST_CASE: Final = TranslationTestCase(
             {
                 "type": "thinking",
                 "thinking": GEMINI_4_ARGON_THOUGHT,
-                "signature": "",
+                "signature": f"litellm_thought_signature:{GEMINI_4_ARGON_THOUGHT_SIGNATURE}",
             },
             {
                 "type": "text",

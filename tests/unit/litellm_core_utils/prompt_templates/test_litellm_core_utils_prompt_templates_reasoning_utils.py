@@ -5,14 +5,21 @@ from typing import Final
 import pytest
 
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    DUMMY_GEMINI_THOUGHT_SIGNATURE,
     ENCRYPTED_REASONING_SIGNATURE_PREFIX,
+    GEMINI_THOUGHT_SIGNATURE_PREFIX,
     converse_redacted_content,
     encrypted_content_from_signature,
     encrypted_reasoning_signature,
+    gemini_thought_signature,
+    is_bridge_reasoning_block,
     is_encrypted_reasoning_block,
+    is_gemini_thought_signature_block,
+    is_unsignable_thinking_block,
     native_redacted_thinking_data,
     responses_reasoning_items_from_thinking_blocks,
     strip_encrypted_reasoning_from_messages,
+    thought_signature_of_block,
 )
 
 
@@ -169,3 +176,40 @@ def test_native_redacted_thinking_data_only_unwraps_the_converse_base64_layer(da
 @pytest.mark.parametrize("data", [_NATIVE_REDACTED_DATA, _CONVERSE_REDACTED_DATA], ids=["native", "legacy-wrapped"])
 def test_converse_redacted_content_wraps_claude_native_data_exactly_once(data: str) -> None:
     assert converse_redacted_content(data) == _CONVERSE_REDACTED_DATA
+
+
+_GEMINI_SIG: Final = "EoUMCoIMAWkUfRNAt6WiTWGx73C1cgarbMkd0STsaBTv0DSrICGKWeyBN9og=="
+
+
+def test_gemini_thought_signature_helpers_distinguish_bridge_dummy_and_claude_blocks() -> None:
+    wrapped: Final = gemini_thought_signature(_GEMINI_SIG)
+    assert wrapped == f"{GEMINI_THOUGHT_SIGNATURE_PREFIX}{_GEMINI_SIG}"
+    assert gemini_thought_signature(wrapped) == wrapped
+
+    thinking_block: Final = {"type": "thinking", "thinking": "plan", "signature": wrapped}
+    redacted_block: Final = {"type": "redacted_thinking", "data": wrapped}
+    dummy_block: Final = {
+        "type": "thinking",
+        "thinking": "plan",
+        "signature": gemini_thought_signature(DUMMY_GEMINI_THOUGHT_SIGNATURE),
+    }
+    claude_block: Final = {"type": "thinking", "thinking": "plan", "signature": "EqQBCkYIAxgCIkA_claude"}
+
+    assert is_gemini_thought_signature_block(thinking_block) is True
+    assert is_gemini_thought_signature_block(redacted_block) is True
+    assert is_bridge_reasoning_block(thinking_block) is True
+    assert is_bridge_reasoning_block(redacted_block) is True
+    assert is_unsignable_thinking_block(thinking_block) is True
+    assert is_unsignable_thinking_block(redacted_block) is True
+    assert thought_signature_of_block(thinking_block) == _GEMINI_SIG
+    assert thought_signature_of_block(redacted_block) == _GEMINI_SIG
+    assert thought_signature_of_block(dummy_block) is None
+
+    assert is_gemini_thought_signature_block(claude_block) is False
+    assert is_bridge_reasoning_block(claude_block) is False
+    assert is_unsignable_thinking_block(claude_block) is False
+    assert thought_signature_of_block(claude_block) is None
+
+    assert responses_reasoning_items_from_thinking_blocks([thinking_block, redacted_block]) == (
+        {"type": "reasoning", "summary": [{"type": "summary_text", "text": "plan"}]},
+    )

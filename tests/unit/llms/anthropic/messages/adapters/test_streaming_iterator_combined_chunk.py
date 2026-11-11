@@ -422,3 +422,155 @@ def test_native_stream_thinking_blocks_keep_their_text_once():
         {"type": "thinking", "thinking": "efgh", "signature": "SIG_B"},
         {"type": "text", "text": "hi"},
     ]
+
+
+_GEMINI_STREAM_SIG_1: Final = "EoUMCoIMAWkUfRNAt6WiTWGx73C1cgarbMkd0STsaBTv0DSrICGKWeyBN9og=="
+_GEMINI_STREAM_SIG_2: Final = "EscLCsQLAWkUfRP4jtXWjNAugx5FeAwxasL/kKzH9gXUHHB2cTK13h4C8C6t=="
+
+
+def _gemini_candidate_chunk(
+    parts: list[dict[str, object]],
+    *,
+    finished: bool = False,
+    thought_signature_in_tool_call_id: bool = True,
+) -> ModelResponseStream:
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+    from litellm.types.llms.vertex_ai import Candidates
+
+    chunk: Final = ModelResponseStream(choices=[])
+    candidate: Final = Candidates(
+        content={"role": "model", "parts": parts},  # pyright: ignore[reportArgumentType]  # test fixture parts
+        index=0,
+    )
+    if finished:
+        candidate["finishReason"] = "STOP"
+    VertexGeminiConfig.process_candidates(
+        _candidates=[candidate],
+        model_response=chunk,
+        standard_optional_params={},
+        thought_signature_in_tool_call_id=thought_signature_in_tool_call_id,
+    )
+    if not finished:
+        for choice in chunk.choices:
+            choice.finish_reason = None
+    return chunk
+
+
+async def _stream_of(*chunks: ModelResponseStream) -> "AsyncIterator[ModelResponseStream]":
+    for chunk in chunks:
+        yield chunk
+
+
+@pytest.mark.parametrize("embed_in_id", [True, False], ids=["embed-id-default", "psf-only"])
+def test_gemini_stream_thinking_and_parallel_tool_calls_emit_signature_delta_and_short_ids(embed_in_id: bool) -> None:
+    from litellm.litellm_core_utils.prompt_templates.reasoning_utils import gemini_thought_signature
+
+    content: Final = _anthropic_sdk_final_content(
+        _stream_of(
+            _gemini_candidate_chunk([{"thought": True, "text": "Check "}], thought_signature_in_tool_call_id=embed_in_id),
+            _gemini_candidate_chunk([{"thought": True, "text": "both cities."}], thought_signature_in_tool_call_id=embed_in_id),
+            _gemini_candidate_chunk(
+                [
+                    {
+                        "functionCall": {"name": "get_weather", "args": {"city": "Tokyo"}},
+                        "thoughtSignature": _GEMINI_STREAM_SIG_1,
+                    },
+                    {"functionCall": {"name": "get_weather", "args": {"city": "Osaka"}}},
+                ],
+                finished=True,
+                thought_signature_in_tool_call_id=embed_in_id,
+            ),
+        )
+    )
+
+    assert [block["type"] for block in content] == ["thinking", "tool_use", "tool_use"]
+    assert content[0] == {
+        "type": "thinking",
+        "thinking": "Check both cities.",
+        "signature": gemini_thought_signature(_GEMINI_STREAM_SIG_1),
+    }
+    assert len(str(content[1]["id"])) <= 64
+    assert len(str(content[2]["id"])) <= 64
+    assert "__thought__" not in str(content[1]["id"])
+    assert content[1]["input"] == {"city": "Tokyo"}
+    assert content[2]["input"] == {"city": "Osaka"}
+
+
+def test_gemini_stream_thinking_then_text_then_tool_call_keeps_text_unbroken() -> None:
+    from litellm.litellm_core_utils.prompt_templates.reasoning_utils import gemini_thought_signature
+
+    content: Final = _anthropic_sdk_final_content(
+        _stream_of(
+            _gemini_candidate_chunk([{"thought": True, "text": "Inspecting validation."}]),
+            _gemini_candidate_chunk([{"text": "I will read validation.py "}]),
+            _gemini_candidate_chunk([{"text": "next."}]),
+            _gemini_candidate_chunk(
+                [
+                    {
+                        "functionCall": {"name": "read_file", "args": {"path": "validation.py"}},
+                        "thoughtSignature": _GEMINI_STREAM_SIG_2,
+                    }
+                ],
+                finished=True,
+            ),
+        )
+    )
+
+    assert [block["type"] for block in content] == ["thinking", "text", "redacted_thinking", "tool_use"]
+    assert content[1] == {"type": "text", "text": "I will read validation.py next."}
+    assert content[2] == {"type": "redacted_thinking", "data": gemini_thought_signature(_GEMINI_STREAM_SIG_2)}
+    assert len(str(content[3]["id"])) <= 64
+
+
+def test_gemini_stream_thinking_then_split_text_holds_redacted_carrier_until_finish() -> None:
+    from litellm.litellm_core_utils.prompt_templates.reasoning_utils import gemini_thought_signature
+
+    content: Final = _anthropic_sdk_final_content(
+        _stream_of(
+            _gemini_candidate_chunk([{"thought": True, "text": "Mental math."}]),
+            _gemini_candidate_chunk([{"text": "The answer "}]),
+            _gemini_candidate_chunk([{"text": "is 42.", "thoughtSignature": _GEMINI_STREAM_SIG_1}], finished=True),
+        )
+    )
+
+    assert content == [
+        {"type": "thinking", "thinking": "Mental math.", "signature": ""},
+        {"type": "text", "text": "The answer is 42."},
+        {"type": "redacted_thinking", "data": gemini_thought_signature(_GEMINI_STREAM_SIG_1)},
+    ]
+
+
+def test_gemini_stream_multi_signature_candidate_keeps_client_tool_signature() -> None:
+    from litellm.litellm_core_utils.prompt_templates.reasoning_utils import gemini_thought_signature
+
+    content: Final = _anthropic_sdk_final_content(
+        _stream_of(
+            _gemini_candidate_chunk(
+                [
+                    {"thought": True, "text": "Search first."},
+                    {
+                        "toolCall": {"toolType": "GOOGLE_SEARCH", "id": "srv_1", "args": {"q": "tokyo"}},
+                        "thoughtSignature": _GEMINI_STREAM_SIG_1,
+                    },
+                ]
+            ),
+            _gemini_candidate_chunk([{"text": "Searching..."}]),
+            _gemini_candidate_chunk([{"thought": True, "text": "Now call client tool."}]),
+            _gemini_candidate_chunk(
+                [
+                    {
+                        "functionCall": {"name": "get_weather", "args": {"city": "Tokyo"}},
+                        "thoughtSignature": _GEMINI_STREAM_SIG_2,
+                    }
+                ],
+                finished=True,
+            ),
+        )
+    )
+
+    signatures: Final = [
+        block.get("signature") or block.get("data")
+        for block in content
+        if block["type"] in ("thinking", "redacted_thinking") and (block.get("signature") or block.get("data"))
+    ]
+    assert signatures[-1] == gemini_thought_signature(_GEMINI_STREAM_SIG_2)

@@ -866,7 +866,7 @@ GEMINI_3_8_FLASH_TEST_CASE: Final = TranslationTestCase(
                     "request to read lines 1 through 40 to get a good understanding of the surrounding context and the "
                     "validation function itself.\n\n"
                 ),
-                "signature": "",
+                "signature": f"litellm_thought_signature:{GEMINI_3_8_FLASH_MESSAGES_THOUGHT_SIGNATURE_0}",
             },
             {
                 "type": "text",
@@ -996,7 +996,7 @@ GEMINI_3_1_PRO_PREVIEW_TEST_CASE: Final = TranslationTestCase(
                     "This will involve looking for conditional statements (`if`, `elif`, `else`) and any associated "
                     "error-raising mechanisms or default behaviors.\n\n"
                 ),
-                "signature": "",
+                "signature": f"litellm_thought_signature:{GEMINI_3_1_PRO_PREVIEW_MESSAGES_THOUGHT_SIGNATURE_0}",
             },
             {
                 "type": "text",
@@ -1114,7 +1114,7 @@ GEMINI_4_ARGON_TEST_CASE: Final = TranslationTestCase(
                     "files, only to read and analyze them, and to communicate my progress and needs via the provided "
                     "messages client.\n\n"
                 ),
-                "signature": "",
+                "signature": f"litellm_thought_signature:{GEMINI_4_ARGON_MESSAGES_THOUGHT_SIGNATURE_0}",
             },
             {
                 "type": "text",

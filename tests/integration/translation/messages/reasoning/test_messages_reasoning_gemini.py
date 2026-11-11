@@ -271,6 +271,10 @@ GEMINI_3_8_FLASH_THOUGHTS_OFF_TEST_CASE: Final = replace(
         "model": "gemini/gemini-3.8-flash",
         "content": [
             {
+                "type": "redacted_thinking",
+                "data": f"litellm_thought_signature:{GEMINI_3_8_FLASH_THOUGHTS_OFF_THOUGHT_SIGNATURE}",
+            },
+            {
                 "type": "text",
                 "text": (
                     "I need to inspect `shop/validation.py` next to examine how `validate_quantity` handles zero, "
@@ -359,7 +363,7 @@ def test_a_streamed_turn_keeps_thinking_and_billing_reasoning_without_thought_te
     started: Final = tuple(
         object_value(event["content_block"])["type"] for event in events if event.get("type") == "content_block_start"
     )
-    assert started == ("text", "tool_use")
+    assert started == ("text", "redacted_thinking", "tool_use")
     deltas: Final = tuple(
         object_value(event["delta"]) for event in events if event.get("type") == "content_block_delta"
     )
