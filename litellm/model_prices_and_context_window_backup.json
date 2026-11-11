@@ -49037,6 +49037,77 @@
         "supports_reasoning": true,
         "supports_system_messages": true
     },
+    "resetdata/deepseek/deepseek-v4-flash": {
+        "litellm_provider": "resetdata",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "mode": "chat",
+        "source": "https://api.resetdata.ai/api/v1/models",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "resetdata/google/gemma-4-26b-a4b-it": {
+        "litellm_provider": "resetdata",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 8192,
+        "mode": "chat",
+        "source": "https://api.resetdata.ai/api/v1/models",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "resetdata/qwen/qwen3-coder-30b-a3b-instruct": {
+        "litellm_provider": "resetdata",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 65536,
+        "mode": "chat",
+        "source": "https://api.resetdata.ai/api/v1/models",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "resetdata/qwen/qwen3.8-27b": {
+        "litellm_provider": "resetdata",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 32768,
+        "mode": "chat",
+        "source": "https://api.resetdata.ai/api/v1/models",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "resetdata/zai/glm-5.2": {
+        "litellm_provider": "resetdata",
+        "max_input_tokens": 800000,
+        "max_output_tokens": 32768,
+        "mode": "chat",
+        "source": "https://api.resetdata.ai/api/v1/models",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "resetdata/zai/glm-5.3": {
+        "litellm_provider": "resetdata",
+        "max_input_tokens": 524288,
+        "max_output_tokens": 32768,
+        "mode": "chat",
+        "source": "https://api.resetdata.ai/api/v1/models",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
     "rerank-english-v3.0": {
         "input_cost_per_query": 0.002,
         "input_cost_per_token": 0.0,
