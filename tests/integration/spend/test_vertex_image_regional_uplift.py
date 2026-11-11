@@ -242,7 +242,7 @@ def test_image_generation_bills_the_deployment_location(
     [
         pytest.param("global", False, _GLOBAL_IMAGE_COST, id="global-edit"),
         pytest.param(_REGION, False, _REGIONAL_IMAGE_COST, id="regional-edit"),
-        pytest.param(_REGION, True, _REGIONAL_IMAGE_COST, id="regional-edit-usage-is-per-image"),
+        pytest.param(_REGION, True, _REGIONAL_TOKEN_COST, id="regional-edit-usage-bills-tokens"),
     ],
 )
 def test_image_edit_bills_the_deployment_location(
@@ -489,8 +489,8 @@ def _burst_calls(global_model: str, regional_model: str) -> tuple[_Call, ...]:
     kinds: Final = (
         ("/v1/images/generations", global_model, _GLOBAL_TOKEN_COST),
         ("/v1/images/generations", regional_model, _REGIONAL_TOKEN_COST),
-        ("/v1/images/edits", global_model, _GLOBAL_IMAGE_COST),
-        ("/v1/images/edits", regional_model, _REGIONAL_IMAGE_COST),
+        ("/v1/images/edits", global_model, _GLOBAL_TOKEN_COST),
+        ("/v1/images/edits", regional_model, _REGIONAL_TOKEN_COST),
     )
     return tuple(
         _Call(call_id=uuid.uuid4().hex, route=route, model=model, expected=expected)
