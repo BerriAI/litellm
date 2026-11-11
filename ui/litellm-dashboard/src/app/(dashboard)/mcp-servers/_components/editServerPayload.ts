@@ -352,9 +352,12 @@ export const buildEditServerPayload = (values: EditServerFormValues, ui: EditSer
 
   // Client-forwarded rows persist ONLY the declared app; strip any token material lingering in the
   // form (e.g. from a prior oauth2 authorize this session) so it can never reach the row.
-  const submitCredentials = isClientForwardedTokenMode(restValues.auth_type)
-    ? withClearedScopes(preservedAdminCredentials(credentialsPayload), credentialValues)
-    : credentialsPayload;
+  const submitCredentials = withClearedScopes(
+    isClientForwardedTokenMode(restValues.auth_type)
+      ? preservedAdminCredentials(credentialsPayload)
+      : credentialsPayload,
+    credentialValues,
+  );
   const includeCredentials = restValues.auth_type && AUTH_TYPES_REQUIRING_CREDENTIALS.includes(restValues.auth_type);
 
   const credentialsEntryInput: CredentialsEntryInput = {
