@@ -37,7 +37,11 @@ from litellm.llms.azure.passthrough.transformation import azure_router_model_in_
 from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_model_group_in_path
 from litellm.proxy._types import *
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.common_utils.http_parsing_utils import extract_nested_form_metadata, resolve_inference_model
+from litellm.proxy.common_utils.http_parsing_utils import (
+    extract_nested_form_metadata,
+    read_request_path_params,
+    resolve_inference_model,
+)
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
 )
@@ -2691,10 +2695,8 @@ def get_model_from_request(
     if request_dispatched_to_pass_through_endpoint(request):
         return None
 
-    handler_request_data: Final[Mapping[str, object]] = request_data
-    handler_path_params: Final[Mapping[str, object] | None] = (
-        request.path_params if request is not None else path_params
-    )
+    handler_request_data: Final = _MODEL_REQUEST_DATA.validate_python(request_data)
+    handler_path_params: Final = read_request_path_params(request) if request is not None else path_params
     handler_model: Final = _handler_selected_model(route, handler_request_data, handler_path_params)
     if handler_model is not None:
         return handler_model
@@ -2729,6 +2731,7 @@ def get_model_from_request(
 
 
 _HandlerModelKind: TypeAlias = Literal["completion", "image_generation", "image_edit"]
+_MODEL_REQUEST_DATA: Final = TypeAdapter(Mapping[str, object])
 _HANDLER_MODEL_ROUTES: Final[tuple[tuple[re.Pattern[str], str, _HandlerModelKind], ...]] = (
     (re.compile(r"^(?:/v1beta)?/models/(.+):(?:generateContent|streamGenerateContent)$"), "model_name", "completion"),
     (re.compile(r"^/openai/deployments/(.+)/images/generations$"), "model", "image_generation"),

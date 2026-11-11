@@ -37,6 +37,11 @@ _BINARY_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-protobu
 _ANNOTATION_QUALIFIERS: Final[frozenset[object]] = frozenset({Annotated, NotRequired, ReadOnly, Required})
 _DECODED_JSON: Final = TypeAdapter(object)
 _JSON_REQUEST_BODY: Final = TypeAdapter(Mapping[str, object])
+_REQUEST_PATH_PARAMS: Final = TypeAdapter(Mapping[str, object])
+
+
+def read_request_path_params(request: Request | None) -> Mapping[str, object] | None:
+    return _REQUEST_PATH_PARAMS.validate_python(request.path_params) if request is not None else None
 
 
 class _ReadableUpload(Protocol):
