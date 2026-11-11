@@ -89,6 +89,7 @@ ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG: Final[frozenset[str]] = frozenset(
         "ignore_invalid_deployments",
         "fallback_access_check",
         "fallback_budget_check",
+        "fallback_rate_limit_check",
         "auto_router_capability_limit",
     }
 )
