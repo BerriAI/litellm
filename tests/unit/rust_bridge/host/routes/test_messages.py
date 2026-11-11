@@ -1,10 +1,14 @@
-from collections.abc import Mapping
+import datetime
+import functools
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
 
 import pytest
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
 from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
 from litellm.rust_bridge.host.routes import messages as messages_host
@@ -728,3 +732,105 @@ def test_workload_identity_fields_are_the_federation_litellm_params() -> None:
         "anthropic_organization_id",
         "anthropic_disable_workload_identity_federation",
     }
+
+
+class _Agentic(CustomLogger):
+    async def async_should_run_agentic_loop(self, *args: object, **kwargs: object) -> tuple[bool, dict[str, object]]:  # pyright: ignore[reportIncompatibleMethodOverride]  # test double only needs the override
+        return False, {}
+
+
+def _agentic_logger(callbacks: Sequence[CustomLogger]) -> Logging:
+    logger: Final = Logging(
+        model="anthropic/claude-sonnet-4-5",
+        messages=[],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="agentic",
+        function_id="agentic",
+        dynamic_success_callbacks=list(callbacks),
+    )
+    return logger
+
+
+@pytest.mark.parametrize(
+    ("callbacks", "dynamic", "request_extra", "expected"),
+    [
+        pytest.param([], [], {}, False, id="no-hook"),
+        pytest.param([_Agentic()], [], {}, True, id="global-hook"),
+        pytest.param([], [_Agentic()], {}, True, id="call-hook"),
+        pytest.param([], [], {"_websearch_interception_converted_stream": True}, True, id="converted-stream"),
+    ],
+)
+def test_runs_agentic_hooks_gates_as_the_python_handler_does(
+    monkeypatch: pytest.MonkeyPatch,
+    callbacks: list[object],
+    dynamic: Sequence[CustomLogger],
+    request_extra: Mapping[str, object],
+    expected: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", callbacks)
+    request: Final = {"model": "anthropic/claude-sonnet-4-5", "litellm_logging_obj": _agentic_logger(dynamic)}
+
+    assert messages_host.runs_agentic_hooks({**request, **request_extra}) is expected
+    assert messages_host.runs_agentic_hooks({"model": "anthropic/claude-sonnet-4-5"}) is False
+
+
+def test_record_agentic_loop_names_the_requested_model_for_follow_up_calls() -> None:
+    logger: Final = _agentic_logger([])
+    messages_host.record_agentic_loop(
+        {
+            "model": "anthropic/claude-sonnet-4-5",
+            "litellm_logging_obj": logger,
+            "_websearch_interception_converted_stream": True,
+        },
+        "anthropic",
+    )
+
+    details: Final = logger.model_call_details
+    assert details["agentic_loop_params"] == {
+        "model": "anthropic/claude-sonnet-4-5",
+        "custom_llm_provider": "anthropic",
+    }
+    assert details["websearch_interception_converted_stream"] is True
+
+
+def test_agentic_stream_tags_the_head_only_when_a_hook_runs(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.rust_bridge.messages.entrypoints import MessagesStreamHead
+
+    request: Final = {
+        "model": "anthropic/claude-sonnet-4-5",
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "hi", "provider_specific_fields": {"x": 1}}]}
+        ],
+        "tools": [{"name": "get_weather", "input_schema": {"type": "object"}}],
+        "api_key": "sk-test",
+        "litellm_call_id": "agentic",
+        "litellm_logging_obj": _agentic_logger([]),
+    }
+    sent: Final = {
+        "model": "claude-sonnet-4-5",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 16,
+        "stream": True,
+        "tools": [{"name": "get_weather", "input_schema": {"type": "object"}}],
+    }
+    requested: Final = {"max_tokens": 16, "stream": True, "tools": request["tools"]}
+    head: Final = MessagesStreamHead()
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+    messages_host.agentic_stream(head, request, sent, "claude-sonnet-4-5", "anthropic", requested)
+    assert head.agentic is None
+
+    monkeypatch.setattr(litellm, "callbacks", [_Agentic()])
+    messages_host.agentic_stream(head, request, sent, "claude-sonnet-4-5", "anthropic", requested)
+    agentic: Final = head.agentic
+    assert isinstance(agentic, functools.partial)
+    bound: Final[Mapping[str, object]] = agentic.keywords
+    call: Final = bound["call"]
+    assert isinstance(call, messages_host._AgenticCall)  # pyright: ignore[reportPrivateUsage]  # the partial binds the handler call
+    assert call.messages == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+    assert call.params == {"stream": True, "tools": request["tools"]}
+    assert call.params["tools"] is request["tools"]
+    assert call.kwargs["api_key"] == "sk-test"
+    assert "tools" not in call.kwargs

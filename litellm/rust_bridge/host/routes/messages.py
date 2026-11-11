@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import datetime
 import errno
+import functools
 import inspect
 import ipaddress
 import os
@@ -30,7 +32,12 @@ from litellm.litellm_core_utils.model_latest_aliases import is_model_latest_alia
 from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
 from litellm.litellm_core_utils.reasoning_effort_capability import deployment_reasoning_effort_levels
 from litellm.litellm_core_utils.request_timeout_resolver import get_configured_request_timeout
-from litellm.llms.anthropic.common_utils import AnthropicError, AnthropicModelInfo, anthropic_pass_through_api_base
+from litellm.llms.anthropic.common_utils import (
+    AnthropicError,
+    AnthropicModelInfo,
+    anthropic_pass_through_api_base,
+    strip_provider_specific_fields_from_anthropic_messages,
+)
 from litellm.llms.anthropic.messages.native import handler
 from litellm.llms.anthropic.messages.native import utils as native_utils
 from litellm.llms.anthropic.messages.native.handler import (
@@ -45,14 +52,19 @@ from litellm.llms.anthropic.messages.native.handler import (
 from litellm.llms.anthropic.messages.native.utils import prepare_native_messages
 from litellm.llms.anthropic.messages.utils import is_reasoning_auto_summary_enabled
 from litellm.llms.anthropic.wif import get_anthropic_wif_token
+from litellm.llms.base_llm.anthropic_messages.transformation import BaseAnthropicMessagesConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
+from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import (
     _merge_messages_header_sources as _merged_headers,  # pyright: ignore[reportPrivateUsage]  # the handler's own header merge
 )
 from litellm.rust_bridge import detectors, failures
+from litellm.rust_bridge.execution import AsyncStream
 from litellm.rust_bridge.host import cache, callbacks_legacy_python, http_transport
+from litellm.rust_bridge.messages.entrypoints import MessagesStreamHead
 from litellm.rust_bridge.public_call import NativeCall, known_params, optional_str
+from litellm.types.integrations.custom_logger import WEBSEARCH_CONVERTED_STREAM_KEY
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes, ProviderSpecificHeader, anthropic_wif_litellm_params
@@ -257,7 +269,7 @@ def stream_hidden_params(headers: Sequence[tuple[str, str]]) -> Mapping[str, obj
         anthropic_messages_stream_hidden_params,
     )
 
-    return anthropic_messages_stream_hidden_params(httpx.Headers(list(headers)))
+    return MessagesStreamHead(anthropic_messages_stream_hidden_params(httpx.Headers(list(headers))))
 
 
 _UPSTREAM_ARGS: Final = TypeAdapter(tuple[int, str])
@@ -646,3 +658,178 @@ def inject_stream_cost(frames: bytes, model: str, request: Mapping[str, object])
 def workload_identity_token(params: Mapping[str, object], api_base: str | None) -> str | None:
     litellm_params: Final = GenericLiteLLMParams(**params)
     return get_anthropic_wif_token(dict(litellm_params), api_base, "")
+
+
+_AGENTIC_UNSENT_PARAMS: Final = frozenset({"model", "messages", "max_tokens"})
+_HANDLER_POPPED: Final = frozenset(
+    {"is_async", "_litellm_messages_presanitized", "_skip_mcp_handler", "cache_control_injection_points"}
+)
+
+
+def _logger(request: Mapping[str, object]) -> LiteLLMLoggingObj | None:
+    logger: Final = request.get("litellm_logging_obj")
+    return logger if isinstance(logger, LiteLLMLoggingObj) else None
+
+
+def runs_agentic_hooks(request: Mapping[str, object]) -> bool:
+    logger: Final = _logger(request)
+    if logger is None:
+        return False
+    return BaseLLMHTTPHandler._has_agentic_completion_hook(logger) or bool(  # pyright: ignore[reportPrivateUsage]  # the handler's own agentic gate
+        request.get(WEBSEARCH_CONVERTED_STREAM_KEY, False)
+    )
+
+
+def record_agentic_loop(request: Mapping[str, object], custom_llm_provider: str) -> None:
+    logger: Final = _logger(request)
+    if logger is None:
+        return
+    logger.model_call_details["agentic_loop_params"] = {
+        "model": request["model"],
+        "custom_llm_provider": custom_llm_provider,
+    }
+    if request.get(WEBSEARCH_CONVERTED_STREAM_KEY, False):
+        logger.model_call_details["websearch_interception_converted_stream"] = True
+
+
+@dataclass(frozen=True, slots=True)
+class _AgenticCall:
+    model: str
+    messages: list[dict[str, object]]  # mutable-ok: the handler's agentic hooks take a message list
+    config: BaseAnthropicMessagesConfig
+    params: dict[str, object]  # mutable-ok: the handler's agentic hooks take a params dict
+    logger: LiteLLMLoggingObj
+    provider: str
+    kwargs: dict[str, object]  # mutable-ok: the handler's agentic hooks take a kwargs dict
+
+
+def _agentic_params(
+    sent: Mapping[str, object], requested: Mapping[str, object], request: Mapping[str, object]
+) -> dict[str, object]:  # mutable-ok: the handler's agentic hooks take a params dict
+    params: Final = {name: value for name, value in sent.items() if name not in _AGENTIC_UNSENT_PARAMS}
+    if "tools" not in params:
+        return params
+    caller_tools: Final = request.get("tools")
+    requested_tools: Final = requested.get("tools")
+    return {**params, "tools": caller_tools if caller_tools == requested_tools else requested_tools}
+
+
+def _agentic_call(
+    request: Mapping[str, object],
+    sent: Mapping[str, object],
+    model: str,
+    custom_llm_provider: str,
+    requested: Mapping[str, object],
+) -> _AgenticCall:
+    logger: Final = _logger(request)
+    api_base: Final = optional_str(request.get("api_base"))
+    config: Final = native_messages_config(model, custom_llm_provider, request.get("model_info"), api_base)
+    if logger is None or config is None:
+        raise ValueError("an agentic Messages call needs its logger and provider config")
+    kwargs: Final = {
+        name: value for name, value in request.items() if name not in _HANDLER_PARAMS and name not in _HANDLER_POPPED
+    }
+    messages, _, _ = _prompt_cached(request, asynchronous=True)
+    return _AgenticCall(
+        model=model,
+        messages=cast(  # cast-ok: the handler hands its prepared messages to the hooks as dicts
+            list[dict[str, object]], strip_provider_specific_fields_from_anthropic_messages(messages)
+        ),
+        config=config,
+        params=_agentic_params(sent, requested, request),
+        logger=logger,
+        provider=custom_llm_provider,
+        kwargs=BaseLLMHTTPHandler._agentic_hook_kwargs(  # pyright: ignore[reportPrivateUsage]  # the handler's own follow-up kwargs
+            kwargs=kwargs, api_key=optional_str(request.get("api_key")), api_base=api_base
+        ),
+    )
+
+
+async def _failed_deployment(request: Mapping[str, object], error: Exception) -> None:
+    from litellm.utils import async_post_call_failure_deployment_hook
+
+    try:
+        await async_post_call_failure_deployment_hook(
+            request_data=request, exception=error, call_type=CallTypes.anthropic_messages.value
+        )
+    except asyncio.CancelledError:
+        raise
+    except BaseException:  # noqa: BLE001, S110  # a failing hook never replaces the agentic loop's own failure, as in `@client`
+        pass
+
+
+async def agentic_response(
+    response: object,
+    request: Mapping[str, object],
+    sent: Mapping[str, object],
+    model: str,
+    custom_llm_provider: str,
+    requested: Mapping[str, object],
+) -> object:
+    try:
+        call: Final = _agentic_call(request, sent, model, custom_llm_provider, requested)
+        initial: Final = cast(AnthropicMessagesResponse, response)  # cast-ok: the public response the handler finishes
+        return await handler.base_llm_http_handler._finalize_anthropic_messages_response(  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType, reportUnknownVariableType]  # the handler's own agentic finish, typed with bare dicts
+            initial_response=initial,
+            model=call.model,
+            messages=call.messages,
+            anthropic_messages_provider_config=call.config,
+            anthropic_messages_optional_request_params=call.params,
+            logging_obj=call.logger,
+            custom_llm_provider=call.provider,
+            kwargs=call.kwargs,
+        )
+    except Exception as error:
+        await _failed_deployment(request, error)
+        raise
+
+
+def _agentic_stream(stream: AsyncStream, call: _AgenticCall, held: frozenset[str]) -> object:
+    from litellm.llms.anthropic.messages.native.agentic_streaming_iterator import AgenticAnthropicStreamingIterator
+    from litellm.llms.anthropic.messages.native.streaming_iterator import (
+        AnthropicMessagesStreamHiddenParams,
+        AnthropicMessagesStreamingResponse,
+    )
+
+    return AnthropicMessagesStreamingResponse(
+        completion_stream=AgenticAnthropicStreamingIterator(
+            completion_stream=stream,
+            http_handler=handler.base_llm_http_handler,
+            model=call.model,
+            messages=call.messages,
+            anthropic_messages_provider_config=call.config,
+            anthropic_messages_optional_request_params=call.params,
+            logging_obj=call.logger,
+            custom_llm_provider=call.provider,
+            kwargs=call.kwargs,
+            hold_back=bool(held),
+            server_fulfilled_tool_names=held,
+        ),
+        hidden_params=cast(  # cast-ok: the stream's stamped hidden params, shared as Python's handler shares them
+            AnthropicMessagesStreamHiddenParams,
+            stream._hidden_params,  # pyright: ignore[reportPrivateUsage]  # the native stream's own hidden params
+        ),
+    )
+
+
+def agentic_stream(
+    head: object,
+    request: Mapping[str, object],
+    sent: Mapping[str, object],
+    model: str,
+    custom_llm_provider: str,
+    requested: Mapping[str, object],
+) -> None:
+    logger: Final = _logger(request)
+    if (
+        not isinstance(head, MessagesStreamHead)
+        or logger is None
+        or not BaseLLMHTTPHandler._has_agentic_completion_hook(logger)  # pyright: ignore[reportPrivateUsage]  # the handler's own agentic gate
+    ):
+        return
+    call: Final = _agentic_call(request, sent, model, custom_llm_provider, requested)
+    held: Final = BaseLLMHTTPHandler._server_fulfilled_tools_in_request(  # pyright: ignore[reportPrivateUsage]  # the handler's own hold-back gate
+        logging_obj=logger, tools=call.params.get("tools")
+    )
+    wrap: Final = functools.partial(_agentic_stream, call=call, held=held)
+    head.agentic = wrap  # rebind-ok: the head carries the stream wrapper back

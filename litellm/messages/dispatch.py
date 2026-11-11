@@ -134,7 +134,7 @@ def messages_target(model: str, custom_llm_provider: str | None, model_info: obj
     return _route_target(model, resolved_model, resolved_provider, model_info, api_base, compacting=False)
 
 
-_NATIVE_COMMON_FEATURES: Final = frozenset({Feature.TIMEOUT_VARIANTS, Feature.LATEST_ALIAS})
+_NATIVE_COMMON_FEATURES: Final = frozenset({Feature.TIMEOUT_VARIANTS, Feature.LATEST_ALIAS, Feature.AGENTIC_LOOP_HOOK})
 
 _FEATURES: Final[detectors.Detectors] = MappingProxyType(
     {

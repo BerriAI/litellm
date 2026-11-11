@@ -1,3 +1,4 @@
+mod agentic;
 mod host;
 mod modify_params;
 pub(crate) mod workload_identity;
@@ -12,6 +13,9 @@ use super::NativeCall;
 fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyResult<Py<PyAny>> {
     let (arguments, hooks) =
         crate::routes::call_hooks(py, LoggingOperation::Messages, &call, asynchronous)?;
+    let hooks = litellm_host_python::HookChain::new()
+        .with(agentic::AgenticLoop::new(asynchronous))
+        .with(hooks);
     let modify_params = ModifyParams::new(&call.args, &call.kwargs)?;
     crate::routes::run_public_call_after_policy(
         py,

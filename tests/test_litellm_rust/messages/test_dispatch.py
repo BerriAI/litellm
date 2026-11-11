@@ -464,6 +464,15 @@ class _Agentic(CustomLogger):
         return False, {}
 
 
+class _ShortCircuit(WebSearchInterceptionLogger):
+    async def try_short_circuit_search(self, *args: object, **kwargs: object) -> dict[str, object] | None:  # pyright: ignore[reportIncompatibleMethodOverride]  # test double only needs the override
+        return None
+
+
+class _WebSearch(WebSearchInterceptionLogger):
+    async_pre_request_hook = CustomLogger.async_pre_request_hook  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # CustomLogger annotates bare containers
+
+
 ADVISOR_TOOL: Final = {"type": ANTHROPIC_ADVISOR_TOOL_TYPE, "name": "advisor", "model": "claude-opus-5-5"}
 STRICT_TOOL: Final = {"name": "a", "input_schema": {"type": "object"}, "strict": True}
 
@@ -479,7 +488,6 @@ STRICT_TOOL: Final = {"name": "a", "input_schema": {"type": "object"}, "strict":
             {},
         ),
         (Feature.CALLER_CLIENT, "anthropic/claude-sonnet-4-5", {"client": object()}, {}),
-        (Feature.AGENTIC_LOOP_HOOK, "anthropic/claude-sonnet-4-5", {}, {"callbacks": [_Agentic()]}),
         (Feature.TLS_POLICY, "anthropic/claude-sonnet-4-5", {}, {"ssl_security_level": "DEFAULT@SECLEVEL=1"}),
     ),
 )
@@ -712,9 +720,7 @@ async def test_modify_params_stays_native(monkeypatch: pytest.MonkeyPatch) -> No
 
 ASYNC_ONLY_FEATURES: Final = (
     pytest.param(Feature.PRE_REQUEST_HOOK, {}, {"callbacks": [_Rewrite()]}, id="pre-request-hook"),
-    pytest.param(
-        Feature.WEBSEARCH_INTERCEPTION, {}, {"callbacks": [WebSearchInterceptionLogger()]}, id="websearch-interception"
-    ),
+    pytest.param(Feature.WEBSEARCH_INTERCEPTION, {}, {"callbacks": [_ShortCircuit()]}, id="websearch-short-circuit"),
     pytest.param(
         Feature.MESSAGES_INTERCEPTOR,
         {"model": "deepseek/deepseek-v4-flash", "tools": [ADVISOR_TOOL]},
@@ -912,8 +918,7 @@ async def test_anthropic_runs_on_rust_without_the_opt_in(
         pytest.param(True, {"mock_response": "hi", "stream": True}, [], Feature.MOCK_RESPONSE, id="streamed-mock"),
         pytest.param(True, {"client": object()}, [], Feature.CALLER_CLIENT, id="caller-client"),
         pytest.param(True, {}, [_Rewrite()], Feature.PRE_REQUEST_HOOK, id="pre-request-hook"),
-        pytest.param(True, {}, [WebSearchInterceptionLogger()], Feature.WEBSEARCH_INTERCEPTION, id="websearch"),
-        pytest.param(False, {}, [_Agentic()], Feature.AGENTIC_LOOP_HOOK, id="agentic-loop"),
+        pytest.param(True, {}, [_ShortCircuit()], Feature.WEBSEARCH_INTERCEPTION, id="websearch-short-circuit"),
     ),
 )
 async def test_anthropic_refuses_what_rust_does_not_serve(
@@ -939,6 +944,30 @@ async def test_anthropic_refuses_what_rust_does_not_serve(
     assert refused.value.llm_provider == "anthropic"
     assert refused.value.status_code == 400
     assert shipped_native == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", (False, True), ids=("sync", "async"))
+@pytest.mark.parametrize(
+    "callbacks",
+    (
+        pytest.param([_Agentic()], id="agentic-loop"),
+        pytest.param([_WebSearch(enabled_providers=["anthropic"])], id="websearch-interception"),
+    ),
+)
+async def test_anthropic_serves_agentic_loop_callbacks_on_rust(
+    monkeypatch: pytest.MonkeyPatch, shipped_native: list[str], asynchronous: bool, callbacks: list[object]
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", callbacks)
+
+    def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: rejected fallback
+        pytest.fail("anthropic has no Python Messages path")
+
+    with rebound(dispatch, "_PYTHON_MESSAGES", python), rebound(dispatch, "_PYTHON_AMESSAGES", python):
+        result: Final = await _public(asynchronous, "anthropic/claude-sonnet-4-5", {})
+
+    assert isinstance(result, dict)
+    assert shipped_native == ["async" if asynchronous else "sync"]
 
 
 @pytest.mark.asyncio

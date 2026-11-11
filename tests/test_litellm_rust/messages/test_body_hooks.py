@@ -82,7 +82,6 @@ async def test_body_interceptor_replaces_the_provider_call(server: RecordingServ
 
 
 @pytest.mark.asyncio
-@BODY_HOOKS
 async def test_body_planned_agentic_loop_sends_the_followup_and_replaces_the_response(server: RecordingServer) -> None:
     loop: Final = PlannedAgenticLoop()
     server.enqueue(ResponseSpec(body=MESSAGES_RESPONSE))
@@ -105,7 +104,6 @@ async def test_body_planned_agentic_loop_sends_the_followup_and_replaces_the_res
 
 
 @pytest.mark.asyncio
-@BODY_HOOKS
 async def test_body_legacy_agentic_loop_replaces_the_response(server: RecordingServer) -> None:
     loop: Final = LegacyAgenticLoop()
 
