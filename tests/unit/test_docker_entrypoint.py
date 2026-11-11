@@ -4,8 +4,10 @@ import re
 import shlex
 import stat
 import subprocess
+import sys
 from pathlib import Path
 from typing import Final
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 import pytest
 
@@ -14,8 +16,10 @@ from litellm.constants import PROMETHEUS_ADMITTED_SERIES_FILE_PREFIX
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 DOCKER_ENTRYPOINT: Final = REPO_ROOT / "docker-entrypoint.sh"
 DOCKERFILE: Final = REPO_ROOT / "Dockerfile"
-TERRAFORM_ECS: Final = REPO_ROOT / "terraform" / "litellm" / "aws" / "ecs.tf"
-TERRAFORM_CLOUDRUN: Final = REPO_ROOT / "terraform" / "litellm" / "gcp" / "cloudrun.tf"
+TERRAFORM_MODULES: Final = {
+    "aws": REPO_ROOT / "terraform" / "litellm" / "aws",
+    "gcp": REPO_ROOT / "terraform" / "litellm" / "gcp",
+}
 
 IMAGE_ENTRYPOINT_PATH: Final = "/app/docker-entrypoint.sh"
 STUBBED_EXECUTABLES: Final = ("ddtrace-run", "uvicorn", "python", "litellm", "nginx")
@@ -36,17 +40,25 @@ _STUB_TEMPLATE: Final = """#!/bin/sh
 
 _ENTRYPOINT_RE: Final = re.compile(r"^ENTRYPOINT\s+(\[.*\])\s*$", re.MULTILINE)
 _CMD_RE: Final = re.compile(r"^CMD\s+(\[.*\])\s*$", re.MULTILINE)
-_APP_TARGET_RE: Final = re.compile(r"(?:gateway|backend)\.main:app|gateway\.launch")
-_TF_STRING_LOCAL_RE: Final = re.compile(r'^\s*(\w+)\s*=\s*"((?:[^"\\]|\\.)*)"\s*$', re.MULTILINE)
-_TF_INTERPOLATION_RE: Final = re.compile(r"\$\{(local|var)\.(\w+)\}")
+_TF_ENTRYPOINT_LOCAL_RE: Final = re.compile(r'^\s*image_entrypoint\s*=\s*"([^"]*)"\s*$', re.MULTILINE)
+_TF_WORD: Final = r'(?:"[^"\s]*"|tostring\(var\.\w+\)|\$\{var\.\w+\}|[\w.-]+)'
+_TF_ENTRYPOINT_CALL_RE: Final = re.compile(rf"exec \$\{{local\.image_entrypoint\}}((?: {_TF_WORD})+)")
+_TF_COMPONENT_LIST_RE: Final = re.compile(
+    rf"(?:command|args|gateway|backend|ui|migrations|metrics|collector)\s*=\s*"
+    rf'\[\s*("(?:proxy|gateway|backend|ui|migrations|metrics|collector)"(?:\s*,\s*{_TF_WORD})*)\s*\]'
+)
+_TF_VAR_RE: Final = re.compile(r"tostring\(var\.(\w+)\)|\$\{var\.(\w+)\}")
 
-TERRAFORM_LAUNCH_SITES: Final = {TERRAFORM_ECS: 2, TERRAFORM_CLOUDRUN: 2}
-TERRAFORM_VAR_STUBS: Final = {"gateway_num_workers": "2"}
-COMPONENT_LAUNCHERS: Final = {
-    "gateway": ("python", "-m", "gateway.launch"),
-    "backend": ("uvicorn", "backend.main:app"),
+TERRAFORM_VAR_STUBS: Final = {"gateway_num_workers": "2", "gateway_metrics_port": "9464"}
+TERRAFORM_WORKLOADS: Final = frozenset({"gateway", "backend", "ui", "migrations", "metrics", "collector"})
+COMPONENT_BINARIES: Final = {
+    "gateway": "python",
+    "backend": "uvicorn",
+    "ui": "nginx",
+    "migrations": "python",
+    "metrics": "python",
+    "collector": "python",
 }
-_MAX_INTERPOLATION_PASSES: Final = 5
 
 
 def _write_stubs(bin_dir: Path, names: tuple[str, ...]) -> None:
@@ -122,28 +134,22 @@ def test_backend_leaves_ui_runtime_config_unchanged(tmp_path: Path) -> None:
     assert json.loads(runtime_file.read_text()) == {"backend_url": "https://stale.example.com"}
 
 
-def _run_shell_command(command: str, bin_dir: Path, record: Path, use_ddtrace: str | None) -> tuple[str, ...]:
-    env = _entrypoint_env(bin_dir, record, {"USE_DDTRACE": use_ddtrace})
-    result = subprocess.run(["sh", "-c", command], env=env, capture_output=True, text=True, check=False)
-    assert result.returncode == 0, f"stdout={result.stdout} stderr={result.stderr}"
-    return tuple(record.read_text().splitlines()) if record.exists() else ()
+def _tf_word(word: str) -> str:
+    var: Final = _TF_VAR_RE.fullmatch(word)
+    if var is not None:
+        return TERRAFORM_VAR_STUBS[var.group(1) or var.group(2)]
+    return word.strip('"')
 
 
-def _resolve_tf_local(terraform_file: Path, name: str) -> str:
-    values = {
-        m.group(1): m.group(2).replace('\\"', '"') for m in _TF_STRING_LOCAL_RE.finditer(terraform_file.read_text())
-    }
-
-    assert name in values, f"{terraform_file} defines no {name} local"
-    resolved = values[name]
-    for _ in range(_MAX_INTERPOLATION_PASSES):
-        if "${" not in resolved:
-            return resolved
-        resolved = _TF_INTERPOLATION_RE.sub(
-            lambda m: values[m.group(2)] if m.group(1) == "local" else TERRAFORM_VAR_STUBS[m.group(2)],
-            resolved,
+def _terraform_component_argvs(module_dir: Path) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    return tuple(
+        (tf.name, tuple(_tf_word(word) for word in words))
+        for tf in sorted(module_dir.glob("*.tf"))
+        for words in (
+            *(m.group(1).split() for m in _TF_ENTRYPOINT_CALL_RE.finditer(tf.read_text())),
+            *(re.split(r"\s*,\s*", m.group(1)) for m in _TF_COMPONENT_LIST_RE.finditer(tf.read_text())),
         )
-    raise AssertionError(f"{terraform_file}:{name} still has unresolved interpolations: {resolved}")
+    )  # comprehension-ok: the two regex scans over one file read are clearer inline than as a generator helper
 
 
 def _entrypoint_argv(dockerfile: Path) -> tuple[str, ...]:
@@ -472,62 +478,30 @@ def test_creates_a_missing_prometheus_multiproc_dir(tmp_path: Path) -> None:
     assert missing.is_dir()
 
 
-@pytest.mark.parametrize("terraform_file", TERRAFORM_LAUNCH_SITES, ids=lambda p: p.parent.name)
-@pytest.mark.parametrize("component", ["gateway", "backend"])
-@pytest.mark.parametrize("use_ddtrace", [*TRUTHY_USE_DDTRACE, *FALSY_USE_DDTRACE])
-def test_terraform_launch_command_matches_the_script_contract(
-    terraform_file: Path, component: str, use_ddtrace: str | None, tmp_path: Path
-) -> None:
-    launcher = COMPONENT_LAUNCHERS[component]
-    app_target = " ".join(launcher[1:])
-    command = _resolve_tf_local(terraform_file, f"{component}_launch_cmd")
+@pytest.mark.parametrize("module", TERRAFORM_MODULES, ids=str)
+def test_terraform_hands_every_workload_to_the_image_entrypoint(module: str) -> None:
+    argvs: Final = _terraform_component_argvs(TERRAFORM_MODULES[module])
 
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir(parents=True)
-    _write_stubs(bin_dir, ("ddtrace-run", "uvicorn", "python"))
-    from_terraform = _run_shell_command(command, bin_dir, tmp_path / "terraform.txt", use_ddtrace)
-
-    from_script = _run_entrypoint((component,), tmp_path / "script", use_ddtrace=use_ddtrace)
-
-    assert from_terraform[0] == from_script[0], (
-        f"{terraform_file} disagrees with the script on USE_DDTRACE={use_ddtrace}"
-    )
-    assert from_terraform[2] == from_script[2], f"{terraform_file} disagrees with the script on the openai integration"
-    assert app_target in from_terraform[1]
-    assert app_target in from_script[1]
-    assert "gateway.main:app" not in from_terraform[1], f"{terraform_file} bypasses the gateway.launch supervisor"
-
-    if use_ddtrace in TRUTHY_USE_DDTRACE:
-        assert from_terraform[0] == "exec=ddtrace-run"
-        assert from_terraform[1].startswith(f"args={launcher[0]} ")
-        assert from_terraform[2] == "DD_TRACE_OPENAI_ENABLED=False"
-    else:
-        assert from_terraform[0] == f"exec={launcher[0]}"
-        assert from_terraform[2] == "DD_TRACE_OPENAI_ENABLED=<unset>"
+    assert {argv[0] for _, argv in argvs} == TERRAFORM_WORKLOADS, f"{module} workloads: {argvs}"
+    for tf in TERRAFORM_MODULES[module].glob("*.tf"):
+        for entrypoint_path in _TF_ENTRYPOINT_LOCAL_RE.findall(tf.read_text()):
+            assert entrypoint_path == _entrypoint_argv(DOCKERFILE)[0], f"{tf} execs a path the image does not ship"
 
 
-@pytest.mark.parametrize("terraform_file", TERRAFORM_LAUNCH_SITES, ids=lambda p: p.parent.name)
-def test_terraform_routes_every_launch_site_through_a_traced_command(terraform_file: Path) -> None:
-    launch_sites = tuple(line for line in terraform_file.read_text().splitlines() if _APP_TARGET_RE.search(line))
+@pytest.mark.parametrize("module", TERRAFORM_MODULES, ids=str)
+@pytest.mark.parametrize("use_ddtrace", ["true", None])
+def test_the_entrypoint_accepts_every_terraform_argv(module: str, use_ddtrace: str | None, tmp_path: Path) -> None:
+    for index, (tf, argv) in enumerate(_terraform_component_argvs(TERRAFORM_MODULES[module])):
+        component, *extra = argv
+        recorded: Final = _run_entrypoint(argv, tmp_path / str(index), use_ddtrace=use_ddtrace)
 
-    assert len(launch_sites) == TERRAFORM_LAUNCH_SITES[terraform_file], (
-        f"{terraform_file} launch-site count changed; re-check each one honors USE_DDTRACE"
-    )
-    for line in launch_sites:
-        assert "ddtrace-run" in line, f"{terraform_file} launches uvicorn without honoring USE_DDTRACE: {line.strip()}"
-
-    body = terraform_file.read_text()
-    for component in ("gateway", "backend"):
-        assert f"local.{component}_launch_cmd" in body, (
-            f"{terraform_file} defines a {component} launch command but never uses it"
-        )
-
-
-@pytest.mark.parametrize("terraform_file", TERRAFORM_LAUNCH_SITES, ids=lambda p: p.parent.name)
-def test_terraform_does_not_depend_on_the_entrypoint_script(terraform_file: Path) -> None:
-    assert IMAGE_ENTRYPOINT_PATH not in terraform_file.read_text(), (
-        f"{terraform_file} depends on a script that images predating it do not ship"
-    )
+        expected_exec: Final = "ddtrace-run" if use_ddtrace and component != "ui" else COMPONENT_BINARIES[component]
+        assert recorded[0] == f"exec={expected_exec}", f"{module}/{tf} {argv}: {recorded}"
+        assert recorded[1].endswith(" ".join(extra)), f"{module}/{tf} {argv} drops its flags: {recorded[1]}"
+        if component == "gateway":
+            assert extra == ["--workers", TERRAFORM_VAR_STUBS["gateway_num_workers"]], f"{module}/{tf}: {argv}"
+        if component == "metrics":
+            assert extra == ["--port", TERRAFORM_VAR_STUBS["gateway_metrics_port"]], f"{module}/{tf}: {argv}"
 
 
 def test_help_prints_the_header_comment_block_without_shell_source(tmp_path: Path) -> None:
@@ -555,3 +529,145 @@ def test_entrypoint_script_is_executable() -> None:
 
 def test_entrypoint_script_has_no_carriage_returns() -> None:
     assert b"\r" not in DOCKER_ENTRYPOINT.read_bytes()
+
+
+def _run_proxy_with_discrete_database(
+    tmp_path: Path, extra_env: dict[str, str | None], extra_pythonpath: Path | None = None
+) -> list[str]:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "litellm").write_text(
+        '#!/bin/sh\n{ echo "args=$*"; echo "DATABASE_URL=$DATABASE_URL"; '
+        'echo "DATABASE_URL_READ_REPLICA=${DATABASE_URL_READ_REPLICA-<unset>}"; } >> "$RECORD"\n'
+    )
+    (bin_dir / "litellm").chmod(0o755)
+    (bin_dir / "python").write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
+    (bin_dir / "python").chmod(0o755)
+    record = tmp_path / "record.txt"
+    env = _entrypoint_env(
+        bin_dir,
+        record,
+        {
+            "DATABASE_URL": None,
+            "DATABASE_URL_READ_REPLICA": None,
+            "DIRECT_URL": None,
+            "DATABASE_MAX_IDLE_CONNECTION_LIFETIME": None,
+            "USE_AWS_KMS": None,
+            "DATABASE_HOST": "writer.db",
+            "DATABASE_PORT": "6543",
+            "DATABASE_USER": "app",
+            "DATABASE_PASSWORD": "p@ss",
+            "DATABASE_NAME": "litellm",
+            "DATABASE_HOST_READ_REPLICA": "reader.db",
+            "DATABASE_PORT_READ_REPLICA": "6544",
+            **extra_env,
+        },
+    )
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(extra_pythonpath), str(REPO_ROOT)] if extra_pythonpath else [str(REPO_ROOT)]
+    )
+
+    result = subprocess.run(
+        ["sh", str(DOCKER_ENTRYPOINT), "proxy", "--port", "4000"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, f"stdout={result.stdout} stderr={result.stderr}"
+    return record.read_text().splitlines()
+
+
+def test_proxy_assembles_database_urls_from_discrete_variables(tmp_path: Path) -> None:
+    lines = _run_proxy_with_discrete_database(tmp_path, {})
+
+    assert lines[0] == "args=--port 4000"
+    assert lines[1].startswith("DATABASE_URL=postgresql://app:p%40ss@writer.db:6543/litellm")
+    assert lines[2].startswith("DATABASE_URL_READ_REPLICA=postgresql://app:p%40ss@reader.db:6544/litellm")
+    assert "max_idle_connection_lifetime" not in parse_qs(urlsplit(lines[1]).query)
+    assert "max_idle_connection_lifetime" not in parse_qs(urlsplit(lines[2]).query)
+
+
+def test_proxy_decrypts_a_kms_database_password_before_assembling(tmp_path: Path) -> None:
+    site_dir = tmp_path / "site"
+    site_dir.mkdir()
+    (site_dir / "sitecustomize.py").write_text(
+        "import os\n"
+        "import litellm.secret_managers.aws_secret_manager as kms\n"
+        "kms.decrypt_env_var = lambda: {'DATABASE_PASSWORD': 'p@ss'} "
+        "if os.environ.get('DATABASE_PASSWORD') == 'aws_kms/ciphertext' else {}\n"
+    )
+    lines = _run_proxy_with_discrete_database(
+        tmp_path,
+        {"USE_AWS_KMS": "True", "DATABASE_PASSWORD": "aws_kms/ciphertext"},
+        extra_pythonpath=site_dir,
+    )
+
+    assert lines[1].startswith("DATABASE_URL=postgresql://app:p%40ss@writer.db:6543/litellm")
+    assert lines[2].startswith("DATABASE_URL_READ_REPLICA=postgresql://app:p%40ss@reader.db:6544/litellm")
+
+
+def test_proxy_pins_an_env_configured_idle_lifetime(tmp_path: Path) -> None:
+    lines = _run_proxy_with_discrete_database(tmp_path, {"DATABASE_MAX_IDLE_CONNECTION_LIFETIME": "120"})
+
+    assert "max_idle_connection_lifetime=120" in lines[1]
+    assert "max_idle_connection_lifetime=120" in lines[2]
+
+
+def test_proxy_keeps_a_reader_url_pinned_idle_lifetime(tmp_path: Path) -> None:
+    lines: Final = _run_proxy_with_discrete_database(
+        tmp_path, {"DATABASE_URL_READ_REPLICA": "postgresql://app:pass@reader.db/litellm?max_idle_connection_lifetime=300"}
+    )
+    assert "max_idle_connection_lifetime" not in parse_qs(urlsplit(lines[1]).query)
+    assert "max_idle_connection_lifetime=300" in lines[2]
+    assert "max_idle_connection_lifetime=60" not in lines[2]
+
+
+@pytest.mark.parametrize("pinned_writer", (False, True))
+def test_proxy_reader_uses_prisma_tls_and_writer_pool_settings(tmp_path: Path, pinned_writer: bool) -> None:
+    root_cert: Final = str(tmp_path / "absent-ca.pem")
+    writer_query: Final = urlencode(
+        {
+            "sslmode": "verify-full",
+            "sslrootcert": root_cert,
+            "connection_limit": "7",
+            "socket_timeout": "9",
+            "max_idle_connection_lifetime": "300",
+        }
+    )
+    lines: Final = _run_proxy_with_discrete_database(
+        tmp_path,
+        {
+            "DATABASE_URL": f"postgresql://app:pass@writer.db/litellm?{writer_query}" if pinned_writer else None,
+            "DATABASE_HOST": None if pinned_writer else "writer.db",
+            "DATABASE_USER_READ_REPLICA": "reader",
+            "DATABASE_PASSWORD_READ_REPLICA": "rpass",
+            "DATABASE_NAME_READ_REPLICA": "replica",
+            "DATABASE_SSLMODE": "verify-full",
+            "DATABASE_SSLROOTCERT": root_cert,
+        },
+    )
+    reader: Final = urlsplit(lines[2].removeprefix("DATABASE_URL_READ_REPLICA="))
+    assert (reader.hostname, reader.username, reader.path) == ("reader.db", "reader", "/replica")
+    assert parse_qs(reader.query) == {
+        "sslmode": ["require"],
+        "sslcert": [root_cert],
+        "sslaccept": ["strict"],
+        **(
+            {"connection_limit": ["7"], "socket_timeout": ["9"], "max_idle_connection_lifetime": ["300"]}
+            if pinned_writer
+            else {}
+        ),
+    }
+
+
+def test_proxy_keeps_an_operator_database_url(tmp_path: Path) -> None:
+    record = _run_entrypoint(
+        ("proxy",),
+        tmp_path,
+        DATABASE_URL="postgresql://pinned/db",
+        DATABASE_HOST="writer.db",
+    )
+
+    assert record[0] == "exec=litellm"

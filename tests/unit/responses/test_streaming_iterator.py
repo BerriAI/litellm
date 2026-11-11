@@ -2743,14 +2743,17 @@ async def test_shutdown_drain_waits_for_a_pending_logging_task():
 
 @pytest.mark.asyncio
 async def test_shutdown_drain_gives_up_on_a_stuck_logging_task_at_its_timeout():
-    stuck: Final = streaming_module.spawn_logging_task(
-        asyncio.get_running_loop(), asyncio.Event().wait(), task_name="stuck"
-    )
+    loop: Final = asyncio.get_running_loop()
+    with patch.object(loop, "time", return_value=0.0):
+        stuck: Final = streaming_module.spawn_logging_task(loop, asyncio.Event().wait(), task_name="stuck")
 
-    await asyncio.wait_for(streaming_module.drain_logging_tasks(timeout=0.05), timeout=1)
-
-    assert not stuck.done()
-    stuck.cancel()
+        try:
+            await streaming_module.drain_logging_tasks(timeout=0)
+            assert not stuck.done()
+        finally:
+            stuck.cancel()
+            with suppress(asyncio.CancelledError):
+                await stuck
 
 
 async def _drain_held_until_released(release: asyncio.Event) -> bool:
