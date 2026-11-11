@@ -7,9 +7,13 @@ metadata:
   annotations:
     "helm.sh/hook": test
 spec:
+  {{- with .Values.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   containers:
     - name: wget
-      image: busybox
+      image: "{{ .Values.test.image.repository }}{{ with .Values.test.image.tag }}:{{ . }}{{ end }}"
       command: ['sh', '-c']
       args:
         - |

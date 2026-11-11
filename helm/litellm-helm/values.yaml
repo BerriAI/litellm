@@ -28,6 +28,11 @@ image:
   # tag: "latest"
   tag: ""
 
+test:
+  image:
+    repository: busybox
+    tag: ""
+
 imagePullSecrets: []
 nameOverride: "litellm"
 fullnameOverride: ""
