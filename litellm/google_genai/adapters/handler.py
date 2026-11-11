@@ -7,12 +7,13 @@ import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.google_genai.adapters import GenerateContentCompletionKwargs
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import CustomPricingLiteLLMParams, ModelResponse
 
 from .transformation import GoogleGenAIAdapter
 
 # Initialize adapter
 GOOGLE_GENAI_ADAPTER: Final = GoogleGenAIAdapter()
+CUSTOM_PRICING_PARAMS: Final = frozenset(CustomPricingLiteLLMParams.model_fields)
 
 
 def _mark_failure_logged_by_inner_completion(adapter_kwargs: Mapping[str, object]) -> None:
@@ -72,8 +73,11 @@ class GenerateContentToCompletionHandler:
                 completion_kwargs["litellm_metadata"] = extra_kwargs["litellm_metadata"]
 
         if isinstance(custom_logging_obj, LiteLLMLoggingObj):
-            completion_kwargs["_dynamic_callback_context"] = custom_logging_obj
+            completion_kwargs["litellm_logging_obj"] = custom_logging_obj
             completion_kwargs["litellm_call_id"] = custom_logging_obj.litellm_call_id
+            completion_kwargs.update(
+                {key: value for key, value in (extra_kwargs or {}).items() if key in CUSTOM_PRICING_PARAMS}
+            )
 
         if stream:
             completion_kwargs["stream"] = stream

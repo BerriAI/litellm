@@ -2718,7 +2718,7 @@ class Logging(LiteLLMLoggingBaseClass):
             elif (
                 self.call_type == CallTypes.generate_content.value
                 or self.call_type == CallTypes.agenerate_content.value
-            ):
+            ) and not isinstance(result, ModelResponse):
                 result = self._handle_non_streaming_google_genai_generate_content_response_logging(result=result)
             elif self.call_type == CallTypes.asend_message.value or self.call_type == CallTypes.send_message.value:
                 result = self._handle_a2a_response_logging(result=result)

@@ -105,6 +105,9 @@ _RESPONSE_MIME_TYPE_KEYS: Final = ("responseMimeType", "response_mime_type")
 _RESPONSE_SCHEMA_KEYS: Final = ("responseJsonSchema", "response_json_schema", "responseSchema", "response_schema")
 _TOOL_PARAMETERS_KEYS: Final = ("parametersJsonSchema", "parameters")
 _JSON_MIME_TYPE: Final = "application/json"
+ADAPTER_GENERATION_CONFIG_KEYS: Final = frozenset(
+    {"temperature", "maxOutputTokens", "topP", "stopSequences", *_RESPONSE_MIME_TYPE_KEYS, *_RESPONSE_SCHEMA_KEYS}
+)
 _GEMINI_ONLY_SCHEMA_KEYS: Final = frozenset({"propertyOrdering", "property_ordering"})
 _CONFIG_FIELDS: Final = TypeAdapter(Mapping[str, object])
 _JSON_OBJECT_SCHEMA: Final = TypeAdapter(dict[str, JsonValue])

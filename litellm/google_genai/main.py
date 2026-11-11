@@ -1,17 +1,20 @@
 import asyncio
+import base64
 import contextvars
-from collections.abc import Awaitable, Mapping
+from collections.abc import Awaitable, Mapping, Sequence
 from functools import partial
 from typing import TYPE_CHECKING, Any, ClassVar, Final
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import ConfigDict, JsonValue, TypeAdapter
+from pydantic_core import to_jsonable_python
 
 import litellm
 from litellm.constants import request_timeout
 
 # Import the adapter for fallback to completion format
-from litellm.google_genai.adapters.handler import GenerateContentToCompletionHandler
+from litellm.google_genai.adapters.handler import CUSTOM_PRICING_PARAMS, GenerateContentToCompletionHandler
+from litellm.google_genai.adapters.transformation import ADAPTER_GENERATION_CONFIG_KEYS
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.google_genai.transformation import (
     GENERATE_CONTENT_REQUEST_TOP_LEVEL_FIELDS,
@@ -19,9 +22,11 @@ from litellm.llms.base_llm.google_genai.transformation import (
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.custom_llm import CustomLLM, CustomLLMError
+from litellm.llms.vertex_ai.gemini.transformation import snake_to_camel
+from litellm.main import _register_custom_pricing_for_request
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import CallTypes
+from litellm.types.utils import CallTypes, LlmProviders
 from litellm.utils import ProviderConfigManager, client
 
 if TYPE_CHECKING:
@@ -48,11 +53,16 @@ _CUSTOM_NATIVE_REQUEST_FIELDS: Final = (
     "systemInstruction",
     "system_instruction",
 )
+_BUILT_IN_PROVIDERS: Final = frozenset(provider.value for provider in LlmProviders)
+_CALLER_DATA_FIELDS: Final = frozenset({"args", "response"})
+_STR_KEYED_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_OBJECT_SEQUENCE: Final = TypeAdapter(Sequence[object])
+_JSON_VALUE: Final = TypeAdapter[JsonValue](JsonValue)
 #################################################
 
 
 def _custom_generate_content_handler(provider: str) -> CustomLLM | None:
-    if provider in tuple(built_in.value for built_in in litellm.LlmProviders):
+    if provider in _BUILT_IN_PROVIDERS:
         return None
     return ProviderConfigManager.get_custom_llm_handler(provider)
 
@@ -173,13 +183,24 @@ class GenerateContentHelper:
             if litellm_logging_obj is None:
                 raise ValueError("litellm_logging_obj is required, but got None")
             if custom_handler is not None:
+                request_kwargs: Final = _STR_KEYED_MAPPING.validate_python(kwargs)
                 litellm_logging_obj.update_from_kwargs(  # pyright: ignore[reportUnknownMemberType]  # legacy logging interface is untyped
                     kwargs=kwargs,
                     model=model,
                     optional_params={"generationConfig": _CUSTOM_GENERATE_CONTENT_BODY.validate_python(config or {})},
-                    litellm_params={"litellm_call_id": litellm_call_id},
+                    litellm_params={
+                        "litellm_call_id": litellm_call_id,
+                        **{key: value for key, value in request_kwargs.items() if key in CUSTOM_PRICING_PARAMS},
+                    },
                     custom_llm_provider=custom_llm_provider,
                 )
+                if any(request_kwargs.get(key) is not None for key in CUSTOM_PRICING_PARAMS):
+                    _register_custom_pricing_for_request(
+                        model=model,
+                        custom_llm_provider=custom_llm_provider,
+                        kwargs=dict(request_kwargs),
+                        model_info=None,
+                    )
             return GenerateContentSetupResult(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
@@ -272,18 +293,62 @@ def _require_custom_stream_hook(setup_result: GenerateContentSetupResult, is_asy
     hook_name: Final = "astreaming" if is_async else "streaming"
     if getattr(type(custom_handler), hook_name) is getattr(CustomLLM, hook_name):
         raise CustomLLMError(
-            status_code=500,
+            status_code=400,
             message=f"{setup_result.custom_llm_provider} does not implement {hook_name}, so it cannot stream generateContent",
         )
+
+
+def _require_adapter_generation_config(setup_result: GenerateContentSetupResult) -> None:
+    if _custom_generate_content_handler(setup_result.custom_llm_provider) is None:
+        return
+    if setup_result.litellm_params.drop_params or litellm.drop_params:
+        return
+    untranslated: Final = sorted(setup_result.generate_content_config_dict.keys() - ADAPTER_GENERATION_CONFIG_KEYS)
+    if untranslated:
+        raise litellm.UnsupportedParamsError(
+            message=(
+                f"{setup_result.custom_llm_provider} has no generateContent hook, and the completion adapter cannot "
+                f"send generationConfig {untranslated}. Set drop_params=True to drop them."
+            ),
+            llm_provider=setup_result.custom_llm_provider,
+            model=setup_result.model,
+        )
+
+
+def _gemini_wire_value(value: object, camel_case_keys: bool) -> JsonValue:
+    match value:
+        case bytes():
+            return base64.b64encode(value).decode()
+        case str():
+            return value
+        case Mapping():
+            return {
+                (snake_to_camel(key) if camel_case_keys else key): _gemini_wire_value(
+                    item, camel_case_keys and key not in _CALLER_DATA_FIELDS
+                )
+                for key, item in _STR_KEYED_MAPPING.validate_python(value).items()
+                if item is not None
+            }
+        case Sequence():
+            return [_gemini_wire_value(item, camel_case_keys) for item in _OBJECT_SEQUENCE.validate_python(value)]
+        case _:
+            return _JSON_VALUE.validate_python(to_jsonable_python(value, fallback=str))
+
+
+def _custom_generate_content_logging_body(response: object) -> Mapping[str, JsonValue]:
+    logged: Final = _gemini_wire_value(
+        _GENERATE_CONTENT_RESULT.validate_python(
+            _GENERATE_CONTENT_RESULT.dump_python(response, by_alias=True, exclude_none=True)
+        ),
+        camel_case_keys=True,
+    )
+    return {"usageMetadata": {}, **(logged if isinstance(logged, dict) else {})}
 
 
 def _log_custom_generate_content_response(
     response: object, logging_obj: LiteLLMLoggingObj, contents: object, api_key: str | None
 ) -> object:
-    body: Final = _CUSTOM_GENERATE_CONTENT_BODY.validate_python(
-        _GENERATE_CONTENT_RESULT.dump_python(response, mode="json", by_alias=True)
-    )
-    raw_response: Final = httpx.Response(status_code=200, json=body)
+    raw_response: Final = httpx.Response(status_code=200, json=_custom_generate_content_logging_body(response))
     logging_obj.model_call_details["httpx_response"] = raw_response  # rebind-ok: success logging needs raw response
     logging_obj.post_call(input=contents, api_key=api_key, original_response=raw_response.text)  # pyright: ignore[reportUnknownMemberType]  # legacy logging interface is untyped
     return response
@@ -462,9 +527,7 @@ def generate_content(
 
         # Check if we should use the adapter (when provider config is None)
         if setup_result.generate_content_provider_config is None:
-            if custom_handler is not None:
-                setup_result.litellm_logging_obj.mark_logging_complete(event_type="sync_success")
-                setup_result.litellm_logging_obj.mark_logging_complete(event_type="async_success")
+            _require_adapter_generation_config(setup_result)
             # Use the adapter to convert to completion format
             adapter_response: Final = GenerateContentToCompletionHandler.generate_content_handler(
                 model=model,
@@ -570,6 +633,7 @@ async def agenerate_content_stream(
             if "stream" in kwargs:
                 kwargs.pop("stream", None)
             _require_custom_stream_hook(setup_result, is_async=True)
+            _require_adapter_generation_config(setup_result)
 
             # Use the adapter to convert to completion format
             return await GenerateContentToCompletionHandler.async_generate_content_handler(
@@ -664,6 +728,7 @@ def generate_content_stream(
             if "stream" in kwargs:
                 kwargs.pop("stream", None)
             _require_custom_stream_hook(setup_result, is_async=_is_async is True)
+            _require_adapter_generation_config(setup_result)
 
             # Use the adapter to convert to completion format
             return GenerateContentToCompletionHandler.generate_content_handler(
