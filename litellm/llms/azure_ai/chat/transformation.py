@@ -17,6 +17,7 @@ from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.azure_ai.common_utils import (
     CHAT_COMPLETIONS_PATH,
     api_key_header_for_base,
+    foundry_project_root,
     foundry_v1_root,
     is_foundry_model_inference_base,
     with_foundry_project_scope,
@@ -153,7 +154,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         """
         Returns True if the request should use `api-key` header for authentication.
         """
-        return api_key_header_for_base(api_base) == "api-key"
+        return api_key_header_for_base(api_base) == "api-key" and not foundry_project_root(httpx.URL(api_base))
 
     def get_complete_url(
         self,
@@ -199,6 +200,9 @@ class AzureAIStudioConfig(OpenAIConfig):
         v1_root: Final = foundry_v1_root(original_url)
         if v1_root is not None:
             v1_chat_path: Final = "/" + "/".join((*v1_root, *CHAT_COMPLETIONS_PATH))
+            if foundry_project_root(original_url):
+                project_params: Final = {key: value for key, value in query_params.items() if key != "api-version"}
+                return str(original_url.copy_with(path=v1_chat_path, params=project_params))
             return str(original_url.copy_with(path=v1_chat_path, params=query_params))
 
         # Add the path to the base URL
@@ -267,7 +271,11 @@ class AzureAIStudioConfig(OpenAIConfig):
         return is_foundry_model_inference_base(api_base)
 
     def _is_azure_openai_model(self, model: str, api_base: str | None) -> bool:
-        if api_base is None or self._is_foundry_model_inference_base(api_base):
+        if (
+            api_base is None
+            or self._is_foundry_model_inference_base(api_base)
+            or foundry_v1_root(httpx.URL(api_base)) is not None
+        ):
             return False
         stripped_model: Final = model.split("/", 1)[1] if "/" in model else model
         return (

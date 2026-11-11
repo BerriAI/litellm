@@ -64,7 +64,11 @@ def _path_segments(base_url: httpx.URL) -> tuple[str, ...]:
 
 def foundry_project_root(base_url: httpx.URL) -> tuple[str, ...]:
     segments: Final = _path_segments(base_url)
-    return segments[:3] if segments[:2] == FOUNDRY_PROJECT_PATH_PREFIX else ()
+    prefix_starts: Final = (
+        index for index in range(len(segments) - 2) if segments[index : index + 2] == FOUNDRY_PROJECT_PATH_PREFIX
+    )
+    project_start: Final = next(prefix_starts, None)
+    return () if project_start is None else segments[: project_start + 3]
 
 
 def foundry_v1_root(base_url: httpx.URL) -> tuple[str, ...] | None:
