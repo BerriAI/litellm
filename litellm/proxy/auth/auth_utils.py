@@ -458,6 +458,7 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     "aws_sts_endpoint",
     "aws_web_identity_token",
     "aws_role_name",
+    "aws_region_name",
     # Remaining AWS identity selectors. ``get_credentials`` prefers a named
     # profile over the deployment's static keys, so a caller-supplied
     # ``aws_profile_name`` signs Bedrock and S3 requests as any profile
@@ -467,6 +468,7 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     "aws_session_name",
     "aws_external_id",
     "aws_session_tags",
+    "base_model",
     "vertex_credentials",
     "vertex_location",
     "vertex_project",

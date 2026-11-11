@@ -6253,3 +6253,35 @@ def test_chatgpt_model_configuration_reaches_role_authorization(
                 model="",
                 route=inference_route,
             )
+
+
+@pytest.mark.parametrize(
+    ("param", "value"),
+    [
+        ("aws_region_name", "us-east-1"),
+        ("base_model", "vertex_ai/gemini-3.1-flash-lite"),
+    ],
+)
+def test_aws_region_name_and_base_model_rejected_without_opt_in(param: str, value: str) -> None:
+    request_body: Final = {
+        "model": "claude-sonnet",
+        "messages": [{"role": "user", "content": "hi"}],
+        param: value,
+    }
+    with pytest.raises(ValueError, match=f"Rejected Request: {param} is not allowed in request body"):
+        is_request_body_safe(
+            request_body=request_body,
+            general_settings={},
+            llm_router=None,
+            model="claude-sonnet",
+        )
+    assert (
+        is_request_body_safe(
+            request_body=request_body,
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="claude-sonnet",
+        )
+        is True
+    )
+
