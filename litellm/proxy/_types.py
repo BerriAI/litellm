@@ -713,6 +713,7 @@ class LiteLLMRoutes(enum.Enum):
             # model
             "/model/new",
             "/model/update",
+            "/model/{model_id}/update",
             "/model/delete",
             "/model/info",
             "/model/{model_id}/kubernetes_pods",
@@ -5335,6 +5336,7 @@ class BaseDailySpendTransaction(TypedDict):
     # missing value to zero, so requiring it here would describe a shape the aggregation
     # is explicitly tested against.
     autorouter_savings_spend: NotRequired[float]
+    guardrail_spend: NotRequired[float]  # writable-ok: the rollup queue accumulates into this key in place
 
     # request level metrics
     spend: float

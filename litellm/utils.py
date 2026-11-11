@@ -85,9 +85,9 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.agentic_followup_failure import is_agentic_followup_failure
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
-    CHAT_ALLOWED_TOOLS_LAYOUT,
     HOSTED_TOOL_CHOICE_TYPES,
-    parse_chat_allowed_tools_tool_choice,
+    chat_allowed_tools_tool_choice,
+    parse_allowed_tools_tool_choice_or_refuse,
 )
 from litellm.litellm_core_utils.attempt_settlement import mark_attempt_answered
 from litellm.litellm_core_utils.core_helpers import (
@@ -2060,11 +2060,9 @@ def _get_call_type_from_public_name(function_name: str) -> str:
             return function_name
 
 
-def _is_litellm_router_call(kwargs: Mapping[str, object], *, is_async: bool) -> bool:
-    """Router completion uses metadata. Async generic calls retry with litellm_metadata; sync generic calls need SDK retries."""
-    metadata_buckets: Final = (
-        (kwargs.get("metadata"), kwargs.get("litellm_metadata")) if is_async else (kwargs.get("metadata"),)
-    )
+def _is_litellm_router_call(kwargs: Mapping[str, object]) -> bool:
+    """Router completion stamps the group on metadata, generic endpoints on litellm_metadata."""
+    metadata_buckets: Final = (kwargs.get("metadata"), kwargs.get("litellm_metadata"))
     return any(isinstance(bucket, Mapping) and "model_group" in bucket for bucket in metadata_buckets)
 
 
@@ -2322,7 +2320,7 @@ def client(original_function):
                     litellm.num_retries = None  # set retries to None to prevent infinite loops
                 context_window_fallback_dict: Final = kwargs.get("context_window_fallback_dict", {})
 
-                is_completion_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=False)
+                is_completion_litellm_router_call: Final = _is_litellm_router_call(kwargs)
                 if (
                     num_retries
                     and not is_completion_litellm_router_call
@@ -2360,7 +2358,7 @@ def client(original_function):
                 if not is_resent_failure(e):
                     litellm.num_retries = None  # set retries to None to prevent infinite loops
 
-                is_responses_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=False)
+                is_responses_litellm_router_call: Final = _is_litellm_router_call(kwargs)
                 if (
                     num_retries
                     and not is_responses_litellm_router_call
@@ -2664,7 +2662,7 @@ def client(original_function):
             if retry_call_type == CallTypes.acompletion.value:
                 context_window_fallback_dict: Final = kwargs.get("context_window_fallback_dict", {})
 
-                is_acompletion_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=True)
+                is_acompletion_litellm_router_call: Final = _is_litellm_router_call(kwargs)
 
                 if (
                     num_retries
@@ -2700,7 +2698,7 @@ def client(original_function):
                     result = await original_function(*args, **kwargs)
                     return result
             elif retry_call_type == CallTypes.aresponses.value:
-                is_aresponses_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=True)
+                is_aresponses_litellm_router_call: Final = _is_litellm_router_call(kwargs)
 
                 if (
                     num_retries
@@ -7266,6 +7264,9 @@ def get_model_info_helper(
                 cache_read_input_audio_token_cost_batches=_model_info.get(
                     "cache_read_input_audio_token_cost_batches", None
                 ),
+                cache_read_input_image_token_cost_batches=_model_info.get(
+                    "cache_read_input_image_token_cost_batches", None
+                ),
                 explicit_cache_read_input_token_cost=_model_info.get("explicit_cache_read_input_token_cost", None),
                 cache_read_input_image_token_cost=_model_info.get("cache_read_input_image_token_cost", None),
                 prompt_cache_min_tokens=_model_info.get("prompt_cache_min_tokens", None),
@@ -9579,6 +9580,7 @@ def validate_chat_completion_user_messages(messages: list[AllMessageValues]):
 def validate_chat_completion_tool_choice(
     tool_choice: dict | str | None,
     model: str = "",
+    drop_params: bool = False,
 ) -> dict | str | None:
     """
     Confirm the tool choice is passed in the OpenAI format.
@@ -9591,35 +9593,21 @@ def validate_chat_completion_tool_choice(
         tool_choice_type = tool_choice.get("type")
         if tool_choice_type in ("auto", "none", "required") and "function" not in tool_choice:
             return tool_choice_type
-        if (
-            tool_choice_type == "allowed_tools"
-            and (
-                parse_chat_allowed_tools_tool_choice(
-                    cast(  # cast-ok: widening an untyped dict to object is always sound, the helper validates it with pydantic
-                        object, tool_choice
-                    )
-                )
-                is None
-            )
-        ):
-            raise BadRequestError(
-                message=(
-                    f"Invalid tool choice, tool_choice={tool_choice}. On chat completions an allowed_tools "
-                    f"tool_choice must be {CHAT_ALLOWED_TOOLS_LAYOUT}"
+        if tool_choice_type == "allowed_tools":
+            allowed_tools: Final = parse_allowed_tools_tool_choice_or_refuse(
+                cast(  # cast-ok: widening an untyped dict to object is always sound, the helper validates it with pydantic
+                    object, tool_choice
                 ),
-                model=model,
-                llm_provider="",
+                model,
+                drop_params,
             )
+            return None if allowed_tools is None else dict(chat_allowed_tools_tool_choice(allowed_tools))
 
         # Standard OpenAI format: {"type": "function", "function": {...}}
         forces_hosted_tool: Final[bool] = (
             isinstance(tool_choice_type, str) and tool_choice_type in HOSTED_TOOL_CHOICE_TYPES
         )
-        if (
-            tool_choice_type != "allowed_tools"
-            and not forces_hosted_tool
-            and (tool_choice_type is None or tool_choice.get("function") is None)
-        ):
+        if not forces_hosted_tool and (tool_choice_type is None or tool_choice.get("function") is None):
             raise BadRequestError(
                 message=f"Invalid tool choice, tool_choice={tool_choice}. Please ensure tool_choice follows the OpenAI spec",
                 model=model,
@@ -11369,6 +11357,7 @@ class ProviderConfigManager:
         from litellm.llms.serper.search.transformation import SerperSearchConfig
         from litellm.llms.tavily.search.transformation import TavilySearchConfig
         from litellm.llms.tinyfish.search.transformation import TinyfishSearchConfig
+        from litellm.llms.webiq.search.transformation import WebIQSearchConfig
         from litellm.llms.xai.search.transformation import XAISearchConfig
         from litellm.llms.you_com.search.transformation import YouComSearchConfig
 
@@ -11393,6 +11382,7 @@ class ProviderConfigManager:
             SearchProviders.AGENTCORE: AgentCoreSearchConfig,
             SearchProviders.NIMBLE: NimbleSearchConfig,
             SearchProviders.BING_GROUNDING: BingGroundingSearchConfig,
+            SearchProviders.WEBIQ: WebIQSearchConfig,
             SearchProviders.DEEPSEEK: DeepSeekSearchConfig,
             SearchProviders.XAI: XAISearchConfig,
         }

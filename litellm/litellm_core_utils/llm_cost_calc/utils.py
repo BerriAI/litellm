@@ -112,6 +112,7 @@ _BATCH_RATE_PREFIXES: Final = (
     "input_cost_per_token",
     "output_cost_per_token",
     "cache_read_input_token_cost",
+    "cache_read_input_image_token_cost",
     "cache_creation_input_token_cost",
 )
 _BATCH_TIER_PREFIXES: Final = (*_BATCH_RATE_PREFIXES, *_TTL_PRICED_CACHE_WRITE_RATE_KEYS.values())
@@ -326,6 +327,7 @@ class BatchCostRates:
     cache_read: float | None
     cache_creation: float | None
     cache_creation_rates_by_ttl: Mapping[str, float] = field(default_factory=lambda: MappingProxyType({}))
+    cache_read_image: float | None = None
 
 
 def _batch_rate(model_info: ModelInfo, key: str) -> float | None:
@@ -388,6 +390,7 @@ def get_batch_cost_rates(model_info: ModelInfo, usage: Usage, custom_llm_provide
                 if (rate := _batch_rate_for_prefix(model_info, key, usage, inclusive)) is not None
             }
         ),
+        cache_read_image=_batch_rate_for_prefix(model_info, "cache_read_input_image_token_cost", usage, inclusive),
     )
 
 
