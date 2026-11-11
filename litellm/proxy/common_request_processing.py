@@ -4515,10 +4515,10 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     async def _legacy_deferred_stream_guardrails(
-        captured_data: dict[str, object],
+        captured_data: dict[str, object],  # mutable-ok: same request-payload shape as the captured request dict
         captured_user_api_key_dict: "UserAPIKeyAuth",
         captured_logging_obj: LiteLLMLoggingObj,
-        assembled_response: Any,
+        assembled_response: Any,  # noqa: ANN401  # same untyped assembled stream response the public method takes
         cache_hit: object,
     ) -> None:
         _response = assembled_response

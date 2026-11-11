@@ -3307,15 +3307,15 @@ class ProxyLogging:
 
     async def _legacy_pre_call(
         self,
-        request_data: dict[str, object],
+        request_data: dict[str, object],  # mutable-ok: same request-payload shape as pre_call_hook's data
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
         guardrails_only: bool,
         skip_guardrails: bool,
         endpoint_type: EndpointType,
-        raw_request_snapshot: dict[str, object] | None,
-    ) -> dict[str, object] | None:
-        data: dict[str, object] | None = request_data  # rebind-ok: hooks below replace the request dict
+        raw_request_snapshot: dict[str, object] | None,  # mutable-ok: same request-payload shape as data
+    ) -> dict[str, object] | None:  # mutable-ok: same request-payload shape as data
+        data: dict[str, object] | None = request_data  # rebind-ok: hooks replace it  # mutable-ok: request dict
         try:
             if not skip_guardrails:
                 data, _ = await self._maybe_execute_pipelines(  # rebind-ok: pipeline edits feed the callback loop below
@@ -3435,7 +3435,9 @@ class ProxyLogging:
                     )
 
             if deferred_route_exc is not None and data is not None:
-                data = await self._handle_sensitive_data_route_exception(deferred_route_exc, data, user_api_key_dict)
+                data = await self._handle_sensitive_data_route_exception(  # rebind-ok: the reroute replaces the request
+                    deferred_route_exc, data, user_api_key_dict
+                )
 
             if parallel_guardrails and data is not None:
                 await self._run_parallel_pre_call_guardrails(
@@ -3451,7 +3453,9 @@ class ProxyLogging:
 
             return data
         except SensitiveDataRouteException as e:
-            data = await self._handle_sensitive_data_route_exception(e, data, user_api_key_dict)
+            data = await self._handle_sensitive_data_route_exception(  # rebind-ok: the reroute replaces the request
+                e, data, user_api_key_dict
+            )
             if data is not None:
                 self._process_guardrail_metadata(data, skip_guardrails=skip_guardrails)
             return data
@@ -3837,11 +3841,11 @@ class ProxyLogging:
 
     async def _legacy_during_call(
         self,
-        data: dict[str, object],
+        data: dict[str, object],  # mutable-ok: same request-payload shape as during_call_hook's data
         user_api_key_dict: UserAPIKeyAuth | None,
         call_type: CallTypesLiteral,
         guardrails_only: bool,
-    ) -> dict[str, object]:
+    ) -> dict[str, object]:  # mutable-ok: the request payload is handed back unchanged
         caps: Final = ProxyLogging.callback_capabilities()
         if not caps.has_guardrail and not caps.has_moderation_override:
             return data
@@ -4220,7 +4224,7 @@ class ProxyLogging:
 
     async def _legacy_post_call_failure(
         self,
-        request_data: dict[str, object],
+        request_data: dict[str, object],  # mutable-ok: same request-payload shape as post_call_failure_hook's
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
         redacted_traceback_str: str | None,
@@ -4508,7 +4512,7 @@ class ProxyLogging:
 
     async def _legacy_post_call_success(
         self,
-        data: dict[str, object],
+        data: dict[str, object],  # mutable-ok: same request-payload shape as post_call_success_hook's data
         response: LLMResponseTypes,
         user_api_key_dict: UserAPIKeyAuth,
     ) -> LLMResponseTypes:
@@ -4768,11 +4772,11 @@ class ProxyLogging:
 
     async def _legacy_response_headers(
         self,
-        data: dict[str, object],
+        data: dict[str, object],  # mutable-ok: same request-payload shape as post_call_response_headers_hook's
         user_api_key_dict: UserAPIKeyAuth,
         response: object,
-        request_headers: dict[str, str] | None,
-    ) -> dict[str, str]:
+        request_headers: dict[str, str] | None,  # mutable-ok: same shape as post_call_response_headers_hook's
+    ) -> dict[str, str]:  # mutable-ok: same merged-headers shape as post_call_response_headers_hook
         merged_headers: Final[dict[str, str]] = {}
         # Outer call sites in common_request_processing.py already gate this
         # call with ``has_post_call_response_headers_callbacks()``. The
