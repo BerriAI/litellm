@@ -4,7 +4,7 @@ Unit tests for auth_utils functions related to rate limiting and customer ID ext
 
 import base64
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Final, Optional
 from unittest.mock import MagicMock, patch
 
