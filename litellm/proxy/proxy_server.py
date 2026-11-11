@@ -5976,10 +5976,11 @@ def _unregister_db_callback(registration: _DbCallbackRegistration) -> None:
 
 
 def _configured_db_callbacks(litellm_settings: Mapping[str, object], setting_key: str) -> tuple[tuple[str, str], ...]:
-    callbacks: Final = litellm_settings.get(setting_key)
-    if not isinstance(callbacks, list):
-        return ()
-    return tuple((setting_key, callback) for callback in callbacks if isinstance(callback, str))
+    return tuple(
+        (setting_key, callback)
+        for callback in _configured_callback_names(litellm_settings.get(setting_key))
+        if isinstance(callback, str)
+    )
 
 
 class ProxyConfig:
