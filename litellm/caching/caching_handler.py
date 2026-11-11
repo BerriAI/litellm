@@ -257,6 +257,9 @@ def _should_defer_streaming_cache_hit_callbacks(*, cached_result: object) -> boo
     spend and callback records. A plain (non-stream) replay logs here, since nothing
     else will.
     """
+    if isinstance(cached_result, EmbeddingResponse):
+        return False
+
     from litellm.llms.anthropic.messages.native.response_cache import (
         CachedAnthropicMessagesStreamIterator,
     )
@@ -971,6 +974,21 @@ class LLMCachingHandler:
             new_kwargs["cache_key"] = litellm.cache.get_cache_key(**new_kwargs)
         cached_result: object | None = None
         if call_type == CallTypes.aembedding.value:
+            response_cache_key: Final = litellm.cache.get_embedding_response_cache_key(new_kwargs)
+            with response_cache_phase("get"):
+                cached_embedding_response: Final = await litellm.cache.async_get_cache(
+                    dynamic_cache_object=self.dual_cache,
+                    **{**new_kwargs, "cache_key": response_cache_key},
+                )
+            if cached_embedding_response is not None:
+                try:
+                    response: Final = EmbeddingResponse.model_validate(cached_embedding_response)
+                except ValidationError:
+                    verbose_logger.debug("LiteLLM Cache: ignoring an invalid full embedding response")
+                else:
+                    if response.data:
+                        self.preset_cache_key = response_cache_key
+                        return response
             new_kwargs["input"] = self.handle_kwargs_input_list_or_str(new_kwargs)
             tasks: Final[list[Awaitable[object]]] = []
             for idx, i in enumerate(new_kwargs["input"]):
