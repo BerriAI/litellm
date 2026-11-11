@@ -20,7 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import respx
-from openai import APITimeoutError, AsyncOpenAI, OpenAI
+from openai import APIError, APITimeoutError, AsyncOpenAI, OpenAI
 from openai._legacy_response import LegacyAPIResponse
 from openai.types.chat.chat_completion import ChatCompletion
 from pydantic import BaseModel, ConfigDict, TypeAdapter
@@ -12016,3 +12016,57 @@ def test_supplied_openai_client_base_url_decides_data_residency(monkeypatch: pyt
         )
 
     assert captured["logging_obj"].litellm_params.get("data_residency") is None
+
+
+_ALEPH_ALPHA_COMPLETE_URL: Final = "https://api.aleph-alpha.com/complete"
+
+
+def _aleph_alpha_completion() -> object:
+    return litellm.completion(
+        model="luminous-base",
+        custom_llm_provider="aleph_alpha",
+        messages=[{"role": "user", "content": "Capital of France?"}],
+        api_key="aleph-test-key",
+    )
+
+
+def test_aleph_alpha_completion_returns_each_upstream_completion_as_a_choice(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post(_ALEPH_ALPHA_COMPLETE_URL).respond(
+        200,
+        json={
+            "model_version": "2022-04",
+            "completions": [
+                {"completion": " Paris", "finish_reason": "maximum_tokens"},
+                {"completion": " Lyon", "finish_reason": "end_of_text"},
+            ],
+        },
+    )
+
+    response: Final = _aleph_alpha_completion()
+
+    assert [choice.message.content for choice in response.choices] == [" Paris", " Lyon"]
+
+
+def test_aleph_alpha_error_in_a_successful_body_fails_the_call_with_the_upstream_message(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(_ALEPH_ALPHA_COMPLETE_URL).respond(
+        200, json={"error": "Prompt rejected by the content filter", "code": "PROMPT_REJECTED"}
+    )
+
+    with pytest.raises(APIError) as raised:
+        _aleph_alpha_completion()
+
+    assert "Prompt rejected by the content filter" in raised.value.message
+
+
+@pytest.mark.parametrize("completion", [42, None])
+def test_aleph_alpha_completion_that_is_not_text_fails_the_call(
+    respx_mock: respx.MockRouter, completion: object
+) -> None:
+    respx_mock.post(_ALEPH_ALPHA_COMPLETE_URL).respond(
+        200, json={"completions": [{"completion": completion, "finish_reason": "end_of_text"}]}
+    )
+
+    with pytest.raises(APIError):
+        _aleph_alpha_completion()

@@ -164,7 +164,9 @@ def _resolve_team_callbacks(team_metadata: object) -> TeamCallbackMetadata:
         for entry in logging_entries if isinstance(logging_entries, list) else ():
             if not isinstance(entry, dict):
                 continue
-            callback = get_validated_callback_metadata(item=entry, source="team-level read")
+            callback = get_validated_callback_metadata(
+                item=_DECODED_JSON.validate_python(entry), source="team-level read"
+            )
             if callback is None:
                 continue
             resolved = convert_key_logging_metadata_to_callback(data=callback, team_callback_settings_obj=resolved)

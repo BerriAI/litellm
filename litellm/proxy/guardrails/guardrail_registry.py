@@ -10,6 +10,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeAlias, TypeVar, cast
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
+from typing_extensions import TypedDict
 
 import litellm
 from litellm import Router
@@ -17,6 +18,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH, GUARDRAIL_ROTATION_ATTEMPTS
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, keyword_arguments, subscript
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
@@ -100,6 +102,10 @@ def _as_json_object(value: object) -> dict[str, object] | None:
 
 def _as_json_array(value: object) -> list[object] | None:
     return _JSON_ARRAY.validate_python(value) if isinstance(value, list) else None
+
+
+class _CategoryThresholdFields(TypedDict, total=False, extra_items=object):
+    pass
 
 
 def _extra_param_items(litellm_params: LitellmParams) -> Iterable[tuple[str, object]]:
@@ -775,7 +781,11 @@ class InMemoryGuardrailHandler:
             litellm_params = litellm_params_data
 
         if "category_thresholds" in litellm_params_data and litellm_params_data["category_thresholds"]:
-            lakera_category_thresholds: Final = LakeraCategoryThresholds(**litellm_params_data["category_thresholds"])
+            lakera_category_thresholds: Final = LakeraCategoryThresholds(
+                **_CategoryThresholdFields(
+                    **keyword_arguments(subscript(litellm_params_data, "category_thresholds"), LakeraCategoryThresholds)
+                )
+            )
             litellm_params.category_thresholds = lakera_category_thresholds
 
         if litellm_params.api_key and litellm_params.api_key.startswith("os.environ/"):
@@ -871,7 +881,8 @@ class InMemoryGuardrailHandler:
         params: Final = guardrail.get("litellm_params")
         if not isinstance(params, (dict, LitellmParams)):
             return
-        litellm_params: Final = LitellmParams(**params) if isinstance(params, dict) else params
+        params_mapping: Final = as_str_mapping(params)
+        litellm_params: Final = LitellmParams(**params_mapping) if params_mapping is not None else params
         guardrail_name: Final = guardrail.get("guardrail_name", "Unknown")
         for custom_guardrail_callback in self._tracked_callbacks(guardrail_id):
             for error in (

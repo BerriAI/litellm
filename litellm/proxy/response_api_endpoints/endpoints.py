@@ -2686,7 +2686,7 @@ async def _responses_websocket_session(
                 llm_router=llm_router,
                 user_model=user_model,
             )
-            outcome: Final = await llm_call
+            outcome: Final = _DECODED_JSON.validate_python(await llm_call)
         except asyncio.CancelledError:
             if refused_turns.first is not None:
                 _ = bill_socket_failure(refused_turns.first)

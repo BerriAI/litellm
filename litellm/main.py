@@ -3657,8 +3657,10 @@ def _complete_openrouter(ctx: CompletionDispatchContext) -> _CompletionDispatchR
         or get_secret_str("OR_API_KEY")
     )
 
-    openrouter_site_url: Final = get_secret("OR_SITE_URL") or "https://litellm.ai"
-    openrouter_app_name: Final = get_secret("OR_APP_NAME") or "liteLLM"
+    openrouter_site_url: Final = _OPAQUE_VALUE_ADAPTER.validate_python(
+        get_secret("OR_SITE_URL") or "https://litellm.ai"
+    )
+    openrouter_app_name: Final = _OPAQUE_VALUE_ADAPTER.validate_python(get_secret("OR_APP_NAME") or "liteLLM")
 
     openrouter_headers: Final = {
         "HTTP-Referer": openrouter_site_url,
@@ -3762,8 +3764,10 @@ def _complete_vercel_ai_gateway(
 
     api_key = api_key or litellm.api_key or get_secret("VERCEL_AI_GATEWAY_API_KEY")
 
-    vercel_site_url: Final = get_secret("VERCEL_SITE_URL") or "https://litellm.ai"
-    vercel_app_name: Final = get_secret("VERCEL_APP_NAME") or "liteLLM"
+    vercel_site_url: Final = _OPAQUE_VALUE_ADAPTER.validate_python(
+        get_secret("VERCEL_SITE_URL") or "https://litellm.ai"
+    )
+    vercel_app_name: Final = _OPAQUE_VALUE_ADAPTER.validate_python(get_secret("VERCEL_APP_NAME") or "liteLLM")
 
     vercel_headers: Final = {
         "http-referer": vercel_site_url,
@@ -7349,8 +7353,10 @@ def embedding(
                 or get_secret_str("OR_API_KEY")
             )
 
-            openrouter_site_url: Final = get_secret("OR_SITE_URL") or "https://litellm.ai"
-            openrouter_app_name: Final = get_secret("OR_APP_NAME") or "liteLLM"
+            openrouter_site_url: Final = _OPAQUE_VALUE_ADAPTER.validate_python(
+                get_secret("OR_SITE_URL") or "https://litellm.ai"
+            )
+            openrouter_app_name: Final = _OPAQUE_VALUE_ADAPTER.validate_python(get_secret("OR_APP_NAME") or "liteLLM")
 
             openrouter_headers: Final = {
                 "HTTP-Referer": openrouter_site_url,
