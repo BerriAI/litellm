@@ -1,4 +1,7 @@
+import base64
 import json
+import struct
+from binascii import crc32
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
@@ -6,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
@@ -241,6 +245,33 @@ def test_transform_response_hands_json_mode_to_nova():
     assert json.loads(result.choices[0].message.content) == {"city": "Paris", "temperature": 21}
 
 
+@pytest.mark.parametrize(("finish_reason", "expected"), [("MAX_TOKENS", "length"), (None, "stop")])
+def test_transform_response_accepts_null_cohere_finish_reason(finish_reason: str | None, expected: str) -> None:
+    from litellm.types.utils import ModelResponse
+
+    raw_response: Final = httpx.Response(
+        200,
+        json={"generations": [{"text": "Hello there", "finish_reason": finish_reason}]},
+        request=httpx.Request("POST", "https://bedrock"),
+    )
+
+    result: Final = AmazonInvokeConfig().transform_response(
+        model="invoke/cohere.command-text-v14",
+        raw_response=raw_response,
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+        api_key=None,
+    )
+
+    assert result.choices[0].message.content == "Hello there"
+    assert result.choices[0].finish_reason == expected
+
+
 def _stream_invoke_completion_with_spied_client(**kwargs: object) -> tuple[MagicMock, MagicMock]:
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -342,15 +373,18 @@ def test_router_deployment_stream_chunk_size_reaches_iter_bytes(
     client: Final = HTTPHandler()
     client.post = MagicMock(return_value=mock_response)
     router: Final = litellm.Router(
-        model_list=[{"model_name": "invoke-chunked", "litellm_params": {**INVOKE_DEPLOYMENT, **deployment_extras}}]
+        model_list=[{"model_name": "invoke-chunked", "litellm_params": {**INVOKE_DEPLOYMENT, **deployment_extras}}],
+        num_retries=0,
     )
 
-    router.completion(
-        model="invoke-chunked",
-        messages=[{"role": "user", "content": "hi"}],
-        stream=True,
-        client=client,
-    )
+    # the empty body is a stream that ends before its first chunk, which the Router now reports from the call
+    with pytest.raises(litellm.BadGatewayError):
+        router.completion(
+            model="invoke-chunked",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            client=client,
+        )
 
     mock_response.iter_bytes.assert_called_once_with(chunk_size=expected_chunk_size)
     data: Final = client.post.call_args.kwargs["data"]
@@ -398,3 +432,225 @@ def test_router_deployment_with_a_non_numeric_stream_chunk_size_gets_a_400_befor
 
     assert exc_info.value.status_code == 400
     send.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_provider"),
+    [
+        pytest.param("us.anthropic.claude-3-5-sonnet-20240620-v1:0", "anthropic", id="region-prefixed-model-id"),
+        pytest.param(
+            "arn:aws:bedrock:us-east-1:123:inference-profile/us.meta.llama3-2-90b-instruct-v1:0",
+            "meta",
+            id="inference-profile-arn",
+        ),
+        pytest.param("my-anthropic-and-cohere-model", "cohere", id="two-providers-named-earliest-listed-wins"),
+        pytest.param("us.twelvelabs.pegasus-1-2-v1:0", "twelvelabs", id="provider-listed-late"),
+        pytest.param("unknown-model", None, id="no-provider-named"),
+        pytest.param("", None, id="empty-model"),
+    ],
+)
+def test_get_bedrock_invoke_provider_finds_a_provider_named_anywhere_in_the_model(
+    model: str, expected_provider: str | None
+) -> None:
+    assert AmazonInvokeConfig.get_bedrock_invoke_provider(model) == expected_provider
+
+
+@pytest.mark.respx(assert_all_called=False)
+def test_transform_request_meta_llama(monkeypatch, respx_mock):
+    monkeypatch.setattr(litellm, "known_tokenizer_config", dict(litellm.known_tokenizer_config))
+    respx_mock.get(host="huggingface.co").respond(404, text="Entry not found")
+    bedrock_transformer = AmazonInvokeConfig()
+    messages = [{"role": "user", "content": "Hello"}]
+
+    result = bedrock_transformer.transform_request(
+        model="meta.llama2-70b",
+        messages=messages,
+        optional_params={"max_gen_len": 2048},
+        litellm_params={},
+        headers={},
+    )
+
+    expected_result = {"prompt": "Hello", "max_gen_len": 2048}
+    assert result == expected_result
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_custom_prompt_roles_wrap_the_mistral_invoke_prompt(respx_mock: respx.Router) -> None:
+    route: Final = respx_mock.post(
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/mistral.OpenOrca/invoke"
+    ).mock(return_value=httpx.Response(200, json={"outputs": [{"text": "ok", "stop_reason": "stop"}]}))
+    response: Final = litellm.completion(
+        model="bedrock/mistral.OpenOrca",
+        messages=[{"role": "user", "content": "What's AWS?"}],
+        roles={
+            "system": {"pre_message": "<|im_start|>system\n", "post_message": "<|im_end|>"},
+            "assistant": {"pre_message": "<|im_start|>assistant\n", "post_message": "<|im_end|>"},
+            "user": {"pre_message": "<|im_start|>user\n", "post_message": "<|im_end|>"},
+        },
+        bos_token="<s>",
+        eos_token="<|im_end|>",
+        aws_access_key_id="AKIAEXAMPLEKEY",
+        aws_secret_access_key="example-secret-key",
+        aws_region_name="us-west-2",
+        client=HTTPHandler(),
+    )
+
+    assert json.loads(route.calls[0].request.content)["prompt"] == "<|im_start|>user\nWhat's AWS?<|im_end|>"
+    assert response.choices[0].message.content == "ok"
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_imported_llama_model_arn_is_encoded_and_max_tokens_become_max_gen_len(respx_mock: respx.Router) -> None:
+    expected_url: Final = (
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/"
+        "arn%3Aaws%3Abedrock%3Aus-east-1%3A086734376398%3Aimported-model%2Fr4c4kewx2s0n/invoke"
+    )
+    route: Final = respx_mock.post(expected_url).mock(
+        return_value=httpx.Response(200, json={"generation": "Here's a joke...", "stop_reason": "stop"})
+    )
+
+    response: Final = litellm.completion(
+        model="bedrock/llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n",
+        messages=[{"role": "user", "content": "Tell me a joke"}],
+        max_tokens=100,
+        aws_access_key_id="AKIALLAMAKEY",
+        aws_secret_access_key="llama-secret",
+        client=HTTPHandler(),
+    )
+
+    assert response.choices[0].message.content == "Here's a joke..."
+    assert str(route.calls[0].request.url) == expected_url
+    assert json.loads(route.calls[0].request.content) == {"prompt": "Tell me a joke", "max_gen_len": 100}
+
+
+GUARDED_INVOKE_TRACE: Final = MappingProxyType(
+    {
+        "guardrail": {
+            "input": {"caller-guardrail": {"invocationMetrics": {"usage": {"topicPolicyUnits": 1}}}},
+            "actionReason": "No action.",
+        }
+    }
+)
+GUARDED_INVOKE_METRICS: Final = MappingProxyType(
+    {"inputTokenCount": 25, "outputTokenCount": 12, "invocationLatency": 300, "firstByteLatency": 90}
+)
+NOVA_INVOKE_MODEL: Final = "us.amazon.nova-2-lite-v1:0"
+LLAMA_INVOKE_MODEL: Final = "meta.llama3-8b-instruct-v1:0"
+
+
+def _event_frame(payload: Mapping[str, object]) -> bytes:
+    def header(name: str, value: str) -> bytes:
+        name_b, value_b = name.encode(), value.encode()
+        return (
+            struct.pack("!B", len(name_b)) + name_b + struct.pack("!B", 7) + struct.pack("!H", len(value_b)) + value_b
+        )
+
+    payload_b: Final = json.dumps(
+        {"bytes": base64.b64encode(json.dumps(payload).encode()).decode()}, separators=(",", ":")
+    ).encode()
+    headers_b: Final = (
+        header(":event-type", "chunk") + header(":content-type", "application/json") + header(":message-type", "event")
+    )
+    prelude: Final = struct.pack("!II", 12 + len(headers_b) + len(payload_b) + 4, len(headers_b))
+    prelude_crc: Final = crc32(prelude) & 0xFFFFFFFF
+    message: Final = struct.pack("!I", prelude_crc) + headers_b + payload_b
+    return prelude + message + struct.pack("!I", crc32(message, prelude_crc) & 0xFFFFFFFF)
+
+
+def _guarded_invoke_completion(model: str, reply: httpx.Response, stream: bool) -> object:
+    return litellm.completion(
+        model=f"bedrock/invoke/{model}",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=20,
+        stream=stream,
+        guardrailConfig={"guardrailIdentifier": "caller-guardrail", "guardrailVersion": "1", "trace": "enabled"},
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(lambda _request: reply))),
+        aws_access_key_id="fake",
+        aws_secret_access_key="fake",
+        aws_region_name="us-east-1",
+    )
+
+
+@pytest.mark.parametrize(
+    ("model", "reply_body"),
+    [
+        pytest.param(
+            NOVA_INVOKE_MODEL,
+            {
+                "output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 25, "outputTokens": 12, "totalTokens": 37},
+            },
+            id="nova",
+        ),
+        pytest.param(
+            LLAMA_INVOKE_MODEL,
+            {"generation": "hi", "prompt_token_count": 25, "generation_token_count": 12, "stop_reason": "stop"},
+            id="llama",
+        ),
+    ],
+)
+def test_guarded_non_claude_invoke_completion_keeps_the_guardrail_trace_from_the_client(
+    model: str, reply_body: Mapping[str, object]
+) -> None:
+    reply: Final = httpx.Response(200, json={**reply_body, "amazon-bedrock-trace": dict(GUARDED_INVOKE_TRACE)})
+
+    response: Final = _guarded_invoke_completion(model, reply, stream=False)
+
+    assert isinstance(response, litellm.ModelResponse)
+    assert response.choices[0].message.content == "hi"
+    assert "amazon-bedrock-trace" not in response.model_dump(), response.model_dump()
+
+
+@pytest.mark.parametrize(
+    ("model", "events"),
+    [
+        pytest.param(
+            NOVA_INVOKE_MODEL,
+            (
+                {"messageStart": {"role": "assistant"}},
+                {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "hi"}}},
+                {"contentBlockStop": {"contentBlockIndex": 0}},
+                {"messageStop": {"stopReason": "end_turn"}},
+                {
+                    "metadata": {"usage": {"inputTokens": 25, "outputTokens": 12, "totalTokens": 37}, "metrics": {}},
+                    "amazon-bedrock-invocationMetrics": dict(GUARDED_INVOKE_METRICS),
+                    "amazon-bedrock-guardrailAction": "NONE",
+                    "amazon-bedrock-trace": dict(GUARDED_INVOKE_TRACE),
+                },
+            ),
+            id="nova",
+        ),
+        pytest.param(
+            LLAMA_INVOKE_MODEL,
+            (
+                {"generation": "hi", "prompt_token_count": 25, "generation_token_count": 1, "stop_reason": None},
+                {
+                    "generation": "",
+                    "prompt_token_count": None,
+                    "generation_token_count": 12,
+                    "stop_reason": "stop",
+                    "amazon-bedrock-invocationMetrics": dict(GUARDED_INVOKE_METRICS),
+                    "amazon-bedrock-trace": dict(GUARDED_INVOKE_TRACE),
+                },
+            ),
+            id="llama",
+        ),
+    ],
+)
+def test_guarded_non_claude_invoke_stream_yields_only_the_text_and_stop_chunks(
+    model: str, events: tuple[Mapping[str, object], ...]
+) -> None:
+    reply: Final = httpx.Response(
+        200,
+        headers={"content-type": "application/vnd.amazon.eventstream"},
+        content=b"".join(_event_frame(event) for event in events),
+    )
+
+    stream: Final = _guarded_invoke_completion(model, reply, stream=True)
+
+    assert isinstance(stream, litellm.CustomStreamWrapper)
+    assert [
+        ([(choice.delta.content, choice.finish_reason) for choice in chunk.choices], chunk.provider_specific_fields or {})
+        for chunk in stream
+    ] == [([("hi", None)], {}), ([(None, "stop")], {})]

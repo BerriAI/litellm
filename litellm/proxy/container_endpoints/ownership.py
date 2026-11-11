@@ -1,13 +1,14 @@
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
-from typing import TYPE_CHECKING, Any, Final, TypeAlias
+from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
 
 from fastapi import HTTPException
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.litellm_core_utils.core_helpers import has_attributes
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.resource_ownership import (
     get_primary_resource_owner_scope,
@@ -67,7 +68,7 @@ def _container_model_object_id(original_container_id: str, custom_llm_provider: 
 
 
 def decode_container_id_for_ownership(container_id: str, custom_llm_provider: str) -> tuple[str, str]:
-    decoded: Final = ResponsesAPIRequestUtils._decode_container_id(container_id)
+    decoded: Final = ResponsesAPIRequestUtils.decode_container_id(container_id)
     original_container_id: Final = decoded.get("response_id", container_id)
     decoded_provider: Final = decoded.get("custom_llm_provider")
     if decoded_provider and custom_llm_provider == "openai":
@@ -82,7 +83,7 @@ async def get_container_forwarding_params(
         "container_id": original_container_id,
         "custom_llm_provider": custom_llm_provider,
     }
-    decoded: Final = ResponsesAPIRequestUtils._decode_container_id(container_id)
+    decoded: Final = ResponsesAPIRequestUtils.decode_container_id(container_id)
     model_id = decoded.get("model_id")
     if not (isinstance(model_id, str) and model_id):
         # Native upstream IDs (e.g. Azure ``cntr_<hex>``) carry no LiteLLM
@@ -92,7 +93,7 @@ async def get_container_forwarding_params(
         # selected a specific deployment that ID embeds the model_id.
         stored_id: Final = await _get_stored_container_id(original_container_id, custom_llm_provider)
         if stored_id and stored_id != container_id:
-            stored_decoded: Final = ResponsesAPIRequestUtils._decode_container_id(stored_id)
+            stored_decoded: Final = ResponsesAPIRequestUtils.decode_container_id(stored_id)
             stored_model_id: Final = stored_decoded.get("model_id")
             if isinstance(stored_model_id, str) and stored_model_id:
                 model_id = stored_model_id
@@ -111,12 +112,20 @@ def _get_response_id(response: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def _dump_response(response: Any) -> dict[str, object]:
+class _SupportsModelDump(Protocol):
+    def model_dump(self) -> Mapping[str, object]: ...
+
+
+class _SupportsPydanticDict(Protocol):
+    def dict(self) -> Mapping[str, object]: ...
+
+
+def _dump_response(response: object) -> Mapping[str, object]:
     if isinstance(response, dict):
         return dict(response)
-    if hasattr(response, "model_dump"):
+    if has_attributes(response, _SupportsModelDump, "model_dump"):
         return response.model_dump()
-    if hasattr(response, "dict"):
+    if has_attributes(response, _SupportsPydanticDict, "dict"):
         return response.dict()
     return {"id": _get_response_id(response)}
 
@@ -199,9 +208,11 @@ async def record_container_owner(
 
     original_container_id, resolved_provider = decode_container_id_for_ownership(container_id, custom_llm_provider)
     model_object_id: Final = _container_model_object_id(original_container_id, resolved_provider)
-    file_object: Final = _dump_response(response)
-    file_object["custom_llm_provider"] = resolved_provider
-    file_object["provider_container_id"] = original_container_id
+    file_object: Final = {
+        **_dump_response(response),
+        "custom_llm_provider": resolved_provider,
+        "provider_container_id": original_container_id,
+    }
     # Prisma Python requires Json fields to be serialized as a JSON string.
     file_object_json: Final[str] = json.dumps(file_object)
 

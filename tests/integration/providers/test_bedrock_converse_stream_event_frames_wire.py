@@ -1,9 +1,7 @@
 import asyncio
 import base64
 import json
-import os
 import re
-import signal
 import threading
 import uuid
 from collections.abc import Callable, Iterable, Mapping
@@ -27,7 +25,7 @@ from integration._support.upstream import _aws_event_frame, aws_event_stream_fra
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
-from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with
+pytestmark: Final = pytest.mark.shares_worker_state
 
 _MODEL_ID: Final = "global.moonshotai.kimi-k3"
 _CONVERSE_MODEL: Final = f"bedrock/converse/{_MODEL_ID}"
@@ -42,7 +40,6 @@ _REJECTION: Final = "structured output schema uses unsupported regex negative lo
 _THROTTLED: Final = "Too many requests, please wait before trying again"
 _UNKNOWN_TYPE: Final = "somethingBedrockAddedLater"
 _UNKNOWN_ONLY: Final = "none of its 1 events carried a known event type"
-_SIGNING_KEY: Final = os.environ.get("LITELLM_SALT_KEY", "sk-integration-salt")
 _JSON_HEADERS: Final = MappingProxyType({":content-type": "application/json", ":message-type": "event"})
 _USAGE: Final[dict[str, JsonValue]] = {"usage": {"inputTokens": 11, "outputTokens": 4, "totalTokens": 15}}
 _RESPONSE: Final = json.dumps(
@@ -276,17 +273,9 @@ def _responses_text(events: Iterable[dict[str, JsonValue]]) -> str:
     )
 
 
-def _inner_response_id(identity: str) -> str:
-    managed: Final = decrypt_if_encrypted_with(identity.removeprefix("resp_"), _SIGNING_KEY)
-    assert managed is not None, identity
-    issued: Final = managed.split(";", 1)[0].rsplit("response_id:", 1)[1]
-    decoded: Final = base64.b64decode(issued.removeprefix("resp_")).decode()
-    return decoded.rsplit("response_id:", 1)[1]
-
-
 def _completed_response_id(events: Iterable[dict[str, JsonValue]]) -> str:
     (completed,) = tuple(event for event in events if event.get("type") == "response.completed")
-    return _inner_response_id(str(_JSON.validate_python(completed["response"])["id"]))
+    return str(_JSON.validate_python(completed["response"])["id"])
 
 
 def _only_received(wire: Wire) -> tuple[str, dict[str, JsonValue]]:
@@ -671,16 +660,17 @@ def _sibling_deployment(scenario: Scenario, name: str, wire: Wire, **extra: Json
     scenario.cleanups.callback(scenario.delete_model, identity)
 
 
-def test_e02_a_throttling_frame_first_is_a_429_after_one_attempt_even_with_retries_and_a_sibling_deployment(
+def test_e02_a_throttling_frame_first_is_a_429_after_the_configured_retries_even_with_a_sibling_deployment(
     gateway: Gateway,
 ) -> None:
+    retries: Final = 2
     with wire_server(_stream_peer(_THROTTLING_FRAME)) as wire, gateway.scenario() as scenario:
-        model: Final = _converse_deployment(scenario, wire, num_retries=2)
-        _sibling_deployment(scenario, model, wire, num_retries=2)
-        streamed: Final = _stream(gateway, "chat", {**_body("chat", model), "num_retries": 2})
+        model: Final = _converse_deployment(scenario, wire, num_retries=retries)
+        _sibling_deployment(scenario, model, wire, num_retries=retries)
+        streamed: Final = _stream(gateway, "chat", {**_body("chat", model), "num_retries": retries})
         _assert_rejected_chat(streamed, 429, f"throttlingException {_error_body(_THROTTLED)}")
         attempts: Final = len(wire.drain())
-        assert attempts == 1, attempts
+        assert attempts == retries + 1, attempts
         _failure_row(streamed.call_id)
 
 
@@ -873,17 +863,18 @@ async def test_c02_worker_sigkill_mid_burst_leaves_the_sibling_rejecting_the_hel
             held_by: Final = MappingProxyType({pid: _open_peer_connections(pid, wire.url) for pid in workers})
             assert sum(held_by.values()) == 20, held_by
             victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-            psutil.Process(victim_pid).send_signal(signal.SIGKILL)
-            release.set()
-            served: Final = await burst
-            assert held_by[survivor_pid] >= 10, held_by
-            assert len(served) == held_by[survivor_pid], (held_by, len(served))
-            for item in served:
-                assert item.status in (200, 400) and _is_rejection(item, _REJECTION), (
-                    item.call,
-                    item.status,
-                    item.text,
-                )
+            with owned.replacing_worker(victim_pid) as kill:
+                await asyncio.to_thread(kill)
+                release.set()
+                served: Final = await burst
+                assert held_by[survivor_pid] >= 10, held_by
+                assert len(served) == held_by[survivor_pid], (held_by, len(served))
+                for item in served:
+                    assert item.status in (200, 400) and _is_rejection(item, _REJECTION), (
+                        item.call,
+                        item.status,
+                        item.text,
+                    )
             eventually(
                 lambda: len(_STARTED_WORKER.findall(owned.log.read_text())), lambda count: count == 3, seconds=60
             )
@@ -921,7 +912,7 @@ async def test_c03_proxy_terminated_mid_burst_lands_every_served_rejection_at_mo
                 _burst(_proxy_url(candidate), candidate.key, _PLAIN, calls, tolerate_transport_errors=True)
             )
             await asyncio.to_thread(eventually, held_indexes.qsize, lambda size: size == 12, 60)
-            owned.process.terminate()
+            owned.begin_shutdown()
             release.set()
             served: Final = await burst
             eventually(owned.process.poll, lambda code: code is not None, seconds=60)

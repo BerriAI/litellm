@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName, deriveErrorMessage, handleError } from "@/components/networking";
-import { all_admin_roles } from "@/utils/roles";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { canReadProjects } from "./projectAccess";
 import { ProjectResponse, projectKeys } from "./useProjects";
 
 // ── Fetch function ───────────────────────────────────────────────────────────
@@ -37,7 +37,7 @@ export const useProjectDetails = (projectId?: string) => {
   return useQuery<ProjectResponse>({
     queryKey: projectKeys.detail(projectId!),
     queryFn: async () => fetchProjectDetails(accessToken!, projectId!),
-    enabled: Boolean(accessToken && projectId) && all_admin_roles.includes(userRole || ""),
+    enabled: Boolean(accessToken && projectId) && canReadProjects(userRole),
 
     // Seed from the list cache when available
     initialData: () => {

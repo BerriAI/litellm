@@ -13,6 +13,7 @@ from litellm.proxy.db.daily_spend_bulk_upsert import (
     merge_by_conflict_key,
 )
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+from litellm.proxy.db.rollup_lock_timeout import ROLLUP_LOCK_TIMEOUT_SQL
 
 TAG_TABLE = DAILY_SPEND_TABLES["tag"]
 USER_TABLE = DAILY_SPEND_TABLES["user"]
@@ -87,10 +88,10 @@ def test_one_statement_carries_every_row_in_the_batch():
 
     assert sql.count("INSERT INTO") == 1
     assert len(re.findall(r"ON CONFLICT", sql)) == 1
-    # 25 bound columns per row plus the inlined updated_at, so the row count is what
+    # 26 bound columns per row plus the inlined updated_at, so the row count is what
     # separates one multi-row statement from a hundred single-row ones.
-    assert len(params) == 100 * 25
-    assert "$2500::text" in sql
+    assert len(params) == 100 * 26
+    assert "$2600::text" in sql
     assert sql.count("(NOW() AT TIME ZONE 'UTC')") == 100 + 1
 
 
@@ -110,6 +111,7 @@ def test_conflict_target_is_the_full_unique_constraint():
         "prompt_tokens",
         "completion_tokens",
         "spend",
+        "guardrail_spend",
         "api_requests",
         "successful_requests",
         "failed_requests",
@@ -146,8 +148,12 @@ def test_non_tag_tables_carry_no_request_id_column():
 class _RecordingDb:
     def __init__(self) -> None:
         self.statements: list[tuple[str, tuple[object, ...]]] = []
+        self.session_settings: list[tuple[str, tuple[object, ...]]] = []
 
     async def execute_raw(self, query: str, *args: object) -> int:
+        if query == ROLLUP_LOCK_TIMEOUT_SQL:
+            self.session_settings.append((query, args))
+            return 0
         self.statements.append((query, args))
         return len(args)
 

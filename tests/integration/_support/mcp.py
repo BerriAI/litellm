@@ -4,12 +4,13 @@ import os
 import queue
 import sys
 import time
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Generator, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final, Literal
 
+import anyio
 import httpx
 from integration._support.asgi import asgi_server
 from integration._support.client import Gateway, Scenario
@@ -21,12 +22,12 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import SamplingMessage, TextContent
-from mcp_tests.mcp_e2e_upstream_server import add, multiply
-from pydantic import BaseModel
+from integration._support.mcp_e2e_upstream_server import add, multiply
+from pydantic import BaseModel, JsonValue
 from sse_starlette.sse import AppStatus
 from starlette.requests import Request as StarletteRequest
 from starlette.responses import Response
-from starlette.types import Message, Receive, Scope, Send
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 Transport = Literal["http", "sse", "stdio"]
 STDIO_PEER: Final = Path(__file__).with_name("mcp_stdio_peer.py")
@@ -63,7 +64,9 @@ class Confirmation(BaseModel):
     confirmed: bool
 
 
-def math_service(name: str = "integration-math", *, rich: bool = False) -> MCPServer:
+def math_service(
+    name: str = "integration-math", *, rich: bool = False, on_slow: Callable[[], None] | None = None
+) -> MCPServer:
     service: Final = MCPServer(name)
     service.add_tool(add)
     service.add_tool(multiply)
@@ -77,6 +80,8 @@ def math_service(name: str = "integration-math", *, rich: bool = False) -> MCPSe
 
     @service.tool()
     async def slow(seconds: float) -> str:
+        if on_slow is not None:
+            on_slow()
         await asyncio.sleep(seconds)
         return "slept"
 
@@ -114,6 +119,29 @@ def math_service(name: str = "integration-math", *, rich: bool = False) -> MCPSe
     return service
 
 
+def _cancel_on_disconnect(app: ASGIApp) -> ASGIApp:
+    async def connected(scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await app(scope, receive, send)
+            return
+        sender, reader = anyio.create_memory_object_stream[Message]()
+        async with sender, reader, anyio.create_task_group() as tasks:
+
+            async def relay() -> None:
+                while True:
+                    message: Final = await receive()
+                    if message["type"] == "http.disconnect":
+                        tasks.cancel_scope.cancel()
+                        return
+                    await sender.send(message)
+
+            tasks.start_soon(relay)
+            await app(scope, reader.receive, send)
+            tasks.cancel_scope.cancel()
+
+    return connected
+
+
 def _capturing(app: Callable[[Scope, Receive, Send], object], observed: queue.Queue[dict[str, object]]):
     async def capture(scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -138,6 +166,70 @@ def _capturing(app: Callable[[Scope, Receive, Send], object], observed: queue.Qu
         await app(scope, replay, send)
 
     return capture
+
+
+def _acknowledge_notifications_after_dispatch(app: ASGIApp) -> ASGIApp:
+    in_flight: Final[dict[bytes, set[asyncio.Event]]] = {}
+
+    async def dispatch(scope: Scope, receive: Receive, send: Send, dispatched: asyncio.Event | None = None) -> None:
+        if scope["type"] != "http" or scope["method"] != "POST":
+            await app(scope, receive, send)
+            return
+        pending: Final[list[Message]] = []
+
+        async def capture(message: Message) -> None:
+            if not pending and message["type"] == "http.response.start" and message["status"] == 202:
+                pending.append(message)
+            elif pending:
+                if (
+                    len(pending) != 1
+                    or message["type"] != "http.response.body"
+                    or message.get("body", b"")
+                    or message.get("more_body", False)
+                ):
+                    raise RuntimeError("MCP notification acknowledgement must be a single empty response")
+                pending.append(message)
+            else:
+                if dispatched is not None and message["type"] == "http.response.start":
+                    dispatched.set()
+                await send(message)
+
+        try:
+            await app(scope, receive, capture)
+        finally:
+            if dispatched is not None:
+                dispatched.set()
+        if pending:
+            if len(pending) != 2:
+                raise RuntimeError("MCP notification acknowledgement did not complete")
+            for message in pending:
+                await send(message)
+
+    async def ordered(scope: Scope, receive: Receive, send: Send) -> None:
+        session: Final = next(
+            (value for name, value in scope.get("headers", ()) if name.lower() == b"mcp-session-id"), None
+        )
+        if scope["type"] != "http" or session is None:
+            await dispatch(scope, receive, send)
+            return
+        if scope["method"] == "DELETE":
+            while pending := tuple(done for done in in_flight.get(session, ()) if not done.is_set()):
+                await asyncio.gather(*(done.wait() for done in pending))
+        if scope["method"] != "POST":
+            await dispatch(scope, receive, send)
+            return
+        done: Final = asyncio.Event()
+        active: Final = in_flight.setdefault(session, set())
+        active.add(done)
+        try:
+            await dispatch(scope, receive, send, done)
+        finally:
+            active.remove(done)
+            if not active:
+                del in_flight[session]
+            done.set()
+
+    return ordered
 
 
 def _drain_sse_streams() -> None:
@@ -183,8 +275,10 @@ def _draining_sse_watcher(app: Callable[[Scope, Receive, Send], object]):
 
 
 @contextmanager
-def mcp_peer(transport: Literal["http", "sse"] = "http", *, rich: bool = False) -> Iterator[McpPeer]:
-    service: Final = math_service(rich=rich)
+def mcp_peer(
+    transport: Literal["http", "sse"] = "http", *, rich: bool = False, on_slow: Callable[[], None] | None = None
+) -> Iterator[McpPeer]:
+    service: Final = math_service(rich=rich, on_slow=on_slow)
     security: Final = TransportSecuritySettings(enable_dns_rebinding_protection=False)
     app: Final = (
         _draining_sse_watcher(service.sse_app(transport_security=security))
@@ -192,7 +286,11 @@ def mcp_peer(transport: Literal["http", "sse"] = "http", *, rich: bool = False) 
         else service.streamable_http_app(stateless_http=True, json_response=True, transport_security=security)
     )
     observed: Final[queue.Queue[dict[str, object]]] = queue.Queue()
-    with asgi_server(_capturing(app, observed), before_stop=_drain_sse_streams if transport == "sse" else None) as url:
+    captured: Final = _capturing(app, observed)
+    with asgi_server(
+        _cancel_on_disconnect(captured) if transport == "http" else captured,
+        before_stop=_drain_sse_streams if transport == "sse" else None,
+    ) as url:
         yield McpPeer(url + ("/sse" if transport == "sse" else "/mcp"), observed, transport)
 
 
@@ -218,6 +316,7 @@ class ScriptedTool:
     respond: Callable[[JsonRpc], Reply | JsonRpc]
     description: str | Callable[[Mapping[str, str]], str] | None = None
     input_schema: JsonRpc = field(default_factory=lambda: {"type": "object"})
+    event_stream: bool = False
 
     def listing(self, headers: Mapping[str, str]) -> JsonRpc:
         described: Final = self.description(headers) if callable(self.description) else self.description
@@ -270,7 +369,10 @@ def scripted_peer(*tools: ScriptedTool) -> Iterator[McpPeer]:
         if tool is None:
             return jsonrpc_error(identity, -32602, "unknown tool")
         produced: Final = tool.respond(body["params"])
-        return produced if isinstance(produced, Reply) else jsonrpc_reply(identity, produced)
+        reply: Final = produced if isinstance(produced, Reply) else jsonrpc_reply(identity, produced)
+        if not tool.event_stream:
+            return reply
+        return Reply(content_type="text/event-stream", body=b"event: message\ndata: " + reply.body + b"\n\n")
 
     with wire_server(provider) as wire:
         yield McpPeer(wire.url + "/mcp", observed)
@@ -383,6 +485,55 @@ def peer_of(kind: PeerKind, *, rich: bool = False) -> Iterator[McpPeer]:
             yield candidate
 
 
+@contextmanager
+def stateful_mcp_peer() -> Generator[McpPeer]:
+    service: Final = MCPServer("integration-stateful")
+    selected: Final[dict[str, str]] = {}  # mutable-ok: per-session state the upstream keeps across tool calls
+
+    def upstream_session(ctx: Context) -> str:
+        assert ctx.headers is not None, "stateful upstream requires HTTP request headers"
+        return ctx.headers["mcp-session-id"]
+
+    @service.tool()
+    def select_project(name: str, ctx: Context) -> str:
+        selected[upstream_session(ctx)] = name
+        return f"selected {name}"
+
+    @service.tool()
+    def create_feature(title: str, ctx: Context) -> str:
+        project: Final = selected.get(upstream_session(ctx))
+        if project is None:
+            raise ValueError("no project selected in this session")
+        return f"{project}/{title}"
+
+    app: Final = service.streamable_http_app(
+        stateless_http=False,
+        json_response=True,
+        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    )
+    observed: Final[queue.Queue[dict[str, object]]] = queue.Queue()
+
+    async def capture(scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and scope["method"] == "GET":
+            await Response(status_code=405)(scope, receive, send)
+            return
+        if scope["type"] != "http" or scope["method"] != "POST":
+            await app(scope, receive, send)
+            return
+        body: Final = await StarletteRequest(scope, receive).body()
+        observed.put({"body": json.loads(body) if body else None, "headers": dict(scope["headers"])})
+        message: Final[Message] = {"type": "http.request", "body": body, "more_body": False}
+        pending: Final = iter((message,))
+
+        async def replay() -> Message:
+            return next(pending, {"type": "http.disconnect"})
+
+        await app(scope, replay, send)
+
+    with asgi_server(capture) as url:
+        yield McpPeer(url + "/mcp", observed)
+
+
 def register_mcp(scenario: Scenario, peer: McpPeer, alias: str, **fields: object) -> str:
     response: Final = scenario.gateway.request(
         "POST", "/v1/mcp/server", {"server_name": alias, "alias": alias, **peer.registration(), **fields}
@@ -427,10 +578,18 @@ def tool_names(gateway: Gateway, key: str, identity: str) -> dict[str, str]:
     }
 
 
-def call_tool(gateway: Gateway, key: str, identity: str, name: str, arguments: dict[str, object]) -> httpx.Response:
+def call_tool(
+    gateway: Gateway,
+    key: str,
+    identity: str,
+    name: str,
+    arguments: dict[str, object],
+    *,
+    headers: Mapping[str, str] | None = None,
+) -> httpx.Response:
     return gateway.client.post(
         "/mcp-rest/tools/call",
-        headers={"x-litellm-api-key": key},
+        headers={"x-litellm-api-key": key, **(headers or {})},
         json={"server_id": identity, "name": name, "arguments": arguments},
     )
 
@@ -508,6 +667,7 @@ class McpCaller:
     entry: EntryPoint
     alias: str | None = None
     headers: Mapping[str, str] = field(default_factory=dict)
+    protocol_version: str | None = None
 
     def _path(self) -> str:
         if self.entry == "server_mcp":
@@ -525,10 +685,23 @@ class McpCaller:
     def rpc(self, method: str, params: JsonRpc | None = None) -> httpx.Response:
         if self.entry == "sse":
             return _legacy_sse_rpc(self.gateway, self._headers(), method, params)
+        modern: Final = self.protocol_version == "2026-07-28"
+        arguments: Final = dict(params or {})
         return self.gateway.client.post(
             self._path(),
-            json={"jsonrpc": "2.0", "id": 1, "method": method, "params": dict(params or {})},
-            headers=self._headers(),
+            json={"jsonrpc": "2.0", "id": 1, "method": method, "params": {
+                **arguments,
+                **({"_meta": {
+                    "io.modelcontextprotocol/protocolVersion": self.protocol_version,
+                    "io.modelcontextprotocol/clientInfo": {"name": "integration-caller", "version": "1"},
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                }} if modern else {}),
+            }},
+            headers={**self._headers(), **({
+                "MCP-Protocol-Version": self.protocol_version,
+                "Mcp-Method": method,
+                "Mcp-Name": str(arguments.get("name", arguments.get("uri", ""))),
+            } if modern else {})},
         )
 
     def initialize(self) -> Outcome:
@@ -622,3 +795,125 @@ def tool_calls(observed: tuple[dict[str, object], ...]) -> tuple[dict[str, objec
     return tuple(
         item for item in observed if isinstance(item.get("body"), dict) and item["body"].get("method") == "tools/call"
     )
+
+
+@contextmanager
+def paginated_mcp_peer(
+    *,
+    page_size: int = 1,
+    ttl_ms: int = 0,
+    repeat_cursor: bool = False,
+    fail_listing: bool = False,
+    fail_continuation: bool = False,
+    metadata: dict[str, JsonValue] | None = None,
+) -> Iterator[McpPeer]:
+    from contextlib import asynccontextmanager
+
+    from mcp.server.lowlevel.server import Server
+    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+    from mcp.types import (
+        CallToolResult,
+        ListPromptsResult,
+        ListResourcesResult,
+        ListResourceTemplatesResult,
+        ListToolsResult,
+        Prompt,
+        Resource,
+        ResourceTemplate,
+        Tool,
+    )
+    from starlette.applications import Starlette
+    from starlette.routing import Mount
+
+    def window(params):
+        if fail_listing or (fail_continuation and params is not None and params.cursor):
+            from mcp import MCPError
+            from mcp.types import INTERNAL_ERROR
+
+            raise MCPError(code=INTERNAL_ERROR, message="untrusted upstream message")
+        start = int(params.cursor) if params is not None and params.cursor else 0
+        end = min(start + page_size, 3)
+        return range(start, end), "1" if repeat_cursor else str(end) if end < 3 else None
+
+    async def tools(context, params):
+        indexes, cursor = window(params)
+        return ListToolsResult(
+            ttl_ms=ttl_ms,
+            cache_scope="public",
+            tools=[
+                Tool(
+                    name=f"add{index}",
+                    input_schema={
+                        "type": "object",
+                        "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}},
+                        "required": ["a", "b"],
+                    },
+                )
+                for index in indexes
+            ],
+            next_cursor=cursor,
+            meta={"revision": "stable", **(metadata or {})},
+        )
+
+    async def prompts(context, params):
+        indexes, cursor = window(params)
+        return ListPromptsResult(
+            ttl_ms=ttl_ms,
+            cache_scope="public",
+            prompts=[Prompt(name=f"prompt{index}") for index in indexes],
+            next_cursor=cursor,
+            meta=metadata,
+        )
+
+    async def resources(context, params):
+        indexes, cursor = window(params)
+        return ListResourcesResult(
+            ttl_ms=ttl_ms,
+            cache_scope="public",
+            resources=[Resource(name=f"resource{index}", uri=f"status://item{index}") for index in indexes],
+            next_cursor=cursor,
+            meta=metadata,
+        )
+
+    async def templates(context, params):
+        indexes, cursor = window(params)
+        return ListResourceTemplatesResult(
+            ttl_ms=ttl_ms,
+            cache_scope="public",
+            resource_templates=[
+                ResourceTemplate(name=f"template{index}", uri_template=f"status{index}://{{item}}") for index in indexes
+            ],
+            next_cursor=cursor,
+            meta=metadata,
+        )
+
+    async def call(context, params):
+        assert params.name in ("add0", "add1", "add2")
+        return CallToolResult(
+            content=[TextContent(type="text", text=str(params.arguments["a"] + params.arguments["b"]))]
+        )
+
+    service = Server(
+        "paginated-catalog",
+        on_list_tools=tools,
+        on_list_prompts=prompts,
+        on_list_resources=resources,
+        on_list_resource_templates=templates,
+        on_call_tool=call,
+    )
+    manager = StreamableHTTPSessionManager(
+        service,
+        stateless=True,
+        json_response=True,
+        security_settings=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    )
+
+    @asynccontextmanager
+    async def lifespan(app):
+        async with manager.run():
+            yield
+
+    app = Starlette(routes=[Mount("/mcp", app=manager.handle_request)], lifespan=lifespan)
+    observed = queue.Queue()
+    with asgi_server(_capturing(app, observed)) as url:
+        yield McpPeer(url + "/mcp/", observed)

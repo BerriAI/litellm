@@ -2,6 +2,8 @@
 
 Tactical guide for building chat UI features. Copy patterns exactly — don't improvise spacing, colors, or components.
 
+The standalone `/ui/chat` workspace shares the dashboard’s navigation primitives, header, account menu, typography and theme tokens. The previous Moyai glass treatment made Chat look like a separate product. Keep Chat’s conversation tools and route-specific navigation inside the shared visual language.
+
 > **Agents:** Read `AGENTS.md` alongside this file. It contains decision trees, the pre-commit checklist, and the rules that govern when to use each pattern here. This file is the _what_; `AGENTS.md` is the _when and how_.
 
 ---
@@ -9,16 +11,30 @@ Tactical guide for building chat UI features. Copy patterns exactly — don't im
 ## Stack
 
 - **Next.js 16** App Router, TypeScript
-- **Tailwind CSS v4** — utility classes only, no custom CSS except in `globals.css`
+- **Tailwind CSS v4** — shared primitives and utilities, with Chat-specific content layout in `moyai/moyai-chat.css` (home, composer and transcript)
 - **shadcn/ui**: import from `@/components/ui/*`. Available today: `alert-dialog`, `badge`, `bubble`, `button`, `card`, `collapsible`, `dialog`, `input`, `input-group`, `label`, `popover`, `scroll-area`, `select`, `separator`, `sheet`, `skeleton`, `sonner`, `switch`, `table`, `tabs`, `textarea`, `tooltip`. Use these shared primitives when composing chat features
 - **lucide-react** — only icon library, no emoji in UI
-- System font stack (`-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`), inherited from `ChatShell`'s root
+- The dashboard font, inherited from the app root. No separate font downloads or Chat palette
 
 ---
 
 ## Tokens
 
 Never hardcode hex values. Use these CSS variables via Tailwind classes — all verified present in `src/app/globals.css`.
+
+`ChatShell` and portalled dialogs carry `.chat-theme` only for Chat-specific message and editor aliases. Do not override the shared foreground, background, sidebar, primary or font tokens. Light and dark modes use the dashboard theme
+
+### Surfaces
+
+Use solid `bg-background` content and `bg-sidebar` navigation with `border-border` separators. No glass, dot/grid backgrounds, gradients or decorative shadows. The composer has a quiet border and a visible focus state. Model selection, attachments, tools and send remain in its action row
+
+The welcome view contains a heading, composer and compact prompt shortcuts. Shortcuts fill the draft without submitting. Recent conversations belong in the sidebar, without an empty-count section. Show run and storage warnings when they apply, not as permanent idle helper text
+
+The standalone `ChatModelPicker` exposes the account's chat and image-generation models from the composer action row. Its portalled popover carries `.chat-theme`; keep model names, capabilities and selection states readable in both themes. Attachment and MCP tools stay beside the composer.
+
+The **Models** sidebar destination opens `/ui/chat/models` inside the same shell. It reuses the existing Model Hub catalog, filters, pricing and details in a read-only `chat` variant. Admins see the authenticated catalog and other users see the published catalog, matching the dashboard's existing access rules. The page uses `.moyai-models-page` for scrolling and `.chat-model-hub-card` for the bordered dashboard surface. Portalled model details carry `.chat-theme`; catalog management and other hub tabs stay in the dashboard.
+
+Show available providers in a single-select dropdown beside model search. “All providers” clears the provider filter while keeping the other filters. The dropdown includes provider logos and uses the Chat theme in its portal. Provider logos reuse the existing asset mapping; white logo plates preserve the colors and contrast of the original assets in both themes. Unknown or failed logos fall back to a provider initial. The model list uses compact search and capability controls, quiet separators, and provider identities beside model names. Keep these styles scoped to Chat.
 
 ### Colors
 
@@ -38,7 +54,7 @@ Never hardcode hex values. Use these CSS variables via Tailwind classes — all 
 | `--sidebar-accent-foreground` | `text-sidebar-accent-foreground`      | Active nav item text                                       |
 | `--sidebar-border`            | `border-sidebar-border`               | Sidebar's own dividers/right border                        |
 
-**Known gotcha — verified in `globals.css`:** `--accent`, `--secondary`, and `--muted` all resolve to the _identical_ OKLCH value in both light and dark themes. Using `bg-accent` for a "selected" state against a `bg-secondary` container is **invisible** — there is zero contrast. This bit us repeatedly in this exact sidebar. Rules:
+**Known gotcha:** generic `--accent`, `--secondary`, and `--muted` values may coincide in the dashboard theme. Always use the sidebar-specific tokens rather than relying on incidental contrast from a generic token. Rules:
 
 - Sidebar container: `bg-sidebar`, never `bg-secondary` or `bg-accent`.
 - Active/selected nav item: `bg-sidebar-accent text-sidebar-accent-foreground`, never `bg-accent` on its own inside the sidebar.
@@ -59,7 +75,9 @@ Never hardcode hex values. Use these CSS variables via Tailwind classes — all 
 
 ```tsx
 // Page/greeting heading
-<h1 className="text-[28px] font-semibold tracking-tight">Good afternoon</h1>
+<header className="moyai-chat-home-header">
+  <h1>What are we working on?</h1>
+</header>
 
 // Section heading (panel titles: "Your API Keys", "Your Usage")
 <h2 className="text-base font-semibold tracking-tight">Your Usage</h2>
@@ -91,7 +109,7 @@ Never hardcode hex values. Use these CSS variables via Tailwind classes — all 
 
 | Context                            | Value                                       |
 | ---------------------------------- | ------------------------------------------- |
-| Sidebar outer padding              | `p-2` (8px)                                 |
+| Sidebar outer padding              | `p-3`                                       |
 | Nav item padding                   | `px-2.5 py-2`                               |
 | Inline icon-to-label gap           | `gap-2.5` in nav items, `gap-1.5` elsewhere |
 | Section divider margin             | `mx-2`                                      |
@@ -104,11 +122,11 @@ Never hardcode hex values. Use these CSS variables via Tailwind classes — all 
 ## Border Radius
 
 ```tsx
-rounded-md // 8px — buttons, inputs, nav items, bordered divs
-rounded-lg // 10px — panel cards, table containers
-rounded-xl // 14px — chat input composer
-rounded-2xl // 16px — chat message bubbles
-rounded-full // pills, avatars, status dots
+rounded - md; // 8px — buttons, inputs, nav items, bordered divs
+rounded - lg; // 10px — panel cards, table containers
+rounded - xl; // 12px — shared panels
+rounded - lg; // 8px — user message bubbles
+rounded - full; // pills, avatars, status dots
 ```
 
 ---
@@ -139,195 +157,11 @@ Sizes: `default` (h-9), `sm` (h-8), `xs` (h-6), `lg` (h-10), `icon` (size-9), `i
 
 ### Sidebar nav item
 
-No dedicated shadcn `Sidebar` block is installed (see gaps). Build nav items from `Button variant="ghost"`, full width, left-aligned, with the sidebar-specific active state:
+Use `Sidebar`, `SidebarContent`, `SidebarFooter` and `SidebarMenuButton` from `components/shared/Sidebar`. Both workspaces use `SidebarBrand`, `ViewSwitcher` and `DashboardHeader`. Chat has a compact account menu with its existing identity, Settings and Sign out actions. Theme lives in the shared top bar. Gateway account preferences and admin controls stay in the gateway. Keep the shared 280px expanded and 72px collapsed widths, 56px header and 768px mobile breakpoint
 
-```tsx
-<Button
-  variant="ghost"
-  aria-current={active ? "page" : undefined}
-  className={`w-full justify-start gap-2.5 px-2.5 font-medium hover:bg-sidebar-accent ${
-    active ? "bg-sidebar-accent text-sidebar-accent-foreground" : "text-muted-foreground"
-  }`}
->
-  <Icon className="size-4 shrink-0" />
-  <span className="flex-1 text-left">{label}</span>
-</Button>
-```
+Use one New Chat action for the blank composer; do not duplicate it with a Chats destination. Chat retains Models, Integrations, Workspace and conversation history. Chat has no gateway-wide header search or worker selector. Search chats in the sidebar owns Cmd/Ctrl+K, including when the sidebar is collapsed or on mobile. Mobile navigation uses the same Sheet treatment as the dashboard
 
-There is no collapsible/icon-rail sidebar mode — it was removed (added complexity, no real use case, and its collapse toggle button had nowhere sensible to live). Don't reintroduce collapse state without a concrete reason.
-
-### ScrollArea
-
-**Known gotcha — cost real debugging time:** a `ScrollArea` won't actually scroll if its container is sized with `max-height` instead of `height`, even though the box _looks_ correctly capped. Radix's `ScrollArea` viewport is `size-full` (`height: 100%`), and CSS percentage-height resolution requires the ancestor chain to have a genuinely _definite_ height — `max-height` on a flex container doesn't count as definite for this purpose, even though the browser renders the box at the capped size. The result: the viewport silently grows to its full content height instead of 100% of the visible box, `scrollHeight === clientHeight` is reported (no overflow, so no scrollbar), and scroll events fall through to whatever's behind the popover/panel instead of scrolling the list.
-
-```tsx
-// Wrong — looks capped, doesn't scroll (max-height isn't a definite height)
-<div className="w-[280px] max-h-[400px] flex flex-col overflow-hidden">
-  <ScrollArea className="flex-1 min-h-0">{items}</ScrollArea>
-</div>
-
-// Right — explicit height propagates as definite through the whole chain
-<div className="w-[280px] h-[400px] flex flex-col overflow-hidden">
-  <ScrollArea className="flex-1 h-0">{items}</ScrollArea>
-</div>
-```
-
-If you need "shrink to fit content, cap at N px" rather than "always N px," you cannot get both with pure CSS here — pick the fixed height (the common case: any list that can realistically exceed the cap, e.g. a model picker with hundreds of entries) over one that only works when short.
-
-### Input / Textarea
-
-Use `Input` and `Textarea` from `@/components/ui`. The shared `ChatComposer` uses `InputGroupTextarea` and owns submission, cancellation and IME handling. Reuse it for new chat surfaces
-
-```tsx
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-
-<div className="flex flex-col gap-1.5">
-  <Label htmlFor="alias">Key alias</Label>
-  <Input id="alias" disabled />
-  {error && <p className="text-xs text-destructive">{error}</p>}
-</div>;
-```
-
-Errors go **below** the field. Never a toast for form validation.
-
-### Card
-
-Use the installed Card primitives for grouped content and action reviews
-
-```tsx
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-
-<Card size="sm">
-  <CardHeader>
-    <CardTitle>Review changes</CardTitle>
-  </CardHeader>
-  <CardContent>{children}</CardContent>
-</Card>;
-```
-
-### Messages and Markdown
-
-`ChatMessages` owns the shared list renderer. `ChatMessageContent` renders one message without a list wrapper so a transcript scroller can own each row. Both retain user editing, reasoning, tool output, copying and response metrics
-
-Use the official registry `Bubble` and `BubbleContent` primitives. User messages use the muted variant and end alignment. Assistant messages use the ghost variant at full available width. Keep paragraph spacing and list markers in the shared Markdown renderer. GFM tables use the shared Table primitives, which provide horizontal scrolling. Forward Markdown cell styles so column alignment survives rendering
-
-LiteAdmin passes `allowImages={false}` to show image descriptions without automatically requesting external image URLs from administrative answers. Other chat consumers retain image rendering by default
-
-Scrolling belongs to the conversation container. LiteAdmin uses official MessageScroller items with stable chronological IDs; a pending action and its result stay in the same row. Its inline action review is an explicit product exception to the AlertDialog confirmation pattern below
-
-### Badge
-
-```tsx
-import { Badge } from "@/components/ui/badge"
-
-<Badge variant="secondary">connected</Badge>
-<Badge variant="outline">expiring</Badge>
-<Badge variant="destructive">expired</Badge>
-```
-
-### Dialog / AlertDialog
-
-```tsx
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-
-<Dialog open={open} onOpenChange={setOpen}>
-  <DialogContent className="sm:max-w-lg">
-    <DialogHeader>
-      <DialogTitle>Rotate key</DialogTitle>
-    </DialogHeader>
-    <div className="flex flex-col gap-4">{/* form */}</div>
-    <DialogFooter>
-      <Button variant="outline" onClick={() => setOpen(false)}>
-        Cancel
-      </Button>
-      <Button onClick={handleSubmit} disabled={loading}>
-        {loading && <Loader2 className="size-4 animate-spin" />}
-        Rotate
-      </Button>
-    </DialogFooter>
-  </DialogContent>
-</Dialog>;
-```
-
-Use `AlertDialog` (not a manual confirm) for any destructive action — delete conversation, revoke credential.
-
-### Table
-
-```tsx
-import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
-
-<div className="border rounded-lg overflow-hidden">
-  <Table>
-    <TableHeader>
-      <TableRow className="bg-muted/50">
-        <TableHead className="text-[11px] font-medium uppercase tracking-wide">Key</TableHead>
-      </TableRow>
-    </TableHeader>
-    <TableBody>
-      <TableRow>
-        <TableCell className="font-mono text-xs">sk-...abcd</TableCell>
-      </TableRow>
-    </TableBody>
-  </Table>
-</div>;
-```
-
-### Tabs
-
-Always pass `variant="line"` for section tabs (Apps: All/Connected). The default variant renders a boxed pill with a background/shadow meant for compact toggle groups, not section tabs, and combining it with hand-added `border-b-2` classes produces a broken double-border look.
-
-```tsx
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-
-<Tabs value={tab} onValueChange={setTab}>
-  <TabsList variant="line" className="w-full justify-start border-b rounded-none h-auto p-0">
-    <TabsTrigger value="all" className="rounded-none px-4 py-2 text-[13px]">
-      All
-    </TabsTrigger>
-  </TabsList>
-</Tabs>;
-```
-
-### Loading states
-
-Skeleton loaders while fetching — never a bare spinner or blank screen for list/table content. `Loader2` + `animate-spin` is reserved for **inside a button** during a submit action, not as a page/panel loading state.
-
-```tsx
-import { Skeleton } from "@/components/ui/skeleton";
-
-<div className="flex flex-col gap-3">
-  <div className="border rounded-lg p-4 flex flex-col gap-2">
-    <Skeleton className="h-4 w-1/3" />
-    <Skeleton className="h-3 w-2/3" />
-  </div>
-</div>;
-```
-
-### Toast / notifications
-
-**Resolved:** `sonner` is installed and mounted from the root layout. Raise toasts through `toast` from `@/lib/toast`; don't introduce a second toast mechanism.
-
----
-
-## Page Layout Patterns
-
-### Chat shell (sidebar + routed content)
-
-```tsx
-<div className="flex h-full w-full flex-col bg-background overflow-hidden">
-  {/* optional full-width banner */}
-  <div className="flex flex-1 min-h-0 overflow-hidden">
-    <aside
-      className="shrink-0 bg-sidebar border-r flex flex-col overflow-hidden"
-      style={{ width: collapsed ? 56 : 260 }}
-    >
-      {/* nav items, conversation list */}
-    </aside>
-    <main className="flex-1 flex flex-col overflow-hidden min-w-0">{children}</main>
-  </div>
-</div>
-```
+The conversation title appears in the shared header. Do not repeat it in a second content header. Routed pages keep their content-specific headings and actions
 
 ### Routed panel (Integrations, Credentials, API Keys, Usage)
 
@@ -366,14 +200,14 @@ No max-width cap on panel content — matches the rest of the dashboard's own pa
 
 Card, Textarea and sonner are installed. Earlier versions of this document listed them as missing and encouraged parallel implementations; use the shared owners above
 
-The shadcn Sidebar primitive block (`SidebarProvider`/`SidebarMenu`/etc) is still absent. Use the "Sidebar nav item" pattern above, built from `Button variant="ghost"` and the `sidebar-*` tokens
+Shared sidebar primitives are available in `components/shared/Sidebar`. Use them instead of hand-writing a separate rail
 
 ## File Structure
 
 ```
 src/components/chat/
-  ChatShell.tsx          # Sidebar chrome (nav, collapse, conversation list), shared across all /chat/* routes
-  ConversationList.tsx   # Date-grouped chat list + Cmd+K search
+  ChatShell.tsx          # Desktop navigation / mobile Sheet, shared across all /chat/* routes
+  ConversationList.tsx   # Date-grouped chat list and conversation search
   ChatMessages.tsx       # Shared list and single-message rendering (user, assistant, tool)
   MCPAppsPanel.tsx       # Integrations grid + detail view
   MCPConnectPicker.tsx   # MCP server toggle popover

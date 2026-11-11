@@ -433,6 +433,7 @@ def test_set_latency_metrics(prometheus_logger):
         team_alias="test_team_alias",
         org_id=None,
         org_alias=None,
+        model_group="openai-gpt",
         requested_model="openai-gpt",
         model="gpt-5-mini",
         model_id="model-123",
@@ -453,6 +454,7 @@ def test_set_latency_metrics(prometheus_logger):
         team_alias="test_team_alias",
         org_id=None,
         org_alias=None,
+        model_group="openai-gpt",
         requested_model="openai-gpt",
         model="gpt-5-mini",
         model_id="model-123",
@@ -473,6 +475,7 @@ def test_set_latency_metrics(prometheus_logger):
         team_alias="test_team_alias",
         org_id=None,
         org_alias=None,
+        model_group="openai-gpt",
         requested_model="openai-gpt",
         model="gpt-5-mini",
         model_id="model-123",
@@ -1054,6 +1057,7 @@ def test_set_llm_deployment_success_metrics(prometheus_logger):
 
     # Verify latency per output token metric
     prometheus_logger.litellm_deployment_latency_per_output_token.labels.assert_called_once_with(
+        model_group="my_custom_model_group",
         litellm_model_name="gpt-5-mini",
         model_id="model-123",
         api_base="https://api.openai.com",
@@ -1707,7 +1711,7 @@ async def test_initialize_remaining_budget_metrics_exception_handling(
             "litellm.proxy.management_endpoints.team_endpoints.get_paginated_teams"
         ) as mock_get_teams,
         patch(
-            "litellm.proxy.management_endpoints.key_management_endpoints._list_key_helper"
+            "litellm.proxy.management_endpoints.key_management_endpoints.list_key_helper"
         ) as mock_list_keys,
     ):
         # Make get_paginated_teams raise an exception
@@ -1782,7 +1786,7 @@ async def test_initialize_api_key_budget_metrics(prometheus_logger):
     with (
         patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
         patch(
-            "litellm.proxy.management_endpoints.key_management_endpoints._list_key_helper"
+            "litellm.proxy.management_endpoints.key_management_endpoints.list_key_helper"
         ) as mock_list_keys,
     ):
         # Create mock key data with proper datetime objects for budget_reset_at

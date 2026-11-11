@@ -10,8 +10,11 @@ the completion fails here.
 
 from __future__ import annotations
 
+from typing import Final
+
 import pytest
 from e2e_config import unique_marker
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
@@ -19,9 +22,20 @@ from sdk_clients import NO_PROXY_CACHE, SdkClients
 
 pytestmark = pytest.mark.e2e
 
+OPENAI_COMPLETIONS_BACKEND: Final = "openai/gpt-5.4-nano"
+
 
 class TestCompletionsEndpoint:
     @pytest.mark.covers("llm.completions.openai.basic.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_COMPLETIONS_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_text_completion_returns_text(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -29,7 +43,7 @@ class TestCompletionsEndpoint:
         model_id = proxy.create_model(
             model,
             LiteLLMParamsBody(
-                model="openai/gpt-5.4-nano",
+                model=OPENAI_COMPLETIONS_BACKEND,
                 api_key="os.environ/OPENAI_API_KEY",
             ),
         )

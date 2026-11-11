@@ -3,7 +3,7 @@ use std::{path::Path, sync::Arc};
 
 use axum::{Json, extract::State, response::IntoResponse};
 use base64::{Engine, engine::general_purpose::STANDARD};
-use litellm_core::audio_transcription::types::AudioTranscriptionRequest;
+use litellm_inference_transcription::types::AudioTranscriptionRequest;
 use serde_json::{Value, json};
 
 use crate::{
@@ -27,7 +27,7 @@ async fn handle(
         upload,
     }: InferenceBody,
 ) -> Result<Value, Error> {
-    let deployment = request::resolve_deployment(gateway, &body)?;
+    let deployment = request::resolve_deployment(gateway, "/audio/transcriptions", &body)?;
     request::authorize_model(identity, deployment, &body).await?;
     let audio = match upload {
         Some(upload) => {

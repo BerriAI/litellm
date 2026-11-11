@@ -7,7 +7,7 @@ The binary reads YAML from `LITELLM_CONFIG` and mounts configured MCP servers al
 From the repository root, start the Python fixture in one terminal:
 
 ```sh
-MCP_HOST=127.0.0.1 MCP_PORT=8090 .venv/bin/python tests/mcp_tests/mcp_e2e_upstream_server.py
+MCP_HOST=127.0.0.1 MCP_PORT=8090 .venv/bin/python tests/integration/_support/mcp_e2e_upstream_server.py
 ```
 
 Start the gateway in another terminal with the example configuration:

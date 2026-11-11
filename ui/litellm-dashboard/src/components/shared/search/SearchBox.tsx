@@ -2,32 +2,37 @@
 
 import "prosemirror-view/style/prosemirror.css";
 
-import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
+import { useDebouncer } from "@tanstack/react-pacer/debouncer";
+import type { ParseKeys } from "i18next";
 import { ProseMirror, ProseMirrorDoc, reactKeys, useEditorEventCallback } from "@handlewithcare/react-prosemirror";
-import { Check, Copy, CornerDownLeft, type LucideIcon, Search } from "lucide-react";
+import { Check, Copy, CornerDownLeft, Loader2, type LucideIcon, Search } from "lucide-react";
 import { Schema } from "prosemirror-model";
 import { EditorState, Plugin, TextSelection, type Transaction } from "prosemirror-state";
 import { Decoration, DecorationSet, type EditorView } from "prosemirror-view";
-import { type ComponentProps, createContext, type ReactNode, useContext, useId, useMemo, useState } from "react";
+import { type ComponentProps, createContext, useContext, useId, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
+import { Kbd } from "@/components/ui/kbd";
 import { cn } from "@/lib/cva.config";
 
-import { parseQuery, type QueryClause, type QueryLanguage } from "./language";
+import { type FilterOp, languageOps, parseQuery, type QueryClause, type QueryLanguage } from "./language";
 import { type SearchQuery, toSearchQuery } from "./searchQuery";
 import { completingField, completingPrefix, suggest, type Suggestion, type SuggestionMenu } from "./suggestions";
 import { NO_VALUES, type ValueSource } from "./valueSource";
+
+const ARIA_AUTOCOMPLETE_LIST = "list";
 
 const schema = new Schema({ nodes: { doc: { content: "text*" }, text: {} } });
 
 const EMIT_WAIT_MS = 150;
 const KEEP_MENU_CLOSED = "searchBoxKeepMenuClosed";
 
-const OPERATORS = [
-  { label: "equals", example: "foo:bar" },
-  { label: "not equals", example: "-foo:bar" },
-  { label: "wildcard match", example: "foo:*bar*" },
-  { label: "does not contain", example: "-foo:*bar*" },
+const OPERATORS: readonly { readonly op: FilterOp; readonly label: ParseKeys; readonly example: string }[] = [
+  { op: "eq", label: "shared.searchBox.operators.equals", example: "foo:bar" },
+  { op: "neq", label: "shared.searchBox.operators.notEquals", example: "-foo:bar" },
+  { op: "glob", label: "shared.searchBox.operators.wildcardMatch", example: "foo:*bar*" },
+  { op: "nglob", label: "shared.searchBox.operators.doesNotContain", example: "-foo:*bar*" },
 ];
 
 /** Colours each `key:` so the filters stand out from free text. */
@@ -75,6 +80,8 @@ interface SearchBoxState {
   readonly menu: SuggestionMenu<string> | null;
   readonly activeId: string | undefined;
   readonly icon: (field: string) => LucideIcon;
+  /** The ops the language can express, so the help only lists forms the surface honors. */
+  readonly ops: readonly FilterOp[];
 }
 
 const SearchBoxContext = createContext<SearchBoxState | null>(null);
@@ -146,11 +153,12 @@ function Root<F extends string>({
       menu: shownMenu,
       activeId: activeItem?.id,
       icon: (field) => language.fields[field as F].icon,
+      ops: languageOps(language),
     }),
     [listId, text, clauses, shownMenu, activeItem, language],
   );
 
-  const emit = useDebouncedCallback(
+  const emitter = useDebouncer(
     (next: string) => {
       setUnechoed((current) => [...current, next]);
       onValueChange(next);
@@ -163,7 +171,7 @@ function Root<F extends string>({
     if (tr.selectionSet || tr.docChanged) setActive(0);
     if (!tr.docChanged) return;
     setMenuOpen(!tr.getMeta(KEEP_MENU_CLOSED));
-    emit(tr.doc.textContent);
+    emitter.maybeExecute(tr.doc.textContent);
   };
 
   const handleKeyDown = (view: EditorView, event: KeyboardEvent): boolean => {
@@ -200,6 +208,7 @@ function Root<F extends string>({
         },
         blur: () => {
           setFocused(false);
+          emitter.flush();
           return false;
         },
       }}
@@ -207,7 +216,7 @@ function Root<F extends string>({
       attributes={{
         role: "combobox",
         "aria-label": label,
-        "aria-autocomplete": "list",
+        "aria-autocomplete": ARIA_AUTOCOMPLETE_LIST,
         "aria-expanded": String(visible),
         "aria-controls": listId,
         ...(activeItem && {
@@ -228,10 +237,13 @@ function Root<F extends string>({
 
 export type SearchBoxInputProps = ComponentProps<"div"> & {
   placeholder: string;
+  /** Results for the current query are loading: the search icon becomes a spinner. */
+  busy?: boolean;
 };
 
 /** The bordered field holding the editor; shows `placeholder` while the query is empty. */
-function Input({ placeholder, className, ...props }: SearchBoxInputProps) {
+function Input({ placeholder, busy = false, className, ...props }: SearchBoxInputProps) {
+  const { t } = useTranslation();
   const { text } = useSearchBox();
   return (
     <div
@@ -242,12 +254,20 @@ function Input({ placeholder, className, ...props }: SearchBoxInputProps) {
       )}
       {...props}
     >
-      <Search className="size-3.5 shrink-0 text-muted-foreground" />
+      {busy ? (
+        <Loader2
+          role="status"
+          aria-label={t("shared.searchBox.loadingResults")}
+          className="size-3.5 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none"
+        />
+      ) : (
+        <Search className="size-3.5 shrink-0 text-muted-foreground" />
+      )}
       <div className="relative flex min-w-0 flex-1">
         <ProseMirrorDoc />
         {!text && (
-          <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center font-mono text-xs text-muted-foreground">
-            {placeholder}
+          <span className="pointer-events-none absolute inset-0 flex items-center font-mono text-xs text-muted-foreground">
+            <span className="truncate">{placeholder}</span>
           </span>
         )}
       </div>
@@ -262,7 +282,8 @@ export type SearchBoxSuggestionsProps = ComponentProps<"div">;
  * `children` render in the footer beside the key hints, e.g. a `CopyCommand`.
  */
 function Suggestions({ className, children, ...props }: SearchBoxSuggestionsProps) {
-  const { listId, menu, activeId, icon } = useSearchBox();
+  const { t } = useTranslation();
+  const { listId, menu, activeId, icon, ops } = useSearchBox();
   const pick = useEditorEventCallback((view, item: Suggestion<string>) => applySuggestion(view, item));
   if (!menu) return null;
   return (
@@ -274,7 +295,12 @@ function Suggestions({ className, children, ...props }: SearchBoxSuggestionsProp
       )}
       {...props}
     >
-      <div id={listId} role="listbox" aria-label="Search suggestions" className="max-h-80 overflow-y-auto p-1">
+      <div
+        id={listId}
+        role="listbox"
+        aria-label={t("shared.searchBox.suggestions")}
+        className="max-h-80 overflow-y-auto p-1"
+      >
         {menu.groups.map((group) => (
           <div key={group.heading} role="group" aria-label={group.heading}>
             <div className="px-2 pt-2 pb-1 text-xs text-muted-foreground">{group.heading}</div>
@@ -299,22 +325,22 @@ function Suggestions({ className, children, ...props }: SearchBoxSuggestionsProp
         ))}
         {menu.loading && (
           <div role="status" className="px-2 py-1.5 font-mono text-xs text-muted-foreground">
-            Loading values…
+            {t("shared.searchBox.loadingValues")}
           </div>
         )}
-        {menu.showOperators && <OperatorHints />}
+        {menu.showOperators && <OperatorHints ops={ops} />}
       </div>
       <div className="flex items-center gap-3 border-t border-border px-3 py-2 text-xs text-muted-foreground">
         <span className="flex items-center gap-1">
           <Kbd>↑</Kbd>
           <Kbd>↓</Kbd>
-          Navigate
+          {t("shared.searchBox.navigate")}
         </span>
         <span className="flex items-center gap-1">
           <Kbd>
-            <CornerDownLeft className="size-3" />
+            <CornerDownLeft />
           </Kbd>
-          Select
+          {t("shared.searchBox.select")}
         </span>
         {children}
       </div>
@@ -331,13 +357,14 @@ export type SearchBoxCopyCommandProps<F extends string> = {
 
 type CopyOutcome = { readonly command: string; readonly outcome: "copied" | "failed" } | null;
 
-const copyLabel = (last: CopyOutcome, command: string): string => {
-  if (last?.command !== command) return "Copy as curl";
-  return last.outcome === "copied" ? "Copied" : "Copy failed";
+const copyLabel = (last: CopyOutcome, command: string): ParseKeys => {
+  if (last?.command !== command) return "shared.searchBox.copyCommand.copy";
+  return last.outcome === "copied" ? "shared.searchBox.copyCommand.copied" : "shared.searchBox.copyCommand.failed";
 };
 
 /** Puts the current query on the clipboard as an API call, from the suggestions footer. */
 function CopyCommand<F extends string>({ title, command }: SearchBoxCopyCommandProps<F>) {
+  const { t } = useTranslation();
   const { clauses } = useSearchBox();
   const [last, setLast] = useState<CopyOutcome>(null);
   const current = useMemo(() => command(toSearchQuery(clauses as readonly QueryClause<F>[])), [command, clauses]);
@@ -358,31 +385,24 @@ function CopyCommand<F extends string>({ title, command }: SearchBoxCopyCommandP
       onMouseDown={(event) => event.preventDefault()}
       onClick={() => void copy()}
     >
-      {label === "Copied" ? <Check /> : <Copy />}
-      {label}
+      {label === "shared.searchBox.copyCommand.copied" ? <Check /> : <Copy />}
+      {t(label)}
     </Button>
   );
 }
 
-function OperatorHints() {
+function OperatorHints({ ops }: { ops: readonly FilterOp[] }) {
+  const { t } = useTranslation();
   return (
     <div className="pb-1">
-      <div className="px-2 pt-2 pb-1 text-xs text-muted-foreground">Comparison operators</div>
-      {OPERATORS.map((op) => (
+      <div className="px-2 pt-2 pb-1 text-xs text-muted-foreground">{t("shared.searchBox.comparisonOperators")}</div>
+      {OPERATORS.filter((op) => ops.includes(op.op)).map((op) => (
         <div key={op.label} className="flex items-center justify-between px-2 py-1 font-mono text-xs">
-          <span className="text-warning">{op.label}</span>
+          <span className="text-warning">{t(op.label)}</span>
           <code className="rounded bg-muted px-1.5 text-muted-foreground">{op.example}</code>
         </div>
       ))}
     </div>
-  );
-}
-
-function Kbd({ children }: { children: ReactNode }) {
-  return (
-    <kbd className="inline-flex h-5 min-w-5 items-center justify-center rounded border border-border px-1 font-sans">
-      {children}
-    </kbd>
   );
 }
 

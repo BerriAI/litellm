@@ -15,8 +15,8 @@ import pytest
 
 from litellm.llms.vertex_ai.common_utils import (
     _get_embedding_url,
-    _get_vertex_url,
     get_vertex_base_url,
+    get_vertex_url,
 )
 
 
@@ -80,7 +80,7 @@ class TestChatCompletionURLs:
             "litellm.VertexGeminiConfig.get_model_for_vertex_ai_url",
             side_effect=lambda model: model,
         ):
-            url, endpoint = _get_vertex_url(
+            url, endpoint = get_vertex_url(
                 mode="chat",
                 model="gemini-1.5-pro",
                 stream=stream,
@@ -112,7 +112,7 @@ class TestChatCompletionURLs:
             "litellm.VertexGeminiConfig.get_model_for_vertex_ai_url",
             side_effect=lambda model: model,
         ):
-            url, endpoint = _get_vertex_url(
+            url, endpoint = get_vertex_url(
                 mode="chat",
                 model="1234567890",  # Numeric model ID
                 stream=stream,
@@ -229,7 +229,7 @@ class TestCountTokensURLs:
             "litellm.VertexGeminiConfig.get_model_for_vertex_ai_url",
             side_effect=lambda model: model,
         ):
-            url, endpoint = _get_vertex_url(
+            url, endpoint = get_vertex_url(
                 mode="count_tokens",
                 model="gemini-1.5-pro",
                 stream=None,
@@ -274,15 +274,13 @@ class TestImageGenerationURLs:
             ),
         ],
     )
-    def test_image_generation_url_construction(
-        self, vertex_location, model, expected_url_pattern
-    ):
+    def test_image_generation_url_construction(self, vertex_location, model, expected_url_pattern):
         """Test that image_generation URLs are correctly constructed for regional and global locations."""
         with patch(
             "litellm.VertexGeminiConfig.get_model_for_vertex_ai_url",
             side_effect=lambda model: model,
         ):
-            url, endpoint = _get_vertex_url(
+            url, endpoint = get_vertex_url(
                 mode="image_generation",
                 model=model,
                 stream=None,
@@ -313,7 +311,7 @@ class TestAPIVersions:
             "litellm.VertexGeminiConfig.get_model_for_vertex_ai_url",
             side_effect=lambda model: model,
         ):
-            url, _ = _get_vertex_url(
+            url, _ = get_vertex_url(
                 mode="chat",
                 model="gemini-1.5-pro",
                 stream=False,
@@ -354,7 +352,7 @@ class TestEdgeCases:
                     vertex_api_version="v1",
                 )
             else:
-                url, _ = _get_vertex_url(
+                url, _ = get_vertex_url(
                     mode=mode,
                     model="gemini-1.5-pro",
                     stream=False,
@@ -376,7 +374,7 @@ class TestEdgeCases:
                 "litellm.VertexGeminiConfig.get_model_for_vertex_ai_url",
                 side_effect=lambda model: model,
             ):
-                url, _ = _get_vertex_url(
+                url, _ = get_vertex_url(
                     mode="chat",
                     model="gemini-1.5-pro",
                     stream=False,
@@ -398,7 +396,7 @@ class TestBackwardCompatibility:
             "litellm.VertexGeminiConfig.get_model_for_vertex_ai_url",
             side_effect=lambda model: model,
         ):
-            url, _ = _get_vertex_url(
+            url, _ = get_vertex_url(
                 mode="chat",
                 model="gemini-1.5-pro",
                 stream=False,
@@ -419,7 +417,7 @@ class TestBackwardCompatibility:
             "litellm.VertexGeminiConfig.get_model_for_vertex_ai_url",
             side_effect=lambda model: model,
         ):
-            url, _ = _get_vertex_url(
+            url, _ = get_vertex_url(
                 mode="chat",
                 model="gemini-1.5-pro",
                 stream=True,

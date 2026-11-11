@@ -9,12 +9,12 @@ use litellm_host::{
     interceptors::{RawResponse, RequestContext, WireRequest},
     lifecycle::{FailureOrigin, Timing, epoch_seconds},
 };
-use litellm_host_python::{HookStep, from_py, missing_state, to_py};
+use litellm_host_python::{Error as HostError, HookStep, from_py, to_py};
 use pyo3::{
     exceptions::{PyBaseException, PyException},
     gc::{PyTraverseError, PyVisit},
     prelude::*,
-    types::{PyDateTime, PyDict, PyList},
+    types::{PyDateTime, PyDict, PyList, PyString},
 };
 use serde_json::Value;
 
@@ -22,7 +22,7 @@ use crate::{
     DeploymentHooks, LegacyCallbacks, PublicCall, PythonLogger,
     deferred::{PendingLogging, PendingSuccess},
     finalize, is_internal_call,
-    python::Streaming,
+    python::{Logging, Streaming},
     setup,
 };
 
@@ -57,6 +57,8 @@ pub struct LegacyLogging {
     asynchronous: bool,
     internal: bool,
     cache_key: Option<String>,
+    /// When the provider request went out, until its window is recorded (Messages only).
+    api_started: Option<f64>,
 }
 
 fn datetime(py: Python<'_>, epoch_seconds: f64) -> PyResult<Py<PyAny>> {
@@ -87,6 +89,94 @@ impl LegacyLogging {
             asynchronous,
             internal: false,
             cache_key: None,
+            api_started: None,
+        }
+    }
+
+    /// The kwargs `Logging.update_from_kwargs` sees. Python's Messages handler takes `metadata` as
+    /// its own argument, so the logger never sees the caller's raw metadata, only the validated
+    /// request metadata merged in through `litellm_params`. Python updates the logger once, before
+    /// the call; the refresh once the result is ready leaves out `litellm_metadata` too, so the
+    /// logged metadata is not rebuilt from what the call wrote into it since.
+    fn logging_kwargs<'py>(&self, py: Python<'py>, refresh: bool) -> PyResult<Bound<'py, PyDict>> {
+        let kwargs = self.call.kwargs().bind(py).copy()?;
+        if self.operation != LoggingOperation::Messages {
+            return Ok(kwargs);
+        }
+        let consumed: &[&str] = if refresh {
+            &["metadata", "litellm_metadata"]
+        } else {
+            &["metadata"]
+        };
+        for name in consumed {
+            if kwargs.contains(name)? {
+                kwargs.del_item(name)?;
+            }
+        }
+        Ok(kwargs)
+    }
+
+    /// Python's Messages handler hands the logger its request params, validated `metadata`
+    /// included, as `litellm_params`, beside the `aanthropic_messages` call flag.
+    fn logged_request_params(
+        &self,
+        context: &RequestContext,
+    ) -> Option<serde_json::Map<String, Value>> {
+        if self.operation != LoggingOperation::Messages {
+            return None;
+        }
+        let mut params = context
+            .optional_params
+            .as_object()
+            .cloned()
+            .unwrap_or_default();
+        params.insert(
+            "aanthropic_messages".to_owned(),
+            Value::Bool(self.asynchronous),
+        );
+        Some(params)
+    }
+
+    // Compared as Python compares them, so a caller's `0` is kept over a typed float's `0.0`.
+    fn caller_value<'py>(
+        &self,
+        py: Python<'py>,
+        name: &str,
+        sent: &Value,
+    ) -> PyResult<Option<Bound<'py, PyAny>>> {
+        match self.call.lookup(py, name)? {
+            Some(value) if from_py::<Value>(&value).is_ok() && value.eq(to_py(py, sent)?)? => {
+                Ok(Some(value))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    // Python's Messages handler logs the caller's own optional params, not their typed copies.
+    fn as_called(&self, py: Python<'_>, context: &RequestContext) -> PyResult<RequestContext> {
+        let mut context = context.clone();
+        if self.operation != LoggingOperation::Messages {
+            return Ok(context);
+        }
+        for (name, sent) in context
+            .optional_params
+            .as_object_mut()
+            .into_iter()
+            .flatten()
+        {
+            if let Some(value) = self.caller_value(py, name, sent)? {
+                *sent = from_py(&value)?;
+            }
+        }
+        Ok(context)
+    }
+
+    /// Python times the provider exchange inside the async `AsyncHTTPHandler.post`; its sync
+    /// client is untimed.
+    fn close_api_window(&mut self, py: Python<'_>, end: f64) -> PyResult<()> {
+        match self.api_started.take() {
+            Some(start) => self.logger()?.record_api_window(py, start, end),
+            None => Ok(()),
         }
     }
 
@@ -102,12 +192,29 @@ impl LegacyLogging {
         }
     }
 
-    fn input_description(&self) -> &'static str {
-        match self.operation {
+    fn logged_input<'py>(
+        &self,
+        py: Python<'py>,
+        body: &Bound<'py, PyDict>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let description = match self.operation {
             LoggingOperation::Completion => "Chat completions",
             LoggingOperation::Responses => "Responses",
-            LoggingOperation::Messages => "Messages",
+            LoggingOperation::Messages => {
+                return Logging::MessagesInput.call(py, (body, self.call.kwargs().bind(py)));
+            }
             LoggingOperation::Ocr => "OCR document processing",
+        };
+        Ok(PyString::new(py, description).into_any())
+    }
+
+    /// The key `pre_call` logs. Python's Messages handler logs an empty string, never the key.
+    fn logged_api_key<'a>(&self, context: &'a RequestContext) -> Option<&'a str> {
+        match self.operation {
+            LoggingOperation::Messages => Some(""),
+            LoggingOperation::Completion | LoggingOperation::Responses | LoggingOperation::Ocr => {
+                context.api_key.as_ref().map(|api_key| api_key.expose())
+            }
         }
     }
 
@@ -134,9 +241,10 @@ impl LegacyLogging {
     }
 
     fn logger(&self) -> PyResult<&PythonLogger> {
-        self.logger.as_ref().ok_or_else(|| {
-            pyo3::exceptions::PyRuntimeError::new_err("call logging is not initialized")
-        })
+        Ok(self
+            .logger
+            .as_ref()
+            .ok_or(crate::error::Error::LoggingNotInitialized)?)
     }
 
     /// The keyword view the rest of the call reads: a copy, so the deployment hook's own
@@ -160,7 +268,7 @@ impl LegacyLogging {
         self.response
             .as_ref()
             .map(|response| HookStep::Ready(response.clone_ref(py)))
-            .ok_or_else(missing_state)
+            .ok_or_else(|| HostError::MissingState.into())
     }
 
     fn dispatch_success(&self, py: Python<'_>) -> PyResult<()> {
@@ -184,32 +292,51 @@ impl LegacyLogging {
         if !self.asynchronous {
             return pending().sync(py);
         }
-        if !self.internal
-            && self
+        if self.internal {
+            return Ok(());
+        }
+        let defers = logger.defers_async_logging(py);
+        if logger.claim_async_success_log(py)? {
+            let enqueues = self
                 .call
                 .kwargs()
                 .bind(py)
                 .get_item("fallbacks")?
-                .is_none_or(|value| value.is_none())
-        {
-            if logger.defers_async_logging(py) {
+                .is_none_or(|value| value.is_none());
+            if defers {
                 let pending = Py::new(
                     py,
                     PendingLogging {
                         pending: Some(pending()),
+                        enqueues,
                     },
                 )?;
-                logger.defer_success(py, pending.bind(py).as_any())?;
-            } else {
+                return logger.defer_success(
+                    py,
+                    pending.bind(py).as_any(),
+                    &self.response,
+                    &self.start,
+                    &self.end,
+                );
+            }
+            if enqueues {
                 pending().asynchronous(py)?;
             }
+        }
+        if defers {
+            return Ok(());
         }
         logger.sync_success_for_async_call(py, &self.response, &self.start, &self.end)
     }
 
-    fn stream_success(&self, py: Python<'_>, stream: &DeliveredStream) -> PyResult<()> {
+    fn stream_success(
+        &self,
+        py: Python<'_>,
+        stream: &DeliveredStream,
+        teardown: bool,
+    ) -> PyResult<()> {
         let logger = self.logger()?;
-        let billing = self.stream_billing().ok_or_else(missing_state)?;
+        let billing = self.stream_billing().ok_or(HostError::MissingState)?;
         let billed = Streaming::Success.call(
             py,
             (
@@ -224,6 +351,7 @@ impl LegacyLogging {
                 &self.start,
                 &self.end,
                 &stream.first_chunk,
+                teardown,
             ),
         );
         match billed {
@@ -375,17 +503,29 @@ impl LegacyLogging {
         wire: Box<WireRequest>,
         context: &RequestContext,
     ) -> PyResult<HookStep<Self, Box<WireRequest>>> {
+        let context = &self.as_called(py, context)?;
         let logger = self.logger()?;
-        logger.update_from_kwargs(py, self.call.kwargs(), &wire, context)?;
+        logger.update_from_kwargs(
+            py,
+            &self.logging_kwargs(py, false)?,
+            &wire,
+            context,
+            self.logged_request_params(context).as_ref(),
+        )?;
         let body = to_py(py, &wire.body)?
             .into_bound(py)
             .cast_into::<PyDict>()?;
         for (name, sent) in wire.body.as_object().into_iter().flatten() {
-            if let Some(value) = self.call.lookup(py, name)?
-                && from_py::<Value>(&value).is_ok_and(|caller| caller == *sent)
-            {
+            if let Some(value) = self.caller_value(py, name, sent)? {
                 body.set_item(name, value)?;
             }
+        }
+        if self.operation == LoggingOperation::Messages {
+            // Python's Messages handler merges its transformed request body into the call details.
+            logger
+                .object(py)
+                .getattr("model_call_details")?
+                .call_method1("update", (&body,))?;
         }
         let headers = PyDict::new(py);
         for (name, value) in &wire.headers {
@@ -396,14 +536,18 @@ impl LegacyLogging {
             headers: headers.clone().unbind(),
             context: context.clone(),
         });
+        let input = self.logged_input(py, &body)?;
         self.logger()?.pre_call(
             py,
-            self.input_description(),
-            context.api_key.as_ref().map(|api_key| api_key.expose()),
+            &input,
+            self.logged_api_key(context),
             &body,
             &headers,
             &wire.url,
         )?;
+        if self.operation == LoggingOperation::Messages && self.asynchronous {
+            self.api_started = Some(epoch_seconds());
+        }
         let headers = headers
             .iter()
             .map(|(name, value)| Ok((name.extract::<String>()?, value.extract::<String>()?)))
@@ -442,19 +586,23 @@ impl LegacyLogging {
         py: Python<'_>,
         facts: &litellm_host::interceptors::ExecutionFacts,
     ) -> PyResult<HookStep<Self, ()>> {
-        use litellm_host::interceptors::ResultSource;
+        use litellm_host::interceptors::{Cost, ResultSource};
 
         let logger = self.logger()?.object(py);
         let params = logger
             .getattr("litellm_params")?
             .cast_into::<PyDict>()?
             .copy()?;
-        params.set_item("custom_llm_provider", &facts.provider.provider)?;
+        if self.operation != LoggingOperation::Messages {
+            // Python's Messages handler hands the provider to the logger beside its params, never
+            // in them, and the proxy's logger carries over to the next fallback hop.
+            params.set_item("custom_llm_provider", &facts.provider.provider)?;
+        }
         crate::python::Logging::Update.call(
             py,
             (
                 &logger,
-                self.call.kwargs(),
+                self.logging_kwargs(py, true)?,
                 &facts.provider.model,
                 logger.getattr("optional_params")?,
                 params,
@@ -462,12 +610,27 @@ impl LegacyLogging {
             ),
         )?;
         let details = logger.getattr("model_call_details")?;
+        let reported_cost = match &facts.cost {
+            Cost::Reported { amount } => amount.as_f64(),
+            Cost::CacheHit | Cost::Deferred => None,
+        };
+        logger.setattr("_provider_reported_cost", reported_cost)?;
+        details.call_method1("pop", ("response_cost", py.None()))?;
         self.cache_key = match &facts.source {
             ResultSource::Provider => None,
             ResultSource::Cache { key } => Some(key.clone()),
         };
-        details.set_item("cache_hit", self.cache_key.is_some())?;
+        if self.cache_key.is_some() {
+            details.set_item("cache_hit", true)?;
+        } else {
+            details.call_method1("pop", ("cache_hit", py.None()))?;
+        }
         details.set_item("cache_key", self.cache_key.as_deref())?;
+        if let (LoggingOperation::Messages, ResultSource::Provider, Some(request)) =
+            (self.operation, &facts.source, &self.request)
+        {
+            details.call_method1("update", (request.body.bind(py),))?;
+        }
         Ok(HookStep::Ready(()))
     }
 
@@ -476,6 +639,16 @@ impl LegacyLogging {
         py: Python<'_>,
         raw: &RawResponse,
     ) -> PyResult<HookStep<Self, ()>> {
+        if self.operation == LoggingOperation::Messages {
+            // Python's Messages handler never calls `post_call` at receipt: it stores the raw
+            // response, and logging replays it through `AnthropicConfig.transform_response`.
+            self.close_api_window(py, epoch_seconds())?;
+            if let Some(head) = &raw.head {
+                self.logger()?
+                    .record_response(py, head.status, &head.headers, &raw.body)?;
+            }
+            return Ok(HookStep::Ready(()));
+        }
         let api_key = self
             .request
             .as_ref()
@@ -500,7 +673,7 @@ impl LegacyLogging {
         self.end = Some(datetime(py, timing.end_time)?);
         self.response = Some(response.clone_ref(py));
         match &self.stream {
-            Some(stream) => self.stream_success(py, stream)?,
+            Some(stream) => self.stream_success(py, stream, false)?,
             None => self.dispatch_success(py)?,
         }
         Ok(HookStep::Ready(()))
@@ -515,11 +688,14 @@ impl LegacyLogging {
     ) -> PyResult<HookStep<Self, ()>> {
         self.end = Some(datetime(py, timing.end_time)?);
         self.error = Some(error.clone_ref(py).into_value(py));
+        if self.logger.is_some() {
+            self.close_api_window(py, timing.end_time)?;
+        }
         if self.stream.is_some() {
             return self.stream_failure(py);
         }
         if origin == FailureOrigin::Call && self.logger.is_some() && self.runs_deployment_hooks() {
-            let error = self.error.as_ref().ok_or_else(missing_state)?;
+            let error = self.error.as_ref().ok_or(HostError::MissingState)?;
             return Ok(HookStep::Await(
                 DeploymentHooks::after_failure(py, self.call.kwargs(), error, self.call_type())?,
                 Self::resume_deployment_failure,
@@ -530,13 +706,27 @@ impl LegacyLogging {
 
     pub(crate) fn stream_opened(&mut self, py: Python<'_>, head: &Py<PyAny>) -> PyResult<()> {
         if self.stream_billing().is_none() {
-            return Err(missing_state());
+            return Err(HostError::MissingState.into());
         }
         if let Some(key) = &self.cache_key {
             head.bind(py).set_item("cache_key", key)?;
             head.bind(py).set_item("cache_hit", true)?;
         }
-        Streaming::Opened.call(py, (self.logger()?.object(py),))?;
+        self.close_api_window(py, epoch_seconds())?;
+        if self.operation == LoggingOperation::Messages {
+            // Python's `@client` stamps the call metadata onto the stream it hands back.
+            Streaming::StampHead.call(
+                py,
+                (
+                    head.bind(py),
+                    self.logger()?.object(py),
+                    self.call.kwargs(),
+                    &self.start,
+                    datetime(py, epoch_seconds())?,
+                ),
+            )?;
+        }
+        Streaming::Opened.call(py, (self.logger()?.object(py), head.bind(py)))?;
         self.stream = Some(DeliveredStream {
             chunks: PyList::empty(py).unbind(),
             first_chunk: None,
@@ -545,7 +735,7 @@ impl LegacyLogging {
     }
 
     pub(crate) fn stream_chunk(&mut self, py: Python<'_>, chunk: &Py<PyAny>) -> PyResult<()> {
-        let stream = self.stream.as_mut().ok_or_else(missing_state)?;
+        let stream = self.stream.as_mut().ok_or(HostError::MissingState)?;
         if stream.first_chunk.is_none() {
             stream.first_chunk = Some(datetime(py, epoch_seconds())?);
         }
@@ -553,8 +743,28 @@ impl LegacyLogging {
     }
 }
 
+impl LegacyLogging {
+    // A caller that goes away mid-stream cancels the call before it ends: Python's Messages
+    // stream iterator still bills the chunks it read, straight away rather than deferred.
+    fn bill_abandoned_stream(&mut self, py: Python<'_>) -> PyResult<()> {
+        if !self.asynchronous || self.end.is_some() {
+            return Ok(());
+        }
+        let Some(stream) = self.stream.take() else {
+            return Ok(());
+        };
+        self.end = Some(datetime(py, epoch_seconds())?);
+        self.stream_success(py, &stream, true)
+    }
+}
+
 impl PythonOwned for LegacyLogging {
     fn close(&mut self, py: Python<'_>) {
+        if self.logger.is_some()
+            && let Err(error) = self.bill_abandoned_stream(py)
+        {
+            error.write_unraisable(py, None);
+        }
         if let Some(logger) = self.logger.take()
             && let Err(error) = logger.restore_context(py)
         {
@@ -918,11 +1128,11 @@ assert all(value is failure for name, value in logger.calls if name.endswith('_h
 mod payload_tests {
     use std::ffi::CStr;
 
-    use litellm_auth::SecretValue;
     use litellm_host::hooks::CallHooks;
     use litellm_host::interceptors::{RawResponse, RequestContext, WireRequest};
     use litellm_host::lifecycle::ExecutionEvent;
     use litellm_host_python::{HookStep, PythonCallEvent, PythonOwned, to_py};
+    use litellm_secret_value::SecretValue;
     use proptest::prelude::*;
     use pyo3::gc::{PyTraverseError, PyVisit};
     use pyo3::prelude::*;
@@ -936,9 +1146,6 @@ mod payload_tests {
     /// The payload phases of `Logging` on top of `StubLogger`, with `pre_call` handing the
     /// payload to the case's `on_pre_call`.
     const PAYLOAD_LOGGER: &CStr = c"
-class Request:
-    pass
-
 class PayloadLogger(StubLogger):
     def update_from_kwargs(self, **update):
         self.update = update
@@ -954,12 +1161,133 @@ class PayloadLogger(StubLogger):
         self.record('post_call', None)
         self.post = (original_response, api_key, additional_args)
 
-request = Request()
+bound = {}
 kwargs = {}
 logger = PayloadLogger()
 on_pre_call = lambda additional_args: None
 check = lambda: None
 ";
+
+    #[rstest]
+    #[case::reported(Some(0.37), false)]
+    #[case::free(Some(0.0), false)]
+    #[case::deferred(None, false)]
+    #[case::cached(None, true)]
+    fn result_ready_hands_only_a_reported_cost_to_the_spend_logging_record(
+        #[case] reported: Option<f64>,
+        #[case] cache_hit: bool,
+        #[values(0.001, 7.0)] existing_cost: f64,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(py, PAYLOAD_LOGGER);
+            run(
+                py,
+                &locals,
+                c"
+logger.litellm_params = {}
+logger.optional_params = {}
+logger.model_call_details = {'response_cost': 7.0}
+logger._provider_reported_cost = None
+",
+            );
+            let mut logging = LegacyLogging {
+                logger: Some(PythonLogger::new(local(&locals, "logger").unbind())),
+                ..legacy_call(py, &locals, false)
+            };
+            let source = if cache_hit {
+                litellm_host::interceptors::ResultSource::Cache {
+                    key: "cached-test".into(),
+                }
+            } else {
+                litellm_host::interceptors::ResultSource::Provider
+            };
+            let facts = litellm_host::interceptors::ExecutionFacts {
+                provider: litellm_host::interceptors::ProviderIdentity {
+                    model: "native-test".into(),
+                    provider: "edenai".into(),
+                },
+                cost: litellm_host::interceptors::Cost::settle(
+                    &source,
+                    reported.and_then(serde_json::Number::from_f64),
+                ),
+                source,
+            };
+            let previous = litellm_host::interceptors::ExecutionFacts {
+                provider: facts.provider.clone(),
+                cost: litellm_host::interceptors::Cost::CacheHit,
+                source: litellm_host::interceptors::ResultSource::Cache {
+                    key: "earlier-hit".into(),
+                },
+            };
+            logging.result_ready(py, &previous).unwrap();
+            local(&locals, "logger")
+                .getattr("model_call_details")
+                .unwrap()
+                .set_item("response_cost", existing_cost)
+                .unwrap();
+            let step = logging.result_ready(py, &facts).unwrap();
+            assert!(matches!(step, HookStep::Ready(())));
+            locals.set_item("reported", reported).unwrap();
+            locals.set_item("cache_hit", cache_hit).unwrap();
+            run(
+                py,
+                &locals,
+                c"
+assert logger.model_call_details.get('response_cost') is None, logger.model_call_details
+assert logger._provider_reported_cost == reported, logger._provider_reported_cost
+assert logger.model_call_details.get('cache_hit') is (True if cache_hit else None), logger.model_call_details
+assert logger.update['custom_llm_provider'] == 'edenai', logger.update
+",
+            );
+        });
+    }
+
+    #[rstest]
+    #[case::messages(crate::LoggingOperation::Messages, false)]
+    #[case::ocr(crate::LoggingOperation::Ocr, true)]
+    fn result_ready_puts_the_provider_in_the_logged_params_except_for_messages(
+        #[case] operation: crate::LoggingOperation,
+        #[case] in_params: bool,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(py, PAYLOAD_LOGGER);
+            run(
+                py,
+                &locals,
+                c"
+logger.litellm_params = {}
+logger.optional_params = {}
+logger.model_call_details = {}
+logger._provider_reported_cost = None
+",
+            );
+            let mut logging = LegacyLogging {
+                logger: Some(PythonLogger::new(local(&locals, "logger").unbind())),
+                operation,
+                ..legacy_call(py, &locals, false)
+            };
+            let facts = litellm_host::interceptors::ExecutionFacts {
+                provider: litellm_host::interceptors::ProviderIdentity {
+                    model: "native-test".into(),
+                    provider: "anthropic".into(),
+                },
+                cost: litellm_host::interceptors::Cost::Deferred,
+                source: litellm_host::interceptors::ResultSource::Provider,
+            };
+            logging.result_ready(py, &facts).unwrap();
+            locals.set_item("in_params", in_params).unwrap();
+            run(
+                py,
+                &locals,
+                c"
+assert logger.update['custom_llm_provider'] == 'anthropic', logger.update
+assert ('custom_llm_provider' in logger.update['litellm_params']) is in_params, logger.update
+",
+            );
+        });
+    }
 
     const DOCUMENT: &str = "data:application/pdf;base64,YWJj";
     const EDITED: &str = "data:application/pdf;base64,ZWRpdGVk";
@@ -1038,9 +1366,7 @@ check = lambda: None
         let step = logging
             .before_provider_request(py, Box::new(wire), context)
             .unwrap();
-        let raw = RawResponse {
-            body: "raw response".into(),
-        };
+        let raw = RawResponse::new("raw response".into());
         assert!(matches!(
             logging
                 .on_event(
@@ -1097,7 +1423,10 @@ check = lambda: None
     #[rstest]
     #[case::completion(crate::LoggingOperation::Completion, "Chat completions")]
     #[case::responses(crate::LoggingOperation::Responses, "Responses")]
-    #[case::messages(crate::LoggingOperation::Messages, "Messages")]
+    #[case::messages(
+        crate::LoggingOperation::Messages,
+        r#"[{'role': 'user', 'content': '{"pages": [1]}'}]"#
+    )]
     #[case::ocr(crate::LoggingOperation::Ocr, "OCR document processing")]
     fn prepared_arguments_replace_the_legacy_view_without_losing_callback_aliases(
         #[case] operation: crate::LoggingOperation,
@@ -1138,7 +1467,7 @@ prepared = {'pages': replacement}
                 &locals,
                 c"
 assert logger.pre['complete_input_dict']['pages'] is replacement
-assert logger.pre_input == description
+assert str(logger.pre_input) == description
 assert original == [0]
 ",
             );
@@ -1225,10 +1554,10 @@ on_pre_call = lambda args: observed.append(
 def check():
     assert observed == [(True, True)], observed
 ")]
-    #[case::request_attribute_behind_an_omitted_keyword(c"
+    #[case::bound_value_behind_an_omitted_keyword(c"
 document = {'type': 'document_url', 'document_url': 'data:application/pdf;base64,YWJj'}
 pages = [0]
-request.document = document
+bound['document'] = document
 kwargs = {'pages': pages}
 observed = []
 on_pre_call = lambda args: observed.append(
@@ -1694,10 +2023,15 @@ mod terminal_tests {
     #[case::async_listened(
         true,
         c"",
-        &["async_success_handler", "enqueued", "sync_success_for_async_call"]
+        &["async_success_handler", "mark_async_success_enqueued", "enqueued", "sync_success_for_async_call"]
     )]
-    #[case::async_deferred(true, c"logger._defer_async_logging = True", &["sync_success_for_async_call"])]
+    #[case::async_deferred(true, c"logger._defer_async_logging = True", &[])]
     #[case::async_with_fallbacks(true, c"kwargs = {'fallbacks': ['other']}", &["sync_success_for_async_call"])]
+    #[case::async_deferred_with_fallbacks(
+        true,
+        c"logger._defer_async_logging = True\nkwargs = {'fallbacks': ['other']}",
+        &[]
+    )]
     fn success_reaches_the_logging_handlers(
         #[case] asynchronous: bool,
         #[case] script: &CStr,
@@ -1723,8 +2057,84 @@ mod terminal_tests {
                 &locals,
                 c"
 assert all(value is response for name, value in logger.calls if name.endswith('_handler'))
-assert hasattr(logger, '_native_pending_logging') == getattr(logger, '_defer_async_logging', False)
+assert hasattr(logger, 'enqueue_deferred_logging') == getattr(logger, '_defer_async_logging', False)
+assert getattr(logger, 'deferred_success_result', (response,))[0] is response
 ",
+            );
+        });
+    }
+
+    #[rstest]
+    #[case::accepted(c"", &["sync_success_for_async_call", "async_success_handler", "mark_async_success_enqueued", "enqueued"])]
+    #[case::accepted_with_fallbacks(c"kwargs = {'fallbacks': ['other']}", &["sync_success_for_async_call"])]
+    fn a_deferred_success_runs_sync_callbacks_only_once_released(
+        #[case] script: &CStr,
+        #[case] expected: &[&str],
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(
+                py,
+                c"response = object()\nlogger._defer_async_logging = True",
+            );
+            run(py, &locals, script);
+            let mut logging = logged(py, &locals, true);
+            succeed(py, &locals, &mut logging);
+            run(
+                py,
+                &locals,
+                c"
+assert logger.names() == [], logger.calls
+logger.enqueue_deferred_logging()
+logger.enqueue_deferred_logging()
+",
+            );
+            let names: Vec<String> = local(&locals, "logger")
+                .call_method0("names")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(names, expected);
+        });
+    }
+
+    #[rstest]
+    #[case::deferred(
+        c"logger._defer_async_logging = True",
+        c"logger.enqueue_deferred_logging()",
+        &["sync_success_for_async_call", "async_success_handler", "mark_async_success_enqueued", "enqueued"]
+    )]
+    #[case::deferred_and_blocked(c"logger._defer_async_logging = True", c"", &[])]
+    #[case::immediate(
+        c"",
+        c"",
+        &["async_success_handler", "mark_async_success_enqueued", "enqueued", "sync_success_for_async_call", "sync_success_for_async_call"]
+    )]
+    fn a_fallback_attempt_on_the_same_logger_leaves_the_first_success_claimed(
+        #[case] script: &CStr,
+        #[case] release: &CStr,
+        #[case] expected: &[&str],
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(py, c"refused = object()\nresponse = refused");
+            run(py, &locals, script);
+            let mut first = logged(py, &locals, true);
+            succeed(py, &locals, &mut first);
+            run(py, &locals, c"response = object()");
+            let mut fallback = logged(py, &locals, true);
+            succeed(py, &locals, &mut fallback);
+            run(py, &locals, release);
+            let names: Vec<String> = local(&locals, "logger")
+                .call_method0("names")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(names, expected);
+            run(
+                py,
+                &locals,
+                c"assert all(value is refused for name, value in logger.calls if name == 'async_success_handler')",
             );
         });
     }
@@ -1754,10 +2164,10 @@ assert hasattr(logger, '_native_pending_logging') == getattr(logger, '_defer_asy
             ));
             assert_eq!(sender.dropped_events(), 1);
             run(py, &locals, c"
-assert logger.names() == ['sync_success_for_async_call'], logger.calls
-logger._native_pending_logging.release(True)
-logger._native_pending_logging.release(True)
-assert logger.names() == ['sync_success_for_async_call', 'async_success_handler', 'enqueued'], logger.calls
+assert logger.names() == [], logger.calls
+logger.enqueue_deferred_logging()
+logger.enqueue_deferred_logging()
+assert logger.names() == ['sync_success_for_async_call', 'async_success_handler', 'mark_async_success_enqueued', 'enqueued'], logger.calls
 assert logger.calls[0][1] is response
 assert logger.calls[1][1] is response
 ");
@@ -1768,13 +2178,13 @@ assert logger.calls[1][1] is response
     fn stream_bindings_deliver_collected_chunks_in_order_without_success_fan_out() {
         Python::initialize();
         Python::attach(|py| {
-            let locals = namespace(py, c"first = b'first'\nlast = b'last'\nresponse = None");
+            let locals = namespace(py, c"first = b'first'\nlast = b'last'\nresponse = None\nhead = {'additional_headers': {'request-id': 'req_native'}}");
             let mut logging = LegacyLogging {
                 operation: crate::LoggingOperation::Messages,
                 ..logged(py, &locals, true)
             };
             logging
-                .on_stream_open(py, &pyo3::types::PyDict::new(py).into_any().unbind())
+                .on_stream_open(py, &local(&locals, "head").unbind())
                 .unwrap();
             logging
                 .on_stream_chunk(py, &local(&locals, "first").unbind())
@@ -1790,13 +2200,54 @@ assert logger.calls[1][1] is response
                 py,
                 &locals,
                 c"
-assert logger.names() == ['stream_opened', 'stream_success'], logger.calls
-chunks = logger.calls[1][1]
+assert logger.names() == ['stamp_stream_head', 'stream_opened', 'stream_success'], logger.calls
+assert logger.calls[0][1] is head
+assert logger.calls[1][1] is head
+chunks = logger.calls[2][1]
 assert len(chunks) == 2
 assert chunks[0] is first
 assert chunks[1] is last
 ",
             );
+        });
+    }
+
+    #[rstest]
+    #[case::cancelled_mid_stream(None, &["stamp_stream_head", "stream_opened", "stream_success", "restore"])]
+    #[case::after_success(Some(true), &["stamp_stream_head", "stream_opened", "stream_success", "restore"])]
+    #[case::after_failure(Some(false), &["stamp_stream_head", "stream_opened", "stream_failure", "restore"])]
+    fn closing_an_unfinished_stream_bills_its_delivered_chunks_once(
+        #[case] ended: Option<bool>,
+        #[case] expected: &[&str],
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(
+                py,
+                c"first = b'first'\nresponse = None\nfailure = ValueError('provider')\nhead = {}",
+            );
+            let mut logging = LegacyLogging {
+                operation: crate::LoggingOperation::Messages,
+                ..logged(py, &locals, true)
+            };
+            logging
+                .on_stream_open(py, &local(&locals, "head").unbind())
+                .unwrap();
+            logging
+                .on_stream_chunk(py, &local(&locals, "first").unbind())
+                .unwrap();
+            match ended {
+                Some(true) => drop(succeed(py, &locals, &mut logging)),
+                Some(false) => drop(fail(py, &locals, &mut logging)),
+                None => {}
+            }
+            litellm_host_python::PythonOwned::close(&mut logging, py);
+            let names: Vec<String> = local(&locals, "logger")
+                .call_method0("names")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(names, expected);
         });
     }
 
@@ -1828,7 +2279,7 @@ assert chunks[1] is last
     }
 
     #[rstest::rstest]
-    fn internal_async_calls_skip_the_async_success_fan_out() {
+    fn internal_async_calls_skip_success_logging() {
         Python::initialize();
         Python::attach(|py| {
             let locals = namespace(py, c"response = object()");
@@ -1837,11 +2288,7 @@ assert chunks[1] is last
                 ..logged(py, &locals, true)
             };
             succeed(py, &locals, &mut logging);
-            run(
-                py,
-                &locals,
-                c"assert logger.names() == ['sync_success_for_async_call'], logger.calls",
-            );
+            run(py, &locals, c"assert logger.calls == [], logger.calls");
         });
     }
 

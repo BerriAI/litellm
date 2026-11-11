@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 
 from litellm.llms.recraft.image_generation.transformation import (
@@ -256,3 +257,56 @@ class TestRecraftImageGenerationTransformation:
             )
 
         assert "Error transforming image generation response" in str(exc_info.value)
+
+
+def _transform(payload: object) -> ImageResponse:
+    return RecraftImageGenerationConfig().transform_image_generation_response(
+        model="recraftv3",
+        raw_response=httpx.Response(200, json=payload),
+        model_response=ImageResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+
+def test_transform_image_generation_response_maps_each_image_object():
+    response = _transform({"data": [{"url": "https://img.recraft.ai/a.png"}, {"b64_json": "QUJD"}, {}]})
+
+    assert [(image.url, image.b64_json) for image in response.data] == [
+        ("https://img.recraft.ai/a.png", None),
+        (None, "QUJD"),
+        (None, None),
+    ]
+
+
+@pytest.mark.parametrize("data", [[], "", {}])
+def test_transform_image_generation_response_with_empty_data_has_no_images(data: object):
+    assert _transform({"data": data}).data == []
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        7,
+        "https://img.recraft.ai/a.png",
+        [{"url": "https://img.recraft.ai/a.png"}],
+        {"data": None},
+        {"data": "https://img.recraft.ai/a.png"},
+        {"data": {"url": "https://img.recraft.ai/a.png"}},
+        {"data": ["https://img.recraft.ai/a.png"]},
+        {"data": [{"url": "https://img.recraft.ai/a.png"}, 7]},
+    ],
+)
+def test_transform_image_generation_response_rejects_malformed_payloads(payload: object):
+    with pytest.raises(ValidationError) as exc_info:
+        _transform(payload)
+
+    assert "img.recraft.ai" not in str(exc_info.value)
+
+
+def test_transform_image_generation_response_requires_data():
+    with pytest.raises(KeyError):
+        _transform({"created": 1})

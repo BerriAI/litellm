@@ -9,6 +9,7 @@ use pyo3::{
 use serde_json::Value;
 
 use super::service::CacheCall;
+use crate::cache::{CACHE_HOST_MODULE, HandleError};
 
 enum Pending {
     Lookup(Reply<Result<Option<Value>, Error>>),
@@ -20,6 +21,7 @@ pub(crate) struct PythonCache {
     arguments: Option<Py<PyDict>>,
     pending: Option<Pending>,
     asynchronous: bool,
+    deferred: bool,
 }
 
 impl PythonCache {
@@ -29,6 +31,7 @@ impl PythonCache {
             arguments: None,
             pending: None,
             asynchronous,
+            deferred: false,
         }
     }
 
@@ -43,16 +46,12 @@ impl PythonCache {
 
     pub fn begin(&mut self, py: Python<'_>, call: CacheCall) -> PyResult<Option<Py<PyAny>>> {
         let Some(cache) = self.cache.as_ref() else {
-            return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                "cache operation without configured cache",
-            ));
+            return Err(HandleError::Unconfigured.into());
         };
         let arguments = self
             .arguments
             .as_ref()
-            .ok_or_else(|| {
-                pyo3::exceptions::PyRuntimeError::new_err("cache arguments unavailable")
-            })?
+            .ok_or(HandleError::MissingArguments)?
             .bind(py)
             .copy()?;
         let (method, result) = match call {
@@ -67,7 +66,14 @@ impl PythonCache {
                     None,
                 )
             }
-            CacheCall::Store { value, reply } => {
+            CacheCall::Store {
+                unary: true, reply, ..
+            } if self.asynchronous => {
+                self.deferred = true;
+                reply.send(Ok(()));
+                return Ok(None);
+            }
+            CacheCall::Store { value, reply, .. } => {
                 self.pending = Some(Pending::Store(reply));
                 (
                     if self.asynchronous {
@@ -92,44 +98,55 @@ impl PythonCache {
         self.resume(py, result)
     }
 
+    pub fn store_response(&mut self, py: Python<'_>, response: &Bound<'_, PyAny>) -> PyResult<()> {
+        if !std::mem::take(&mut self.deferred) {
+            return Ok(());
+        }
+        let (Some(cache), Some(arguments)) = (self.cache.as_ref(), self.arguments.as_ref()) else {
+            return Err(HandleError::Unconfigured.into());
+        };
+        py.import(CACHE_HOST_MODULE)?
+            .getattr("store_response")?
+            .call((cache, response), Some(&arguments.bind(py).copy()?))?;
+        Ok(())
+    }
+
     pub fn resume(
         &mut self,
         py: Python<'_>,
         result: PyResult<Py<PyAny>>,
     ) -> PyResult<Option<Py<PyAny>>> {
-        if let Err(error) = &result
-            && !error.is_instance_of::<pyo3::exceptions::PyException>(py)
-        {
-            self.pending = None;
-            return Err(result.err().unwrap());
-        }
+        let result = match result {
+            Err(error) if !error.is_instance_of::<pyo3::exceptions::PyException>(py) => {
+                self.pending = None;
+                return Err(error);
+            }
+            result => result,
+        };
         match self.pending.take() {
             Some(Pending::Lookup(reply)) => {
-                let value = result.map_err(|_| Error::Unavailable).and_then(|value| {
+                let value = result.map_err(Error::unavailable).and_then(|value| {
                     if value.bind(py).is_none() {
                         Ok(None)
                     } else {
                         from_py(value.bind(py))
                             .map(Some)
-                            .map_err(|_| Error::InvalidEntry)
+                            .map_err(Error::invalid_entry)
                     }
                 });
                 reply.send(value);
             }
             Some(Pending::Store(reply)) => {
-                reply.send(result.map(|_| ()).map_err(|_| Error::Unavailable));
+                reply.send(result.map(|_| ()).map_err(Error::unavailable));
             }
-            None => {
-                return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                    "cache reply without pending operation",
-                ));
-            }
+            None => return Err(HandleError::NothingPending.into()),
         }
         Ok(None)
     }
 
     pub fn close(&mut self) {
         self.pending = None;
+        self.deferred = false;
         self.cache = None;
         self.arguments = None;
     }

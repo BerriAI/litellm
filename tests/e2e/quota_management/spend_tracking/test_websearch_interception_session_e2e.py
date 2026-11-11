@@ -17,6 +17,7 @@ from typing import Final, Literal
 import pytest
 from e2e_config import unique_marker
 from e2e_http import unwrap
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import (
     AnthropicContentBlock,
@@ -29,7 +30,7 @@ from models import (
 from proxy_client import ProxyClient
 from pydantic import BaseModel, ValidationError
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.provider_live]
 
 BEDROCK_INVOKE_BACKEND: Final = "bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 SEARCH_CALL_TYPE: Final = "asearch"
@@ -55,6 +56,16 @@ class TestWebSearchInterceptionSession:
     @pytest.mark.covers(
         "quota_management.spend_tracking.websearch_interception.bills_under_request_session",
         exercised_on=("messages",),
+    )
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.MESSAGES,
+            providers=(Provider.BEDROCK, Provider.PERPLEXITY),
+            models=(BEDROCK_INVOKE_BACKEND,),
+            capabilities=(Capability.WEB_SEARCH,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_intercepted_search_is_billed_under_the_request_session(
         self, proxy: ProxyClient, resources: ResourceManager

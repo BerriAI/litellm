@@ -1,86 +1,8 @@
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use super::ResponsesOutputItem;
+use crate::recognized::Recognized;
 use serde_json::{Map, Value};
 
-#[derive(Clone, Debug, PartialEq, Eq, strum::AsRefStr)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[cfg_attr(feature = "schema", schemars(with = "String"))]
-pub enum ResponsesWsEventType {
-    #[strum(serialize = "response.create")]
-    ResponseCreate,
-    #[strum(serialize = "response.created")]
-    ResponseCreated,
-    #[strum(serialize = "response.completed")]
-    ResponseCompleted,
-    #[strum(serialize = "response.failed")]
-    ResponseFailed,
-    #[strum(serialize = "response.incomplete")]
-    ResponseIncomplete,
-    #[strum(serialize = "error")]
-    Error,
-    #[strum(default, transparent)]
-    Other(String),
-}
-
-impl ResponsesWsEventType {
-    pub fn as_str(&self) -> &str {
-        self.as_ref()
-    }
-}
-
-impl Serialize for ResponsesWsEventType {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for ResponsesWsEventType {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        Ok(match value.as_str() {
-            "response.create" => Self::ResponseCreate,
-            "response.created" => Self::ResponseCreated,
-            "response.completed" => Self::ResponseCompleted,
-            "response.failed" => Self::ResponseFailed,
-            "response.incomplete" => Self::ResponseIncomplete,
-            "error" => Self::Error,
-            _ => Self::Other(value),
-        })
-    }
-}
-
-#[macro_rules_attribute::apply(wire_type)]
-pub struct ResponsesWsEvent {
-    #[serde(rename = "type")]
-    pub event_type: ResponsesWsEventType,
-    #[serde(flatten)]
-    pub data: Map<String, Value>,
-}
-
-impl ResponsesWsEvent {
-    pub fn model(&self) -> Option<&str> {
-        let model = self.data.get("model").and_then(Value::as_str);
-        if model.is_some() {
-            return model;
-        }
-        self.data
-            .get("response")
-            .and_then(Value::as_object)
-            .and_then(|response| response.get("model"))
-            .and_then(Value::as_str)
-    }
-
-    pub fn is_response_create(&self) -> bool {
-        self.event_type == ResponsesWsEventType::ResponseCreate
-    }
-}
-
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Eq)]
 pub struct ResponsesErrorFrame {
     #[serde(rename = "type")]
@@ -100,7 +22,7 @@ impl ResponsesErrorFrame {
     }
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Eq)]
 pub struct ResponsesErrorBody {
     #[serde(rename = "type")]
@@ -108,26 +30,31 @@ pub struct ResponsesErrorBody {
     pub message: String,
 }
 
+#[serde_with::skip_serializing_none]
+#[macro_rules_attribute::apply(crate::wire_type)]
+#[derive(Default)]
+pub struct ResponsesEventResponse {
+    pub id: Option<String>,
+    pub model: Option<String>,
+    pub status: Option<String>,
+    pub output: Option<Vec<Recognized<ResponsesOutputItem>>>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
     use rstest::rstest;
 
-    use super::*;
+    use crate::formats::responses::ResponsesOutputItem;
 
-    #[rstest]
-    #[case::known("response.completed", ResponsesWsEventType::ResponseCompleted)]
-    #[case::unknown(
-        "response.output_text.delta",
-        ResponsesWsEventType::Other("response.output_text.delta".to_string())
-    )]
-    fn event_type_round_trips_known_and_unknown_values(
-        #[case] value: &str,
-        #[case] expected: ResponsesWsEventType,
-    ) {
-        let actual: ResponsesWsEventType =
-            serde_json::from_str(&serde_json::to_string(value).unwrap()).expect("valid event type");
-        assert_eq!(actual, expected);
-    }
+    use crate::{
+        formats::responses::streaming_websocket::ResponsesEventResponse, recognized::Recognized,
+        test_support::*,
+    };
+
+    use serde_json::{Value, json};
 
     #[test]
     fn error_frame_matches_proxy_shape() {
@@ -145,13 +72,94 @@ mod tests {
     }
 
     #[rstest]
-    #[case::flat(serde_json::json!({"type":"response.create","model":"model-a"}), Some("model-a"))]
-    #[case::nested(serde_json::json!({"type":"response.create","response":{"model":"model-b"}}), Some("model-b"))]
-    fn model_reads_flat_and_nested_create_shapes(
-        #[case] payload: serde_json::Value,
-        #[case] expected: Option<&str>,
-    ) {
-        let event: ResponsesWsEvent = serde_json::from_value(payload).expect("valid event");
-        assert_eq!(event.model(), expected);
+    fn nested_event_response_exposes_typed_output_and_preserves_extensions() {
+        let wire = json!({
+            "id":"response_1",
+            "model":"example-model",
+            "status":"completed",
+            "output":[{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{}","extension":true}],
+            "extension":{"nested":[1,null]}
+        });
+        let response: ResponsesEventResponse = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(response.id.as_deref(), Some("response_1"));
+        assert_eq!(response.model.as_deref(), Some("example-model"));
+        let Some(output) = &response.output else {
+            panic!("expected typed output");
+        };
+        let [Recognized::Known(ResponsesOutputItem::FunctionCall(call))] = output.as_slice() else {
+            panic!("expected function call");
+        };
+        assert_eq!(call.name.as_deref(), Some("lookup"));
+        assert_eq!(call.arguments.as_deref(), Some("{}"));
+        assert_eq!(serde_json::to_value(response).unwrap(), wire);
+    }
+
+    #[rstest]
+    #[case::empty(json!({}))]
+    #[case::partial(json!({"id":"response_1","output":[]}))]
+    fn nested_event_response_accepts_partial_metadata(#[case] wire: Value) {
+        round_trip::<ResponsesEventResponse>(wire);
+    }
+
+    #[rstest]
+    #[case::wrong_model(json!({"model":7}))]
+    #[case::wrong_status(json!({"status":false}))]
+    #[case::wrong_output(json!({"output":{}}))]
+    fn event_response_rejects_malformed_typed_fields(#[case] wire: Value) {
+        assert!(serde_json::from_value::<ResponsesEventResponse>(wire).is_err());
+    }
+
+    #[rstest]
+    #[case::unknown_type(json!({"type":"future_item","id":"item_1","payload":[1,null]}))]
+    #[case::missing_tag(json!({"id":"item_1"}))]
+    #[case::malformed_known(json!({"type":"message","content":[{"type":"output_text","text":7}]}))]
+    fn event_response_keeps_unmodeled_output_items_beside_typed_ones(#[case] item: Value) {
+        let wire = json!({"output":[{"type":"function_call","name":"lookup"}, item.clone()]});
+        let response: ResponsesEventResponse = serde_json::from_value(wire.clone()).unwrap();
+        let Some(
+            [
+                Recognized::Known(ResponsesOutputItem::FunctionCall(call)),
+                Recognized::Unrecognized(kept),
+            ],
+        ) = response.output.as_deref()
+        else {
+            panic!("expected one typed item and one preserved item");
+        };
+        assert_eq!(call.name.as_deref(), Some("lookup"));
+        assert_eq!(kept, &item);
+        assert_eq!(serde_json::to_value(response).unwrap(), wire);
+    }
+
+    #[rstest]
+    fn event_response_optional_fields_omit_missing_and_null() {
+        let response: ResponsesEventResponse = serde_json::from_value(json!({
+            "id":null,"model":null,"status":null,"output":null,"future":null
+        }))
+        .unwrap();
+        assert!(response.id.is_none());
+        assert!(response.model.is_none());
+        assert!(response.status.is_none());
+        assert!(response.output.is_none());
+        assert_eq!(
+            serde_json::to_value(response).unwrap(),
+            json!({"future":null})
+        );
+    }
+
+    #[rstest]
+    #[case::compaction(json!({"type":"compaction","id":"cmp_1","encrypted_content":"opaque"}))]
+    #[case::approval(json!({"type":"mcp_approval_request","id":"apr_1","server_label":"s","name":"n","arguments":"{}"}))]
+    #[case::shell(json!({"type":"shell_call","call_id":"call_1","action":{"commands":["ls"]}}))]
+    fn event_response_types_documented_output_items(#[case] item: Value) {
+        let wire = json!({"output":[item.clone()]});
+        let response: ResponsesEventResponse = serde_json::from_value(wire.clone()).unwrap();
+        let Some([Recognized::Known(known)]) = response.output.as_deref() else {
+            panic!("expected one typed item");
+        };
+        assert_eq!(
+            known,
+            &serde_json::from_value::<ResponsesOutputItem>(item).unwrap()
+        );
+        assert_eq!(serde_json::to_value(response).unwrap(), wire);
     }
 }

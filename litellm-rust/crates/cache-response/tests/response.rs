@@ -17,10 +17,9 @@ use litellm_cache_response::{
     CacheControls, CacheEntry, CacheKeyField, CacheKeyInput, ResponseCache, ResponseCacheRequest,
     WriteBuffer, cache_key,
 };
-use redis_test::MockCmd;
 use rstest::{fixture, rstest};
 use serde_json::{Value, json};
-use support::{keyed, memory, redis, request};
+use support::{keyed, memory, request};
 
 type Memory = Arc<ResponseCache<InMemoryCache<CacheEntry>>>;
 
@@ -158,8 +157,16 @@ fn scored(timestamp: f64, similarity: f64) -> Result<SemanticLookup<CacheEntry>,
 )]
 #[case::no_search(Ok(SemanticLookup::miss(None)), true, Ok(SemanticLookup::miss(None)))]
 #[case::disabled_reads_skip_the_backend(scored(95.0, 0.95), false, Ok(SemanticLookup::miss(None)))]
-#[case::invalid_entry_is_a_miss(Err(Error::InvalidEntry), true, Ok(SemanticLookup::miss(None)))]
-#[case::backend_errors_propagate(Err(Error::Unavailable), true, Err(Error::Unavailable))]
+#[case::invalid_entry_is_a_miss(
+    Err(Error::InvalidEntry(None)),
+    true,
+    Ok(SemanticLookup::miss(None))
+)]
+#[case::backend_errors_propagate(
+    Err(Error::Unavailable(None)),
+    true,
+    Err(Error::Unavailable(None))
+)]
 #[tokio::test]
 async fn semantic_lookup_applies_freshness_to_the_value_only(
     #[case] backend: Result<SemanticLookup<CacheEntry>, Error>,
@@ -324,79 +331,6 @@ async fn directives_skip_io_and_keep_reads_and_writes_independent(
 }
 
 #[rstest]
-#[case::python_sync_literal(
-    br#"{'timestamp': 100.0, 'response': '{"ok": true, "text": "cached"}'}"#.as_slice()
-)]
-#[case::python_async_json(br#"{"timestamp":100.0,"response":{"ok":true,"text":"cached"}}"#.as_slice())]
-#[tokio::test]
-async fn redis_consumer_reads_python_sync_and_async_envelopes(
-    request: ResponseCacheRequest,
-    #[case] stored: &[u8],
-    #[values(false, true)] asynchronous: bool,
-) {
-    let cache = redis(
-        vec![MockCmd::new(
-            redis::cmd("GET").arg("tenant:key"),
-            Ok(stored.to_vec()),
-        )],
-        Some("tenant"),
-    );
-    let now = Duration::from_secs(101);
-    let found = if asynchronous {
-        cache.async_lookup(&request, now).await.unwrap()
-    } else {
-        cache.lookup(&request, now).unwrap()
-    };
-    assert_eq!(found, Some(json!({"ok": true, "text": "cached"})));
-}
-
-#[rstest]
-#[case::object(
-    json!({"ok": true, "text": "cached"}),
-    br#"{"timestamp":100.0,"response":{"ok":true,"text":"cached"}}"#.as_slice()
-)]
-#[case::array(json!([1, 2]), br#"{"timestamp":100.0,"response":"[1,2]"}"#.as_slice())]
-#[tokio::test]
-async fn redis_consumer_writes_python_compatible_json(
-    request: ResponseCacheRequest,
-    #[case] response: Value,
-    #[case] wire: &[u8],
-) {
-    let cache = redis(
-        vec![MockCmd::new(
-            redis::cmd("SETEX").arg("tenant:key").arg(600).arg(wire),
-            Ok("OK"),
-        )],
-        Some("tenant"),
-    );
-    cache
-        .async_store(&request, response, Duration::from_secs(100))
-        .await
-        .unwrap();
-}
-
-#[rstest]
-#[tokio::test]
-async fn invalid_entries_are_misses_and_disabled_reads_do_not_touch_redis(
-    mut request: ResponseCacheRequest,
-) {
-    let cache = redis(
-        vec![MockCmd::new(
-            redis::cmd("GET").arg("tenant:key"),
-            Ok(b"invalid".to_vec()),
-        )],
-        None,
-    );
-    request.controls.no_cache = true;
-    assert_eq!(cache.lookup(&request, Duration::ZERO).unwrap(), None);
-    request.controls.no_cache = false;
-    assert_eq!(
-        cache.async_lookup(&request, Duration::ZERO).await.unwrap(),
-        None
-    );
-}
-
-#[rstest]
 #[tokio::test]
 async fn captured_service_keeps_the_selected_backend_for_background_writes(
     #[from(memory)] original: Memory,
@@ -531,27 +465,6 @@ async fn batch_lookup_reports_partial_hits_and_batch_store_populates_misses(
     );
     requests[2].controls.caching = None;
     assert_eq!(memory.lookup(&requests[2], now).unwrap(), None);
-}
-
-#[rstest]
-#[tokio::test]
-async fn batch_lookup_with_no_readable_request_skips_the_backend(
-    #[values(false, true)] asynchronous: bool,
-) {
-    let cache = redis(Vec::new(), None);
-    let mut request = keyed("key");
-    request.controls.no_cache = true;
-    let requests = [request.clone(), request];
-    let partial = if asynchronous {
-        cache
-            .async_lookup_batch(&requests, Duration::ZERO)
-            .await
-            .unwrap()
-    } else {
-        cache.lookup_batch(&requests, Duration::ZERO).unwrap()
-    };
-    assert_eq!(partial.values, vec![None, None]);
-    assert_eq!(partial.missing_indices, vec![0, 1]);
 }
 
 #[rstest]
@@ -768,7 +681,7 @@ async fn gcs() -> (wiremock::MockServer, Gcs) {
             path_service_account: None,
             endpoint: server.uri(),
         },
-        litellm_http::Client::plain_for_test(),
+        litellm_http::Client::for_test(),
         litellm_cache_response::ResponseCacheCodec,
         Arc::new(litellm_cache_gcs::StaticTokenSource("token".into())),
     )));

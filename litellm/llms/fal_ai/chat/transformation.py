@@ -10,11 +10,14 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
 import httpx
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 
+import litellm
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Message, ModelResponse, Usage
 
@@ -28,16 +31,20 @@ PROVIDER_PREFIX: Final[str] = "fal_ai/"
 PASSTHROUGH_PARAMS: Final[frozenset[str]] = frozenset(("reasoning", "temperature", "top_p"))
 REASONING_DISABLED_EFFORTS: Final[frozenset[str]] = frozenset(("none", "minimal"))
 REASONING_ENABLED_EFFORTS: Final[frozenset[str]] = frozenset(("low", "medium", "high"))
+_UNSUPPORTED_EFFORT_REASON: Final = (
+    f"fal only turns reasoning off for {sorted(REASONING_DISABLED_EFFORTS)} "
+    f"and on for {sorted(REASONING_ENABLED_EFFORTS)}."
+)
 
 
-class _FalUsage(BaseModel):
+class _FalUsage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     input_tokens: int
     output_tokens: int
 
 
-class _FalChatResponse(BaseModel):
+class _FalChatResponse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     output: str
@@ -119,9 +126,10 @@ class FalAIChatConfig(BaseConfig):
             return False
         if isinstance(value, str) and value in REASONING_ENABLED_EFFORTS:
             return True
-        if drop_params:
-            return None
-        raise FalAIError(status_code=400, message=f"Unsupported reasoning_effort {value!r} for {model}")
+        if not (drop_params or litellm.drop_params is True):
+            raise FalAIError(status_code=400, message=f"Unsupported reasoning_effort {value!r} for {model}")
+        warn_dropped_reasoning("reasoning_effort", value, model, _UNSUPPORTED_EFFORT_REASON, drop_params_gated=True)
+        return None
 
     def _translate_param(self, param: str, value: object, model: str, drop_params: bool) -> tuple[str, object] | None:
         if param in ("temperature", "top_p"):

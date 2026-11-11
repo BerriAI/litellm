@@ -1,6 +1,7 @@
+import inspect
 import time
 import types
-from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator, Mapping
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal, Optional, cast
 
 import httpx
@@ -11,13 +12,15 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 import openai
-from openai import AsyncOpenAI, OpenAI
+from openai import AsyncOpenAI, AsyncStream, OpenAI, Stream
 from openai._base_client import make_request_options
 from openai._constants import RAW_RESPONSE_HEADER
 from openai._legacy_response import LegacyAPIResponse
 from openai._types import RequestOptions
+from openai.pagination import SyncCursorPage
 from openai.types import CreateEmbeddingResponse
 from openai.types.beta.assistant_deleted import AssistantDeleted
+from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from openai.types.file_deleted import FileDeleted
 from pydantic import BaseModel, TypeAdapter
 from typing_extensions import overload
@@ -26,30 +29,40 @@ import litellm
 from litellm import LlmProviders
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RETRIES
+from litellm.exceptions import UnsupportedParamsError
 from litellm.files.types import FileContentStreamingResult
+from litellm.litellm_core_utils.chat_completion_agentic_loop import (
+    bill_first_round_on_failure,
+    run_chat_completion_agentic_hooks,
+)
 from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_utils import speech_request_body, track_llm_api_timing
-from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
+from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator, MockResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
-from litellm.llms.bedrock.chat.invoke_handler import MockResponseIterator
 from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
     LiteLLMBatch,
     ModelResponse,
     ModelResponseStream,
+    openai_batch_status,
 )
 from litellm.utils import (
     CustomStreamWrapper,
     ProviderConfigManager,
     convert_to_model_response_object,
+    get_base_model_from_metadata,
 )
 
 from ...types.llms.openai import *
 from ..base import BaseLLM
-from .chat.gpt_5_transformation import OpenAIGPT5Config
-from .chat.gpt_transformation import OpenAIGPTConfig, OpenAIUnknownModelConfig
+from .chat.gpt_reasoning_transformation import OpenAIGPT5Config
+from .chat.gpt_transformation import (
+    OpenAIGPTConfig,
+    OpenAIUnknownModelConfig,
+    translate_developer_role_for_openai_compatible_endpoint,
+)
 from .chat.o_series_transformation import OpenAIOSeriesConfig
 from .common_utils import (
     BaseOpenAILLM,
@@ -58,8 +71,15 @@ from .common_utils import (
     drop_params_from_unprocessable_entity_error,
     is_openai_backed_api_base,
     is_output_token_limit_error,
+    model_dump_provider_response,
+    upstream_error_response,
 )
-from .workload_identity import resolve_openai_workload_identity_config
+from .workload_identity import (
+    build_async_openai_client,
+    build_openai_client,
+    openai_static_api_key,
+    resolve_openai_workload_identity_config,
+)
 
 openaiOSeriesConfig: Final = OpenAIOSeriesConfig()
 openAIGPT5Config: Final = OpenAIGPT5Config()
@@ -73,14 +93,14 @@ class MistralEmbeddingConfig:
     def __init__(
         self,
     ) -> None:
-        locals_: Final[Mapping[str, object]] = locals().copy()
+        locals_: Final[Mapping[str, object]] = types.MappingProxyType(locals().copy())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
 
     @classmethod
     def get_config(cls):
-        config_attrs: Final[Mapping[str, object]] = cls.__dict__
+        config_attrs: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
             for k, v in config_attrs.items()
@@ -166,7 +186,7 @@ class OpenAIConfig(BaseConfig):
         top_p: int | None = None,
         response_format: dict | None = None,
     ) -> None:
-        locals_: Final[Mapping[str, object]] = locals().copy()
+        locals_: Final[Mapping[str, object]] = types.MappingProxyType(locals().copy())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -199,6 +219,19 @@ class OpenAIConfig(BaseConfig):
         else:
             return self._gpt_config_for_model(model).get_supported_openai_params(model=model)
 
+    def translate_developer_role_to_system_role(
+        self,
+        messages: Sequence[AllMessageValues],
+        *,
+        model: str,
+        custom_llm_provider: str | None,
+        api_base: str | None,
+        model_info: object,
+    ) -> Sequence[AllMessageValues]:
+        return translate_developer_role_for_openai_compatible_endpoint(
+            messages, model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, model_info=model_info
+        )
+
     def _gpt_config_for_model(self, model: str) -> OpenAIGPTConfig:
         if type(self) is OpenAIConfig and not OpenAIGPTConfig.is_openai_catalog_model(model):
             return OpenAIUnknownModelConfig()
@@ -213,6 +246,13 @@ class OpenAIConfig(BaseConfig):
 
     def _transform_messages(self, messages: list[AllMessageValues], model: str) -> list[AllMessageValues]:
         return messages
+
+    def transform_messages(
+        self,
+        messages: list[AllMessageValues],  # mutable-ok: mirrors override contract
+        model: str,
+    ) -> list[AllMessageValues]:  # mutable-ok: mirrors override contract
+        return self._transform_messages(messages, model)
 
     def map_openai_params(
         self,
@@ -340,9 +380,21 @@ _EXTRA_HEADERS_ADAPTER: Final = TypeAdapter(dict[str, str] | None)
 _EXTRA_QUERY_ADAPTER: Final = TypeAdapter(dict[str, object] | None)
 _NO_EXTRA_HEADERS: Final[Mapping[str, str]] = types.MappingProxyType({})
 _SDK_OPTION_KEYS: Final = frozenset(("extra_headers", "extra_query", "extra_body"))
+_CLIENT_API_KEY_ONLY_AUTH: Final[Mapping[str, Mapping[str, bool]]] = (
+    types.MappingProxyType({"security": types.MappingProxyType({"bearer_auth": True})})
+    if "security" in inspect.signature(make_request_options).parameters
+    else types.MappingProxyType({})
+)
 
 
-def _embedding_request_without_sdk_defaults(
+def _raw_chat_response(
+    result: ChatCompletion | Stream[ChatCompletionChunk] | AsyncStream[ChatCompletionChunk],
+) -> LegacyAPIResponse[ChatCompletion]:
+    assert isinstance(result, LegacyAPIResponse)
+    return result
+
+
+def _request_without_sdk_transform(
     data: Mapping[str, object], timeout: float | httpx.Timeout
 ) -> tuple[Mapping[str, object], RequestOptions]:
     body: Final = {k: v for k, v in data.items() if k not in _SDK_OPTION_KEYS}
@@ -352,6 +404,7 @@ def _embedding_request_without_sdk_defaults(
         extra_query=_EXTRA_QUERY_ADAPTER.validate_python(data.get("extra_query")),
         extra_body=data.get("extra_body"),
         timeout=timeout,
+        **_CLIENT_API_KEY_ONLY_AUTH,  # pyright: ignore[reportArgumentType]  # openai<3 make_request_options has no security kwarg
     )
     return body, options
 
@@ -416,7 +469,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     )
                     if workload_identity_config is not None
                     else AsyncOpenAI(
-                        api_key=api_key,
+                        api_key=openai_static_api_key(api_key),
                         base_url=api_base,
                         http_client=async_http_client,
                         timeout=timeout,
@@ -438,7 +491,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     )
                     if workload_identity_config is not None
                     else OpenAI(
-                        api_key=api_key,
+                        api_key=openai_static_api_key(api_key),
                         base_url=api_base,
                         http_client=sync_http_client,
                         timeout=timeout,
@@ -464,6 +517,32 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             )
             return client
 
+    def get_openai_client(
+        self,
+        is_async: bool,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        api_version: str | None = None,
+        timeout: float | httpx.Timeout = (_get_openai_client.__defaults__ or ())[3],
+        max_retries: int | None = DEFAULT_MAX_RETRIES,
+        organization: str | None = None,
+        client: OpenAI | AsyncOpenAI | None = None,
+        shared_session: Optional["ClientSession"] = None,
+        litellm_params: Mapping[str, object] | None = None,
+    ) -> OpenAI | AsyncOpenAI | None:
+        return self._get_openai_client(
+            is_async,
+            api_key,
+            api_base,
+            api_version,
+            timeout,
+            max_retries,
+            organization,
+            client,
+            shared_session,
+            litellm_params,
+        )
+
     @track_llm_api_timing()
     async def make_openai_chat_completion_request(
         self,
@@ -479,7 +558,17 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         """
         start_time: Final = time.time()
         try:
-            raw_response = await openai_aclient.chat.completions.with_raw_response.create(**data, timeout=timeout)
+            body, options = _request_without_sdk_transform(data, timeout)
+            raw_response = _raw_chat_response(
+                await openai_aclient.post(
+                    "/chat/completions",
+                    body=body,
+                    cast_to=ChatCompletion,
+                    options=options,
+                    stream=bool(data.get("stream")),
+                    stream_cls=AsyncStream[ChatCompletionChunk],
+                )
+            )
             end_time = time.time()
 
             if hasattr(raw_response, "headers"):
@@ -501,7 +590,12 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         except openai.BadRequestError as e:
             if not is_output_token_limit_error(e):
                 raise
-            return build_output_token_limit_response(e=e, data=data, is_async=True)
+            return build_output_token_limit_response(
+                e=e,
+                data=data,
+                is_async=True,
+                base_model=get_base_model_from_metadata(logging_obj.model_call_details),
+            )
         except Exception as e:
             raise e
 
@@ -520,7 +614,17 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         """
         raw_response = None
         try:
-            raw_response = openai_client.chat.completions.with_raw_response.create(**data, timeout=timeout)
+            body, options = _request_without_sdk_transform(data, timeout)
+            raw_response = _raw_chat_response(
+                openai_client.post(
+                    "/chat/completions",
+                    body=body,
+                    cast_to=ChatCompletion,
+                    options=options,
+                    stream=bool(data.get("stream")),
+                    stream_cls=Stream[ChatCompletionChunk],
+                )
+            )
 
             if hasattr(raw_response, "headers"):
                 headers = dict(raw_response.headers)
@@ -538,7 +642,12 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         except openai.BadRequestError as e:
             if not is_output_token_limit_error(e):
                 raise
-            return build_output_token_limit_response(e=e, data=data, is_async=False)
+            return build_output_token_limit_response(
+                e=e,
+                data=data,
+                is_async=False,
+                base_model=get_base_model_from_metadata(logging_obj.model_call_details),
+            )
         except Exception as e:
             if raw_response is not None:
                 raise Exception(
@@ -565,67 +674,23 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
 
         Returns the response from agentic loop, or None if no hook runs.
         """
-        from litellm._logging import verbose_logger
-        from litellm.integrations.custom_logger import CustomLogger
-
-        callbacks: Final = litellm.callbacks + (logging_obj.dynamic_success_callbacks or [])
-        # Avoid logging full callback objects to prevent leaking sensitive data
-        verbose_logger.debug("LiteLLM.AgenticHooks: callbacks_count=%s", len(callbacks))
-        tools: Final = optional_params.get("tools", [])
-        # Avoid logging full tools payloads; they may contain sensitive parameters
-        verbose_logger.debug(
-            "LiteLLM.AgenticHooks: tools_count=%s",
-            len(tools) if isinstance(tools, list) else 1 if tools else 0,
+        if not isinstance(response, ModelResponse):
+            return None
+        return await bill_first_round_on_failure(
+            run_chat_completion_agentic_hooks(
+                response=response,
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                kwargs=litellm_params or {},
+                logging_obj=logging_obj,
+                custom_llm_provider=litellm_params.get("custom_llm_provider", "openai"),
+                stream=stream,
+            ),
+            logging_obj=logging_obj,
+            response=response,
+            stream=stream,
         )
-        # Get custom_llm_provider from litellm_params
-        custom_llm_provider: Final = litellm_params.get("custom_llm_provider", "openai")
-
-        for callback in callbacks:
-            try:
-                if isinstance(callback, CustomLogger):
-                    # Check if the callback has the chat completion agentic loop methods
-                    if not hasattr(callback, "async_should_run_chat_completion_agentic_loop"):
-                        continue
-
-                    # First: Check if agentic loop should run (using chat completion method)
-                    (
-                        should_run,
-                        tool_calls,
-                    ) = await callback.async_should_run_chat_completion_agentic_loop(
-                        response=response,
-                        model=model,
-                        messages=messages,
-                        tools=tools,
-                        stream=stream,
-                        custom_llm_provider=custom_llm_provider,
-                        kwargs=litellm_params,
-                    )
-
-                    if should_run:
-                        # Second: Execute agentic loop
-                        kwargs_with_provider = litellm_params.copy() if litellm_params else {}
-                        kwargs_with_provider["custom_llm_provider"] = custom_llm_provider
-
-                        # For OpenAI Chat Completions, use the chat completion agentic loop method
-                        agentic_response: object = await callback.async_run_chat_completion_agentic_loop(
-                            tools=tool_calls,
-                            model=model,
-                            messages=messages,
-                            response=response,
-                            optional_params=optional_params,
-                            logging_obj=logging_obj,
-                            stream=stream,
-                            kwargs=kwargs_with_provider,
-                        )
-                        # First hook that runs agentic loop wins
-                        return agentic_response
-
-            except Exception as e:
-                verbose_logger.exception(
-                    "LiteLLM.AgenticHookError: Exception in agentic completion hooks for OpenAI: %s", e
-                )
-
-        return None
 
     def mock_streaming(
         self,
@@ -799,7 +864,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                             api_key=openai_client.api_key,
                             additional_args={
                                 "headers": headers,
-                                "api_base": openai_client._base_url._uri_reference,
+                                "api_base": openai_client._base_url._uri_reference,  # pyright: ignore[reportPrivateUsage]  # SDK URL internals
                                 "acompletion": acompletion,
                                 "complete_input_dict": data,
                                 "openai_sdk": True,
@@ -817,7 +882,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                         )
 
                         logging_obj.model_call_details["response_headers"] = headers
-                        stringified_response = provider_config.transform_parsed_response_dict(response.model_dump())
+                        stringified_response = provider_config.transform_parsed_response_dict(
+                            model_dump_provider_response(response)
+                        )
                         logging_obj.post_call(
                             input=messages,
                             api_key=api_key,
@@ -842,7 +909,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 except openai.UnprocessableEntityError as e:
                     ## check if body contains unprocessable params - related issue https://github.com/BerriAI/litellm/issues/4800
                     if litellm.drop_params is True or drop_params is True:
-                        inference_params = drop_params_from_unprocessable_entity_error(e, inference_params)
+                        inference_params = drop_params_from_unprocessable_entity_error(
+                            e, inference_params, model=model, drop_params_gated=True
+                        )
                     else:
                         raise e
                     # e.message
@@ -874,19 +943,20 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                         litellm.remove_index_from_tool_calls(messages=messages)
                     else:
                         raise e
-        except OpenAIError as e:
-            raise e
+        except (OpenAIError, UnsupportedParamsError):
+            raise
         except Exception as e:
             status_code: Final = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
             error_text: Final = getattr(e, "text", str(e))
-            error_response: Final = getattr(e, "response", None)
+            error_response: Final[object] = getattr(e, "response", None)
             error_body: Final = getattr(e, "body", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
             raise OpenAIError(
                 status_code=status_code,
                 message=error_text,
+                response=upstream_error_response(e),
                 headers=error_headers,
                 body=error_body,
             )
@@ -942,7 +1012,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     api_key=openai_aclient.api_key,
                     additional_args={
                         "headers": {"Authorization": f"Bearer {openai_aclient.api_key}"},
-                        "api_base": openai_aclient._base_url._uri_reference,
+                        "api_base": openai_aclient._base_url._uri_reference,  # pyright: ignore[reportPrivateUsage]  # SDK URL internals
                         "acompletion": True,
                         "complete_input_dict": data,
                         "openai_sdk": True,
@@ -955,7 +1025,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     timeout=timeout,
                     logging_obj=logging_obj,
                 )
-                stringified_response = provider_config.transform_parsed_response_dict(response.model_dump())
+                stringified_response = provider_config.transform_parsed_response_dict(
+                    model_dump_provider_response(response)
+                )
                 logging_obj.post_call(
                     input=data["messages"],
                     api_key=api_key,
@@ -969,8 +1041,28 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     hidden_params={"headers": headers},
                     _response_headers=headers,
                 )
+            except openai.UnprocessableEntityError as e:
+                if litellm.drop_params is True or drop_params is True:
+                    data = drop_params_from_unprocessable_entity_error(e, data, model=model, drop_params_gated=True)
+                else:
+                    raise e
+            except Exception as e:
+                exception_response: object = getattr(e, "response", None)
+                status_code = getattr(e, "status_code", 500)
+                exception_body = getattr(e, "body", None)
+                error_headers = getattr(e, "headers", None)
+                if error_headers is None and exception_response:
+                    error_headers = getattr(exception_response, "headers", None)
+                message = getattr(e, "message", str(e))
 
-                # Call agentic completion hooks (e.g., for websearch_interception)
+                raise OpenAIError(
+                    status_code=status_code,
+                    message=message,
+                    response=upstream_error_response(e),
+                    headers=error_headers,
+                    body=exception_body,
+                )
+            else:
                 agentic_response = await self._call_agentic_completion_hooks_openai(
                     response=final_response_obj,
                     model=model,
@@ -993,28 +1085,6 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     )
 
                 return final_response_obj
-            except openai.UnprocessableEntityError as e:
-                ## check if body contains unprocessable params - related issue https://github.com/BerriAI/litellm/issues/4800
-                if litellm.drop_params is True or drop_params is True:
-                    data = drop_params_from_unprocessable_entity_error(e, data)
-                else:
-                    raise e
-                # e.message
-            except Exception as e:
-                exception_response = getattr(e, "response", None)
-                status_code = getattr(e, "status_code", 500)
-                exception_body = getattr(e, "body", None)
-                error_headers = getattr(e, "headers", None)
-                if error_headers is None and exception_response:
-                    error_headers = getattr(exception_response, "headers", None)
-                message = getattr(e, "message", str(e))
-
-                raise OpenAIError(
-                    status_code=status_code,
-                    message=message,
-                    headers=error_headers,
-                    body=exception_body,
-                )
 
     def streaming(
         self,
@@ -1052,7 +1122,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             api_key=api_key,
             additional_args={
                 "headers": {"Authorization": f"Bearer {openai_client.api_key}"},
-                "api_base": openai_client._base_url._uri_reference,
+                "api_base": openai_client._base_url._uri_reference,  # pyright: ignore[reportPrivateUsage]  # SDK URL internals
                 "acompletion": False,
                 "complete_input_dict": data,
             },
@@ -1096,7 +1166,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         shared_session: Optional["ClientSession"] = None,
     ):
         response = None
-        data = provider_config.transform_request(
+        data = await provider_config.async_transform_request(
             model=model,
             messages=messages,
             optional_params=optional_params,
@@ -1150,7 +1220,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             except openai.UnprocessableEntityError as e:
                 ## check if body contains unprocessable params - related issue https://github.com/BerriAI/litellm/issues/4800
                 if litellm.drop_params is True or drop_params is True:
-                    data = drop_params_from_unprocessable_entity_error(e, data)
+                    data = drop_params_from_unprocessable_entity_error(e, data, model=model, drop_params_gated=True)
                 else:
                     raise e
             except (
@@ -1161,7 +1231,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
 
                 error_headers = getattr(e, "headers", None)
                 status_code = getattr(e, "status_code", 500)
-                error_response = getattr(e, "response", None)
+                error_response: object = getattr(e, "response", None)
                 exception_body = getattr(e, "body", None)
                 if error_headers is None and error_response:
                     error_headers = getattr(error_response, "headers", None)
@@ -1184,6 +1254,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                         raise OpenAIError(
                             status_code=getattr(e, "status_code", 500),
                             message=str(e),
+                            response=upstream_error_response(e),
                             headers=error_headers,
                             body=exception_body,
                         )
@@ -1215,7 +1286,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         logging_obj: LiteLLMLoggingObj,
     ) -> LegacyAPIResponse[CreateEmbeddingResponse]:
         if "encoding_format" not in data:
-            body, options = _embedding_request_without_sdk_defaults(data, timeout)
+            body, options = _request_without_sdk_transform(data, timeout)
             bypass_response: Final = await openai_aclient.post(
                 "/embeddings", body=body, options=options, cast_to=CreateEmbeddingResponse
             )
@@ -1232,7 +1303,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         logging_obj: LiteLLMLoggingObj,
     ) -> LegacyAPIResponse[CreateEmbeddingResponse]:
         if "encoding_format" not in data:
-            body, options = _embedding_request_without_sdk_defaults(data, timeout)
+            body, options = _request_without_sdk_transform(data, timeout)
             bypass_response: Final = openai_client.post(
                 "/embeddings", body=body, options=options, cast_to=CreateEmbeddingResponse
             )
@@ -1308,10 +1379,15 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             status_code: Final = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
             error_text: Final = getattr(e, "text", str(e))
-            error_response: Final = getattr(e, "response", None)
+            error_response: Final[object] = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-            raise OpenAIError(status_code=status_code, message=error_text, headers=error_headers)
+            raise OpenAIError(
+                status_code=status_code,
+                message=error_text,
+                response=upstream_error_response(e),
+                headers=error_headers,
+            )
 
     def embedding(
         self,
@@ -1398,10 +1474,15 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             status_code: Final = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
             error_text: Final = getattr(e, "text", str(e))
-            error_response: Final = getattr(e, "response", None)
+            error_response: Final[object] = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-            raise OpenAIError(status_code=status_code, message=error_text, headers=error_headers)
+            raise OpenAIError(
+                status_code=status_code,
+                message=error_text,
+                response=upstream_error_response(e),
+                headers=error_headers,
+            )
 
     async def aimage_generation(
         self,
@@ -1416,10 +1497,12 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         max_retries=None,
         organization: str | None = None,
         headers: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ):
         try:
             openai_aclient: Final = self._get_openai_client(
                 is_async=True,
+                litellm_params=litellm_params,
                 api_key=api_key,
                 api_base=api_base,
                 timeout=timeout,
@@ -1481,6 +1564,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         aimg_generation=None,
         organization: str | None = None,
         headers: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> ImageResponse:
         data = {}
         try:
@@ -1502,10 +1586,12 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     max_retries=max_retries,
                     organization=organization,
                     headers=headers,
+                    litellm_params=litellm_params,
                 )
 
             openai_client: Final[OpenAI] = self._get_openai_client(
                 is_async=False,
+                litellm_params=litellm_params,
                 api_key=api_key,
                 api_base=api_base,
                 timeout=timeout,
@@ -1520,7 +1606,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 api_key=openai_client.api_key,
                 additional_args={
                     "headers": {"Authorization": f"Bearer {openai_client.api_key}"},
-                    "api_base": openai_client._base_url._uri_reference,
+                    "api_base": openai_client._base_url._uri_reference,  # pyright: ignore[reportPrivateUsage]  # SDK URL internals
                     "acompletion": True,
                     "complete_input_dict": data,
                 },
@@ -1563,7 +1649,11 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 original_response=str(e),
             )
             if hasattr(e, "status_code"):
-                raise OpenAIError(status_code=getattr(e, "status_code", 500), message=str(e))
+                raise OpenAIError(
+                    status_code=getattr(e, "status_code", 500),
+                    message=str(e),
+                    response=upstream_error_response(e),
+                )
             else:
                 raise OpenAIError(status_code=500, message=str(e))
 
@@ -1583,6 +1673,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         aspeech: bool | None = None,
         client=None,
         shared_session: Optional["ClientSession"] = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> HttpxBinaryResponseContent:
         if aspeech is not None and aspeech is True:
             return self.async_audio_speech(
@@ -1599,6 +1690,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 logging_obj=logging_obj,
                 client=client,
                 shared_session=shared_session,
+                litellm_params=litellm_params,
             )
 
         openai_client: Final = self._get_openai_client(
@@ -1609,6 +1701,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             max_retries=max_retries,
             client=client,
             shared_session=shared_session,
+            litellm_params=litellm_params,
         )
 
         sync_client: Final = cast(OpenAI, openai_client)
@@ -1646,6 +1739,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         logging_obj: LiteLLMLoggingObj,
         client=None,
         shared_session: Optional["ClientSession"] = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> HttpxBinaryResponseContent:
         openai_client: Final = cast(
             AsyncOpenAI,
@@ -1657,6 +1751,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 max_retries=max_retries,
                 client=client,
                 shared_session=shared_session,
+                litellm_params=litellm_params,
             ),
         )
 
@@ -1703,26 +1798,27 @@ class OpenAIFilesAPI(BaseLLM):
         organization: str | None,
         client: OpenAI | AsyncOpenAI | None = None,
         _is_async: bool = False,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> OpenAI | AsyncOpenAI | None:
-        received_args: Final[Mapping[str, object]] = locals()
-        openai_client: OpenAI | AsyncOpenAI | None = None
-        if client is None:
-            data: Final = {}
-            for k, v in received_args.items():
-                if k == "self" or k == "client" or k == "_is_async":
-                    pass
-                elif k == "api_base" and v is not None:
-                    data["base_url"] = v
-                elif v is not None:
-                    data[k] = v
-            if _is_async is True:
-                openai_client = AsyncOpenAI(**data)
-            else:
-                openai_client = OpenAI(**data)
-        else:
-            openai_client = client
-
-        return openai_client
+        if client is not None:
+            return client
+        if _is_async:
+            return build_async_openai_client(
+                api_key=api_key,
+                api_base=api_base,
+                timeout=timeout,
+                max_retries=max_retries,
+                organization=organization,
+                litellm_params=litellm_params,
+            )
+        return build_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            litellm_params=litellm_params,
+        )
 
     async def acreate_file(
         self,
@@ -1742,6 +1838,7 @@ class OpenAIFilesAPI(BaseLLM):
         max_retries: int | None,
         organization: str | None,
         client: OpenAI | AsyncOpenAI | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> OpenAIFileObject | Coroutine[None, None, OpenAIFileObject]:
         openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
             api_key=api_key,
@@ -1751,6 +1848,7 @@ class OpenAIFilesAPI(BaseLLM):
             organization=organization,
             client=client,
             _is_async=_is_async,
+            litellm_params=litellm_params,
         )
         if openai_client is None:
             raise ValueError(
@@ -1784,6 +1882,7 @@ class OpenAIFilesAPI(BaseLLM):
         max_retries: int | None,
         organization: str | None,
         client: OpenAI | AsyncOpenAI | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> HttpxBinaryResponseContent | Coroutine[None, None, HttpxBinaryResponseContent]:
         openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
             api_key=api_key,
@@ -1793,6 +1892,7 @@ class OpenAIFilesAPI(BaseLLM):
             organization=organization,
             client=client,
             _is_async=_is_async,
+            litellm_params=litellm_params,
         )
         if openai_client is None:
             raise ValueError(
@@ -1849,6 +1949,7 @@ class OpenAIFilesAPI(BaseLLM):
         organization: str | None,
         chunk_size: int = 1024 * 1024,
         client: OpenAI | AsyncOpenAI | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> FileContentStreamingResult:
         openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
             api_key=api_key,
@@ -1858,6 +1959,7 @@ class OpenAIFilesAPI(BaseLLM):
             organization=organization,
             client=client,
             _is_async=_is_async,
+            litellm_params=litellm_params,
         )
         if openai_client is None:
             raise ValueError(
@@ -1912,6 +2014,7 @@ class OpenAIFilesAPI(BaseLLM):
         max_retries: int | None,
         organization: str | None,
         client: OpenAI | AsyncOpenAI | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ):
         openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
             api_key=api_key,
@@ -1921,6 +2024,7 @@ class OpenAIFilesAPI(BaseLLM):
             organization=organization,
             client=client,
             _is_async=_is_async,
+            litellm_params=litellm_params,
         )
         if openai_client is None:
             raise ValueError(
@@ -1958,6 +2062,7 @@ class OpenAIFilesAPI(BaseLLM):
         max_retries: int | None,
         organization: str | None,
         client: OpenAI | AsyncOpenAI | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ):
         openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
             api_key=api_key,
@@ -1967,6 +2072,7 @@ class OpenAIFilesAPI(BaseLLM):
             organization=organization,
             client=client,
             _is_async=_is_async,
+            litellm_params=litellm_params,
         )
         if openai_client is None:
             raise ValueError(
@@ -2007,6 +2113,7 @@ class OpenAIFilesAPI(BaseLLM):
         organization: str | None,
         purpose: str | None = None,
         client: OpenAI | AsyncOpenAI | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ):
         openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
             api_key=api_key,
@@ -2016,6 +2123,7 @@ class OpenAIFilesAPI(BaseLLM):
             organization=organization,
             client=client,
             _is_async=_is_async,
+            litellm_params=litellm_params,
         )
         if openai_client is None:
             raise ValueError(
@@ -2040,6 +2148,18 @@ class OpenAIFilesAPI(BaseLLM):
         return response
 
 
+def _with_openai_batch_fields(batches: Sequence[Batch]) -> Sequence[Batch]:
+    return [
+        batch.model_copy(
+            update={
+                "object": batch.object or "batch",
+                "status": openai_batch_status(batch.status),
+            }
+        )
+        for batch in batches
+    ]
+
+
 class OpenAIBatchesAPI(BaseLLM):
     """
     OpenAI methods to support for batches
@@ -2061,26 +2181,27 @@ class OpenAIBatchesAPI(BaseLLM):
         organization: str | None,
         client: OpenAI | AsyncOpenAI | None = None,
         _is_async: bool = False,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> OpenAI | AsyncOpenAI | None:
-        received_args: Final[Mapping[str, object]] = locals()
-        openai_client: OpenAI | AsyncOpenAI | None = None
-        if client is None:
-            data: Final = {}
-            for k, v in received_args.items():
-                if k == "self" or k == "client" or k == "_is_async":
-                    pass
-                elif k == "api_base" and v is not None:
-                    data["base_url"] = v
-                elif v is not None:
-                    data[k] = v
-            if _is_async is True:
-                openai_client = AsyncOpenAI(**data)
-            else:
-                openai_client = OpenAI(**data)
-        else:
-            openai_client = client
-
-        return openai_client
+        if client is not None:
+            return client
+        if _is_async:
+            return build_async_openai_client(
+                api_key=api_key,
+                api_base=api_base,
+                timeout=timeout,
+                max_retries=max_retries,
+                organization=organization,
+                litellm_params=litellm_params,
+            )
+        return build_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            litellm_params=litellm_params,
+        )
 
     async def acreate_batch(
         self,
@@ -2100,6 +2221,7 @@ class OpenAIBatchesAPI(BaseLLM):
         max_retries: int | None,
         organization: str | None,
         client: OpenAI | AsyncOpenAI | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> LiteLLMBatch | Coroutine[None, None, LiteLLMBatch]:
         openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
             api_key=api_key,
@@ -2109,6 +2231,7 @@ class OpenAIBatchesAPI(BaseLLM):
             organization=organization,
             client=client,
             _is_async=_is_async,
+            litellm_params=litellm_params,
         )
         if openai_client is None:
             raise ValueError(
@@ -2144,6 +2267,7 @@ class OpenAIBatchesAPI(BaseLLM):
         max_retries: int | None,
         organization: str | None,
         client: OpenAI | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ):
         openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
             api_key=api_key,
@@ -2153,6 +2277,7 @@ class OpenAIBatchesAPI(BaseLLM):
             organization=organization,
             client=client,
             _is_async=_is_async,
+            litellm_params=litellm_params,
         )
         if openai_client is None:
             raise ValueError(
@@ -2187,6 +2312,7 @@ class OpenAIBatchesAPI(BaseLLM):
         max_retries: int | None,
         organization: str | None,
         client: OpenAI | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ):
         openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
             api_key=api_key,
@@ -2196,6 +2322,7 @@ class OpenAIBatchesAPI(BaseLLM):
             organization=organization,
             client=client,
             _is_async=_is_async,
+            litellm_params=litellm_params,
         )
         if openai_client is None:
             raise ValueError(
@@ -2223,7 +2350,7 @@ class OpenAIBatchesAPI(BaseLLM):
     ):
         verbose_logger.debug("listing batches, after= %s, limit= %s", after, limit)
         response: Final = await openai_client.batches.list(after=after, limit=limit)
-        return response
+        return response.model_copy(update={"data": _with_openai_batch_fields(response.data)})
 
     def list_batches(
         self,
@@ -2235,7 +2362,8 @@ class OpenAIBatchesAPI(BaseLLM):
         organization: str | None,
         after: str | None = None,
         limit: int | None = None,
-        client: OpenAI | None = None,
+        client: OpenAI | AsyncOpenAI | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ):
         openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
             api_key=api_key,
@@ -2245,6 +2373,7 @@ class OpenAIBatchesAPI(BaseLLM):
             organization=organization,
             client=client,
             _is_async=_is_async,
+            litellm_params=litellm_params,
         )
         if openai_client is None:
             raise ValueError(
@@ -2258,7 +2387,9 @@ class OpenAIBatchesAPI(BaseLLM):
                 )
             return self.alist_batches(openai_client=openai_client, after=after, limit=limit)
         response: Final = openai_client.batches.list(after=after, limit=limit)
-        return response
+        if not isinstance(response, SyncCursorPage):
+            return response
+        return response.model_copy(update={"data": _with_openai_batch_fields(response.data)})
 
 
 class OpenAIAssistantsAPI(BaseLLM):
@@ -2273,22 +2404,19 @@ class OpenAIAssistantsAPI(BaseLLM):
         max_retries: int | None,
         organization: str | None,
         client: OpenAI | None = None,
+        *,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> OpenAI:
-        received_args: Final[Mapping[str, object]] = locals()
-        if client is None:
-            data: Final = {}
-            for k, v in received_args.items():
-                if k == "self" or k == "client":
-                    pass
-                elif k == "api_base" and v is not None:
-                    data["base_url"] = v
-                elif v is not None:
-                    data[k] = v
-            openai_client = OpenAI(**data)
-        else:
-            openai_client = client
-
-        return openai_client
+        if client is not None:
+            return client
+        return build_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            litellm_params=litellm_params,
+        )
 
     def async_get_openai_client(
         self,
@@ -2298,22 +2426,19 @@ class OpenAIAssistantsAPI(BaseLLM):
         max_retries: int | None,
         organization: str | None,
         client: AsyncOpenAI | None = None,
+        *,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> AsyncOpenAI:
-        received_args: Final[Mapping[str, object]] = locals()
-        if client is None:
-            data: Final = {}
-            for k, v in received_args.items():
-                if k == "self" or k == "client":
-                    pass
-                elif k == "api_base" and v is not None:
-                    data["base_url"] = v
-                elif v is not None:
-                    data[k] = v
-            openai_client = AsyncOpenAI(**data)
-        else:
-            openai_client = client
-
-        return openai_client
+        if client is not None:
+            return client
+        return build_async_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            litellm_params=litellm_params,
+        )
 
     ### ASSISTANTS ###
 
@@ -2329,6 +2454,8 @@ class OpenAIAssistantsAPI(BaseLLM):
         limit: int | None = 20,
         before: str | None = None,
         after: str | None = None,
+        *,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> AsyncCursorPage[Assistant]:
         openai_client: Final = self.async_get_openai_client(
             api_key=api_key,
@@ -2336,6 +2463,7 @@ class OpenAIAssistantsAPI(BaseLLM):
             timeout=timeout,
             max_retries=max_retries,
             organization=organization,
+            litellm_params=litellm_params,
             client=client,
         )
         request_params: Final = {
@@ -2363,6 +2491,8 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: str | None,
         client: AsyncOpenAI | None,
         aget_assistants: Literal[True], 
+        *,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> Coroutine[None, None, AsyncCursorPage[Assistant]]:
         ...
 
@@ -2376,6 +2506,8 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: str | None,
         client: OpenAI | None,
         aget_assistants: Literal[False] | None, 
+        *,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> SyncCursorPage[Assistant]: 
         ...
 
@@ -2394,7 +2526,9 @@ class OpenAIAssistantsAPI(BaseLLM):
         limit: int | None = 20,
         before: str | None = None,
         after: str | None = None,
-    ):
+        *,
+        litellm_params: Mapping[str, object] | None = None,
+    ) -> Coroutine[None, None, AsyncCursorPage[Assistant]] | SyncCursorPage[Assistant]:
         if aget_assistants is not None and aget_assistants is True:
             return self.async_get_assistants(
                 api_key=api_key,
@@ -2402,6 +2536,7 @@ class OpenAIAssistantsAPI(BaseLLM):
                 timeout=timeout,
                 max_retries=max_retries,
                 organization=organization,
+                litellm_params=litellm_params,
                 client=client,
             )
         openai_client: Final = self.get_openai_client(
@@ -2410,6 +2545,7 @@ class OpenAIAssistantsAPI(BaseLLM):
             timeout=timeout,
             max_retries=max_retries,
             organization=organization,
+            litellm_params=litellm_params,
             client=client,
         )
 
@@ -2437,6 +2573,8 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: str | None,
         client: AsyncOpenAI | None,
         create_assistant_data: dict,
+        *,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> Assistant:
         openai_client: Final = self.async_get_openai_client(
             api_key=api_key,
@@ -2444,6 +2582,7 @@ class OpenAIAssistantsAPI(BaseLLM):
             timeout=timeout,
             max_retries=max_retries,
             organization=organization,
+            litellm_params=litellm_params,
             client=client,
         )
 
@@ -2461,6 +2600,8 @@ class OpenAIAssistantsAPI(BaseLLM):
         create_assistant_data: dict,
         client=None,
         async_create_assistants=None,
+        *,
+        litellm_params: Mapping[str, object] | None = None,
     ):
         if async_create_assistants is not None and async_create_assistants is True:
             return self.async_create_assistants(
@@ -2469,6 +2610,7 @@ class OpenAIAssistantsAPI(BaseLLM):
                 timeout=timeout,
                 max_retries=max_retries,
                 organization=organization,
+                litellm_params=litellm_params,
                 client=client,
                 create_assistant_data=create_assistant_data,
             )
@@ -2478,6 +2620,7 @@ class OpenAIAssistantsAPI(BaseLLM):
             timeout=timeout,
             max_retries=max_retries,
             organization=organization,
+            litellm_params=litellm_params,
             client=client,
         )
 
@@ -2494,6 +2637,8 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: str | None,
         client: AsyncOpenAI | None,
         assistant_id: str,
+        *,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> AssistantDeleted:
         openai_client: Final = self.async_get_openai_client(
             api_key=api_key,
@@ -2501,6 +2646,7 @@ class OpenAIAssistantsAPI(BaseLLM):
             timeout=timeout,
             max_retries=max_retries,
             organization=organization,
+            litellm_params=litellm_params,
             client=client,
         )
 
@@ -2518,6 +2664,8 @@ class OpenAIAssistantsAPI(BaseLLM):
         assistant_id: str,
         client=None,
         async_delete_assistants=None,
+        *,
+        litellm_params: Mapping[str, object] | None = None,
     ):
         if async_delete_assistants is not None and async_delete_assistants is True:
             return self.async_delete_assistant(
@@ -2526,6 +2674,7 @@ class OpenAIAssistantsAPI(BaseLLM):
                 timeout=timeout,
                 max_retries=max_retries,
                 organization=organization,
+                litellm_params=litellm_params,
                 client=client,
                 assistant_id=assistant_id,
             )
@@ -2535,6 +2684,7 @@ class OpenAIAssistantsAPI(BaseLLM):
             timeout=timeout,
             max_retries=max_retries,
             organization=organization,
+            litellm_params=litellm_params,
             client=client,
         )
 
@@ -2553,6 +2703,8 @@ class OpenAIAssistantsAPI(BaseLLM):
         max_retries: int | None,
         organization: str | None,
         client: AsyncOpenAI | None = None,
+        *,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> OpenAIMessage:
         openai_client: Final = self.async_get_openai_client(
             api_key=api_key,
@@ -2560,6 +2712,7 @@ class OpenAIAssistantsAPI(BaseLLM):
             timeout=timeout,
             max_retries=max_retries,
             organization=organization,
+            litellm_params=litellm_params,
             client=client,
         )
 
@@ -2590,6 +2743,8 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: str | None,
         client: AsyncOpenAI | None,
         a_add_message: Literal[True], 
+        *,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> Coroutine[None, None, OpenAIMessage]:
         ...
 
@@ -2605,6 +2760,8 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: str | None,
         client: OpenAI | None,
         a_add_message: Literal[False] | None, 
+        *,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> OpenAIMessage: 
         ...
 
@@ -2621,6 +2778,8 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: str | None,
         client=None,
         a_add_message: bool | None = None,
+        *,
+        litellm_params: Mapping[str, object] | None = None,
     ):
         if a_add_message is not None and a_add_message is True:
             return self.a_add_message(
@@ -2631,6 +2790,7 @@ class OpenAIAssistantsAPI(BaseLLM):
                 timeout=timeout,
                 max_retries=max_retries,
                 organization=organization,
+                litellm_params=litellm_params,
                 client=client,
             )
         openai_client: Final = self.get_openai_client(
@@ -2639,6 +2799,7 @@ class OpenAIAssistantsAPI(BaseLLM):
             timeout=timeout,
             max_retries=max_retries,
             organization=organization,
+            litellm_params=litellm_params,
             client=client,
         )
 
@@ -2664,6 +2825,8 @@ class OpenAIAssistantsAPI(BaseLLM):
         max_retries: int | None,
         organization: str | None,
         client: AsyncOpenAI | None = None,
+        *,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> AsyncCursorPage[OpenAIMessage]:
         openai_client: Final = self.async_get_openai_client(
             api_key=api_key,
@@ -2671,6 +2834,7 @@ class OpenAIAssistantsAPI(BaseLLM):
             timeout=timeout,
             max_retries=max_retries,
             organization=organization,
+            litellm_params=litellm_params,
             client=client,
         )
 
@@ -2691,6 +2855,8 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: str | None,
         client: AsyncOpenAI | None,
         aget_messages: Literal[True], 
+        *,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> Coroutine[None, None, AsyncCursorPage[OpenAIMessage]]:
         ...
 
@@ -2705,6 +2871,8 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: str | None,
         client: OpenAI | None,
         aget_messages: Literal[False] | None, 
+        *,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> SyncCursorPage[OpenAIMessage]: 
         ...
 
@@ -2720,6 +2888,8 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: str | None,
         client=None,
         aget_messages=None,
+        *,
+        litellm_params: Mapping[str, object] | None = None,
     ):
         if aget_messages is not None and aget_messages is True:
             return self.async_get_messages(
@@ -2729,6 +2899,7 @@ class OpenAIAssistantsAPI(BaseLLM):
                 timeout=timeout,
                 max_retries=max_retries,
                 organization=organization,
+                litellm_params=litellm_params,
                 client=client,
             )
         openai_client: Final = self.get_openai_client(
@@ -2737,6 +2908,7 @@ class OpenAIAssistantsAPI(BaseLLM):
             timeout=timeout,
             max_retries=max_retries,
             organization=organization,
+            litellm_params=litellm_params,
             client=client,
         )
 
@@ -2756,6 +2928,8 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: str | None,
         client: AsyncOpenAI | None,
         messages: Iterable[OpenAICreateThreadParamsMessage] | None,
+        *,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> Thread:
         openai_client: Final = self.async_get_openai_client(
             api_key=api_key,
@@ -2763,6 +2937,7 @@ class OpenAIAssistantsAPI(BaseLLM):
             timeout=timeout,
             max_retries=max_retries,
             organization=organization,
+            litellm_params=litellm_params,
             client=client,
         )
 
@@ -2795,6 +2970,8 @@ class OpenAIAssistantsAPI(BaseLLM):
         messages: Iterable[OpenAICreateThreadParamsMessage] | None,
         client: AsyncOpenAI | None,
         acreate_thread: Literal[True], 
+        *,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> Coroutine[None, None, Thread]:
         ...
 
@@ -2810,6 +2987,8 @@ class OpenAIAssistantsAPI(BaseLLM):
         messages: Iterable[OpenAICreateThreadParamsMessage] | None,
         client: OpenAI | None,
         acreate_thread: Literal[False] | None, 
+        *,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> Thread: 
         ...
 
@@ -2826,6 +3005,8 @@ class OpenAIAssistantsAPI(BaseLLM):
         messages: Iterable[OpenAICreateThreadParamsMessage] | None,
         client=None,
         acreate_thread=None,
+        *,
+        litellm_params: Mapping[str, object] | None = None,
     ):
         """
         Here's an example:
@@ -2845,6 +3026,7 @@ class OpenAIAssistantsAPI(BaseLLM):
                 timeout=timeout,
                 max_retries=max_retries,
                 organization=organization,
+                litellm_params=litellm_params,
                 client=client,
                 messages=messages,
             )
@@ -2854,6 +3036,7 @@ class OpenAIAssistantsAPI(BaseLLM):
             timeout=timeout,
             max_retries=max_retries,
             organization=organization,
+            litellm_params=litellm_params,
             client=client,
         )
 
@@ -2881,6 +3064,8 @@ class OpenAIAssistantsAPI(BaseLLM):
         max_retries: int | None,
         organization: str | None,
         client: AsyncOpenAI | None,
+        *,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> Thread:
         openai_client: Final = self.async_get_openai_client(
             api_key=api_key,
@@ -2888,6 +3073,7 @@ class OpenAIAssistantsAPI(BaseLLM):
             timeout=timeout,
             max_retries=max_retries,
             organization=organization,
+            litellm_params=litellm_params,
             client=client,
         )
 
@@ -2913,6 +3099,8 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: str | None,
         client: AsyncOpenAI | None,
         aget_thread: Literal[True], 
+        *,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> Coroutine[None, None, Thread]:
         ...
 
@@ -2927,6 +3115,8 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: str | None,
         client: OpenAI | None,
         aget_thread: Literal[False] | None, 
+        *,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> Thread: 
         ...
 
@@ -2942,6 +3132,8 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: str | None,
         client=None,
         aget_thread=None,
+        *,
+        litellm_params: Mapping[str, object] | None = None,
     ):
         if aget_thread is not None and aget_thread is True:
             return self.async_get_thread(
@@ -2951,6 +3143,7 @@ class OpenAIAssistantsAPI(BaseLLM):
                 timeout=timeout,
                 max_retries=max_retries,
                 organization=organization,
+                litellm_params=litellm_params,
                 client=client,
             )
         openai_client: Final = self.get_openai_client(
@@ -2959,6 +3152,7 @@ class OpenAIAssistantsAPI(BaseLLM):
             timeout=timeout,
             max_retries=max_retries,
             organization=organization,
+            litellm_params=litellm_params,
             client=client,
         )
 
@@ -2992,6 +3186,8 @@ class OpenAIAssistantsAPI(BaseLLM):
         max_retries: int | None,
         organization: str | None,
         client: AsyncOpenAI | None,
+        *,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> Run:
         openai_client: Final = self.async_get_openai_client(
             api_key=api_key,
@@ -2999,6 +3195,7 @@ class OpenAIAssistantsAPI(BaseLLM):
             timeout=timeout,
             max_retries=max_retries,
             organization=organization,
+            litellm_params=litellm_params,
             client=client,
         )
 
@@ -3103,6 +3300,8 @@ class OpenAIAssistantsAPI(BaseLLM):
         client,
         arun_thread: Literal[True], 
         event_handler: AssistantEventHandler | None,
+        *,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> Coroutine[None, None, Run]:
         ...
 
@@ -3125,6 +3324,8 @@ class OpenAIAssistantsAPI(BaseLLM):
         client,
         arun_thread: Literal[False] | None, 
         event_handler: AssistantEventHandler | None,
+        *,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> Run: 
         ...
 
@@ -3148,6 +3349,8 @@ class OpenAIAssistantsAPI(BaseLLM):
         client=None,
         arun_thread=None,
         event_handler: AssistantEventHandler | None = None,
+        *,
+        litellm_params: Mapping[str, object] | None = None,
     ):
         if arun_thread is not None and arun_thread is True:
             if stream is not None and stream is True:
@@ -3157,6 +3360,7 @@ class OpenAIAssistantsAPI(BaseLLM):
                     timeout=timeout,
                     max_retries=max_retries,
                     organization=organization,
+                    litellm_params=litellm_params,
                     client=client,
                 )
                 return self.async_run_thread_stream(
@@ -3184,6 +3388,7 @@ class OpenAIAssistantsAPI(BaseLLM):
                 timeout=timeout,
                 max_retries=max_retries,
                 organization=organization,
+                litellm_params=litellm_params,
                 client=client,
             )
         openai_client: Final = self.get_openai_client(
@@ -3192,6 +3397,7 @@ class OpenAIAssistantsAPI(BaseLLM):
             timeout=timeout,
             max_retries=max_retries,
             organization=organization,
+            litellm_params=litellm_params,
             client=client,
         )
 

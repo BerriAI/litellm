@@ -5,6 +5,8 @@ When a SCIM provider deprovisions a user (DELETE) or marks them inactive
 working immediately. Reactivating (active=True) must un-block them.
 """
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -38,12 +40,22 @@ def _build_prisma_with_keys(user_keys, mock_user=None, updated_user=None):
     mock_client = MagicMock()
     mock_db = MagicMock()
     mock_client.db = mock_db
+
+    @asynccontextmanager
+    async def tx(*, timeout: object = None) -> AsyncIterator[MagicMock]:
+        yield mock_db
+
+    mock_client.tx = tx
+    mock_db.query_raw = AsyncMock(return_value=[])
     if mock_user is not None:
         mock_db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
+    mock_db.litellm_usertable.find_many = AsyncMock(return_value=[mock_user] if mock_user is not None else [])
     if updated_user is not None:
         mock_db.litellm_usertable.update = AsyncMock(return_value=updated_user)
-    mock_db.litellm_usertable.delete = AsyncMock(return_value=None)
+    mock_db.litellm_usertable.delete_many = AsyncMock(return_value=1)
     mock_db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    mock_db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+    mock_db.litellm_teammembership.find_many = AsyncMock(return_value=[])
 
     mock_db.litellm_verificationtoken.find_many = AsyncMock(return_value=user_keys)
     mock_db.litellm_verificationtoken.update_many = AsyncMock(return_value=None)
@@ -73,7 +85,7 @@ async def test_set_user_keys_blocked_flips_state_and_invalidates_cache():
         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
         patch(
-            "litellm.proxy.management_endpoints.scim.scim_v2._delete_cache_key_object",
+            "litellm.proxy.management_endpoints.scim.scim_v2.delete_cache_key_object",
             AsyncMock(side_effect=fake_delete),
         ),
     ):
@@ -104,7 +116,7 @@ async def test_set_user_keys_blocked_noop_when_no_matching_keys():
         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
         patch(
-            "litellm.proxy.management_endpoints.scim.scim_v2._delete_cache_key_object",
+            "litellm.proxy.management_endpoints.scim.scim_v2.delete_cache_key_object",
             AsyncMock(),
         ) as mocked_delete,
     ):
@@ -139,7 +151,7 @@ async def test_set_user_keys_unblocked_skips_admin_blocked_keys():
         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
         patch(
-            "litellm.proxy.management_endpoints.scim.scim_v2._delete_cache_key_object",
+            "litellm.proxy.management_endpoints.scim.scim_v2.delete_cache_key_object",
             AsyncMock(side_effect=fake_delete),
         ),
     ):
@@ -172,7 +184,7 @@ async def test_scim_delete_user_blocks_keys_before_deleting_user():
         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
         patch(
-            "litellm.proxy.management_endpoints.scim.scim_v2._delete_cache_key_object",
+            "litellm.proxy.management_endpoints.scim.scim_v2.delete_cache_key_object",
             AsyncMock(),
         ),
     ):
@@ -184,8 +196,8 @@ async def test_scim_delete_user_blocks_keys_before_deleting_user():
     assert update_kwargs["where"] == {"token": "hash-a"}
     assert update_kwargs["data"]["blocked"] is True
     assert '"scim_blocked": true' in update_kwargs["data"]["metadata"]
-    mock_db.litellm_usertable.delete.assert_awaited_once_with(
-        where={"user_id": user_id}
+    mock_db.litellm_usertable.delete_many.assert_awaited_once_with(
+        where={"user_id": {"in": [user_id]}}
     )
 
 
@@ -211,8 +223,8 @@ async def test_scim_delete_user_clears_fk_referenced_rows_before_user_delete():
     mock_db.litellm_teammembership.delete_many = AsyncMock(
         side_effect=lambda **kw: call_order.append(("teammembership", kw)) or None
     )
-    mock_db.litellm_usertable.delete = AsyncMock(
-        side_effect=lambda **kw: call_order.append(("user", kw)) or None
+    mock_db.litellm_usertable.delete_many = AsyncMock(
+        side_effect=lambda **kw: call_order.append(("user", kw)) or 1
     )
 
     with (
@@ -220,7 +232,7 @@ async def test_scim_delete_user_clears_fk_referenced_rows_before_user_delete():
         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
         patch(
-            "litellm.proxy.management_endpoints.scim.scim_v2._delete_cache_key_object",
+            "litellm.proxy.management_endpoints.scim.scim_v2.delete_cache_key_object",
             AsyncMock(),
         ),
     ):
@@ -232,18 +244,18 @@ async def test_scim_delete_user_clears_fk_referenced_rows_before_user_delete():
     inv_kwargs = mock_db.litellm_invitationlink.delete_many.await_args.kwargs
     assert inv_kwargs == {
         "where": {
-            "OR": [
-                {"user_id": user_id},
-                {"created_by": user_id},
-                {"updated_by": user_id},
-            ]
+            "OR": (
+                {"user_id": {"in": [user_id]}},
+                {"created_by": {"in": [user_id]}},
+                {"updated_by": {"in": [user_id]}},
+            )
         }
     }
     mock_db.litellm_organizationmembership.delete_many.assert_awaited_once_with(
-        where={"user_id": user_id}
+        where={"user_id": {"in": [user_id]}}
     )
     mock_db.litellm_teammembership.delete_many.assert_awaited_once_with(
-        where={"user_id": user_id}
+        where={"user_id": {"in": [user_id]}}
     )
 
     stages = [stage for stage, _ in call_order]
@@ -294,7 +306,7 @@ async def test_scim_patch_user_active_false_blocks_keys():
             AsyncMock(return_value=mock_scim_user),
         ),
         patch(
-            "litellm.proxy.management_endpoints.scim.scim_v2._delete_cache_key_object",
+            "litellm.proxy.management_endpoints.scim.scim_v2.delete_cache_key_object",
             AsyncMock(),
         ),
     ):
@@ -354,7 +366,7 @@ async def test_scim_patch_user_active_true_unblocks_keys():
             AsyncMock(return_value=mock_scim_user),
         ),
         patch(
-            "litellm.proxy.management_endpoints.scim.scim_v2._delete_cache_key_object",
+            "litellm.proxy.management_endpoints.scim.scim_v2.delete_cache_key_object",
             AsyncMock(),
         ),
     ):
@@ -411,7 +423,7 @@ async def test_scim_patch_user_no_active_change_does_not_touch_keys():
             AsyncMock(return_value=mock_scim_user),
         ),
         patch(
-            "litellm.proxy.management_endpoints.scim.scim_v2._delete_cache_key_object",
+            "litellm.proxy.management_endpoints.scim.scim_v2.delete_cache_key_object",
             AsyncMock(),
         ),
     ):
@@ -474,7 +486,7 @@ async def test_scim_put_user_omitting_active_preserves_deactivated_state():
             AsyncMock(return_value=mock_scim_user),
         ),
         patch(
-            "litellm.proxy.management_endpoints.scim.scim_v2._delete_cache_key_object",
+            "litellm.proxy.management_endpoints.scim.scim_v2.delete_cache_key_object",
             AsyncMock(),
         ),
     ):
@@ -530,7 +542,7 @@ async def test_scim_put_user_explicit_active_false_blocks_keys():
             AsyncMock(return_value=mock_scim_user),
         ),
         patch(
-            "litellm.proxy.management_endpoints.scim.scim_v2._delete_cache_key_object",
+            "litellm.proxy.management_endpoints.scim.scim_v2.delete_cache_key_object",
             AsyncMock(),
         ),
     ):
@@ -615,7 +627,7 @@ async def test_scim_delete_user_evicts_cached_user_row(failure: str | None) -> N
     saved: Final = LiteLLM_UserTable(user_id=user_id, user_email="x@example.com", teams=[], metadata={})
     client, db = _build_prisma_with_keys([], mock_user=saved.model_copy(deep=True))
     if failure == "delete":
-        db.litellm_usertable.delete.side_effect = RuntimeError("user delete failed")
+        db.litellm_usertable.delete_many.side_effect = RuntimeError("user delete failed")
     cache: Final = UserApiKeyCache()
     await cache.async_set_cache(key=user_id, value=saved, model_type=LiteLLM_UserTable)
     with (

@@ -11,8 +11,8 @@ if TYPE_CHECKING:
         ModifyResponseException,
     )
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.llms.openai import AllMessageValues
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 
 @dataclass(slots=True)
@@ -81,13 +81,15 @@ class BaseTranslation(ABC):
 
     @staticmethod
     def transform_user_api_key_dict_to_metadata(
-        user_api_key_dict: "UserAPIKeyAuth | None",
+        user_api_key_dict: object,
     ) -> dict[str, object]:
         """The authenticated key's identity as prefixed metadata, an allowlist safe to hand to guardrail vendors."""
-        if user_api_key_dict is None:
-            return {}
         # Lazy: `import litellm` loads this module before litellm.Router exists, and litellm_pre_call_utils imports it
+        from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+        if not isinstance(user_api_key_dict, UserAPIKeyAuth):
+            return {}
 
         return {
             **LiteLLMProxyRequestSetup.get_authenticated_identity_metadata(user_api_key_dict),
@@ -96,7 +98,7 @@ class BaseTranslation(ABC):
 
     @staticmethod
     def merge_user_api_key_metadata_into_request(
-        request_data: dict[str, Any],  # mutable-ok: proxy hooks share and mutate the request payload dict in place
+        request_data: dict[str, object],  # mutable-ok: proxy hooks share and mutate the request payload dict in place
         user_api_key_dict: Optional["UserAPIKeyAuth"],
     ) -> None:
         """
@@ -160,7 +162,7 @@ class BaseTranslation(ABC):
         request_data: dict | None = None,
         stream_transform_sink: StreamTransformSink | None = None,
         deliver_ended_stream_rewrites: bool = False,
-    ) -> Any:
+    ) -> object:
         """
         Process output streaming response with guardrails.
 
@@ -177,6 +179,11 @@ class BaseTranslation(ABC):
 
     def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
         return None
+
+    def needs_ended_stream_scan(self, guardrail: "CustomGuardrail", responses_so_far: Sequence[object]) -> bool:
+        """Whether the end-of-stream round scans ``guardrail`` even when a sampled round already covered every
+        text, because this translation hands that guardrail marks only the ended round carries."""
+        return False
 
     def released_stream_as_ended(self, responses_so_far: Sequence[object]) -> tuple[object, ...]:
         """The chunks a client left the stream with, closed the way this endpoint ends a stream, so the
@@ -227,11 +234,12 @@ class BaseTranslation(ABC):
         """
         return None
 
-    def get_structured_messages(self, data: dict) -> list["AllMessageValues"] | None:
+    def get_structured_messages(self, data: dict, *, keep_tool_errors: bool = False) -> list["AllMessageValues"] | None:
         """
         Convert request data to OpenAI-spec structured messages.
 
-        Override in subclasses for format-specific conversion.
+        Override in subclasses for format-specific conversion. ``keep_tool_errors`` copies a provider's
+        tool-failure marker onto tool messages as ``is_error``; only for copies that are never sent to a model.
 
         Returns None if no convertible content is found.
         """

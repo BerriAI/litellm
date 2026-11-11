@@ -1,26 +1,86 @@
+import type { ParseKeys } from "i18next";
 import { z } from "zod";
+import i18n from "@/i18n/i18n";
+
+export type DecisionEndpoint = "/v1/systemone" | "/typesafe/v1/systemone";
+
+const decisionsJson = z.union([z.string(), z.record(z.string(), z.unknown()), z.array(z.unknown())]);
+const decisionInstructions = decisionsJson.nullish();
+const decisionQuestionSchema = z.discriminatedUnion("type", [
+  z.looseObject({
+    type: z.literal("choice"),
+    instructions: decisionInstructions,
+    criteria: z.record(z.string(), decisionsJson.nullable()).refine(
+      (value) => {
+        const count = Object.keys(value).length;
+        return count >= 1 && count <= 255;
+      },
+      { error: () => i18n.t("playground.systemOne.schemas.choiceOptionCount", { max: 255 }) },
+    ),
+  }),
+  z
+    .looseObject({
+      type: z.literal("noul"),
+      instructions: decisionInstructions,
+      criteria: z.partialRecord(z.enum(["true", "false"]), decisionsJson.nullable()).nullish(),
+    })
+    .refine((value) => value.instructions != null || value.criteria != null, {
+      error: () => i18n.t("playground.systemOne.schemas.noulNeedsInstructionsOrCriteria"),
+    }),
+  z.looseObject({
+    type: z.literal("score"),
+    instructions: decisionInstructions,
+    criteria: z.array(decisionsJson).min(1).max(10),
+  }),
+]);
+
+export const decisionsRequestSchema = z.looseObject({
+  model: z
+    .string()
+    .refine((value) => value.trim().length > 0, { error: () => i18n.t("playground.systemOne.schemas.modelNonEmpty") })
+    .optional(),
+  state: decisionsJson,
+  questions: z.record(z.string().min(1), decisionQuestionSchema).refine(
+    (value) => {
+      const count = Object.keys(value).length;
+      return count >= 1 && count <= 128;
+    },
+    { error: () => i18n.t("playground.systemOne.schemas.questionCount") },
+  ),
+});
+
+export type DecisionRequest = z.infer<typeof decisionsRequestSchema>;
+export type PlaygroundRequest = SystemOneRequest | DecisionRequest;
+export type PlaygroundQuestion = SystemOneQuestion | z.infer<typeof decisionQuestionSchema>;
 
 const MAX_CHOICE_OPTIONS = 255;
 
-const nonEmptyString = (message: string) =>
-  z.string({ error: message }).refine((value) => value.trim().length > 0, message);
+const nonEmptyString = (messageKey: ParseKeys) =>
+  z
+    .string({ error: () => i18n.t(messageKey) })
+    .refine((value) => value.trim().length > 0, { error: () => i18n.t(messageKey) });
 
 const instructions = z.string({
   error: (iss) =>
-    iss.input === undefined ? "Required property 'instructions' is missing." : "Instructions must be a string.",
+    iss.input === undefined
+      ? i18n.t("playground.systemOne.schemas.instructionsMissing")
+      : i18n.t("playground.systemOne.schemas.instructionsType"),
 });
 
 const choiceQuestionSchema = z.looseObject({
   type: z.literal("choice"),
   instructions,
   criteria: z
-    .record(z.string(), z.string({ error: "Choice descriptions must be strings." }), {
-      error: "Choice criteria must be an object mapping labels to descriptions.",
+    .record(z.string(), z.string({ error: () => i18n.t("playground.systemOne.schemas.choiceDescriptionType") }), {
+      error: () => i18n.t("playground.systemOne.schemas.choiceCriteriaType"),
     })
-    .refine((criteria) => {
-      const count = Object.keys(criteria).length;
-      return count >= 1 && count <= MAX_CHOICE_OPTIONS;
-    }, `Choice criteria must contain between 1 and ${MAX_CHOICE_OPTIONS} options.`),
+    .refine(
+      (criteria) => {
+        const count = Object.keys(criteria).length;
+        return count >= 1 && count <= MAX_CHOICE_OPTIONS;
+      },
+      { error: () => i18n.t("playground.systemOne.schemas.choiceOptionCount", { max: MAX_CHOICE_OPTIONS }) },
+    ),
 });
 
 const noulQuestionSchema = z.looseObject({
@@ -29,10 +89,10 @@ const noulQuestionSchema = z.looseObject({
   criteria: z
     .looseObject(
       {
-        true: z.string({ error: "Noul true criteria must be a string." }).optional(),
-        false: z.string({ error: "Noul false criteria must be a string." }).optional(),
+        true: z.string({ error: () => i18n.t("playground.systemOne.schemas.noulTrueType") }).optional(),
+        false: z.string({ error: () => i18n.t("playground.systemOne.schemas.noulFalseType") }).optional(),
       },
-      { error: "Noul criteria, when provided, must be an object." },
+      { error: () => i18n.t("playground.systemOne.schemas.noulCriteriaType") },
     )
     .optional(),
 });
@@ -41,35 +101,40 @@ const scoreQuestionSchema = z.looseObject({
   type: z.literal("score"),
   instructions,
   criteria: z
-    .array(z.string({ error: "Score levels must be strings." }), {
-      error: "Score criteria must be an array of levels.",
+    .array(z.string({ error: () => i18n.t("playground.systemOne.schemas.scoreLevelType") }), {
+      error: () => i18n.t("playground.systemOne.schemas.scoreCriteriaType"),
     })
-    .min(2, "Score criteria must contain at least 2 levels."),
+    .min(2, { error: () => i18n.t("playground.systemOne.schemas.scoreLevelCount") }),
 });
 
-const QUESTION_ERROR_MESSAGES: Partial<Record<z.core.$ZodIssue["code"], string>> = {
-  invalid_union: "Question type must be choice, noul, or score.",
-  invalid_type: "Question must be an object.",
+const QUESTION_ERROR_MESSAGES: Partial<Record<z.core.$ZodIssue["code"], ParseKeys>> = {
+  invalid_union: "playground.systemOne.schemas.questionType",
+  invalid_type: "playground.systemOne.schemas.questionObject",
 };
 
 const questionSchema = z.discriminatedUnion("type", [choiceQuestionSchema, noulQuestionSchema, scoreQuestionSchema], {
-  error: (iss) => QUESTION_ERROR_MESSAGES[iss.code],
+  error: (iss) => {
+    const key = QUESTION_ERROR_MESSAGES[iss.code];
+    return key === undefined ? undefined : i18n.t(key);
+  },
 });
 
 export const systemOneRequestSchema = z.looseObject(
   {
-    model: nonEmptyString("Model must be a non-empty string.").optional(),
-    state: z.unknown().nonoptional({ error: "Required property 'state' is missing." }),
+    model: nonEmptyString("playground.systemOne.schemas.modelNonEmpty").optional(),
+    state: z.unknown().nonoptional({ error: () => i18n.t("playground.systemOne.schemas.stateMissing") }),
     questions: z
       .record(z.string(), questionSchema, {
         error: (iss) =>
           iss.input === undefined
-            ? "Required property 'questions' is missing."
-            : "Questions must be a non-empty object.",
+            ? i18n.t("playground.systemOne.schemas.questionsMissing")
+            : i18n.t("playground.systemOne.schemas.questionsType"),
       })
-      .refine((questions) => Object.keys(questions).length > 0, "At least one question is required."),
+      .refine((questions) => Object.keys(questions).length > 0, {
+        error: () => i18n.t("playground.systemOne.schemas.questionRequired"),
+      }),
   },
-  { error: "Payload must be a JSON object." },
+  { error: () => i18n.t("playground.systemOne.schemas.payloadType") },
 );
 
 const probability = z.number().finite().min(0).max(1);
@@ -80,7 +145,7 @@ const noulAnswerSchema = z.looseObject({ type: z.literal("noul"), noul: probabil
 const choiceAnswerShape = {
   type: z.literal("choice"),
   choice: z.string(),
-  confidence: probability.optional(),
+  confidence: probability.nullish(),
   probabilities,
 };
 const choiceAnswerSchema = z.looseObject(choiceAnswerShape);
@@ -88,8 +153,8 @@ const choiceAnswerSchema = z.looseObject(choiceAnswerShape);
 const scoreAnswerShape = {
   type: z.literal("score"),
   score: z.number().finite(),
-  confidence: probability.optional(),
-  legend: z.record(z.string(), z.string()).optional(),
+  confidence: probability.nullish(),
+  legend: z.record(z.string(), decisionsJson).optional(),
   probabilities,
 };
 const scoreAnswerSchema = z.looseObject(scoreAnswerShape);
@@ -97,12 +162,12 @@ const scoreAnswerSchema = z.looseObject(scoreAnswerShape);
 const tokenCount = z.number().finite().nonnegative();
 
 export const systemOneResponseSchema = z.looseObject({
-  model: nonEmptyString("Model must be a non-empty string.").nullish(),
+  model: nonEmptyString("playground.systemOne.schemas.modelNonEmpty").nullish(),
   answers: z.record(
     z.string(),
     z.discriminatedUnion("type", [noulAnswerSchema, choiceAnswerSchema, scoreAnswerSchema]),
   ),
-  usage: z.object({ input_tokens: tokenCount, output_tokens: tokenCount }).optional(),
+  usage: z.looseObject({ input_tokens: tokenCount, output_tokens: tokenCount }).nullish(),
 });
 
 export type SystemOneRequest = z.infer<typeof systemOneRequestSchema>;

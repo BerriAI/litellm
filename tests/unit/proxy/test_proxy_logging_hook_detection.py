@@ -241,20 +241,20 @@ def _streaming_logging_obj():
 def test_stream_requires_guardrail_translation_route_detection():
     assert (
         ProxyLogging._stream_requires_guardrail_translation(
-            UserAPIKeyAuth(api_key="sk-1234", request_route="/v1/messages")
+            UserAPIKeyAuth(api_key="sk-9876", request_route="/v1/messages")
         )
         is True
     )
     assert (
         ProxyLogging._stream_requires_guardrail_translation(
-            UserAPIKeyAuth(api_key="sk-1234", request_route="/chat/completions")
+            UserAPIKeyAuth(api_key="sk-9876", request_route="/chat/completions")
         )
         is False
     )
-    assert ProxyLogging._stream_requires_guardrail_translation(UserAPIKeyAuth(api_key="sk-1234")) is False
+    assert ProxyLogging._stream_requires_guardrail_translation(UserAPIKeyAuth(api_key="sk-9876")) is False
     assert (
         ProxyLogging._stream_requires_guardrail_translation(
-            UserAPIKeyAuth(api_key="sk-1234", request_route="/route/without/call/types")
+            UserAPIKeyAuth(api_key="sk-9876", request_route="/route/without/call/types")
         )
         is False
     )
@@ -296,7 +296,7 @@ async def test_post_call_stream_guardrail_blocks_anthropic_messages_stream(monke
     async def _drain():
         async for chunk in proxy_logging.async_post_call_streaming_iterator_hook(
             response=fake_stream(),
-            user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/v1/messages"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", request_route="/v1/messages"),
             request_data=request_data,
         ):
             delivered.append(chunk)
@@ -337,7 +337,7 @@ async def test_post_call_stream_guardrail_keeps_own_iterator_on_chat_completions
     delivered_text = ""
     async for chunk in proxy_logging.async_post_call_streaming_iterator_hook(
         response=fake_stream(),
-        user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/chat/completions"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", request_route="/chat/completions"),
         request_data={"model": "gpt-4o-mini", "metadata": {}},
     ):
         for choice in chunk.choices:
@@ -345,6 +345,241 @@ async def test_post_call_stream_guardrail_keeps_own_iterator_on_chat_completions
 
     assert "zebra" not in delivered_text
     assert delivered_text != ""
+
+
+async def _served_token_ids(monkeypatch, guardrail_default_on: bool) -> tuple[object, ...]:
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+        ContentFilterGuardrail,
+    )
+    from litellm.types.guardrails import BlockedWord, ContentFilterAction
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    guardrail = ContentFilterGuardrail(
+        guardrail_name="output-filter",
+        blocked_words=[BlockedWord(keyword="zebra", action=ContentFilterAction("MASK"))],
+        event_hook="post_call",
+        default_on=guardrail_default_on,
+    )
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+
+    def chunk(content: str, token_ids: list[int], finish_reason: str | None = None) -> ModelResponseStream:
+        streamed = ModelResponseStream(
+            choices=[StreamingChoices(index=0, delta=Delta(content=content), finish_reason=finish_reason)]
+        )
+        setattr(streamed.choices[0], "token_ids", token_ids)
+        return streamed
+
+    async def fake_stream():
+        yield chunk("the zebra runs", [1, 2, 3])
+        yield chunk("", [4], finish_reason="stop")
+
+    served = [
+        served_chunk
+        async for served_chunk in ProxyLogging(user_api_key_cache=DualCache()).async_post_call_streaming_iterator_hook(
+            response=fake_stream(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", request_route="/chat/completions"),
+            request_data={"model": "gpt-4o-mini", "metadata": {}},
+        )
+    ]
+    return tuple(getattr(served_chunk.choices[0], "token_ids", None) for served_chunk in served)
+
+
+@pytest.mark.asyncio
+async def test_post_call_stream_guardrail_drops_token_ids_that_decode_to_the_unmasked_text(monkeypatch):
+    served_token_ids = await _served_token_ids(monkeypatch, guardrail_default_on=True)
+
+    assert served_token_ids
+    assert all(token_ids is None for token_ids in served_token_ids)
+
+
+@pytest.mark.asyncio
+async def test_post_call_stream_keeps_token_ids_when_no_guardrail_runs_on_the_request(monkeypatch):
+    served_token_ids = await _served_token_ids(monkeypatch, guardrail_default_on=False)
+
+    assert served_token_ids == ([1, 2, 3], [4])
+
+
+class _ChecksEachChunkText(CustomGuardrail):
+    async def async_post_call_streaming_hook(self, user_api_key_dict, response):
+        return None
+
+
+async def _per_chunk_hook_token_ids(monkeypatch, guardrail_default_on: bool) -> tuple[object, bool]:
+    import time
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [_ChecksEachChunkText(guardrail_name="chunk-check", event_hook="post_call", default_on=guardrail_default_on)],
+    )
+    logging_obj = Logging(
+        model="m",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="per-chunk-call",
+        function_id="per-chunk-call",
+    )
+    held_back_text_chunk = ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content=""))])
+    setattr(held_back_text_chunk.choices[0], "token_ids", [220, 19, 11])
+
+    served = await ProxyLogging(user_api_key_cache=DualCache()).async_post_call_streaming_hook(
+        data={"model": "m", "metadata": {}, "litellm_logging_obj": logging_obj},
+        response=held_back_text_chunk,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", request_route="/chat/completions"),
+    )
+    return getattr(served.choices[0], "token_ids", None), logging_obj.drops_stream_token_ids
+
+
+@pytest.mark.asyncio
+async def test_per_chunk_stream_check_drops_token_ids_served_ahead_of_the_text_it_checks(monkeypatch):
+    assert await _per_chunk_hook_token_ids(monkeypatch, guardrail_default_on=True) == (None, True)
+
+
+@pytest.mark.asyncio
+async def test_per_chunk_stream_keeps_token_ids_when_its_check_does_not_run_on_the_request(monkeypatch):
+    assert await _per_chunk_hook_token_ids(monkeypatch, guardrail_default_on=False) == ([220, 19, 11], False)
+
+
+class _ScansWholeStreamFirst(CustomGuardrail):
+    async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
+        for chunk in [chunk async for chunk in response]:
+            yield chunk
+
+
+async def _logged_stream_token_ids(monkeypatch, guardrail_default_on: bool) -> object:
+    import asyncio
+    import json
+    import time
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
+
+    guardrail = _ScansWholeStreamFirst(
+        guardrail_name="whole-stream-scan", event_hook="post_call", default_on=guardrail_default_on
+    )
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    logging_obj = Logging(
+        model="m",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="token-ids-call",
+        function_id="token-ids-call",
+    )
+    logged = asyncio.get_running_loop().create_future()
+
+    async def capture_logged_response(complete_streaming_response, cache_hit):
+        logged.set_result(complete_streaming_response)
+
+    logging_obj._on_deferred_stream_complete = capture_logged_response
+
+    async def sse_lines():
+        for choice in (
+            {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+            {"index": 0, "delta": {"content": ""}, "finish_reason": None, "token_ids": [16]},
+            {"index": 0, "delta": {"content": "1,2"}, "finish_reason": None, "token_ids": [11, 17]},
+            {"index": 0, "delta": {"content": ""}, "finish_reason": "stop", "token_ids": [20]},
+        ):
+            yield "data: " + json.dumps(
+                {"id": "chatcmpl-1", "object": "chat.completion.chunk", "model": "m", "choices": [choice]}
+            )
+        yield "data: [DONE]"
+
+    stream = CustomStreamWrapper(
+        completion_stream=HostedVLLMChatConfig().get_model_response_iterator(
+            streaming_response=sse_lines(), sync_stream=False, json_mode=False
+        ),
+        model="m",
+        custom_llm_provider="hosted_vllm",
+        logging_obj=logging_obj,
+    )
+    async for _ in ProxyLogging(user_api_key_cache=DualCache()).async_post_call_streaming_iterator_hook(
+        response=stream,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", request_route="/chat/completions"),
+        request_data={"model": "m", "metadata": {}, "litellm_logging_obj": logging_obj},
+    ):
+        pass
+    return (await asyncio.wait_for(logged, timeout=5)).choices[0].token_ids
+
+
+@pytest.mark.asyncio
+async def test_post_call_stream_guardrail_drops_token_ids_from_the_response_it_logs_and_caches(monkeypatch):
+    assert await _logged_stream_token_ids(monkeypatch, guardrail_default_on=True) is None
+
+
+@pytest.mark.asyncio
+async def test_post_call_stream_logs_every_token_id_when_no_guardrail_runs_on_the_request(monkeypatch):
+    assert await _logged_stream_token_ids(monkeypatch, guardrail_default_on=False) == [16, 11, 17, 20]
+
+
+def _completion_chunk(text: str, token_ids: list[int], finish_reason: str | None = None) -> object:
+    from litellm.types.utils import TextChoices, TextCompletionResponse
+
+    return TextCompletionResponse(
+        object="text_completion",
+        choices=[TextChoices(index=0, text=text, finish_reason=finish_reason, token_ids=token_ids)],
+    )
+
+
+def _guarded_completions_stream(monkeypatch, action: str, held_back: tuple[object, ...]):
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+        ContentFilterGuardrail,
+    )
+    from litellm.types.guardrails import BlockedWord, ContentFilterAction
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [
+            ContentFilterGuardrail(
+                guardrail_name="output-filter",
+                blocked_words=[BlockedWord(keyword="7", action=ContentFilterAction(action))],
+                event_hook="post_call",
+                default_on=True,
+            )
+        ],
+    )
+
+    async def upstream():
+        for chunk in held_back:
+            yield chunk
+        yield _completion_chunk(", 6, 7", [21, 11, 22], finish_reason="stop")
+
+    return ProxyLogging(user_api_key_cache=DualCache()).async_post_call_streaming_iterator_hook(
+        response=upstream(),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", request_route="/v1/completions"),
+        request_data={"model": "qwen3", "metadata": {}},
+    )
+
+
+@pytest.mark.asyncio
+async def test_post_call_stream_guardrail_blocks_completions_before_serving_token_id_only_chunks(monkeypatch):
+    stream = _guarded_completions_stream(
+        monkeypatch, "BLOCK", (_completion_chunk("", [11]), _completion_chunk("", [220]))
+    )
+
+    with pytest.raises(HTTPException):
+        await stream.__anext__()
+
+
+@pytest.mark.asyncio
+async def test_post_call_stream_guardrail_serves_no_chunk_left_empty_by_the_token_id_drop(monkeypatch):
+    held_back = (_completion_chunk("", [11]), _completion_chunk("", [220]))
+
+    served = [chunk async for chunk in _guarded_completions_stream(monkeypatch, "MASK", held_back)]
+
+    assert [(chunk.choices[0].text, chunk.choices[0].token_ids) for chunk in served] == [
+        (", 6, [KEYWORD_REDACTED]", None)
+    ]
+    assert [chunk.choices[0].token_ids for chunk in held_back] == [None, None]
 
 
 @pytest.mark.asyncio
@@ -364,7 +599,7 @@ async def test_post_call_stream_records_masked_text_for_deferred_logging(monkeyp
     delivered_text = ""
     async for chunk in proxy_logging.async_post_call_streaming_iterator_hook(
         response=fake_stream(),
-        user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/chat/completions"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", request_route="/chat/completions"),
         request_data={"model": "gpt-4o-mini", "metadata": {}, "litellm_logging_obj": logging_obj},
     ):
         for choice in chunk.choices:
@@ -390,7 +625,7 @@ async def test_post_call_stream_records_the_served_text_when_the_client_disconne
 
     stream = proxy_logging.async_post_call_streaming_iterator_hook(
         response=fake_stream(),
-        user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/chat/completions"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", request_route="/chat/completions"),
         request_data={"model": "gpt-4o-mini", "metadata": {}, "litellm_logging_obj": logging_obj},
     )
     first = await stream.__anext__()
@@ -425,7 +660,7 @@ async def test_unified_guardrail_iterator_accepts_explicit_guardrail():
 
     delivered = []
     async for item in unified_guardrail.async_post_call_streaming_iterator_hook(
-        user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/v1/messages"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", request_route="/v1/messages"),
         response=fake_stream(),
         request_data=request_data,
         guardrail_to_apply=guardrail,
@@ -478,7 +713,7 @@ async def test_post_call_stream_guardrail_reroutes_inherited_apply_guardrail(mon
     async def _drain():
         async for chunk in proxy_logging.async_post_call_streaming_iterator_hook(
             response=fake_stream(),
-            user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/v1/messages"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", request_route="/v1/messages"),
             request_data=request_data,
         ):
             delivered.append(chunk)
@@ -530,7 +765,7 @@ async def test_post_call_stream_masking_guardrail_keeps_own_iterator_on_anthropi
     delivered = []
     async for chunk in proxy_logging.async_post_call_streaming_iterator_hook(
         response=fake_stream(),
-        user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/v1/messages"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", request_route="/v1/messages"),
         request_data={
             "model": "claude-sonnet-5",
             "litellm_logging_obj": _streaming_logging_obj(),
@@ -585,7 +820,7 @@ async def test_post_call_stream_presidio_output_masking_masks_anthropic_messages
     delivered = []
     async for chunk in ProxyLogging(user_api_key_cache=DualCache()).async_post_call_streaming_iterator_hook(
         response=fake_stream(),
-        user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/v1/messages"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", request_route="/v1/messages"),
         request_data={
             "model": "claude-sonnet-5",
             "litellm_logging_obj": _streaming_logging_obj(),
@@ -663,7 +898,7 @@ async def test_execute_guardrail_hook_routes_apply_guardrail_implementers_to_uni
         callback=guardrail,
         hook_type=hook_type,
         data=data,
-        user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876"),
         call_type="completion",
         response=None,
     )
@@ -683,7 +918,7 @@ async def test_execute_guardrail_hook_keeps_native_hooks_when_opted_out(hook_typ
         callback=guardrail,
         hook_type=hook_type,
         data=data,
-        user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876"),
         call_type="completion",
         response=None,
     )
@@ -713,7 +948,7 @@ async def test_during_call_hook_keeps_native_moderation_hook_when_opted_out(monk
 
     await ProxyLogging(user_api_key_cache=DualCache()).during_call_hook(
         data={"messages": [{"role": "user", "content": "hi"}]},
-        user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876"),
         call_type="completion",
     )
 
@@ -744,7 +979,7 @@ async def test_during_call_hook_runs_custom_logger_moderation_override(monkeypat
     with pytest.raises(HTTPException) as exc_info:
         await ProxyLogging(user_api_key_cache=DualCache()).during_call_hook(
             data={"messages": [{"role": "user", "content": "hi"}]},
-            user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876"),
             call_type="acompletion",
         )
 
@@ -787,7 +1022,7 @@ async def test_during_call_hook_runs_moderation_override_after_v1_pre_call_guard
     with pytest.raises(HTTPException) as exc_info:
         await ProxyLogging(user_api_key_cache=DualCache()).during_call_hook(
             data={"messages": [{"role": "user", "content": "hi"}]},
-            user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876"),
             call_type="acompletion",
         )
 
@@ -803,7 +1038,7 @@ async def test_during_call_hook_runs_moderation_override_inherited_from_parent(m
     with pytest.raises(HTTPException) as exc_info:
         await ProxyLogging(user_api_key_cache=DualCache()).during_call_hook(
             data={"messages": [{"role": "user", "content": "hi"}]},
-            user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876"),
             call_type="acompletion",
         )
 
@@ -823,7 +1058,7 @@ async def test_post_call_success_hook_keeps_native_hook_when_opted_out(monkeypat
     await ProxyLogging(user_api_key_cache=DualCache()).post_call_success_hook(
         data={"messages": [{"role": "user", "content": "hi"}]},
         response=response,
-        user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876"),
     )
 
     assert opted_out.native_hooks_ran == ["post_call"]
@@ -869,7 +1104,7 @@ async def test_deferred_stream_guardrails_run_native_hook_when_opted_out(monkeyp
 
     await ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(
         captured_data={"messages": [{"role": "user", "content": "hi"}]},
-        captured_user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234"),
+        captured_user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876"),
         captured_logging_obj=_streaming_logging_obj(),
         assembled_response=ModelResponse(choices=[Choices(message=Message(role="assistant", content="hello"))]),
         cache_hit=False,
@@ -896,7 +1131,7 @@ async def test_deferred_stream_guardrails_skip_pipeline_managed_native_hook(monk
             "messages": [{"role": "user", "content": "hi"}],
             "metadata": {"_guardrail_pipelines": [("response-governance", pipeline)]},
         },
-        captured_user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/v1/chat/completions"),
+        captured_user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", request_route="/v1/chat/completions"),
         captured_logging_obj=_streaming_logging_obj(),
         assembled_response=ModelResponse(choices=[Choices(message=Message(role="assistant", content="hello"))]),
         cache_hit=False,
@@ -933,7 +1168,7 @@ async def test_deferred_stream_guardrails_run_native_hook_whose_pipeline_could_n
             "messages": [{"role": "user", "content": "hi"}],
             "metadata": {"_guardrail_pipelines": [("response-governance", pipeline)]},
         },
-        captured_user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/v1/chat/completions"),
+        captured_user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", request_route="/v1/chat/completions"),
         captured_logging_obj=_streaming_logging_obj(),
         assembled_response=ModelResponse(choices=[Choices(message=Message(role="assistant", content="hello"))]),
         cache_hit=False,
@@ -959,7 +1194,7 @@ async def test_deferred_stream_guardrails_run_native_hook_on_route_without_trans
             "messages": [{"role": "user", "content": "hi"}],
             "metadata": {"_guardrail_pipelines": [("response-governance", pipeline)]},
         },
-        captured_user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/custom/stream"),
+        captured_user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", request_route="/custom/stream"),
         captured_logging_obj=_streaming_logging_obj(),
         assembled_response=ModelResponse(choices=[Choices(message=Message(role="assistant", content="hello"))]),
         cache_hit=False,
@@ -1032,7 +1267,7 @@ async def test_post_call_stream_keeps_own_iterator_when_opted_out(monkeypatch):
     delivered = []
     async for chunk in ProxyLogging(user_api_key_cache=DualCache()).async_post_call_streaming_iterator_hook(
         response=fake_stream(),
-        user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/v1/messages"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", request_route="/v1/messages"),
         request_data={"model": "claude-sonnet-5", "litellm_logging_obj": _streaming_logging_obj(), "metadata": {}},
     ):
         delivered.append(chunk)
@@ -1055,7 +1290,7 @@ async def test_parallel_post_call_guardrails_keep_native_hook_when_opted_out(mon
     await ProxyLogging(user_api_key_cache=DualCache()).post_call_success_hook(
         data={"messages": [{"role": "user", "content": "hi"}]},
         response=response,
-        user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876"),
     )
 
     assert opted_out.native_hooks_ran == ["post_call"]

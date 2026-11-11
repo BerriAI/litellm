@@ -1,4 +1,6 @@
+from collections.abc import Mapping, Sequence
 from contextlib import contextmanager
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -6,6 +8,7 @@ from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
+from pydantic import BaseModel
 
 from litellm.proxy._types import (
     LiteLLM_EndUserTable,
@@ -13,7 +16,7 @@ from litellm.proxy._types import (
     ProxyException,
 )
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
-from litellm.proxy.management_endpoints.customer_endpoints import router
+from litellm.proxy.management_endpoints.customer_endpoints import _should_update_field, router
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
@@ -40,6 +43,48 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
 
 app.include_router(router)
 client = TestClient(app)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "sent_fields", "expected"),
+    (
+        ("models", None, frozenset({"models"}), False),
+        ("blocked", False, frozenset({"blocked"}), True),
+        ("blocked", False, frozenset(), False),
+        ("models", [], frozenset({"models"}), True),
+        ("models", [], frozenset(), False),
+        ("metadata", {}, frozenset({"metadata"}), False),
+        ("object_permission", {"mcp_servers": ["s1"]}, frozenset(), True),
+        ("object_permission", {"mcp_servers": ["s1"]}, frozenset({"object_permission"}), True),
+        ("metadata", ["m1"], frozenset(), True),
+        ("models", ["m1"], frozenset(), True),
+        ("max_budget", 0, frozenset({"max_budget"}), False),
+        ("max_budget", 5.0, frozenset(), True),
+        ("alias", "a", frozenset(), True),
+    ),
+    ids=(
+        "null-models",
+        "explicit-false",
+        "omitted-false",
+        "clear-models",
+        "omitted-empty-models",
+        "empty-metadata",
+        "nonempty-object-permission-omitted",
+        "nonempty-object-permission-sent",
+        "nonempty-list-other-field",
+        "nonempty-models",
+        "zero-budget",
+        "nonzero-budget",
+        "alias",
+    ),
+)
+def test_should_update_field(
+    field: str,
+    value: object,
+    sent_fields: frozenset[str],
+    expected: bool,
+) -> None:
+    assert _should_update_field(field, value, sent_fields) is expected
 
 
 @pytest.fixture
@@ -203,6 +248,31 @@ def test_delete_customer_not_found(mock_prisma_client, mock_user_api_key_auth):
     assert response_json["error"]["type"] == "not_found"
     assert response_json["error"]["param"] == "user_ids"
     assert response_json["error"]["code"] == "404"
+
+
+def test_delete_customer_drops_its_committed_spend_so_a_recreated_customer_starts_from_its_own_row(
+    monkeypatch, mock_prisma_client, mock_user_api_key_auth
+):
+    from types import SimpleNamespace
+
+    from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+    spend: Final = FakeSpendCounters(
+        redis=None,
+        memory={"spend:committed:end_user:cust-gone": 7.0, "spend:committed:end_user:cust-stays": 3.0},
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_store", spend.store())
+    mock_prisma_client.db.litellm_endusertable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(user_id="cust-gone")]
+    )
+    mock_prisma_client.db.litellm_endusertable.delete_many = AsyncMock(return_value=1)
+
+    response: Final = client.post(
+        "/customer/delete", json={"user_ids": ["cust-gone"]}, headers={"Authorization": "Bearer test-key"}
+    )
+
+    assert response.status_code == 200
+    assert spend.memory == {"spend:committed:end_user:cust-stays": 3.0}
 
 
 def test_error_schema_consistency(mock_prisma_client, mock_user_api_key_auth):
@@ -749,6 +819,7 @@ _FULL_DB_ROW = {
     "spend": 1.5,
     "allowed_model_region": None,
     "default_model": None,
+    "models": ["allowed-model"],
     "budget_id": "b1",
     "object_permission_id": "p1",
     "litellm_budget_table": {
@@ -759,6 +830,8 @@ _FULL_DB_ROW = {
         "tpm_limit": None,
         "rpm_limit": None,
         "model_max_budget": None,
+        "model_tpm_limit": None,
+        "model_rpm_limit": None,
         "budget_duration": "30d",
         "allowed_models": [],
         "budget_reset_at": "2024-02-01T00:00:00",
@@ -794,6 +867,7 @@ _EXPECTED_CUSTOMER = {
     "spend": 1.5,
     "allowed_model_region": None,
     "default_model": None,
+    "models": ["allowed-model"],
     "budget_id": "b1",
     "litellm_budget_table": {
         "budget_id": "b1",
@@ -804,6 +878,8 @@ _EXPECTED_CUSTOMER = {
         "rpm_limit": None,
         "tpd_limit": None,
         "model_max_budget": None,
+        "model_tpm_limit": None,
+        "model_rpm_limit": None,
         "budget_duration": "30d",
         "allowed_models": [],
         "temp_budget_increase": None,
@@ -843,11 +919,165 @@ def test_char_info_body(mock_prisma_client, mock_user_api_key_auth):
     assert response.json() == _EXPECTED_CUSTOMER
 
 
-def test_char_list_body(mock_prisma_client, mock_user_api_key_auth):
+@pytest.mark.parametrize("path", ["/customer/list", "/end_user/list"])
+def test_char_list_body(
+    mock_prisma_client: MagicMock,
+    mock_user_api_key_auth: None,
+    path: str,
+) -> None:
     mock_prisma_client.db.litellm_endusertable.find_many = AsyncMock(return_value=[_row(_FULL_DB_ROW)])
-    response = client.get("/customer/list", headers={"Authorization": "Bearer k"})
+    response: Final = client.get(path, headers={"Authorization": "Bearer k"})
     assert response.status_code == 200
     assert response.json() == [_EXPECTED_CUSTOMER]
+
+
+class _CustomerListTable:
+    def __init__(self) -> None:
+        self.rows: Final = tuple(
+            LiteLLM_EndUserTable(user_id=f"customer-{i:04d}", alias=f"Title {i}", blocked=False)
+            for i in reversed(range(251))
+        )
+        self.materialized_rows: tuple[int, ...] = ()
+
+    async def find_many(
+        self,
+        *,
+        include: Mapping[str, bool] | None = None,
+        where: Mapping[str, Sequence[Mapping[str, Mapping[str, str]]]] | None = None,
+        order: Mapping[str, str] | None = None,
+        skip: int = 0,
+        take: int | None = None,
+    ) -> tuple[LiteLLM_EndUserTable, ...]:
+        def customer_id(row: LiteLLM_EndUserTable) -> str:
+            return row.user_id
+
+        filtered: Final = tuple(row for row in self.rows if self._matches(row, where))
+        ordered: Final = (
+            tuple(sorted(filtered, key=customer_id, reverse=order["user_id"] == "desc")) if order else filtered
+        )
+        selected: Final = ordered[skip:] if take is None else ordered[skip : skip + take]
+        self.materialized_rows += (len(selected),)
+        return selected
+
+    @staticmethod
+    def _matches(
+        row: LiteLLM_EndUserTable,
+        where: Mapping[str, Sequence[Mapping[str, Mapping[str, str]]]] | None,
+    ) -> bool:
+        if not where:
+            return True
+        values: Final = {"user_id": row.user_id, "alias": row.alias or ""}
+        for clause in where["OR"]:
+            for field, predicate in clause.items():
+                value: Final = values[field]
+                needle: Final = predicate["contains"]
+                if predicate.get("mode") == "insensitive":
+                    if needle.casefold() in value.casefold():
+                        return True
+                elif needle in value:
+                    return True
+        return False
+
+
+@pytest.mark.parametrize("path", ["/customer/list", "/end_user/list"])
+@pytest.mark.parametrize("role", [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY])
+def test_customer_list_defaults_bound_database_reads(
+    mock_prisma_client: MagicMock,
+    mock_user_api_key_auth: None,
+    path: str,
+    role: LitellmUserRoles,
+) -> None:
+    table: Final = _CustomerListTable()
+    mock_prisma_client.db.litellm_endusertable = table
+
+    def authenticated_user() -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(user_id="admin", user_role=role)
+
+    app.dependency_overrides[user_api_key_auth] = authenticated_user
+    response: Final = client.get(path)
+
+    assert response.status_code == 200, response.text
+    assert table.materialized_rows == (50,)
+    assert [row["user_id"] for row in response.json()] == [f"customer-{i:04d}" for i in range(50)]
+
+
+@pytest.mark.parametrize("path", ["/customer/list", "/end_user/list"])
+def test_customer_list_pages_cover_the_directory_once(
+    mock_prisma_client: MagicMock,
+    mock_user_api_key_auth: None,
+    path: str,
+) -> None:
+    table: Final = _CustomerListTable()
+    mock_prisma_client.db.litellm_endusertable = table
+    responses: Final = tuple(client.get(path, params={"page": page, "page_size": 100}) for page in range(1, 5))
+
+    for response in responses:
+        assert response.status_code == 200, response.text
+    pages: Final = tuple([row["user_id"] for row in response.json()] for response in responses)
+    assert pages == (
+        [f"customer-{i:04d}" for i in range(100)],
+        [f"customer-{i:04d}" for i in range(100, 200)],
+        [f"customer-{i:04d}" for i in range(200, 251)],
+        [],
+    )
+    assert table.materialized_rows == (100, 100, 51, 0)
+
+
+@pytest.mark.parametrize("path", ["/customer/list", "/end_user/list"])
+@pytest.mark.parametrize(
+    "search,page,expected",
+    [("", 1, [0, 1, 2]), ("CuStOmEr-0249", 1, [249]), ("TITLE 24", 2, [242, 243, 244]), ("missing", 1, [])],
+)
+def test_customer_list_search_filters_before_pagination(
+    mock_prisma_client: MagicMock,
+    mock_user_api_key_auth: None,
+    path: str,
+    search: str,
+    page: int,
+    expected: list[int],
+) -> None:
+    table: Final = _CustomerListTable()
+    mock_prisma_client.db.litellm_endusertable = table
+    response: Final = client.get(path, params={"search": search, "page": page, "page_size": 3})
+
+    assert response.status_code == 200, response.text
+    assert [row["user_id"] for row in response.json()] == [f"customer-{i:04d}" for i in expected]
+    assert table.materialized_rows == (len(expected),)
+
+
+@pytest.mark.parametrize("path", ["/customer/list", "/end_user/list"])
+@pytest.mark.parametrize("query", ["page=0", "page=-1", "page_size=0", "page_size=-1", "page_size=101", "page=bad"])
+def test_customer_list_invalid_pagination_never_reads_database(
+    mock_prisma_client: MagicMock,
+    mock_user_api_key_auth: None,
+    path: str,
+    query: str,
+) -> None:
+    table: Final = _CustomerListTable()
+    mock_prisma_client.db.litellm_endusertable = table
+    response: Final = client.get(f"{path}?{query}")
+
+    assert table.materialized_rows == ()
+    assert response.status_code == 422, response.text
+
+
+@pytest.mark.parametrize("path", ["/customer/list", "/end_user/list"])
+def test_customer_list_non_admin_never_reads_database(
+    mock_prisma_client: MagicMock,
+    mock_user_api_key_auth: None,
+    path: str,
+) -> None:
+    table: Final = _CustomerListTable()
+    mock_prisma_client.db.litellm_endusertable = table
+
+    def authenticated_user() -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(user_id="user", user_role=LitellmUserRoles.INTERNAL_USER)
+
+    app.dependency_overrides[user_api_key_auth] = authenticated_user
+    response: Final = client.get(path)
+
+    assert response.status_code == 401, response.text
+    assert table.materialized_rows == ()
 
 
 def test_char_new_body(mock_prisma_client, mock_user_api_key_auth):
@@ -857,10 +1087,21 @@ def test_char_new_body(mock_prisma_client, mock_user_api_key_auth):
     assert response.json() == _EXPECTED_CUSTOMER
 
 
+def test_customer_new_forwards_models_to_db(mock_prisma_client, mock_user_api_key_auth):
+    mock_prisma_client.db.litellm_endusertable.create = AsyncMock(return_value=_row(_FULL_DB_ROW))
+
+    response = client.post(
+        "/customer/new",
+        json={"user_id": "c1", "models": ["allowed-model"]},
+        headers={"Authorization": "Bearer k"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert mock_prisma_client.db.litellm_endusertable.create.call_args.kwargs["data"]["models"] == ["allowed-model"]
+
+
 @pytest.mark.parametrize("bad_duration", ["0s", "-5m"])
-def test_customer_new_rejects_a_duration_that_never_advances(
-    mock_prisma_client, mock_user_api_key_auth, bad_duration
-):
+def test_customer_new_rejects_a_duration_that_never_advances(mock_prisma_client, mock_user_api_key_auth, bad_duration):
     """A zero-length window resets to "now", leaving the customer's budget row
     permanently due for the reset job to re-read every tick."""
     mock_prisma_client.db.litellm_endusertable.create = AsyncMock(return_value=_row(_FULL_DB_ROW))
@@ -903,6 +1144,50 @@ def test_char_update_body(mock_prisma_client, mock_user_api_key_auth):
     )
     assert response.status_code == 200
     assert response.json() == _EXPECTED_CUSTOMER
+    assert "models" not in mock_prisma_client.db.litellm_endusertable.update.call_args.kwargs["data"]
+
+
+def test_customer_update_clears_models_allowlist(mock_prisma_client, mock_user_api_key_auth):
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
+        return_value=_row({"user_id": "c1", "blocked": False})
+    )
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(return_value=_row(_FULL_DB_ROW))
+
+    response = client.post(
+        "/customer/update",
+        json={"user_id": "c1", "models": []},
+        headers={"Authorization": "Bearer k"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert mock_prisma_client.db.litellm_endusertable.update.call_args.kwargs["data"]["models"] == []
+
+
+def test_customer_update_applies_nonempty_object_permission(mock_prisma_client, mock_user_api_key_auth):
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
+        return_value=_row({"user_id": "c1", "blocked": False, "object_permission_id": None})
+    )
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=None)
+    updated_permission = MagicMock()
+    updated_permission.object_permission_id = "permission-1"
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert = AsyncMock(return_value=updated_permission)
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(
+        return_value=LiteLLM_EndUserTable(user_id="c1", blocked=False, object_permission_id="permission-1")
+    )
+
+    response = client.post(
+        "/customer/update",
+        json={"user_id": "c1", "object_permission": {"mcp_servers": ["s1"]}},
+        headers={"Authorization": "Bearer k"},
+    )
+
+    assert response.status_code == 200, response.text
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert.assert_awaited_once()
+    permission_upsert = mock_prisma_client.db.litellm_objectpermissiontable.upsert.call_args.kwargs
+    assert permission_upsert["data"]["create"]["mcp_servers"] == ["s1"]
+    assert mock_prisma_client.db.litellm_endusertable.update.call_args.kwargs["data"]["object_permission_id"] == (
+        "permission-1"
+    )
 
 
 def test_char_delete_body(mock_prisma_client, mock_user_api_key_auth):
@@ -1019,6 +1304,29 @@ def test_customer_block_invalidates_end_user_and_registry_caches(mock_prisma_cli
         "end_user_id:c2",
         "end_user_restricted_registry",
     ]
+
+
+def test_customer_block_success_serializes_db_model_instance(mock_prisma_client, mock_user_api_key_auth):
+    class MockPrismaEndUser(BaseModel):
+        user_id: str
+        blocked: bool
+        spend: float | None = None
+
+    mock_prisma_client.db.litellm_endusertable.upsert = AsyncMock(
+        return_value=MockPrismaEndUser(user_id="c1", blocked=True, spend=None)
+    )
+
+    response = client.post(
+        "/customer/block",
+        json={"user_ids": ["c1"]},
+        headers={"Authorization": "Bearer k"},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["blocked_users"][0]["user_id"] == "c1"
+    assert body["blocked_users"][0]["blocked"] is True
+    assert body["blocked_users"][0]["spend"] == 0.0
 
 
 def test_customer_delete_invalidates_end_user_and_registry_caches(mock_prisma_client, mock_user_api_key_auth):

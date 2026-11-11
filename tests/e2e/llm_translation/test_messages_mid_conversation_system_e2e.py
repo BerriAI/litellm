@@ -34,13 +34,14 @@ import pytest
 from anthropic import Anthropic
 from anthropic.types import Message, MessageParam, TextBlockParam
 from e2e_config import unique_marker
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
 from pydantic import BaseModel
 from sdk_clients import NO_PROXY_CACHE, SdkClients
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.provider_live]
 
 FLAGGED_INVOKE_MODEL = "bedrock/invoke/us.anthropic.claude-sonnet-5"
 UNFLAGGED_INVOKE_MODEL = "bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0"
@@ -208,6 +209,16 @@ class TestBedrockInvokeMidConversationSystem:
         "llm.messages.bedrock_invoke.mid_conversation_system.nonstream.cache_hit",
         exercised_on=[],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.BEDROCK,),
+            models=(FLAGGED_INVOKE_MODEL,),
+            capabilities=(Capability.MID_CONVERSATION_SYSTEM, Capability.PROMPT_CACHING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_flagged_model_keeps_prompt_cache_across_system_reminder(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -233,6 +244,16 @@ class TestBedrockInvokeMidConversationSystem:
     @pytest.mark.covers(
         "llm.messages.bedrock_invoke.mid_conversation_system.nonstream.works",
         exercised_on=[],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.BEDROCK,),
+            models=(UNFLAGGED_INVOKE_MODEL,),
+            capabilities=(Capability.MID_CONVERSATION_SYSTEM, Capability.PROMPT_CACHING,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_unflagged_model_converts_system_reminder_and_succeeds(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients

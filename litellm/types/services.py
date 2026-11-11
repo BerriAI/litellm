@@ -1,8 +1,10 @@
 import enum
 from typing import Final
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 from typing_extensions import TypedDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
 class ServiceMetrics(enum.Enum):
@@ -95,7 +97,7 @@ class ServiceEventMetadata(TypedDict, total=False):
     gauge_value: float | None
 
 
-class ServiceLoggerPayload(BaseModel):
+class ServiceLoggerPayload(LiteLLMBaseModel):
     """
     The payload logged during service success/failure
     """

@@ -14,7 +14,7 @@ import os
 
 import litellm
 from litellm.utils import (
-    _supports_factory,
+    supports_factory,
 )
 
 # ---------------------------------------------------------------------------
@@ -78,7 +78,7 @@ class TestBareModelFallback:
             # Simulate the pre-fix state: field missing from prefixed entry
             if key in litellm.model_cost:
                 litellm.model_cost[key].pop("supports_response_schema", None)
-            result = _supports_factory(
+            result = supports_factory(
                 model="deepseek-chat",
                 custom_llm_provider="deepseek",
                 key="supports_response_schema",
@@ -100,7 +100,7 @@ class TestBareModelFallback:
         try:
             if key in litellm.model_cost:
                 litellm.model_cost[key]["supports_function_calling"] = False
-            result = _supports_factory(
+            result = supports_factory(
                 model="deepseek-reasoner",
                 custom_llm_provider="deepseek",
                 key="supports_function_calling",

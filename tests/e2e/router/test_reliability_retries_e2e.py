@@ -30,9 +30,12 @@ import pytest
 from complexity_router_client import ComplexityRouterClient
 from e2e_config import CHEAP_OPENAI_MODEL, unique_marker
 from e2e_http import StreamingResponse
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
 from models import KeyGenerateBody, RouterSettingsOverride
 from reliability_support import (
+    REAL_MODEL,
+    SMALL_CONTEXT_MODEL,
     chat_override,
     completion_tokens_of,
     content_of,
@@ -84,6 +87,14 @@ def _retry_once(client: ComplexityRouterClient, key: str, group: str) -> Streami
 
 class TestReliabilityRetries:
     @pytest.mark.covers("reliability.retry.timeout.succeeds_within_retries")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            providers=(Provider.OPENAI,),
+            models=(REAL_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_timeout_on_first_deployment_succeeds_on_retry(
         self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -96,6 +107,14 @@ class TestReliabilityRetries:
         _assert_served_after_retry(_retry_once(client, scoped_key, group))
 
     @pytest.mark.covers("reliability.retry.5xx.succeeds_within_retries")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            providers=(Provider.OPENAI,),
+            models=(REAL_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_5xx_on_first_deployment_succeeds_on_retry(
         self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -112,6 +131,14 @@ class TestReliabilityRetries:
         _assert_served_after_retry(_retry_once(client, scoped_key, group))
 
     @pytest.mark.covers("reliability.retry.429.succeeds_within_retries")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            providers=(Provider.OPENAI,),
+            models=(CHEAP_OPENAI_MODEL, REAL_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_429_on_first_deployment_succeeds_on_retry(
         self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -130,6 +157,14 @@ class TestReliabilityRetries:
         _assert_served_after_retry(_retry_once(client, scoped_key, group))
 
     @pytest.mark.covers("reliability.retry.auth.succeeds_within_retries")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            providers=(Provider.OPENAI,),
+            models=(REAL_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_auth_failure_on_first_deployment_succeeds_on_retry(
         self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -142,6 +177,14 @@ class TestReliabilityRetries:
         _assert_served_after_retry(_retry_once(client, scoped_key, group))
 
     @pytest.mark.covers("reliability.retry.context_window.succeeds_within_retries")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            providers=(Provider.OPENAI,),
+            models=(REAL_MODEL, SMALL_CONTEXT_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_context_window_refusal_on_first_deployment_succeeds_on_retry(
         self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
     ) -> None:

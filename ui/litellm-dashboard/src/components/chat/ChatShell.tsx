@@ -1,18 +1,53 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { Plus, MessageSquare, LayoutGrid, KeyRound, Lock, BarChart3, ScrollText } from "lucide-react";
+import {
+  Menu,
+  Plus,
+  Network,
+  LayoutGrid,
+  KeyRound,
+  Lock,
+  BarChart3,
+  ScrollText,
+  Search,
+  Settings2,
+  ChevronDown,
+  Info,
+} from "lucide-react";
+import { useMediaQuery } from "usehooks-ts";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Sidebar, SidebarContent, SidebarFooter, SidebarMenuButton } from "@/components/shared/Sidebar";
+import { SidebarBrand } from "@/components/shared/SidebarBrand";
+import ChatAccountMenu from "./ChatAccountMenu";
+import { Kbd } from "@/components/ui/kbd";
+import { useShortcutLabel } from "@/components/CommandPalette/useShortcutLabel";
+import { useHotkeys } from "react-hotkeys-hook";
+import { DashboardHeader } from "@/components/DashboardHeader";
+import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
+import { useLogout } from "@/app/(dashboard)/hooks/useLogout";
 import { uiHref } from "@/utils/uiHref";
 import { useChatShell } from "@/contexts/ChatShellContext";
+import ViewSwitcher from "@/components/Navbar/ViewSwitcher";
 import ConversationList from "./ConversationList";
+
+const conversationUrl = (chatsRoute: string, id: string) => `${chatsRoute}?id=${encodeURIComponent(id)}`;
 
 export function getChatRoutes() {
   const base = uiHref("chat");
   return {
     chats: base,
+    models: `${base}/models`,
     integrations: `${base}/integrations`,
     credentials: `${base}/credentials`,
     apiKeys: `${base}/api-keys`,
@@ -30,117 +65,213 @@ interface NavItemProps {
   label: string;
   onClick: () => void;
   active?: boolean;
+  shortcut?: string;
 }
 
-function NavItem({ icon, label, onClick, active = false }: NavItemProps) {
+function NavItem({ icon, label, onClick, active = false, shortcut }: NavItemProps) {
   return (
-    <Button
+    <SidebarMenuButton
       onClick={onClick}
-      variant="ghost"
+      isActive={active}
+      aria-label={label}
+      title={label}
       aria-current={active ? "page" : undefined}
-      className={`w-full justify-start gap-2.5 px-2.5 font-medium hover:bg-sidebar-accent ${
-        active ? "bg-sidebar-accent text-sidebar-accent-foreground" : "text-muted-foreground"
-      }`}
     >
-      <span className="shrink-0">{icon}</span>
-      <span className="flex-1 text-left">{label}</span>
-    </Button>
+      {icon}
+      <span className="flex-1 truncate group-data-[collapsed=true]/sidebar:hidden">{label}</span>
+      {shortcut && (
+        <Kbd className="bg-transparent text-muted-foreground group-data-[collapsed=true]/sidebar:hidden">
+          {shortcut}
+        </Kbd>
+      )}
+    </SidebarMenuButton>
   );
 }
 
-interface ChatShellProps {
-  children: React.ReactNode;
-}
-
-const ChatShell: React.FC<ChatShellProps> = ({ children }) => {
+const ChatShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { t } = useTranslation();
   const router = useRouter();
   const pathname = stripTrailingSlash(usePathname() ?? "");
-  const { conversations, activeConversationId, deleteConversation, renameConversation } = useChatShell();
-
+  const { accessToken, conversations, activeConversationId, deleteConversation, renameConversation } = useChatShell();
+  const handleLogout = useLogout(accessToken);
+  const isDesktop = useMediaQuery("(min-width: 768px)", { initializeWithValue: false });
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  if (isDesktop && sidebarOpen) setSidebarOpen(false);
+  const collapsed = isDesktop && sidebarCollapsed;
+  const [mobileNavigationHandle] = useState(() => DialogPrimitive.createHandle());
+  const shortcut = useShortcutLabel();
+  const openSearch = () => {
+    setSidebarCollapsed(false);
+    if (!isDesktop) setSidebarOpen(true);
+    setSearchOpen(true);
+  };
+  useHotkeys("mod+k", openSearch, { enableOnFormTags: true, preventDefault: true, useKey: true });
   const routes = getChatRoutes();
   const isChatsRoute = pathname === routes.chats;
+  const workspaceItems = [
+    { label: t("chat.shell.workspaceItems.credentials"), route: routes.credentials, Icon: KeyRound },
+    { label: t("chat.shell.workspaceItems.apiKeys"), route: routes.apiKeys, Icon: Lock },
+    { label: t("chat.shell.workspaceItems.logs"), route: routes.logs, Icon: ScrollText },
+    { label: t("chat.shell.workspaceItems.usage"), route: routes.usage, Icon: BarChart3 },
+  ];
+  const workspaceActive = workspaceItems.some((item) => item.route === pathname);
+  const navigate = (href: string) => {
+    setSidebarOpen(false);
+    setSearchOpen(false);
+    router.push(href);
+  };
+
+  const sidebar = (
+    <>
+      <SidebarBrand
+        accessToken={accessToken}
+        homeHref={routes.chats}
+        homeLabel={t("chat.shell.home")}
+        onHomeClick={() => setSidebarOpen(false)}
+        collapsed={collapsed}
+        onToggleCollapsed={() => (isDesktop ? setSidebarCollapsed(!sidebarCollapsed) : setSidebarOpen(false))}
+      />
+      <div className="space-y-1 px-3 pt-3 pb-2">
+        <ViewSwitcher className="h-9 w-full max-w-none justify-start shadow-none group-data-[collapsed=true]/sidebar:size-9 group-data-[collapsed=true]/sidebar:justify-center group-data-[collapsed=true]/sidebar:p-0 [&_[data-slot=workspace-label]]:flex-1 [&_[data-slot=workspace-label]]:text-left group-data-[collapsed=true]/sidebar:[&_[data-slot=workspace-label]]:hidden" />
+        <NavItem icon={<Plus />} label={t("chat.shell.newChat")} onClick={() => navigate(routes.chats)} />
+      </div>
+      <SidebarContent aria-label={t("chat.shell.workspaceNav")} className="flex-none">
+        <NavItem
+          icon={<Network className="size-4" />}
+          label={t("chat.shell.models")}
+          onClick={() => navigate(routes.models)}
+          active={pathname === routes.models}
+        />
+        <NavItem
+          icon={<LayoutGrid className="size-4" />}
+          label={t("chat.shell.integrations")}
+          onClick={() => navigate(routes.integrations)}
+          active={pathname === routes.integrations}
+        />
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <SidebarMenuButton
+                isActive={workspaceActive}
+                aria-label={t("chat.shell.workspace")}
+                title={t("chat.shell.workspace")}
+                aria-current={workspaceActive ? "page" : undefined}
+              />
+            }
+          >
+            <Settings2 className="size-4" />
+            <span className="flex-1 text-left group-data-[collapsed=true]/sidebar:hidden">
+              {t("chat.shell.workspace")}
+            </span>
+            <ChevronDown className="size-3.5 group-data-[collapsed=true]/sidebar:hidden" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent side="right" align="start" className="min-w-44">
+            {workspaceItems.map(({ label, route, Icon }) => (
+              <DropdownMenuItem
+                key={route}
+                aria-current={pathname === route ? "page" : undefined}
+                onClick={() => navigate(route)}
+              >
+                <Icon className="size-4" />
+                {label}
+              </DropdownMenuItem>
+            ))}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              render={
+                <a href="https://github.com/BerriAI/litellm/discussions/32085" target="_blank" rel="noreferrer" />
+              }
+            >
+              <Info className="size-4" />
+              {t("chat.shell.shareFeedback")}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <NavItem icon={<Search />} label={t("chat.shell.searchChats")} shortcut={shortcut} onClick={openSearch} />
+      </SidebarContent>
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-3 pb-3 group-data-[collapsed=true]/sidebar:hidden">
+        <ConversationList
+          conversations={conversations}
+          activeConversationId={activeConversationId}
+          onSelect={(id) => navigate(conversationUrl(routes.chats, id))}
+          onDelete={(id) => {
+            deleteConversation(id);
+            if (id === activeConversationId) navigate(routes.chats);
+          }}
+          onRename={renameConversation}
+          searchOpen={searchOpen}
+          onSearchOpenChange={setSearchOpen}
+          hideSearchButton
+          enableSearchShortcut={false}
+        />
+      </div>
+      <SidebarFooter className="mt-auto">
+        <ChatAccountMenu
+          onLogout={handleLogout}
+          collapsed={collapsed}
+          onSettings={() => navigate(routes.credentials)}
+        />
+      </SidebarFooter>
+    </>
+  );
+
+  const titles = [
+    { route: routes.chats, label: t("shell.viewSwitcher.chat") },
+    { route: routes.models, label: t("chat.shell.models") },
+    { route: routes.integrations, label: t("chat.shell.integrations") },
+    ...workspaceItems,
+  ];
+  const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId);
+  const title =
+    isChatsRoute && activeConversation?.messages.length
+      ? activeConversation.title
+      : titles.find((item) => item.route === pathname)?.label ?? t("shell.viewSwitcher.chat");
 
   return (
-    <div className="flex h-full w-full flex-col bg-background overflow-hidden">
-      <div className="shrink-0 border-b border-warning/20 bg-warning/10 px-4 py-1.5 text-center text-[13px] text-warning">
-        This is a pre-v0 feature. Do not use in production, it may change unexpectedly. Please share feedback{" "}
-        <a
-          href="https://github.com/BerriAI/litellm/discussions/32085"
-          target="_blank"
-          rel="noreferrer"
-          className="font-medium underline"
+    <div className="chat-theme flex h-full w-full overflow-hidden bg-background text-foreground">
+      {isDesktop && (
+        <Sidebar aria-label={t("chat.shell.chatNavigation")} collapsed={collapsed}>
+          {sidebar}
+        </Sidebar>
+      )}
+      <Sheet handle={mobileNavigationHandle} open={sidebarOpen} onOpenChange={setSidebarOpen}>
+        <SheetContent
+          side="left"
+          initialFocus={searchOpen ? false : undefined}
+          showCloseButton={false}
+          className="gap-0 p-0 data-[side=left]:w-[min(280px,calc(100vw-3rem))] [&_[data-slot=sidebar]]:w-full"
         >
-          here
-        </a>
-        .
-      </div>
-      <div className="flex flex-1 min-h-0 overflow-hidden">
-        <div className="shrink-0 bg-sidebar border-sidebar-border border-r flex flex-col overflow-hidden w-[260px]">
-          <div className="px-2 pt-3 pb-1 shrink-0">
-            <Button onClick={() => router.push(routes.chats)} className="w-full justify-start gap-2.5">
-              <Plus className="h-4 w-4" />
-              New Chat
-            </Button>
-          </div>
-
-          <Separator className="mx-2 mt-2 shrink-0" />
-
-          <div className="px-2 py-1 shrink-0">
-            <NavItem
-              icon={<MessageSquare className="h-4 w-4" />}
-              label="Chats"
-              onClick={() => router.push(routes.chats)}
-              active={isChatsRoute}
-            />
-            <NavItem
-              icon={<LayoutGrid className="h-4 w-4" />}
-              label="Integrations"
-              onClick={() => router.push(routes.integrations)}
-              active={pathname === routes.integrations}
-            />
-            <NavItem
-              icon={<KeyRound className="h-4 w-4" />}
-              label="Credentials"
-              onClick={() => router.push(routes.credentials)}
-              active={pathname === routes.credentials}
-            />
-            <NavItem
-              icon={<Lock className="h-4 w-4" />}
-              label="API Keys"
-              onClick={() => router.push(routes.apiKeys)}
-              active={pathname === routes.apiKeys}
-            />
-            <NavItem
-              icon={<ScrollText className="h-4 w-4" />}
-              label="Logs"
-              onClick={() => router.push(routes.logs)}
-              active={pathname === routes.logs}
-            />
-            <NavItem
-              icon={<BarChart3 className="h-4 w-4" />}
-              label="Usage"
-              onClick={() => router.push(routes.usage)}
-              active={pathname === routes.usage}
-            />
-          </div>
-
-          <Separator className="mx-2 shrink-0" />
-
-          <div className="flex-1 overflow-hidden flex flex-col">
-            <ConversationList
-              conversations={conversations}
-              activeConversationId={activeConversationId}
-              onSelect={(id) => router.push(`${routes.chats}?id=${id}`)}
-              onDelete={(id) => {
-                deleteConversation(id);
-                if (id === activeConversationId) router.push(routes.chats);
-              }}
-              onRename={renameConversation}
-            />
-          </div>
-        </div>
-
-        <div className="flex-1 flex flex-col overflow-hidden min-w-0">{children}</div>
+          <SheetHeader className="sr-only">
+            <SheetTitle>{t("chat.shell.sheetTitle")}</SheetTitle>
+            <SheetDescription>{t("chat.shell.sheetDescription")}</SheetDescription>
+          </SheetHeader>
+          <Sidebar>{sidebar}</Sidebar>
+        </SheetContent>
+      </Sheet>
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <DashboardHeader
+          accessToken={accessToken}
+          title={title}
+          workspace="chat"
+          navigationTrigger={
+            <SheetTrigger
+              handle={mobileNavigationHandle}
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-11 md:hidden"
+                  aria-label={t("chat.shell.openChatNavigation")}
+                />
+              }
+            >
+              <Menu />
+            </SheetTrigger>
+          }
+        />
+        <main className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">{children}</main>
       </div>
     </div>
   );

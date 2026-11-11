@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from litellm.llms.watsonx.common_utils import (
     WatsonXAIError,
@@ -260,3 +261,64 @@ class TestIBMWatsonXRerankTransform:
         assert "return_documents" in supported_params
         assert "max_tokens_per_doc" in supported_params
         assert len(supported_params) == 5
+
+
+def _transform(payload: object) -> RerankResponse:
+    return IBMWatsonXRerankConfig().transform_rerank_response(
+        model="watsonx/cross-encoder/ms-marco-minilm-l-12-v2",
+        raw_response=httpx.Response(200, json=payload),
+        model_response=RerankResponse(),
+        logging_obj=MagicMock(),
+    )
+
+
+def test_transform_rerank_response_keeps_the_upstream_id_documents_and_token_count():
+    response = _transform(
+        {
+            "id": "rerank-1",
+            "results": [
+                {"index": 1, "score": 0.5, "input": "plain text"},
+                {"index": 0, "score": 0.25, "input": {"text": "object text"}},
+            ],
+            "input_token_count": 62,
+        }
+    )
+
+    assert response.id == "rerank-1"
+    assert response.results == [
+        {"index": 1, "relevance_score": 0.5, "document": {"text": "plain text"}},
+        {"index": 0, "relevance_score": 0.25, "document": {"text": "object text"}},
+    ]
+    assert response.meta == {"tokens": {"input_tokens": 62}}
+
+
+def test_transform_rerank_response_without_a_token_count_reports_zero_tokens():
+    response = _transform({"results": []})
+
+    assert response.results == []
+    assert response.meta == {"tokens": {"input_tokens": 0}}
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        ["sensitive-document"],
+        "sensitive-document",
+        {"results": "sensitive-document"},
+        {"results": 7},
+        {"results": ["sensitive-document"]},
+        {"results": [{"index": 0, "score": 0.5}, None]},
+        {"results": [{"index": 0, "score": 0.5}], "id": 7},
+        {"results": [{"index": 0, "score": 0.5}], "input_token_count": "many"},
+    ],
+)
+def test_transform_rerank_response_rejects_malformed_payloads(payload: object):
+    with pytest.raises(ValidationError) as exc_info:
+        _transform(payload)
+
+    assert "sensitive-document" not in str(exc_info.value)
+
+
+def test_transform_rerank_response_requires_index_and_score_on_each_result():
+    with pytest.raises(KeyError):
+        _transform({"results": [{"index": 0}]})

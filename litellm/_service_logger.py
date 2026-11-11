@@ -16,7 +16,7 @@ from .types.services import ServiceLoggerPayload, ServiceTypes
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
     Span = _Span | Any
     OTELClass = OpenTelemetry
@@ -151,6 +151,11 @@ class ServiceLogging(CustomLogger):
                 loop.run_until_complete(ServiceLogging._emit_guarded(hook))
         except Exception as e:
             verbose_logger.exception("Error dispatching service event - %s", e)
+
+    def redis_breaker_hook(self, transitions_to: str | None, failure_class: str | None) -> None:
+        prometheus_logger: Final[PrometheusServicesLogger | None] = getattr(self, "prometheusServicesLogger", None)
+        if prometheus_logger is not None:
+            prometheus_logger.redis_breaker_hook(transitions_to=transitions_to, failure_class=failure_class)
 
     def service_success_hook(
         self,

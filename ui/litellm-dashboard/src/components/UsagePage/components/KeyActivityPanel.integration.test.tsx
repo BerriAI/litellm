@@ -671,4 +671,23 @@ describe("KeyActivityPanel", () => {
     expect(screen.queryByRole("button", { name: /old-scope-key/ })).not.toBeInTheDocument();
     expect(secondScopeFetch).toHaveBeenCalledWith(0, 50);
   });
+
+  it("renders key search before the summary metrics", async () => {
+    render(
+      <KeyActivityPanel
+        summary={summary}
+        fetchKeyPage={vi.fn().mockResolvedValue(pageResponse([], 0))}
+        fetchKeyDetail={vi.fn()}
+        searchKeys={vi.fn().mockResolvedValue({ api_keys: [] })}
+        teams={[]}
+      />,
+    );
+
+    const searchInput = await screen.findByRole("textbox", { name: "Search keys" });
+    const summaryHeading = await screen.findByRole("heading", { name: "Overall Usage" });
+
+    expect(searchInput.compareDocumentPosition(summaryHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+  });
 });

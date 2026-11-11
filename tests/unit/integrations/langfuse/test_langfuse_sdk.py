@@ -8,17 +8,19 @@ otherwise record its own duration instead of the call's.
 import json
 import logging
 import threading
+import time
 import uuid
 from base64 import b64encode
 from datetime import datetime, timedelta, timezone
 from time import monotonic, sleep
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 from typing import Final
 
 import httpx
 import opentelemetry.trace as otel_trace
 import pytest
 from langfuse import LangfuseOtelSpanAttributes as A
+from langfuse.api.core import http_client as langfuse_http_client
 from langfuse.api.core.api_error import ApiError
 from langfuse.api.core.request_options import RequestOptions
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
@@ -1042,28 +1044,35 @@ def test_auth_check_fails_when_the_keys_reach_no_project():
 
 
 @pytest.mark.parametrize("status", [500, 503, 429], ids=["http-500", "http-503", "http-429"])
-def test_auth_check_and_project_id_make_one_round_trip_when_langfuse_is_down(status):
+def test_auth_check_and_project_id_make_one_round_trip_when_langfuse_is_down(
+    status: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Both run on the event loop; the generated client's default retries sleep for seconds, or for Retry-After."""
-    requests: list[httpx.Request] = []
+    requests: Final[list[httpx.Request]] = []
+    sleeps: Final[list[float]] = []
+    monkeypatch.setattr(
+        langfuse_http_client,
+        "time",
+        SimpleNamespace(sleep=sleeps.append, time=time.time),
+    )
 
     def fail(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         return httpx.Response(status, request=request, headers={"retry-after": "20"}, json={"message": "down"})
 
-    client = build_langfuse_client(
+    client: Final = build_langfuse_client(
         public_key="pk",
         secret_key="sk",
         base_url="http://127.0.0.1:1",
         httpx_client=httpx.Client(transport=httpx.MockTransport(fail)),
     )
 
-    started = monotonic()
-    failure = client.auth_check()
+    failure: Final = client.auth_check()
     with pytest.raises(ApiError):
         client.project_id()
     assert failure is not None and f"status_code: {status}" in failure.reason
     assert len(requests) == 2
-    assert monotonic() - started < 0.5
+    assert sleeps == [], "failed auth checks should not sleep for REST retries"
 
 
 @pytest.mark.parametrize(
@@ -1071,11 +1080,19 @@ def test_auth_check_and_project_id_make_one_round_trip_when_langfuse_is_down(sta
     [(500, 2), (503, 2), (429, 1), (404, 1)],
     ids=["http-500", "http-503", "http-429", "http-404"],
 )
-def test_cold_prompt_miss_never_sleeps_when_langfuse_is_down(status: int, round_trips: int):
+def test_cold_prompt_miss_never_sleeps_when_langfuse_is_down(
+    status: int, round_trips: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A cold ``get_prompt`` fetches inline on the event loop; with the generated client's default retries a
     429 carrying ``Retry-After: 30`` used to hold the loop for a minute. A 5xx gets the v2 client's one
     quick retry, a 429 or 4xx none."""
     requests: list[httpx.Request] = []
+    sleeps: Final[list[float]] = []
+    monkeypatch.setattr(
+        langfuse_http_client,
+        "time",
+        SimpleNamespace(sleep=sleeps.append, time=time.time),
+    )
 
     def fail(request: httpx.Request) -> httpx.Response:
         requests.append(request)
@@ -1088,18 +1105,25 @@ def test_cold_prompt_miss_never_sleeps_when_langfuse_is_down(status: int, round_
         httpx_client=httpx.Client(transport=httpx.MockTransport(fail)),
     )
 
-    started = monotonic()
     with pytest.raises(LangfusePromptError) as caught:
         client.get_prompt("greeting")
     assert len(requests) == round_trips
-    assert monotonic() - started < 0.5
+    assert sleeps == [], "a cold prompt miss should not sleep for REST retries"
     assert caught.value.status_code == status
 
 
 @pytest.mark.parametrize("first_failure", [503, "connect-error"], ids=["http-503", "connect-error"])
-def test_one_transient_failure_on_a_cold_prompt_miss_does_not_fail_the_call(first_failure: int | str):
+def test_one_transient_failure_on_a_cold_prompt_miss_does_not_fail_the_call(
+    first_failure: int | str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The v2 client retried a cold fetch once; a single Langfuse blip must not fail the LLM call."""
     requests: list[httpx.Request] = []
+    sleeps: Final[list[float]] = []
+    monkeypatch.setattr(
+        langfuse_http_client,
+        "time",
+        SimpleNamespace(sleep=sleeps.append, time=time.time),
+    )
 
     def flaky(request: httpx.Request) -> httpx.Response:
         requests.append(request)
@@ -1116,10 +1140,9 @@ def test_one_transient_failure_on_a_cold_prompt_miss_does_not_fail_the_call(firs
         httpx_client=httpx.Client(transport=httpx.MockTransport(flaky)),
     )
 
-    started = monotonic()
     assert client.get_prompt("greeting").compile() == "hello"
     assert len(requests) == 2
-    assert monotonic() - started < 0.5
+    assert sleeps == [], "one transient failure should not sleep for REST retries"
     assert client.get_prompt("greeting").compile() == "hello", "the retried prompt is cached like any other"
     assert len(requests) == 2
 
@@ -1543,12 +1566,12 @@ def test_exporter_reports_failure_when_no_span_of_the_batch_can_be_encoded(monke
 
 def test_built_exporter_uses_the_shared_litellm_handler_and_langfuse_headers(monkeypatch):
     """No private requests session or TLS adapter: the channel is the same handler the rest of litellm uses."""
-    from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+    from litellm.llms.custom_httpx.http_handler import get_httpx_client
 
     monkeypatch.delenv("LANGFUSE_TIMEOUT", raising=False)
     monkeypatch.delenv("LANGFUSE_MAX_RETRIES", raising=False)
     default = _build_span_exporter(public_key="pk", secret_key="sk", base_url="https://lf.internal.example")
-    assert default.handler is _get_httpx_client()
+    assert default.handler is get_httpx_client()
     assert default.timeout == 20
     assert len(default.delays) == 3
 

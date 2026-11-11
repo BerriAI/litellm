@@ -6,16 +6,22 @@ containing content blocks, unlike standard Voyage embeddings which use
 /v1/embeddings and a string/list `input` field.
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
-from litellm.secret_managers.main import get_secret_str
+from litellm.llms.voyage.common_utils import get_default_base_url, get_voyage_api_key
 from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse, Usage
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_INT: Final = TypeAdapter(int)
 
 
 class VoyageMultimodalEmbeddingError(BaseLLMException):
@@ -54,11 +60,7 @@ class VoyageMultimodalEmbeddingConfig(BaseEmbeddingConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        if api_base:
-            if not api_base.endswith("/multimodalembeddings"):
-                api_base = f"{api_base}/multimodalembeddings"
-            return api_base
-        return "https://api.voyageai.com/v1/multimodalembeddings"
+        return ensure_api_route(api_base or get_default_base_url(api_key), "multimodalembeddings")
 
     def get_supported_openai_params(self, model: str) -> list:
         return ["dimensions"]
@@ -84,19 +86,14 @@ class VoyageMultimodalEmbeddingConfig(BaseEmbeddingConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        if api_key is None:
-            api_key = (
-                get_secret_str("VOYAGE_API_KEY")
-                or get_secret_str("VOYAGE_AI_API_KEY")
-                or get_secret_str("VOYAGE_AI_TOKEN")
-            )
-        if not api_key:
+        resolved_api_key: Final = get_voyage_api_key(api_key)
+        if not resolved_api_key:
             raise ValueError(
                 "Voyage API key is required for multimodal embeddings. "
                 "Set VOYAGE_API_KEY / VOYAGE_AI_API_KEY / VOYAGE_AI_TOKEN "
                 "or pass `api_key` explicitly."
             )
-        return {"Authorization": f"Bearer {api_key}"}
+        return {"Authorization": f"Bearer {resolved_api_key}"}
 
     def _normalize_content_item(self, item: dict[str, object]) -> dict[str, object]:
         item_type: Final = item.get("type")
@@ -160,8 +157,8 @@ class VoyageMultimodalEmbeddingConfig(BaseEmbeddingConfig):
         model_response.data = raw_response_json.get("data")
         model_response.object = raw_response_json.get("object")
 
-        usage_payload: Final = raw_response_json.get("usage", {})
-        total_tokens: Final = usage_payload.get("total_tokens", 0)
+        usage_payload: Final = _JSON_OBJECT.validate_python(raw_response_json.get("usage", {}))
+        total_tokens: Final = _INT.validate_python(usage_payload.get("total_tokens", 0) or 0)
         model_response.usage = Usage(
             prompt_tokens=total_tokens,
             total_tokens=total_tokens,

@@ -326,3 +326,137 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "ingress.extraPaths[0]: each entry must be a mapping with a 'path' key"
+
+  - it: routes a custom Service by number without replacing the existing ingress
+    set:
+      ingress.enabled: true
+      ingress.className: alb
+      ingress.host: gateway.example.com
+      ingress.extraPaths:
+        - path: /moyai
+          serviceName: moyai-ingress
+          servicePort: 8080
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-litellm
+      - equal:
+          path: spec.ingressClassName
+          value: alb
+      - equal:
+          path: spec.rules[0].host
+          value: gateway.example.com
+      - equal:
+          path: spec.rules[0].http.paths[-2]
+          value:
+            path: /moyai
+            pathType: Prefix
+            backend:
+              service:
+                name: moyai-ingress
+                port:
+                  number: 8080
+      - equal:
+          path: spec.rules[0].http.paths[-1].backend.service.name
+          value: RELEASE-NAME-litellm-backend
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.name
+          value: RELEASE-NAME-litellm-ui
+
+  - it: routes a custom Service by named port alongside a component alias
+    set:
+      ingress.enabled: true
+      ingress.extraPaths:
+        - path: /moyai
+          serviceName: moyai-ingress
+          servicePort: http
+        - path: /watsonx
+          service: gateway
+    asserts:
+      - equal:
+          path: spec.rules[0].http.paths[-3].backend.service
+          value:
+            name: moyai-ingress
+            port:
+              name: http
+      - equal:
+          path: spec.rules[0].http.paths[-2].backend.service.name
+          value: RELEASE-NAME-litellm-gateway
+
+  - it: rejects ambiguous component and custom Service selectors
+    set:
+      ingress.enabled: true
+      ingress.extraPaths:
+        - path: /moyai
+          service: gateway
+          serviceName: moyai-ingress
+          servicePort: 8080
+    asserts:
+      - failedTemplate:
+          errorMessage: 'ingress.extraPaths[0]: service cannot be combined with serviceName or servicePort'
+
+  - it: rejects a custom Service without its port
+    set:
+      ingress.enabled: true
+      ingress.extraPaths:
+        - path: /moyai
+          serviceName: moyai-ingress
+    asserts:
+      - failedTemplate:
+          errorMessage: 'ingress.extraPaths[0]: a non-empty serviceName and servicePort are required for a custom Service'
+
+  - it: rejects a custom Service port without its name
+    set:
+      ingress.enabled: true
+      ingress.extraPaths:
+        - path: /moyai
+          servicePort: 8080
+    asserts:
+      - failedTemplate:
+          errorMessage: 'ingress.extraPaths[0]: a non-empty serviceName and servicePort are required for a custom Service'
+
+  - it: rejects a non scalar port
+    set:
+      ingress.enabled: true
+      ingress.extraPaths:
+        - path: /moyai
+          serviceName: moyai-ingress
+          servicePort: {number: 8080}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'ingress.extraPaths[0]: servicePort must be a port number or name'
+
+  - it: rejects a fractional port
+    set:
+      ingress.enabled: true
+      ingress.extraPaths:
+        - path: /moyai
+          serviceName: moyai-ingress
+          servicePort: 8080.5
+    asserts:
+      - failedTemplate:
+          errorMessage: 'ingress.extraPaths[0]: numeric servicePort must be an integer from 1 to 65535'
+
+  - it: rejects an out of range port
+    set:
+      ingress.enabled: true
+      ingress.extraPaths:
+        - path: /moyai
+          serviceName: moyai-ingress
+          servicePort: 65536
+    asserts:
+      - failedTemplate:
+          errorMessage: 'ingress.extraPaths[0]: numeric servicePort must be an integer from 1 to 65535'
+
+  - it: rejects a custom Service taking over a built in path
+    set:
+      ingress.enabled: true
+      ingress.extraPaths:
+        - path: /v1/chat
+          serviceName: moyai-ingress
+          servicePort: 8080
+    asserts:
+      - failedTemplate:
+          errorMessage: 'ingress.extraPaths[0]: path /v1/chat with pathType Prefix is already routed by this chart, and a duplicate would take it over rather than add to it'

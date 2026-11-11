@@ -102,6 +102,16 @@ def json_integer(
     return value
 
 
+def uses_server_vad(
+    update: TranscriptionSessionUpdate, backend: str, drop_params: bool, error: ProtocolErrorType
+) -> bool:
+    if update.turn_detection_disabled:
+        return False
+    if update.turn_detection_type in (None, "server_vad") or drop_params:
+        return True
+    raise error(f"{backend} supports server_vad turn detection or null. Set drop_params to use server_vad instead")
+
+
 def new_event_id() -> str:
     return f"event_{uuid.uuid4().hex}"
 

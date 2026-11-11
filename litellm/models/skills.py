@@ -28,3 +28,18 @@ class LiteLLM_SkillsTable(LiteLLMPydanticObjectBase):
     created_by: str | None = None
     updated_at: datetime | None = None
     updated_by: str | None = None
+
+
+class NewSkillRequest(LiteLLMPydanticObjectBase):
+    """Request to create a new skill in LiteLLM database"""
+
+    display_title: str | None = None
+    description: str | None = None
+    instructions: str | None = None
+    file_content: bytes | None = None  # Binary content of skill files (zip)
+    file_name: str | None = None  # Original filename
+    file_type: str | None = None  # MIME type (e.g., "application/zip")
+    metadata: dict[str, Any] | None = None
+    authorization_url: str | None = None
+    token_url: str | None = None
+    registration_url: str | None = None

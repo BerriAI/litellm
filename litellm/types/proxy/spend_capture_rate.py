@@ -7,14 +7,15 @@ higher means LiteLLM prices above the bill. ``None`` means the provider billed n
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
 
 from litellm.constants import SPEND_CAPTURE_RATE_MAX_RANGE_DAYS
+from litellm.types.llms.base import LiteLLMBaseModel
 
 SpendCaptureProvider = Literal["openai"]
 
 
-class SpendCaptureRateCheckSettings(BaseModel):
+class SpendCaptureRateCheckSettings(LiteLLMBaseModel):
     """``general_settings.spend_capture_rate_check``: the daily check of captured spend against the provider bill."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -31,7 +32,7 @@ class SpendCaptureRateCheckSettings(BaseModel):
     )
 
 
-class CaptureRateDay(BaseModel):
+class CaptureRateDay(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     date: str
@@ -40,7 +41,7 @@ class CaptureRateDay(BaseModel):
     capture_rate: float | None
 
 
-class CaptureRateReport(BaseModel):
+class CaptureRateReport(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     provider: SpendCaptureProvider

@@ -11,11 +11,10 @@ import {
   waitForSpendLog,
 } from "../../helpers/traffic";
 
-/** Covers /ui/usage. The legacy /ui/old-usage view is deprecated and deliberately not covered. */
+/** Covers /ui/usage. */
 
-/** Stepping up from the title is exact; the page renders several other tables. */
 const topKeysCard = (page: PlaywrightPage): Locator =>
-  page.getByText("Top Virtual Keys", { exact: true }).locator("xpath=..");
+  page.locator("section").filter({ has: page.getByRole("heading", { name: "Top Virtual Keys", exact: true }) });
 
 async function openUsage(page: PlaywrightPage): Promise<Locator> {
   await navigateToPage(page, Page.NewUsage);
