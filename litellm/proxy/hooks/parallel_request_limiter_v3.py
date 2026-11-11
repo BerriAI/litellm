@@ -79,6 +79,7 @@ from litellm.proxy.auth.budget_throttle import throttled_limit
 from litellm.proxy.common_utils.callback_utils import get_model_group_from_litellm_kwargs
 from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
 from litellm.proxy.common_utils.proxy_rate_limit_error import (
+    PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS,
     ProxyRateLimitError,
     map_v3_rate_limit_type,
 )
@@ -3776,6 +3777,27 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         response: Final = await admission
         if response["overall_code"] == "OK":
             await self._release_parallel_request_slots(acquisition, user_api_key_dict.parent_otel_span)
+
+    async def async_fallback_target_allowed(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        model: str,
+        request_data: Mapping[str, object],
+    ) -> bool:
+        """Reserve the caller's per-model limits on a router fallback target. False when any is exhausted."""
+        data: Final = MappingProxyType({**request_data, "model": model})
+        hidden_stash: Final = _request_stash.set(None)
+        try:
+            built: Final = await self._build_request_rate_limit_descriptors(user_api_key_dict, data, None)
+        finally:
+            _request_stash.reset(hidden_stash)
+        descriptors: Final = [
+            descriptor for descriptor in built if descriptor["key"] in PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS
+        ]
+        if not descriptors:
+            return True
+        response: Final = await self.should_rate_limit(descriptors, parent_otel_span=user_api_key_dict.parent_otel_span)
+        return response["overall_code"] == "OK"
 
     @asynccontextmanager
     async def request_capacity(
