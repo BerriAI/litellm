@@ -2544,6 +2544,15 @@ def _db_model_names(row: _ProxyModelRow) -> frozenset[str]:
     return frozenset((row.model_name, public_name)) if isinstance(public_name, str) else frozenset((row.model_name,))
 
 
+def _db_model_team(row: _ProxyModelRow) -> str | None:
+    team_id: Final = row.model_info.get("team_id") if is_str_keyed_mapping(row.model_info) else None
+    return team_id if isinstance(team_id, str) else None
+
+
+def _first_router_reload(rows: Sequence[_ProxyModelRow]) -> ModelRoutesReload:
+    return ModelRoutesReload(routes_current=llm_router is not None or not rows or master_key is None)
+
+
 def _is_db_deployment(deployment: Deployment | None) -> bool:
     return deployment is not None and deployment.model_info.db_model
 
@@ -9098,14 +9107,26 @@ class ProxyConfig:
         rows: Final = await self.get_models_from_db(prisma_client=prisma_client)
         if rows is None:
             return ModelRoutesReload(routes_current=False)
-        await self.get_credentials(prisma_client=prisma_client)
+        if not await self._upsert_db_credentials(prisma_client):
+            return ModelRoutesReload(routes_current=False)
         router: Final = llm_router
         if router is None:
             await self._update_llm_router(new_models=rows, proxy_logging_obj=proxy_logging_obj)
-            return ModelRoutesReload(routes_current=llm_router is not None)
+            return _first_router_reload(rows)
         self._evict_db_models_missing_from(router, frozenset(row.model_id for row in rows))
         unloaded: Final = frozenset(failure for row in rows if (failure := self._load_db_model(row)) is not None)
         return ModelRoutesReload(routes_current=True, unloaded=unloaded)
+
+    async def _upsert_db_credentials(self, prisma_client: PrismaClient) -> bool:
+        try:
+            credentials: Final = await CredentialsRepository(WriterPinnedClient(prisma_client.db)).find_all()
+        except Exception as e:
+            if not PrismaDBExceptionHandler.is_database_connection_error(e):
+                raise
+            verbose_proxy_logger.warning("Could not read the credentials from the database: %s", e)
+            return False
+        CredentialAccessor.upsert_credentials([self.decrypt_credentials(credential) for credential in credentials])
+        return True
 
     def _evict_db_models_missing_from(self, router: Router, db_model_ids: frozenset[str]) -> None:
         registry: Final = router.registry()
@@ -9122,7 +9143,7 @@ class ProxyConfig:
             self._add_deployment(db_models=[row])
         except Exception as e:
             verbose_proxy_logger.exception("Could not load model %s from the database: %s", row.model_name, e)
-            return UnloadedDbModel(model_id=row.model_id, names=_db_model_names(row))
+            return UnloadedDbModel(model_id=row.model_id, names=_db_model_names(row), team_id=_db_model_team(row))
         return None
 
     def start_config_sync_subscriber(

@@ -10,13 +10,15 @@ catch-all handler in _update_llm_router.
 
 import asyncio
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Final
 
+import httpx
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.models.model import LiteLLM_ProxyModelTable
 from litellm.proxy._types import ModelRoutesReload, UnloadedDbModel
 from litellm.proxy.proxy_server import ProxyConfig
@@ -125,12 +127,14 @@ _OLD_ROUTE: Final = "runwayml/gen4.5"
 _NEW_ROUTE: Final = "vertex_ai/gemini-3.8-flash"
 
 
-def _db_row(model_id: str, route: str, api_key: str | None = None) -> LiteLLM_ProxyModelTable:
+def _db_row(
+    model_id: str, route: str, api_key: str | None = None, team_info: Mapping[str, str] | None = None
+) -> LiteLLM_ProxyModelTable:
     return LiteLLM_ProxyModelTable(
         model_id=model_id,
         model_name=model_id,
         litellm_params={"model": route} if api_key is None else {"model": route, "api_key": api_key},
-        model_info={"id": model_id, "db_model": True},
+        model_info={"id": model_id, "db_model": True, **(team_info or {})},
     )
 
 
@@ -151,14 +155,14 @@ class TestModelRoutesReloadForQuotaChecks:
     async def _reload(
         self,
         monkeypatch: pytest.MonkeyPatch,
-        router: litellm.Router,
+        router: litellm.Router | None,
         db_models: Sequence[LiteLLM_ProxyModelTable],
     ) -> ModelRoutesReload:
         monkeypatch.delenv("QA_UNSET_OIDC_TOKEN", raising=False)
         proxy_config: Final = ProxyConfig()
         monkeypatch.setattr("litellm.proxy.proxy_server.DB_RECONCILE_LOCK", asyncio.Lock())
         monkeypatch.setattr(proxy_config, "get_models_from_db", AsyncMock(return_value=list(db_models)))
-        monkeypatch.setattr(proxy_config, "get_credentials", AsyncMock())
+        monkeypatch.setattr(proxy_config, "_upsert_db_credentials", AsyncMock(return_value=True))
         with (
             patch("litellm.proxy.proxy_server.llm_router", router),
             patch("litellm.proxy.proxy_server.master_key", MASTER_KEY),
@@ -172,17 +176,51 @@ class TestModelRoutesReloadForQuotaChecks:
         self, monkeypatch: pytest.MonkeyPatch
     ):
         router: Final = _router_with(("clip-token", _OLD_ROUTE, True), ("clip-moved", _OLD_ROUTE, True))
-        broken: Final = _db_row("clip-token", _OLD_ROUTE, api_key="os.environ/oidc/env/QA_UNSET_OIDC_TOKEN")
+        broken: Final = _db_row(
+            "clip-token",
+            _OLD_ROUTE,
+            api_key="os.environ/oidc/env/QA_UNSET_OIDC_TOKEN",
+            team_info={"team_id": "media-team", "team_public_model_name": "clip-studio"},
+        )
 
         outcome: Final = await self._reload(monkeypatch, router, [broken, _db_row("clip-moved", _NEW_ROUTE)])
 
         assert outcome == ModelRoutesReload(
             routes_current=True,
-            unloaded=frozenset({UnloadedDbModel(model_id="clip-token", names=frozenset({"clip-token"}))}),
+            unloaded=frozenset(
+                {
+                    UnloadedDbModel(
+                        model_id="clip-token", names=frozenset({"clip-token", "clip-studio"}), team_id="media-team"
+                    )
+                }
+            ),
         )
         moved: Final = router.registry().deployment("clip-moved")
         assert moved is not None
         assert moved.litellm_params.model == _NEW_ROUTE
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("db_models", "routes_current"),
+        [
+            ((), True),
+            ((_db_row("clip-moved", _NEW_ROUTE),), True),
+            (
+                (
+                    _db_row("clip-moved", _NEW_ROUTE),
+                    _db_row("clip-token", _OLD_ROUTE, api_key="os.environ/oidc/env/QA_UNSET_OIDC_TOKEN"),
+                ),
+                False,
+            ),
+        ],
+        ids=["no-db-models", "router-built", "router-build-failed"],
+    )
+    async def test_a_worker_with_no_router_confirms_routes_only_once_its_first_router_builds(
+        self, monkeypatch: pytest.MonkeyPatch, db_models: Sequence[LiteLLM_ProxyModelTable], routes_current: bool
+    ):
+        monkeypatch.setattr(ProxyConfig, "get_config", AsyncMock(return_value={}))
+
+        assert await self._reload(monkeypatch, None, db_models) == ModelRoutesReload(routes_current=routes_current)
 
     @pytest.mark.asyncio
     async def test_reload_drops_models_deleted_from_the_db_and_keeps_config_models(
@@ -513,7 +551,7 @@ def _count_model_reads(
     read_models_mock: Final = AsyncMock(side_effect=read_models)
     monkeypatch.setattr("litellm.proxy.proxy_server.DB_RECONCILE_LOCK", asyncio.Lock())
     monkeypatch.setattr(proxy_config, "get_models_from_db", read_models_mock)
-    monkeypatch.setattr(proxy_config, "get_credentials", AsyncMock())
+    monkeypatch.setattr(proxy_config, "_upsert_db_credentials", AsyncMock(return_value=True))
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", litellm.Router(model_list=[]))
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_model_list", [])
     return read_models_mock
@@ -523,6 +561,51 @@ async def _reconcile(proxy_config: ProxyConfig) -> ModelRoutesReload:
     return await proxy_config.reconcile_db_models(
         prisma_client=MagicMock(), proxy_logging_obj=MagicMock(), requested_at=time.monotonic()
     )
+
+
+@pytest.mark.asyncio
+async def test_quota_reload_installs_a_new_db_credential_while_the_config_cannot_be_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proxy_config: Final = ProxyConfig()
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_credentialstable.find_many = AsyncMock(
+        return_value=[
+            {"credential_name": "media-cred", "credential_values": {"api_key": "sk-media"}, "credential_info": {}}
+        ]
+    )
+    monkeypatch.setattr(litellm, "credential_list", [])
+    monkeypatch.setattr("litellm.proxy.proxy_server.DB_RECONCILE_LOCK", asyncio.Lock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", litellm.Router(model_list=[]))
+    monkeypatch.setattr(proxy_config, "get_models_from_db", AsyncMock(return_value=[]))
+    monkeypatch.setattr(proxy_config, "get_config", AsyncMock(side_effect=TimeoutError("config bucket unreachable")))
+
+    outcome: Final = await proxy_config.reconcile_db_models(
+        prisma_client=prisma_client, proxy_logging_obj=MagicMock(), requested_at=time.monotonic()
+    )
+
+    assert outcome == ModelRoutesReload(routes_current=True)
+    assert CredentialAccessor.get_credential_values("media-cred") == {"api_key": "sk-media"}
+
+
+@pytest.mark.asyncio
+async def test_quota_reload_cannot_confirm_routes_while_the_credentials_cannot_be_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proxy_config: Final = ProxyConfig()
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_credentialstable.find_many = AsyncMock(side_effect=httpx.ConnectError("db unreachable"))
+    router: Final = litellm.Router(model_list=[])
+    monkeypatch.setattr("litellm.proxy.proxy_server.DB_RECONCILE_LOCK", asyncio.Lock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    monkeypatch.setattr(proxy_config, "get_models_from_db", AsyncMock(return_value=[_db_row("db-clip", _NEW_ROUTE)]))
+
+    outcome: Final = await proxy_config.reconcile_db_models(
+        prisma_client=prisma_client, proxy_logging_obj=MagicMock(), requested_at=time.monotonic()
+    )
+
+    assert outcome == ModelRoutesReload(routes_current=False)
+    assert router.get_deployment(model_id="db-clip") is None
 
 
 @pytest.mark.asyncio

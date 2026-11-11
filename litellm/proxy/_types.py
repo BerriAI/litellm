@@ -165,6 +165,7 @@ class ReconcileOutcome(NamedTuple):
 class UnloadedDbModel(NamedTuple):
     model_id: str
     names: frozenset[str]
+    team_id: str | None
 
 
 class ModelRoutesReload(NamedTuple):

@@ -3,7 +3,9 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
 
+from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.proxy.management_helpers.model_quota_policy import (
+    EVERY_LIMIT,
     ModelQuotaPolicy,
     QuotaLimit,
     RouteOf,
@@ -26,15 +28,15 @@ def _limits_set_for(
     return MappingProxyType({"rpm": rpm_set.get(model), "tpm": tpm_set.get(model)})
 
 
+def _limits_in(limits: object) -> Mapping[str, object]:
+    return limits if is_str_keyed_mapping(limits) else _NO_LIMITS_SET
+
+
 def missing_project_model_quota(
-    models: Sequence[str],
-    rpm_limits: Mapping[str, object] | None,
-    tpm_limits: Mapping[str, object] | None,
-    policy: ModelQuotaPolicy,
-    route_of: RouteOf,
+    models: Sequence[str], metadata: Mapping[str, object], policy: ModelQuotaPolicy, route_of: RouteOf
 ) -> tuple[MissingModelQuota, ...]:
-    rpm_set: Final = rpm_limits or _NO_LIMITS_SET
-    tpm_set: Final = tpm_limits or _NO_LIMITS_SET
+    rpm_set: Final = _limits_in(metadata.get("model_rpm_limit"))
+    tpm_set: Final = _limits_in(metadata.get("model_tpm_limit"))
     gaps: Final = tuple(
         MissingModelQuota(
             model,
@@ -43,6 +45,12 @@ def missing_project_model_quota(
         for model in models
     )
     return tuple(gap for gap in gaps if gap.limits)
+
+
+def models_short_of_a_limit(models: Sequence[str], metadata: Mapping[str, object]) -> tuple[str, ...]:
+    rpm_set: Final = _limits_in(metadata.get("model_rpm_limit"))
+    tpm_set: Final = _limits_in(metadata.get("model_tpm_limit"))
+    return tuple(model for model in models if unmet_limits(EVERY_LIMIT, _limits_set_for(model, rpm_set, tpm_set)))
 
 
 def describe_missing_quota(missing: Sequence[MissingModelQuota]) -> str:

@@ -23,6 +23,7 @@ QuotaLimit: TypeAlias = Literal["rpm", "tpm"]
 ENFORCE_PROJECT_MODEL_QUOTA_SETTING: Final = "enforce_project_model_quota"
 
 _LIMITS: Final[tuple[QuotaLimit, ...]] = ("rpm", "tpm")
+EVERY_LIMIT: Final = frozenset(_LIMITS)
 _ROUTER_PATTERNS: Final = PatternMatchRouter()
 
 
@@ -242,13 +243,19 @@ def _names_behind(llm_router: "Router | None", model: str) -> frozenset[str]:
     return frozenset((model, target, *(() if group is None else group.models)))
 
 
-def _name_serves(name: str, served: frozenset[str]) -> bool:
-    return name in served or ("*" in name and any(_wildcard_matches(name, model) for model in served))
+def _wildcard_serves(name: str, served: frozenset[str]) -> bool:
+    return "*" in name and any(_wildcard_matches(name, model) for model in served)
 
 
-def model_routes_through(llm_router: "Router | None", model: str, names: frozenset[str]) -> bool:
+def _wildcards_reach(llm_router: "Router | None", model: str, team_id: str | None) -> bool:
+    return llm_router is None or not _named_deployments(llm_router, _routable_name(llm_router, model), team_id)
+
+
+def model_routes_through(llm_router: "Router | None", model: str, names: frozenset[str], team_id: str | None) -> bool:
     served: Final = _names_behind(llm_router, model)
-    return any(_name_serves(name, served) for name in names)
+    if not names.isdisjoint(served):
+        return True
+    return _wildcards_reach(llm_router, model, team_id) and any(_wildcard_serves(name, served) for name in names)
 
 
 def _patterns_tried_before(patterns: Sequence[str], regex: str) -> Sequence[str]:
@@ -330,13 +337,18 @@ def limits_added_by_team_write(
     public_name: str,
     replaced_id: str | None,
     written_params: Mapping[str, object] | None,
+    stored_params: Mapping[str, object] | None,
     model: str,
 ) -> frozenset[QuotaLimit]:
     after: Final = team_route_after_write(llm_router, team_id, public_name, replaced_id, written_params, model)
     if after is None:
         return frozenset()
-    now: Final = router_model_routes(llm_router, team_id)(model)
-    return required_limits(policy, model, after) - required_limits(policy, model, now)
+    before: Final = (
+        router_model_routes(llm_router, team_id)(model)
+        if replaced_id is None
+        else team_route_after_write(llm_router, team_id, public_name, replaced_id, stored_params, model)
+    )
+    return required_limits(policy, model, after) - required_limits(policy, model, before or NO_ROUTE)
 
 
 def exempts_any_route(policy: ModelQuotaPolicy) -> bool:

@@ -121,6 +121,7 @@ from litellm.proxy.management_helpers.auto_router_permissions import (
 from litellm.proxy.management_helpers.model_allowlist_rename_sync import sync_model_allowlists_for_renamed_model
 from litellm.proxy.management_helpers.model_quota_policy import (
     ENFORCE_PROJECT_MODEL_QUOTA_SETTING,
+    EVERY_LIMIT,
     ModelQuotaPolicy,
     QuotaLimit,
     deployment_route,
@@ -962,6 +963,7 @@ async def _raise_if_team_write_leaves_projects_short(
     public_name: str,
     replaced_id: str | None,
     written_params: Mapping[str, object] | None,
+    stored_params: Mapping[str, object] | None = None,
     requested_at: float | None = None,
 ) -> None:
     if team_id is None:
@@ -970,10 +972,14 @@ async def _raise_if_team_write_leaves_projects_short(
     if policy is None or not exempts_any_route(policy):
         return
     projects: Final = await ProjectRepository(prisma_client).table.find_many(where={"team_id": team_id})
-    listed: Final = frozenset(itertools.chain.from_iterable(project.models for project in projects))
+    listed: Final = frozenset(
+        model
+        for model in itertools.chain.from_iterable(project.models for project in projects)
+        if _projects_short_on(projects, model, EVERY_LIMIT)
+    )
     if not listed:
         return
-    llm_router: Final = await model_router_reconciled_with_db(listed, replaced_id, requested_at)
+    llm_router: Final = await model_router_reconciled_with_db(listed, team_id, replaced_id, requested_at)
     served: Final = sorted(model for model in listed if team_write_serves(llm_router, team_id, public_name, model))
     shortfall: Final = next(
         (
@@ -981,7 +987,7 @@ async def _raise_if_team_write_leaves_projects_short(
             for model in served
             if (
                 added := limits_added_by_team_write(
-                    policy, llm_router, team_id, public_name, replaced_id, written_params, model
+                    policy, llm_router, team_id, public_name, replaced_id, written_params, stored_params, model
                 )
             )
             and (short := _projects_short_on(projects, model, added))
@@ -1017,6 +1023,8 @@ async def _raise_if_team_update_leaves_projects_short(
     if written_team_id is None and existing.model_info.team_id is None:
         return
     stored_name: Final = existing.model_info.team_public_model_name or existing.model_name
+    stored_params: Final = _written_routing_params(None, existing.litellm_params)
+    keeps_its_name: Final = (written_team_id, written_name) == (existing.model_info.team_id, stored_name)
     requested_at: Final = time.monotonic()
     await _raise_if_team_write_leaves_projects_short(
         prisma_client=prisma_client,
@@ -1025,9 +1033,10 @@ async def _raise_if_team_update_leaves_projects_short(
         public_name=written_name,
         replaced_id=existing.model_info.id,
         written_params=_written_routing_params(incoming_params, remaining_params),
+        stored_params=stored_params if keeps_its_name else None,
         requested_at=requested_at,
     )
-    if (written_team_id, written_name) == (existing.model_info.team_id, stored_name):
+    if keeps_its_name:
         return
     await _raise_if_team_write_leaves_projects_short(
         prisma_client=prisma_client,
@@ -1036,6 +1045,7 @@ async def _raise_if_team_update_leaves_projects_short(
         public_name=stored_name,
         replaced_id=existing.model_info.id,
         written_params=None,
+        stored_params=stored_params,
         requested_at=requested_at,
     )
 
@@ -2998,6 +3008,7 @@ async def delete_model(
             public_name=model_params.model_info.team_public_model_name or model_params.model_name,
             replaced_id=model_params.model_info.id,
             written_params=None,
+            stored_params=_written_routing_params(None, model_params.litellm_params),
         )
 
         # update DB

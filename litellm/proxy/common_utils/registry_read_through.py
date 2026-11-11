@@ -313,31 +313,36 @@ class ModelRoutesUnconfirmed:
     models: tuple[str, ...] = ()
 
 
-def _unloaded_names(outcome: ModelRoutesReload, written_model_id: str | None) -> frozenset[str]:
+def _unloaded_names(outcome: ModelRoutesReload, team_id: str | None, written_model_id: str | None) -> frozenset[str]:
     return frozenset(
-        itertools.chain.from_iterable(model.names for model in outcome.unloaded if model.model_id != written_model_id)
+        itertools.chain.from_iterable(
+            model.names
+            for model in outcome.unloaded
+            if model.model_id != written_model_id and model.team_id in (None, team_id)
+        )
     )
 
 
 async def _reconcile_model_router_with_db(
-    judged_models: Collection[str], written_model_id: str | None, requested_at: float
+    judged_models: Collection[str], team_id: str | None, written_model_id: str | None, requested_at: float
 ) -> "Router | None | ModelRoutesUnconfirmed":
     from litellm.proxy import proxy_server
 
     prisma_client: Final = proxy_server.prisma_client
     if prisma_client is None or not _db_backed_registries_enabled("models"):
         return proxy_server.llm_router
-    router_before: Final = proxy_server.llm_router
     outcome: Final = await proxy_server.proxy_config.reconcile_db_models(
         prisma_client=prisma_client, proxy_logging_obj=proxy_server.proxy_logging_obj, requested_at=requested_at
     )
-    if router_before is not None and not outcome.routes_current:
+    if not outcome.routes_current:
         return ModelRoutesUnconfirmed()
     router: Final = proxy_server.llm_router
     if router is not None:
         proxy_server.llm_model_list = router.registry().deployments()
-    unloaded: Final = _unloaded_names(outcome, written_model_id)
-    stale: Final = tuple(sorted(model for model in judged_models if model_routes_through(router, model, unloaded)))
+    unloaded: Final = _unloaded_names(outcome, team_id, written_model_id)
+    stale: Final = tuple(
+        sorted(model for model in judged_models if model_routes_through(router, model, unloaded, team_id))
+    )
     return ModelRoutesUnconfirmed(models=stale) if stale else router
 
 
@@ -351,10 +356,13 @@ def _routes_unconfirmed_message(models: tuple[str, ...]) -> str:
 
 
 async def model_router_reconciled_with_db(
-    judged_models: Collection[str], written_model_id: str | None = None, requested_at: float | None = None
+    judged_models: Collection[str],
+    team_id: str | None,
+    written_model_id: str | None = None,
+    requested_at: float | None = None,
 ) -> "Router | None":
     match await _reconcile_model_router_with_db(
-        judged_models, written_model_id, time.monotonic() if requested_at is None else requested_at
+        judged_models, team_id, written_model_id, time.monotonic() if requested_at is None else requested_at
     ):
         case ModelRoutesUnconfirmed(models=models):
             raise ProxyException(

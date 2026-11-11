@@ -1998,9 +1998,11 @@ def test_team_model_write_adds_only_the_limits_its_new_route_requires(
         ]
     )
 
+    stored_params: Final = None if replaced_id is None else dict(team_routes)[replaced_id]
+
     assert policy is not None
     assert limits_added_by_team_write(
-        policy, router, "media-team", public_name, replaced_id, written_params, public_name
+        policy, router, "media-team", public_name, replaced_id, written_params, stored_params, public_name
     ) == frozenset(added)
 
 
@@ -2082,6 +2084,7 @@ def test_team_pattern_write_reads_each_served_name_by_the_model_it_calls(model: 
         "video-*",
         None,
         {"model": "vertex_ai/*", "vertex_project": "qa-project"},
+        None,
         model,
     ) == frozenset(added)
 
@@ -2120,7 +2123,9 @@ async def _create_clip_studio_project(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 async def _add_clip_studio_to_project(monkeypatch: pytest.MonkeyPatch) -> None:
-    _project_update_mocks(monkeypatch, {})
+    prisma: Final = _project_update_mocks(monkeypatch, {})
+    prisma.db.litellm_projecttable.find_unique.return_value.team_id = "test-team"
+    prisma.db.litellm_teamtable.find_unique = mock.AsyncMock(return_value=LiteLLM_TeamTable(team_id="test-team"))
     monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _clip_studio_router("runwayml/gen4_turbo"))
     monkeypatch.setattr(
         litellm.proxy.proxy_server, "general_settings", {"enforce_project_model_quota": _CUSTOMER_QUOTA_POLICY}
@@ -2155,10 +2160,15 @@ def _model_reload_returns(
 _MODELS_NOT_READ: Final = ModelRoutesReload(routes_current=False)
 
 
-def _not_loaded(model_id: str, *names: str) -> ModelRoutesReload:
+def _not_loaded(model_id: str, *names: str, team_id: str | None = None) -> ModelRoutesReload:
     return ModelRoutesReload(
-        routes_current=True, unloaded=frozenset({UnloadedDbModel(model_id=model_id, names=frozenset(names))})
+        routes_current=True,
+        unloaded=frozenset({UnloadedDbModel(model_id=model_id, names=frozenset(names), team_id=team_id)}),
     )
+
+
+def _clip_wildcard_router() -> "litellm.Router":
+    return litellm.Router(model_list=[{"model_name": "clip-*", "litellm_params": {"model": "runwayml/*"}}])
 
 
 @pytest.mark.asyncio
@@ -2169,8 +2179,18 @@ def _not_loaded(model_id: str, *names: str) -> ModelRoutesReload:
 )
 @pytest.mark.parametrize(
     "reload_outcome",
-    [ModelRoutesReload(routes_current=True), _not_loaded("unrelated-id", "unrelated-model")],
-    ids=["every-model-loaded", "unrelated-model-not-loaded"],
+    [
+        ModelRoutesReload(routes_current=True),
+        _not_loaded("unrelated-id", "unrelated-model"),
+        _not_loaded("other-team-clip-id", "clip-studio", team_id="other-team"),
+        _not_loaded("clip-wildcard-id", "clip-*"),
+    ],
+    ids=[
+        "every-model-loaded",
+        "unrelated-model-not-loaded",
+        "another-teams-model-of-that-name-not-loaded",
+        "wildcard-the-named-model-shadows-not-loaded",
+    ],
 )
 async def test_project_quota_check_reads_the_route_another_worker_just_wrote(
     monkeypatch: pytest.MonkeyPatch,
@@ -2193,27 +2213,57 @@ async def test_project_quota_check_reads_the_route_another_worker_just_wrote(
     ids=["create", "update", "team-move"],
 )
 @pytest.mark.parametrize(
-    ("failed_reload", "expected_message"),
+    ("failed_reload", "router_in_db", "expected_message"),
     [
-        (_MODELS_NOT_READ, "Could not reload the model routes from the database"),
-        (_not_loaded("clip-studio-id", "clip-studio"), "Could not load every model behind 'clip-studio'"),
-        (_not_loaded("clip-wildcard-id", "clip-*"), "Could not load every model behind 'clip-studio'"),
+        (_MODELS_NOT_READ, None, "Could not reload the model routes from the database"),
+        (_not_loaded("clip-studio-id", "clip-studio"), None, "Could not load every model behind 'clip-studio'"),
+        (
+            _not_loaded("team-clip-id", "clip-studio", team_id="test-team"),
+            None,
+            "Could not load every model behind 'clip-studio'",
+        ),
+        (
+            _not_loaded("clip-wildcard-id", "clip-*"),
+            _clip_wildcard_router(),
+            "Could not load every model behind 'clip-studio'",
+        ),
     ],
-    ids=["models-not-read", "judged-model-not-loaded", "wildcard-serving-judged-model-not-loaded"],
+    ids=[
+        "models-not-read",
+        "judged-model-not-loaded",
+        "the-teams-own-model-of-that-name-not-loaded",
+        "wildcard-serving-judged-model-not-loaded",
+    ],
 )
 async def test_project_quota_check_refuses_stale_routes_when_the_model_reload_fails(
     monkeypatch: pytest.MonkeyPatch,
     write_project: Callable[[pytest.MonkeyPatch], Awaitable[None]],
     failed_reload: ModelRoutesReload,
+    router_in_db: "litellm.Router | None",
     expected_message: str,
 ) -> None:
-    _model_reload_returns(monkeypatch, failed_reload)
+    _model_reload_returns(monkeypatch, failed_reload, router_in_db)
 
     with pytest.raises(ProxyException) as exc_info:
         await write_project(monkeypatch)
 
     assert (exc_info.value.code, exc_info.value.type) == ("503", "service_unavailable_error")
     assert expected_message in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+async def test_project_create_on_a_worker_with_no_router_refuses_while_the_model_reload_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _enforced_new_project_mocks(
+        monkeypatch, team_models=["clip-studio"], llm_router=None, quota_setting={"default": [], "providers": {}}
+    )
+    _model_reload_returns(monkeypatch, _MODELS_NOT_READ)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_new_project(NewProjectRequest(team_id="test-team", models=["clip-studio"]))
+
+    assert (exc_info.value.code, exc_info.value.type) == ("503", "service_unavailable_error")
 
 
 async def _create_project_listing_no_models(monkeypatch: pytest.MonkeyPatch) -> str:
@@ -2243,14 +2293,59 @@ async def _create_project_under_a_policy_that_exempts_nothing(monkeypatch: pytes
     return exc_info.value.message
 
 
+async def _create_project_that_limits_clip_studio(monkeypatch: pytest.MonkeyPatch) -> str:
+    _enforced_new_project_mocks(
+        monkeypatch,
+        team_models=["clip-studio"],
+        llm_router=_clip_studio_router("runwayml/gen4_turbo"),
+        quota_setting=_CUSTOMER_QUOTA_POLICY,
+    )
+    prisma: Final = mock.MagicMock()
+    prisma.db.litellm_projecttable.find_unique = mock.AsyncMock(return_value=mock.MagicMock())
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", prisma)
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_new_project(
+            NewProjectRequest(
+                team_id="test-team",
+                project_id="taken-id",
+                models=["clip-studio"],
+                model_rpm_limit={"clip-studio": 5},
+                model_tpm_limit={"clip-studio": 100},
+            )
+        )
+    return exc_info.value.message
+
+
+async def _block_project_that_limits_clip_studio(monkeypatch: pytest.MonkeyPatch) -> str:
+    prisma: Final = _project_update_mocks(
+        monkeypatch, {"model_rpm_limit": {"clip-studio": 5}, "model_tpm_limit": {"clip-studio": 100}}
+    )
+    prisma.db.litellm_projecttable.find_unique.return_value.team_id = "test-team"
+    prisma.db.litellm_projecttable.find_unique.return_value.models = ["clip-studio"]
+    prisma.db.litellm_teamtable.find_unique = mock.AsyncMock(return_value=LiteLLM_TeamTable(team_id="test-team"))
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _clip_studio_router("runwayml/gen4_turbo"))
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "general_settings", {"enforce_project_model_quota": _CUSTOMER_QUOTA_POLICY}
+    )
+    await _run_project_update(f"project-{uuid.uuid4()}", blocked=True)
+    return "saved" if prisma.db.litellm_projecttable.update.await_count == 1 else "not saved"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("write_project", "expected_outcome"),
     [
         (_create_project_listing_no_models, "already exists"),
         (_create_project_under_a_policy_that_exempts_nothing, "clip-studio (model_rpm_limit and model_tpm_limit)"),
+        (_create_project_that_limits_clip_studio, "already exists"),
+        (_block_project_that_limits_clip_studio, "saved"),
     ],
-    ids=["create-without-models", "policy-exempts-nothing"],
+    ids=[
+        "create-without-models",
+        "policy-exempts-nothing",
+        "create-setting-both-limits",
+        "block-a-project-setting-both-limits",
+    ],
 )
 async def test_project_write_with_no_route_to_judge_succeeds_while_the_model_reload_fails(
     monkeypatch: pytest.MonkeyPatch,
@@ -2286,7 +2381,9 @@ async def test_project_quota_check_reads_the_first_router_built_from_the_db(monk
     _enforced_new_project_mocks(
         monkeypatch, team_models=["clip-studio"], llm_router=None, quota_setting=_CUSTOMER_QUOTA_POLICY
     )
-    _model_reload_returns(monkeypatch, _MODELS_NOT_READ, _clip_studio_router("vertex_ai/gemini-3.8-flash"))
+    _model_reload_returns(
+        monkeypatch, ModelRoutesReload(routes_current=True), _clip_studio_router("vertex_ai/gemini-3.8-flash")
+    )
 
     with pytest.raises(ProxyException) as exc_info:
         await _run_new_project(NewProjectRequest(team_id="test-team", models=["clip-studio"]))

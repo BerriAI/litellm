@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from litellm_enterprise.proxy.management_endpoints.project_model_quota import (
     describe_missing_quota,
     missing_project_model_quota,
+    models_short_of_a_limit,
 )
 from pydantic import TypeAdapter, ValidationError
 
@@ -323,15 +324,24 @@ def _raise_on_project_models_expanding_at_request_time(
 
 
 async def _router_for_quota_check(
-    policy: ModelQuotaPolicy, llm_router: "Router | None", judged_models: Sequence[str]
+    policy: ModelQuotaPolicy,
+    llm_router: "Router | None",
+    models: Sequence[str],
+    metadata: Mapping[str, object],
+    team_id: str | None,
 ) -> "Router | None":
+    judged_models: Final = models_short_of_a_limit(models, metadata)
     if not judged_models or not exempts_any_route(policy):
         return llm_router
-    return await model_router_reconciled_with_db(judged_models)
+    return await model_router_reconciled_with_db(judged_models, team_id)
 
 
 def _models_after_update(data: UpdateProjectRequest, existing_project: object) -> list[str]:
     return data.models if data.models is not None else (getattr(existing_project, "models", None) or [])
+
+
+def _metadata_after_update(data: UpdateProjectRequest, existing_project: object) -> Mapping[str, object]:
+    return data.metadata if data.metadata is not None else (getattr(existing_project, "metadata", None) or {})
 
 
 def _project_model_quota_policy(general_settings: Mapping[str, object]) -> ModelQuotaPolicy | None:
@@ -356,10 +366,7 @@ def _raise_on_missing_project_model_quota(
     model's `set_model_info` validator, so they are read from there.
     """
     _raise_on_project_models_expanding_at_request_time(data.models, access_group_names)
-    metadata = data.metadata or {}
-    missing: Final = missing_project_model_quota(
-        data.models or (), metadata.get("model_rpm_limit"), metadata.get("model_tpm_limit"), policy, route_of
-    )
+    missing: Final = missing_project_model_quota(data.models or (), data.metadata or {}, policy, route_of)
     if not missing:
         return
     raise HTTPException(
@@ -385,17 +392,9 @@ def _raise_on_missing_project_model_quota_on_update(
     model's quota must leave every resulting model with the limits it needs.
     """
     resulting_models = _models_after_update(data, existing_project)
-    resulting_metadata = (
-        data.metadata if data.metadata is not None else (getattr(existing_project, "metadata", None) or {})
-    )
+    resulting_metadata = _metadata_after_update(data, existing_project)
     _raise_on_project_models_expanding_at_request_time(resulting_models, access_group_names)
-    missing: Final = missing_project_model_quota(
-        resulting_models,
-        resulting_metadata.get("model_rpm_limit"),
-        resulting_metadata.get("model_tpm_limit"),
-        policy,
-        route_of,
-    )
+    missing: Final = missing_project_model_quota(resulting_models, resulting_metadata, policy, route_of)
     if not missing:
         return
     raise HTTPException(
@@ -621,7 +620,9 @@ async def new_project(
 
         quota_policy: Final = _project_model_quota_policy(general_settings_view())
         if quota_policy is not None:
-            quota_router: Final = await _router_for_quota_check(quota_policy, llm_router, data.models or ())
+            quota_router: Final = await _router_for_quota_check(
+                quota_policy, llm_router, data.models or (), data.metadata or {}, data.team_id
+            )
             _raise_on_missing_project_model_quota(
                 data,
                 _router_access_group_names(quota_router),
@@ -861,7 +862,11 @@ async def update_project(
         quota_policy: Final = _project_model_quota_policy(general_settings_view())
         if quota_policy is not None:
             quota_router: Final = await _router_for_quota_check(
-                quota_policy, llm_router, _models_after_update(data, existing_project)
+                quota_policy,
+                llm_router,
+                _models_after_update(data, existing_project),
+                _metadata_after_update(data, existing_project),
+                target_team_id,
             )
             _raise_on_missing_project_model_quota_on_update(
                 data,
