@@ -72,14 +72,15 @@ def test_embedding_payload_has_aembedding_call_type_tokens_and_cost(rig: Callbac
 def test_embedding_payload_names_group_provider_and_model(rig: CallbackRig) -> None:
     """The embedding request names the public model "dec1-embedding", served by openai/text-embedding-3-small.
     The payload reports model_group "dec1-embedding", custom_llm_provider "openai" and model
-    "text-embedding-3-small"."""
+    "openai/text-embedding-3-small", the deployment's model string with its provider prefix
+    (`reconstruct_model_name` in litellm/litellm_core_utils/core_helpers.py)."""
     call_id: Final = new_call_id()
     assert post(rig, "/v1/embeddings", {"model": EMBEDDING, "input": "dec1 embedding"}, call_id).status_code == 200
     event: Final = rig.event(call_id)
     assert (event["model_group"], event["custom_llm_provider"], event["model"]) == (
         EMBEDDING,
         "openai",
-        "text-embedding-3-small",
+        "openai/text-embedding-3-small",
     )
 
 

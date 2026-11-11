@@ -208,14 +208,16 @@ def test_provider_400_on_other_surfaces_logs_one_failure_with_that_call_type(
 
 def test_invalid_virtual_key_is_logged_as_a_401_failure_without_the_key(rig: CallbackRig) -> None:
     """A caller presents a virtual key the proxy does not know. The caller gets 401, no provider request is made,
-    and one failure payload arrives for the call id with error_information.error_code "401". The rejected key
-    string itself must not appear anywhere in the payload."""
+    and one failure payload arrives with error_information.error_code "401". The rejected key string itself must
+    not appear anywhere in the payload. Key auth fails before the endpoint reads `x-litellm-call-id`, so the
+    payload is found by the request's unique text (`CallbackRig.event_mentioning`)."""
     call_id: Final = new_call_id()
+    text: Final = marker()
     bad_key: Final = "sk-dec1-unknown-" + marker()
     rig.provider.drain()
-    response: Final = chat(rig, call_id, key=bad_key)
+    response: Final = chat(rig, call_id, text, key=bad_key)
     assert response.status_code == 401, response.text
-    event: Final = rig.event(call_id, "failure")
+    event: Final = rig.event_mentioning(text, "failure")
     assert object_value(event["error_information"])["error_code"] == "401"
     assert bad_key not in json.dumps(event)
     assert provider_bodies(rig) == ()
@@ -223,9 +225,10 @@ def test_invalid_virtual_key_is_logged_as_a_401_failure_without_the_key(rig: Cal
 
 def test_model_not_allowed_for_the_key_is_logged_as_a_failure_with_the_key_identity(rig: CallbackRig) -> None:
     """A key restricted to the embedding model asks for the chat model. The caller gets 401 or 403, no provider
-    request is made, and one failure payload arrives that identifies the key by hash and alias. UNVERIFIED: the
-    exact status (401 vs 403) and error_class were not traced; see the model access check in
-    litellm/proxy/auth/auth_checks.py."""
+    request is made, and one failure payload arrives that identifies the key by hash and alias. The model check
+    runs inside key auth, before the endpoint reads `x-litellm-call-id`, so the payload is found by the request's
+    unique text. UNVERIFIED: the exact status (401 vs 403) and error_class were not traced; see the model access
+    check in litellm/proxy/auth/auth_checks.py."""
     call_id: Final = new_call_id()
     alias: Final = "alias-" + marker()
     with rig.proxy.scenario() as scenario:
@@ -233,7 +236,7 @@ def test_model_not_allowed_for_the_key_is_logged_as_a_failure_with_the_key_ident
         text: Final = marker()
         response: Final = chat(rig, call_id, text, key=key)
         assert response.status_code in (401, 403), response.text
-        event: Final = rig.event(call_id, "failure")
+        event: Final = rig.event_mentioning(text, "failure")
         metadata: Final = object_value(event["metadata"])
         assert object_value(event["error_information"])["error_code"] == str(response.status_code)
         assert (metadata["user_api_key_hash"], metadata["user_api_key_alias"]) == (key_hash(key), alias)

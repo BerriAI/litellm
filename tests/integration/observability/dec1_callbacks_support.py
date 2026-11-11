@@ -434,6 +434,34 @@ class CallbackRig:
         assert len(found) == 1, [(event["id"], event["status"]) for event in found]
         return found[0]
 
+    def events_mentioning(self, text: str) -> tuple[dict[str, JsonValue], ...]:
+        """StandardLoggingPayloads whose logged request `messages` contain `text`.
+
+        A request rejected during key auth is logged before the endpoint reads `x-litellm-call-id`, so its payload
+        carries a call id the proxy generated (`_handle_logging_proxy_only_error`, litellm/proxy/utils.py). Tests
+        of such failures send a unique text and find the payload by it instead.
+        """
+        return tuple(event for event in self.sink.records() if text in json.dumps(event.get("messages")))
+
+    def event_mentioning(self, text: str, status: str, seconds: float = 20) -> dict[str, JsonValue]:
+        """The single payload with the given status whose logged request carried `text`."""
+        found: Final = eventually(
+            lambda: tuple(event for event in self.events_mentioning(text) if event["status"] == status),
+            lambda events: len(events) >= 1,
+            seconds=seconds,
+        )
+        assert len(found) == 1, [(event["id"], event["status"]) for event in found]
+        return found[0]
+
+    def hook_names_mentioning(self, text: str, logger: str = "recorder") -> tuple[str, ...]:
+        """Hook names, in call order, of the probe records from one logger whose request text contains `text`."""
+        found: Final = tuple(
+            record
+            for record in self.probe.records()
+            if record.get("logger") == logger and text in str(record.get("text"))
+        )
+        return tuple(str(record["hook"]) for record in sorted(found, key=_sequence))
+
     def settled_events(self, call_id: str, count: int, *, holding: float = 3) -> tuple[dict[str, JsonValue], ...]:
         """Exactly `count` payloads for the call, still `count` after `holding` more seconds."""
         return held(lambda: self.events(call_id), lambda events: len(events) == count, holding=holding, seconds=30)

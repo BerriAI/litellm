@@ -194,7 +194,8 @@ class FrontDoor:
     upstream: Wire
 
     def chat_model(self, **parameters: JsonValue) -> str:
-        return self.scenario.model(api_base=f"{self.upstream.url}/v1", **parameters)
+        """A chat deployment on the recording peer; `parameters` override any litellm_params, `api_base` included."""
+        return self.scenario.model(**{"api_base": f"{self.upstream.url}/v1", **parameters})
 
     def completion_model(self) -> str:
         return self.scenario.model(

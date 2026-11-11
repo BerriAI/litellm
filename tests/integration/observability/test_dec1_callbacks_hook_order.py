@@ -325,8 +325,14 @@ def test_streaming_chunk_hook_sees_the_text_so_far_for_every_chunk(rig: Callback
 
 def test_guardrail_blocked_request_never_reaches_the_provider_hooks(rig: CallbackRig) -> None:
     """A pre-call guardrail rejects the request with 400. The caller gets 400 with the guardrail's message, the
-    provider receives nothing, and the recorder sees no async_pre_call_deployment_hook, no log_pre_api_call, no
-    async_post_call_success_hook and no async_log_success_event for the call."""
+    provider receives nothing, and the recorder sees no async_pre_call_deployment_hook, no
+    async_post_call_success_hook and no async_log_success_event for the call.
+
+    Pinned current behaviour: log_pre_api_call does fire, exactly once and after async_pre_call_hook. For a
+    request stopped by the proxy, `_handle_logging_proxy_only_error` (litellm/proxy/utils.py) calls
+    `Logging.pre_call` on purpose so every callback's input hook sees the request before its failure is logged,
+    even though no provider attempt is made. A caller that counts log_pre_api_call as provider attempts sees one
+    here."""
     call_id: Final = new_call_id()
     text: Final = f"{GUARDRAIL_BLOCK} {marker()}"
     response: Final = chat(rig, call_id, text)
@@ -337,11 +343,12 @@ def test_guardrail_blocked_request_never_reaches_the_provider_hooks(rig: Callbac
     assert all(text not in str(body) for body in provider_bodies(rig))
     for absent in (
         "async_pre_call_deployment_hook",
-        "log_pre_api_call",
         "async_post_call_success_hook",
         "async_log_success_event",
     ):
         assert absent not in names, names
+    assert names.count("log_pre_api_call") == 1, names
+    assert names.index("async_pre_call_hook") < names.index("log_pre_api_call"), names
 
 
 def test_guardrail_blocked_request_fires_failure_hook_and_one_failure_log(rig: CallbackRig) -> None:
@@ -391,19 +398,24 @@ def test_guardrail_that_passes_is_recorded_as_success_on_the_success_payload(rig
 
 def test_request_rejected_by_key_auth_skips_pre_call_and_logs_one_failure(rig: CallbackRig) -> None:
     """A request with an unknown virtual key is rejected with 401 before the request pipeline starts. The recorder
-    must get no async_pre_call_hook and no provider-facing hook for it, but must get exactly one
-    async_log_failure_event, so auth failures stay visible to logging callbacks. async_post_call_failure_hook also
-    runs for auth failures, but whether its request_data carries the call id was not traced, so it is not asserted."""
-    call_id: Final = new_call_id()
-    assert chat(rig, call_id, key="sk-dec1-unknown-" + marker()).status_code == 401
+    must get no async_pre_call_hook and no async_pre_call_deployment_hook for it, but must get exactly one
+    async_log_failure_event, so auth failures stay visible to logging callbacks. Key auth fails before the endpoint
+    reads `x-litellm-call-id`, so the hooks are found by the request's unique text, not by the call id.
+
+    Pinned current behaviour: log_pre_api_call fires once even though no provider attempt is made, because
+    `_handle_logging_proxy_only_error` (litellm/proxy/utils.py) calls `Logging.pre_call` before logging a proxy
+    rejection."""
+    text: Final = marker()
+    assert chat(rig, new_call_id(), text, key="sk-dec1-unknown-" + marker()).status_code == 401
     names: Final = held(
-        lambda: rig.hook_names(call_id),
+        lambda: rig.hook_names_mentioning(text),
         lambda found: found.count("async_log_failure_event") == 1,
         holding=3,
         seconds=30,
     )
-    for absent in ("async_pre_call_hook", "async_pre_call_deployment_hook", "log_pre_api_call"):
+    for absent in ("async_pre_call_hook", "async_pre_call_deployment_hook"):
         assert absent not in names, names
+    assert names.count("log_pre_api_call") == 1, names
 
 
 def test_two_instances_in_callbacks_each_get_every_hook_once(tmp_path_factory: pytest.TempPathFactory) -> None:

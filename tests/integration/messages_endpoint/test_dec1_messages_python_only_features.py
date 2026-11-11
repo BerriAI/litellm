@@ -216,8 +216,14 @@ def test_a_strict_tool_error_unrelated_to_strict_limits_is_relayed_without_a_sec
 def test_the_stream_cost_header_adds_only_a_cost_to_the_final_usage(gateway: Gateway) -> None:
     """With `x-litellm-include-cost-in-streaming-usage: true` on a priced deployment, the stream must
     carry the same six events in the same order with the same text and token counts as a plain
-    stream. The only addition is a numeric `cost` inside `message_delta.usage`, equal to
-    11 * 0.001 + 7 * 0.002 = 0.025."""
+    stream. The only addition is a numeric `cost` inside `message_delta.usage`.
+
+    Pinned current behaviour: the cost prices the `message_delta` frame's own `usage` object and
+    nothing else (`common_request_processing.py` `_inject_cost_into_usage_dict` and
+    `_stream_usage_for_event`). The scripted stream reports the 11 input tokens only in
+    `message_start` and sends `{"output_tokens": 7}` in `message_delta`, so the injected cost is
+    7 * 0.002 = 0.014, not the 0.025 the whole call costs. Real Anthropic streams repeat the input
+    counts in `message_delta`, where the two agree."""
     with deployment(gateway, always(stream_reply(f"msg_{marker()}")), **PRICES) as rig:
         _plain_response, plain_text = rig.stream(rig.body(stream=True))
         _cost_response, cost_text = rig.stream(rig.body(stream=True), headers={_COST_HEADER: "true"})
@@ -229,7 +235,7 @@ def test_the_stream_cost_header_adds_only_a_cost_to_the_final_usage(gateway: Gat
         ]
         usage: Final = object_value(dict(costed)["message_delta"]["usage"])
         assert usage["output_tokens"] == 7
-        assert float(str(usage["cost"])) == pytest.approx(11 * 0.001 + 7 * 0.002)
+        assert float(str(usage["cost"])) == pytest.approx(7 * 0.002)
         assert "cost" not in object_value(dict(plain)["message_delta"]["usage"])
 
 

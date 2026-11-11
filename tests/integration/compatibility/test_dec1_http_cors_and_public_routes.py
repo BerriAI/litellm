@@ -62,11 +62,30 @@ def test_preflight_is_answered_for_a_path_no_route_serves(gateway: Gateway) -> N
     assert response.headers["access-control-allow-origin"] == "*"
 
 
-def test_preflight_varies_on_origin(gateway: Gateway) -> None:
-    """The preflight reply must name `Origin` in its `vary` header so a shared cache never serves one origin's
-    preflight to another. Starlette's CORS middleware sets this on every preflight."""
-    response: Final = gateway.client.options(CHAT, headers=PREFLIGHT)
-    assert "Origin" in [part.strip() for part in response.headers["vary"].split(",")]
+def test_a_wildcard_preflight_is_the_same_for_every_origin(gateway: Gateway) -> None:
+    """Under the default wildcard CORS settings the preflight reply does not depend on the origin, which is why
+    Starlette 1.3 (`CORSMiddleware`, the version uv.lock pins) only adds `Vary: Origin` when it echoes an explicit
+    origin. Two preflights from different origins must both answer 200 with `access-control-allow-origin: *` and
+    the same allow-methods and allow-headers, so a shared cache serving one origin's preflight to the other is
+    harmless. Whether `vary` is present is not asserted, since newer Starlette releases add it here."""
+    answers: Final = tuple(
+        gateway.client.options(CHAT, headers={**PREFLIGHT, "Origin": origin})
+        for origin in (ORIGIN, "https://other.example")
+    )
+    assert [response.status_code for response in answers] == [200, 200]
+    seen: Final = {
+        tuple(
+            response.headers[name]
+            for name in (
+                "access-control-allow-origin",
+                "access-control-allow-methods",
+                "access-control-allow-headers",
+            )
+        )
+        for response in answers
+    }
+    assert len(seen) == 1, seen
+    assert next(iter(seen))[0] == "*"
 
 
 def test_a_successful_chat_response_to_a_browser_origin_carries_the_cors_headers(gateway: Gateway) -> None:
@@ -229,12 +248,14 @@ def test_the_openapi_schema_version_matches_the_version_response_header(gateway:
         assert response.headers["x-litellm-version"] == object_value(schema["info"])["version"]
 
 
-def test_the_routes_listing_requires_a_key_and_then_lists_the_chat_route(gateway: Gateway) -> None:
-    """The caller GETs `/routes` without a key and then with the master key. The first must be 401. The second
-    must be 200 with a `routes` list in which some entry has `path: "/v1/chat/completions"` and `POST` among its
-    methods (`GetRoutes.get_app_routes`)."""
-    assert gateway.client.get("/routes").status_code == 401
-    routes: Final = tuple(object_value(entry) for entry in list_value(gateway.get("/routes")["routes"]))
+def test_the_routes_listing_is_public_and_lists_the_chat_route(gateway: Gateway) -> None:
+    """The caller GETs `/routes` without a key. `/routes` is in `LiteLLMRoutes.public_routes`
+    (`litellm/proxy/_types.py`), so the answer must be 200 with a `routes` list in which some entry has
+    `path: "/v1/chat/completions"` and `POST` among its methods (`GetRoutes.get_app_routes`). A front door that
+    starts demanding a key here breaks clients that discover routes before they have one."""
+    response: Final = gateway.client.get("/routes")
+    assert response.status_code == 200, response.text
+    routes: Final = tuple(object_value(entry) for entry in list_value(object_value(response.json())["routes"]))
     chat: Final = tuple(entry for entry in routes if entry["path"] == CHAT)
     assert chat, "The chat route is missing from /routes"
     assert "POST" in list_value(chat[0]["methods"])

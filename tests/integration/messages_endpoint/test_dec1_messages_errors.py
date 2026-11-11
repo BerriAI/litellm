@@ -264,12 +264,16 @@ def test_a_missing_max_tokens_is_refused_with_400_before_the_provider(gateway: G
 
 
 def test_a_null_max_tokens_is_refused_like_a_missing_one(gateway: Gateway) -> None:
-    """`"max_tokens": null` counts as missing (the check is `data.get(param) is None`). It must get
-    the same HTTP 400 with `Missing required parameter: 'max_tokens'.` and no provider call."""
+    """`"max_tokens": null` is still refused with HTTP 400 and no provider call, but not by the proxy's
+    missing-parameter check: `anthropic_messages` is listed in `REQUIRED_PRESENT_BODY_PARAMS_BY_ROUTE`
+    (`route_llm_request.py`), which only asks that the key be present, so an explicit null passes it.
+    The Anthropic request transformation then refuses the null with its own message,
+    `max_tokens is required for Anthropic /v1/messages API` (`messages/native/transformation.py`),
+    before any HTTP call is made."""
     with deployment(gateway, echo_message) as rig:
         response: Final = rig.post(rig.body(max_tokens=None))
         assert response.status_code == 400, response.text
-        assert "Missing required parameter: 'max_tokens'." in str(anthropic_error(response)["message"])
+        assert "max_tokens is required for Anthropic /v1/messages API" in str(anthropic_error(response)["message"])
         assert rig.calls() == ()
 
 

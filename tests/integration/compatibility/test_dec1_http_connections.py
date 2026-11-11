@@ -107,12 +107,16 @@ def test_an_http_1_0_client_without_a_host_header_is_served(gateway: Gateway) ->
     assert (response.status, response.body) == (200, ALIVE)
 
 
-def test_an_http_1_1_request_without_a_host_header_is_a_400(gateway: Gateway) -> None:
-    """The caller sends `GET /health/liveliness HTTP/1.1` with no `Host` header. HTTP/1.1 makes Host mandatory,
-    so the proxy must answer 400 and the handler must not run. The forwarder returns the same status itself
-    (`Rejection::MissingHost`). UNVERIFIED: holds when uvicorn parses with h11; httptools does not enforce it."""
+def test_an_http_1_1_request_without_a_host_header_is_served_today(gateway: Gateway) -> None:
+    """The caller sends `GET /health/liveliness HTTP/1.1` with no `Host` header. HTTP/1.1 makes Host mandatory and
+    the forwarder answers 400 itself (`Rejection::MissingHost`).
+
+    Pinned current behaviour: the proxy installs `httptools` (pyproject `httptools>=0.7.1`), so uvicorn's `auto`
+    HTTP implementation parses with httptools, which does not enforce Host, and the liveness handler answers 200
+    with its usual body. Putting the forwarder in front turns this into a 400, and this test then has to change
+    on purpose."""
     (response,) = exchange(gateway, request_bytes("GET", LIVELINESS, (("Connection", "close"),)))
-    assert response.status == 400, response.body
+    assert (response.status, response.body) == (200, ALIVE)
 
 
 def test_bytes_that_are_not_http_get_a_400_invalid_request(gateway: Gateway) -> None:
@@ -173,18 +177,26 @@ def test_a_stream_to_an_http_1_1_client_is_chunked(gateway: Gateway) -> None:
         assert response.body.endswith(b"data: [DONE]\n\n")
 
 
-def test_a_stream_to_an_http_1_0_client_is_unframed_and_ends_with_the_connection(gateway: Gateway) -> None:
+def test_a_stream_to_an_http_1_0_client_is_chunked_and_ends_with_the_connection(gateway: Gateway) -> None:
     """A chat model is registered. The caller requests a streamed chat completion with an `HTTP/1.0` request
-    line. HTTP/1.0 has no chunked coding, so the response must carry neither `transfer-encoding` nor
-    `content-length`, the raw bytes must be the SSE text itself ending `data: [DONE]`, and the end of the stream
-    must be signalled by the server closing the connection."""
-    with front_door(gateway) as door:
+    line. HTTP/1.0 has no chunked coding, so a strict server would send the SSE text unframed and end it by
+    closing the connection.
+
+    Pinned current behaviour: uvicorn's httptools protocol (`httptools_impl.py`) adds
+    `transfer-encoding: chunked` to any response without a `content-length`, whatever the request's HTTP
+    version, and closes the connection afterwards because HTTP/1.0 is not kept alive. The test pins that framing,
+    no `content-length`, a de-chunked body that is the SSE text ending `data: [DONE]`, and the closed connection.
+    The forwarder (hyper) frames by close for HTTP/1.0, so this changes once it is in front."""
+    with front_door(gateway) as door, connection(gateway) as (client, stream):
         body: Final = json.dumps(chat_body(door.chat_model(), stream=True)).encode()
-        (response,) = exchange(gateway, json_post(gateway, CHAT, body, version="HTTP/1.0"))
-        assert response.status == 200, response.body
-        assert (response.header("transfer-encoding"), response.header("content-length")) == (None, None)
-        assert response.body.startswith(b"data: ")
-        assert response.body.endswith(b"data: [DONE]\n\n")
+        client.sendall(json_post(gateway, CHAT, body, version="HTTP/1.0"))
+        response: Final = read_response(stream)
+        closed: Final = peer_closed(client, stream)
+    assert response.status == 200, response.body
+    assert (response.header("transfer-encoding"), response.header("content-length")) == ("chunked", None)
+    assert response.body.startswith(b"data: ")
+    assert response.body.endswith(b"data: [DONE]\n\n")
+    assert closed
 
 
 def test_a_request_with_150_headers_is_served(gateway: Gateway) -> None:

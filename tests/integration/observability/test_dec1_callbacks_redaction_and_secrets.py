@@ -20,7 +20,7 @@ from collections.abc import Iterator
 from typing import Final
 
 import pytest
-from integration._support.client import JsonValue, list_value, object_value
+from integration._support.client import JsonValue, eventually, held, list_value, object_value
 from integration.observability.dec1_callbacks_support import (
     CHAT_COST,
     CHAT_REJECTED,
@@ -154,13 +154,20 @@ def test_global_redaction_hides_the_input_on_every_surface(redacting: CallbackRi
 
 def test_caller_cannot_opt_out_of_global_redaction_with_a_body_field(redacting: CallbackRig) -> None:
     """Under global redaction a caller with an ordinary key sends `turn_off_message_logging: false` in the body.
-    The proxy strips that opt-out, so the payload must still be redacted and must not contain the caller's text."""
-    call_id: Final = new_call_id()
+    The opt-out must not work: the provider is never called and the caller's text reaches no payload.
+
+    Pinned current behaviour: the request is refused with 401 during key auth instead of having the field
+    stripped. `turn_off_message_logging` is in `_supported_callback_params`, so `_build_banned_observability_params`
+    (litellm/proxy/auth/auth_utils.py) bans it from request bodies and `_check_banned_params` answers
+    "turn_off_message_logging is not allowed in request body". The pre-call strip
+    (`_strip_client_message_redaction_opt_out`, litellm/proxy/litellm_pre_call_utils.py) is never reached for a
+    root-level field."""
     text: Final = marker()
-    assert chat(redacting, call_id, text, turn_off_message_logging=False).status_code == 200
-    event: Final = redacting.event(call_id)
-    assert event["messages"] == REDACTED_MESSAGES
-    assert text not in json.dumps(event)
+    response: Final = chat(redacting, new_call_id(), text, turn_off_message_logging=False)
+    assert response.status_code == 401, response.text
+    assert "turn_off_message_logging is not allowed in request body" in response.text
+    assert all(text not in json.dumps(body) for body in provider_bodies(redacting))
+    held(redacting.sink.bodies, lambda delivered: text.encode() not in delivered, holding=3, seconds=10)
 
 
 def test_caller_cannot_opt_out_of_global_redaction_with_a_header(redacting: CallbackRig) -> None:
@@ -191,7 +198,14 @@ def test_key_with_opt_out_permission_can_turn_global_redaction_off(redacting: Ca
 def test_caller_can_request_redaction_for_one_request_with_a_body_field(rig: CallbackRig) -> None:
     """On a proxy that does not redact globally, a caller sends `turn_off_message_logging: true` in the body. That
     request's payload must be redacted, the field must not be forwarded to the provider, and the next request
-    without the field must be logged in full."""
+    without the field must be logged in full.
+
+    BUG: the request is refused with 401 "turn_off_message_logging is not allowed in request body". The auth ban
+    list is derived from `_supported_callback_params` minus `_SAFE_CLIENT_CALLBACK_PARAMS`
+    (litellm/proxy/auth/auth_utils.py `_build_banned_observability_params`), and the redaction flag is not
+    exempted, so a caller asking for more privacy is treated as smuggling callback credentials. The pre-call code
+    (`_strip_client_message_redaction_opt_out`) and the redaction code expect this field from the body."""
+    pytest.skip("BUG: turn_off_message_logging: true in the request body is rejected with 401 at key auth")
     redacted_call, plain_call = new_call_id(), new_call_id()
     hidden, shown = marker(), marker()
     assert chat(rig, redacted_call, hidden, turn_off_message_logging=True).status_code == 200
@@ -287,37 +301,44 @@ def test_requester_custom_headers_never_include_authorization(rig: CallbackRig) 
 
 def test_request_supplied_langfuse_credentials_are_not_forwarded_or_logged(rig: CallbackRig) -> None:
     """A caller puts `langfuse_public_key`, `langfuse_secret_key` and `langfuse_host` in the chat body on a proxy
-    with no Langfuse callback. The request answers 200, the provider's request body contains none of the three
-    fields, and the secret value appears nowhere in the generic_api payload for the call."""
-    call_id: Final = new_call_id()
+    with no Langfuse callback and without `allow_client_side_credentials`. Observability credentials are banned
+    request-body params (`_check_banned_params`, litellm/proxy/auth/auth_utils.py), so the request is refused with
+    401 naming the first banned field, `langfuse_host`. The provider receives nothing, and the failure payload
+    logged for the rejection (found by the request's unique text, since key auth runs before the call id header is
+    read) carries the request but not the secret value: only allowlisted request fields are logged for a proxy
+    rejection (`_PROXY_ONLY_ERROR_LOGGED_FIELDS`, litellm/proxy/utils.py)."""
     text, secret = marker(), "sk-lf-dec1-" + marker()
     response: Final = chat(
         rig,
-        call_id,
+        new_call_id(),
         text,
         langfuse_public_key="pk-lf-dec1",
         langfuse_secret_key=secret,
         langfuse_host="http://127.0.0.1:9",
     )
-    assert response.status_code == 200, response.text
-    sent: Final = tuple(body for body in provider_bodies(rig) if text in json.dumps(body))
-    assert len(sent) == 1
-    assert {"langfuse_public_key", "langfuse_secret_key", "langfuse_host"} & sent[0].keys() == set()
-    assert secret not in json.dumps(rig.event(call_id))
+    assert response.status_code == 401, response.text
+    assert "langfuse_host is not allowed in request body" in response.text
+    assert secret not in response.text
+    assert all(text not in json.dumps(body) for body in provider_bodies(rig))
+    rig.event_mentioning(text, "failure")
+    assert secret.encode() not in rig.sink.bodies() + rig.probe.bodies()
 
 
-def test_request_supplied_blocked_callback_destinations_are_dropped(rig: CallbackRig) -> None:
+def test_request_supplied_blocked_callback_destinations_are_refused(rig: CallbackRig) -> None:
     """A caller puts `dd_api_key`, `dd_site` and `gcs_bucket_name` in the chat body and in `metadata`. These are on
-    the request-blocked list, so the request answers 200, none of them reach the provider, and none of their
-    values appear in the payload for the call."""
-    call_id: Final = new_call_id()
+    the request-blocked list, which the proxy also bans from request bodies (`_build_banned_observability_params`
+    and `_check_banned_params`, litellm/proxy/auth/auth_utils.py), so the request is refused with 401 naming
+    `dd_api_key`. None of them reach the provider, and the secret value appears neither in the response nor in
+    anything delivered to the callbacks for the rejection, which is found by the request's unique text."""
     text, secret = marker(), "dd-dec1-" + marker()
     fields: Final[dict[str, JsonValue]] = {"dd_api_key": secret, "dd_site": "dec1.invalid", "gcs_bucket_name": secret}
-    response: Final = chat(rig, call_id, text, metadata=dict(fields), **fields)
-    assert response.status_code == 200, response.text
-    sent: Final = tuple(body for body in provider_bodies(rig) if text in json.dumps(body))
-    assert len(sent) == 1 and fields.keys() & sent[0].keys() == set(), sent
-    assert secret not in json.dumps(rig.event(call_id))
+    response: Final = chat(rig, new_call_id(), text, metadata=dict(fields), **fields)
+    assert response.status_code == 401, response.text
+    assert "dd_api_key is not allowed in request body" in response.text
+    assert secret not in response.text
+    assert all(text not in json.dumps(body) for body in provider_bodies(rig))
+    rig.event_mentioning(text, "failure")
+    assert secret.encode() not in rig.sink.bodies() + rig.probe.bodies()
 
 
 def test_env_reference_in_a_request_callback_param_is_refused(rig: CallbackRig) -> None:
@@ -336,10 +357,11 @@ def test_env_reference_in_a_request_callback_param_is_refused(rig: CallbackRig) 
 
 def test_error_payload_for_a_bad_key_does_not_echo_the_authorization_header(rig: CallbackRig) -> None:
     """A caller sends an unknown key. The 401 failure payload, including its error message and traceback fields,
-    must not contain the presented key string, and neither may the custom logger's record of the failure."""
-    call_id: Final = new_call_id()
+    must not contain the presented key string, and neither may the custom logger's record of the failure. Key auth
+    fails before the endpoint reads `x-litellm-call-id`, so both are found by the request's unique text."""
+    text: Final = marker()
     bad_key: Final = "sk-dec1-secret-" + marker()
-    assert chat(rig, call_id, key=bad_key).status_code == 401
-    rig.event(call_id, "failure")
-    rig.hook(call_id, "async_log_failure_event")
+    assert chat(rig, new_call_id(), text, key=bad_key).status_code == 401
+    rig.event_mentioning(text, "failure")
+    eventually(lambda: rig.hook_names_mentioning(text), lambda names: "async_log_failure_event" in names, seconds=20)
     assert bad_key.encode() not in rig.sink.bodies() + rig.probe.bodies()

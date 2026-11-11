@@ -163,8 +163,10 @@ def test_status_fields_report_llm_success_and_no_guardrail_run(rig: CallbackRig)
 
 def test_model_fields_name_the_group_the_deployment_and_the_provider(rig: CallbackRig) -> None:
     """The caller asks for the public model name "dec1-chat", served by one deployment of openai/gpt-4o-mini. The
-    payload must report `model_group` "dec1-chat", `custom_llm_provider` "openai", `model` "gpt-4o-mini", and a
-    `model_id` equal to the deployment id the proxy lists for that model in /model/info and returns in the
+    payload must report `model_group` "dec1-chat", `custom_llm_provider` "openai", `model` "openai/gpt-4o-mini"
+    (the deployment's model string with its provider prefix: `reconstruct_model_name` in
+    litellm/litellm_core_utils/core_helpers.py prefers the router's `deployment` metadata), and a `model_id`
+    equal to the deployment id the proxy lists for that model in /model/info and returns in the
     `x-litellm-model-id` response header."""
     call_id: Final = new_call_id()
     response: Final = chat(rig, call_id)
@@ -175,7 +177,11 @@ def test_model_fields_name_the_group_the_deployment_and_the_provider(rig: Callba
         for entry in list_value(rig.proxy.get("/model/info")["data"])
         if object_value(entry)["model_name"] == CHAT
     )
-    assert (event["model_group"], event["custom_llm_provider"], event["model"]) == (CHAT, "openai", "gpt-4o-mini")
+    assert (event["model_group"], event["custom_llm_provider"], event["model"]) == (
+        CHAT,
+        "openai",
+        "openai/gpt-4o-mini",
+    )
     assert listed == (event["model_id"],)
     assert response.headers["x-litellm-model-id"] == event["model_id"]
 

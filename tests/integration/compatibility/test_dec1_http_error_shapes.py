@@ -42,13 +42,17 @@ def test_a_missing_key_is_a_401_openai_envelope_with_type_auth_error(gateway: Ga
 
 
 def test_an_unknown_key_is_a_401_that_never_echoes_the_key(gateway: Gateway) -> None:
-    """A chat call is sent with a well-formed but unknown `sk-` key. The proxy must answer 401 with `type`
-    `auth_error`, and the full key must not appear anywhere in the response body: error bodies end up in client
-    logs."""
+    """A chat call is sent with a well-formed but unknown `sk-` key. The proxy must answer 401 in the OpenAI
+    envelope with `type` `token_not_found_in_db` and `code` `"401"` (`ProxyErrorTypes.token_not_found_in_db`,
+    raised by `get_key_object` in `auth_checks.py` when the hashed key has no row), unlike the missing-key case,
+    which is `auth_error`. The full key must not appear anywhere in the response body: error bodies end up in
+    client logs."""
     key: Final = f"sk-dec1-{uuid.uuid4().hex}"
     response: Final = gateway.request("POST", CHAT, chat_body("dec1-any-model"), key=key)
     assert response.status_code == 401
-    assert _error(response)["type"] == "auth_error"
+    error: Final = _error(response)
+    assert set(error) >= ENVELOPE_KEYS
+    assert (error["type"], error["code"]) == ("token_not_found_in_db", "401")
     assert key not in response.text
 
 
