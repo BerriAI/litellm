@@ -48,13 +48,15 @@ type Models struct {
 type Class struct {
 	Name           string  `json:"name"`
 	Weight         float64 `json:"weight"`
-	Endpoint       string  `json:"endpoint"` // "chat" or "messages"
+	Endpoint       string  `json:"endpoint"` // "chat", "messages" or "decisions"
 	StreamFraction float64 `json:"stream_fraction"`
 	ContextTokens  Dist    `json:"context_tokens"`
 	TTFTMs         Dist    `json:"ttft_ms"`
 	DurationS      Dist    `json:"duration_s"`
 	// OutputTokensPerS sets output length from the duration (default 50).
 	OutputTokensPerS float64 `json:"output_tokens_per_s"`
+	OutputTokens     *Dist   `json:"output_tokens"`
+	Questions        int     `json:"questions"`
 }
 
 // Dist is a distribution: "const" (Min), "uniform", "loguniform" (Min..Max), or "choice"
@@ -127,8 +129,14 @@ func loadWorkload(path string) (*Workload, error) {
 		return nil, fmt.Errorf("%s: needs stages and classes", path)
 	}
 	for _, c := range w.Classes {
-		if c.Endpoint != "chat" && c.Endpoint != "messages" {
-			return nil, fmt.Errorf("class %s: endpoint must be chat or messages", c.Name)
+		if c.Endpoint != "chat" && c.Endpoint != "messages" && c.Endpoint != "decisions" {
+			return nil, fmt.Errorf("class %s: endpoint must be chat, messages or decisions", c.Name)
+		}
+		if c.Endpoint == "decisions" && c.StreamFraction > 0 {
+			return nil, fmt.Errorf("class %s: decisions do not stream", c.Name)
+		}
+		if c.Questions < 0 || c.Questions > maxQuestions {
+			return nil, fmt.Errorf("class %s: questions must be 0 to %d", c.Name, maxQuestions)
 		}
 		if m, ok := w.Models[c.Endpoint]; !ok || m.Count == 0 {
 			return nil, fmt.Errorf("class %s: no models for endpoint %s", c.Name, c.Endpoint)

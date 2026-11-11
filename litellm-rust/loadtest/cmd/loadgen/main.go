@@ -76,6 +76,7 @@ func main() {
 	keysFile := flag.String("keys", "", "keys file to use instead of the workload's keys.file")
 	chatPath := flag.String("chat-path", "/v1/chat/completions", "path of the chat endpoint under -target")
 	messagesPath := flag.String("messages-path", "/v1/messages", "path of the messages endpoint under -target (Bifrost serves it at /anthropic/v1/messages)")
+	decisionsPath := flag.String("decisions-path", "/v1/decisions", "path of the decisions endpoint under -target")
 	var headers headerFlags
 	flag.Var(&headers, "header", "extra request header as 'Name: value' (repeatable)")
 	flag.Parse()
@@ -227,9 +228,18 @@ schedule:
 			planned: next,
 		}
 		outTokens := max(int(float64(durMs-ttftMs)/1000*tps), 1)
+		if cl.OutputTokens != nil {
+			outTokens = max(int(cl.OutputTokens.Sample(rng)), 1)
+		}
 		res.OutTokens = outTokens
 		id++
-		body := buildBody(pool, rng, res, outTokens, fmt.Sprintf("%d-%d", *shard, id))
+		nonce := fmt.Sprintf("%d-%d", *shard, id)
+		var body []byte
+		if cl.Endpoint == "decisions" {
+			body = buildDecisionsBody(pool, rng, res, outTokens, cl.Questions, nonce)
+		} else {
+			body = buildBody(pool, rng, res, outTokens, nonce)
+		}
 		res.BodyBytes = len(body)
 		transport := pooled
 		if res.NewConn {
@@ -241,7 +251,7 @@ schedule:
 		go func() {
 			defer wg.Done()
 			defer c.inflight.Add(-1)
-			do(reqCtx, transport, *target, paths{*chatPath, *messagesPath}, keys[keyIdx], *messagesAuth, headers, body, &res)
+			do(reqCtx, transport, *target, paths{*chatPath, *messagesPath, *decisionsPath}, keys[keyIdx], *messagesAuth, headers, body, &res)
 			if res.OK {
 				c.ok.Add(1)
 			} else {
@@ -286,17 +296,20 @@ func (h *headerFlags) Set(value string) error {
 	return nil
 }
 
-// paths are the chat and messages endpoints under the target.
-type paths struct{ chat, messages string }
+// paths are the chat, messages and decisions endpoints under the target.
+type paths struct{ chat, messages, decisions string }
 
 func do(ctx context.Context, transport *http.Transport, target string, p paths, key, messagesAuth string, headers headerFlags, body []byte, res *result) {
 	limit := time.Duration(res.DurPlanMs)*time.Millisecond + 3*time.Minute
 	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 
-	path := p.chat
-	if res.Endpoint == "messages" {
-		path = p.messages
+	path, marker := p.chat, []byte(`"choices"`)
+	switch res.Endpoint {
+	case "messages":
+		path, marker = p.messages, []byte(`"content"`)
+	case "decisions":
+		path, marker = p.decisions, []byte(`"answers"`)
 	}
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, target+path, bytes.NewReader(body))
 	req.Header.Set("content-type", "application/json")
@@ -332,10 +345,6 @@ func do(ctx context.Context, transport *http.Transport, target string, p paths, 
 		rest, err := io.ReadAll(resp.Body)
 		res.TotalMs = ms(time.Since(t0))
 		full := append(first[:n], rest...)
-		marker := []byte(`"choices"`)
-		if res.Endpoint == "messages" {
-			marker = []byte(`"content"`)
-		}
 		res.OK = err == nil && resp.StatusCode == http.StatusOK && bytes.Contains(full, marker)
 		if !res.OK {
 			res.Err = trim(fmt.Sprintf("status %d: %s", resp.StatusCode, full))

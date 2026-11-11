@@ -508,7 +508,7 @@ impl Hook for ProviderMetadata {
         // Body paths name Messages API fields; Chat Completions takes the headers only.
         let body = match request.route {
             Route::Messages => self.body.as_slice(),
-            Route::ChatCompletions => &[],
+            Route::ChatCompletions | Route::Decisions => &[],
         };
         for (path, template) in body {
             if let Some(value) = template.render(request) {

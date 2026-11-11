@@ -1,0 +1,21 @@
+{
+  "name": "system-one-auto: /v1/decisions with 2000 input and 20 output tokens, 50 to 150 ms upstream, rising rates against a 0.5 s SLO",
+  "stages": [
+    {"duration_s": 120, "rps": 500},
+    {"duration_s": 120, "rps": 1000},
+    {"duration_s": 120, "rps": 2000},
+    {"duration_s": 120, "rps": 4000},
+    {"duration_s": 120, "rps": 8000}
+  ],
+  "warmup_s": 15,
+  "max_in_flight": 20000,
+  "keys": {"file": "out/keys.txt", "zipf_s": 0},
+  "models": {"decisions": {"prefix": "gpt-6-luna-", "count": 4}},
+  "classes": [
+    {"name": "system-one-auto", "weight": 1, "endpoint": "decisions", "stream_fraction": 0, "questions": 3,
+     "context_tokens": {"dist": "const", "min": 2000},
+     "output_tokens": {"dist": "const", "min": 20},
+     "ttft_ms": {"dist": "const", "min": 0},
+     "duration_s": {"dist": "uniform", "min": 0.05, "max": 0.15}}
+  ]
+}

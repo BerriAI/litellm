@@ -72,6 +72,7 @@ impl BitOrAssign for Facts {
 pub enum Route {
     Messages,
     ChatCompletions,
+    Decisions,
 }
 
 impl Route {
@@ -80,6 +81,7 @@ impl Route {
         match self {
             Self::Messages => "anthropic_messages",
             Self::ChatCompletions => "acompletion",
+            Self::Decisions => "adecisions",
         }
     }
 
@@ -88,6 +90,7 @@ impl Route {
         match self {
             Self::Messages => "/v1/messages",
             Self::ChatCompletions => "/chat/completions",
+            Self::Decisions => "/v1/decisions",
         }
     }
 }

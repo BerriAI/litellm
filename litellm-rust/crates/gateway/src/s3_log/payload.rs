@@ -438,6 +438,7 @@ fn response(record: &Record) -> Value {
     let assembled = match record.request.route {
         Route::ChatCompletions => chat_completion(events),
         Route::Messages => anthropic_message(events),
+        Route::Decisions => None,
     };
     assembled.unwrap_or_else(|| Value::Object(Map::new()))
 }

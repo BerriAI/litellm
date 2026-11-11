@@ -119,6 +119,7 @@ fn programmatic_deployments_preserve_overrides_and_share_their_group() {
         id: None,
         base_model: None,
         undiscoverable: false,
+        supports_box_questions: None,
     };
     let router = Router::from_iter([
         ("public-model".into(), Deployment::default()),
@@ -187,6 +188,27 @@ fn configuration_reads_discoverable(#[case] model_info: &str, #[case] undiscover
     let router = Router::from_config(&config).unwrap();
 
     assert_eq!(only(&router, "m").undiscoverable, undiscoverable);
+}
+
+#[rstest]
+#[case::unset("{}", None)]
+#[case::supported("{supports_box_questions: true}", Some(true))]
+#[case::unsupported("{supports_box_questions: false}", Some(false))]
+#[case::not_a_bool("{supports_box_questions: \"yes\"}", None)]
+fn configuration_reads_box_question_support(
+    #[case] model_info: &str,
+    #[case] expected: Option<bool>,
+) {
+    let config = Config::from_yaml(&format!(
+        "model_list:
+  - model_name: m
+    litellm_params: {{model: provider/a}}
+    model_info: {model_info}"
+    ))
+    .unwrap();
+    let router = Router::from_config(&config).unwrap();
+
+    assert_eq!(only(&router, "m").supports_box_questions, expected);
 }
 
 #[rstest]

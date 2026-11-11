@@ -20,6 +20,17 @@ Workloads live in `workloads/`: `smoke`, `realistic-ramp`, `long-streams`, `larg
 15 minutes with evenly spaced arrivals and smoke's request mix over every model group;
 `sustained-check` runs the same mix at 100, 500 and 1,000 rps for 2 minutes each, to check that the
 client, mock and stack hold 1,000 rps before the long runs.
+`system-one-auto` sends only `/v1/decisions`: 2,000 input tokens, 20 output tokens and three
+questions per request, with a 50 to 150 ms upstream, at 500 to 8,000 rps, against a 0.5 s
+completion SLO. Its model groups come from `genconfig -decisions-groups 4` (`gpt-6-luna-0..3`,
+OpenAI by default, `-decisions-provider azure` for Azure):
+
+```sh
+genconfig -out out -mocks http://127.0.0.1:9000 -keys 100 -chat-groups 0 -messages-groups 0 -decisions-groups 4
+LITELLM_CONFIG=out/config.yaml litellm-gateway &
+loadgen -workload workloads/system-one-auto.json -target http://127.0.0.1:4000 -key sk-loadtest-master -out out/system-one-auto.jsonl
+summarize out/system-one-auto.jsonl
+```
 
 ## Build the images
 

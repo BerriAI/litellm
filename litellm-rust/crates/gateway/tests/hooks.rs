@@ -42,6 +42,7 @@ const MESSAGE_STREAM: &str = concat!(
     "data: {\"type\":\"message_stop\"}\n\n",
 );
 const COMPLETION: &str = r#"{"id":"chatcmpl-1","object":"chat.completion","created":1,"model":"gpt-x","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":6,"total_tokens":11}}"#;
+const DECISION: &str = r#"{"model":"gpt-6-luna","answers":[{"type":"predicate","probability":0.9}],"usage":{"input_tokens":12,"input_tokens_details":{"cached_tokens":4},"output_tokens":3,"total_tokens":15}}"#;
 const COMPLETION_STREAM: &str = concat!(
     "data: {\"id\":\"c\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\n",
     "data: {\"id\":\"c\",\"choices\":[],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3,\"total_tokens\":10}}\n\n",
@@ -78,6 +79,9 @@ async fn upstream(bodies: Bodies) -> String {
                     .unwrap();
             let stream = body["stream"].as_bool().unwrap_or(false);
             bodies.lock().unwrap().push(body);
+            if path.ends_with("/decisions") {
+                return ([(CONTENT_TYPE, "application/json")], DECISION).into_response();
+            }
             let (content_type, payload) = match (path.ends_with("/chat/completions"), stream) {
                 (true, true) => ("text/event-stream", COMPLETION_STREAM),
                 (true, false) => ("application/json", COMPLETION),
@@ -252,6 +256,17 @@ async fn harness() -> Harness {
       output_cost_per_token: 2
     model_info:
       id: gpt-1
+  - model_name: luna
+    litellm_params:
+      model: openai/luna-test
+      api_base: {upstream}
+      api_key: sk-upstream
+      input_cost_per_token: 1
+      output_cost_per_token: 2
+      cache_read_input_token_cost: 0.5
+      output_cost_per_token_decisions: 0
+    model_info:
+      id: luna-1
 router_settings:
   num_retries: 0
 general_settings:
@@ -427,13 +442,71 @@ async fn chat_completions_are_priced() {
     assert_eq!(seen[0].key_alias, None);
 }
 
+fn decisions() -> Value {
+    json!({"model": "luna", "input": "refund order 4411 today",
+        "questions": [{"type": "predicate", "name": "refund", "instructions": "Refund?"}]})
+}
+
 #[rstest]
-#[case::messages("/v1/messages")]
-#[case::chat("/v1/chat/completions")]
+#[case::versioned("/v1/decisions")]
+#[case::unversioned("/decisions")]
 #[tokio::test]
-async fn a_refusal_stops_the_request_with_its_headers(#[case] path: &str) {
+async fn decisions_are_hooked_and_priced_at_their_own_rates(#[case] path: &str) {
     let harness = harness().await;
-    let (status, headers, body) = send(&harness.app, path, "sk-team", messages(false), true).await;
+    let (status, headers, body) = send(&harness.app, path, "sk-team", decisions(), false).await;
+    assert_eq!(status, 200, "{body:?}");
+    assert_eq!(headers["x-hooked"], "1");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()["answers"],
+        json!([{"type": "predicate", "name": "refund", "probability": 0.9}])
+    );
+    assert_eq!(
+        harness.bodies.lock().unwrap()[0],
+        json!({"model": "luna-test", "input": "refund order 4411 today",
+            "questions": [{"type": "predicate", "name": "refund", "instructions": "Refund?"}]})
+    );
+
+    litellm_gateway::hooks::close(&harness.inference).await;
+    assert_eq!(*harness.settled.lock().unwrap(), [200]);
+    let seen = harness.seen.0.lock().unwrap();
+    let [seen] = seen.as_slice() else {
+        panic!("{seen:?}")
+    };
+    assert_eq!(seen.deployment.as_deref(), Some("luna-1"));
+    assert_eq!(seen.key_alias.as_deref(), Some("team-key"));
+    assert_eq!(seen.usage, Some((8, 4, 3)));
+    assert_eq!(seen.cost, Some(8.0 + 4.0 * 0.5));
+}
+
+#[rstest]
+#[tokio::test]
+async fn an_invalid_decisions_request_is_refused_before_the_hooks_count_it() {
+    let harness = harness().await;
+    let request = json!({"model": "luna", "input": "x", "questions": []});
+    let (status, _, body) = send(&harness.app, "/v1/decisions", "sk-team", request, false).await;
+    assert_eq!(status, 400);
+    let body: Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("Invalid Decisions request: questions should have 1 to 128 items"),
+        "{body}"
+    );
+
+    litellm_gateway::hooks::close(&harness.inference).await;
+    assert!(harness.seen.0.lock().unwrap().is_empty());
+    assert!(harness.bodies.lock().unwrap().is_empty());
+}
+
+#[rstest]
+#[case::messages("/v1/messages", messages(false))]
+#[case::chat("/v1/chat/completions", messages(false))]
+#[case::decisions("/v1/decisions", decisions())]
+#[tokio::test]
+async fn a_refusal_stops_the_request_with_its_headers(#[case] path: &str, #[case] request: Value) {
+    let harness = harness().await;
+    let (status, headers, body) = send(&harness.app, path, "sk-team", request, true).await;
     assert_eq!(status, 429);
     assert_eq!(headers["retry-after"], "7");
     let body: Value = serde_json::from_slice(&body).unwrap();

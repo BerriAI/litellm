@@ -11,7 +11,10 @@ use litellm_cost::{
 use litellm_model_catalog::Catalog;
 use serde_json::{Map, Value};
 
-use crate::usage::{ServiceTier, Usage};
+use crate::{
+    facts::Route,
+    usage::{ServiceTier, Usage},
+};
 
 /// Prices by deployment id.
 #[derive(Debug, Default)]
@@ -24,6 +27,8 @@ pub struct Prices {
     by_response_model: HashMap<Arc<str>, Arc<str>>,
     /// Cost map prices by model name, for the deployments priced by their response's model.
     models: HashMap<String, PricingPlan>,
+    decisions: HashMap<Arc<str>, PricingPlan>,
+    decisions_models: HashMap<String, PricingPlan>,
 }
 
 impl Prices {
@@ -32,6 +37,9 @@ impl Prices {
     pub fn insert(&mut self, id: Arc<str>, fields: &Map<String, Value>) {
         if let Some(limit) = fields.get("max_output_tokens").and_then(Value::as_u64) {
             self.max_output_tokens.insert(id.clone(), limit);
+        }
+        if let Some(plan) = decisions_fields(fields).and_then(|fields| plan(&id, &fields)) {
+            self.decisions.insert(id.clone(), plan);
         }
         if let Some(plan) = plan(&id, fields) {
             self.plans.insert(id, plan);
@@ -46,6 +54,9 @@ impl Prices {
 
     /// Adds the cost map prices of `model`, for deployments priced by their response's model.
     pub fn insert_model(&mut self, model: &str, fields: &Map<String, Value>) {
+        if let Some(plan) = decisions_fields(fields).and_then(|fields| plan(model, &fields)) {
+            self.decisions_models.insert(model.to_owned(), plan);
+        }
         if let Some(plan) = plan(model, fields) {
             self.models.insert(model.to_owned(), plan);
         }
@@ -74,10 +85,22 @@ impl Prices {
         plan_cost(deployment, self.plans.get(deployment)?, usage)
     }
 
+    pub fn route_cost(&self, route: Route, deployment: &str, usage: &Usage) -> Option<f64> {
+        match route {
+            Route::Decisions => self
+                .decisions
+                .get(deployment)
+                .or_else(|| self.plans.get(deployment))
+                .and_then(|plan| plan_cost(deployment, plan, usage)),
+            Route::Messages | Route::ChatCompletions => self.cost(deployment, usage),
+        }
+    }
+
     /// [`Self::cost`], first by `response_model` for a deployment priced by its response's
     /// model, as the proxy tries `{provider}/{response model}` ahead of the deployment.
     pub fn response_cost(
         &self,
+        route: Route,
         deployment: &str,
         response_model: Option<&str>,
         usage: &Usage,
@@ -90,10 +113,38 @@ impl Prices {
                     true => model.to_owned(),
                     false => format!("{provider}/{model}"),
                 };
-                plan_cost(deployment, self.models.get(&name)?, usage)
+                let plan = match route {
+                    Route::Decisions => self
+                        .decisions_models
+                        .get(&name)
+                        .or_else(|| self.models.get(&name)),
+                    Route::Messages | Route::ChatCompletions => self.models.get(&name),
+                };
+                plan_cost(deployment, plan?, usage)
             })
-            .or_else(|| self.cost(deployment, usage))
+            .or_else(|| self.route_cost(route, deployment, usage))
     }
+}
+
+const DECISIONS_SUFFIX: &str = "_decisions";
+
+fn decisions_fields(fields: &Map<String, Value>) -> Option<Map<String, Value>> {
+    let overrides: Vec<_> = fields
+        .iter()
+        .filter_map(|(name, value)| Some((name.strip_suffix(DECISIONS_SUFFIX)?, value)))
+        .collect();
+    if overrides.is_empty() {
+        return None;
+    }
+    let mut priced: Map<String, Value> = fields
+        .iter()
+        .filter(|(name, _)| !name.ends_with(DECISIONS_SUFFIX))
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect();
+    for (name, value) in overrides {
+        priced.insert(name.to_owned(), value.clone());
+    }
+    Some(priced)
 }
 
 /// The plan `fields` price, or `None` when they hold no usable prices.
@@ -160,7 +211,8 @@ pub fn deployment_fields(
         .unwrap_or_default();
     for layer in overrides {
         for (name, value) in layer.iter() {
-            if price_key(name).is_some() {
+            let plain = name.strip_suffix(DECISIONS_SUFFIX).unwrap_or(name);
+            if price_key(plain).is_some() {
                 fields.insert(name.clone(), value.clone());
             }
         }
@@ -514,7 +566,7 @@ mod tests {
         let prices =
             response_priced(json!({"input_cost_per_token": 7e-6, "output_cost_per_token": 0.0}));
         assert_eq!(
-            prices.response_cost("d", response_model, &usage(1, 0)),
+            prices.response_cost(Route::ChatCompletions, "d", response_model, &usage(1, 0)),
             rate
         );
     }
@@ -529,8 +581,73 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(
-            prices.response_cost("other", Some("gpt-4o"), &usage(1, 0)),
+            prices.response_cost(
+                Route::ChatCompletions,
+                "other",
+                Some("gpt-4o"),
+                &usage(1, 0)
+            ),
             Some(7e-6)
+        );
+    }
+
+    #[rstest]
+    #[case::chat_uses_the_plain_rates(Route::ChatCompletions, 1000.0 * 1e-6 + 10.0 * 2e-6)]
+    #[case::messages_uses_the_plain_rates(Route::Messages, 1000.0 * 1e-6 + 10.0 * 2e-6)]
+    #[case::decisions_uses_its_overrides(Route::Decisions, 1000.0 * 5e-7)]
+    fn decisions_rates_override_the_plain_ones_on_the_decisions_route(
+        #[case] route: Route,
+        #[case] expected: f64,
+    ) {
+        let prices = prices(json!({
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 2e-6,
+            "input_cost_per_token_decisions": 5e-7,
+            "output_cost_per_token_decisions": 0.0,
+        }));
+        assert!(close(
+            prices.route_cost(route, "d", &usage(1000, 10)).unwrap(),
+            expected
+        ));
+    }
+
+    #[rstest]
+    fn decisions_without_overrides_bill_the_plain_rates() {
+        let prices = prices(json!({"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}));
+        assert!(close(
+            prices
+                .route_cost(Route::Decisions, "d", &usage(10, 10))
+                .unwrap(),
+            10.0 * 1e-6 + 10.0 * 2e-6
+        ));
+    }
+
+    #[rstest]
+    fn config_decisions_prices_reach_the_fields() {
+        let config = json!({"output_cost_per_token_decisions": 0.0, "model_decisions": "x"});
+        let fields = deployment_fields(None, "openai/m", None, &[config.as_object().unwrap()]);
+        assert_eq!(
+            fields.get("output_cost_per_token_decisions"),
+            Some(&json!(0.0))
+        );
+        assert!(!fields.contains_key("model_decisions"));
+    }
+
+    #[rstest]
+    #[case::decisions_model_overrides(Route::Decisions, Some(1e-7))]
+    #[case::chat_model_rates(Route::ChatCompletions, Some(2e-6))]
+    fn response_model_prices_follow_the_route(#[case] route: Route, #[case] rate: Option<f64>) {
+        let mut prices = Prices::default();
+        prices.insert_model(
+            "azure/luna",
+            json!({"input_cost_per_token": 2e-6, "output_cost_per_token": 0.0, "input_cost_per_token_decisions": 1e-7})
+                .as_object()
+                .unwrap(),
+        );
+        prices.price_by_response_model("d".into(), "azure");
+        assert_eq!(
+            prices.response_cost(route, "d", Some("luna"), &usage(1, 0)),
+            rate
         );
     }
 }

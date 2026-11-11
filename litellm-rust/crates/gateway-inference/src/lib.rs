@@ -7,6 +7,7 @@ mod cache_control_injection;
 mod caching;
 mod chat_completions;
 mod client_side;
+mod decisions;
 mod deployment_params;
 mod error;
 mod hooks;
@@ -27,6 +28,7 @@ use litellm_http::{
 };
 use litellm_inference::resources::CoreResources;
 use litellm_inference_chat::ChatCompletionsRoute;
+use litellm_inference_decisions::DecisionsRoute;
 use litellm_inference_messages::MessagesRoute;
 use litellm_llms::base_llm::model_info::ModelInfo;
 use litellm_secrets::source::SecretSource;
@@ -44,6 +46,7 @@ pub struct Gateway {
     allow_client_side_credentials: bool,
     pub chat_completions: ChatCompletionsRoute,
     pub messages: MessagesRoute,
+    pub decisions: DecisionsRoute,
     pub models: ModelRouter,
     pub secrets: Arc<dyn SecretSource>,
     pub resources: CoreResources,
@@ -136,7 +139,8 @@ impl Gateway {
                 &http,
                 UrlPolicy::default(),
             )?),
-            messages: MessagesRoute::new(provider, auth, secrets.clone()),
+            messages: MessagesRoute::new(provider.clone(), auth.clone(), secrets.clone()),
+            decisions: DecisionsRoute::new(provider, auth, secrets.clone()),
             models,
             secrets,
             resources,
@@ -150,6 +154,8 @@ pub fn router(gateway: Arc<Gateway>) -> Router {
         .route("/v1/messages", post(messages::create))
         .route("/chat/completions", post(chat_completions::create))
         .route("/v1/chat/completions", post(chat_completions::create))
+        .route("/decisions", post(decisions::create))
+        .route("/v1/decisions", post(decisions::create))
         .route("/models", get(models::list))
         .route("/v1/models", get(models::list))
         .route("/models/{model_id}", get(models::retrieve))

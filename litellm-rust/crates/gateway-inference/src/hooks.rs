@@ -279,7 +279,7 @@ impl Tracking {
             (true, true, Route::ChatCompletions) => {
                 Meter::Stream(StreamUsage::new(StreamFormat::OpenAi))
             }
-            (true, false, _) => Meter::Body(Vec::new()),
+            (true, false, _) | (true, true, Route::Decisions) => Meter::Body(Vec::new()),
         };
         let mut finish = Finish {
             body: pipeline.reads(Facts::RESPONSE_BODY).then(Vec::new),
@@ -372,7 +372,8 @@ impl Finish {
     /// carries.
     fn usage_and_cost(&self) -> (Option<Usage>, Option<f64>) {
         let by_model = self.pipeline.prices().prices_by_response_model()
-            && (self.route == Route::ChatCompletions || self.upstream.is_some());
+            && (matches!(self.route, Route::ChatCompletions | Route::Decisions)
+                || self.upstream.is_some());
         let (usage, model) = match (&self.meter, &self.upstream) {
             (Meter::Off, _) => (None, None),
             (_, Some(upstream)) => {
@@ -395,9 +396,12 @@ impl Finish {
             .then_some(())
             .zip(self.deployment.as_ref().zip(usage.as_ref()))
             .and_then(|((), (deployment, usage))| {
-                self.pipeline
-                    .prices()
-                    .response_cost(&deployment.id, model.as_deref(), usage)
+                self.pipeline.prices().response_cost(
+                    self.route,
+                    &deployment.id,
+                    model.as_deref(),
+                    usage,
+                )
             });
         (usage, cost)
     }
@@ -440,6 +444,7 @@ fn body_usage(route: Route, body: &[u8]) -> Option<Usage> {
     match route {
         Route::Messages => Usage::from_anthropic(&value),
         Route::ChatCompletions => Usage::from_openai(&value),
+        Route::Decisions => Usage::from_decisions(&value),
     }
 }
 

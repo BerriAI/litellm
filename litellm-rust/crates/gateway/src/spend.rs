@@ -516,9 +516,9 @@ fn daily_row(record: &Record, log: &SpendLog) -> DailySpend {
         api_key: log.api_key.clone(),
         model: log.model.clone(),
         custom_llm_provider: log.custom_llm_provider.clone(),
-        // The proxy maps only chat completions to an endpoint here.
         endpoint: match record.request.route {
             Route::ChatCompletions => "/chat/completions".into(),
+            Route::Decisions => "/decisions".into(),
             Route::Messages => String::new(),
         },
         model_group: Some(log.model_group.clone()),

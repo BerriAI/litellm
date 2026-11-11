@@ -94,6 +94,7 @@ impl Router {
                             .clone()
                             .or_else(|| info_base_model(model)),
                         undiscoverable: undiscoverable(model),
+                        supports_box_questions: supports_box_questions(model),
                         ..deployment
                     },
                 ))
@@ -397,6 +398,13 @@ fn undiscoverable(model: &Model) -> bool {
         model.model_info.get("discoverable"),
         Some(litellm_config::Value::Bool(false))
     )
+}
+
+fn supports_box_questions(model: &Model) -> Option<bool> {
+    match model.model_info.get("supports_box_questions")? {
+        litellm_config::Value::Bool(flag) => Some(*flag),
+        _ => None,
+    }
 }
 
 fn info_base_model(model: &Model) -> Option<String> {

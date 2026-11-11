@@ -3855,6 +3855,7 @@ dependencies = [
  "litellm-http",
  "litellm-inference",
  "litellm-inference-chat",
+ "litellm-inference-decisions",
  "litellm-inference-messages",
  "litellm-llms",
  "litellm-llms-types",
@@ -4078,6 +4079,28 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+ "wiremock",
+]
+
+[[package]]
+name = "litellm-inference-decisions"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "litellm-auth",
+ "litellm-core-utils",
+ "litellm-host",
+ "litellm-http",
+ "litellm-inference",
+ "litellm-inference-testing",
+ "litellm-llms",
+ "litellm-llms-types",
+ "litellm-secrets",
+ "reqwest 0.12.28",
+ "rstest",
+ "serde_json",
+ "tokio",
+ "tracing",
  "wiremock",
 ]
 

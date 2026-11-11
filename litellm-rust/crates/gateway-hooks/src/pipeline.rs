@@ -140,7 +140,7 @@ impl Pipeline {
         if outcome.cost.is_none()
             && let (Some(usage), Some(deployment)) = (&outcome.usage, &outcome.deployment)
         {
-            outcome.cost = self.prices.cost(&deployment.id, usage);
+            outcome.cost = self.prices.route_cost(request.route, &deployment.id, usage);
         }
         let record = Record {
             request,
