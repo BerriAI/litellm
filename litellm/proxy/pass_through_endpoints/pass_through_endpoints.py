@@ -6,7 +6,16 @@ import posixpath
 import re
 import traceback
 from base64 import b64encode
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping, MutableMapping, Sequence
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Callable,
+    Collection,
+    Iterable,
+    Mapping,
+    MutableMapping,
+    Sequence,
+)
 from dataclasses import dataclass
 from datetime import datetime
 from functools import reduce
@@ -1235,6 +1244,12 @@ def _caller_query_source(
     return query_params or request.query_params
 
 
+def _forwarded_query_params(
+    params: Mapping[str, object], excluded: Collection[str]
+) -> dict[str, object] | None:  # mutable-ok: rewrite_query_ids and the httpx request helpers take a plain dict
+    return {k: v for k, v in params.items() if k not in excluded} or None
+
+
 def _json_object(value: object) -> Mapping[str, object]:
     return cast("Mapping[str, object]", value) if isinstance(value, Mapping) else MappingProxyType({})  # cast-ok: json
 
@@ -1285,6 +1300,7 @@ async def pass_through_request(
     merge_query_params: bool | None = False,
     query_params: dict | None = None,
     default_query_params: dict | None = None,
+    excluded_query_params: Collection[str] = (),
     stream: bool | None = None,
     cost_per_request: float | None = None,
     custom_llm_provider: str | None = None,
@@ -1307,6 +1323,7 @@ async def pass_through_request(
         merge_query_params: Whether to merge query params
         query_params: The query params
         default_query_params: The default query params to be applied if not overridden by client
+        excluded_query_params: Query param names dropped before the request is sent upstream
         stream: Whether to stream the response
         cost_per_request: Optional field - cost per request to the target endpoint
         custom_llm_provider: Optional field - custom LLM provider for the endpoint
@@ -1354,9 +1371,9 @@ async def pass_through_request(
             parent_span=user_api_key_dict.parent_otel_span,
         )
 
-        requested_query_params: dict | None = (
-            dict(_caller_query_source(keep_target_query, query_params, request))  # pyright: ignore[reportUnknownArgumentType]  # query_params keeps its legacy untyped dict annotation
-            or None
+        requested_query_params: dict | None = _forwarded_query_params(
+            _caller_query_source(keep_target_query, query_params, request),  # pyright: ignore[reportUnknownArgumentType]  # query_params keeps its legacy untyped dict annotation
+            excluded_query_params,
         )
 
         endpoint_type: Final[EndpointType] = HttpPassThroughEndpointHelpers.get_endpoint_type(
@@ -2361,6 +2378,7 @@ def create_pass_through_route(
     is_streaming_request: bool | None = False,
     query_params: dict | None = None,
     default_query_params: dict | None = None,
+    excluded_query_params: Collection[str] = (),
     guardrails: dict[str, object] | None = None,
     config_file_path: str | None = None,
     timeout: float | None = None,
@@ -2508,6 +2526,7 @@ def create_pass_through_route(
                         merge_query_params=cast(bool | None, param_merge_query_params),
                         query_params=final_query_params,
                         default_query_params=cast(dict | None, param_default_query_params),
+                        excluded_query_params=excluded_query_params,
                         stream=is_stream,
                         custom_body=final_custom_body,
                         cost_per_request=cast(float | None, param_cost_per_request),
