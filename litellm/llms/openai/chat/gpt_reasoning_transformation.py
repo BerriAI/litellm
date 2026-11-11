@@ -58,7 +58,9 @@ class DeferredReasoningDropWarnings:
 
     def log_unless_dropped_effort_sent(self, sent_params: Mapping[str, object]) -> None:
         sent_effort: Final = _sent_effort_level(sent_params)
-        for msg, args in self.held:
+        held: Final = self.held
+        self.held = ()
+        for msg, args in held:
             match args:
                 case ("reasoning_effort", dropped_effort, *_) if dropped_effort == sent_effort:
                     continue

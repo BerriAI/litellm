@@ -2431,6 +2431,37 @@ def test_reasoning_effort_drop_warning_fires_unless_the_provider_gets_the_droppe
     assert len(drop_warnings) == (0 if sent_effort == "none" else 1)
 
 
+@pytest.mark.parametrize(
+    "request_params",
+    [
+        pytest.param(
+            {"provider_affinity_header": "x-session-affinity", "litellm_session_id": "a\nb"},
+            id="rejected-before-dispatch",
+        ),
+        pytest.param({}, id="rejected-by-the-provider"),
+    ],
+)
+def test_reasoning_effort_drop_warning_fires_once_when_the_request_fails(
+    request_params: dict[str, object],
+    azure_upstream_routes: AzureUpstreamRoutes,
+    caplog: pytest.LogCaptureFixture,
+):
+    azure_upstream_routes.chat.respond(400, json={"error": {"message": "refused", "type": "invalid_request_error"}})
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"), pytest.raises(litellm.BadRequestError):
+        litellm.completion(
+            model=_UNLISTED_AZURE_GPT_5_MODEL,
+            messages=[{"role": "user", "content": "hello"}],
+            api_base=_AZURE_TEST_API_BASE,
+            api_key="fake-key",
+            api_version="2025-04-01-preview",
+            drop_params=True,
+            reasoning_effort="none",
+            **request_params,
+        )
+
+    assert len([r for r in caplog.records if "Dropping reasoning_effort" in r.getMessage()]) == 1
+
+
 @pytest.fixture
 def github_copilot_access_token(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))

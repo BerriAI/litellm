@@ -5921,6 +5921,7 @@ def completion(
             merge_with_first_system=True,
         )
 
+    reasoning_drop_warnings: Final = DeferredReasoningDropWarnings(logger=verbose_logger)
     try:
         if base_url is not None:
             api_base = base_url
@@ -6191,7 +6192,6 @@ def completion(
                 **mapping_special_params,
             )
 
-        reasoning_drop_warnings: Final = DeferredReasoningDropWarnings(logger=verbose_logger)
         validated_model_info: Final = (
             _MODEL_INFO_ADAPTER.validate_python(model_info) if isinstance(model_info, dict) else None
         )
@@ -6725,6 +6725,7 @@ def completion(
             raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
         return response
     except Exception as e:
+        reasoning_drop_warnings.log_unless_dropped_effort_sent(MappingProxyType({}))
         ## Map to OpenAI Exception
         raise exception_type(
             model=model,
