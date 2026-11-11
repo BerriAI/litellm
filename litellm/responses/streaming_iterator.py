@@ -287,6 +287,8 @@ _ERROR_CODE_HTTP_STATUS: Final[Mapping[str, int]] = MappingProxyType(
 
 
 def _error_event_fields(error_obj: object) -> tuple[str, str | None, str | None]:
+    if isinstance(error_obj, str):
+        return error_obj, None, None
     if _is_json_object(error_obj):
         raw_message = error_obj.get("message")
         raw_type = error_obj.get("type")
@@ -373,7 +375,7 @@ def checked_responses_api_response(
     custom_llm_provider: str,
     logging_obj: LiteLLMLoggingObj,
 ) -> ResponsesAPIResponse:
-    headers: Final = provider_request_id_headers(raw_response.headers)
+    headers: Final = raw_response.headers
     try:
         transformed: Final = responses_api_provider_config.transform_response_api_response(
             model=model, raw_response=raw_response, logging_obj=logging_obj

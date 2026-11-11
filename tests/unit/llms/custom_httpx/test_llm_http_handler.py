@@ -18,6 +18,7 @@ import respx
 import websockets.exceptions
 from botocore.credentials import RefreshableCredentials
 from h2.events import ConnectionTerminated
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -7028,6 +7029,62 @@ def test_responses_names_a_failed_response_that_carries_no_error():
             client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(answer_failed_without_error))),
             **_HOSTED_VLLM_PARAMS,
         )
+
+
+def test_a_failed_response_whose_error_is_a_string_raises_with_that_message():
+    def answer_failed_with_a_string_error(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_responses_body("failed", error="Model quota exceeded"))
+
+    with pytest.raises(litellm.InternalServerError, match="Model quota exceeded"):
+        litellm.responses(
+            input="hello",
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(answer_failed_with_a_string_error))),
+            **_HOSTED_VLLM_PARAMS,
+        )
+
+
+_RATE_LIMIT_HEADERS: Final = MappingProxyType(
+    {
+        "retry-after": "7",
+        "x-ratelimit-limit-requests": "100",
+        "x-ratelimit-remaining-requests": "0",
+        "x-request-id": "req_rate_limited",
+    }
+)
+_RATE_LIMITED: Final = MappingProxyType(
+    {"type": "rate_limit_exceeded", "code": "rate_limit_exceeded", "message": "slow down"}
+)
+_EXCEPTION_HEADERS: Final = TypeAdapter(Mapping[str, str])
+
+
+def _rate_limited_over_http(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(429, json={"error": dict(_RATE_LIMITED)}, headers=dict(_RATE_LIMIT_HEADERS))
+
+
+def _rate_limited_in_a_failed_body(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        200, json=_responses_body("failed", error=dict(_RATE_LIMITED)), headers=dict(_RATE_LIMIT_HEADERS)
+    )
+
+
+def _rate_limit_headers_raised_for(answer: Callable[[httpx.Request], httpx.Response]) -> Mapping[str, str | None]:
+    with pytest.raises(litellm.RateLimitError) as raised:
+        litellm.responses(
+            input="hello",
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(answer))),
+            **_HOSTED_VLLM_PARAMS,
+        )
+    headers: Final = _EXCEPTION_HEADERS.validate_python(getattr(raised.value, "litellm_response_headers", None))
+    return {name: headers.get(name) for name in _RATE_LIMIT_HEADERS}
+
+
+def test_a_failed_response_raises_with_the_provider_headers_an_http_error_from_that_provider_carries():
+    http_error_headers: Final = _rate_limit_headers_raised_for(_rate_limited_over_http)
+    failed_body_headers: Final = _rate_limit_headers_raised_for(_rate_limited_in_a_failed_body)
+
+    assert failed_body_headers == http_error_headers
+    assert failed_body_headers["retry-after"] == _RATE_LIMIT_HEADERS["retry-after"]
+    assert failed_body_headers["x-request-id"] == _RATE_LIMIT_HEADERS["x-request-id"]
 
 
 class _FailureCostRecorder(CustomLogger):
