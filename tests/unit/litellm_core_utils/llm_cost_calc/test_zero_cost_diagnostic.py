@@ -79,6 +79,25 @@ def test_free_cached_usage_uses_the_selected_tier_cache_rate_or_its_input_rate(c
     assert is_explicitly_free_usage(usage, rates) is (cache_rate is None)
 
 
+@pytest.mark.parametrize(
+    "tiers",
+    [
+        ["invalid tier"],
+        [],
+        [{"range": [0, 20], "output_cost_per_token": 0.0}],
+        [{"range": "invalid range", "input_cost_per_token": 0.0, "output_cost_per_token": 0.0}],
+    ],
+)
+def test_invalid_or_inactive_tiers_do_not_make_paid_usage_free(tiers: object) -> None:
+    rates: Final = {
+        "input_cost_per_token": 0.01,
+        "output_cost_per_token": 0.02,
+        "tiered_pricing": tiers,
+    }
+
+    assert is_explicitly_free_usage(Usage(prompt_tokens=10, completion_tokens=5), rates) is False
+
+
 def test_missing_pricing_key_names_every_rate_the_usage_needs() -> None:
     diagnostic = diagnose_zero_cost(
         usage=TEXT_USAGE, pricing_model="dep-1", pricing_entry=PER_SECOND_ENTRY, calculation_failed=False
