@@ -2576,6 +2576,62 @@ async def test_store_batch_output_file_sizes_only_an_unsized_provider_file_from_
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_respx_sees_provider_calls")
+@pytest.mark.parametrize("team_id", ["team-a", "team-b"])
+@respx.mock
+async def test_store_batch_output_file_reads_a_team_model_output_from_the_owner_team_account(team_id: str) -> None:
+    import litellm.proxy.proxy_server as proxy_server_module
+
+    file_bytes_by_team: Final = {"team-a": 111, "team-b": 222}
+    for team, size in file_bytes_by_team.items():
+        respx.get(f"{_OPENAI_API_BASE}/files/file-output456", headers={"Authorization": f"Bearer {team}-key"}).respond(
+            200,
+            json={
+                "id": "file-output456",
+                "object": "file",
+                "bytes": size,
+                "created_at": 456,
+                "filename": "output.jsonl",
+                "purpose": "batch_output",
+                "status": "processed",
+            },
+        )
+    respx.get(f"{_OPENAI_API_BASE}/files/file-output456").respond(404, json={"error": {"message": "No such File"}})
+    router: Final = Router(
+        model_list=[
+            {"model_name": "*", "litellm_params": {"model": "openai/*", "api_key": "proxy-wide-key"}},
+            *(
+                {
+                    "model_name": f"model_name_{team}_4f2a",
+                    "litellm_params": {"model": "openai/gpt-4o", "api_key": f"{team}-key"},
+                    "model_info": {"id": f"{team}-gpt-id", "team_id": team, "team_public_model_name": "team-gpt"},
+                }
+                for team in file_bytes_by_team
+            ),
+        ]
+    )
+    proxy_managed_files, managed_file_table = _managed_files_with_fake_prisma()
+
+    with patch.object(proxy_server_module, "llm_router", router):
+        await proxy_managed_files.store_batch_output_file(
+            unified_file_id="unified-output",
+            provider_file_id="file-output456",
+            model_id="team-gpt",
+            model_name="team-gpt",
+            owner=UserAPIKeyAuth(user_id="user-123", team_id=team_id),
+            litellm_parent_otel_span=None,
+        )
+
+    stored: Final = managed_file_table.rows["unified-output"].file_object
+    assert stored is not None
+    assert (stored.filename, stored.bytes, stored.litellm_details_fallback) == (
+        "output.jsonl",
+        file_bytes_by_team[team_id],
+        None,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_respx_sees_provider_calls")
 @respx.mock
 async def test_store_batch_output_file_keeps_its_measured_size_when_a_read_refreshes_the_row_first():
     import litellm.proxy.proxy_server as proxy_server_module

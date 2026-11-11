@@ -246,11 +246,12 @@ def _provider_file_retrieve_credentials(
     *,
     llm_router: Router | None,
     model_id: str | None,
+    team_id: str | None = None,
 ) -> Mapping[str, object] | None:
     if llm_router is None or model_id is None:
         return None
     try:
-        credentials: Final = llm_router.registry().credentials(model_id, form="with_provider")
+        credentials: Final = llm_router.registry().credentials(model_id, form="with_provider", team_id=team_id)
     except Exception as error:
         verbose_logger.warning(
             "Failed to retrieve credentials for provider file "
@@ -300,11 +301,14 @@ def _is_xai_batch_output(
     model_id: str | None,
     model_name: str | None,
     provider_file_id: str,
+    team_id: str | None = None,
 ) -> bool:
     """Whether a batch output row holds an xAI batch's results, from its batch id and its deployment's provider."""
     if not is_xai_batch_results_id(provider_file_id):
         return False
-    router_credentials: Final = _provider_file_retrieve_credentials(llm_router=llm_router, model_id=model_id)
+    router_credentials: Final = _provider_file_retrieve_credentials(
+        llm_router=llm_router, model_id=model_id, team_id=team_id
+    )
     provider: Final = (router_credentials or {}).get("custom_llm_provider") or _model_name_file_retrieve_provider(
         model_name
     )
@@ -1186,12 +1190,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         llm_router: Router | None = None,
         raise_on_failure: bool = False,
         allow_default_provider: bool = False,
+        team_id: str | None = None,
     ) -> tuple[OpenAIFileObject | None, bool]:
         """Fetch provider file details through the configured route under a total timeout."""
         route_llm_router: Final = llm_router if llm_router is not None else _proxy_llm_router()
         router_credentials: Final = _provider_file_retrieve_credentials(
             llm_router=route_llm_router,
             model_id=model_id,
+            team_id=team_id,
         )
         model_name_provider: Final = _model_name_file_retrieve_provider(model_name)
         fetch_route_available: Final = _has_provider_file_retrieve_route(
@@ -1338,6 +1344,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             router_credentials: Final = _provider_file_retrieve_credentials(
                 llm_router=_proxy_llm_router(),
                 model_id=model_id,
+                team_id=owner.team_id,
             )
             file_object_without_provider_details: Final = _batch_output_file_object(
                 unified_file_id,
@@ -1366,6 +1373,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     model_id=model_id,
                     model_name=model_name,
                     provider_file_id=provider_file_id,
+                    team_id=owner.team_id,
                 )
             ):
                 await self._save_batch_output_file_object(stored_file, stored_object, size_bytes)
@@ -1383,6 +1391,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 provider_file_id=provider_file_id,
                 model_id=model_id,
                 model_name=model_name,
+                team_id=owner.team_id,
             )
         )
         provider_object, fetch_route_available = provider_fetch_result
@@ -1413,6 +1422,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             model_id=model_id,
             model_name=model_name,
             provider_file_id=provider_file_id,
+            team_id=owner.team_id,
         )
         if stored_file is not None and xai_batch_output:
             await self._save_batch_output_file_object(stored_file, file_object, size_bytes)
