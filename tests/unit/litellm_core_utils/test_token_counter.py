@@ -721,16 +721,33 @@ def test_token_counter_tool_choice_adds_nothing_for_deepseek_v3_and_v4(model: st
     ) == token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools)
 
 
-# A request with a one-function tool billed 283 prompt tokens on xAI grok-4.3 without tool_choice and 297 with a
-# named one, and 357 and 358 on Azure AI Foundry grok-4-1-fast-reasoning, on 2026-10-29
-@pytest.mark.parametrize("model", ["grok-4.3", "grok-4-1-fast-reasoning"])
-def test_token_counter_counts_a_named_tool_choice_for_grok(model: str):
+# xAI grok-4.3 and grok-4-1-fast-reasoning each billed 275 prompt tokens for the weather tool with no tool_choice,
+# 296 with "none", 286 with "required" and 289 with the named tool on 2026-11-10, and Azure AI Foundry grok-4.7
+# billed the same 21, 11 and 15 more than its own 89
+@pytest.mark.parametrize("model", ["xai/grok-4.3", "grok-4-1-fast-reasoning"])
+@pytest.mark.parametrize(
+    ("tool_choice", "billed_over_unset"),
+    [
+        pytest.param("none", 21, id="none"),
+        pytest.param({"type": "none"}, 21, id="anthropic-none"),
+        pytest.param("required", 11, id="required"),
+        pytest.param({"type": "any"}, 11, id="anthropic-any"),
+        pytest.param({"type": "function", "function": {"name": "get_weather"}}, 14, id="named"),
+        pytest.param({"type": "tool", "name": "get_weather"}, 14, id="anthropic-tool"),
+        pytest.param({"type": "function", "name": "get_weather"}, 14, id="responses-function"),
+        pytest.param("auto", 0, id="auto"),
+    ],
+)
+def test_token_counter_counts_each_grok_tool_choice_the_way_xai_bills_it(
+    model: str, tool_choice: str | Mapping[str, object], billed_over_unset: int
+):
     tools: Final = [_openai_tool(_WEATHER_FUNCTION)]
-    named: Final = {"type": "function", "function": {"name": "get_weather"}}
 
-    assert token_counter_new(
-        model=model, messages=list(_USER_MESSAGES), tools=tools, tool_choice=named
-    ) > token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools)
+    assert (
+        token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools, tool_choice=tool_choice)
+        - token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools)
+        == billed_over_unset
+    )
 
 
 def _counted_with_strict(model: str, **strict: bool) -> int:
@@ -767,7 +784,7 @@ def test_token_counter_renders_a_false_strict_like_a_true_one_for_other_chat_tem
     ("tool_choice", "expected_tool_choice"),
     [
         pytest.param({"type": "auto"}, None, id="anthropic-auto"),
-        pytest.param({"type": "any"}, None, id="anthropic-any"),
+        pytest.param({"type": "any"}, "required", id="anthropic-any"),
         pytest.param({"type": "none"}, "none", id="anthropic-none"),
         pytest.param(
             {"type": "tool", "name": "get_weather"},

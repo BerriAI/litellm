@@ -6,11 +6,22 @@ from typing import Final
 
 
 @dataclass(frozen=True, slots=True)
+class ToolChoiceTokens:
+    none: int
+    required: int
+    named: int
+
+
+OPENAI_TOOL_CHOICE_TOKENS: Final = ToolChoiceTokens(none=1, required=0, named=7)
+_GROK_TOOL_CHOICE_TOKENS: Final = ToolChoiceTokens(none=21, required=11, named=12)
+
+
+@dataclass(frozen=True, slots=True)
 class ChatTemplateToolSection:
     preamble_tokens: int
     implicit_system_turn_tokens: int
     render_tool_schemas: Callable[[Sequence[Mapping[str, object]]], str]
-    counts_tool_choice: bool = False
+    tool_choice_tokens: ToolChoiceTokens | None = None
     renders_strict_only_when_true: bool = False
 
 
@@ -43,13 +54,21 @@ _TOOL_SECTIONS: Final = (
     (
         re.compile(r"grok-4[-.]1(?![.\d])", re.IGNORECASE),
         ChatTemplateToolSection(
-            0, 0, _compact_json_line_tool_schemas, counts_tool_choice=True, renders_strict_only_when_true=True
+            0,
+            0,
+            _compact_json_line_tool_schemas,
+            tool_choice_tokens=_GROK_TOOL_CHOICE_TOKENS,
+            renders_strict_only_when_true=True,
         ),
     ),
     (
         re.compile(r"grok-4[-.]3(?![.\d])", re.IGNORECASE),
         ChatTemplateToolSection(
-            0, 0, _json_line_tool_schemas, counts_tool_choice=True, renders_strict_only_when_true=True
+            0,
+            0,
+            _json_line_tool_schemas,
+            tool_choice_tokens=_GROK_TOOL_CHOICE_TOKENS,
+            renders_strict_only_when_true=True,
         ),
     ),
 )
