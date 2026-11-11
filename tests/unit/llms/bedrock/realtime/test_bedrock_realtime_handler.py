@@ -1036,6 +1036,32 @@ class TestBedrockRealtimeAwsAuth:
         assert stub_aws_sdk_client["config_kwargs"]["endpoint_uri"] == "https://vpce-bedrock.example.internal"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("api_base", "runtime_endpoint", "expected_endpoint"),
+        (
+            ("", None, "https://bedrock-runtime.us-east-1.amazonaws.com"),
+            ("", "", "https://bedrock-runtime.us-east-1.amazonaws.com"),
+            (None, "", "https://bedrock-runtime.us-east-1.amazonaws.com"),
+            ("", "https://vpce-bedrock.example.internal", "https://vpce-bedrock.example.internal"),
+        ),
+    )
+    async def test_an_empty_endpoint_setting_counts_as_unset(
+        self, stub_aws_sdk_client, api_base, runtime_endpoint, expected_endpoint
+    ):
+        await BedrockRealtime().async_realtime(
+            model="amazon.nova-sonic-v1:0",
+            websocket=RealtimeClientWS(),
+            logging_obj=FakeLogging(),
+            aws_region_name="us-east-1",
+            aws_access_key_id="k",
+            aws_secret_access_key="s",
+            api_base=api_base,
+            aws_bedrock_runtime_endpoint=runtime_endpoint,
+        )
+
+        assert stub_aws_sdk_client["config_kwargs"]["endpoint_uri"] == expected_endpoint
+
+    @pytest.mark.asyncio
     async def test_role_assumption_params_forwarded_to_get_credentials(self, stub_aws_sdk_client):
         handler = StubCredentialsBedrockRealtime(
             SimpleNamespace(
