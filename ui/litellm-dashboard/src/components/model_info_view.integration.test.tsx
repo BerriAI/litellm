@@ -1869,7 +1869,6 @@ describe("ModelInfoView", () => {
         isLoading: false,
         error: null,
       });
-      mockModelInfoV1Call.mockResolvedValue({ data: [stored] });
     };
 
     it("routes edited weight and order into the payload as numbers", async () => {
