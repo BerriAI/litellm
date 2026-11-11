@@ -30,6 +30,7 @@ from litellm.litellm_core_utils.litellm_logging import mask_api_base_credentials
 from litellm.router_deprecated import renamed_router_param
 from litellm.router_utils.cooldown_cache import CooldownCacheValue
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
+from litellm.types.llms.anthropic import MESSAGE_THREAD_NOT_FOUND_ERROR_CODE
 from litellm.types.router import Deployment
 from litellm.types.utils import (
     BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
@@ -104,6 +105,12 @@ def is_background_response_poll_not_found(exception: Exception, litellm_params: 
 def is_video_lookup_not_found(exception: object, failure_kwargs: Mapping[str, object]) -> bool:
     """Whether a call on an existing video id failed with a provider 404: the video is not on that account."""
     return getattr(exception, "status_code", None) == 404 and failure_kwargs.get("call_type") in VIDEO_ID_CALL_TYPES
+
+
+def is_message_thread_not_found(exception: object) -> bool:
+    """Whether a message-thread continue failed with Anthropic's 404 ``thread_not_found``: the caller's
+    ``previous_message_id`` is stale and the SDK replays the conversation, the deployment is healthy."""
+    return getattr(exception, "status_code", None) == 404 and MESSAGE_THREAD_NOT_FOUND_ERROR_CODE in str(exception)
 
 
 # The calls on an existing response id. ``compact_responses`` is left out: it sends a model and input,
