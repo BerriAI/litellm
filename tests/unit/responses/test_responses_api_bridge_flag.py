@@ -21,7 +21,7 @@ import respx
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
-from litellm.responses.bridge_check import responses_api_bridge_check
+from litellm.responses.bridge_check import bridge_reasoning_effort, responses_api_bridge_check
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
@@ -674,29 +674,31 @@ def test_gpt_5_4_function_tools_route_by_explicit_effort(
 
 @pytest.mark.parametrize("provider", ("openai", "azure"))
 @pytest.mark.parametrize(
-    ("model", "effort", "expected"),
+    ("model", "effort", "extra_body", "expected"),
     (
-        ("gpt-5.4-mini", None, "chat"),
-        ("gpt-5.4-nano", None, "chat"),
-        ("gpt-5.5", None, "chat"),
-        ("gpt-5.6", None, "responses"),
-        ("gpt-6.1-sol", None, "responses"),
-        ("gpt-5.4-mini", "none", "chat"),
-        ("gpt-5.4-mini", "medium", "responses"),
-        ("gpt-5.4-mini", {"effort": "medium"}, "responses"),
+        ("gpt-5.4-mini", None, None, "chat"),
+        ("gpt-5.4-nano", None, None, "chat"),
+        ("gpt-5.5", None, None, "chat"),
+        ("gpt-5.6", None, None, "responses"),
+        ("gpt-6.1-sol", None, None, "responses"),
+        ("gpt-5.4-mini", "none", None, "chat"),
+        ("gpt-5.4-mini", "medium", None, "responses"),
+        ("gpt-5.4-mini", {"effort": "medium"}, None, "responses"),
+        ("gpt-5.4-mini", None, {"reasoning_effort": "medium"}, "responses"),
     ),
 )
 def test_function_tools_bridge_only_when_chat_rejects_the_effective_effort(
     provider: str,
     model: str,
     effort: str | Mapping[str, object] | None,
+    extra_body: Mapping[str, object] | None,
     expected: str,
 ) -> None:
     info, _ = responses_api_bridge_check(
         model=model,
         custom_llm_provider=provider,
         tools=[_FUNCTION_TOOL],
-        reasoning_effort=effort,
+        reasoning_effort=bridge_reasoning_effort(effort, extra_body),
         api_base="https://api.openai.com/v1",
     )
     assert info.get("mode") == expected

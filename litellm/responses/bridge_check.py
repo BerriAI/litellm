@@ -42,6 +42,24 @@ def _resolve_openai_api_base(api_base: str | None) -> str:
     )
 
 
+def str_keyed_mapping(value: object) -> Mapping[str, object] | None:
+    if not isinstance(value, Mapping):
+        return None
+    return cast(  # cast-ok: isinstance only narrows to Mapping[Unknown, Unknown]; request JSON keys are str
+        Mapping[str, object], value
+    )
+
+
+def bridge_reasoning_effort(
+    reasoning_effort: str | Mapping[str, object] | None, extra_body: object
+) -> str | Mapping[str, object] | None:
+    nested_body: Final = str_keyed_mapping(extra_body)
+    if reasoning_effort is not None or nested_body is None:
+        return reasoning_effort
+    nested_effort: Final = nested_body.get("reasoning_effort")
+    return nested_effort if isinstance(nested_effort, str) else str_keyed_mapping(nested_effort)
+
+
 def chat_target_accepts_reasoning_summary(model: str, custom_llm_provider: str | None) -> bool:
     try:
         local_model, provider, _, _ = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
