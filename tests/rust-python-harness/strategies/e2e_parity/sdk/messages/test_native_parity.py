@@ -39,11 +39,14 @@ from pydantic import JsonValue, TypeAdapter
 import litellm
 from litellm.anthropic_interface.exceptions.exception_mapping_utils import AnthropicExceptionMapping
 from litellm.caching.caching import Cache, CacheMode
+from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.caching.caching_handler import (
     _PENDING_CACHE_WRITES,  # pyright: ignore[reportPrivateUsage]  # a primed entry must land before the measured call reads it
 )
 from litellm.caching.dual_cache import DualCache
+from litellm.litellm_core_utils import logging_utils
 from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.messages import dispatch
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -379,6 +382,7 @@ KNOWN_GAPS: Final[Mapping[str, Mapping[str, str | None]]] = MappingProxyType(
                 "legacy_thinking_non_numeric_budget_on_adaptive_model",
                 "legacy_thinking_null_budget_on_adaptive_model",
                 "missing_api_key",
+                "tls_security_level_python_cannot_apply",
             )
         },
     }
@@ -1303,6 +1307,103 @@ THREAD_CASES: Final = (
     ),
 )
 
+
+class _CallerHandler(AsyncHTTPHandler):
+    def __deepcopy__(self, memo: dict[int, object]) -> "_CallerHandler":
+        return _CallerHandler()
+
+
+class _UncheckedHandler(_CallerHandler):
+    def __deepcopy__(self, memo: dict[int, object]) -> "_UncheckedHandler":
+        return _UncheckedHandler()
+
+    async def post(self, url: str, **kwargs: object) -> httpx.Response:  # pyright: ignore[reportIncompatibleMethodOverride]  # kwargs-ok: the test double ignores the rest of the post
+        return httpx.Response(503, text="unavailable")
+
+
+class _UnreadHandler(_CallerHandler):
+    def __deepcopy__(self, memo: dict[int, object]) -> "_UnreadHandler":
+        return _UnreadHandler()
+
+    async def post(self, url: str, **kwargs: object) -> httpx.Response:  # pyright: ignore[reportIncompatibleMethodOverride]  # kwargs-ok: the test double ignores the rest of the post
+        return httpx.Response(500, stream=httpx.ByteStream(b"unread"), request=httpx.Request("POST", url))
+
+
+class _CallerHttpxClient(httpx.AsyncClient):
+    def __deepcopy__(self, memo: dict[int, object]) -> "_CallerHttpxClient":
+        return _CallerHttpxClient()
+
+
+class _CallerSyncHandler(HTTPHandler):
+    def __deepcopy__(self, memo: dict[int, object]) -> "_CallerSyncHandler":
+        return _CallerSyncHandler()
+
+
+def _caller(**kwargs: object) -> Mapping[str, object]:
+    return _kw(client=_CallerHandler(), **kwargs)
+
+
+def _tls(**settings: object) -> Mapping[str, object]:
+    return MappingProxyType({**settings, "in_memory_llm_clients_cache": LLMClientCache()})
+
+
+_TLS_LEVEL: Final = _tls(ssl_security_level="DEFAULT@SECLEVEL=1")
+_TLS_CURVE: Final = _tls(ssl_ecdh_curve="secp521r1")
+
+TRANSPORT_CASES: Final = (
+    Case("caller_client", _caller()),
+    Case("caller_client_stream", _caller(stream=True), upstream=(_stream(TEXT_STREAM),)),
+    Case(
+        "caller_client_upstream_429",
+        _caller(),
+        upstream=(
+            _failure(429, "rate_limit_error", "slow down", **{"retry-after": "7", "request-id": "req_01Parity"}),
+        ),
+    ),
+    Case(
+        "caller_client_stream_upstream_429",
+        _caller(stream=True),
+        upstream=(_failure(429, "rate_limit_error", "slow down", **{"retry-after": "3"}),),
+    ),
+    Case(
+        "caller_client_non_json_error",
+        _caller(),
+        upstream=(ResponseSpec(body=b"<html>bad gateway</html>", status=502),),
+    ),
+    Case("caller_client_invalid_json_success", _caller(), upstream=(ResponseSpec(body=b"not json", status=200),)),
+    Case("caller_client_timeout", _caller(timeout=0.5), upstream=(ResponseSpec(body=dict(TEXT_RESPONSE), delay=1.5),)),
+    Case(
+        "caller_client_stream_read_stalls_past_timeout",
+        _caller(stream=True, timeout=0.5),
+        upstream=(_stream(SLOW_STREAM, chunk_delay=1.0),),
+    ),
+    Case(
+        "caller_client_thinking_signature_rejected_then_retried",
+        _kw(**_replay(), client=_CallerHandler()),
+        upstream=(_rejected(), _ok()),
+    ),
+    Case(
+        "caller_client_strict_tools_rejected_then_retried_stream",
+        _strict(drop_params=True, stream=True, client=_CallerHandler()),
+        upstream=(_rejected(STRICT_REJECTION), _stream(TEXT_STREAM)),
+    ),
+    Case("caller_client_sync", _caller(), sync=True),
+    Case("caller_client_post_returns_unchecked_failure", _kw(client=_UncheckedHandler()), upstream=()),
+    Case("caller_client_post_returns_unread_failure", _kw(client=_UnreadHandler(), stream=True), upstream=()),
+    Case("caller_httpx_client_is_ignored", _kw(client=_CallerHttpxClient())),
+    Case("caller_sync_handler_is_ignored", _kw(client=_CallerSyncHandler())),
+    Case("tls_security_level", settings=_TLS_LEVEL),
+    Case("tls_security_level_stream", _kw(stream=True), upstream=(_stream(TEXT_STREAM),), settings=_TLS_LEVEL),
+    Case("tls_ecdh_curve", settings=_TLS_CURVE),
+    Case("tls_ecdh_curve_upstream_500", upstream=(_failure(500, "api_error", "internal"),), settings=_TLS_CURVE),
+    Case(
+        "tls_security_level_from_environment",
+        env=MappingProxyType({"SSL_SECURITY_LEVEL": "DEFAULT@SECLEVEL=1"}),
+        settings=_tls(),
+    ),
+    Case("tls_security_level_python_cannot_apply", upstream=(), settings=_tls(ssl_security_level="NOT-A-CIPHER")),
+)
+
 CASES: Final = (
     *REQUEST_CASES,
     *PROMPT_CACHING_CASES,
@@ -1317,6 +1418,7 @@ CASES: Final = (
     *FALLBACK_CASES,
     *CACHE_CASES,
     *THREAD_CASES,
+    *TRANSPORT_CASES,
 )
 
 
@@ -1702,6 +1804,59 @@ def test_catalog_serves_the_case_natively(case: Case, parity_server: RecordingSe
         assert request is not None
         context: Final = dispatch._context(request, features)  # pyright: ignore[reportPrivateUsage]  # the entry's own route context
         assert catalog.rollout(context) is Rollout.RUST_REQUIRED, context.features
+
+
+@pytest.mark.parametrize("case", [pytest.param(case, id=case.name) for case in TRANSPORT_CASES])
+def test_catalog_serves_the_transport_case_natively(case: Case, parity_server: RecordingServer) -> None:
+    with isolated_callback_registries(), _environment(case.env), _settings(case.settings):
+        request: Final = dispatch._public_request(dispatch._AMESSAGES, (), _kwargs(case, parity_server))  # pyright: ignore[reportPrivateUsage]  # the public binding the async entry routes by
+        assert request is not None
+        context: Final = dispatch._context(request, dispatch._ASYNC_FEATURES)  # pyright: ignore[reportPrivateUsage]  # the async entry's own route context
+        assert catalog.rollout(context) is Rollout.RUST_REQUIRED, context.features
+
+
+@dataclass(slots=True)
+class _Exchanges:
+    posts: int = 0
+    windows: int = 0
+
+
+async def _exchanges(
+    case: Case, server: RecordingServer, probe: FallbackProbe | None, monkeypatch: pytest.MonkeyPatch
+) -> _Exchanges:
+    counted: Final = _Exchanges()
+    post: Final = AsyncHTTPHandler.post  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the handler's untyped dict params
+    record: Final = logging_utils._set_duration_in_model_call_details  # pyright: ignore[reportPrivateUsage]  # the one recorder of an exchange window
+
+    async def posted(
+        handler: AsyncHTTPHandler, *args: object, **kwargs: object
+    ) -> object:  # kwargs-ok: the handler's own post signature
+        counted.posts += 1
+        return await post(handler, *args, **kwargs)  # pyright: ignore[reportArgumentType]  # forwarded unchanged
+
+    def windowed(**kwargs: object) -> None:  # kwargs-ok: the recorder's own keywords
+        counted.windows += 1
+        record(**kwargs)  # pyright: ignore[reportArgumentType]  # forwarded unchanged
+
+    with monkeypatch.context() as patch:
+        patch.setattr(AsyncHTTPHandler, "post", posted)
+        patch.setattr(logging_utils, "_set_duration_in_model_call_details", windowed)
+        await _leg(case, server, probe)
+    return counted
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", [pytest.param(case, id=case.name) for case in TRANSPORT_CASES if not case.sync])
+async def test_transport_cases_post_through_the_handler_python_posts_through(
+    case: Case, parity_server: RecordingServer, native_messages: FallbackProbe, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    python: Final = await _exchanges(case, parity_server, None, monkeypatch)
+    native: Final = await _exchanges(case, parity_server, native_messages, monkeypatch)
+    ignored: Final = case.name.endswith("_is_ignored")
+    assert python.posts == len(case.upstream)
+    assert native.posts == (0 if ignored else python.posts)
+    assert native.windows == python.windows
+    assert native_messages.calls == 0
 
 
 _COST_CASES: Final = tuple(

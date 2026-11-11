@@ -29,7 +29,8 @@ use litellm_tracing::ByteChunk;
 use serde_json::{Map, Value};
 
 use super::{
-    Error, MessagesBody, MessagesCall, MessagesCallResponse, MessagesRoute, WorkloadIdentity,
+    Delivered, Error, MessagesBody, MessagesCall, MessagesCallResponse, MessagesRoute, Transport,
+    TransportBody, TransportRequest, TransportResponse, WorkloadIdentity,
     common_utils::{MessagesProvider, merge_messages_header_sources, string_headers},
     constants::{MESSAGES_HTTP_ERROR_ATTEMPTS, MESSAGES_TIMEOUT_SECS},
     route::Messages,
@@ -156,7 +157,7 @@ pub(super) async fn execute(
     let (output, source) = match hit {
         Some(hit) => hit,
         None => (
-            call_provider(&route.http, request, context).await?,
+            call_provider(&route.http, route.transport.as_deref(), request, context).await?,
             ResultSource::Provider,
         ),
     };
@@ -407,15 +408,24 @@ fn without_additional_drop_params(
     })
 }
 
+enum Upstream {
+    Native(reqwest::Response),
+    Hosted(TransportResponse),
+}
+
 async fn call_provider(
     http: &litellm_http::Client,
+    transport: Option<&dyn Transport>,
     request: ProviderCall,
     context: &CallContext<'_, impl Interceptors<Error>>,
 ) -> Result<MessagesCallResponse, Error> {
     let timeout = request
         .timeout
         .unwrap_or(Duration::from_secs(MESSAGES_TIMEOUT_SECS));
-    let response = send_recovering(http, &request, timeout, context).await?;
+    let response = match send_recovering(http, transport, &request, timeout, context).await? {
+        Upstream::Native(response) => response,
+        Upstream::Hosted(response) => return hosted_response(response, request, context).await,
+    };
     let ProviderCall {
         identity,
         provider,
@@ -455,33 +465,159 @@ async fn call_provider(
     decode_response(config, &identity.model, &text).map(MessagesCallResponse::Complete)
 }
 
+async fn hosted_response(
+    response: TransportResponse,
+    request: ProviderCall,
+    context: &CallContext<'_, impl Interceptors<Error>>,
+) -> Result<MessagesCallResponse, Error> {
+    let TransportResponse {
+        status,
+        headers,
+        delivered,
+    } = response;
+    let ProviderCall {
+        identity,
+        provider,
+        whole_sse_frames,
+        ..
+    } = request;
+    let provider_name = provider.as_str();
+    let config = provider.config();
+    let text = match delivered {
+        Delivered::Complete(text) => text,
+        Delivered::Stream(chunks) => {
+            context
+                .raw_response_received(RawResponse::new(String::new()).with_head(ResponseHead {
+                    status,
+                    headers: headers.clone(),
+                }))
+                .await?;
+            let streamed =
+                hosted_streaming_response(headers, chunks, config.stream_decoder(), provider_name);
+            return Ok(if whole_sse_frames {
+                framed(streamed)
+            } else {
+                streamed
+            });
+        }
+        Delivered::Rejected { error, .. } => return Err(error),
+    };
+    log_response_body(&text);
+    context
+        .raw_response_received(
+            RawResponse::new(text.clone()).with_head(ResponseHead { status, headers }),
+        )
+        .await?;
+    if serde_json::from_str::<serde::de::IgnoredAny>(&text).is_err() {
+        return Err(litellm_http::Error::upstream(status, text).into());
+    }
+    decode_response(config, &identity.model, &text).map(MessagesCallResponse::Complete)
+}
+
+fn hosted_request(
+    authenticated: Authenticated,
+    url: &str,
+    body: &Value,
+    stream: bool,
+) -> Result<TransportRequest, Error> {
+    if authenticated.signer.is_none() {
+        return Ok(TransportRequest {
+            url: url.to_owned(),
+            headers: authenticated.headers,
+            body: TransportBody::Json(body.clone()),
+            stream,
+        });
+    }
+    let names: Vec<String> = authenticated
+        .headers
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect();
+    let signed = outbound_request(authenticated, url, body, None)?;
+    let headers = signed
+        .headers()
+        .iter()
+        .filter_map(|(name, value)| {
+            let spelled = names
+                .iter()
+                .find(|known| known.eq_ignore_ascii_case(name.as_str()))
+                .cloned()
+                .unwrap_or_else(|| name.to_string());
+            Some((spelled, value.to_str().ok()?.to_owned()))
+        })
+        .collect();
+    let bytes = signed
+        .body()
+        .and_then(reqwest::Body::as_bytes)
+        .map(Bytes::copy_from_slice)
+        .unwrap_or_default();
+    Ok(TransportRequest {
+        url: signed.url().to_string(),
+        headers,
+        body: TransportBody::Signed(bytes),
+        stream,
+    })
+}
+
 async fn send_recovering(
     http: &litellm_http::Client,
+    transport: Option<&dyn Transport>,
     request: &ProviderCall,
     timeout: Duration,
     context: &CallContext<'_, impl Interceptors<Error>>,
-) -> Result<reqwest::Response, Error> {
+) -> Result<Upstream, Error> {
     let config = request.provider.config();
     let mut body = std::borrow::Cow::Borrowed(&request.wire.body);
     let mut attempt = 1;
     loop {
         log_request_body(request.provider.as_str(), request.stream, &body);
-        let response = send(
-            http,
-            Authenticated {
-                headers: request.wire.headers.clone(),
-                signer: request.signer.clone(),
-            },
-            &request.wire.url,
-            &body,
-            timeout,
-            request.stream,
-        )
-        .await?;
-        if response.status().is_success() {
-            return Ok(response);
-        }
-        let failure = provider_failure(response, timeout).await?;
+        let authenticated = Authenticated {
+            headers: request.wire.headers.clone(),
+            signer: request.signer.clone(),
+        };
+        let response = match transport {
+            None => Upstream::Native(
+                send(
+                    http,
+                    authenticated,
+                    &request.wire.url,
+                    &body,
+                    timeout,
+                    request.stream,
+                )
+                .await?,
+            ),
+            Some(transport) => Upstream::Hosted(
+                transport
+                    .send(hosted_request(
+                        authenticated,
+                        &request.wire.url,
+                        &body,
+                        request.stream,
+                    )?)
+                    .await?,
+            ),
+        };
+        let failure = match response {
+            Upstream::Native(response) if response.status().is_success() => {
+                return Ok(Upstream::Native(response));
+            }
+            Upstream::Native(response) => provider_failure(response, timeout).await?,
+            Upstream::Hosted(TransportResponse {
+                status,
+                headers,
+                delivered: Delivered::Rejected { text, error },
+            }) => {
+                log_error_body(status, &text);
+                ProviderFailure {
+                    status,
+                    text,
+                    headers,
+                    raised: Some(error),
+                }
+            }
+            hosted @ Upstream::Hosted(_) => return Ok(hosted),
+        };
         let retried = if attempt == MESSAGES_HTTP_ERROR_ATTEMPTS {
             None
         } else {
@@ -557,12 +693,20 @@ struct ProviderFailure {
     status: u16,
     text: String,
     headers: Vec<(String, String)>,
+    raised: Option<Error>,
 }
 
 impl From<ProviderFailure> for Error {
     fn from(failure: ProviderFailure) -> Self {
-        litellm_http::Error::upstream_with_headers(failure.status, failure.text, failure.headers)
-            .into()
+        match failure.raised {
+            Some(raised) => raised,
+            None => litellm_http::Error::upstream_with_headers(
+                failure.status,
+                failure.text,
+                failure.headers,
+            )
+            .into(),
+        }
     }
 }
 
@@ -581,6 +725,7 @@ async fn provider_failure(
                 status,
                 text,
                 headers,
+                raised: None,
             })
         }
         Ok(Err(error)) => Err(litellm_http::Error::from(error).into()),
@@ -628,6 +773,27 @@ fn streaming_response(
         .inspect_ok(move |chunk| log_chunk(provider, "provider_response", chunk));
     let chunks = match decoder {
         None => chunks.map_err(Error::from).boxed(),
+        Some(decode) => decoded_chunks(
+            chunks.map_err(std::io::Error::other).boxed(),
+            decode,
+            provider,
+        ),
+    };
+    MessagesCallResponse::Stream {
+        head: super::route::MessagesStreamHead { headers },
+        chunks,
+    }
+}
+
+fn hosted_streaming_response(
+    headers: Vec<(String, String)>,
+    chunks: BoxStream<'static, Result<Bytes, Error>>,
+    decoder: Option<StreamDecoder>,
+    provider: &'static str,
+) -> MessagesCallResponse {
+    let chunks = chunks.inspect_ok(move |chunk| log_chunk(provider, "provider_response", chunk));
+    let chunks = match decoder {
+        None => chunks.boxed(),
         Some(decode) => decoded_chunks(
             chunks.map_err(std::io::Error::other).boxed(),
             decode,

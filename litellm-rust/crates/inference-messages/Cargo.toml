@@ -36,4 +36,5 @@ litellm-host-native.workspace = true
 litellm-http = { workspace = true, features = ["test-support"] }
 litellm-inference-testing.workspace = true
 rstest.workspace = true
+thiserror.workspace = true
 wiremock.workspace = true

@@ -1,5 +1,6 @@
 mod host;
 mod modify_params;
+mod transport;
 pub(crate) mod workload_identity;
 
 use host::MessagesPythonHost;
@@ -31,10 +32,17 @@ fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyR
             Ok(litellm_host::call::hosted_call(
                 request,
                 None,
-                move |(call, selection): (_, crate::cache::Selection),
+                move |(call, selection, hosted): (_, crate::cache::Selection, bool),
                       services,
                       interceptors,
                       observers| async move {
+                    let route = if hosted {
+                        route.with_transport(std::sync::Arc::new(transport::PythonTransport::new(
+                            services.clone(),
+                        )))
+                    } else {
+                        route
+                    };
                     let (cache, options) = selection.attach(services);
                     let route = match cache {
                         Some(cache) => route.with_cache(cache),

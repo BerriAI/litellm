@@ -50,6 +50,8 @@ pub(crate) enum Logging {
     RecordResponse,
     #[strum(serialize = "record_api_window")]
     RecordApiWindow,
+    #[strum(serialize = "times_provider_exchange")]
+    TimesProviderExchange,
     #[strum(serialize = "retried_request")]
     RetriedRequest,
     #[strum(serialize = "defers_async_logging")]

@@ -173,6 +173,10 @@ def _tls_unsupported(security_level: str | None, ecdh_curve: str | None) -> bool
 
 def tls_policy(_request: NativeCall) -> bool:
     """Python applies TLS settings or ECDH curves the native client cannot configure."""
+    return unsupported_tls()
+
+
+def unsupported_tls() -> bool:
     configured: Final[tuple[object, object]] = (
         os.environ.get("SSL_SECURITY_LEVEL", litellm.ssl_security_level),
         os.environ.get("SSL_ECDH_CURVE", litellm.ssl_ecdh_curve),
