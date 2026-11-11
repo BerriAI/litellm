@@ -84,12 +84,12 @@ class BaseTranslation(ABC):
         user_api_key_dict: object,
     ) -> dict[str, object]:
         """The authenticated key's identity as prefixed metadata, an allowlist safe to hand to guardrail vendors."""
-        # Lazy: `import litellm` loads this module before litellm.Router exists, and litellm_pre_call_utils imports it
-        from litellm.proxy._types import UserAPIKeyAuth
-        from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+        from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
         if not isinstance(user_api_key_dict, UserAPIKeyAuth):
             return {}
+        # Lazy: needs the proxy extras, and `import litellm` loads this module before litellm.Router exists
+        from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
         return {
             **LiteLLMProxyRequestSetup.get_authenticated_identity_metadata(user_api_key_dict),

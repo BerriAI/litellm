@@ -1,5 +1,8 @@
 import json
+import sys
 from typing import Final
+
+import pytest
 
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.proxy._types import UserAPIKeyAuth
@@ -49,5 +52,10 @@ def test_transform_emits_only_identity_never_credentials_or_callback_secrets():
         assert dropped not in metadata
 
 
-def test_transform_of_no_key_is_empty():
-    assert BaseTranslation.transform_user_api_key_dict_to_metadata(None) == {}
+@pytest.mark.parametrize("sdk_value", [None, {"key_alias": "forged"}], ids=["none", "dict"])
+def test_transform_without_an_auth_key_is_empty_and_never_needs_the_proxy_extras(
+    monkeypatch: pytest.MonkeyPatch, sdk_value: object
+):
+    monkeypatch.setitem(sys.modules, "litellm.proxy.litellm_pre_call_utils", None)
+
+    assert BaseTranslation.transform_user_api_key_dict_to_metadata(sdk_value) == {}
