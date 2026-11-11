@@ -2411,6 +2411,10 @@ def anthropic_process_openai_file_message(
     raise Exception(f"Either file_data or file_id must be present in the file message: {message}")
 
 
+_S3_MIME_SUBTYPE_FORMATS: Final = MappingProxyType(
+    {"jpg": "jpeg", "quicktime": "mov", "x-matroska": "mkv", "x-flv": "flv", "x-ms-wmv": "wmv", "3gpp": "3gp"}
+)
+_CONVERSE_VIDEO_FORMAT_NAMES: Final = MappingProxyType({"3gp": "three_gp"})
 _EMPTY_TEXT_PLACEHOLDER: Final = "[System: Empty message content sanitised to satisfy protocol]"
 
 
@@ -4238,7 +4242,11 @@ class BedrockImageProcessor:
                 )
             )
         elif is_video:
-            return BedrockContentBlock(video=BedrockVideoBlock(source=source, format=image_format))
+            return BedrockContentBlock(
+                video=BedrockVideoBlock(
+                    source=source, format=_CONVERSE_VIDEO_FORMAT_NAMES.get(image_format, image_format)
+                )
+            )
         else:
             return BedrockContentBlock(image=BedrockImageBlock(source=source, format=image_format))
 
@@ -4259,14 +4267,15 @@ class BedrockImageProcessor:
 
     @classmethod
     def _create_s3_block(cls, uri: str, format: str | None, bucket_owner: str | None) -> BedrockContentBlock:
-        mime_type: Final = format or cls._s3_key_mime_type(uri)
-        if mime_type is None:
+        declared_type: Final = format or cls._s3_key_mime_type(uri)
+        if declared_type is None:
             raise litellm.BadRequestError(
                 message=f"Cannot tell the media type of {uri} from its file extension. "
                 "Set the part's `format` to its MIME type, e.g. `image/png`.",
                 model="",
                 llm_provider="bedrock",
             )
+        mime_type: Final = declared_type.partition(";")[0].strip().lower()
         if mime_type.startswith("audio/"):
             raise litellm.BadRequestError(
                 message=f"Bedrock Converse does not accept {uri} as {mime_type}. "
@@ -4275,7 +4284,8 @@ class BedrockImageProcessor:
                 llm_provider="bedrock",
             )
         try:
-            image_format: Final = cls.validate_format(mime_type, mime_type.partition("/")[2])
+            subtype: Final = mime_type.partition("/")[2]
+            image_format: Final = cls.validate_format(mime_type, _S3_MIME_SUBTYPE_FORMATS.get(subtype, subtype))
         except ValueError as e:
             raise litellm.BadRequestError(
                 message=f"Bedrock Converse does not accept {uri} as {mime_type}. {e}",

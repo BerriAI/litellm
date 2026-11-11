@@ -270,9 +270,21 @@ def _responses_file(file_id: str) -> dict[str, object]:
     return {"input": [{"role": "user", "content": [{"type": "input_file", "file_id": file_id}]}]}
 
 
+def _responses_file_url(file_id: str) -> dict[str, object]:
+    return {"input": [{"role": "user", "content": [{"type": "input_file", "file_url": file_id}]}]}
+
+
+def _gemini_file_uri(file_id: str) -> dict[str, object]:
+    return {
+        "contents": [{"role": "user", "parts": [{"file_data": {"mime_type": "application/pdf", "file_uri": file_id}}]}]
+    }
+
+
 _S3_FILE_ID_SURFACES: Final = (
     pytest.param("acompletion", "/v1/chat/completions", _chat_file, id="chat-completions"),
     pytest.param("aresponses", "/v1/responses", _responses_file, id="responses"),
+    pytest.param("aresponses", "/v1/responses", _responses_file_url, id="responses-file-url"),
+    pytest.param("agenerate_content", _GEMINI_GENERATE_CONTENT_PATH, _gemini_file_uri, id="gemini-file-uri"),
 )
 _UPLOADED_OBJECT: Final = "s3://media-bucket/litellm-bedrock-files/upload.pdf"
 _UPLOADED_FILE_ID: Final = (
@@ -511,6 +523,10 @@ async def _send_s3_media(
         proxy_config=RealProxyConfig(),
         llm_router=router,
     )
+
+
+class _StopAfterTheS3Check(Exception):
+    pass
 
 
 class TestProxyBaseLLMRequestProcessing:
@@ -774,6 +790,34 @@ class TestProxyBaseLLMRequestProcessing:
         except ValueError:
             pytest.fail("litellm_call_id is not a valid UUID")
         assert data_passed["litellm_call_id"] == returned_data["litellm_call_id"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("route_type", "refused"), [("call_mcp_tool", False), ("acompletion", True)], ids=["mcp-tool", "chat"]
+    )
+    async def test_s3_media_check_covers_model_requests_and_leaves_mcp_tool_arguments_alone(
+        self, monkeypatch, route_type: Literal["call_mcp_tool", "acompletion"], refused: bool
+    ):
+        tool_argument: Final = {"type": "image_url", "image_url": {"url": "s3://other-bucket/cat.png"}}
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(data={"name": "describe", "arguments": tool_argument})
+        mock_request: Final = MagicMock(spec=Request)
+        mock_request.headers = {}
+        reached_request_setup: Final = AsyncMock(side_effect=_StopAfterTheS3Check)
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing, "add_litellm_data_to_request", reached_request_setup
+        )
+
+        with pytest.raises(HTTPException if refused else _StopAfterTheS3Check):
+            await processing_obj.common_processing_pre_call_logic(
+                request=mock_request,
+                general_settings={},
+                user_api_key_dict=ProxyUserAPIKeyAuth(
+                    api_key="sk-test", user_id="user-a", user_role=LitellmUserRoles.INTERNAL_USER
+                ),
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+                proxy_config=MagicMock(spec=ProxyConfig),
+                route_type=route_type,
+            )
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("requested_model", [{"bad": "value"}, ["gpt-5.2"], 1])

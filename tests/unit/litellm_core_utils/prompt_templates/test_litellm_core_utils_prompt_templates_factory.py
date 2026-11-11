@@ -3407,6 +3407,53 @@ async def test_bedrock_converse_s3_media_is_sent_as_an_s3_location_without_a_dow
 
 
 @pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("declared", "block", "converse_format"),
+    [
+        pytest.param("image/jpg", "image", "jpeg", id="image-jpg"),
+        pytest.param("IMAGE/PNG", "image", "png", id="upper-case"),
+        pytest.param("image/png; charset=binary", "image", "png", id="image-with-parameter"),
+        pytest.param("video/quicktime", "video", "mov", id="quicktime"),
+        pytest.param("video/x-matroska", "video", "mkv", id="matroska"),
+        pytest.param("video/x-flv", "video", "flv", id="flv"),
+        pytest.param("video/x-ms-wmv", "video", "wmv", id="wmv"),
+        pytest.param("video/3gpp", "video", "three_gp", id="3gpp"),
+    ],
+)
+async def test_bedrock_converse_s3_media_format_accepts_a_registered_mime_type(
+    declared: str, block: str, converse_format: str, run_async: bool
+):
+    uri: Final = "s3://media-bucket/uploads/7f3a9c"
+
+    content: Final = await _converse_user_content(
+        {"type": "image_url", "image_url": {"url": uri, "format": declared}}, run_async
+    )
+
+    assert content == [{block: {"format": converse_format, "source": _s3_source(uri)}}]
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+async def test_bedrock_converse_s3_3gp_key_uses_the_converse_format_name(run_async: bool):
+    uri: Final = "s3://media-bucket/clips/demo.3gp"
+
+    content: Final = await _converse_user_content({"type": "image_url", "image_url": {"url": uri}}, run_async)
+
+    assert content == [{"video": {"format": "three_gp", "source": _s3_source(uri)}}]
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+async def test_bedrock_converse_s3_text_with_a_charset_is_a_txt_document(run_async: bool):
+    uri: Final = "s3://media-bucket/docs/7f3a9c"
+
+    content: Final = await _converse_user_content(
+        {"type": "file", "file": {"file_id": uri, "format": "text/plain; charset=utf-8"}}, run_async
+    )
+
+    assert content[0]["document"]["format"] == "txt"
+    assert content[0]["document"]["source"] == _s3_source(uri)
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
 async def test_bedrock_converse_s3_pdf_is_a_document_named_after_its_uri(run_async: bool):
     report: Final = "s3://media-bucket/docs/report.pdf"
     invoice: Final = "s3://media-bucket/docs/invoice.pdf"

@@ -2734,12 +2734,13 @@ class ProxyBaseLLMRequestProcessing:
                 param="model",
                 code=status.HTTP_400_BAD_REQUEST,
             )
-        await refuse_s3_media_the_key_may_not_read(
-            raw_request_fields,
-            user_api_key_dict,
-            _REQUEST_FIELDS.validate_python(general_settings),
-            proxy_logging_obj.get_proxy_hook("managed_files"),
-        )
+        if route_type != "call_mcp_tool":
+            await refuse_s3_media_the_key_may_not_read(
+                raw_request_fields,
+                user_api_key_dict,
+                _REQUEST_FIELDS.validate_python(general_settings),
+                proxy_logging_obj.get_proxy_hook("managed_files"),
+            )
         self.data = await add_litellm_data_to_request(
             data=self.data,
             request=request,

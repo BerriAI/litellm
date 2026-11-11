@@ -116,6 +116,18 @@ def _gemini_turn(*parts: object) -> dict[str, object]:
             id="responses-unified-file-id",
         ),
         pytest.param(
+            _responses_turn({"type": "input_file", "file_url": _UNIFIED_BATCH_OUTPUT_ID}),
+            id="responses-unified-file-id-in-file-url",
+        ),
+        pytest.param(
+            _gemini_turn({"file_data": {"mime_type": "application/pdf", "file_uri": _UNIFIED_BATCH_OUTPUT_ID}}),
+            id="gemini-unified-file-id-in-file-uri",
+        ),
+        pytest.param(
+            _gemini_turn({"fileData": {"mimeType": "application/pdf", "fileUri": _MODEL_EMBEDDED_UPLOAD_ID}}),
+            id="gemini-model-embedded-file-id-in-camel-case-file-uri",
+        ),
+        pytest.param(
             {
                 **_user_turn({"type": "file", "file": {"file_id": "alias"}}),
                 "model_file_id_mapping": {"alias": {"deployment-1": _MANAGED_UPLOAD}},
@@ -391,6 +403,15 @@ def test_media_file_ids_lists_the_file_ids_of_media_parts_only():
     }
 
     assert media_file_ids(request_body) == ("file-a",)
+
+
+def test_media_file_ids_lists_every_field_a_bridge_reads_as_a_file_id():
+    request_body: Final = {
+        **_responses_turn({"type": "input_file", "file_url": "file-a"}),
+        **_gemini_turn({"file_data": {"file_uri": "file-b"}}, {"fileData": {"fileUri": "file-c"}}),
+    }
+
+    assert set(media_file_ids(request_body)) == {"file-a", "file-b", "file-c"}
 
 
 def test_s3_media_uris_names_each_s3_object_once_in_the_order_it_first_appears():
