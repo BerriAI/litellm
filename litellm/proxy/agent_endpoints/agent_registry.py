@@ -190,7 +190,8 @@ async def _managed_fields(
     if prior is None:
         return result
     if existing is None or prior.agent_id != existing.agent_id:
-        raise HTTPException(409, "Entra application was already registered to another agent")
+        provider: Final = "Okta" if entry["provider"] == "okta" else "Entra"
+        raise HTTPException(409, f"{provider} application was already registered to another agent")
     return MappingProxyType({key: value for key, value in result.items() if key != "retired_identities"})
 
 

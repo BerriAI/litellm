@@ -13567,6 +13567,65 @@ async def test_managed_jwt_cannot_be_downgraded_into_virtual_key_mapping(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_okta_agent_jwt_cannot_be_downgraded_into_virtual_key_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
+    from typing import Final
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.types.agents import AgentResponse
+    from litellm.types.proxy.agent_identity import AgentIdentityBinding
+
+    issuer: Final = "https://example.okta.com/oauth2/aus1agents"
+    binding: Final = AgentIdentityBinding(
+        agent_id="managed",
+        provider="okta",
+        issuer=issuer,
+        tenant_id=issuer,
+        client_id="0oa1AgentClient",
+        required_scopes=(),
+        revision="current",
+    )
+    agent: Final = AgentResponse(
+        agent_id="managed",
+        agent_name="Managed",
+        agent_card_params={},
+        identity_managed=True,
+        identity=binding,
+        execution_mode="autonomous",
+    )
+    client: Final = MagicMock()
+    client.writer_db.litellm_agentidentity.find_unique = AsyncMock(return_value=binding)
+    client.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=agent)
+    handler: Final = MagicMock()
+    handler.is_jwt.return_value = True
+    handler.litellm_jwtauth = LiteLLM_JWTAuth(virtual_key_claim_field="sub")
+    handler.okta_agent_issuers.return_value = frozenset({issuer})
+    handler.auth_jwt = AsyncMock(return_value={"iss": issuer, "cid": "0oa1AgentClient", "sub": "0oa1AgentClient"})
+    for name, value in {
+        **_proxy_attrs_for_centralized_checks(),
+        "general_settings": {"enable_jwt_auth": True},
+        "premium_user": True,
+        "prisma_client": client,
+        "jwt_handler": handler,
+        "user_api_key_cache": UserApiKeyCache(),
+        "proxy_logging_obj": MagicMock(post_call_failure_hook=AsyncMock(return_value=None)),
+    }.items():
+        monkeypatch.setattr(proxy_server, name, value)
+    with pytest.raises(ProxyException) as failure:
+        await user_api_key_auth_builder(
+            request=_alias_request("/v1/chat/completions", {}),
+            api_key="Bearer verified.jwt.token",
+            azure_api_key_header="",
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data={},
+        )
+    assert failure.value.code == "403"
+    assert "without virtual-key mapping" in failure.value.message
+
+
+@pytest.mark.asyncio
 async def test_virtual_key_cannot_enter_checks_as_an_identity_managed_actor(monkeypatch: pytest.MonkeyPatch) -> None:
     from typing import Final
     from litellm.proxy import proxy_server

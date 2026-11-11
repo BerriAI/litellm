@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 import pytest
@@ -255,3 +257,121 @@ def test_empty_requirements_do_not_make_a_scope_less_human_token_valid(scope: ob
     binding: Final = BINDING.model_copy(update={"required_scopes": ()})
     result: Final = classify_agent_subject(binding, claims(oid=HUMAN, scp=scope), "both")
     assert isinstance(result, AgentIdentityFailure)
+
+
+OKTA_ISSUER: Final = "https://example.okta.com/oauth2/aus1agents"
+OKTA_CLIENT: Final = "0oa1AgentClient"
+OKTA_BINDING: Final = AgentIdentityBinding(
+    agent_id="agent-one",
+    provider="okta",
+    tenant_id=OKTA_ISSUER,
+    client_id=OKTA_CLIENT,
+    issuer=OKTA_ISSUER,
+    required_scopes=("agents:invoke",),
+    revision="okta-one",
+)
+OKTA_CONFIGURATION: Final = {
+    "provider": "okta",
+    "issuer": OKTA_ISSUER,
+    "client_id": OKTA_CLIENT,
+    "required_scopes": ["agents:invoke"],
+}
+
+
+def okta_claims(overrides: Mapping[str, object] = MappingProxyType({})) -> Mapping[str, object]:
+    return {"iss": OKTA_ISSUER, "cid": OKTA_CLIENT, "sub": OKTA_CLIENT, "scp": ["agents:invoke"], **overrides}
+
+
+def test_okta_client_credentials_token_authenticates_as_its_application() -> None:
+    result: Final = classify_agent_subject(OKTA_BINDING, okta_claims(), "autonomous")
+    assert result == AgentSubject(kind="application", oid=OKTA_CLIENT, mode="autonomous")
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"iss": "https://example.okta.com"},
+        {"cid": "0oa1OtherClient", "sub": "0oa1OtherClient"},
+        {"cid": OKTA_CLIENT.lower(), "sub": OKTA_CLIENT.lower()},
+        {"sub": "person@example.com"},
+        {"uid": "00u1person"},
+        {"scp": ["other:scope"]},
+        {"scp": "agents:invoke"},
+        {"scp": [1]},
+        {"scp": None},
+    ],
+)
+def test_okta_application_rejects_mismatched_or_user_tokens(overrides: Mapping[str, object]) -> None:
+    assert isinstance(classify_agent_subject(OKTA_BINDING, okta_claims(overrides), "autonomous"), AgentIdentityFailure)
+
+
+def test_okta_application_cannot_act_in_delegated_mode() -> None:
+    assert isinstance(classify_agent_subject(OKTA_BINDING, okta_claims(), "delegated"), AgentIdentityFailure)
+
+
+def test_okta_binding_stores_the_issuer_as_its_tenant_and_keeps_client_case() -> None:
+    result: Final = managed_write_fields({"identity": OKTA_CONFIGURATION}, None, "admin")
+    assert not isinstance(result, AgentIdentityFailure)
+    created: Final = result["identity"]["create"]
+    assert {key: value for key, value in created.items() if key != "revision"} == {
+        "provider": "okta",
+        "tenant_id": OKTA_ISSUER,
+        "client_id": OKTA_CLIENT,
+        "service_principal_id": None,
+        "required_roles": (),
+        "required_scopes": ("agents:invoke",),
+        "issuer": OKTA_ISSUER,
+        "active": True,
+        "last_authenticated_at": None,
+    }
+    assert result["retired_identities"] == {
+        "create": {"provider": "okta", "issuer": OKTA_ISSUER, "tenant_id": OKTA_ISSUER, "client_id": OKTA_CLIENT}
+    }
+
+
+def test_unchanged_okta_binding_preserves_revision() -> None:
+    agent: Final = managed_agent().model_copy(update={"identity": OKTA_BINDING})
+    assert managed_write_fields({"identity": OKTA_CONFIGURATION}, agent, "admin") == {}
+
+
+@pytest.mark.parametrize("mode", ["delegated", "both"])
+def test_okta_agents_are_autonomous_only(mode: str) -> None:
+    created: Final = managed_write_fields({"identity": OKTA_CONFIGURATION, "execution_mode": mode}, None, "admin")
+    assert isinstance(created, AgentIdentityFailure)
+    assert created.message == "Okta agent identities support autonomous mode only"
+    agent: Final = managed_agent().model_copy(update={"identity": OKTA_BINDING})
+    switched: Final = managed_write_fields({"execution_mode": mode}, agent, "admin")
+    assert isinstance(switched, AgentIdentityFailure)
+    assert switched.message == "Okta agent identities support autonomous mode only"
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"issuer": "https://example.okta.com"},
+        {"issuer": "http://example.okta.com/oauth2/aus1agents"},
+        {"issuer": "https://example.okta.com/oauth2/aus1agents/extra"},
+        {"client_id": ""},
+        {"tenant_id": OKTA_ISSUER},
+        {"required_scopes": ["agents:invoke agents:read"]},
+        {"required_scopes": [""]},
+    ],
+)
+def test_okta_binding_requires_a_custom_authorization_server(overrides: Mapping[str, object]) -> None:
+    result: Final = managed_write_fields({"identity": {**OKTA_CONFIGURATION, **overrides}}, None, "admin")
+    assert isinstance(result, AgentIdentityFailure)
+    assert result.message.startswith("Invalid agent identity configuration:")
+
+
+def test_okta_default_custom_authorization_server_is_accepted() -> None:
+    issuer: Final = "https://example.okta.com/oauth2/default"
+    result: Final = managed_write_fields({"identity": {**OKTA_CONFIGURATION, "issuer": issuer}}, None, "admin")
+    assert not isinstance(result, AgentIdentityFailure)
+    assert result["identity"]["create"]["issuer"] == issuer
+
+
+@pytest.mark.parametrize("scope", ["agents:invoke", [1], None])
+def test_okta_malformed_scope_claim_is_rejected_even_without_required_scopes(scope: object) -> None:
+    binding: Final = OKTA_BINDING.model_copy(update={"required_scopes": ()})
+    result: Final = classify_agent_subject(binding, okta_claims({"scp": scope}), "autonomous")
+    assert result == AgentIdentityFailure(message="Invalid scope claim")

@@ -8305,6 +8305,133 @@ async def test_managed_application_uses_persisted_identity_without_provisioning_
     database.db.litellm_usertable.upsert.assert_not_awaited()
 
 
+_OKTA_ISSUER: Final = "https://example.okta.com/oauth2/aus1agents"
+_OKTA_CLIENT: Final = "0oa1AgentClient"
+
+
+def _okta_admission(
+    monkeypatch: pytest.MonkeyPatch, route: str, *, opted_in: bool
+) -> tuple[Mapping[str, object], MagicMock]:
+    from litellm.types.proxy.agent_identity import AgentIdentityBinding
+
+    jwks_url: Final = f"{_OKTA_ISSUER}/v1/keys"
+    for name in ("JWT_PUBLIC_KEY_URL", "JWT_ISSUER", "JWT_AUDIENCE"):
+        monkeypatch.delenv(name, raising=False)
+    private_key, jwk = _get_rsa_key_and_jwk(kid="okta-key")
+    cache: Final = DualCache()
+    cache.set_cache(key=f"litellm_jwt_auth_keys_{jwks_url}", value=[jwk])
+    handler: Final = JWTHandler()
+    issuer_config: Final = JWTIssuerConfig(
+        issuer=_OKTA_ISSUER,
+        audience="api://gateway",
+        jwks_url=jwks_url,
+        agent_identity_provider="okta" if opted_in else None,
+    )
+    handler.update_environment(
+        None, cache, LiteLLM_JWTAuth(
+            issuers=[issuer_config], admin_jwt_scope="litellm_proxy_admin", admin_allowed_routes=["llm_api_routes"]
+        )
+    )
+    binding: Final = AgentIdentityBinding(
+        agent_id="okta-agent",
+        provider="okta",
+        issuer=_OKTA_ISSUER,
+        tenant_id=_OKTA_ISSUER,
+        client_id=_OKTA_CLIENT,
+        required_scopes=("agents:invoke",),
+        revision="revision-one",
+    )
+    agent: Final = AgentResponse.model_validate(
+        {
+            "agent_id": "okta-agent",
+            "agent_name": "Okta agent",
+            "agent_card_params": {},
+            "identity": binding,
+            "identity_managed": True,
+        }
+    )
+    database: Final = MagicMock()
+    database.writer_db.litellm_agentidentity.find_unique = AsyncMock(return_value=binding)
+    database.writer_db.litellm_agentidentity.update_many = AsyncMock(return_value=1)
+    database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=agent)
+    database.db.litellm_usertable.upsert = AsyncMock()
+    token: Final = _encode_rsa_jwt(
+        private_key,
+        issuer=_OKTA_ISSUER,
+        audience="api://gateway",
+        kid="okta-key",
+        extra_claims={
+            "cid": _OKTA_CLIENT,
+            "sub": _OKTA_CLIENT,
+            "scp": ["agents:invoke"],
+            "scope": "litellm_proxy_admin",
+        },
+    )
+    arguments: Final = dict(
+        api_key=token,
+        jwt_handler=handler,
+        request_data={},
+        general_settings={},
+        route=route,
+        prisma_client=database,
+        user_api_key_cache=cache,
+        parent_otel_span=None,
+        proxy_logging_obj=MagicMock(),
+    )
+    return arguments, database
+
+
+def test_only_opted_in_issuers_with_audience_validation_carry_okta_agents() -> None:
+    handler: Final = JWTHandler()
+    handler.update_environment(
+        None,
+        DualCache(),
+        LiteLLM_JWTAuth(
+            issuers=[
+                JWTIssuerConfig(issuer=_OKTA_ISSUER, audience="api://gateway", agent_identity_provider="okta"),
+                JWTIssuerConfig(
+                    issuer="https://example.okta.com/oauth2/no-audience",
+                    disable_audience_validation=True,
+                    agent_identity_provider="okta",
+                ),
+                JWTIssuerConfig(issuer="https://example.okta.com/oauth2/people", audience="api://gateway"),
+            ]
+        ),
+    )
+    assert handler.okta_agent_issuers() == frozenset({_OKTA_ISSUER})
+
+
+@pytest.mark.asyncio
+async def test_okta_client_credentials_token_authenticates_as_its_bound_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    arguments, database = _okta_admission(monkeypatch, "/chat/completions", opted_in=True)
+    auth: Final = JWTAuthManager.user_api_key_auth_from_result(await JWTAuthManager.auth_builder(**arguments))
+    assert auth.agent_id == "okta-agent"
+    assert auth.user_id is None
+    assert auth.managed_agent_context is not None
+    assert auth.managed_agent_context.mode == "autonomous"
+    database.db.litellm_usertable.upsert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_okta_agent_token_cannot_reach_management_routes(monkeypatch: pytest.MonkeyPatch) -> None:
+    arguments, _ = _okta_admission(monkeypatch, "/key/generate", opted_in=True)
+    with pytest.raises(HTTPException) as failure:
+        await JWTAuthManager.auth_builder(**arguments)
+    assert failure.value.status_code == 403
+    assert failure.value.detail == "Agent identities can only access inference and agent discovery routes"
+
+
+@pytest.mark.asyncio
+async def test_okta_token_from_an_issuer_that_has_not_opted_in_keeps_plain_jwt_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    arguments, database = _okta_admission(monkeypatch, "/chat/completions", opted_in=False)
+    result: Final = await JWTAuthManager.auth_builder(**arguments)
+    assert result["is_proxy_admin"] is True
+    assert JWTAuthManager.user_api_key_auth_from_result(result).managed_agent_context is None
+    database.writer_db.litellm_agentidentity.find_unique.assert_not_awaited()
+
+
 @pytest.mark.parametrize("claim_value", ["managed", "Readable managed agent"])
 def test_legacy_claim_cannot_select_a_top_level_entra_binding(claim_value: str) -> None:
     from litellm.types.proxy.agent_identity import AgentIdentityBinding

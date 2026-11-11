@@ -1,8 +1,8 @@
 from datetime import datetime
-from typing import Literal, TypeAlias
+from typing import Annotated, Final, Literal, TypeAlias
 from uuid import UUID
 
-from pydantic import ConfigDict, Field, field_validator
+from pydantic import ConfigDict, Field, TypeAdapter, field_validator
 
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -32,12 +32,25 @@ class EntraIdentityConfig(LiteLLMBaseModel):
         return f"https://login.microsoftonline.com/{self.tenant_id}/v2.0"
 
 
+class OktaIdentityConfig(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    provider: Literal["okta"]
+    issuer: Annotated[str, Field(pattern=r"^https://[^/?#]+/oauth2/[^/?#]+$")]
+    client_id: Annotated[str, Field(min_length=1)]
+    required_scopes: tuple[Annotated[str, Field(pattern=r"^[\x21\x23-\x5B\x5D-\x7E]+$")], ...] = ()
+
+
+AgentIdentityConfig: TypeAlias = Annotated[EntraIdentityConfig | OktaIdentityConfig, Field(discriminator="provider")]
+AGENT_IDENTITY_CONFIG: Final[TypeAdapter[EntraIdentityConfig | OktaIdentityConfig]] = TypeAdapter(AgentIdentityConfig)
+
+
 class AgentIdentityBinding(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     agent_id: str
     active: bool = True
-    provider: Literal["microsoft_entra"]
+    provider: Literal["microsoft_entra", "okta"]
     tenant_id: str
     client_id: str
     service_principal_id: str | None = None

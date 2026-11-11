@@ -26699,7 +26699,8 @@ export interface components {
             execution_mode?: "autonomous" | "delegated" | "both";
             /** Extra Headers */
             extra_headers?: string[] | null;
-            identity?: components["schemas"]["EntraIdentityConfig"] | null;
+            /** Identity */
+            identity?: (components["schemas"]["EntraIdentityConfig"] | components["schemas"]["OktaIdentityConfig"]) | null;
             kill_switch?: components["schemas"]["AgentKillSwitchConfig"] | null;
             /** Litellm Params */
             litellm_params?: {
@@ -26803,9 +26804,9 @@ export interface components {
             last_authenticated_at?: string | null;
             /**
              * Provider
-             * @constant
+             * @enum {string}
              */
-            provider: "microsoft_entra";
+            provider: "microsoft_entra" | "okta";
             /**
              * Required Roles
              * @default []
@@ -33377,8 +33378,8 @@ export interface components {
             /** Client Id */
             client_id: string;
             /**
-             * Provider
-             * @constant
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
              */
             provider: "microsoft_entra";
             /**
@@ -41180,6 +41181,23 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /** OktaIdentityConfig */
+        OktaIdentityConfig: {
+            /** Client Id */
+            client_id: string;
+            /** Issuer */
+            issuer: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            provider: "okta";
+            /**
+             * Required Scopes
+             * @default []
+             */
+            required_scopes: string[];
+        };
         /** OpenAIBoxAnswer */
         OpenAIBoxAnswer: {
             box: components["schemas"]["DecisionsBox"];
@@ -41967,7 +41985,8 @@ export interface components {
             execution_mode?: "autonomous" | "delegated" | "both";
             /** Extra Headers */
             extra_headers?: string[] | null;
-            identity?: components["schemas"]["EntraIdentityConfig"] | null;
+            /** Identity */
+            identity?: (components["schemas"]["EntraIdentityConfig"] | components["schemas"]["OktaIdentityConfig"]) | null;
             kill_switch?: components["schemas"]["AgentKillSwitchConfig"] | null;
             /** Litellm Params */
             litellm_params?: {
@@ -81144,7 +81163,10 @@ export interface operations {
     };
     get_agent_identity_providers_v1_agents_identity_providers_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description okta lists only the issuers opted in for Okta agents */
+                provider?: "okta" | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -81158,6 +81180,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": string[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

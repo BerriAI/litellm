@@ -1590,6 +1590,43 @@ async def test_retired_application_cannot_transfer_to_another_agent(operation: s
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "identity,message",
+    [
+        (
+            {
+                "provider": "microsoft_entra",
+                "tenant_id": "11111111-1111-4111-8111-111111111111",
+                "client_id": "22222222-2222-4222-8222-222222222222",
+                "service_principal_id": "33333333-3333-4333-8333-333333333333",
+            },
+            "Entra application was already registered to another agent",
+        ),
+        (
+            {"provider": "okta", "issuer": "https://example.okta.com/oauth2/aus1agents", "client_id": "0oa1AgentClient"},
+            "Okta application was already registered to another agent",
+        ),
+    ],
+)
+async def test_retired_application_conflict_names_its_identity_provider(
+    identity: Mapping[str, object], message: str
+) -> None:
+    from fastapi import HTTPException
+
+    client: Final = MagicMock()
+    client.writer_db.litellm_retiredagentidentity.find_unique = AsyncMock(
+        return_value=SimpleNamespace(agent_id="previous-agent")
+    )
+    client.db.litellm_agentstable.create = AsyncMock()
+    with pytest.raises(HTTPException) as denied:
+        await AgentRegistry().add_agent_to_db(
+            {"agent_name": "Agent", "agent_card_params": {}, "identity": identity}, client, created_by="admin"
+        )
+    assert (denied.value.status_code, denied.value.detail) == (409, message)
+    client.db.litellm_agentstable.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["create", "patch", "put"])
 @pytest.mark.parametrize("prior_owner", [False, True])
 async def test_application_registration_preserves_its_existing_owner(operation: str, prior_owner: bool) -> None:

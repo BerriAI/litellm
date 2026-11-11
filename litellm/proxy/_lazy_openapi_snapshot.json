@@ -2772,12 +2772,27 @@
             "identity": {
               "anyOf": [
                 {
-                  "$ref": "#/components/schemas/EntraIdentityConfig"
+                  "discriminator": {
+                    "mapping": {
+                      "microsoft_entra": "#/components/schemas/EntraIdentityConfig",
+                      "okta": "#/components/schemas/OktaIdentityConfig"
+                    },
+                    "propertyName": "provider"
+                  },
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/EntraIdentityConfig"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OktaIdentityConfig"
+                    }
+                  ]
                 },
                 {
                   "type": "null"
                 }
-              ]
+              ],
+              "title": "Identity"
             },
             "kill_switch": {
               "anyOf": [
@@ -2939,7 +2954,10 @@
               "title": "Last Authenticated At"
             },
             "provider": {
-              "const": "microsoft_entra",
+              "enum": [
+                "microsoft_entra",
+                "okta"
+              ],
               "title": "Provider",
               "type": "string"
             },
@@ -4640,6 +4658,42 @@
           "title": "OAuthFlows",
           "type": "object"
         },
+        "OktaIdentityConfig": {
+          "additionalProperties": false,
+          "properties": {
+            "client_id": {
+              "minLength": 1,
+              "title": "Client Id",
+              "type": "string"
+            },
+            "issuer": {
+              "pattern": "^https://[^/?#]+/oauth2/[^/?#]+$",
+              "title": "Issuer",
+              "type": "string"
+            },
+            "provider": {
+              "const": "okta",
+              "title": "Provider",
+              "type": "string"
+            },
+            "required_scopes": {
+              "default": [],
+              "items": {
+                "pattern": "^[\\x21\\x23-\\x5B\\x5D-\\x7E]+$",
+                "type": "string"
+              },
+              "title": "Required Scopes",
+              "type": "array"
+            }
+          },
+          "required": [
+            "provider",
+            "issuer",
+            "client_id"
+          ],
+          "title": "OktaIdentityConfig",
+          "type": "object"
+        },
         "OpenIdConnectSecurityScheme": {
           "description": "Defines a security scheme using OpenID Connect.",
           "properties": {
@@ -4724,12 +4778,27 @@
             "identity": {
               "anyOf": [
                 {
-                  "$ref": "#/components/schemas/EntraIdentityConfig"
+                  "discriminator": {
+                    "mapping": {
+                      "microsoft_entra": "#/components/schemas/EntraIdentityConfig",
+                      "okta": "#/components/schemas/OktaIdentityConfig"
+                    },
+                    "propertyName": "provider"
+                  },
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/EntraIdentityConfig"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OktaIdentityConfig"
+                    }
+                  ]
                 },
                 {
                   "type": "null"
                 }
-              ]
+              ],
+              "title": "Identity"
             },
             "kill_switch": {
               "anyOf": [
@@ -6136,6 +6205,27 @@
       "/v1/agents/identity/providers": {
         "get": {
           "operationId": "get_agent_identity_providers_v1_agents_identity_providers_get",
+          "parameters": [
+            {
+              "description": "okta lists only the issuers opted in for Okta agents",
+              "in": "query",
+              "name": "provider",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "const": "okta",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "okta lists only the issuers opted in for Okta agents",
+                "title": "Provider"
+              }
+            }
+          ],
           "responses": {
             "200": {
               "content": {
@@ -6150,6 +6240,16 @@
                 }
               },
               "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
             }
           },
           "security": [
