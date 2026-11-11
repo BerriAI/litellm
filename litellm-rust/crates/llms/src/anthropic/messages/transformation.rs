@@ -3,7 +3,7 @@ use litellm_host::interceptors::{RetriedRequest, RetryReason};
 use litellm_http::request::{with_header, without_headers};
 use litellm_llms_types::{
     formats::messages::{
-        ContentBlock, ContentBlockType, ContextEdit, ContextManagement, Message,
+        ContentBlock, ContentBlockType, ContextEdit, ContextManagement, Message, MessageContent,
         MessagesOptionalParams, MessagesRequest, Speed, ThinkingConfig, ThinkingDisplay,
     },
     providers::anthropic::{AnthropicBeta, BETA_HEADER, BetaProvider, BetaSet, DEFAULT_HEADERS},
@@ -303,6 +303,11 @@ pub(crate) fn transform_messages_request(
     } else {
         map_known_runs(request.messages, strip_advisor_blocks)
     };
+    let messages = if context.drops_unsupported_params {
+        drop_non_string_tool_result_texts(messages)
+    } else {
+        messages
+    };
     Ok(MessagesRequest {
         messages: map_known_runs(messages, strip_encrypted_reasoning_blocks),
         params: MessagesOptionalParams {
@@ -312,6 +317,62 @@ pub(crate) fn transform_messages_request(
         },
         ..request
     })
+}
+
+fn is_python_str(value: &Value) -> bool {
+    match value {
+        Value::String(text) => {
+            litellm_host::raw_json::decode(text).is_none_or(|raw| raw.starts_with('"'))
+        }
+        _ => false,
+    }
+}
+
+fn is_non_string_text(part: &Value) -> bool {
+    part.get("type").and_then(Value::as_str) == Some("text")
+        && part.get("text").is_some_and(|text| !is_python_str(text))
+}
+
+fn without_non_string_texts(content: &mut Value) {
+    if let Value::Array(parts) = content {
+        parts.retain(|part| !is_non_string_text(part));
+    }
+}
+
+fn drop_non_string_tool_result_texts(
+    messages: Vec<Recognized<Message>>,
+) -> Vec<Recognized<Message>> {
+    messages
+        .into_iter()
+        .map(|message| match message {
+            Recognized::Known(mut message) => {
+                if message.role == "user"
+                    && let MessageContent::Blocks(blocks) = &mut message.content
+                {
+                    blocks
+                        .iter_mut()
+                        .filter(|block| block.is_type(ContentBlockType::ToolResult))
+                        .filter_map(|block| block.content.as_mut())
+                        .for_each(without_non_string_texts);
+                }
+                Recognized::Known(message)
+            }
+            Recognized::Unrecognized(mut message) => {
+                if message.get("role").and_then(Value::as_str) == Some("user")
+                    && let Some(Value::Array(blocks)) = message.get_mut("content")
+                {
+                    blocks
+                        .iter_mut()
+                        .filter(|block| {
+                            block.get("type").and_then(Value::as_str) == Some("tool_result")
+                        })
+                        .filter_map(|block| block.get_mut("content"))
+                        .for_each(without_non_string_texts);
+                }
+                Recognized::Unrecognized(message)
+            }
+        })
+        .collect()
 }
 
 fn without_null_safeguards(extra: Map<String, Value>) -> Map<String, Value> {

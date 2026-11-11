@@ -88,6 +88,10 @@ async def store_stream(
 
     events: Final = entry.get(CACHED_STREAM_EVENTS_KEY)
     handler: Final = getattr(kwargs.get("litellm_logging_obj"), "llm_caching_handler", None)
+    preset_cache_key: Final = handler.preset_cache_key if isinstance(handler, LLMCachingHandler) else None
+    cache_key_override: Final[Mapping[str, object]] = (
+        {"cache_key": preset_cache_key} if preset_cache_key is not None else {}
+    )
 
     async def write() -> None:
         try:
@@ -96,7 +100,7 @@ async def store_stream(
                 if isinstance(events, list)
                 else entry,
                 dynamic_cache_object=handler.dual_cache if isinstance(handler, LLMCachingHandler) else None,
-                **kwargs,  # pyright: ignore[reportArgumentType]  # the cache call's own keyword arguments, as Python passes them
+                **{**kwargs, **cache_key_override},  # pyright: ignore[reportArgumentType]  # the cache call's own keyword arguments, as Python passes them
             )
         except Exception as e:  # noqa: BLE001  # a cache write must never surface as a client-visible stream error
             verbose_logger.exception("Anthropic Messages stream cache write failed: %s", e)

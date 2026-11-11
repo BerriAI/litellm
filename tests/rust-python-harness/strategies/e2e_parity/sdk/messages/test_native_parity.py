@@ -338,6 +338,32 @@ WIDE_INTEGER_REPLY: Final = (
     b'"stop_reason":"tool_use","stop_sequence":null,"usage":{"input_tokens":12,"output_tokens":9}}'
 )
 
+MARKED_TEXTS_REPLY: Final = (
+    '{"id":"msg_01ParityMarked","type":"message","role":"assistant","model":"claude-sonnet-4-5-20250929",'
+    '"content":[{"type":"text","text":"\\uf8fflitellm-raw-json:42"},{"type":"tool_use","id":"toolu_01ParityMarked",'
+    '"name":"get_ids","input":{"n":"\uf8fflitellm-raw-json:NaN","s":"\\uF8FFlitellm-raw-json:\\"x\\"",'
+    '"\\uf8fflitellm-raw-json:1":true,"big":18446744073709551616}}],'
+    '"stop_reason":"tool_use","stop_sequence":null,"usage":{"input_tokens":12,"output_tokens":9}}'
+).encode()
+
+
+def _non_string_tool_result_texts(*texts: object) -> list[dict[str, object]]:  # mutable-ok: the messages kwarg is a list of dicts
+    return [
+        dict(USER),
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_01Texts", "name": "get_ids", "input": {}}]},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01Texts",
+                    "content": [{"type": "text", "text": text} for text in texts],
+                },
+                {"type": "text", "text": "go on"},
+            ],
+        },
+    ]
+
 
 def _upstream_error(kind: str, message: str) -> Mapping[str, JsonValue]:
     return MappingProxyType({"type": "error", "error": {"type": kind, "message": message}})
@@ -1490,6 +1516,31 @@ FALLBACK_CASES: Final = (
     Case("cache_write_without_read", _kw(cache={"no-cache": True}), upstream=(_ok(), _ok()), cache=Cache),
     Case("reply_with_wide_numbers", upstream=(ResponseSpec(body=WIDE_NUMBERS_REPLY),)),
     Case("reply_with_a_wide_integer_cached", upstream=(ResponseSpec(body=WIDE_INTEGER_REPLY),), cache=Cache),
+    Case("reply_with_raw_leaf_marked_texts", upstream=(ResponseSpec(body=MARKED_TEXTS_REPLY),)),
+    Case("reply_with_raw_leaf_marked_texts_cached", upstream=(ResponseSpec(body=MARKED_TEXTS_REPLY),), cache=Cache),
+    Case(
+        "modify_params_clamped_stream_hits_the_cache",
+        _kw(max_tokens=200_000, stream=True),
+        upstream=(_stream(TEXT_STREAM), _stream(TEXT_STREAM)),
+        settings=_MODIFY_PARAMS,
+        cache=Cache,
+    ),
+    Case(
+        "drop_params_drops_non_string_tool_result_texts",
+        _kw(
+            messages=_non_string_tool_result_texts(5, None, {"a": 1}, 8.5, 2**70, float("nan"), "kept"),
+            drop_params=True,
+        ),
+    ),
+    Case(
+        "global_drop_params_drops_every_tool_result_text",
+        _kw(messages=_non_string_tool_result_texts(5, None)),
+        settings=MappingProxyType({"drop_params": True}),
+    ),
+    Case(
+        "drop_params_keeps_string_tool_result_texts",
+        _kw(messages=_non_string_tool_result_texts("\uf8fflitellm-raw-json:1", "kept"), drop_params=True),
+    ),
     Case("modify_params_sync", _kw(max_tokens=200_000), sync=True, settings=_MODIFY_PARAMS),
     Case("request_timeout_kwarg", _kw(request_timeout=30)),
     Case("stream_timeout_kwarg", _kw(stream=True, stream_timeout=30), upstream=(_stream(TEXT_STREAM),)),

@@ -32,7 +32,15 @@ pub fn mark_wide_numbers(text: &str) -> Cow<'_, str> {
     let mut index = 0;
     while index < bytes.len() {
         match bytes[index] {
-            b'"' => index = string_end(bytes, index + 1),
+            b'"' => {
+                let end = string_end(bytes, index + 1);
+                if let Some(escaped) = escaped_marked_string(&text[index..end]) {
+                    out.push_str(&text[copied..index]);
+                    out.push_str(&escaped);
+                    copied = end;
+                }
+                index = end;
+            }
             b'-' | b'0'..=b'9' => {
                 let end = bytes[index..]
                     .iter()
@@ -55,6 +63,42 @@ pub fn mark_wide_numbers(text: &str) -> Cow<'_, str> {
     }
     out.push_str(&text[copied..]);
     Cow::Owned(out)
+}
+
+fn escaped_marked_string(token: &str) -> Option<String> {
+    let inner = token.strip_prefix('"')?;
+    let escaped_mark = inner
+        .get(..6)
+        .is_some_and(|head| head.eq_ignore_ascii_case("\\uf8ff"));
+    if !inner.starts_with(MARK) && !escaped_mark {
+        return None;
+    }
+    let text = serde_json::from_str::<String>(token).ok()?;
+    is_marked(&text)
+        .then(|| serde_json::Value::String(encode(&ascii_string_literal(&text))).to_string())
+}
+
+fn ascii_string_literal(text: &str) -> String {
+    let mut literal = String::with_capacity(text.len() + 2);
+    literal.push('"');
+    for character in text.chars() {
+        match character {
+            '"' => literal.push_str("\\\""),
+            '\\' => literal.push_str("\\\\"),
+            '\n' => literal.push_str("\\n"),
+            '\r' => literal.push_str("\\r"),
+            '\t' => literal.push_str("\\t"),
+            ' '..='~' => literal.push(character),
+            _ => {
+                let mut units = [0; 2];
+                for unit in character.encode_utf16(&mut units) {
+                    literal.push_str(&format!("\\u{unit:04x}"));
+                }
+            }
+        }
+    }
+    literal.push('"');
+    literal
 }
 
 fn string_end(bytes: &[u8], mut index: usize) -> usize {
@@ -289,6 +333,9 @@ mod tests {
     #[case::negative_wide_integer(r#"[-12345678901234567890123]"#, json!([encode("-12345678901234567890123")]))]
     #[case::overflowing_float(r#"{"a":[1e400,-1E+400]}"#, json!({"a": [encode("Infinity"), encode("-Infinity")]}))]
     #[case::numbers_that_fit(r#"{"a":[18446744073709551615,-9223372036854775808,-0.0,5e-324,1E2,0.30000000000000004]}"#, json!({"a": [18_446_744_073_709_551_615_u64, i64::MIN, -0.0, 5e-324, 100.0, 0.300_000_000_000_000_04]}))]
+    #[case::provider_marked_text("{\"a\":\"\u{F8FF}litellm-raw-json:42\"}", json!({"a": encode(r#""\uf8fflitellm-raw-json:42""#)}))]
+    #[case::provider_escaped_mark(r#"{"\uF8FFlitellm-raw-json:1":["\uf8fflitellm-raw-json:\"x\"\n\u00e9"]}"#, json!({encode(r#""\uf8fflitellm-raw-json:1""#): [encode(r#""\uf8fflitellm-raw-json:\"x\"\n\u00e9""#)]}))]
+    #[case::mark_not_leading(r#"["x\uf8fflitellm-raw-json:NaN"]"#, json!(["x\u{F8FF}litellm-raw-json:NaN"]))]
     #[case::numbers_inside_strings(r#"{"18446744073709551616":"1e400 \" 18446744073709551616"}"#, json!({"18446744073709551616": "1e400 \" 18446744073709551616"}))]
     fn wide_numbers_are_read_as_marked_texts(#[case] text: &str, #[case] read: Value) {
         assert_eq!(
