@@ -14379,12 +14379,14 @@
     "bedrock/moonshotai.kimi-k2.5": {
         "input_cost_per_token": 6e-07,
         "input_cost_per_token_flex": 3e-07,
+        "input_cost_per_token_priority": 1.05e-06,
         "litellm_provider": "bedrock",
         "max_input_tokens": 262144,
         "max_output_tokens": 16000,
         "mode": "chat",
         "output_cost_per_token": 3e-06,
         "output_cost_per_token_flex": 1.5e-06,
+        "output_cost_per_token_priority": 5.25e-06,
         "source": "https://b0.p.awsstatic.com/pricing/2.0/meteredUnitMaps/bedrock/USD/current/bedrock.json",
         "supports_function_calling": true,
         "supports_reasoning": true,
@@ -24828,7 +24830,7 @@
     "deepinfra/mistralai/Mistral-Nemo-Instruct-2407": {
         "max_input_tokens": 131072,
         "max_output_tokens": 131072,
-        "input_cost_per_token": 1.9e-08,
+        "input_cost_per_token": 2.9e-08,
         "output_cost_per_token": 3e-08,
         "litellm_provider": "deepinfra",
         "mode": "chat",
@@ -24909,8 +24911,8 @@
     },
     "deepinfra/nvidia/NVIDIA-Nemotron-3.5-Lightning": {
         "max_input_tokens": 262144,
-        "input_cost_per_token": 8e-08,
-        "output_cost_per_token": 2e-07,
+        "input_cost_per_token": 6e-08,
+        "output_cost_per_token": 1.6e-07,
         "litellm_provider": "deepinfra",
         "mode": "chat",
         "source": "https://deepinfra.com/pricing",
@@ -56200,6 +56202,7 @@
     "zai.glm-5": {
         "input_cost_per_token": 1e-06,
         "input_cost_per_token_batches": 5e-07,
+        "input_cost_per_token_flex": 5e-07,
         "input_cost_per_token_priority": 1.75e-06,
         "output_cost_per_token": 3.2e-06,
         "litellm_provider": "bedrock_converse",
@@ -56207,6 +56210,7 @@
         "max_output_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token_batches": 1.6e-06,
+        "output_cost_per_token_flex": 1.6e-06,
         "output_cost_per_token_priority": 5.6e-06,
         "supports_function_calling": true,
         "supports_reasoning": true,
@@ -67981,12 +67985,12 @@
         "source": "https://deepinfra.com/pricing"
     },
     "deepinfra/anthropic/claude-sonnet-5": {
-        "input_cost_per_token": 2e-06,
+        "input_cost_per_token": 3e-06,
         "litellm_provider": "deepinfra",
         "max_input_tokens": 1000000,
         "max_output_tokens": 1000000,
         "mode": "chat",
-        "output_cost_per_token": 1e-05,
+        "output_cost_per_token": 1.5e-05,
         "prompt_cache_min_tokens": 1024,
         "source": "https://deepinfra.com/pricing",
         "supports_adaptive_thinking": true,
@@ -100382,6 +100386,62 @@
             "/v1/images/edits",
             "/v1/images/generations"
         ],
+        "supports_vision": true
+    },
+    "databricks/databricks-gemini-4-carbon": {
+        "cache_creation_input_token_cost": 2e-06,
+        "cache_read_input_token_cost": 2e-06,
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "metadata": {"notes":"Gemini 4 Carbon on Databricks is available only through Unity Gateway with the model service name system.ai.gemini-4-carbon on a global endpoint. The Databricks pricing pages list no row for it yet, so input and output are the Global rates on the Vertex AI pricing page for Gemini 4 Carbon (listed there through November 30, 2026), no '*_dbu_cost_per_token' fields are published, and cache tokens bill at the input rate until Databricks publishes cache DBU rates."},
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "source": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models",
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_video_input": true,
+        "supports_vision": true
+    },
+    "databricks/system.ai.gemini-4-carbon": {
+        "cache_creation_input_token_cost": 2e-06,
+        "cache_read_input_token_cost": 2e-06,
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "metadata": {"notes":"Gemini 4 Carbon on Databricks is available only through Unity Gateway with the model service name system.ai.gemini-4-carbon on a global endpoint. The Databricks pricing pages list no row for it yet, so input and output are the Global rates on the Vertex AI pricing page for Gemini 4 Carbon (listed there through November 30, 2026), no '*_dbu_cost_per_token' fields are published, and cache tokens bill at the input rate until Databricks publishes cache DBU rates."},
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "source": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models",
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_video_input": true,
         "supports_vision": true
     }
 }
