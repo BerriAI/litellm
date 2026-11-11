@@ -50,6 +50,7 @@ from litellm.proxy.auth.password_policy import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.callback_config_validation import raise_on_logging_metadata_env_reference
 from litellm.proxy.common_utils.openai_error_payload import openai_shaped_proxy_exception, proxy_exception_for
 from litellm.proxy.common_utils.timezone_utils import keeps_due_budget_reset
 from litellm.proxy.common_utils.user_api_key_cache import (
@@ -597,6 +598,7 @@ async def new_user(
                 detail=f"Only proxy admins can create administrative users (proxy_admin, proxy_admin_viewer). Attempted to create user with role: {data.user_role}. Your role: {user_api_key_dict.user_role}",
             )
 
+        raise_on_logging_metadata_env_reference(data.metadata)
         if data.auto_create_key and isinstance(user_api_key_dict, UserAPIKeyAuth):
             enforce_batch_limits_are_admin_only(data, None, user_api_key_dict, "key")
             enforce_vector_store_index_grants_are_admin_only(data, None, None, user_api_key_dict, "key")

@@ -2,6 +2,7 @@ from collections.abc import Iterator
 from typing import Final
 
 import pytest
+from fastapi import HTTPException
 
 from litellm.proxy.common_utils.callback_config_validation import (
     callback_config_error,
@@ -10,6 +11,8 @@ from litellm.proxy.common_utils.callback_config_validation import (
     credential_reference_rejection,
     cross_entry_family_error,
     logging_metadata_config_error,
+    logging_metadata_env_reference_error,
+    raise_on_logging_metadata_env_reference,
 )
 
 
@@ -500,6 +503,52 @@ def test_key_logging_entries_compare_excluded_services_by_parsed_value(
 def test_a_failure_only_entry_rejects_excluded_services() -> None:
     error: Final = callback_config_error("langfuse_otel", {"excluded_services": "redis"}, "failure")
     assert error is not None and "excluded_services" in error and "success_and_failure" in error
+
+
+_LITERAL_ARIZE_VARS: Final = {"arize_api_key": "literal-key", "arize_space_id": "literal-space"}
+
+
+def _arize_entry(**callback_vars: str) -> dict[str, object]:
+    return {
+        "callback_name": "arize",
+        "callback_type": "success",
+        "callback_vars": {**_LITERAL_ARIZE_VARS, **callback_vars},
+    }
+
+
+@pytest.mark.parametrize("field", ["arize_api_key", "arize_space_id"])
+def test_an_env_reference_in_any_logging_entry_is_rejected(field: str) -> None:
+    metadata: Final = {"logging": [_arize_entry(), _arize_entry(**{field: "os.environ/ARIZE_TENANT_1"})]}
+    error: Final = logging_metadata_env_reference_error(metadata)
+    assert error is not None and f"Callback param '{field}'" in error and "os.environ/" in error
+    assert logging_metadata_config_error(metadata) == error
+
+
+def test_an_env_reference_is_rejected_whatever_the_callback_name() -> None:
+    metadata: Final = {"logging": [{"callback_vars": {"langfuse_secret_key": "os.environ/LANGFUSE_SECRET"}}]}
+    assert logging_metadata_env_reference_error(metadata) is not None
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        pytest.param(None, id="no-metadata"),
+        pytest.param({"owner": "x"}, id="no-logging"),
+        pytest.param({"logging": [_arize_entry()]}, id="literal-values"),
+        pytest.param({"logging": [{"callback_name": "arize"}]}, id="no-callback-vars"),
+    ],
+)
+def test_logging_metadata_without_an_env_reference_passes(metadata: dict[str, object] | None) -> None:
+    assert logging_metadata_env_reference_error(metadata) is None
+    raise_on_logging_metadata_env_reference(metadata)
+
+
+def test_an_env_reference_raises_a_400_carrying_the_error() -> None:
+    metadata: Final = {"logging": [_arize_entry(arize_space_id="os.environ/ARIZE_SPACE_ID")]}
+    with pytest.raises(HTTPException) as raised:
+        raise_on_logging_metadata_env_reference(metadata)
+    assert raised.value.status_code == 400
+    assert raised.value.detail == {"error": logging_metadata_env_reference_error(metadata)}
 
 
 _REFERENCE: Final = {"callback_name": "arize", "callback_type": "success", "litellm_credential_name": "space-a"}

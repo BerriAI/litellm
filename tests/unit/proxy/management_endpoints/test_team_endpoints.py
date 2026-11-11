@@ -12436,6 +12436,52 @@ async def test_update_team_rejects_unauthorized_caller():
         assert exc_info.value.code == "403"
 
 
+@pytest.mark.asyncio
+async def test_patch_team_hides_a_stored_env_reference_from_a_caller_without_access():
+    from litellm.proxy.management_endpoints.team_endpoints import patch_team
+    from litellm.proxy._types import PatchTeamRequest
+
+    stored_metadata: Final = {
+        "logging": [
+            {
+                "callback_name": "arize",
+                "callback_type": "success",
+                "callback_vars": {"arize_space_id": "os.environ/ARIZE_SPACE_ID_TENANT_1"},
+            }
+        ]
+    }
+    existing_team: Final = MagicMock()
+    existing_team.metadata = stored_metadata
+    existing_team.model_dump.return_value = {
+        "team_id": "team-123",
+        "members_with_roles": [{"role": "admin", "user_id": "other_admin_user"}],
+        "organization_id": "org-456",
+        "metadata": stored_metadata,
+    }
+    caller: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="outsider")
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client,
+        patch("litellm.proxy.proxy_server.llm_router"),
+        patch("litellm.proxy.proxy_server.user_api_key_cache"),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj"),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        _not_org_admin(),
+    ):
+        mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing_team)
+        with pytest.raises(ProxyException) as exc_info:
+            await patch_team(
+                team_id="team-123",
+                data=PatchTeamRequest(metadata={}),
+                http_request=MagicMock(spec=Request),
+                user_api_key_dict=caller,
+            )
+
+    assert exc_info.value.code == "403"
+    assert "os.environ" not in exc_info.value.message
+    assert "arize_space_id" not in exc_info.value.message
+
+
 # ----- /team/{team_id}/members/me -----
 
 
@@ -14103,6 +14149,34 @@ async def test_explicit_null_metadata_with_budget_field_still_clears_metadata(ki
     written = await _written_metadata_with_budget(kind, {"metadata": None, "team_member_budget": 7.0})
 
     assert written == {"team_member_budget_id": "budget-existing-123"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["post", "patch"])
+async def test_a_stored_env_reference_encrypted_at_rest_still_blocks_a_metadata_save(kind, monkeypatch):
+    from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-unit-test-salt-key-for-callback-vars")
+    stored: Final = encrypt_callback_vars(
+        {
+            "logging": [
+                {
+                    "callback_name": "arize",
+                    "callback_type": "success",
+                    "callback_vars": {"arize_api_key": "os.environ/ARIZE_API_KEY_TENANT_1"},
+                }
+            ]
+        }
+    )
+    assert "os.environ" not in json.dumps(stored)
+    resend: Final = stored if kind == "post" else {"cost_center": "1234"}
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _drive_team_write(kind, existing_metadata=stored, payload={"metadata": resend})
+
+    assert exc_info.value.code == "400"
+    assert f"Team {_PATCH_TEAM_ID} already stores this reference" in exc_info.value.message
+    assert "arize_api_key" in exc_info.value.message
 
 
 @pytest.mark.asyncio

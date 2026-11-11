@@ -34,7 +34,10 @@ from litellm.proxy.auth.auth_utils import (
     enforce_vector_store_index_grants_are_admin_only,
 )
 from litellm.proxy.auth.litellm_license import LicenseCheck
-from litellm.proxy.common_utils.callback_config_validation import credential_reference_rejection
+from litellm.proxy.common_utils.callback_config_validation import (
+    credential_reference_rejection,
+    raise_on_logging_metadata_env_reference,
+)
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
@@ -221,6 +224,7 @@ def _row_error(item: BulkNewUserItem, user_api_key_dict: UserAPIKeyAuth) -> str 
     try:
         validate_budget_duration(item.budget_duration)
         check_permissions_caller_permission(data=item, user_api_key_dict=user_api_key_dict)
+        raise_on_logging_metadata_env_reference(item.metadata)
         if item.auto_create_key:
             enforce_batch_limits_are_admin_only(item, None, user_api_key_dict, "key")
             enforce_vector_store_index_grants_are_admin_only(item, None, None, user_api_key_dict, "key")

@@ -132,7 +132,11 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     evict_shared,
     publish_auth_cache_invalidation,
 )
-from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
+from litellm.proxy.common_utils.callback_config_validation import (
+    raise_on_logging_metadata_env_reference,
+    raise_on_team_metadata_env_reference,
+)
+from litellm.proxy.common_utils.callback_utils import decrypted_callback_metadata, encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, keeps_due_budget_reset
@@ -1797,6 +1801,8 @@ async def new_team(
             user_api_key_dict=user_api_key_dict,
             entity="team",
         )
+        _new_team_metadata: Final[object] = getattr(data, "metadata", None)
+        raise_on_logging_metadata_env_reference(_new_team_metadata)
 
         # Check if license is over limit
         total_teams: Final = await _team_db(prisma_client).count()
@@ -2615,6 +2621,11 @@ async def update_team(
             existing_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,  # pyright: ignore[reportUnknownArgumentType]  # stored metadata is a bare dict
             user_api_key_dict=user_api_key_dict,
             entity="team",
+        )
+        raise_on_team_metadata_env_reference(
+            data.team_id,
+            decrypted_callback_metadata(getattr(data, "metadata", None)),
+            decrypted_callback_metadata(_existing_team_metadata),
         )
 
         check_passthrough_routes_caller_permission(

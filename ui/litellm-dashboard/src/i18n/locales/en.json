@@ -17159,6 +17159,7 @@
         "show": "Show password"
       },
       "selectParam": "Select {{label}}",
+      "enterParam": "Enter {{label}}",
       "integrationParameters": "Integration Parameters",
       "badges": {
         "sensitive": "Sensitive",

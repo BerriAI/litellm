@@ -45,8 +45,10 @@ def _is_env_reference(value: object) -> bool:
     return isinstance(value, str) and "os.environ/" in value
 
 
-def _raise_env_reference_error(param: str, *, source: str) -> None:
-    raise ValueError(
+def callback_env_reference_error(param: str, value: object, *, source: str) -> str | None:
+    if not _is_env_reference(value):
+        return None
+    return (
         f"Callback param '{param}' (from {source}) contains an 'os.environ/' "
         "reference. Environment references in request-supplied parameters are "
         "no longer resolved server-side for security reasons.\n"
@@ -62,8 +64,9 @@ def _raise_env_reference_error(param: str, *, source: str) -> None:
 
 
 def validate_no_callback_env_reference(param: str, value: object, *, source: str) -> None:
-    if _is_env_reference(value):
-        _raise_env_reference_error(param, source=source)
+    error: Final = callback_env_reference_error(param, value, source=source)
+    if error is not None:
+        raise ValueError(error)
 
 
 # Langfuse rejects events whose environment does not match this pattern

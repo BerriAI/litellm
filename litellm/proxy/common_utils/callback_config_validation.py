@@ -11,9 +11,11 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, Literal, cast  # noqa: TID251  # preserve arbitrary keys from validated callback mappings
 
+from fastapi import HTTPException
 from pydantic import TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.litellm_core_utils.initialize_dynamic_callback_params import callback_env_reference_error
 from litellm.types.utils import CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_VAR
 
 _NEWRELIC_CALLBACK: Final = "newrelic"
@@ -25,6 +27,7 @@ _ARIZE_OTLP_PROTOCOL_VAR: Final = "arize_otlp_protocol"
 _ARIZE_SAMPLING_RATE_VARS: Final[frozenset[str]] = frozenset(
     {"arize_success_sampling_rate", "arize_error_sampling_rate"}
 )
+_LOGGING_METADATA: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 
 def callback_config_error(
@@ -283,7 +286,7 @@ def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str 
     entries: Final = object_sequence(metadata.get("logging"))
     if entries is None:
         return None
-    entry_error: Final = next(
+    entry_error: Final = logging_metadata_env_reference_error(metadata) or next(
         (error for entry in entries if (error := _logging_entry_error(entry)) is not None),
         None,
     )
@@ -299,6 +302,55 @@ def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str 
                 *(_conflicting_entry_setting_error(named_vars[i], named_vars[:i]) for i in range(len(named_vars))),
             )
             if error is not None
+        ),
+        None,
+    )
+
+
+def logging_metadata_env_reference_error(metadata: Mapping[str, object] | None) -> str | None:
+    if not metadata:
+        return None
+    entries: Final = (*(object_sequence(metadata.get("logging")) or ()), metadata.get("callback_settings"))
+    return next(
+        (error for entry in entries if (error := _entry_env_reference_error(entry)) is not None),
+        None,
+    )
+
+
+def raise_on_logging_metadata_env_reference(metadata: object) -> None:
+    error: Final = _metadata_env_reference_error(metadata)
+    if error is not None:
+        raise HTTPException(status_code=400, detail={"error": error})
+
+
+def raise_on_team_metadata_env_reference(team_id: str, requested_metadata: object, stored_metadata: object) -> None:
+    error: Final = _metadata_env_reference_error(requested_metadata)
+    if error is None:
+        return
+    if _metadata_env_reference_error(stored_metadata) != error:
+        raise HTTPException(status_code=400, detail={"error": error})
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error": f"Team {team_id} already stores this reference in its metadata, so it must be removed "
+            "before metadata can be saved. Send metadata.logging or metadata.callback_settings without "
+            f"it to clear it. {error}"
+        },
+    )
+
+
+def _metadata_env_reference_error(metadata: object) -> str | None:
+    if not isinstance(metadata, Mapping):
+        return None
+    return logging_metadata_env_reference_error(_LOGGING_METADATA.validate_python(metadata))
+
+
+def _entry_env_reference_error(entry: object) -> str | None:
+    return next(
+        (
+            error
+            for name, value in _entry_callback_vars(entry).items()
+            if (error := callback_env_reference_error(name, value, source="key/team callback metadata")) is not None
         ),
         None,
     )
@@ -343,7 +395,10 @@ def _entry_callback_vars(entry: object) -> Mapping[str, str]:
     callback_vars: Final = entry.get("callback_vars") if isinstance(entry, Mapping) else None
     if not isinstance(callback_vars, Mapping):
         return MappingProxyType({})
-    return MappingProxyType({str(key): str(value) for key, value in callback_vars.items()})
+    typed_vars: Final[Mapping[object, object]] = cast(  # cast-ok: callback_vars is Mapping-checked, keys unvalidated
+        Mapping[object, object], callback_vars
+    )
+    return MappingProxyType({str(key): str(value) for key, value in typed_vars.items()})
 
 
 def _logging_entry_error(entry: object) -> str | None:

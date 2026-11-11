@@ -24464,3 +24464,58 @@ def test_non_admin_resaving_referencing_key_metadata_read_back_encrypted_is_not_
         raise_on_logging_credential_change({"note": "unrelated edit"}, key_row, internal_user)
 
     assert removed.value.status_code == 403
+
+
+def test_a_resent_encrypted_env_reference_is_refused_on_key_and_user_writes(monkeypatch):
+    from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
+    from litellm.proxy.management_endpoints.key_management_endpoints import raise_on_invalid_key_logging_config
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-unit-test-salt-key-for-callback-vars")
+    resent: Final = encrypt_callback_vars(
+        {
+            "logging": [
+                {
+                    "callback_name": "arize",
+                    "callback_type": "success",
+                    "callback_vars": {"arize_api_key": "os.environ/ARIZE_API_KEY_TENANT_1"},
+                }
+            ]
+        }
+    )
+    assert isinstance(resent, dict) and "os.environ" not in json.dumps(resent)
+
+    with pytest.raises(HTTPException) as exc_info:
+        raise_on_invalid_key_logging_config(resent)
+
+    assert exc_info.value.status_code == 400
+    assert "arize_api_key" in str(exc_info.value.detail) and "os.environ/" in str(exc_info.value.detail)
+
+
+def test_a_resent_ciphertext_never_comes_back_decrypted_in_a_validation_error(monkeypatch):
+    from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
+    from litellm.proxy.management_endpoints.key_management_endpoints import raise_on_invalid_key_logging_config
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-unit-test-salt-key-for-callback-vars")
+    secret: Final = "arize-secret-api-key-value"
+    stored: Final = encrypt_callback_vars(
+        {"logging": [{"callback_name": "arize", "callback_vars": {"arize_api_key": secret}}]}
+    )
+    ciphertext: Final = stored["logging"][0]["callback_vars"]["arize_api_key"]
+    assert ciphertext != secret
+
+    with pytest.raises(HTTPException) as exc_info:
+        raise_on_invalid_key_logging_config(
+            {
+                "logging": [
+                    {
+                        "callback_name": "arize",
+                        "callback_type": "success",
+                        "callback_vars": {"arize_error_sampling_rate": ciphertext},
+                    }
+                ]
+            }
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "arize_error_sampling_rate" in str(exc_info.value.detail)
+    assert secret not in str(exc_info.value.detail)
