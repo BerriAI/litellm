@@ -1159,6 +1159,70 @@ class TestNonAdminCannotPersistWifFieldsOnCredential:
         update_mock.assert_awaited_once()
 
 
+class TestNonAdminCannotPersistEnvRefsOnCredential:
+    """An ``os.environ/`` credential value resolves against the proxy's own environment when the
+    credential loads, and a read-back masks by field name, so a non-admin able to write one under a
+    name that reads as harmless could name any server variable and read its value back."""
+
+    def test_non_admin_cannot_create_a_credential_reading_a_server_variable(self, restore_credential_list):
+        with _repository_holding(None) as repository:
+            response = _post_credential(
+                {
+                    "credential_name": "attacker-cred",
+                    "credential_values": {"probe": "os.environ/LITELLM_MASTER_KEY"},
+                    "credential_info": {"custom_llm_provider": "openai"},
+                },
+                auth=_as_non_admin,
+            )
+
+        assert response.status_code == 403, response.text
+        assert "probe" in response.json()["error"]["message"]
+        repository.create.assert_not_awaited()
+
+    def test_non_admin_cannot_update_a_credential_to_read_a_server_variable(self, restore_credential_list):
+        with _repository_holding(_plain_credential("existing")) as repository:
+            response = _patch_credential(
+                "existing",
+                {
+                    "credential_name": "existing",
+                    "credential_values": {"probe": "os.environ/LITELLM_MASTER_KEY"},
+                    "credential_info": {},
+                },
+                auth=_as_non_admin,
+            )
+
+        assert response.status_code == 403, response.text
+        repository.update_by_name.assert_not_awaited()
+
+    def test_proxy_admin_can_create_a_credential_reading_a_server_variable(self, restore_credential_list):
+        with _repository_holding(None) as repository:
+            response = _post_credential(
+                {
+                    "credential_name": "admin-cred",
+                    "credential_values": {"aws_region_name": "os.environ/BEDROCK_B_REGION"},
+                    "credential_info": {"custom_llm_provider": "bedrock"},
+                },
+                auth=_as_admin,
+            )
+
+        assert response.status_code == 200, response.text
+        repository.create.assert_awaited_once()
+
+    def test_non_admin_can_still_create_a_credential_holding_a_literal_secret(self, restore_credential_list):
+        with _repository_holding(None) as repository:
+            response = _post_credential(
+                {
+                    "credential_name": "ordinary-cred",
+                    "credential_values": {"api_key": "sk-new"},
+                    "credential_info": {"custom_llm_provider": "openai"},
+                },
+                auth=_as_non_admin,
+            )
+
+        assert response.status_code == 200, response.text
+        repository.create.assert_awaited_once()
+
+
 def _wif_credential(name: str = "federated-cred", source: CredentialSource = "db") -> CredentialItem:
     return CredentialItem(
         credential_name=name,
