@@ -252,6 +252,28 @@ def _skips_stream_fallback(status_code: int | None) -> bool:
     return status_code is not None and 400 <= status_code < 500 and status_code != 429
 
 
+def _mid_stream_error_is_terminal(
+    mapped_exception: Exception,
+    mapped_status_code: int | None,
+    original_status_code: int | None,
+    *,
+    router_fallback_available: bool = False,
+) -> bool:
+    """Whether a mid-stream failure is surfaced instead of retried on another deployment.
+
+    A 4xx is terminal, with two exceptions: 429 is transient, and a context-window overflow
+    is satisfiable by a deployment with a larger window (#48887). That second exemption is
+    the Router's, not the exception's: a direct SDK call has no other deployment to try, so
+    it keeps receiving the 400 it got (#15785).
+    """
+    if (
+        isinstance(mapped_exception, litellm.ContextWindowExceededError)
+        and router_fallback_available
+    ):
+        return False
+    return _skips_stream_fallback(mapped_status_code) or _skips_stream_fallback(original_status_code)
+
+
 def is_async_iterable(obj: object) -> bool:
     """
     Check if an object is an async iterable (can be used with 'async for').
@@ -488,6 +510,9 @@ class CustomStreamWrapper:
         self.response_uptil_now = ""
         self._emitted_disqualifying_content = False
         _model_info: Final[dict] = litellm_params.model_info or {}
+        # Set by the Router when it resolved a deployment. A direct SDK call has none, which is
+        # what separates "try another deployment" from "this 400 is the answer".
+        self._has_router_model_info: bool = bool(_model_info)
 
         _api_base: Final = get_api_base(
             model=model or "",
@@ -2961,8 +2986,11 @@ class CustomStreamWrapper:
         # Raise non-retriable client errors directly (skip fallback).
         # Exception: 429 (rate-limit) IS retriable/transient — allow it
         # through so the Router can switch to a different model group.
-        if not _is_transport_timeout(e) and (
-            _skips_stream_fallback(mapped_status_code) or _skips_stream_fallback(original_status_code)
+        if not _is_transport_timeout(e) and _mid_stream_error_is_terminal(
+            mapped_exception,
+            mapped_status_code,
+            original_status_code,
+            router_fallback_available=self._has_router_model_info,
         ):
             raise mapped_exception
 

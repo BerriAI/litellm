@@ -382,7 +382,26 @@ def _error_event_error_object(event: object) -> object:
     return {field: value for field in ("message", "code") if _is_error_field_value(value := _event_field(event, field))}
 
 
-def _mid_stream_fallback_eligible(mapped_exception: Exception) -> bool:
+def _has_router_deployment(litellm_metadata: Mapping[str, object] | None) -> bool:
+    """Whether the Router is the caller, and so has another deployment to try.
+
+    `model_info` is the deployment the Router resolved before the call. A direct SDK
+    call has no deployment, and therefore nothing to fall back to.
+    """
+    model_info: Final = litellm_metadata.get("model_info") if litellm_metadata else None
+    return _is_json_object(model_info) and bool(model_info)
+
+
+def _mid_stream_fallback_eligible(
+    mapped_exception: Exception,
+    litellm_metadata: Mapping[str, object] | None = None,
+) -> bool:
+    # A context-window overflow arrives as a 400, but another deployment with a larger
+    # window can still satisfy it, so it has to reach the Router's fallback chain (#48887).
+    # Only when the Router is actually the caller: a direct SDK call has no other deployment
+    # to consult, and keeps the 400 it got (#15785).
+    if isinstance(mapped_exception, litellm.ContextWindowExceededError):
+        return _has_router_deployment(litellm_metadata)
     if isinstance(mapped_exception, litellm.ContentPolicyViolationError):
         return True
     status_code: Final = getattr(mapped_exception, "status_code", None)
@@ -821,7 +840,7 @@ class BaseResponsesAPIStreamingIterator:
         )
 
         mapped_exception: Final = self._map_error_event_exception(error_obj)
-        if not _mid_stream_fallback_eligible(mapped_exception):
+        if not _mid_stream_fallback_eligible(mapped_exception, self.litellm_metadata):
             raise mapped_exception
         mapped_status: Final = getattr(mapped_exception, "status_code", None)
         raise MidStreamFallbackError(
