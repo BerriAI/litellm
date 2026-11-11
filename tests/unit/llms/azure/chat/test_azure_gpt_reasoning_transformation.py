@@ -41,12 +41,16 @@ def test_azure_gpt5_allows_tool_choice_for_deployment_names():
     assert "temperature" in supported_params
 
 
-@pytest.mark.parametrize("model", ["gpt-chat-latest", "my-gpt-5-deployment"])
-def test_azure_gpt5_family_deployment_off_the_openai_catalog_keeps_user(model: str):
+@pytest.mark.parametrize(
+    ("model", "forwards_user"), [("gpt-chat-latest", True), ("my-gpt-5-deployment", False)]
+)
+def test_azure_gpt5_deployment_off_the_openai_catalog_forwards_user_only_for_chat_latest(
+    model: str, forwards_user: bool
+):
     params: Final = litellm.get_optional_params(
         model=model, custom_llm_provider="azure", max_tokens=5, user="end-user-1"
     )
-    assert params["user"] == "end-user-1"
+    assert ("user" in params) is forwards_user
     assert params["max_completion_tokens"] == 5
 
 

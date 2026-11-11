@@ -7,8 +7,8 @@ chat gate uses: medium and high are unconditional, minimal and low are opt-out (
 explicit false), xhigh is opt-in, and none is opt-out except on the azure gpt-5 family, whose chat
 config refuses it without an explicit true.
 
-The Responses gate reads none, minimal, low and xhigh as opt-out. Neither gate judges max, which
-Chat Completions refuses and Responses honors on the gpt-6 family, so its flag is advisory and
+The Responses gate reads none, minimal, low and xhigh as opt-out. Neither gate reads a flag for max,
+which Chat Completions refuses and Responses honors on the gpt-6 family, so its flag is advisory and
 advertised opt-in: outside the gpt-6 rows every entry carrying supports_max_reasoning_effort is
 Claude-family, where anthropic/chat/transformation.py gates max on the output_config path, so an
 explicit flag is the only signal that the tier is real.
@@ -42,6 +42,7 @@ from litellm.litellm_core_utils.reasoning_effort_utils import reasoning_effort_f
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo, validated_object_mapping
 from litellm.types.llms.anthropic import AnthropicThinkingParam
 from litellm.types.llms.openai import REASONING_EFFORT
+from litellm.utils import catalog_with_runtime_registrations
 
 RequestedReasoningEffort: TypeAlias = str | Mapping[str, object] | None
 
@@ -111,17 +112,17 @@ def declared_reasoning_efforts_for_model(model: str, custom_llm_provider: str) -
     it does not know: a provider config runs on the request path for every model it serves, most of
     which the map never named, and a lookup miss there must not fail the call.
     """
-    entry: Final = _map_entry(f"{custom_llm_provider}/{model}") or _map_entry(model)
-    return declared_reasoning_efforts(entry) if entry is not None else None
+    entry: Final = litellm.model_cost.get(f"{custom_llm_provider}/{model}") or litellm.model_cost.get(model)
+    if not isinstance(entry, dict):
+        return None
+    return declared_reasoning_efforts(entry)
 
 
 def declared_reasoning_efforts_for_map_key(key: str) -> tuple[str, ...] | None:
-    entry: Final = _map_entry(key)
-    return declared_reasoning_efforts(entry) if entry is not None else None
-
-
-def _map_entry(key: str) -> Mapping[str, object] | None:
-    return as_str_mapping(litellm.model_cost.get(key))
+    """The levels the catalog row itself lists, never a router deployment's copy of its own
+    model_info on the shared key, since that copy would gate every sibling deployment of the model."""
+    row: Final = catalog_with_runtime_registrations().get(key)
+    return _declared_levels(row.get(_DECLARED_EFFORTS_KEY)) if row is not None else None
 
 
 _ROUNDING_KEY: Final = "reasoning_effort_rounding"

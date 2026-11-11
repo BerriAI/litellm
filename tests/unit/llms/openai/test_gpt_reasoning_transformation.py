@@ -7,6 +7,7 @@ import pytest
 
 import litellm
 import litellm.main as litellm_main
+from litellm import Router
 from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
 from litellm.llms.openai.openai import OpenAIConfig
@@ -151,6 +152,45 @@ def test_chat_latest_forwards_only_the_effort_levels_its_row_lists(
         litellm.get_optional_params(
             model=model, custom_llm_provider=custom_llm_provider, reasoning_effort=level, drop_params=False
         )
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "aihubmix"])
+def test_gpt_chat_latest_keeps_tool_choice_on_providers_without_a_row_that_flags_it(custom_llm_provider: str):
+    function_tool: Final = {
+        "type": "function",
+        "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+    }
+    params: Final = litellm.get_optional_params(
+        model="gpt-chat-latest",
+        custom_llm_provider=custom_llm_provider,
+        tools=[function_tool],
+        tool_choice="required",
+        drop_params=False,
+    )
+    assert params["tool_choice"] == "required"
+
+
+def test_a_deployments_declared_levels_do_not_gate_its_sibling_deployments():
+    level: Final = next(
+        level
+        for level in ("none", "minimal", "low")
+        if not OpenAIGPT5Config.refuses_reasoning_effort_level("gpt-5.1", level)
+    )
+    Router(
+        model_list=[
+            {
+                "model_name": "capped",
+                "litellm_params": {"model": "openai/gpt-5.1", "api_key": "sk-test"},
+                "model_info": {"reasoning_effort_levels": ["medium", "high"]},
+            },
+            {"model_name": "uncapped", "litellm_params": {"model": "openai/gpt-5.1", "api_key": "sk-test"}},
+        ]
+    )
+    chat: Final = litellm.get_optional_params(
+        model="gpt-5.1", custom_llm_provider="openai", reasoning_effort=level, drop_params=False
+    )
+    assert chat["reasoning_effort"] == level
+    assert not OpenAIGPT5Config.row_disables_reasoning_effort_level("gpt-5.1", level)
 
 
 def test_a_deployments_declared_levels_outrank_the_levels_its_row_lists(gpt5_config: OpenAIGPT5Config):
