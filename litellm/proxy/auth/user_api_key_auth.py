@@ -109,12 +109,14 @@ from litellm.proxy.auth.auth_object_prefetch import (
 )
 from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
+    checks_team_s3_buckets_in_handler,
     fallback_target_model_name,
     get_end_user_id_from_request_body,
     get_model_from_request,
     get_request_route,
     get_request_route_template,
     is_invalid_virtual_key_error,
+    is_request_body_safe,
     iter_request_fallback_targets,
     log_model_access_denial,
     normalize_request_route,
@@ -1313,6 +1315,12 @@ def _apply_budget_limits_to_end_user_params(
     if budget_info.model_max_budget is not None:
         end_user_params["end_user_model_max_budget"] = budget_info.model_max_budget
 
+    if budget_info.model_tpm_limit is not None:
+        end_user_params["end_user_model_tpm_limit"] = budget_info.model_tpm_limit  # rebind-ok: in-place like siblings
+
+    if budget_info.model_rpm_limit is not None:
+        end_user_params["end_user_model_rpm_limit"] = budget_info.model_rpm_limit  # rebind-ok: in-place like siblings
+
     verbose_proxy_logger.debug("Applied budget limits to end user %s", end_user_id)
 
 
@@ -1444,6 +1452,10 @@ def update_valid_token_with_end_user_params(valid_token: UserAPIKeyAuth, end_use
         valid_token.allowed_model_region = end_user_params["allowed_model_region"]
     if end_user_params.get("end_user_model_max_budget") is not None:
         valid_token.end_user_model_max_budget = end_user_params["end_user_model_max_budget"]
+    if "end_user_model_tpm_limit" in end_user_params:
+        valid_token.end_user_model_tpm_limit = end_user_params["end_user_model_tpm_limit"]  # rebind-ok: in-place
+    if "end_user_model_rpm_limit" in end_user_params:
+        valid_token.end_user_model_rpm_limit = end_user_params["end_user_model_rpm_limit"]  # rebind-ok: in-place
     return valid_token
 
 
@@ -2266,6 +2278,7 @@ async def user_api_key_auth_builder(
     azure_apim_header: str | None,
     request_data: dict[str, object],
     custom_litellm_key_header: str | None = None,
+    defer_team_checks: bool = False,
 ) -> UserAPIKeyAuth:
     from litellm.proxy.proxy_server import (
         general_settings,
@@ -2300,6 +2313,7 @@ async def user_api_key_auth_builder(
                 request_data=request_data,
                 request=request,
                 route=route,
+                defer_team_checks=defer_team_checks,
             )
         pass_through_endpoints: Final[list[dict] | None] = general_settings.get("pass_through_endpoints", None)
         ## CHECK IF X-LITELM-API-KEY IS PASSED IN - supercedes Authorization header
@@ -2985,6 +2999,10 @@ async def user_api_key_auth_builder(
             valid_token.end_user_tpm_limit = end_user_params.get("end_user_tpm_limit")
             valid_token.end_user_rpm_limit = end_user_params.get("end_user_rpm_limit")
             valid_token.end_user_tpd_limit = end_user_params.get("end_user_tpd_limit")
+            if "end_user_model_tpm_limit" in end_user_params:
+                valid_token.end_user_model_tpm_limit = end_user_params["end_user_model_tpm_limit"]
+            if "end_user_model_rpm_limit" in end_user_params:
+                valid_token.end_user_model_rpm_limit = end_user_params["end_user_model_rpm_limit"]
             valid_token.allowed_model_region = end_user_params.get("allowed_model_region")
 
         return await validate_resolved_virtual_key(
@@ -3670,6 +3688,18 @@ async def run_centralized_common_checks(
         user_custom_auth,
     )
 
+    if not sub_call and getattr(request.state, "deferred_model_body_check", False) is True:
+        body_model: Final = request_data.get("model")
+        is_request_body_safe(
+            request_body=request_data,
+            general_settings=_GENERAL_SETTINGS_ADAPTER.validate_python(general_settings),
+            llm_router=llm_router,
+            model=body_model if isinstance(body_model, str) else "",
+            route=route,
+            team_id=user_api_key_auth_obj.team_id,
+            defer_s3_buckets=checks_team_s3_buckets_in_handler(request),
+        )
+
     # Public routes (e.g. /health/liveness) are exempt from
     # auth in the builder — the wrapper must not retroactively apply
     # authz on top, or k8s readiness probes and other unauthenticated
@@ -4134,6 +4164,10 @@ async def _apply_key_end_user_default_budget_to_token(
         valid_token.end_user_tpd_limit = default_budget.tpd_limit
     if not keep_token_limits or valid_token.end_user_model_max_budget is None:
         valid_token.end_user_model_max_budget = default_budget.model_max_budget
+    if not keep_token_limits or valid_token.end_user_model_tpm_limit is None:
+        valid_token.end_user_model_tpm_limit = default_budget.model_tpm_limit  # rebind-ok: in-place like siblings
+    if not keep_token_limits or valid_token.end_user_model_rpm_limit is None:
+        valid_token.end_user_model_rpm_limit = default_budget.model_rpm_limit  # rebind-ok: in-place like siblings
 
 
 async def _reserve_budget_after_common_checks(
@@ -4502,6 +4536,7 @@ async def user_api_key_auth(
                 azure_apim_header=azure_apim_header,
                 request_data=request_data,
                 custom_litellm_key_header=custom_litellm_key_header,
+                defer_team_checks=True,
             )
         except Exception:
             # The body was read first, so a caller who sent both a malformed body and
@@ -4981,7 +5016,7 @@ async def authorize_internal_virtual_key(
         )
     )
     route: Final = get_request_route(request=request)
-    await pre_db_read_auth_checks(request_data=request_data, request=request, route=route)
+    await pre_db_read_auth_checks(request_data=request_data, request=request, route=route, defer_team_checks=True)
     auth: Final = await validate_resolved_virtual_key(
         request=request,
         request_data=request_data,

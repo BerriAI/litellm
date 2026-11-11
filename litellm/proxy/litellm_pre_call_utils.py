@@ -47,6 +47,7 @@ from litellm.constants import (
     SESSION_ID_GENERATED_METADATA_KEY,
     SESSION_ID_OMITTED_METADATA_KEY,
     TYPESAFE_DANGER_ZONE_HEADER_PREFIX,
+    USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY,
     VECTOR_STORE_CALLER_METADATA_KWARG,
     X_LITELLM_DISABLE_CALLBACKS,
 )
@@ -531,7 +532,7 @@ _CLIENT_PRICING_METADATA_FIELDS: Final = frozenset({"model_info"})
 # ``attempted_fallbacks`` and ``original_model_group`` are written by the router
 # and read by spend logs as fact; a client value has no legitimate meaning and no
 # key or team setting keeps it, so the strip is never gated.
-_ROUTER_RESERVED_METADATA_FIELDS: Final = frozenset(
+ROUTER_RESERVED_METADATA_FIELDS: Final = frozenset(
     {
         "attempted_fallbacks",
         "original_model_group",
@@ -539,6 +540,7 @@ _ROUTER_RESERVED_METADATA_FIELDS: Final = frozenset(
         "request_retry_count",
         CLIENT_OUTPUT_CEILING_METADATA_KEY,
         ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
+        USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY,
     }
 )
 _ALLOW_CLIENT_PRICING_OVERRIDE_METADATA_KEY: Final = "allow_client_pricing_override"
@@ -883,7 +885,7 @@ def _strip_router_reserved_metadata(
     for metadata_key in ("metadata", "litellm_metadata"):
         if not isinstance(metadata := data.get(metadata_key), dict):
             continue
-        for field in _ROUTER_RESERVED_METADATA_FIELDS & metadata.keys():
+        for field in ROUTER_RESERVED_METADATA_FIELDS & metadata.keys():
             metadata.pop(field)
             verbose_proxy_logger.debug(
                 "Stripped router-reserved metadata field from request body: %s.%s", metadata_key, field
@@ -1652,6 +1654,10 @@ def redact_credential_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
         header: (_REDACTED_HEADER_VALUE if _is_credential_header(header) else value)
         for header, value in headers.items()
     }
+
+
+def without_credential_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
+    return {header: value for header, value in headers.items() if not _is_credential_header(header)}
 
 
 class TenantLoggingMetadata(TypedDict):

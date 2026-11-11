@@ -10130,6 +10130,45 @@ def test_get_standard_logging_object_payload_reads_overhead_from_logging_obj_for
     assert payload["hidden_params"]["litellm_overhead_time_ms"] == 100.0
 
 
+@pytest.mark.parametrize(
+    ("stamped_overhead_ms", "first_chunk_overhead_ms", "expected_overhead_ms"),
+    (
+        (100.0, 25.5, 125.5),
+        (None, 25.5, None),
+    ),
+)
+def test_get_standard_logging_object_payload_adds_first_chunk_work_to_overhead(
+    logging_obj, stamped_overhead_ms, first_chunk_overhead_ms, expected_overhead_ms
+):
+    """The overhead stamped when the stream object came back misses the hook and cost injection on
+    the first chunk, the delay every chunk the client sees inherits, so that one chunk's work is
+    added on top. With no stamped overhead the first chunk work alone is not reported."""
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+
+    logging_obj.set_response_timing_metrics(
+        {"_response_ms": 1000.0}
+        if stamped_overhead_ms is None
+        else {"_response_ms": 1000.0, "litellm_overhead_time_ms": stamped_overhead_ms}
+    )
+    logging_obj.first_chunk_overhead_ms = first_chunk_overhead_ms
+    now = datetime.datetime.now()
+    payload = get_standard_logging_object_payload(
+        kwargs={"litellm_call_id": "call-1", "model": "gpt-4o", "messages": []},
+        init_response_obj={"id": "msg_1", "type": "message", "role": "assistant", "content": []},
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["hidden_params"]["litellm_overhead_time_ms"] == expected_overhead_ms
+
+
 def test_get_standard_logging_object_payload_survives_logging_obj_without_timing_metrics(logging_obj):
     """The payload is built inside a blanket except that returns None, so a logging object without
     the timing carrier (custom subclasses, older pickles) must not silently drop every spend log."""
