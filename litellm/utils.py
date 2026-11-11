@@ -107,6 +107,13 @@ from litellm.litellm_core_utils.get_model_cost_map import (
     fetch_registration_document,
     model_cost_inputs,
 )
+from litellm.litellm_core_utils.model_cost_table import (
+    AliasedCostEntry,
+    Landing,
+    VersionCached,
+    changed_in_place,
+    model_cost_version,
+)
 from litellm.litellm_core_utils.model_param_helper import peek_reasoning_summary_aliases
 from litellm.litellm_core_utils.model_retirement import is_hidden_as_retired
 from litellm.litellm_core_utils.offline_mode import is_offline_mode
@@ -121,13 +128,6 @@ from litellm.rust_bridge import tokenizer as tokenizer_dispatch
 from litellm.rust_bridge._native import NativeModelCostMap, NativeRegistered
 from litellm.rust_bridge.catalog import decision
 from litellm.rust_bridge.configuration import Decision
-from litellm.rust_bridge.host.model_cost import (
-    AliasedCostEntry,
-    Landing,
-    VersionCached,
-    changed_in_place,
-    model_cost_version,
-)
 
 _CachingHandlerResponse = None
 _LLMCachingHandler = None
@@ -516,7 +516,7 @@ from litellm.secret_managers.main import (
     resolve_api_key_oidc_reference,
 )
 
-from ._logging import is_debugging_on, verbose_logger
+from ._logging import WarningLogger, is_debugging_on, verbose_logger
 from .caching.caching import (
     AzureBlobCache,
     Cache,
@@ -5441,6 +5441,42 @@ def _declared_reasoning_efforts(model_info: Mapping[str, object] | None) -> tupl
     return deployment_reasoning_effort_levels(model_info) or ()
 
 
+def _map_params_with_provider_config(
+    provider_config: BaseConfig,
+    *,
+    custom_llm_provider: str,
+    non_default_params: dict[str, object],  # mutable-ok: map_openai_params takes the caller's dicts
+    optional_params: dict[str, object],  # mutable-ok: map_openai_params fills and returns the caller's dict
+    model: str,
+    drop_params: bool,
+    model_info: Mapping[str, object] | None,
+    reasoning_drop_logger: WarningLogger,
+) -> dict[str, object]:  # mutable-ok: get_optional_params keeps building on the mapped params
+    if custom_llm_provider == "azure_ai" and isinstance(provider_config, litellm.AzureAIStudioConfig):
+        return provider_config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params,
+            declared_reasoning_efforts=_declared_reasoning_efforts(model_info),
+            reasoning_drop_logger=reasoning_drop_logger,
+        )
+    if isinstance(provider_config, (litellm.ChatGPTConfig, litellm.GithubCopilotConfig)):
+        return provider_config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params,
+            reasoning_drop_logger=reasoning_drop_logger,
+        )
+    return provider_config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=drop_params,
+    )
+
+
 _DROPPED_REASONING_PARAMS: Final = ("reasoning_effort", "thinking")
 
 _DROP_UNREAD_OUTPUT_CONFIG_WARNING: Final = (
@@ -5530,6 +5566,7 @@ def get_optional_params(
     prompt_cache_key: str | None = None,
     base_model: str | None = None,
     model_info: Mapping[str, object] | None = None,
+    _litellm_reasoning_drop_logger: WarningLogger = verbose_logger,
     **kwargs: object,
 ):
     drop_params = normalize_drop_params(drop_params)  # rebind-ok: config and DB deployments pass "true" as a string
@@ -5541,6 +5578,7 @@ def get_optional_params(
     # OpenAI param.
     passed_params.pop("base_model", None)
     passed_params.pop("model_info", None)
+    passed_params.pop("_litellm_reasoning_drop_logger", None)
     provider_config: BaseConfig | None = None
     if custom_llm_provider is not None and custom_llm_provider in [provider.value for provider in LlmProviders]:
         provider_config = ProviderConfigManager.get_provider_chat_config(
@@ -6035,6 +6073,7 @@ def get_optional_params(
                 model=model,
                 drop_params=bool(drop_params),
                 declared_reasoning_efforts=_declared_reasoning_efforts(model_info),
+                reasoning_drop_logger=_litellm_reasoning_drop_logger,
             )
             if litellm.OpenAIGPT5Config.is_model_gpt_5_model(model=model)
             else litellm.OpenAIConfig().map_openai_params(
@@ -6067,6 +6106,7 @@ def get_optional_params(
                 model=_azure_detection_model,
                 drop_params=bool(drop_params),
                 declared_reasoning_efforts=_declared_reasoning_efforts(model_info),
+                reasoning_drop_logger=_litellm_reasoning_drop_logger,
             )
         else:
             verbose_logger.debug(
@@ -6088,21 +6128,15 @@ def get_optional_params(
                 drop_params=bool(drop_params),
             )
     elif provider_config is not None:
-        optional_params = (
-            provider_config.map_openai_params(
-                non_default_params=non_default_params,
-                optional_params=optional_params,
-                model=model,
-                drop_params=bool(drop_params),
-                declared_reasoning_efforts=_declared_reasoning_efforts(model_info),
-            )
-            if custom_llm_provider == "azure_ai" and isinstance(provider_config, litellm.AzureAIStudioConfig)
-            else provider_config.map_openai_params(
-                non_default_params=non_default_params,
-                optional_params=optional_params,
-                model=model,
-                drop_params=bool(drop_params),
-            )
+        optional_params = _map_params_with_provider_config(
+            provider_config,
+            custom_llm_provider=custom_llm_provider,
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=bool(drop_params),
+            model_info=model_info,
+            reasoning_drop_logger=_litellm_reasoning_drop_logger,
         )
     else:  # assume passing in params for openai-like api
         optional_params = litellm.OpenAILikeChatConfig().map_openai_params(
@@ -11734,8 +11768,8 @@ def reasoning_effort_with_summary_alias(
 
 
 def strip_reasoning_summary_aliases_from_optional_params(
-    optional_params: dict,
-) -> tuple[dict, object | None]:
+    optional_params: Mapping[str, object],
+) -> tuple[dict[str, object], object | None]:
     """Copy optional_params; remove reasoningSummary aliases from top-level and extra_body."""
     op: Final = dict(optional_params)
     rs_val = op.pop("reasoningSummary", None)

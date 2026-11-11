@@ -17,6 +17,7 @@ from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
 
 import litellm
+from litellm.caching.caching import Cache, CacheMode
 from litellm.constants import (
     CALLER_SESSION_ID_METADATA_KEY,
     COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY,
@@ -64,6 +65,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     resolve_tenant_otel_destinations,
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.types.caching import LiteLLMCacheType
 from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES
 from litellm.types.utils import CredentialItem
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
@@ -8379,6 +8381,159 @@ async def test_key_level_callback_vars_survive_the_strip():
     assert updated["dd_site"] == "us5.datadoghq.com"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key_cache, request_cache, expected_cache, uses_cache_when_default_off",
+    [
+        pytest.param(
+            {"ttl": 600},
+            {"use-cache": True, "namespace": "team-a"},
+            {"use-cache": True, "namespace": "team-a", "ttl": 600},
+            True,
+            id="key-control-added-to-request-opt-in",
+        ),
+        pytest.param(
+            {"no-store": True},
+            {"use-cache": True, "no-store": False},
+            {"use-cache": True, "no-store": True},
+            True,
+            id="key-control-wins-over-request",
+        ),
+        pytest.param(
+            {"use-cache": True, "namespace": "key-ns"},
+            None,
+            {},
+            False,
+            id="unsupported-key-controls-ignored",
+        ),
+        pytest.param(None, {"use-cache": True}, {}, False, id="non-dict-key-cache-still-wipes-request"),
+        pytest.param(
+            {"no-cache": True},
+            {"use-cache": True, "ttl": 60},
+            {"no-cache": True},
+            False,
+            id="key-no-cache-keeps-the-key-out-of-opt-in-caching",
+        ),
+        pytest.param(
+            {"use-cache": False},
+            {"use-cache": True, "ttl": 60},
+            {},
+            False,
+            id="key-use-cache-false-keeps-the-key-out-of-opt-in-caching",
+        ),
+        pytest.param(
+            {"use-cache": True},
+            {"use-cache": True},
+            {"use-cache": True},
+            True,
+            id="key-use-cache-true-leaves-the-request-opt-in",
+        ),
+        pytest.param(
+            {"no-cache": "true"},
+            {"use-cache": True},
+            {"no-cache": "true"},
+            False,
+            id="key-non-boolean-no-cache-keeps-the-key-out-of-opt-in-caching",
+        ),
+        pytest.param(
+            {"no-cache": False},
+            {"use-cache": True},
+            {"use-cache": True, "no-cache": False},
+            True,
+            id="key-no-cache-false-leaves-the-request-opt-in",
+        ),
+        pytest.param(
+            {"ttl": 600},
+            {"no-cache": True, "namespace": "team-a"},
+            {"ttl": 600},
+            False,
+            id="request-without-opt-in-is-still-replaced",
+        ),
+        pytest.param(
+            {"ttl": 600},
+            {"use-cache": "true", "no-store": True},
+            {"ttl": 600},
+            False,
+            id="request-non-boolean-use-cache-is-still-replaced",
+        ),
+        pytest.param(
+            {"s-maxage": 1},
+            {"use-cache": True, "s-max-age": 100000},
+            {"use-cache": True, "s-maxage": 1},
+            True,
+            id="key-s-maxage-overrides-the-request-s-max-age-alias",
+        ),
+        pytest.param(
+            {"ttl": 600},
+            {"use-cache": True, "s-max-age": 5},
+            {"use-cache": True, "s-max-age": 5, "ttl": 600},
+            True,
+            id="request-s-max-age-kept-when-the-key-has-no-s-maxage",
+        ),
+    ],
+)
+async def test_key_cache_controls_merge_into_request_cache_controls(
+    key_cache: dict[str, object] | None,
+    request_cache: dict[str, object] | None,
+    expected_cache: dict[str, object],
+    uses_cache_when_default_off: bool,
+):
+    key: Final = UserAPIKeyAuth(api_key="hashed-key", metadata={"cache": key_cache})
+    data: Final = {
+        "model": "gpt-4.1-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        **({} if request_cache is None else {"cache": request_cache}),
+    }
+
+    updated: Final = await add_litellm_data_to_request(
+        data=data,
+        request=_callback_credential_request_mock(),
+        user_api_key_dict=key,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated["cache"] == expected_cache
+    opt_in_cache: Final = Cache(type=LiteLLMCacheType.LOCAL, mode=CacheMode.default_off)
+    assert opt_in_cache.should_use_cache(**updated) is uses_cache_when_default_off
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "allowed_cache_controls, request_cache, expected_cache",
+    [
+        pytest.param(["no-store"], {"use-cache": True}, {"ttl": 600}, id="opt-in-not-allowed-is-replaced"),
+        pytest.param(
+            ["use-cache"], {"use-cache": True, "no-store": True}, {"ttl": 600}, id="any-disallowed-control-is-replaced"
+        ),
+        pytest.param(["use-cache"], {"use-cache": True}, {"use-cache": True, "ttl": 600}, id="allowed-opt-in-is-kept"),
+        pytest.param([], {"use-cache": True}, {"use-cache": True, "ttl": 600}, id="empty-list-allows-the-opt-in"),
+    ],
+)
+async def test_key_cache_metadata_only_keeps_request_controls_the_key_allows(
+    allowed_cache_controls: list[str],
+    request_cache: dict[str, object],
+    expected_cache: dict[str, object],
+):
+    key: Final = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={"cache": {"ttl": 600}},
+        allowed_cache_controls=allowed_cache_controls,
+    )
+
+    updated: Final = await add_litellm_data_to_request(
+        data={"model": "gpt-4.1-mini", "messages": [{"role": "user", "content": "hello"}], "cache": request_cache},
+        request=_callback_credential_request_mock(),
+        user_api_key_dict=key,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated["cache"] == expected_cache
+
+
 class TestPromotedTraceControlFields:
     """LIT-5137: caller metadata trace fields must reach litellm_metadata."""
 
@@ -11607,3 +11762,61 @@ def test_caller_tags_reach_litellm_metadata_whether_metadata_is_a_dict_or_a_json
     LiteLLMProxyRequestSetup.merge_caller_body_tags(request_data=data)
     assert set(data["litellm_metadata"]["tags"]) == {"key-tag", "client-tag"}
     assert data["metadata"] == caller_metadata
+
+
+@pytest.mark.parametrize(
+    ("model", "global_aliases", "key_aliases", "group_alias", "expected"),
+    [
+        pytest.param("a", {"a": "b"}, {"b": "c"}, {"c": "d"}, "d", id="global-then-key-then-router"),
+        pytest.param("a", {}, {}, {"a": {"model": "x"}}, "x", id="router-item-entry"),
+        pytest.param("a", {"a": "b"}, {}, None, "b", id="global-only"),
+        pytest.param("a", {}, {}, None, "a", id="no-alias"),
+    ],
+)
+def test_pre_call_served_model_applies_aliases_in_request_preparation_order(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    global_aliases: dict[str, str],
+    key_aliases: dict[str, str],
+    group_alias: object,
+    expected: str,
+) -> None:
+    from litellm.proxy.litellm_pre_call_utils import pre_call_served_model
+
+    monkeypatch.setattr(litellm, "model_alias_map", global_aliases)
+
+    assert pre_call_served_model(model, UserAPIKeyAuth(aliases=key_aliases), group_alias) == expected
+
+
+@pytest.mark.parametrize(
+    ("token_fields", "expected"),
+    [
+        pytest.param({"aliases": {"requested": 7}}, "requested", id="non-string-key-alias"),
+        pytest.param({"team_model_aliases": {"requested": 7}}, "requested", id="non-string-team-alias"),
+        pytest.param({"aliases": {"mid": 7}, "team_model_aliases": {"requested": "mid"}}, "mid", id="after-team"),
+    ],
+)
+def test_request_served_model_ignores_a_malformed_alias_like_request_preparation_does(
+    token_fields: dict[str, object], expected: str
+) -> None:
+    from litellm.proxy.litellm_pre_call_utils import _update_model_if_key_alias_exists, _update_model_if_team_alias_exists
+    from litellm.proxy.litellm_pre_call_utils import request_served_model
+
+    valid_token: Final = UserAPIKeyAuth(**token_fields)
+    prepared: Final[dict[str, object]] = {"model": "requested"}  # mutable-ok: the rewrite functions edit the body
+    with patch("litellm.proxy.proxy_server.llm_router", None):
+        _update_model_if_team_alias_exists(data=prepared, user_api_key_dict=valid_token)
+    _update_model_if_key_alias_exists(data=prepared, user_api_key_dict=valid_token)
+
+    assert request_served_model("requested", valid_token, None, None) == prepared["model"] == expected
+
+
+def test_stale_team_alias_bypass_flag_is_read_once_per_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
+
+    monkeypatch.setattr(pre_call_utils, "_ENABLE_TEAM_STALE_ALIAS_BYPASS", None)
+    monkeypatch.setenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", "true")
+    first: Final = pre_call_utils._stale_team_alias_bypass_enabled()
+    monkeypatch.setenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", "false")
+
+    assert (first, pre_call_utils._stale_team_alias_bypass_enabled()) == (True, True)

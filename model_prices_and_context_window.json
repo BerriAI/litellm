@@ -100031,6 +100031,25 @@
         "supports_vision": true,
         "thinking_always_on": true
     },
+    "replicate/google/gemini-4-carbon": {
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "replicate",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65535,
+        "mode": "chat",
+        "output_cost_per_reasoning_token": 1e-05,
+        "output_cost_per_token": 1e-05,
+        "source": "https://replicate.com/google/gemini-4-carbon",
+        "supports_audio_input": true,
+        "supports_function_calling": false,
+        "supports_parallel_function_calling": false,
+        "supports_reasoning": true,
+        "supports_response_schema": false,
+        "supports_system_messages": true,
+        "supports_tool_choice": false,
+        "supports_video_input": true,
+        "supports_vision": true
+    },
     "azure_ai/mistral-large-4-latest": {
         "deprecation_date": "2027-10-27",
         "deprecation_source": "https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.CognitiveServices/locations/eastus/models?api-version=2024-10-01",
