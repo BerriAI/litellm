@@ -95,6 +95,14 @@
       },
       "loading": "Loading",
       "regionLabel": "Agent Identity",
+      "okta": {
+        "title": "Agent Identity: Okta",
+        "issuer": "Authorization server:",
+        "clientId": "Client ID:",
+        "requiredScopes": "Required scopes:",
+        "anyScope": "Any scope",
+        "evidenceNote": "Recent evidence comes from a validated Okta token matching this binding. It is persisted across restarts and cleared when the binding changes. Tool and model permissions are checked separately."
+      },
       "title": "Agent Identity: Microsoft Entra ID",
       "tenant": "Tenant:",
       "clientId": "Application (Client) ID:",
@@ -108,7 +116,8 @@
     "identityFields": {
       "providers": {
         "none": "No explicit identity binding",
-        "microsoftEntra": "Microsoft Entra ID"
+        "microsoftEntra": "Microsoft Entra ID",
+        "okta": "Okta"
       },
       "executionModes": {
         "autonomous": "Autonomous",
@@ -155,6 +164,25 @@
         "note": "Users must first sign in through this gateway's Microsoft SSO. Subsequent delegated calls must satisfy both user and agent permissions."
       },
       "executionLabel": "Execution",
+      "okta": {
+        "issuer": {
+          "label": "Trusted Okta Authorization Server",
+          "required": "Select a trusted authorization server",
+          "placeholder": "Select the gateway's trusted authorization server",
+          "noneAvailable": "No trusted Okta custom authorization server is available. Add https://your-domain/oauth2/your-server to the gateway's JWT issuers with an audience and agent_identity_provider: okta first.",
+          "description": "Only issuers with agent_identity_provider: okta in the gateway's JWT issuer config can authenticate agents."
+        },
+        "clientId": {
+          "label": "Client ID",
+          "required": "Enter the Okta application client ID",
+          "description": "The agent's API Services application in Okta. Its client-credentials tokens authenticate as this agent. No client secret is required here."
+        },
+        "requiredScopes": {
+          "label": "Required Scopes",
+          "description": "Scopes every agent token must carry, separated by commas or spaces. Leave empty to accept any scope."
+        },
+        "verificationNote": "LiteLLM verifies the agent's Okta token before matching this identity. Okta agents run autonomously, without acting on behalf of a user."
+      },
       "verificationNote": "LiteLLM verifies the agent's Entra token before matching this identity. Saving these fields configures the binding; an authenticated request provides verification. Runtime authentication headers are configured separately."
     },
     "formKit": {
@@ -626,6 +654,7 @@
           "hint": "Optionally select a team for the virtual key. The agent identity and its permissions are managed separately."
         },
         "entraNotice": "This agent will authenticate with Microsoft Entra ID. You can skip virtual key creation.",
+        "oktaNotice": "This agent will authenticate with Okta. You can skip virtual key creation.",
         "createNew": {
           "title": "Create a new key for this agent",
           "description": "A dedicated key scoped to this agent.",
@@ -643,6 +672,7 @@
         },
         "skip": {
           "entra": "Use Entra JWT authentication",
+          "okta": "Use Okta JWT authentication",
           "later": "Skip for now, I’ll assign a key later"
         }
       },
@@ -650,6 +680,7 @@
         "title": "Agent Created!",
         "keyAssigned": "Key <alias/> has been assigned to this agent.",
         "entraConfigured": "Microsoft Entra ID is configured. Send an authenticated agent request to verify the connection.",
+        "oktaConfigured": "Okta is configured. Send an authenticated agent request to verify the connection.",
         "noKey": "No key assigned. You can create one from the Virtual Keys page."
       },
       "dialog": {

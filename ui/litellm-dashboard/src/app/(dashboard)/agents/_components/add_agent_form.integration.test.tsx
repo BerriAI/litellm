@@ -119,6 +119,87 @@ describe("AddAgentForm submit payload", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
+  it("drops the Entra issuer list when the Okta list fails to load", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    vi.mocked(networking.apiClient.get)
+      .mockReset()
+      .mockImplementation(async (path) => {
+        if (path === "/v1/agents/identity/providers/okta") throw new Error("temporarily unavailable");
+        return ["https://example.okta.com/oauth2/people"];
+      });
+    renderForm();
+    await user.click(await screen.findByLabelText("Identity Provider"));
+    await user.click(await screen.findByRole("option", { name: "Microsoft Entra ID" }));
+    await waitFor(() => expect(networking.apiClient.get).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByLabelText("Identity Provider"));
+    await user.click(await screen.findByRole("option", { name: "Okta" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could not load the gateway's trusted identity providers",
+    );
+    await user.click(screen.getByLabelText("Trusted Okta Authorization Server"));
+    expect(within(await screen.findByRole("listbox")).queryAllByRole("option")).toEqual([]);
+  });
+
+  it("keeps an Entra load failure off the Okta fields", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    const issuer = "https://example.okta.com/oauth2/aus1agents";
+    vi.mocked(networking.apiClient.get)
+      .mockReset()
+      .mockImplementation(async (path) => {
+        if (path === "/v1/agents/identity/providers/okta") return [issuer];
+        throw new Error("temporarily unavailable");
+      });
+    renderForm();
+    await user.click(await screen.findByLabelText("Identity Provider"));
+    await user.click(await screen.findByRole("option", { name: "Microsoft Entra ID" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could not load the gateway's trusted identity providers",
+    );
+    await user.click(screen.getByLabelText("Identity Provider"));
+    await user.click(await screen.findByRole("option", { name: "Okta" }));
+    await user.click(screen.getByLabelText("Trusted Okta Authorization Server"));
+    expect(await screen.findByRole("option", { name: issuer })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("waits for the Okta list before saying no server is available", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    vi.mocked(networking.apiClient.get)
+      .mockReset()
+      .mockImplementation(() => new Promise(() => undefined));
+    renderForm();
+    await user.click(await screen.findByLabelText("Identity Provider"));
+    await user.click(await screen.findByRole("option", { name: "Okta" }));
+    await waitFor(() =>
+      expect(networking.apiClient.get).toHaveBeenCalledWith("/v1/agents/identity/providers/okta", {
+        accessToken: "tok",
+      }),
+    );
+    expect(screen.getByLabelText("Trusted Okta Authorization Server")).toBeInTheDocument();
+    expect(screen.queryByText(/agent_identity_provider: okta first/)).not.toBeInTheDocument();
+  });
+
+  it("keeps the loaded Entra tenants while reselecting Entra", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    const tenant = "11111111-1111-4111-8111-111111111111";
+    vi.mocked(networking.apiClient.get)
+      .mockReset()
+      .mockResolvedValueOnce([`https://login.microsoftonline.com/${tenant}/v2.0`])
+      .mockImplementation(() => new Promise(() => undefined));
+    renderForm();
+    await user.click(await screen.findByLabelText("Identity Provider"));
+    await user.click(await screen.findByRole("option", { name: "Microsoft Entra ID" }));
+    await user.click(screen.getByLabelText("Trusted Entra Tenant"));
+    await user.click(await screen.findByRole("option", { name: tenant }));
+    await user.click(screen.getByLabelText("Identity Provider"));
+    await user.click(await screen.findByRole("option", { name: "No explicit identity binding" }));
+    await user.click(screen.getByLabelText("Identity Provider"));
+    await user.click(await screen.findByRole("option", { name: "Microsoft Entra ID" }));
+    await waitFor(() => expect(networking.apiClient.get).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByLabelText("Trusted Entra Tenant"));
+    expect(await screen.findByRole("option", { name: tenant })).toBeInTheDocument();
+  });
+
   it("registers a readable agent with an explicit Entra identity and no virtual key", async () => {
     const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
     const tenant = "11111111-1111-4111-8111-111111111111";
@@ -161,6 +242,55 @@ describe("AddAgentForm submit payload", () => {
       screen.getByText(
         "Microsoft Entra ID is configured. Send an authenticated agent request to verify the connection.",
       ),
+    ).toBeInTheDocument();
+  });
+
+  it("registers an Okta-bound agent from an Okta authorization server only", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    const issuer = "https://example.okta.com/oauth2/aus1agents";
+    const trusted = [
+      "https://login.microsoftonline.com/11111111-1111-4111-8111-111111111111/v2.0",
+      "https://example.okta.com/oauth2/people",
+      issuer,
+    ];
+    vi.mocked(networking.apiClient.get).mockImplementation(async (path) =>
+      path === "/v1/agents/identity/providers/okta" ? [issuer] : trusted,
+    );
+    renderForm();
+    fireEvent.change(await screen.findByLabelText("Agent Name"), { target: { value: "Okta agent" } });
+    fireEvent.change(screen.getByLabelText("URL"), { target: { value: "https://runtime.example/a2a" } });
+    fireEvent.change(screen.getByLabelText("Display Name"), { target: { value: "Okta agent" } });
+    fireEvent.change(screen.getByPlaceholderText("Describe what this agent does..."), {
+      target: { value: "Test agent" },
+    });
+    await user.click(screen.getByLabelText("Identity Provider"));
+    await user.click(await screen.findByRole("option", { name: "Okta" }));
+    await user.click(screen.getByLabelText("Trusted Okta Authorization Server"));
+    const options = await screen.findAllByRole("option");
+    expect(options.map((option) => option.textContent)).toEqual([issuer]);
+    await user.click(options[0]);
+    fireEvent.change(screen.getByLabelText("Client ID"), { target: { value: "0oa1AgentClient" } });
+    fireEvent.change(screen.getByLabelText("Required Scopes"), { target: { value: "agents:invoke" } });
+    await user.click(screen.getByRole("button", { name: /^Next/ }));
+    await user.click(screen.getByRole("button", { name: /^Next/ }));
+    await user.click(screen.getByRole("button", { name: /^Next/ }));
+    expect(
+      screen.getByText("This agent will authenticate with Okta. You can skip virtual key creation."),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Use Okta JWT authentication" }));
+    await user.click(screen.getByRole("button", { name: /Create Agent/ }));
+    await waitFor(() => expect(networking.createAgentCall).toHaveBeenCalledTimes(1));
+    const expectedIdentity = {
+      provider: "okta",
+      issuer,
+      client_id: "0oa1AgentClient",
+      required_scopes: ["agents:invoke"],
+    };
+    expect(createdPayload().identity).toEqual(expectedIdentity);
+    expect(createdPayload().execution_mode).toBe("autonomous");
+    expect(networking.keyCreateForAgentCall).not.toHaveBeenCalled();
+    expect(
+      screen.getByText("Okta is configured. Send an authenticated agent request to verify the connection."),
     ).toBeInTheDocument();
   });
 
@@ -308,6 +438,66 @@ describe("AddAgentForm submit payload", () => {
         skills: [],
       },
     });
+  });
+
+  it("blocks an Okta client ID that is only whitespace", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    const issuer = "https://example.okta.com/oauth2/aus1agents";
+    vi.mocked(networking.apiClient.get).mockResolvedValue([issuer]);
+    renderForm();
+
+    await screen.findByLabelText("Agent Name");
+    await openAgentTypeMenu(user);
+    await user.click(await screen.findByText("Custom / Other"));
+    fireEvent.change(await screen.findByLabelText("Agent Name"), { target: { value: "okta-custom-agent" } });
+    await user.click(screen.getByLabelText("Identity Provider"));
+    await user.click(await screen.findByRole("option", { name: "Okta" }));
+    await user.click(screen.getByLabelText("Trusted Okta Authorization Server"));
+    await user.click(await screen.findByRole("option", { name: issuer }));
+    fireEvent.change(screen.getByLabelText("Client ID"), { target: { value: "   " } });
+    await user.click(screen.getByRole("button", { name: /^Next/ }));
+
+    expect(await screen.findByText("Enter the Okta application client ID")).toBeInTheDocument();
+    expect(networking.createAgentCall).not.toHaveBeenCalled();
+  });
+
+  it("tells the admin how to opt in when no Okta authorization server is available", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    vi.mocked(networking.apiClient.get).mockResolvedValue([]);
+    renderForm();
+
+    await screen.findByLabelText("Agent Name");
+    await user.click(screen.getByLabelText("Identity Provider"));
+    await user.click(await screen.findByRole("option", { name: "Okta" }));
+
+    expect(await screen.findByText(/agent_identity_provider: okta first/)).toBeInTheDocument();
+  });
+
+  it("sends a custom Okta-bound agent without a synthesized agent card", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    const issuer = "https://example.okta.com/oauth2/aus1agents";
+    vi.mocked(networking.apiClient.get).mockResolvedValue([issuer]);
+    renderForm();
+
+    await screen.findByLabelText("Agent Name");
+    await openAgentTypeMenu(user);
+    await user.click(await screen.findByText("Custom / Other"));
+    await user.type(await screen.findByLabelText("Agent Name"), "okta-custom-agent");
+    await user.click(screen.getByLabelText("Identity Provider"));
+    await user.click(await screen.findByRole("option", { name: "Okta" }));
+    await user.click(screen.getByLabelText("Trusted Okta Authorization Server"));
+    await user.click(await screen.findByRole("option", { name: issuer }));
+    fireEvent.change(screen.getByLabelText("Client ID"), { target: { value: "0oa1AgentClient" } });
+
+    await goToLastStepAndCreate(user);
+
+    const expectedPayload = {
+      agent_name: "okta-custom-agent",
+      identity: { provider: "okta", issuer, client_id: "0oa1AgentClient", required_scopes: [] },
+      execution_mode: "autonomous",
+      enabled: true,
+    };
+    expect(createdPayload()).toEqual(expectedPayload);
   });
 
   it("sends credential fields and the model template for a dynamic agent type", async () => {

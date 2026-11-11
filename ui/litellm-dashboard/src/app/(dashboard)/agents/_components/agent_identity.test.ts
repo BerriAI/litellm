@@ -80,4 +80,72 @@ describe("agent identity configuration", () => {
     expect(entraTenantFromIssuer("https://attacker.example/tenant/v2.0")).toBeNull();
     expect(entraTenantFromIssuer("https://login.microsoftonline.com/common/v2.0")).toBeNull();
   });
+
+  describe("okta", () => {
+    const okta = {
+      provider: "okta",
+      issuer: "https://example.okta.com/oauth2/aus1agents",
+      client_id: "0oa1AgentClient",
+      required_scopes: ["agents:invoke"],
+    } satisfies import("./agent_identity").OktaAgentIdentity;
+    const stored = {
+      ...okta,
+      agent_id: "stable",
+      active: true,
+      revision: "rev",
+      tenant_id: okta.issuer,
+      service_principal_id: null,
+      required_roles: [],
+    };
+
+    it("round trips an existing Okta binding", () => {
+      expect(buildIdentityParams(parseIdentityForForm({ identity: stored }))).toEqual({ identity: okta });
+    });
+    it("keeps the client ID's case and trims what the admin typed", () => {
+      const values = {
+        identity_provider: "okta",
+        identity_okta_issuer: ` ${okta.issuer} `,
+        identity_okta_client_id: " 0oa1AgentClient ",
+        identity_okta_required_scopes: " agents:invoke agents:read,agents:write, ",
+      };
+      expect(buildIdentityParams(values)).toEqual({
+        identity: { ...okta, required_scopes: ["agents:invoke", "agents:read", "agents:write"] },
+      });
+    });
+    it("allows an empty scope list", () => {
+      const values = {
+        identity_provider: "okta",
+        identity_okta_issuer: okta.issuer,
+        identity_okta_client_id: okta.client_id,
+      };
+      expect(buildIdentityParams(values)).toEqual({ identity: { ...okta, required_scopes: [] } });
+    });
+    it.each(["https://example.okta.com", "http://example.okta.com/oauth2/aus1agents", ""])(
+      "rejects an issuer that is not a custom authorization server: %j",
+      (issuer) => {
+        const values = { identity_provider: "okta", identity_okta_issuer: issuer, identity_okta_client_id: "0oa1" };
+        expect(() => buildIdentityParams(values)).toThrow("Select a trusted Okta issuer");
+      },
+    );
+    it("rejects a missing client ID", () => {
+      const values = { identity_provider: "okta", identity_okta_issuer: okta.issuer, identity_okta_client_id: " " };
+      expect(() => buildIdentityParams(values)).toThrow("Select a trusted Okta issuer");
+    });
+    it("always submits Okta agents as autonomous", () => {
+      const values = {
+        identity_provider: "okta",
+        identity_okta_issuer: okta.issuer,
+        identity_okta_client_id: okta.client_id,
+        execution_mode: "delegated",
+        enabled: true,
+      };
+      const payload = withAgentIdentity({ agent_name: "okta-agent" }, values);
+      expect(payload.identity).toEqual({ ...okta, required_scopes: [] });
+      expect(payload.execution_mode).toBe("autonomous");
+      expect(payload.enabled).toBe(true);
+    });
+    it("clears an Okta binding when the admin picks no provider", () => {
+      expect(buildIdentityParams({ identity_provider: "none" }, stored)).toEqual({ identity: null });
+    });
+  });
 });

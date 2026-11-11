@@ -3,12 +3,17 @@ import type { components } from "@/lib/http/schema";
 import type { AgentFormValues, AgentRequestPayload } from "./AgentFormKit";
 
 export type EntraAgentIdentity = components["schemas"]["EntraIdentityConfig"];
+export type OktaAgentIdentity = components["schemas"]["OktaIdentityConfig"];
+export type AgentIdentity = EntraAgentIdentity | OktaAgentIdentity;
 type AgentIdentityState = Pick<
   components["schemas"]["AgentResponse"],
   "identity" | "enabled" | "execution_mode" | "agent_card_params"
 >;
 
 export const IDENTITY_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const isBoundIdentityProvider = (provider: unknown): boolean =>
+  provider === "microsoft_entra" || provider === "okta";
+export const OKTA_ISSUER_PATTERN = /^https:\/\/[^/?#]+\/oauth2\/[^/?#]+$/;
 
 const stringGrants = (fallback: string[]) =>
   z
@@ -26,14 +31,27 @@ const identityShape = {
   required_roles: stringGrants([]),
   required_scopes: stringGrants(["user_impersonation"]),
 };
-const identitySchema = z.object(identityShape);
+const oktaShape = {
+  provider: z.literal("okta"),
+  issuer: z.string().regex(OKTA_ISSUER_PATTERN),
+  client_id: z.string().min(1),
+  required_scopes: stringGrants([]),
+};
+const identitySchema = z.discriminatedUnion("provider", [z.object(identityShape), z.object(oktaShape)]);
 
-export const readAgentIdentity = (value: unknown): EntraAgentIdentity | null => {
+export const readAgentIdentity = (value: unknown): AgentIdentity | null => {
   const parsed = identitySchema.safeParse(value);
   return parsed.success ? parsed.data : null;
 };
 
-const identityFormFields = (identity: EntraAgentIdentity | null): AgentFormValues => ({
+const oktaFormFields = (identity: OktaAgentIdentity): AgentFormValues => ({
+  identity_provider: "okta",
+  identity_okta_issuer: identity.issuer,
+  identity_okta_client_id: identity.client_id,
+  identity_okta_required_scopes: identity.required_scopes?.join(", ") ?? "",
+});
+
+const entraFormFields = (identity: EntraAgentIdentity | null): AgentFormValues => ({
   identity_provider: identity?.provider ?? "none",
   identity_tenant_id: identity?.tenant_id ?? "",
   identity_client_id: identity?.client_id ?? "",
@@ -41,6 +59,9 @@ const identityFormFields = (identity: EntraAgentIdentity | null): AgentFormValue
   identity_required_roles: identity?.required_roles?.join(", ") ?? "",
   identity_required_scopes: identity?.required_scopes?.join(", ") ?? "user_impersonation",
 });
+
+const identityFormFields = (identity: AgentIdentity | null): AgentFormValues =>
+  identity?.provider === "okta" ? oktaFormFields(identity) : entraFormFields(identity);
 
 export const parseIdentityForForm = (agent?: Partial<AgentIdentityState> | null): AgentFormValues => {
   const identity = agent?.identity?.active === false ? null : readAgentIdentity(agent?.identity);
@@ -59,11 +80,32 @@ const splitGrants = (value: unknown, fallback: string[]): string[] =>
         .filter(Boolean)
     : fallback;
 
+const splitScopes = (value: unknown): string[] =>
+  typeof value === "string" ? value.split(/[\s,]+/).filter(Boolean) : [];
+
+const trimmed = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
+
+const buildOktaIdentity = (values: AgentFormValues): OktaAgentIdentity | null => {
+  const candidate: OktaAgentIdentity = {
+    provider: "okta",
+    issuer: trimmed(values.identity_okta_issuer),
+    client_id: trimmed(values.identity_okta_client_id),
+    required_scopes: splitScopes(values.identity_okta_required_scopes),
+  };
+  const identity = readAgentIdentity(candidate);
+  return identity?.provider === "okta" ? identity : null;
+};
+
 export const buildIdentityParams = (
   values: AgentFormValues,
   existingIdentity?: unknown,
-): { identity?: EntraAgentIdentity | null } => {
+): { identity?: AgentIdentity | null } => {
   if (values.identity_provider === undefined) return {};
+  if (values.identity_provider === "okta") {
+    const identity = buildOktaIdentity(values);
+    if (!identity) throw new Error("Select a trusted Okta issuer and enter the application client ID");
+    return { identity };
+  }
   if (values.identity_provider !== "microsoft_entra")
     return readAgentIdentity(existingIdentity) ? { identity: null } : {};
   const candidate: EntraAgentIdentity = {
@@ -78,7 +120,8 @@ export const buildIdentityParams = (
     required_scopes: splitGrants(values.identity_required_scopes, ["user_impersonation"]),
   };
   const identity = readAgentIdentity(candidate);
-  if (!identity) throw new Error("Enter valid Entra tenant, application client and service principal IDs");
+  if (identity?.provider !== "microsoft_entra")
+    throw new Error("Enter valid Entra tenant, application client and service principal IDs");
   if (values.execution_mode !== "delegated" && !identity.service_principal_id)
     throw new Error("Autonomous agents require the Enterprise application Object ID");
   return { identity };
@@ -98,12 +141,13 @@ export const withAgentIdentity = (
   const { agent_card_params, ...settings } = payload;
   const hasCard = !existing || cardEdited || Object.keys(existing.agent_card_params ?? {}).length > 0;
   const identityFields = buildIdentityParams(values, existing?.identity);
-  const managed = values.identity_provider === "microsoft_entra" || Boolean(readAgentIdentity(existing?.identity));
+  const managed = isBoundIdentityProvider(values.identity_provider) || Boolean(readAgentIdentity(existing?.identity));
+  const mode = values.identity_provider === "okta" ? "autonomous" : values.execution_mode;
   return {
     ...settings,
     ...(hasCard && agent_card_params ? { agent_card_params } : {}),
     ...identityFields,
-    ...(managed && values.execution_mode !== undefined ? { execution_mode: values.execution_mode } : {}),
+    ...(managed && mode !== undefined ? { execution_mode: mode } : {}),
     ...(managed && values.enabled !== undefined ? { enabled: values.enabled } : {}),
   };
 };

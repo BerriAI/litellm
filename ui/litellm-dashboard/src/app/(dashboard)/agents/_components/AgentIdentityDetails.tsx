@@ -48,19 +48,35 @@ export const AgentIdentityDetails = ({
       aria-label={t("agents.identityDetails.regionLabel")}
       className="mb-6 space-y-2 rounded-lg border border-border p-4"
     >
-      <h3 className="font-medium">{t("agents.identityDetails.title")}</h3>
-      <p className="text-sm">
-        {t("agents.identityDetails.tenant")} <span className="font-mono">{identity.tenant_id}</span>
-      </p>
-      <>
-        <p className="text-sm">
-          {t("agents.identityDetails.clientId")} <span className="font-mono">{identity.client_id}</span>
-        </p>
-        <p className="text-sm">
-          {t("agents.identityDetails.servicePrincipal")}{" "}
-          {identity.service_principal_id || t("agents.identityDetails.notConfigured")}
-        </p>
-      </>
+      {identity.provider === "okta" ? (
+        <>
+          <h3 className="font-medium">{t("agents.identityDetails.okta.title")}</h3>
+          <p className="text-sm">
+            {t("agents.identityDetails.okta.issuer")} <span className="font-mono">{identity.issuer}</span>
+          </p>
+          <p className="text-sm">
+            {t("agents.identityDetails.okta.clientId")} <span className="font-mono">{identity.client_id}</span>
+          </p>
+          <p className="text-sm">
+            {t("agents.identityDetails.okta.requiredScopes")}{" "}
+            {identity.required_scopes?.join(", ") || t("agents.identityDetails.okta.anyScope")}
+          </p>
+        </>
+      ) : (
+        <>
+          <h3 className="font-medium">{t("agents.identityDetails.title")}</h3>
+          <p className="text-sm">
+            {t("agents.identityDetails.tenant")} <span className="font-mono">{identity.tenant_id}</span>
+          </p>
+          <p className="text-sm">
+            {t("agents.identityDetails.clientId")} <span className="font-mono">{identity.client_id}</span>
+          </p>
+          <p className="text-sm">
+            {t("agents.identityDetails.servicePrincipal")}{" "}
+            {identity.service_principal_id || t("agents.identityDetails.notConfigured")}
+          </p>
+        </>
+      )}
       <p className="text-sm">
         {t("agents.identityDetails.executionSummary", {
           execution: data ? executionLabel : t("agents.identityDetails.loading"),
@@ -72,7 +88,11 @@ export const AgentIdentityDetails = ({
           ? t("agents.identityDetails.evidence.unbound")
           : authenticationMessage(t, isError, data?.last_authenticated_at)}
       </p>
-      <p className="text-xs text-muted-foreground">{t("agents.identityDetails.evidenceNote")}</p>
+      <p className="text-xs text-muted-foreground">
+        {identity.provider === "okta"
+          ? t("agents.identityDetails.okta.evidenceNote")
+          : t("agents.identityDetails.evidenceNote")}
+      </p>
       <div className="flex items-center gap-4">
         <Button
           variant="outline"
