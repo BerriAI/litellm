@@ -501,7 +501,8 @@ def test_custom_images_drop_additional_drop_params(
         n=2,
         size="1024x1024",
         user="image-user",
-        additional_drop_params=["size", "user"],
+        background="transparent",
+        additional_drop_params=["size", "user", "background"],
     )
     if operation == "edit":
         litellm.image_edit(**request, image=b"input-image")
@@ -511,6 +512,7 @@ def test_custom_images_drop_additional_drop_params(
     assert received["n"] == 2
     assert "size" not in received
     assert "user" not in received
+    assert "background" not in received
 
 
 def test_custom_image_edit_receives_one_mask_from_a_mask_list(
