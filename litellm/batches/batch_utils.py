@@ -49,6 +49,10 @@ def _uses_native_vertex_output(
     model_name: str | None,
     first_row: Mapping[str, object] | None,
 ) -> bool:
+    if custom_llm_provider == "gemini":
+        from litellm.llms.gemini.batches.transformation import is_native_gemini_batch_output_row
+
+        return first_row is not None and is_native_gemini_batch_output_row(first_row)
     if custom_llm_provider != "vertex_ai":
         return False
     if model_name and litellm.disable_vertex_batch_output_transformation:

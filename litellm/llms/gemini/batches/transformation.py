@@ -136,6 +136,13 @@ class _GeminiBatchOutputUsage(LiteLLMBaseModel):
     total_tokens: int = Field(default=0, alias="totalTokens")
 
 
+def is_native_gemini_batch_output_row(row: Mapping[str, object]) -> bool:
+    """A native ``{key, response: {candidates, usageMetadata}}`` row, written when the input file held
+    native ``{key, request}`` rows instead of OpenAI-shaped ones."""
+    response: Final = row.get("response")
+    return isinstance(response, Mapping) and "usageMetadata" in response
+
+
 def is_gemini_batch_usage_shape(usage_object: Mapping[str, object]) -> bool:
     return any(key in usage_object for key in ("promptTokens", "completionTokens", "totalTokens"))
 
@@ -240,6 +247,9 @@ class GeminiBatchesConfig(BaseBatchesConfig):
             raise ValueError("input_file_id is required to create a Gemini batch job")
         file_name: Final = gemini_file_name(input_file_id)
         metadata: Final = create_batch_data.get("metadata") or {}
+        unsupported_metadata: Final = sorted(set(metadata) - {"display_name"})
+        if unsupported_metadata:
+            raise ValueError(f"Gemini batch jobs carry no metadata besides display_name, got {unsupported_metadata}")
         display_name: Final = (
             metadata.get("display_name") or f"litellm-{file_name.removeprefix(_GEMINI_FILE_RESOURCE_PREFIX)}"
         )

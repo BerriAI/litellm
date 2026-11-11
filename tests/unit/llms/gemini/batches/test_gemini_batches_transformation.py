@@ -16,6 +16,7 @@ import pytest
 from litellm.llms.gemini.batches.transformation import (
     GeminiBatchesConfig,
     is_gemini_batch_usage_shape,
+    is_native_gemini_batch_output_row,
     usage_from_batch_output,
 )
 from litellm.llms.gemini.common_utils import GeminiError
@@ -283,3 +284,27 @@ def test_batch_output_usage_folds_thinking_tokens_into_completion(reported, expe
 )
 def test_batch_usage_shape_detection(usage_object, expected):
     assert is_gemini_batch_usage_shape(usage_object) is expected
+
+
+def test_create_request_rejects_metadata_gemini_cannot_carry(config):
+    with pytest.raises(ValueError, match=r"\['run_id'\]"):
+        config.transform_create_batch_request(
+            model="gemini-3.8-flash",
+            create_batch_data={
+                "input_file_id": "files/abc",
+                "endpoint": "/v1/chat/completions",
+                "completion_window": "24h",
+                "metadata": {"display_name": "nightly", "run_id": "42"},
+            },
+            optional_params={},
+            litellm_params={},
+        )
+
+
+def test_native_output_row_detection():
+    native = {"key": "r0", "response": {"candidates": [], "usageMetadata": {"promptTokenCount": 3}}}
+    openai_shaped = {"custom_id": "r0", "response": {"status_code": 200, "body": {"usage": {"promptTokens": 3}}}}
+    assert (is_native_gemini_batch_output_row(native), is_native_gemini_batch_output_row(openai_shaped)) == (
+        True,
+        False,
+    )

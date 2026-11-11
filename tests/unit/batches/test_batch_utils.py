@@ -14,27 +14,28 @@ maps (litellm.completion_cost, batch_cost_calculator), the tokenizer
 deterministic stand-ins so the arithmetic under test is the only variable.
 """
 
-import asyncio, json, time
+import asyncio
+import json
 import logging
+import time
 from typing import Final, Literal
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 import respx
 
-
 import litellm
 import litellm.batches.batch_utils as bu
-from litellm.types.utils import LiteLLMBatch, ModelInfo, Usage
-from litellm.batches.batch_utils import(
+from litellm.batches.batch_utils import (
     _aggregate_batch_cost_usage_models,
-    get_file_content_as_dictionary,
     _get_response_from_batch_job_output_file,
     calculate_batch_cost_and_usage,
+    get_file_content_as_dictionary,
 )
 from litellm.cost_calculator import batch_cost_calculator
+from litellm.types.utils import LiteLLMBatch, ModelInfo, Usage
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from unittest.mock import AsyncMock, patch
 
 # --------------------------------------------------------------------------- #
 # Builders for batch OUTPUT file rows.
@@ -3485,3 +3486,40 @@ def test_gemini_output_lines_bill_camelcase_usage_with_thinking_tokens_at_batch_
     assert (result.usage.prompt_tokens, result.usage.completion_tokens, result.usage.total_tokens) == (9, 66, 75)
     assert result.cost == pytest.approx((9 * 3.75e-7) + (66 * 1.875e-6))
     assert (result.successful_requests, result.failed_requests, result.models) == (1, 0, ["gemini-3.8-flash"])
+
+
+@pytest.mark.asyncio
+async def test_gemini_native_output_rows_are_priced_from_usage_metadata(monkeypatch):
+    native_row = {
+        "key": "r0",
+        "response": {
+            "candidates": [{"content": {"parts": [{"text": "0"}], "role": "model"}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 3, "candidatesTokenCount": 1, "totalTokenCount": 65, "thoughtsTokenCount": 61},
+            "modelVersion": "gemini-3.8-flash",
+        },
+    }
+    monkeypatch.setattr(bu, "_fetch_batch_managed_file_content", AsyncMock(return_value=json.dumps(native_row).encode()))
+    monkeypatch.setattr(bu, "count_error_file_failed_requests", AsyncMock(return_value=0))
+
+    result = await bu.handle_completed_batch(
+        batch=_batch("batch-la6"),
+        custom_llm_provider="gemini",
+        model_name="gemini-3.8-flash",
+        model_info=ModelInfo(
+            key="gemini/gemini-3.8-flash",
+            max_tokens=None,
+            max_input_tokens=None,
+            max_output_tokens=None,
+            input_cost_per_token=7.5e-7,
+            output_cost_per_token=3.75e-6,
+            litellm_provider="gemini",
+            mode="chat",
+            supported_openai_params=None,
+            input_cost_per_token_batches=3.75e-7,
+            output_cost_per_token_batches=1.875e-6,
+        ),
+    )
+
+    assert (result.usage.prompt_tokens, result.usage.completion_tokens, result.usage.total_tokens) == (3, 62, 65)
+    assert result.cost == pytest.approx((3 * 3.75e-7) + (62 * 1.875e-6))
+    assert (result.successful_requests, result.failed_requests) == (1, 0)
