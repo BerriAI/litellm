@@ -24,6 +24,12 @@ STATIC_SECURITY_HEADERS: Final = (
     ("X-Content-Type-Options", "nosniff"),
 )
 HSTS_HEADER: Final = ("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+STATIC_ASSET_PATHS: Final = (
+    "/_next/static/",
+    "/ui/_next/static/",
+    "/litellm-asset-prefix/_next/static/",
+    "/swagger/",
+)
 
 
 def _hsts_enabled() -> bool:
@@ -39,12 +45,16 @@ class SecurityHeadersMiddleware:
             await self.app(scope, receive, send)
             return
 
+        path: Final = scope.get("path", "").removeprefix(scope.get("root_path", ""))
+
         async def send_with_security_headers(message: Message) -> None:
             if message["type"] == "http.response.start":
                 headers: Final = MutableHeaders(scope=message)
                 applied: Final = (*STATIC_SECURITY_HEADERS, HSTS_HEADER) if _hsts_enabled() else STATIC_SECURITY_HEADERS
                 for name, value in applied:
                     headers.setdefault(name, value)
+                if not (200 <= message["status"] < 400 and path.startswith(STATIC_ASSET_PATHS)):
+                    headers["Cache-Control"] = "no-store"
             await send(message)
 
         await self.app(scope, receive, send_with_security_headers)

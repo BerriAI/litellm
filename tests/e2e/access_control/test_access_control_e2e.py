@@ -228,3 +228,53 @@ class TestVirtualKeyAuth:
                 pytest.fail("forged bearer must not reach a successful completion")
             case _:
                 pytest.fail(f"forged bearer must be auth-denied, got {bad}")
+
+
+class TestSensitiveResponseCaching:
+    @pytest.mark.parametrize("path", ["/ui/", "/key/list", "/v1/models", "/not-a-real-route"])
+    @meta(Subject(domain=Domain.PROXY_AUTH))
+    def test_dynamic_responses_and_errors_are_not_stored(self, proxy: ProxyClient, path: str) -> None:
+        from typing import Final
+
+        response: Final = proxy.transport.download(path, headers=proxy.transport.master)
+        assert response.status_code == (404 if path == "/not-a-real-route" else 200), response.body
+        assert response.headers.get("cache-control") == "no-store", response.headers
+
+    @meta(Subject(domain=Domain.PROXY_AUTH))
+    def test_invalid_key_response_is_not_stored(self, proxy: ProxyClient) -> None:
+        from typing import Final
+
+        response: Final = proxy.transport.download(
+            "/key/list", headers=proxy.transport.bearer(f"sk-invalid-{unique_marker()}")
+        )
+        assert response.status_code == 401, response.body
+        assert response.headers.get("cache-control") == "no-store", response.headers
+
+    @meta(Subject(domain=Domain.PROXY_AUTH))
+    def test_early_upload_size_rejection_is_not_stored(self, proxy: ProxyClient) -> None:
+        from typing import Final
+
+        from pydantic import RootModel
+
+        response: Final = proxy.transport.send(
+            "/claude-code/plugins/upload",
+            headers=proxy.transport.master,
+            json=RootModel[str]("x" * (12 * 1024 * 1024)),
+        )
+        assert response.status_code == 413, response.body
+        assert response.headers.get("cache-control") == "no-store", response.headers
+
+    @meta(Subject(domain=Domain.PROXY_AUTH))
+    def test_successful_ui_build_assets_keep_their_cache_policy(self, proxy: ProxyClient) -> None:
+        import re
+        from typing import Final
+
+        page: Final = proxy.transport.download("/ui/", headers=proxy.transport.master)
+        assert page.status_code == 200, page.body
+        script: Final = re.search(r'<script[^>]+src="([^"]*/_next/static/[^"?]+\.js)', page.body)
+        assert script is not None, "UI HTML contains no Next.js build asset"
+        asset_path: Final = script.group(1)
+        asset: Final = proxy.transport.download(asset_path, headers=proxy.transport.master)
+        assert asset.status_code == 200, asset.body[:200]
+        assert asset.body
+        assert "no-store" not in asset.headers.get("cache-control", "")
