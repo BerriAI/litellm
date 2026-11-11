@@ -23,7 +23,7 @@ from litellm.cost_calculator import infer_call_type
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
-from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, get_or_create_metadata_bucket, is_str_keyed_dict
 from litellm.llms import get_guardrail_translation_mapping, load_guardrail_translation_mappings
 from litellm.llms.anthropic.common_utils import anthropic_server_call_fields
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation, StreamingScanKey
@@ -218,7 +218,8 @@ def _a2a_jsonrpc_error_chunk(exc: HTTPException, request_id: str | None) -> Mapp
     Returned as an object, not a serialized string: the A2A endpoint owns wire
     framing and serializes whatever the stream yields.
     """
-    detail: Final = exc.detail if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
+    detail_mapping: Final = as_str_mapping(exc.detail)
+    detail: Final = detail_mapping if detail_mapping is not None else {"message": str(exc.detail)}
     return {
         "jsonrpc": "2.0",
         "id": request_id,
@@ -234,8 +235,8 @@ _PROXY_ENRICHED_IDENTITY_FIELDS: Final = frozenset({"user_api_key_auth_metadata"
 
 
 def _apply_authenticated_identity_to_litellm_metadata(data: dict, user_api_key_dict: UserAPIKeyAuth) -> None:
-    existing: Final = data.get("litellm_metadata")
-    if isinstance(existing, dict):
+    existing: Final[object] = data.get("litellm_metadata")
+    if is_str_keyed_dict(existing):
         identity: Final = LiteLLMProxyRequestSetup.get_authenticated_identity_metadata(user_api_key_dict)
         existing.update({key: value for key, value in identity.items() if key not in _PROXY_ENRICHED_IDENTITY_FIELDS})
         existing.pop("user_api_key_token", None)

@@ -69,6 +69,7 @@ from litellm.litellm_core_utils.core_helpers import (
     bind_budget_reservation_to_callbacks,
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
+    is_str_keyed_dict,
     require_attributes,
 )
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import validate_no_callback_env_reference
@@ -1228,8 +1229,29 @@ from litellm.passthrough.timeout_utils import (
 )
 
 
-def _guardrail_request_headers(headers: Headers, litellm_key_header_name: str | None) -> Mapping[str, str]:
-    cleaned: Final = clean_headers(headers, litellm_key_header_name=litellm_key_header_name)
+def _replace_caller_identity(body: object, user_api_key_dict: UserAPIKeyAuth, headers: Headers) -> None:
+    if not is_str_keyed_dict(body):
+        return
+    strip_untrusted_caller_metadata(
+        body,
+        allow_client_message_redaction_opt_out=key_or_team_allows_client_message_redaction_opt_out(user_api_key_dict),
+    )
+    body.pop("proxy_server_request", None)
+    body.pop("headers", None)
+    for caller_bucket in (body.get("metadata"), body.get("litellm_metadata")):
+        if is_str_keyed_dict(caller_bucket):
+            caller_bucket.pop("headers", None)
+    body["proxy_server_request"] = {"headers": _guardrail_request_headers(headers)}
+
+
+def _guardrail_request_headers(headers: Headers) -> Mapping[str, str]:
+    # Lazy: proxy_server imports this module
+    from litellm.proxy.proxy_server import general_settings_view
+
+    key_header_name: Final = general_settings_view().get("litellm_key_header_name")
+    cleaned: Final = clean_headers(
+        headers, litellm_key_header_name=key_header_name if isinstance(key_header_name, str) else None
+    )
     mcp_credential_headers: Final = upstream_credential_headers(cleaned)
     return redact_credential_headers(
         {name: value for name, value in cleaned.items() if name.lower() not in mcp_credential_headers}
@@ -1401,26 +1423,6 @@ async def pass_through_request(
             _parsed_body = {}
         else:
             _parsed_body = await read_request_body(request)  # rebind-ok: pre-existing rebinding on a rename-only line
-        strip_untrusted_caller_metadata(
-            _parsed_body,
-            allow_client_message_redaction_opt_out=key_or_team_allows_client_message_redaction_opt_out(
-                user_api_key_dict
-            ),
-        )
-        # Lazy: proxy_server imports this module
-        from litellm.proxy.proxy_server import (
-            general_settings as proxy_general_settings,
-        )
-        from litellm.proxy.proxy_server import (
-            general_settings_view,
-        )
-
-        # Only the proxy's own view of the inbound headers may reach guardrail vendors
-        _parsed_body.pop("proxy_server_request", None)
-        _parsed_body.pop("headers", None)
-        for _caller_bucket in (_parsed_body.get("metadata"), _parsed_body.get("litellm_metadata")):
-            if isinstance(_caller_bucket, dict):
-                _caller_bucket.pop("headers", None)
         verbose_proxy_logger.debug(
             "Pass through endpoint sending request to \nURL %s\nheaders: %s\nbody: %s\n",
             url,
@@ -1429,6 +1431,7 @@ async def pass_through_request(
         )
 
         client_body: Final = TypeAdapter(dict[str, object]).validate_python(_parsed_body)
+        _replace_caller_identity(client_body, user_api_key_dict, request.headers)
         strip_client_guardrail_information(client_body)
         if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
             _strip_client_pricing_overrides(client_body)
@@ -1492,10 +1495,6 @@ async def pass_through_request(
         if _parsed_body is None:
             _parsed_body = {}
         _parsed_body["litellm_logging_obj"] = logging_obj
-        guardrail_headers: Final = _guardrail_request_headers(
-            request.headers, litellm_key_header_name=proxy_general_settings.get("litellm_key_header_name")
-        )
-        _parsed_body["proxy_server_request"] = {"headers": guardrail_headers}
         is_streaming_pass_through: Final = bool(
             HttpPassThroughEndpointHelpers._update_stream_param_based_on_request_body(
                 parsed_body=_parsed_body,
@@ -1578,6 +1577,13 @@ async def pass_through_request(
         # provider IDs before forwarding upstream.  Gated by feature flag and
         # enterprise managed-files hook.  Runs after pre_call_hook so
         # guardrails have already seen the managed IDs.
+        from litellm.proxy.proxy_server import (
+            general_settings as proxy_general_settings,
+        )
+        from litellm.proxy.proxy_server import (
+            general_settings_view,
+        )
+
         _managed_id_provider: Final = resolve_passthrough_managed_id_provider(custom_llm_provider)
 
         if proxy_general_settings.get("passthrough_managed_object_ids", False) and _managed_id_provider is not None:
@@ -2010,7 +2016,7 @@ async def pass_through_request(
                 **existing_metadata,
                 "guardrails": guardrails_to_run,
             }
-            hook_data["proxy_server_request"] = {"headers": guardrail_headers}
+            hook_data["proxy_server_request"] = {"headers": _guardrail_request_headers(request.headers)}
             post_call_guardrail_data = hook_data
             response_body = await proxy_logging_obj.post_call_success_hook(
                 data=hook_data,

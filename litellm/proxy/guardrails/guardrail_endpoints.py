@@ -18,6 +18,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -2504,14 +2505,13 @@ async def apply_guardrail(
 
         response_handler: Final = GUARDRAIL_RESPONSE_HANDLERS[request.response_format]
         prepared_request_data: Final = response_handler.prepare_request_data(request)
-        caller_metadata: Final = prepared_request_data.get("metadata")
-        processed_metadata: Final = data.get("metadata")
-        inbound_headers: Final = processed_metadata.get("headers") if isinstance(processed_metadata, dict) else None
+        processed_metadata: Final = as_str_mapping(data.get("metadata"))
+        inbound_headers: Final = processed_metadata.get("headers") if processed_metadata is not None else None
         request_data: Final = {
             **prepared_request_data,
             "metadata": {
                 **caller_metadata_with_authenticated_identity(
-                    caller_metadata if isinstance(caller_metadata, Mapping) else None, user_api_key_dict
+                    as_str_mapping(prepared_request_data.get("metadata")), user_api_key_dict
                 ),
                 **({"headers": inbound_headers} if inbound_headers is not None else {}),
             },

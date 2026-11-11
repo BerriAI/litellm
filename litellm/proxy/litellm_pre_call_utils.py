@@ -56,6 +56,7 @@ from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     attribute_or_none,
     is_codex_user_agent,
+    is_str_keyed_dict,
     normalize_drop_params,
     require_attributes,
 )
@@ -738,11 +739,11 @@ def is_untrusted_caller_metadata_key(key: str) -> bool:
     return key.startswith("user_api_key_") or key in _UNTRUSTED_METADATA_CONTROL_FIELDS
 
 
-def strip_untrusted_caller_metadata(
-    data: MutableMapping[str, object], *, allow_client_message_redaction_opt_out: bool
-) -> None:
+def strip_untrusted_caller_metadata(data: object, *, allow_client_message_redaction_opt_out: bool) -> None:
+    if not is_str_keyed_dict(data):
+        return
     for user_meta in (data.get("metadata"), data.get("litellm_metadata")):
-        if not isinstance(user_meta, dict):
+        if not is_str_keyed_dict(user_meta):
             continue
         _strip_untrusted_request_header_controls(
             user_meta.get("headers"),
