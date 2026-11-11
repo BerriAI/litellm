@@ -1,7 +1,8 @@
 # Model catalog refresh
 
-- `fetch` fetches one document over http(s) or `s3://` and never parses it
+- `fetch` fetches one document over http(s), `s3://` or `gs://` and never parses it
 - Only 429, 500, 502, 503, 504 and transport errors are retried. S3 errors are final
+- `gs://` reuses the http attempt with a Google application default credentials bearer token, so its statuses retry like http. A token that cannot be acquired is final, and the token never reaches a reason or a log line
 - `Failed.retryable` means only the attempt limit ended the fetch
 - A server's Retry-After overrides the backoff, capped at `max_delay`
 - `Start::After(failed)` resumes the backoff schedule where another caller's first attempt left off

@@ -25,6 +25,10 @@ enum Repr {
     S3Body(#[source] ByteStreamError),
     #[error("S3 GetObject timed out")]
     S3Timeout(#[source] Elapsed),
+    #[error("invalid GCS URL")]
+    GcsUri,
+    #[error("Google access token unavailable")]
+    GcsToken(#[source] litellm_auth_types::Error),
     #[error("response body is over the {limit} byte limit")]
     BodyTooLarge { limit: u64 },
 }
@@ -32,6 +36,14 @@ enum Repr {
 impl Error {
     pub fn unsupported_scheme(scheme: String) -> Self {
         Self(Box::new(Repr::UnsupportedScheme { scheme }))
+    }
+
+    pub(crate) fn invalid_gcs_url() -> Self {
+        Self(Box::new(Repr::GcsUri))
+    }
+
+    pub(crate) fn gcs_token(cause: litellm_auth_types::Error) -> Self {
+        Self(Box::new(Repr::GcsToken(cause)))
     }
 
     pub(crate) fn body_too_large(limit: u64) -> Self {
