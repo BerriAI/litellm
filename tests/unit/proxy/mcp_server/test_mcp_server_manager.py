@@ -17163,6 +17163,34 @@ async def test_listing_before_a_first_tool_call_asks_the_upstream_even_when_the_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("search", ("search_tool", "proxy_search_tool"))
+async def test_tool_search_asks_the_upstream_on_every_call_under_a_server_ttl(
+    search: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.mcp_server import operations, tool_search
+
+    monkeypatch.setattr(litellm, "mcp_tool_search", None)
+    manager: Final = MCPServerManager(discovery_clock=_DiscoveryClock())
+    server: Final = _server_with_tools_list_ttl(300)
+    manager.registry = {server.server_id: server}
+    manager.config_mcp_servers = dict(manager.registry)
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", manager)
+    admin: Final = UserAPIKeyAuth(api_key="hashed-admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    searches: Final = {
+        "search_tool": lambda: tool_search.handle_mcp_tool_search(query="example", top_k=1, user_api_key_dict=admin),
+        "proxy_search_tool": lambda: tool_search.handle_mcp_proxy_tool(
+            name=tool_search.MCP_PROXY_SEARCH_TOOL_NAME, arguments={"query": "example"}, user_api_key_dict=admin
+        ),
+    }
+    upstream: Final = _DiscoveryUpstream()
+    with _mcp_upstream(upstream.respond):
+        results: Final = [await searches[search]() for _ in range(2)]
+    assert [result.is_error for result in results] == [False, False]
+    assert sum(method == "tools/list" for method, _auth in upstream.requests) == 2
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("invalidation", ("invalidate_discovery_lists", "clear_initialize_instructions"))
 async def test_tools_list_fetched_across_an_invalidation_is_not_stored(invalidation: str) -> None:
     manager: Final = MCPServerManager(discovery_clock=_DiscoveryClock())

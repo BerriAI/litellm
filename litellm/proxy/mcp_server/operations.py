@@ -1713,6 +1713,7 @@ async def _list_mcp_tools(
     protocol_version: str | None = None,
     *,
     record_listing: bool = False,
+    use_tool_list_cache: bool = True,
 ) -> AggregateToolListing:
     """
     List all available MCP tools.
@@ -1748,6 +1749,7 @@ async def _list_mcp_tools(
             record_listing=record_listing,
             params=params,
             protocol_version=protocol_version,
+            use_tool_list_cache=use_tool_list_cache,
         )
         verbose_logger.debug("Successfully fetched %s tools from managed MCP servers", len(listing.tools))
         return listing
