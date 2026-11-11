@@ -54,12 +54,12 @@ def test_sha256_base64_known_value():
     assert sha256_base64(data) == expected
 
 
-def test_sha256_base64_asks_for_a_security_digest(monkeypatch):
+def test_sha256_base64_asks_for_a_security_digest(monkeypatch: pytest.MonkeyPatch) -> None:
     import hashlib
 
-    real_sha256 = hashlib.sha256
+    real_sha256: Final = hashlib.sha256
 
-    def security_only_sha256(data=b"", *, usedforsecurity=True):
+    def security_only_sha256(data: bytes = b"", *, usedforsecurity: bool = True) -> "hashlib._Hash":
         assert usedforsecurity, "usedforsecurity=False lets a provider outside the FIPS module serve the digest"
         return real_sha256(data)
 
