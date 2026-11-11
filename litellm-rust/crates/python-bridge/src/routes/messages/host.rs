@@ -24,11 +24,12 @@ use crate::{
         ArgumentError, optional_timeout, project_optional_fields, public_response,
         python_timeout_seconds,
     },
-    python_settings::missing_module,
+    python_settings::PythonSettings,
     routes::RequestView,
 };
 
 const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.host.routes.messages";
+const MODEL_CAPABILITIES_MODULE: &str = "litellm.rust_bridge.host.model_capabilities";
 
 fn merge_headers(
     forwarded: Option<Map<String, Value>>,
@@ -40,16 +41,10 @@ fn merge_headers(
     (!merged.is_empty()).then_some(merged)
 }
 
-/// Reads `litellm.<name>`, the module global a param spec names, the way
-/// `VertexBase.get_vertex_ai_project` reads `litellm.vertex_project`.
 fn module_global<'py>(py: Python<'py>, name: &str) -> PyResult<Option<Bound<'py, PyAny>>> {
-    let module = match py.import("litellm") {
-        Ok(module) => module,
-        Err(error) if missing_module(py, &error, "litellm")? => return Ok(None),
-        Err(error) => return Err(error),
-    };
-    let value = module.getattr(name)?;
-    Ok((!value.is_none()).then_some(value))
+    PythonSettings::ProviderDefaults
+        .read_or_unset(py)?
+        .map_or(Ok(None), |defaults| defaults.attribute(name))
 }
 
 /// The caller's litellm params, read from the kwargs by the names the typed params declare,
@@ -173,7 +168,7 @@ impl MessagesPythonHost {
     ) -> PyResult<MessagesShaping> {
         let module = py.import(ROUTE_HOST_MODULE)?;
         let capabilities: MessagesModelCapabilities = from_py(
-            &py.import("litellm.rust_bridge.host.model_capabilities")?
+            &py.import(MODEL_CAPABILITIES_MODULE)?
                 .getattr("anthropic_model_capabilities")?
                 .call1((model, custom_llm_provider))?,
         )?;
@@ -239,9 +234,13 @@ impl PythonBinding for MessagesPythonHost {
     fn encode_response(
         &mut self,
         py: Python<'_>,
-        response: Box<litellm_llms_types::formats::messages::MessagesResponse>,
+        response: litellm_inference_messages::MessagesBody,
     ) -> PyResult<Py<PyAny>> {
-        public_response(py, ROUTE_HOST_MODULE, response.as_ref())
+        public_response(py, ROUTE_HOST_MODULE, &response)
+    }
+
+    fn deliver_response(&mut self, py: Python<'_>, response: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.cache.store_response(py, response)
     }
 
     fn encode_stream_head(

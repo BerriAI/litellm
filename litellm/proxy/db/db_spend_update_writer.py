@@ -39,6 +39,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.batch_utils import BATCH_COST_REQUEST_ID_SUFFIX
 from litellm.litellm_core_utils.core_helpers import finite_cost, single_log_line
 from litellm.litellm_core_utils.litellm_logging import coerce_model_access_groups
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_share_of_spend
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
     DB_RETRY_SAFE_ERROR_TYPES,
@@ -91,6 +92,7 @@ from litellm.proxy.spend_tracking.savings import (
     extract_cache_read_tokens,
     marks_gateway_injection,
 )
+from litellm.proxy.spend_tracking.session_spend_total import SessionSpendTotals
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.repositories.prisma_protocols import BatchTable
 from litellm.responses.streaming_iterator import spawn_logging_task
@@ -684,8 +686,10 @@ class DBSpendUpdateWriter:
         self,
         redis_cache: RedisCache | None = None,
         accounting_clock: Callable[[], float] = time.monotonic,
+        session_spend_totals: SessionSpendTotals | None = None,
     ):
         self.redis_cache = redis_cache
+        self.session_spend_totals: Final = session_spend_totals
         self.accounting_storage_checks = Cadence(accounting_clock)
         self.accounting_delay_alerts = Cadence(accounting_clock)
         self.redis_update_buffer = RedisUpdateBuffer(redis_cache=self.redis_cache)
@@ -818,6 +822,7 @@ class DBSpendUpdateWriter:
                 prisma_client=prisma_client,
                 spend_logs_kept=keep_spend_logs,
             )
+            await self._record_session_spend(hashed_token, billable_cost or 0.0, request_fields)
             if keep_spend_logs:
                 await self._enqueue_tool_usage_transaction(
                     payload=payload,
@@ -872,6 +877,19 @@ class DBSpendUpdateWriter:
                 end_user_id,
             )
             return True
+
+    async def _record_session_spend(
+        self, api_key: str | None, spend: float, request_fields: Mapping[str, object]
+    ) -> None:
+        from litellm.proxy.spend_tracking.spend_tracking_utils import caller_session_for_accounting
+
+        totals: Final = self.session_spend_totals
+        if totals is None or not api_key or spend <= 0:
+            return
+        session_id: Final = caller_session_for_accounting(request_fields)
+        if session_id is None:
+            return
+        await totals.record(api_key=api_key, session_id=session_id, spend=spend)
 
     async def _record_spend_log(
         self,
@@ -3164,6 +3182,10 @@ class DBSpendUpdateWriter:
                 prompt_caching_savings_spend=savings_spend.prompt_caching,
                 gateway_injected_caching_savings_spend=savings_spend.gateway_injected_caching,
                 autorouter_savings_spend=0.0 if is_internal_call else savings_spend.autorouter,
+                guardrail_spend=guardrail_share_of_spend(
+                    _metadata,
+                    payload["spend"],  # pyright: ignore[reportUnknownArgumentType]  # legacy dict | SpendLogsPayload union
+                ),
                 total_response_time_ms=timed_duration_ms or 0,
                 timed_requests=0 if timed_duration_ms is None else 1,
             )

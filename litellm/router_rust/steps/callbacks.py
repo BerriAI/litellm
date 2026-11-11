@@ -452,6 +452,10 @@ class OptionalChecks:
             *self._policies_not_set_globally(),
         )
 
+    def has_filters(self) -> bool:
+        """Whether ``filter_deployments`` would run any callback: without one it keeps every deployment."""
+        return any(filters_deployments(callback) for callback in self.routing_callbacks())
+
     async def filter_deployments(
         self,
         model: str,
@@ -464,12 +468,10 @@ class OptionalChecks:
         the Rust core takes only if its later filters keep it; a filter's error is raised for the
         Rust core to decide on."""
         remaining: list[object] = list(deployments)  # mutable-ok: filter contract  # rebind-ok: narrowed
-        base: Final[object] = CustomLogger.async_filter_deployments  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped deployment dicts
         request_kwargs: Final = dict(request)
         callbacks: Final = tuple(self.routing_callbacks())
         for callback in callbacks:
-            # The base filter returns its input unchanged: only overriding filters are run.
-            if not isinstance(callback, CustomLogger) or type(callback).async_filter_deployments is base:  # pyright: ignore[reportUnknownMemberType]  # see above
+            if not isinstance(callback, CustomLogger) or not filters_deployments(callback):
                 continue
             if isinstance(callback, PromptCachingDeploymentCheck):
                 continue
@@ -572,14 +574,22 @@ def _ids_of(value: object) -> Sequence[object]:
     return value if isinstance(value, list | tuple) else ()  # pyright: ignore[reportUnknownVariableType]  # the step's id list
 
 
+def filters_deployments(callback: object) -> bool:
+    """A routing callback that overrides ``async_filter_deployments``: the base filter returns its
+    input unchanged, so only overriding filters are run."""
+    base: Final[object] = CustomLogger.async_filter_deployments  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped deployment dicts
+    return isinstance(callback, CustomLogger) and type(callback).async_filter_deployments is not base  # pyright: ignore[reportUnknownMemberType]  # see above
+
+
 def filtered_ids(remaining: Iterable[object], candidates: Sequence[str]) -> list[str]:  # mutable-ok: a JSON list
     """The ids of the deployments the filters left, in their order, among the candidates."""
-    ids: Final[list[str]] = []  # mutable-ok: built here
+    allowed: Final = frozenset(candidates)
+    ids: Final[dict[str, None]] = {}  # mutable-ok: built here, insertion-ordered
     for deployment in remaining:
         found = (as_str_mapping((as_str_mapping(deployment) or {}).get("model_info")) or {}).get("id")
-        if isinstance(found, str) and found in candidates and found not in ids:
-            ids.append(found)
-    return ids
+        if isinstance(found, str) and found in allowed:
+            ids.setdefault(found)
+    return list(ids)
 
 
 class RustOptionalChecks:
@@ -698,6 +708,8 @@ class RustOptionalChecks:
         from litellm.router_rust.core import attempt_failure
 
         candidates: Final = [str(id) for id in step.get("candidates") or ()]  # pyright: ignore[reportGeneralTypeIssues, reportUnknownVariableType, reportUnknownArgumentType]  # the step's id list
+        if not self._opt.has_filters():
+            return (list(dict.fromkeys(candidates)), None), None
         records: Final = self._records_of(candidates)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]  # RustCore's deployment dicts
         narrowed: Final = _request_with_failed_ids(request, step)
         try:

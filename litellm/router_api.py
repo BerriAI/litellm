@@ -80,6 +80,7 @@ if TYPE_CHECKING:
         DeploymentTypedDict,
         FallbackAccessCheck,
         FallbackBudgetCheck,
+        FallbackRateLimitCheck,
         GuardrailTypedDict,
         ModelGroupInfo,
         PreRoutingHookResponse,
@@ -153,6 +154,7 @@ ResolveKind: TypeAlias = Literal[
     "team_model_alternatives",
     "routing_group_alternatives",
     "search_tool_support",
+    "upstreams",
 ]
 GroupField: TypeAlias = Literal[
     "info",
@@ -272,6 +274,7 @@ ROUTER_INIT_ARGS: Final[tuple[str, ...]] = (
     "enable_mid_stream_fallback_continuation",
     "fallback_access_check",
     "fallback_budget_check",
+    "fallback_rate_limit_check",
     "auto_router_capability_limit",
     "session_affinity_repin_on_failover",
 )
@@ -783,6 +786,17 @@ class RouterRegistry:
     @overload
     def resolve(
         self,
+        name: str,
+        *,
+        kind: Literal["upstreams"],
+        team_id: str | None = None,
+        custom_llm_provider: str | None = None,
+        served_model: str | None = None,
+    ) -> tuple[tuple[str, str | None], ...]: ...
+
+    @overload
+    def resolve(
+        self,
         name: str | None,
         *,
         kind: Literal["from_id", "team_model"],
@@ -853,6 +867,8 @@ class RouterRegistry:
         - ``routing_group_alternatives``: (was ``routing_group_has_alternatives``)
         - ``search_tool_support``: per routable deployment, whether it answers Codex's client
           ``tool_search`` (was ``get_search_tool_support``)
+        - ``upstreams``: per routable deployment, its upstream model and the provider it declares, read
+          the way ``upstream`` and ``upstream_provider`` read the first one
         """
         r: Final = self._router
         if kind == "from_id":
@@ -874,7 +890,7 @@ class RouterRegistry:
             return name if served_model is None else r._core_resolve_served_model_name(name, served_model)
         if kind == "recognized":
             return r._core_is_recognized_model(name)
-        if kind in ("upstream", "upstream_provider", "search_tool_support"):
+        if kind in ("upstream", "upstream_provider", "search_tool_support", "upstreams"):
             return self._resolve_routable(name, kind, team_id)
         if kind == "group_of_id":
             return r._core_get_model_group(id=name)
@@ -887,14 +903,16 @@ class RouterRegistry:
     def _resolve_routable(
         self,
         name: str,
-        kind: Literal["upstream", "upstream_provider", "search_tool_support"],
+        kind: Literal["upstream", "upstream_provider", "search_tool_support", "upstreams"],
         team_id: str | None,
-    ) -> str | tuple[bool | None, ...] | None:
+    ) -> str | tuple[bool | None, ...] | tuple[tuple[str, str | None], ...] | None:
         r: Final = self._router
         if kind == "upstream":
             return r._core_get_routable_upstream_model(name, team_id=team_id)
         if kind == "upstream_provider":
             return r._core_get_routable_upstream_provider(name, team_id=team_id)
+        if kind == "upstreams":
+            return r._core_get_routable_upstreams(name, team_id=team_id)
         return r._core_get_search_tool_support(name, team_id=team_id)
 
     def aliases(
@@ -1188,6 +1206,7 @@ SETTING_FIELDS: Final[tuple[str, ...]] = (
     "provider_default_deployment_ids",
     "fallback_access_check",
     "fallback_budget_check",
+    "fallback_rate_limit_check",
     "kubernetes_pod_discovery",
     "search_tools",
     "guardrail_list",
@@ -1248,6 +1267,7 @@ class RouterSettings:
     provider_default_deployment_ids: list[str] = None  # pyright: ignore[reportAssignmentType]  # unset only when built directly (see above)  # mutable-ok: the router's live list
     fallback_access_check: "FallbackAccessCheck | None" = None
     fallback_budget_check: "FallbackBudgetCheck | None" = None
+    fallback_rate_limit_check: "FallbackRateLimitCheck | None" = None
     kubernetes_pod_discovery: "KubernetesPodDiscovery" = None  # pyright: ignore[reportAssignmentType]  # unset only when built directly (see above)
     search_tools: "list[SearchToolTypedDict]" = None  # pyright: ignore[reportAssignmentType]  # unset only when built directly (see above)  # mutable-ok: the router's live list
     guardrail_list: "list[GuardrailTypedDict]" = None  # pyright: ignore[reportAssignmentType]  # unset only when built directly (see above)  # mutable-ok: the router's live list
@@ -1291,6 +1311,9 @@ class RouterSettings:
     def guardrail(self, name: str) -> "GuardrailTypedDict":
         """The guardrail configured under this name (was ``get_available_guardrail``)."""
         return self._owner("_core_get_available_guardrail")._core_get_available_guardrail(name)
+
+    def timeout_for(self, litellm_params: Mapping[str, object]) -> object:
+        return self._owner("_core_deployment_call_timeout")._core_deployment_call_timeout(litellm_params)
 
 
 class RouterHealth:
@@ -1503,7 +1526,7 @@ def _takes_legacy_llm_router(check: object) -> bool:
 
 
 async def _run_fallback_check(
-    check: "FallbackAccessCheck | FallbackBudgetCheck",
+    check: "FallbackAccessCheck | FallbackBudgetCheck | FallbackRateLimitCheck",
     ctx: "RoutingContext",
     *,
     model: str,
@@ -1645,6 +1668,10 @@ class RoutingContext:
 
     async def fallback_budget_allowed(self, *, model: str, request_kwargs: Mapping[str, object]) -> bool:
         check: Final = self._router.settings().fallback_budget_check
+        return check is None or await _run_fallback_check(check, self, model=model, request_kwargs=request_kwargs)
+
+    async def fallback_rate_limit_allowed(self, *, model: str, request_kwargs: Mapping[str, object]) -> bool:
+        check: Final = self._router.settings().fallback_rate_limit_check
         return check is None or await _run_fallback_check(check, self, model=model, request_kwargs=request_kwargs)
 
     def pre_call_checks(
