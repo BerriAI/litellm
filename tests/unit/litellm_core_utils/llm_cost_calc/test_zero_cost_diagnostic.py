@@ -47,6 +47,38 @@ def test_free_usage_requires_explicit_zero_rates_for_every_used_token_kind(
     assert is_explicitly_free_usage(usage, rates) is expected
 
 
+@pytest.mark.parametrize(
+    ("input_tokens", "tier_output_rate", "expected"),
+    [(10, 0.0, True), (11, 0.0, False), (10, 0.001, False), (10, None, False)],
+)
+def test_free_usage_uses_the_selected_tier_and_preserves_missing_output_prices(
+    input_tokens: int, tier_output_rate: float | None, expected: bool
+) -> None:
+    rates: Final = {
+        "input_cost_per_token": 0.01,
+        "tiered_pricing": [
+            {"range": [0, 10], "input_cost_per_token": 0.0, "output_cost_per_token": tier_output_rate},
+            {"range": [10, 20], "input_cost_per_token": 0.01, "output_cost_per_token": 0.02},
+        ],
+    }
+
+    assert is_explicitly_free_usage(Usage(prompt_tokens=input_tokens, completion_tokens=5), rates) is expected
+
+
+@pytest.mark.parametrize("cache_rate", (None, 0.01))
+def test_free_cached_usage_uses_the_selected_tier_cache_rate_or_its_input_rate(cache_rate: float | None) -> None:
+    rates: Final = {
+        "input_cost_per_token": 0.01,
+        "cache_read_input_token_cost": 0.02,
+        "tiered_pricing": [
+            {"range": [0, 20], "input_cost_per_token": 0.0, "cache_read_input_token_cost": cache_rate}
+        ],
+    }
+    usage: Final = Usage(prompt_tokens=10, completion_tokens=0, prompt_tokens_details={"cached_tokens": 10})
+
+    assert is_explicitly_free_usage(usage, rates) is (cache_rate is None)
+
+
 def test_missing_pricing_key_names_every_rate_the_usage_needs() -> None:
     diagnostic = diagnose_zero_cost(
         usage=TEXT_USAGE, pricing_model="dep-1", pricing_entry=PER_SECOND_ENTRY, calculation_failed=False

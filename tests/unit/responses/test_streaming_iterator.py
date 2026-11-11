@@ -868,10 +868,28 @@ def _responses_api_response_with_usage() -> ResponsesAPIResponse:
         ({"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}, 140e-6),
         ({"input_cost_per_token": 0.0}, None),
         ({}, None),
+        (
+            {
+                "input_cost_per_token": 0.01,
+                "output_cost_per_token": 0.02,
+                "tiered_pricing": [
+                    {"range": [0, 128000], "input_cost_per_token": 0.0, "output_cost_per_token": 0.0}
+                ],
+            },
+            0.0,
+        ),
+        (
+            {
+                "tiered_pricing": [
+                    {"range": [0, 128000], "input_cost_per_token": 0.0, "output_cost_per_token": 0.0}
+                ]
+            },
+            0.0,
+        ),
     ],
 )
 def test_responses_stream_usage_distinguishes_free_from_unpriced_calls(
-    monkeypatch: pytest.MonkeyPatch, rates: dict[str, float], expected_cost: float | None
+    monkeypatch: pytest.MonkeyPatch, rates: dict[str, object], expected_cost: float | None
 ) -> None:
     from litellm.responses.streaming_iterator import stamp_responses_usage_cost
 

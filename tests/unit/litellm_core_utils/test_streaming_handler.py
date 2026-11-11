@@ -7657,10 +7657,28 @@ def test_chunk_creator_preserves_hidden_provider_specific_fields_from_parsed_chu
         ({"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}, 20e-6),
         ({"input_cost_per_token": 0.0}, None),
         ({}, None),
+        (
+            {
+                "input_cost_per_token": 0.01,
+                "output_cost_per_token": 0.02,
+                "tiered_pricing": [
+                    {"range": [0, 128000], "input_cost_per_token": 0.0, "output_cost_per_token": 0.0}
+                ],
+            },
+            0.0,
+        ),
+        (
+            {
+                "tiered_pricing": [
+                    {"range": [0, 128000], "input_cost_per_token": 0.0, "output_cost_per_token": 0.0}
+                ]
+            },
+            0.0,
+        ),
     ],
 )
 async def test_stream_usage_distinguishes_free_from_unpriced_calls(
-    monkeypatch: pytest.MonkeyPatch, sync_mode: bool, rates: dict[str, float], expected_cost: float | None
+    monkeypatch: pytest.MonkeyPatch, sync_mode: bool, rates: dict[str, object], expected_cost: float | None
 ) -> None:
     model: Final = "stream-zero-cost-regression"
     monkeypatch.setitem(litellm.model_cost, model, {"litellm_provider": "openai", "mode": "chat", **rates})
