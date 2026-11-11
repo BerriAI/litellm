@@ -8,13 +8,14 @@ import { setServerRootPath } from "@/lib/serverRootPath";
 
 import ViewSwitcher from "./ViewSwitcher";
 
-const { state, getUiSettingsMock, getUiConfigMock } = vi.hoisted(() => ({
+const { state, getUiSettingsMock, getUiConfigMock, pushMock } = vi.hoisted(() => ({
   state: { pathname: "/ui/", plugins: [] as Plugin[] },
   getUiSettingsMock: vi.fn(),
   getUiConfigMock: vi.fn(),
+  pushMock: vi.fn(),
 }));
 
-vi.mock("next/navigation", () => ({ usePathname: () => state.pathname }));
+vi.mock("next/navigation", () => ({ usePathname: () => state.pathname, useRouter: () => ({ push: pushMock }) }));
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: () => "",
   getUiSettings: getUiSettingsMock,
@@ -56,6 +57,8 @@ describe("ViewSwitcher", () => {
   });
 
   afterEach(() => {
+    pushMock.mockClear();
+    assignSpy.mockClear();
     Object.defineProperty(window, "location", { configurable: true, value: originalLocation });
     testQueryClient.clear();
     localStorage.clear();
@@ -101,6 +104,27 @@ describe("ViewSwitcher", () => {
     await user.click(await screen.findByRole("menuitem", { name: "Observability" }));
     expect(screen.getByRole("button", { name: "Switch workspace, current: Observability" })).toBeInTheDocument();
     expect(assignSpy).not.toHaveBeenCalled();
+  });
+
+  it("should open the Customer Portal at the customers page and come back to the gateway", async () => {
+    const user = userEvent.setup();
+    renderSwitcher();
+
+    await user.click(screen.getByRole("button", { name: "Switch workspace, current: AI Gateway" }));
+    await user.click(await screen.findByRole("menuitem", { name: /Customer Portal/ }));
+    expect(pushMock).toHaveBeenCalledWith("/ui/customers");
+    expect(assignSpy).not.toHaveBeenCalled();
+    expect(localStorage.getItem("litellm_plugin_mode")).toBeNull();
+  });
+
+  it("should route back to the gateway from Customer Portal mode instead of only flipping the mode", async () => {
+    localStorage.setItem("litellm_plugin_mode", "customer-portal");
+    const user = userEvent.setup();
+    renderSwitcher();
+
+    await user.click(await screen.findByRole("button", { name: "Switch workspace, current: Customer Portal" }));
+    await user.click(await screen.findByRole("menuitem", { name: /^AI Gateway/ }));
+    expect(pushMock).toHaveBeenCalledWith("/ui/api-keys");
   });
 
   it("should navigate from the gateway to enabled Chat without changing plugin mode", async () => {
@@ -162,7 +186,7 @@ describe("ViewSwitcher", () => {
   );
 
   it.each(["/ui/moyai", "/ui/moyai/sessions/one"])(
-    "should show Moyai's icon at %s and let users switch to Chat",
+    "should identify Moyai at %s and let users switch to Chat",
     async (pathname) => {
       state.pathname = pathname;
       getUiSettingsMock.mockResolvedValue({ values: { enable_chat_ui: true } });
@@ -170,7 +194,7 @@ describe("ViewSwitcher", () => {
       renderSwitcher();
 
       const trigger = screen.getByRole("button", { name: "Switch workspace, current: Moyai" });
-      expect(within(trigger).getByAltText("")).toHaveAttribute("src", expect.stringContaining("moyai-head.svg"));
+      expect(trigger).toHaveTextContent("Moyai");
       await user.click(trigger);
       await user.click(await screen.findByRole("menuitem", { name: "Chat Chat UI for using LLMs, MCPs, Agents" }));
       expect(assignSpy).toHaveBeenCalledWith("/ui/chat");

@@ -1,3 +1,5 @@
+import i18n from "@/i18n/i18n";
+
 export const getDaysUntilExpiration = (expirationDate: string | null, now: Date = new Date()): number | null => {
   if (!expirationDate) {
     return null;
@@ -31,7 +33,9 @@ export const formatExpiryDate = (expirationDate: string): string => {
 export const formatExpirationStatus = (expirationDate: string | null, now: Date = new Date()): string => {
   const days = getDaysUntilExpiration(expirationDate, now);
   if (expirationDate === null || days === null) {
-    return "No expiration";
+    return i18n.t("utils.licenseUtils.noExpiration");
   }
-  return days < 0 ? `Expired ${formatExpiryDate(expirationDate)}` : `Expires ${formatExpiryDate(expirationDate)}`;
+  return days < 0
+    ? i18n.t("utils.licenseUtils.expired", { date: formatExpiryDate(expirationDate) })
+    : i18n.t("utils.licenseUtils.expires", { date: formatExpiryDate(expirationDate) });
 };

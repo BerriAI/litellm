@@ -14,6 +14,7 @@ from typing import (
     Any,
     Final,
     Literal,
+    Protocol,
     TypeAlias,
     cast,  # noqa: TID251  # narrows untyped deployment and credential payloads
 )
@@ -22,6 +23,7 @@ from fastapi import HTTPException, Request, status
 from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
@@ -45,11 +47,18 @@ from litellm.constants import (
     SESSION_ID_GENERATED_METADATA_KEY,
     SESSION_ID_OMITTED_METADATA_KEY,
     TYPESAFE_DANGER_ZONE_HEADER_PREFIX,
+    USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY,
     VECTOR_STORE_CALLER_METADATA_KWARG,
     X_LITELLM_DISABLE_CALLBACKS,
 )
 from litellm.integrations.custom_guardrail import merged_guardrail_entries, without_server_streaming_classification
-from litellm.litellm_core_utils.core_helpers import is_codex_user_agent, normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    attribute_or_none,
+    is_codex_user_agent,
+    normalize_drop_params,
+    require_attributes,
+)
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     TRUSTED_CALLBACK_VARS_FIELD,
@@ -80,6 +89,7 @@ from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.callback_utils import (
     decrypt_callback_vars,
     get_metadata_variable_name_from_kwargs,
+    key_logging_entries,
     strip_callback_config,
 )
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
@@ -97,7 +107,7 @@ _REDACTED_HEADER_VALUE: Final = "***REDACTED***"
 _DECODED_JSON: Final = TypeAdapter(object)
 _OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 _CREDENTIAL_HEADER_NAMES: Final = SpecialHeaders.litellm_credential_header_names() | frozenset(
-    {"cookie", "proxy-authorization"}
+    {"cookie", "proxy-authorization", "x-amz-security-token"}
 )
 _TRANSPORT_ONLY_CREDENTIAL_KEYS: Final = frozenset({"provider_specific_header", "headers", "api_key"})
 _REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object])
@@ -215,12 +225,21 @@ def _caller_session_beside_trace_header(
     return get_chain_id_from_headers(session_headers) or _caller_body_session_id(data, metadata_variable_name)
 
 
+def _claude_code_subagent_tier_session(normalized_headers: Mapping[str, str]) -> str | None:
+    session: Final = normalized_headers.get("x-claude-code-session-id", "")
+    agent: Final = normalized_headers.get("x-claude-code-agent-id", "")
+    if not _SESSION_ID_VALUE_RE.fullmatch(session) or not _SESSION_ID_VALUE_RE.fullmatch(agent):
+        return None
+    return f"{session}:{agent}"
+
+
 def _child_tier_session_metadata(
     normalized_headers: Mapping[str, str], data: Mapping[str, object], metadata_variable_name: str
 ) -> Mapping[str, str | None]:
     parent: Final = normalized_headers.get("x-parent-session-id")
     if not parent or not _SESSION_ID_VALUE_RE.fullmatch(parent):
-        return {}
+        claude_code_subagent: Final = _claude_code_subagent_tier_session(normalized_headers)
+        return {COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY: claude_code_subagent} if claude_code_subagent else {}
     own_headers: Final = {
         key: value
         for key, value in normalized_headers.items()
@@ -513,7 +532,7 @@ _CLIENT_PRICING_METADATA_FIELDS: Final = frozenset({"model_info"})
 # ``attempted_fallbacks`` and ``original_model_group`` are written by the router
 # and read by spend logs as fact; a client value has no legitimate meaning and no
 # key or team setting keeps it, so the strip is never gated.
-_ROUTER_RESERVED_METADATA_FIELDS: Final = frozenset(
+ROUTER_RESERVED_METADATA_FIELDS: Final = frozenset(
     {
         "attempted_fallbacks",
         "original_model_group",
@@ -521,6 +540,7 @@ _ROUTER_RESERVED_METADATA_FIELDS: Final = frozenset(
         "request_retry_count",
         CLIENT_OUTPUT_CEILING_METADATA_KEY,
         ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
+        USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY,
     }
 )
 _ALLOW_CLIENT_PRICING_OVERRIDE_METADATA_KEY: Final = "allow_client_pricing_override"
@@ -865,7 +885,7 @@ def _strip_router_reserved_metadata(
     for metadata_key in ("metadata", "litellm_metadata"):
         if not isinstance(metadata := data.get(metadata_key), dict):
             continue
-        for field in _ROUTER_RESERVED_METADATA_FIELDS & metadata.keys():
+        for field in ROUTER_RESERVED_METADATA_FIELDS & metadata.keys():
             metadata.pop(field)
             verbose_proxy_logger.debug(
                 "Stripped router-reserved metadata field from request body: %s.%s", metadata_key, field
@@ -1229,9 +1249,11 @@ def convert_key_logging_metadata_to_callback(
     return team_callback_settings_obj
 
 
-def get_validated_callback_metadata(item: dict, *, source: str) -> AddTeamCallback | None:
+def get_validated_callback_metadata(item: object, *, source: str) -> AddTeamCallback | None:
+    if not isinstance(item, Mapping):
+        raise TypeError(f"{source} metadata.logging must be a list of objects, got an item of {type(item).__name__}")
     try:
-        return AddTeamCallback(**item)
+        return AddTeamCallback.model_validate(item)
     except (PydanticValidationError, ValueError) as e:
         verbose_proxy_logger.warning(
             "Ignoring invalid %s callback metadata: %s",
@@ -1250,9 +1272,9 @@ class KeyAndTeamLoggingSettings:
     """
 
     @staticmethod
-    def get_key_dynamic_logging_settings(user_api_key_dict: UserAPIKeyAuth):
+    def get_key_dynamic_logging_settings(user_api_key_dict: UserAPIKeyAuth) -> tuple[Mapping[str, object], ...] | None:
         if user_api_key_dict.metadata is not None and "logging" in user_api_key_dict.metadata:
-            return decrypt_callback_vars(user_api_key_dict.metadata).get("logging")
+            return key_logging_entries(user_api_key_dict.metadata)
         return None
 
     @staticmethod
@@ -1266,9 +1288,7 @@ def get_dynamic_logging_metadata(
     user_api_key_dict: UserAPIKeyAuth, proxy_config: ProxyConfig
 ) -> TeamCallbackMetadata | None:
     callback_settings_obj: TeamCallbackMetadata | None = None
-    key_dynamic_logging_settings: Final[dict | None] = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(
-        user_api_key_dict
-    )
+    key_dynamic_logging_settings: Final = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(user_api_key_dict)
     team_dynamic_logging_settings: Final[dict | None] = KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(
         user_api_key_dict
     )
@@ -1636,7 +1656,23 @@ def redact_credential_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
     }
 
 
+def without_credential_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
+    return {header: value for header, value in headers.items() if not _is_credential_header(header)}
+
+
+class TenantLoggingMetadata(TypedDict):
+    user_api_key_metadata: ReadOnly[Mapping[str, object] | None]
+    user_api_key_team_metadata: ReadOnly[Mapping[str, object] | None]
+
+
 class LiteLLMProxyRequestSetup:
+    @staticmethod
+    def get_tenant_logging_metadata(user_api_key_dict: UserAPIKeyAuth) -> TenantLoggingMetadata:
+        return {
+            "user_api_key_metadata": strip_callback_config(user_api_key_dict.metadata),
+            "user_api_key_team_metadata": strip_callback_config(user_api_key_dict.team_metadata),
+        }
+
     @staticmethod
     def _get_timeout_from_request(headers: dict) -> float | None:
         """
@@ -2136,7 +2172,14 @@ class LiteLLMProxyRequestSetup:
                 user_api_key_dict.matched_model_access_groups
             )
         # UserAPIKeyAuth object for MCP server access control
-        data[_metadata_variable_name]["user_api_key_auth"] = user_api_key_dict.model_copy(
+        data[_metadata_variable_name]["user_api_key_auth"] = LiteLLMProxyRequestSetup.auth_for_request_metadata(
+            user_api_key_dict
+        )
+        return data
+
+    @staticmethod
+    def auth_for_request_metadata(user_api_key_dict: UserAPIKeyAuth) -> UserAPIKeyAuth:
+        return user_api_key_dict.model_copy(
             update={
                 "metadata": strip_callback_config(user_api_key_dict.metadata),
                 "team_metadata": strip_callback_config(user_api_key_dict.team_metadata),
@@ -2144,7 +2187,6 @@ class LiteLLMProxyRequestSetup:
                 "organization_metadata": strip_callback_config(user_api_key_dict.organization_metadata),
             }
         )
-        return data
 
     @staticmethod
     def add_management_endpoint_metadata_to_request_metadata(
@@ -2664,11 +2706,11 @@ async def add_litellm_data_to_request(
 
     _raw_headers: Final[dict[str, str]] = RedactedDict(safe_get_request_headers(request))
 
-    forward_llm_auth = False
-    if general_settings:
-        forward_llm_auth = general_settings.get("forward_llm_provider_auth_headers", False)
-    if not forward_llm_auth:
-        forward_llm_auth = getattr(litellm, "forward_llm_provider_auth_headers", False)
+    general_settings_view: Final = as_str_mapping(general_settings)
+    forward_llm_auth: Final = bool(
+        (general_settings_view.get("forward_llm_provider_auth_headers", False) if general_settings_view else False)
+        or attribute_or_none(litellm, "forward_llm_provider_auth_headers")
+    )
     _headers: Final[dict[str, str]] = clean_headers(
         request.headers,
         litellm_key_header_name=(
@@ -3291,7 +3333,7 @@ def _fallback_edges(
     and its provider-stripped suffix, plus the router matcher run over the fuzzy
     entries that have not fired yet (tracked in ``fired_fuzzy`` by
     ``(list_index, entry_index)``), so each entry's targets are expanded once."""
-    from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
+    from litellm.router_api import fallback_chain
 
     stripped: Final = model_group.split("/", 1)[1] if "/" in model_group else None
     targets: Final[set[str]] = set()  # mutable-ok: accumulates fallback targets
@@ -3302,7 +3344,7 @@ def _fallback_edges(
         pending = tuple(index for index in range(len(fuzzy)) if (list_index, index) not in fired_fuzzy)
         if not pending:
             continue
-        resolved = get_fallback_model_group(fallbacks=[fuzzy[index] for index in pending], model_group=model_group)[0]
+        resolved = fallback_chain([fuzzy[index] for index in pending], model_group)[0]
         values = resolved if isinstance(resolved, list) else ([resolved] if resolved is not None else [])
         targets.update(name for value in values if (name := _fallback_target_name(value)) is not None)
         if resolved is not None:
@@ -3489,7 +3531,7 @@ async def _resolve_user_provider_credentials_for_request(
             status_code=400,
             detail=(f"fallback lists in the request body cannot exceed {_FALLBACK_DISCOVERY_LIMIT} entries"),
         )
-    from litellm.router_utils.common_utils import resolve_model_group_alias
+    from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 
     # Discovery must see the group the router actually routes to, so include the
     # post-alias name from every alias map that may still rewrite data["model"]
@@ -3562,6 +3604,10 @@ def _warn_stale_team_alias_once(warning_key: str, message: str, *args: str) -> N
     verbose_proxy_logger.warning(message, *args)
 
 
+class _SupportsStartswith(Protocol):
+    def startswith(self, prefix: str, /) -> bool: ...
+
+
 def _update_model_if_team_alias_exists(
     data: dict,
     user_api_key_dict: UserAPIKeyAuth,
@@ -3589,14 +3635,15 @@ def _update_model_if_team_alias_exists(
     exist (e.g. a gateway-level model group shared with the team).
     """
     _model: Final = data.get("model")
-    if not _model or not user_api_key_dict.team_model_aliases or _model not in user_api_key_dict.team_model_aliases:
+    team_model_aliases: Final = as_str_mapping(user_api_key_dict.team_model_aliases)
+    if not _model or not team_model_aliases or _model not in team_model_aliases:
         return
 
     from litellm.proxy.proxy_server import llm_router
 
     # Skip alias rewrite if this model resolves to team-specific deployments
     # (team models use team_public_model_name, not model_aliases)
-    aliased_target: Final = user_api_key_dict.team_model_aliases[_model]
+    aliased_target: Final = team_model_aliases[_model]
 
     # Optional bypass for stale aliases from pre-PR deployments:
     # only enabled via feature flag to preserve backwards compatibility.
@@ -3607,7 +3654,9 @@ def _update_model_if_team_alias_exists(
     enable_stale_alias_bypass: Final = _ENABLE_TEAM_STALE_ALIAS_BYPASS
     # Check if the alias points to a team-scoped UUID name
     # (format: "model_name_{team_id}_{uuid}")
-    is_stale_team_alias: Final = aliased_target.startswith(f"model_name_{user_api_key_dict.team_id}_")
+    is_stale_team_alias: Final = require_attributes(aliased_target, _SupportsStartswith, "startswith").startswith(
+        f"model_name_{user_api_key_dict.team_id}_"
+    )
     if is_stale_team_alias and llm_router:
         if aliased_target not in llm_router.registry().index("model_name"):
             _warn_stale_team_alias_once(

@@ -2,7 +2,10 @@ use std::{
     cmp::Reverse,
     collections::{BinaryHeap, HashMap, HashSet},
     hash::Hash,
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{
+        Arc, Mutex, MutexGuard,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -31,7 +34,7 @@ struct CacheState<V> {
 
 pub struct InMemoryCache<V: Clone> {
     state: Mutex<CacheState<V>>,
-    max_size_in_memory: usize,
+    max_size_in_memory: AtomicUsize,
     default_ttl: Duration,
     max_entry_bytes: Option<usize>,
     measure_value: Option<ValueMeasure<V>>,
@@ -74,7 +77,9 @@ impl<V: Clone> InMemoryCache<V> {
                 expirations: HashMap::new(),
                 expiration_heap: BinaryHeap::new(),
             }),
-            max_size_in_memory: max_size_in_memory.unwrap_or(DEFAULT_MAX_SIZE_IN_MEMORY),
+            max_size_in_memory: AtomicUsize::new(
+                max_size_in_memory.unwrap_or(DEFAULT_MAX_SIZE_IN_MEMORY),
+            ),
             default_ttl: default_ttl
                 .filter(|ttl| !ttl.is_zero())
                 .unwrap_or(DEFAULT_TTL),
@@ -94,7 +99,7 @@ impl<V: Clone> InMemoryCache<V> {
         value: V,
         ttl: Option<Duration>,
     ) -> Result<CacheWrite, Error> {
-        if self.max_size_in_memory == 0 {
+        if self.max_size_in_memory() == 0 {
             return Ok(CacheWrite::Disabled);
         }
         let now = (self.now)();
@@ -129,7 +134,7 @@ impl<V: Clone> InMemoryCache<V> {
     pub fn evict_cache(&self) -> Result<(), Error> {
         let now = (self.now)();
         let mut state = self.lock()?;
-        Self::evict(&mut state, self.max_size_in_memory, now, None);
+        Self::evict(&mut state, self.max_size_in_memory(), now, None);
         Ok(())
     }
 
@@ -170,7 +175,16 @@ impl<V: Clone> InMemoryCache<V> {
     }
 
     pub fn max_size_in_memory(&self) -> usize {
-        self.max_size_in_memory
+        self.max_size_in_memory.load(Ordering::Relaxed)
+    }
+
+    /// `DualCache.update_in_memory_max_size`: `None` restores the default. Entries already held stay
+    /// until the next write evicts down to the new size.
+    pub fn update_max_size_in_memory(&self, max_size_in_memory: Option<usize>) {
+        self.max_size_in_memory.store(
+            max_size_in_memory.unwrap_or(DEFAULT_MAX_SIZE_IN_MEMORY),
+            Ordering::Relaxed,
+        );
     }
 
     pub fn max_entry_bytes(&self) -> Option<usize> {
@@ -197,6 +211,23 @@ impl<V: Clone> InMemoryCache<V> {
             .into_iter()
             .take(count)
             .map(|(key, _)| key)
+            .collect())
+    }
+
+    /// Every live entry, for callers that inspect the whole tier.
+    pub fn entries(&self) -> Result<Vec<(String, V)>, Error> {
+        let now = (self.now)();
+        let state = self.lock()?;
+        Ok(state
+            .values
+            .iter()
+            .filter(|(key, _)| {
+                state
+                    .expirations
+                    .get(*key)
+                    .is_none_or(|expiration| *expiration >= now)
+            })
+            .map(|(key, value)| (key.clone(), value.clone()))
             .collect())
     }
 
@@ -276,7 +307,7 @@ impl<V: Clone> InMemoryCache<V> {
         ttl: Option<Duration>,
         now: Duration,
     ) -> Result<CacheWrite, Error> {
-        Self::evict(state, self.max_size_in_memory, now, None);
+        Self::evict(state, self.max_size_in_memory(), now, None);
         if !self.check_value_size(&value)? {
             return Ok(CacheWrite::TooLarge);
         }
@@ -300,12 +331,12 @@ where
         eligible: &[V],
         context: ExactCacheContext,
     ) -> Result<V, Error> {
-        if self.max_size_in_memory == 0 {
+        if self.max_size_in_memory() == 0 {
             return Ok(candidate);
         }
         let now = (self.now)();
         let mut state = self.lock()?;
-        Self::evict(&mut state, self.max_size_in_memory, now, Some(key));
+        Self::evict(&mut state, self.max_size_in_memory(), now, Some(key));
         let existing = state
             .values
             .get(key)
@@ -335,7 +366,7 @@ impl CounterCache for InMemoryCache<f64> {
         amount: f64,
         context: ExactCacheContext,
     ) -> Result<f64, Error> {
-        if self.max_size_in_memory == 0 {
+        if self.max_size_in_memory() == 0 {
             return Ok(amount);
         }
         let now = (self.now)();
@@ -408,7 +439,7 @@ where
         values: Vec<Self::SetValue>,
         ttl: Option<Duration>,
     ) -> Result<Self::SetResult, Error> {
-        if self.max_size_in_memory == 0 {
+        if self.max_size_in_memory() == 0 {
             return Ok(values);
         }
         let now = (self.now)();

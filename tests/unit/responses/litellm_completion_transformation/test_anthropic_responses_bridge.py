@@ -18,11 +18,13 @@ from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
 from litellm.responses.litellm_completion_transformation.session_handler import StoredTurns
+from litellm.responses.litellm_completion_transformation.tool_search import anthropic_tool_search_chat_tool
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
-from litellm.types.llms.openai import ResponsesAPIStreamEvents
+from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesAPIStreamEvents
 from litellm.types.utils import Message, ModelResponse
+from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 from tests.unit.proxy.conftest import httpx_transport
 
 
@@ -371,6 +373,9 @@ def _search_turn(tool_calls: Sequence[Mapping[str, object]]) -> Mapping[str, obj
     }
 
 
+_ANTHROPIC_SEARCH_TOOL: Final = anthropic_tool_search_chat_tool()
+
+
 async def _follow_up_messages(
     tool_calls: Sequence[Mapping[str, object]], model: str, custom_llm_provider: str
 ) -> Sequence[object]:
@@ -378,7 +383,10 @@ async def _follow_up_messages(
 
 
 async def _follow_up_messages_after(
-    spend_log: Mapping[str, object], model: str, custom_llm_provider: str
+    spend_log: Mapping[str, object],
+    model: str,
+    custom_llm_provider: str,
+    tools: Sequence[Mapping[str, object]] = (_ANTHROPIC_SEARCH_TOOL,),
 ) -> Sequence[object]:
     with patch("litellm.proxy.proxy_server.prisma_client", _FakePrismaClient([spend_log])):
         request: Final = await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
@@ -387,6 +395,7 @@ async def _follow_up_messages_after(
                 "model": model,
                 "custom_llm_provider": custom_llm_provider,
                 "messages": [{"role": "user", "content": "And in Osaka?"}],
+                **({"tools": [dict(tool) for tool in tools]} if tools else {}),
             },
             instructions=None,
         )
@@ -491,7 +500,12 @@ def _history_tool_ids(messages: Sequence[object]) -> tuple[Sequence[str], Sequen
 @pytest.mark.parametrize("search_answered", [False, True])
 @pytest.mark.parametrize(
     ("model", "custom_llm_provider", "expect_search"),
-    [("mistral/mistral-small-latest", "mistral", False), (_MODEL, "anthropic", True)],
+    [
+        ("mistral/mistral-small-latest", "mistral", False),
+        ("anthropic/claude-3-7-sonnet-20250219", "anthropic", True),
+        ("azure_ai/claude-deployment", "azure_ai", True),
+        (_MODEL, "anthropic", True),
+    ],
 )
 async def test_previous_response_id_drops_a_client_replayed_search_call_only_off_anthropic(
     model: str, custom_llm_provider: str, expect_search: bool, search_answered: bool
@@ -1595,3 +1609,1018 @@ async def test_previous_response_id_keeps_the_tools_an_earlier_codex_tool_search
         [("tool_result", "toolu_standup"), ("text", None)],
     ]
     assert prisma_client.db.queries == 1
+
+
+_WEATHER_TOOL: Final = {
+    "type": "function",
+    "name": "get_weather",
+    "description": "Get the current weather for a city",
+    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+    "defer_loading": True,
+}
+_SEARCHABLE_TOOLS: Final = ({"type": "tool_search"}, _WEATHER_TOOL)
+_WEATHER_QUESTION: Final = ({"role": "user", "content": "What is the weather in Paris?"},)
+_SEARCH_USE: Final = {
+    "type": "server_tool_use",
+    "id": "srvtoolu_01Search",
+    "name": "tool_search_tool_regex",
+    "input": {"pattern": "weather"},
+}
+_SEARCH_RESULT: Final = {
+    "type": "tool_search_tool_result",
+    "tool_use_id": "srvtoolu_01Search",
+    "content": {
+        "type": "tool_search_tool_search_result",
+        "tool_references": [{"type": "tool_reference", "tool_name": "get_weather"}],
+    },
+}
+_WEATHER_USE: Final = {"type": "tool_use", "id": "toolu_01Weather", "name": "get_weather", "input": {"city": "Paris"}}
+_WEATHER_ANSWER: Final = {"type": "function_call_output", "call_id": "toolu_01Weather", "output": "18C and sunny"}
+
+
+_TOOL_NAMES_ON_EACH_SIDE: Final = pytest.mark.parametrize(
+    ("caller_name", "claude_name"),
+    [("get_weather", "get_weather"), ("weather.get", "weather_get")],
+    ids=["valid_name", "name_anthropic_rewrites"],
+)
+
+
+def _search_result_finding(tool_name: str) -> Mapping[str, object]:
+    return {
+        **_SEARCH_RESULT,
+        "content": {
+            "type": "tool_search_tool_search_result",
+            "tool_references": [{"type": "tool_reference", "tool_name": tool_name}],
+        },
+    }
+
+
+@_TOOL_NAMES_ON_EACH_SIDE
+def test_responses_over_anthropic_return_the_tool_search_output_and_send_the_search_back_without_a_stored_turn(
+    respx_mock: respx.MockRouter, caller_name: str, claude_name: str
+) -> None:
+    tools: Final = [{"type": "tool_search"}, {**_WEATHER_TOOL, "name": caller_name}]
+    search_result: Final = _search_result_finding(claude_name)
+    weather_use: Final = {**_WEATHER_USE, "name": claude_name}
+    route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=_anthropic_message(_SEARCH_USE, search_result, weather_use)
+    )
+
+    first: Final = litellm.responses(model=_MODEL, input=list(_WEATHER_QUESTION), tools=tools, api_key="mock_api_key")
+    litellm.responses(
+        model=_MODEL,
+        input=[*_WEATHER_QUESTION, *(item.model_dump(exclude_none=True) for item in first.output), _WEATHER_ANSWER],
+        tools=tools,
+        api_key="mock_api_key",
+    )
+
+    assert [item.type for item in first.output] == ["tool_search_call", "tool_search_output", "function_call"]
+    search_output: Final = first.output[1]
+    assert (search_output.id, search_output.call_id) == ("tso_srvtoolu_01Search", "srvtoolu_01Search")
+    assert (search_output.execution, search_output.status) == ("server", "completed")
+    assert [dict(tool) for tool in search_output.tools] == tools[1:]
+    assert first.output[2].name == caller_name
+    assert _sent_assistant_content(route) == [_SEARCH_USE, search_result, weather_use]
+
+
+
+@pytest.mark.parametrize(
+    ("search_tools", "search_use"),
+    [
+        pytest.param((), _SEARCH_USE, id="regex"),
+        pytest.param(
+            ({"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"},),
+            {**_SEARCH_USE, "name": "tool_search_tool_bm25", "input": {"query": "weather"}},
+            id="bm25",
+        ),
+    ],
+)
+def test_responses_over_anthropic_send_a_search_back_under_the_anthropic_search_tool_that_ran_it(
+    respx_mock: respx.MockRouter, search_tools: tuple[Mapping[str, object], ...], search_use: Mapping[str, object]
+) -> None:
+    tools: Final = [{"type": "tool_search"}, *search_tools, _WEATHER_TOOL]
+    route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=_anthropic_message(search_use, _SEARCH_RESULT, _WEATHER_USE)
+    )
+
+    first: Final = litellm.responses(model=_MODEL, input=list(_WEATHER_QUESTION), tools=tools, api_key="mock_api_key")
+    litellm.responses(
+        model=_MODEL,
+        input=[*_WEATHER_QUESTION, *(item.model_dump(exclude_none=True) for item in first.output), _WEATHER_ANSWER],
+        tools=tools,
+        api_key="mock_api_key",
+    )
+
+    assert _sent_assistant_content(route) == [search_use, _SEARCH_RESULT, _WEATHER_USE]
+
+def _tool_search_stream(*events: Mapping[str, object]) -> httpx.Response:
+    return httpx.Response(
+        200,
+        headers={"content-type": "text/event-stream"},
+        content=_anthropic_sse(
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_tool_search_stream",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-5-5",
+                    "content": [],
+                    "usage": {"input_tokens": 9, "output_tokens": 1},
+                },
+            },
+            *events,
+            {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 4}},
+            {"type": "message_stop"},
+        ),
+    )
+
+
+def _streamed_tool_use(index: int, block: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    return (
+        {"type": "content_block_start", "index": index, "content_block": {**block, "input": {}}},
+        {
+            "type": "content_block_delta",
+            "index": index,
+            "delta": {"type": "input_json_delta", "partial_json": json.dumps(block["input"])},
+        },
+        {"type": "content_block_stop", "index": index},
+    )
+
+
+@_TOOL_NAMES_ON_EACH_SIDE
+def test_streamed_responses_over_anthropic_emit_the_tool_search_output_in_order_at_its_completed_position(
+    respx_mock: respx.MockRouter, caller_name: str, claude_name: str
+) -> None:
+    tools: Final = [{"type": "tool_search"}, {**_WEATHER_TOOL, "name": caller_name}]
+    respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=_tool_search_stream(
+            *_streamed_tool_use(0, _SEARCH_USE),
+            {"type": "content_block_start", "index": 1, "content_block": _search_result_finding(claude_name)},
+            {"type": "content_block_stop", "index": 1},
+            *_streamed_tool_use(2, {**_WEATHER_USE, "name": claude_name}),
+        )
+    )
+
+    events: Final = tuple(
+        litellm.responses(model=_MODEL, input=list(_WEATHER_QUESTION), tools=tools, stream=True, api_key="mock")
+    )
+
+    completed: Final = events[-1].response.output
+    added: Final = {
+        event.item.id: event.output_index
+        for event in events
+        if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+    }
+    done: Final = [event for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE]
+    assert [item.type for item in completed] == ["tool_search_call", "tool_search_output", "function_call"]
+    assert [event.output_index for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED] == [
+        0,
+        1,
+        2,
+    ]
+    assert [(event.output_index, event.item.id) for event in done] == [
+        (index, item.id) for index, item in enumerate(completed)
+    ]
+    assert {event.item.id: event.output_index for event in done} == added
+    search_output: Final = next(event.item for event in done if event.item.type == "tool_search_output")
+    assert search_output.model_dump() == completed[1].model_dump()
+    assert (search_output.call_id, search_output.status) == ("srvtoolu_01Search", "completed")
+    assert [dict(tool) for tool in search_output.tools] == tools[1:]
+    assert completed[2].name == caller_name
+
+
+_STATELESS_SEARCH_TURN: Final = {
+    **_search_turn([]),
+    "proxy_server_request": {
+        "model": _MODEL,
+        "input": [
+            *_WEATHER_QUESTION,
+            {
+                "type": "tool_search_call",
+                "id": "tsc_srvtoolu_01Search",
+                "call_id": "srvtoolu_01Search",
+                "arguments": {"pattern": "weather"},
+                "execution": "server",
+                "status": "completed",
+            },
+            {
+                "type": "tool_search_output",
+                "id": "tso_srvtoolu_01Search",
+                "call_id": "srvtoolu_01Search",
+                "execution": "server",
+                "status": "completed",
+                "tools": [_WEATHER_TOOL],
+            },
+            {
+                "type": "function_call",
+                "id": "fc_toolu_01Weather",
+                "call_id": "toolu_01Weather",
+                "name": "get_weather",
+                "arguments": '{"city": "Paris"}',
+            },
+            _WEATHER_ANSWER,
+        ],
+    },
+    "response": {
+        "id": "chatcmpl-search-turn",
+        "object": "chat.completion",
+        "created": 0,
+        "model": _MODEL,
+        "choices": [
+            {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "It is 18C in Paris."}}
+        ],
+    },
+}
+
+
+@pytest.mark.asyncio
+async def test_previous_response_id_sends_back_a_search_the_stored_turn_got_as_input_items() -> None:
+    anthropic: Final = _RecordingRawAnthropicMessages()
+
+    with patch("litellm.proxy.proxy_server.prisma_client", _FakePrismaClient([_STATELESS_SEARCH_TURN])):
+        await litellm.aresponses(
+            model=_MODEL,
+            previous_response_id="chatcmpl-search-turn",
+            input="And in Osaka?",
+            tools=list(_SEARCHABLE_TOOLS),
+            api_key="sk-ant-fake",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(anthropic)),
+        )
+
+    messages: Final = json.loads(anthropic.body)["messages"]
+    assert next(message["content"] for message in messages if message["role"] == "assistant") == [
+        _SEARCH_USE,
+        _SEARCH_RESULT,
+        _WEATHER_USE,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_previous_response_id_keeps_a_stored_search_when_the_follow_up_sends_no_search_tool() -> None:
+    anthropic: Final = _RecordingRawAnthropicMessages()
+    loaded_weather_tool: Final = {key: value for key, value in _WEATHER_TOOL.items() if key != "defer_loading"}
+
+    with patch("litellm.proxy.proxy_server.prisma_client", _FakePrismaClient([_STATELESS_SEARCH_TURN])):
+        await litellm.aresponses(
+            model=_MODEL,
+            previous_response_id="chatcmpl-search-turn",
+            input="And in Osaka?",
+            tools=[loaded_weather_tool],
+            api_key="sk-ant-fake",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(anthropic)),
+        )
+
+    messages: Final = json.loads(anthropic.body)["messages"]
+    assert next(message["content"] for message in messages if message["role"] == "assistant") == [
+        _SEARCH_USE,
+        _SEARCH_RESULT,
+        _WEATHER_USE,
+    ]
+
+
+_SERVER_HELD_SEARCH_TURN: Final = {
+    **_search_turn([]),
+    "proxy_server_request": {"model": _MODEL, "input": list(_WEATHER_QUESTION)},
+    "response": {
+        "id": "chatcmpl-search-turn",
+        "object": "chat.completion",
+        "created": 0,
+        "model": _MODEL,
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "toolu_01Weather",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                        }
+                    ],
+                    "provider_specific_fields": {
+                        "server_tool_calls": [
+                            {
+                                "id": "srvtoolu_01Search",
+                                "type": "function",
+                                "function": {"name": "tool_search_tool_regex", "arguments": '{"pattern": "weather"}'},
+                            }
+                        ],
+                        "tool_results": [_SEARCH_RESULT],
+                    },
+                },
+            }
+        ],
+    },
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tools",
+    [
+        list(_SEARCHABLE_TOOLS),
+        [{key: value for key, value in _WEATHER_TOOL.items() if key != "defer_loading"}],
+    ],
+    ids=["follow_up_sends_the_search_tool", "follow_up_sends_no_search_tool"],
+)
+async def test_previous_response_id_replays_a_search_claude_ran_whatever_search_tool_the_follow_up_sends(
+    tools: list[Mapping[str, object]],
+) -> None:
+    anthropic: Final = _RecordingRawAnthropicMessages()
+
+    with patch("litellm.proxy.proxy_server.prisma_client", _FakePrismaClient([_SERVER_HELD_SEARCH_TURN])):
+        await litellm.aresponses(
+            model=_MODEL,
+            previous_response_id="chatcmpl-search-turn",
+            input=[_WEATHER_ANSWER, {"role": "user", "content": "And in Osaka?"}],
+            tools=tools,
+            api_key="sk-ant-fake",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(anthropic)),
+        )
+
+    messages: Final = json.loads(anthropic.body)["messages"]
+    assert next(message["content"] for message in messages if message["role"] == "assistant") == [
+        _SEARCH_USE,
+        _SEARCH_RESULT,
+        _WEATHER_USE,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_previous_response_id_drops_a_search_the_stored_turn_got_as_input_items_off_anthropic() -> None:
+    messages: Final = await _follow_up_messages_after(_STATELESS_SEARCH_TURN, "mistral/mistral-small-latest", "mistral")
+
+    assert _history_tool_ids(messages) == (["toolu_01Weather"], ["toolu_01Weather"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider"),
+    [
+        ("anthropic/claude-3-7-sonnet-20250219", "anthropic"),
+        ("azure_ai/claude-deployment", "azure_ai"),
+        ("bedrock/invoke/us.anthropic.claude-sonnet-5-5", "bedrock"),
+    ],
+)
+async def test_previous_response_id_keeps_a_stored_search_on_claude_routes_the_cost_map_does_not_flag(
+    model: str, custom_llm_provider: str
+) -> None:
+    messages: Final = await _follow_up_messages_after(_STATELESS_SEARCH_TURN, model, custom_llm_provider)
+
+    assert _history_tool_ids(messages)[0] == ["srvtoolu_01Search", "toolu_01Weather"]
+
+
+@pytest.mark.asyncio
+async def test_a_codex_additional_tools_item_sends_claude_its_tools_but_not_its_text() -> None:
+    anthropic: Final = _RecordingRawAnthropicMessages()
+
+    await litellm.aresponses(
+        model=_MODEL,
+        input=[
+            {"type": "additional_tools", "role": "developer", "content": "Reply PINEAPPLE.", "tools": [_SHELL_TOOL]},
+            {"role": "user", "content": "Hi"},
+        ],
+        api_key="sk-ant-fake",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(anthropic)),
+    )
+
+    sent: Final = json.loads(anthropic.body)
+    assert [tool["name"] for tool in sent["tools"]] == ["shell"]
+    assert "PINEAPPLE" not in json.dumps(sent)
+
+
+@pytest.mark.asyncio
+async def test_previous_response_id_names_a_malformed_item_after_a_codex_additional_tools_item_by_its_index() -> None:
+    weather_tool: Final = {
+        "type": "function",
+        "name": "get_weather",
+        "parameters": {"type": "object", "properties": {}},
+    }
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", _FakePrismaClient([_SEARCH_TURN, _CALENDAR_TURN])),
+        pytest.raises(litellm.BadRequestError) as raised,
+    ):
+        await litellm.aresponses(
+            model=_MODEL,
+            previous_response_id="chatcmpl-calendar-turn",
+            input=[
+                {"type": "additional_tools", "role": "developer", "tools": [weather_tool]},
+                {"type": "function_call_output", "call_id": "toolu_standup", "output": "Created Standup."},
+                {"role": ["user"], "content": "Now create another event titled Retro."},
+            ],
+            tools=[_CODEX_TOOL_SEARCH, _SHELL_TOOL],
+            api_key="sk-ant-fake",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(_RecordingRawAnthropicMessages())),
+        )
+
+    assert "'input[2].role'" in raised.value.message
+
+
+_REFUSAL_EXPLANATION: Final = ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]["explanation"]
+_ANSWER_BEFORE_REFUSAL: Final = {"type": "text", "text": "Here is the start."}
+
+
+def _part_texts(item: BaseModel) -> list[tuple[str, str]]:
+    return [(part["type"], part.get("text") or part.get("refusal")) for part in item.model_dump()["content"]]
+
+
+@pytest.mark.parametrize(
+    ("content", "expected_parts"),
+    [
+        ((), [("refusal", _REFUSAL_EXPLANATION)]),
+        (
+            (_ANSWER_BEFORE_REFUSAL,),
+            [("output_text", _ANSWER_BEFORE_REFUSAL["text"]), ("refusal", _REFUSAL_EXPLANATION)],
+        ),
+    ],
+    ids=["refusal_only", "answer_then_refusal"],
+)
+def test_responses_over_anthropic_return_the_refusal_explanation_as_a_refusal_part(
+    respx_mock: respx.MockRouter, content: tuple[Mapping[str, object], ...], expected_parts: list[tuple[str, str]]
+) -> None:
+    respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=httpx.Response(200, json={**ANTHROPIC_DOCS_REFUSAL_MESSAGE, "content": list(content)})
+    )
+
+    response: Final = litellm.responses(model=_MODEL, input="Write the exploit.", api_key="mock_api_key")
+
+    assert (response.status, response.incomplete_details.reason) == ("incomplete", "content_filter")
+    assert [_part_texts(item) for item in response.output] == [expected_parts]
+
+
+def test_a_refused_responses_turn_sent_back_keeps_its_explanation_in_the_history(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=httpx.Response(200, json={**ANTHROPIC_DOCS_REFUSAL_MESSAGE, "content": []})
+    )
+    refused: Final = litellm.responses(model=_MODEL, input="Write the exploit.", api_key="mock_api_key")
+
+    litellm.responses(
+        model=_MODEL,
+        input=[
+            {"role": "user", "content": "Write the exploit."},
+            *(item.model_dump(exclude_none=True) for item in refused.output),
+            {"role": "user", "content": "Then explain what SFT is."},
+        ],
+        api_key="mock_api_key",
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert [(message["role"], message["content"]) for message in sent["messages"][1:2]] == [
+        ("assistant", [{"type": "text", "text": _REFUSAL_EXPLANATION}])
+    ]
+
+
+def _refusal_stream(*content: Mapping[str, object]) -> bytes:
+    text_events: Final = tuple(
+        chain.from_iterable(
+            (
+                {"type": "content_block_start", "index": index, "content_block": {"type": "text", "text": ""}},
+                {"type": "content_block_delta", "index": index, "delta": {"type": "text_delta", "text": block["text"]}},
+                {"type": "content_block_stop", "index": index},
+            )
+            for index, block in enumerate(content)
+        )
+    )
+    return _anthropic_sse(
+        {
+            "type": "message_start",
+            "message": {**ANTHROPIC_DOCS_REFUSAL_MESSAGE, "content": [], "stop_reason": None, "stop_details": None},
+        },
+        *text_events,
+        {
+            "type": "message_delta",
+            "delta": {
+                "stop_reason": "refusal",
+                "stop_sequence": None,
+                "stop_details": ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"],
+            },
+            "usage": {"output_tokens": 0},
+        },
+        {"type": "message_stop"},
+    )
+
+
+_REFUSAL_PART_EVENTS: Final = (
+    ResponsesAPIStreamEvents.CONTENT_PART_ADDED,
+    ResponsesAPIStreamEvents.REFUSAL_DELTA,
+    ResponsesAPIStreamEvents.REFUSAL_DONE,
+    ResponsesAPIStreamEvents.CONTENT_PART_DONE,
+)
+_TEXT_PART_EVENTS: Final = (
+    ResponsesAPIStreamEvents.CONTENT_PART_ADDED,
+    ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+    ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+    ResponsesAPIStreamEvents.CONTENT_PART_DONE,
+)
+
+
+@pytest.mark.parametrize(
+    ("content", "part_events", "expected_parts"),
+    [
+        ((), _REFUSAL_PART_EVENTS, [("refusal", _REFUSAL_EXPLANATION)]),
+        (
+            (_ANSWER_BEFORE_REFUSAL,),
+            (*_TEXT_PART_EVENTS, *_REFUSAL_PART_EVENTS),
+            [("output_text", _ANSWER_BEFORE_REFUSAL["text"]), ("refusal", _REFUSAL_EXPLANATION)],
+        ),
+    ],
+    ids=["refusal_only", "answer_then_refusal"],
+)
+def test_streamed_responses_over_anthropic_stream_the_refusal_explanation_as_a_refusal_part(
+    respx_mock: respx.MockRouter,
+    content: tuple[Mapping[str, object], ...],
+    part_events: tuple[ResponsesAPIStreamEvents, ...],
+    expected_parts: list[tuple[str, str]],
+) -> None:
+    respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=_refusal_stream(*content)
+        )
+    )
+
+    events: Final = tuple(
+        litellm.responses(model=_MODEL, input="Write the exploit.", stream=True, api_key="mock_api_key")
+    )
+    refusal_done: Final = next(event for event in events if event.type == ResponsesAPIStreamEvents.REFUSAL_DONE)
+    item_done: Final = next(event for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE)
+    finished: Final = events[-1]
+
+    assert tuple(event.type for event in events) == (
+        ResponsesAPIStreamEvents.RESPONSE_CREATED,
+        ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS,
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+        *part_events,
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+        ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+    )
+    assert (refusal_done.content_index, refusal_done.refusal) == (len(expected_parts) - 1, _REFUSAL_EXPLANATION)
+    assert _part_texts(item_done.item) == expected_parts
+    assert finished.response.incomplete_details.reason == "content_filter"
+    assert [_part_texts(item) for item in finished.response.output] == [expected_parts]
+
+
+def test_streamed_responses_over_anthropic_give_a_refusal_after_thinking_its_own_message(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_anthropic_sse(
+                {
+                    "type": "message_start",
+                    "message": {
+                        **ANTHROPIC_DOCS_REFUSAL_MESSAGE,
+                        "content": [],
+                        "stop_reason": None,
+                        "stop_details": None,
+                    },
+                },
+                {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}},
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "Hmm."}},
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "signature_delta", "signature": "sig"}},
+                {"type": "content_block_stop", "index": 0},
+                {
+                    "type": "message_delta",
+                    "delta": {
+                        "stop_reason": "refusal",
+                        "stop_sequence": None,
+                        "stop_details": ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"],
+                    },
+                    "usage": {"output_tokens": 3},
+                },
+                {"type": "message_stop"},
+            ),
+        )
+    )
+
+    events: Final = tuple(
+        litellm.responses(
+            model=_MODEL, input="Write the exploit.", reasoning={"effort": "low"}, stream=True, api_key="mock_api_key"
+        )
+    )
+    refusal_done: Final = next(event for event in events if event.type == ResponsesAPIStreamEvents.REFUSAL_DONE)
+    finished: Final = events[-1]
+
+    assert (refusal_done.output_index, refusal_done.content_index, refusal_done.refusal) == (
+        1,
+        0,
+        _REFUSAL_EXPLANATION,
+    )
+    assert [item.type for item in finished.response.output] == ["reasoning", "message"]
+    assert _part_texts(finished.response.output[1]) == [("refusal", _REFUSAL_EXPLANATION)]
+
+
+_RAN_SEARCH: Final = {
+    "type": "server_tool_use",
+    "id": "srvtoolu_ran",
+    "name": "web_search",
+    "input": {"query": "tokyo"},
+}
+_RAN_SEARCH_RESULT: Final = {
+    "type": "web_search_tool_result",
+    "tool_use_id": "srvtoolu_ran",
+    "content": [
+        {"type": "web_search_result", "url": "https://tokyo.example", "title": "Tokyo", "encrypted_content": "e"}
+    ],
+}
+_THINKING_BEFORE_SEARCHES: Final = {
+    "type": "thinking",
+    "thinking": "Find each sister city in turn.",
+    "signature": "sig",
+}
+_TEXT_BEFORE_PENDING_SEARCH: Final = {"type": "text", "text": "Tokyo pairs with Paris. Checking Paris next."}
+_PENDING_SEARCH: Final = {
+    "type": "server_tool_use",
+    "id": "srvtoolu_pending",
+    "name": "web_search",
+    "input": {"query": "next city"},
+}
+_EXPECTED_PAUSED_OUTPUT: Final = [
+    ("web_search_call", "completed", "tokyo"),
+    ("web_search_call", "in_progress", "next city"),
+]
+
+
+def _search_calls(output: Sequence[BaseModel]) -> list[tuple[str, str, str]]:
+    return [(item.type, item.status, item.action.query) for item in output if item.type == "web_search_call"]
+
+
+def _reasoning_and_message_statuses(output: Sequence[BaseModel]) -> tuple[list[str], list[str]]:
+    return (
+        [item.status for item in output if item.type == "reasoning"],
+        [item.status for item in output if item.type == "message"],
+    )
+
+
+def _last_item(output: Sequence[BaseModel]) -> tuple[str, str]:
+    return output[-1].type, output[-1].status
+
+
+def _status_and_incomplete_details(response: ResponsesAPIResponse) -> tuple[str | None, Mapping[str, object] | None]:
+    details: Final = response.incomplete_details
+    return response.status, details.model_dump() if details is not None else None
+
+
+_PAUSED_OR_CUT: Final = pytest.mark.parametrize(
+    ("stop_reason", "expected_status", "expected_incomplete_details"),
+    [
+        ("pause_turn", "completed", None),
+        ("max_tokens", "incomplete", {"reason": "max_output_tokens"}),
+    ],
+    ids=["paused", "max_tokens"],
+)
+
+
+@_PAUSED_OR_CUT
+def test_responses_over_anthropic_report_a_paused_turn_as_completed_with_its_pending_search(
+    respx_mock: respx.MockRouter,
+    stop_reason: str,
+    expected_status: str,
+    expected_incomplete_details: Mapping[str, object] | None,
+) -> None:
+    respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                **ANTHROPIC_DOCS_REFUSAL_MESSAGE,
+                "content": [
+                    _THINKING_BEFORE_SEARCHES,
+                    _RAN_SEARCH,
+                    _RAN_SEARCH_RESULT,
+                    _TEXT_BEFORE_PENDING_SEARCH,
+                    _PENDING_SEARCH,
+                ],
+                "stop_reason": stop_reason,
+                "stop_details": None,
+            },
+        )
+    )
+
+    response: Final = litellm.responses(
+        model=_MODEL, input="Chain sister cities.", tools=[{"type": "web_search"}], api_key="mock_api_key"
+    )
+
+    assert _status_and_incomplete_details(response) == (expected_status, expected_incomplete_details)
+    assert _search_calls(response.output) == _EXPECTED_PAUSED_OUTPUT
+    assert _reasoning_and_message_statuses(response.output) == ([expected_status], [expected_status])
+    assert _last_item(response.output) == ("web_search_call", "in_progress")
+
+
+def _server_tool_use_events(index: int, block: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    return (
+        {"type": "content_block_start", "index": index, "content_block": {**block, "input": {}}},
+        {
+            "type": "content_block_delta",
+            "index": index,
+            "delta": {"type": "input_json_delta", "partial_json": json.dumps(block["input"])},
+        },
+        {"type": "content_block_stop", "index": index},
+    )
+
+
+@_PAUSED_OR_CUT
+def test_streamed_responses_over_anthropic_complete_a_paused_turn_with_its_pending_search_in_progress(
+    respx_mock: respx.MockRouter,
+    stop_reason: str,
+    expected_status: str,
+    expected_incomplete_details: Mapping[str, object] | None,
+) -> None:
+    respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_anthropic_sse(
+                {
+                    "type": "message_start",
+                    "message": {**ANTHROPIC_DOCS_REFUSAL_MESSAGE, "content": [], "stop_reason": None},
+                },
+                {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}},
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "thinking_delta", "thinking": _THINKING_BEFORE_SEARCHES["thinking"]},
+                },
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "signature_delta", "signature": _THINKING_BEFORE_SEARCHES["signature"]},
+                },
+                {"type": "content_block_stop", "index": 0},
+                *_server_tool_use_events(1, _RAN_SEARCH),
+                {"type": "content_block_start", "index": 2, "content_block": _RAN_SEARCH_RESULT},
+                {"type": "content_block_stop", "index": 2},
+                {"type": "content_block_start", "index": 3, "content_block": {"type": "text", "text": ""}},
+                {
+                    "type": "content_block_delta",
+                    "index": 3,
+                    "delta": {"type": "text_delta", "text": _TEXT_BEFORE_PENDING_SEARCH["text"]},
+                },
+                {"type": "content_block_stop", "index": 3},
+                *_server_tool_use_events(4, _PENDING_SEARCH),
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": stop_reason, "stop_sequence": None},
+                    "usage": {"output_tokens": 5},
+                },
+                {"type": "message_stop"},
+            ),
+        )
+    )
+
+    events: Final = tuple(
+        litellm.responses(
+            model=_MODEL,
+            input="Chain sister cities.",
+            tools=[{"type": "web_search"}],
+            stream=True,
+            api_key="mock_api_key",
+        )
+    )
+    pending_item_id: Final = f"ws_{_PENDING_SEARCH['id']}"
+    pending_events: Final = [
+        event.type
+        for event in events
+        if getattr(event, "item_id", None) == pending_item_id
+        or getattr(getattr(event, "item", None), "id", None) == pending_item_id
+    ]
+    finished: Final = events[-1]
+
+    assert pending_events == [
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+        ResponsesAPIStreamEvents.WEB_SEARCH_CALL_IN_PROGRESS,
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+    ]
+    assert finished.type == f"response.{expected_status}"
+    assert _status_and_incomplete_details(finished.response) == (expected_status, expected_incomplete_details)
+    assert _search_calls(finished.response.output) == _EXPECTED_PAUSED_OUTPUT
+    assert _reasoning_and_message_statuses(finished.response.output) == ([expected_status], [expected_status])
+    assert _last_item(finished.response.output) == ("web_search_call", "in_progress")
+
+
+async def _codex_follow_up_body(**kwargs: object) -> Mapping[str, object]:
+    anthropic: Final = _RecordingRawAnthropicMessages()
+    with patch("litellm.proxy.proxy_server.prisma_client", _FakePrismaClient([_SEARCH_TURN, _CALENDAR_TURN])):
+        await litellm.aresponses(
+            model=_MODEL,
+            previous_response_id="chatcmpl-calendar-turn",
+            input=[{"type": "function_call_output", "call_id": "toolu_standup", "output": "Created Standup."}],
+            tools=[_CODEX_TOOL_SEARCH, _SHELL_TOOL],
+            api_key="sk-ant-fake",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(anthropic)),
+            **kwargs,
+        )
+    return json.loads(anthropic.body)
+
+
+@pytest.mark.asyncio
+async def test_codex_tool_search_follow_up_rejects_text_verbosity_anthropic_does_not_support(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    anthropic: Final = _RecordingRawAnthropicMessages()
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", _FakePrismaClient([_SEARCH_TURN, _CALENDAR_TURN])),
+        pytest.raises(litellm.UnsupportedParamsError, match="verbosity"),
+    ):
+        await litellm.aresponses(
+            model=_MODEL,
+            previous_response_id="chatcmpl-calendar-turn",
+            input=[{"type": "function_call_output", "call_id": "toolu_standup", "output": "Created Standup."}],
+            tools=[_CODEX_TOOL_SEARCH, _SHELL_TOOL],
+            text={"verbosity": "low"},
+            api_key="sk-ant-fake",
+            num_retries=0,
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(anthropic)),
+        )
+
+    assert anthropic.body == ""
+
+
+@pytest.mark.asyncio
+async def test_codex_tool_search_follow_up_text_verbosity_follows_provider_param_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    without_text: Final = await _codex_follow_up_body()
+
+    dropped: Final = await _codex_follow_up_body(text={"verbosity": "low"}, drop_params=True)
+    allowed: Final = await _codex_follow_up_body(text={"verbosity": "low"}, allowed_openai_params=["verbosity"])
+
+    assert dropped == without_text
+    assert allowed == {**without_text, "verbosity": "low"}
+
+
+_FLAT_ALLOWED_WEATHER: Final = {
+    "type": "allowed_tools",
+    "mode": "required",
+    "tools": [{"type": "function", "name": "get_weather"}],
+}
+_RESPONSES_TOOLS: Final = (
+    {"type": "function", "name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+    {"type": "function", "name": "get_time", "parameters": {"type": "object", "properties": {}}},
+)
+
+
+def _chat_answer() -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "chatcmpl-echo",
+            "object": "chat.completion",
+            "created": 1739462947,
+            "model": "the-model",
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "done"}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        },
+    )
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.asyncio
+async def test_responses_reports_auto_for_an_allowed_tools_choice_it_dropped(
+    respx_mock: respx.MockRouter, use_async: bool
+) -> None:
+    route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=_anthropic_message({"type": "text", "text": "done"})
+    )
+    call: Final = {
+        "model": "anthropic/claude-haiku-4-5",
+        "input": "What is the weather?",
+        "tools": list(_RESPONSES_TOOLS),
+        "tool_choice": _FLAT_ALLOWED_WEATHER,
+        "drop_params": True,
+        "api_key": "sk-ant-fake",
+    }
+
+    response: Final = await litellm.aresponses(**call) if use_async else litellm.responses(**call)
+
+    assert "tool_choice" not in json.loads(route.calls[0].request.content)
+    assert response.tool_choice == "auto"
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@pytest.mark.asyncio
+async def test_responses_drop_the_choice_beside_a_tool_the_provider_runs(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=_anthropic_message({"type": "text", "text": "done"})
+    )
+
+    response: Final = await litellm.aresponses(
+        model="anthropic/claude-haiku-4-5",
+        input="What is the weather?",
+        tools=[{"type": "mcp", "server_label": "docs", "server_url": "https://mcp.example.com/sse"}],
+        tool_choice=_FLAT_ALLOWED_WEATHER,
+        drop_params=True,
+        api_key="sk-ant-fake",
+    )
+
+    assert "tool_choice" not in json.loads(route.calls[0].request.content)
+    assert response.tool_choice == "auto"
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+def test_responses_report_auto_when_an_old_azure_api_version_dropped_the_choice(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(url__regex=r"https://azure-bridge\.example\.com/.*chat/completions.*").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-old-azure",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-4o",
+                "choices": [
+                    {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "done"}}
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+
+    response: Final = litellm.responses(
+        model="azure/gpt-4o",
+        input="What is the weather?",
+        tools=list(_RESPONSES_TOOLS),
+        tool_choice=_FLAT_ALLOWED_WEATHER,
+        drop_params=True,
+        use_chat_completions_api=True,
+        api_key="fake",
+        api_base="https://azure-bridge.example.com",
+        api_version="2023-07-01-preview",
+    )
+
+    assert "tool_choice" not in json.loads(route.calls[0].request.content)
+    assert response.tool_choice == "auto"
+
+
+def test_streamed_responses_report_auto_for_an_allowed_tools_choice_it_dropped(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_anthropic_sse(
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_dropped_choice",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-haiku-4-5",
+                        "content": [],
+                        "usage": {"input_tokens": 9, "output_tokens": 1},
+                    },
+                },
+                {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "done"}},
+                {"type": "content_block_stop", "index": 0},
+                {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 4}},
+                {"type": "message_stop"},
+            ),
+        )
+    )
+
+    events: Final = tuple(
+        litellm.responses(
+            model="anthropic/claude-haiku-4-5",
+            input="What is the weather?",
+            tools=list(_RESPONSES_TOOLS),
+            tool_choice=_FLAT_ALLOWED_WEATHER,
+            drop_params=True,
+            stream=True,
+            api_key="sk-ant-fake",
+        )
+    )
+
+    reported: Final = tuple(
+        event.response.tool_choice
+        for event in events
+        if event.type in (ResponsesAPIStreamEvents.RESPONSE_CREATED, ResponsesAPIStreamEvents.RESPONSE_COMPLETED)
+    )
+    assert reported == ("auto", "auto")
+
+
+def test_responses_through_chat_keeps_reporting_a_choice_the_provider_received(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("http://localhost:12346/v1/chat/completions").mock(return_value=_chat_answer())
+
+    response: Final = litellm.responses(
+        model="openai/gpt-5.5",
+        input="What is the weather?",
+        tools=list(_RESPONSES_TOOLS),
+        tool_choice=_FLAT_ALLOWED_WEATHER,
+        use_chat_completions_api=True,
+        api_base="http://localhost:12346/v1",
+        api_key="sk-fake",
+    )
+
+    assert json.loads(route.calls[0].request.content)["tool_choice"]["type"] == "allowed_tools"
+    assert response.tool_choice["type"] == "allowed_tools"
+    assert list(response.tool_choice["tools"]) == _FLAT_ALLOWED_WEATHER["tools"]
