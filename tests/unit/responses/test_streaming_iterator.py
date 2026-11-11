@@ -530,6 +530,19 @@ def test_sync_closing_the_stream_at_its_completed_event_closes_the_upstream_at_o
     assert closed.is_set()
 
 
+def test_sync_stream_read_again_after_it_ended_keeps_draining_the_upstream_once():
+    release: Final = threading.Event()
+    iterator, closed = _sync_stream_over(_sync_upstream(None, release))
+
+    assert [event.type for event in iterator][-1] == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    with pytest.raises(StopIteration):
+        next(iterator)
+
+    assert not closed.wait(timeout=0.5), "a second read started a second drain of the same upstream"
+    release.set()
+    assert closed.wait(timeout=5)
+
+
 def test_sync_stream_ending_in_failed_event_still_closes_the_upstream():
     failed: Final = _sse_event(
         {"type": "response.failed", "response": {"error": {"code": "server_error", "message": "boom"}}}
@@ -541,6 +554,24 @@ def test_sync_stream_ending_in_failed_event_still_closes_the_upstream():
             pass
 
     assert closed.wait(timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_stream_ending_in_failed_event_still_closes_the_upstream():
+    failed: Final = _sse_event(
+        {"type": "response.failed", "response": {"error": {"code": "server_error", "message": "boom"}}}
+    )
+
+    async def upstream() -> AsyncIterator[bytes]:
+        for event in (*_COMPLETE_STREAM_EVENTS[:-1], failed):
+            yield event
+
+    iterator, closed = _async_stream_over(upstream())
+
+    with pytest.raises(MidStreamFallbackError):
+        await _event_types(iterator)
+
+    await asyncio.wait_for(closed.wait(), timeout=5)
 
 
 def test_sync_release_that_cannot_start_a_thread_closes_the_upstream_and_frees_its_slot():
