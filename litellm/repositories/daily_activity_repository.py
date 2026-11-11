@@ -1,15 +1,17 @@
 import asyncio
 from collections.abc import AsyncIterator, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from itertools import groupby
 from types import MappingProxyType
 from typing import Final, Protocol
 
-from pydantic import StrictStr, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, StrictStr, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 from litellm import constants
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import UNKNOWN_MODEL_SPEND_LOG_MODEL
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.daily_activity_sql import (
     ExportCursor,
@@ -17,8 +19,11 @@ from litellm.repositories.daily_activity_sql import (
     adjust_dates_for_timezone,
     build_aggregated_sql,
     build_cache_leakage_keys_sql,
+    build_customer_daily_rows_sql,
+    build_customer_team_rollup_sql,
     build_entity_rollup_sql,
     build_export_sql,
+    build_guardrail_spend_sql,
     build_key_page_sql,
     build_key_search_sql,
     build_model_top_keys_sql,
@@ -27,6 +32,7 @@ from litellm.repositories.daily_activity_sql import (
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.types.repositories.daily_activity import (
     AggregatedRows,
+    CustomerTeamRollupRow,
     DailyActivityProxyReads,
     DailyActivityRow,
     DailyActivityScope,
@@ -36,6 +42,7 @@ from litellm.types.repositories.daily_activity import (
     ExportRow,
     ExportType,
     GroupingSetsRow,
+    GuardrailSpendRow,
     KeyMetadataRow,
     KeyPage,
     KeySpendRow,
@@ -99,12 +106,53 @@ class DailyActivityDatabase(Protocol):
 
 
 _GROUPING_ADAPTER: Final = TypeAdapter(tuple[GroupingSetsRow, ...])
+_CUSTOMER_TEAM_ADAPTER: Final = TypeAdapter(tuple[CustomerTeamRollupRow, ...])
 _ENTITY_ADAPTER: Final = TypeAdapter(tuple[EntityRollupRow, ...])
+_GUARDRAIL_SPEND_ADAPTER: Final = TypeAdapter(tuple[GuardrailSpendRow, ...])
 _KEY_SPEND_ADAPTER: Final = TypeAdapter(tuple[KeySpendRow, ...])
 _KEY_PAGE_TOTAL_ADAPTER: Final[TypeAdapter[int]] = TypeAdapter(int)
 _USER_SPEND_ADAPTER: Final = TypeAdapter(tuple[UserSpendRow, ...])
 _EXPORT_ADAPTER: Final = TypeAdapter(tuple[ExportRow, ...])
 _METADATA_TAGS_ADAPTER: Final = TypeAdapter(list[StrictStr])
+
+
+class _CustomerDailyRow(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    date: str
+    api_key: str
+    end_user_id: str | None
+    prompt_tokens: int
+    completion_tokens: int
+    cache_read_input_tokens: int
+    cache_creation_input_tokens: int
+    compression_saved_tokens: int
+    compression_savings_spend: float
+    prompt_caching_savings_spend: float
+    gateway_injected_caching_savings_spend: float
+    autorouter_savings_spend: float
+    guardrail_spend: float
+    spend: float
+    api_requests: int
+    successful_requests: int
+    failed_requests: int
+    total_response_time_ms: int
+    timed_requests: int
+    model: str | None = None
+    model_group: str | None = None
+    custom_llm_provider: str | None = None
+    mcp_namespaced_tool_name: str | None = None
+    endpoint: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _CustomerDailyRowsResult:
+    total_count: int
+    rows: tuple[_CustomerDailyRow, ...]
+
+
+_CUSTOMER_DAILY_ROWS_ADAPTER: Final = TypeAdapter(tuple[_CustomerDailyRowsResult])
 
 
 def _metadata_tags(value: object) -> tuple[str, ...]:
@@ -190,6 +238,9 @@ class DailyActivityRepository:
             entity_rows=entity_rows,
             distinct_api_keys=distinct_api_keys,
         )
+
+    async def guardrail_spend(self, scope: DailyActivityScope) -> tuple[GuardrailSpendRow, ...]:
+        return _GUARDRAIL_SPEND_ADAPTER.validate_python(await self._query(build_guardrail_spend_sql(scope)))
 
     async def search_keys(self, scope: DailyActivityScope, *, search: str, limit: int) -> tuple[str, ...]:
         if not 1 <= limit <= constants.USAGE_KEY_SEARCH_MAX:
@@ -317,6 +368,11 @@ class DailyActivityRepository:
         )
 
     async def daily_rows(self, scope: DailyActivityScope, *, page: int, page_size: int) -> DailyRowsPage:
+        if scope.table is DailyActivityTable.CUSTOMER and scope.team_ids is not None:
+            result: Final = _CUSTOMER_DAILY_ROWS_ADAPTER.validate_python(
+                await self._query(build_customer_daily_rows_sql(scope, page=page, page_size=page_size))
+            )[0]
+            return DailyRowsPage(total_count=result.total_count, rows=result.rows)
         table: Final = _daily_rows_table(self._prisma_client, scope.table)
         adjusted_start, adjusted_end = adjust_dates_for_timezone(
             scope.start_date,
@@ -338,7 +394,13 @@ class DailyActivityRepository:
             "date": {"gte": adjusted_start, "lte": adjusted_end},
             **({scope.entity_id_field: {"in": list(scope.entity_ids)}} if scope.entity_ids is not None else {}),
             **exclusion_filter,
-            **({"model": scope.model} if scope.model else {}),
+            **(
+                {"AND": [{"OR": [{"model": None}, {"model": ""}, {"model": scope.model}]}]}
+                if scope.model == UNKNOWN_MODEL_SPEND_LOG_MODEL
+                else {"model": scope.model}
+                if scope.model
+                else {}
+            ),
             **({"api_key": {"in": list(scope.api_keys)}} if scope.api_keys is not None else {}),
         }
         count, rows = await asyncio.gather(
@@ -351,3 +413,10 @@ class DailyActivityRepository:
             ),
         )
         return DailyRowsPage(total_count=count, rows=tuple(rows))
+
+    async def customer_team_spend(
+        self, scope: DailyActivityScope, *, row_ids: tuple[str, ...] | None = None
+    ) -> tuple[CustomerTeamRollupRow, ...]:
+        return _CUSTOMER_TEAM_ADAPTER.validate_python(
+            await self._query(build_customer_team_rollup_sql(scope, row_ids=row_ids))
+        )

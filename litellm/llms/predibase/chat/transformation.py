@@ -13,6 +13,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     prompt_factory,
     render_custom_prompt_template,
 )
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
@@ -337,12 +338,12 @@ class PredibaseConfig(BaseConfig):
         elif "PREDIBASE_API_BASE" in os.environ:
             base_url = os.getenv("PREDIBASE_API_BASE", "")
 
-        completion_url = f"{base_url}/{tenant_id}/deployments/v2/llms/{model}"
+        completion_url = join_api_base(base_url, f"{tenant_id}/deployments/v2/llms/{model}")
         should_stream: Final = stream if stream is not None else optional_params.get("stream", False)
         if should_stream is True:
-            completion_url += "/generate_stream"
+            completion_url = join_api_base(completion_url, "generate_stream")
         else:
-            completion_url += "/generate"
+            completion_url = join_api_base(completion_url, "generate")
         return completion_url
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:

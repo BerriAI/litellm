@@ -3,7 +3,6 @@ use litellm_host_python::{PythonHostCalls, PythonOwned};
 
 use bytes::Bytes;
 use litellm_host_python::{InvokeError, PythonBinding, from_py, to_py};
-use litellm_http::transport::Error as TransportError;
 use litellm_inference_messages::{
     Error, MessagesCall, MessagesSettings, MessagesShaping, litellm_params, messages_body,
     route::{Messages, MessagesStreamHead},
@@ -12,7 +11,7 @@ use litellm_llms::base_llm::messages::context::MessagesModelCapabilities;
 use litellm_llms_types::headers::ProviderSpecificHeaders;
 use litellm_router_types::LitellmParams;
 use pyo3::{
-    exceptions::{PyException, PyValueError},
+    exceptions::PyException,
     gc::{PyTraverseError, PyVisit},
     prelude::*,
     types::{PyBytes, PyDict},
@@ -20,37 +19,32 @@ use pyo3::{
 use serde_json::{Map, Value};
 
 use crate::{
-    errors::{RustUpstreamError, route_error_to_pyerr},
-    marshal::{optional_timeout, project_optional_fields, public_response, python_timeout_seconds},
-    python_settings::missing_module,
+    errors::{RequestMarker, route_failure},
+    marshal::{
+        ArgumentError, optional_timeout, project_optional_fields, public_response,
+        python_timeout_seconds,
+    },
+    python_settings::PythonSettings,
     routes::RequestView,
 };
 
 const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.host.routes.messages";
-const REQUEST_ERROR_MARKER: &str = "messages_request_error";
+const MODEL_CAPABILITIES_MODULE: &str = "litellm.rust_bridge.host.model_capabilities";
 
 fn merge_headers(
     forwarded: Option<Map<String, Value>>,
     extra_headers: Option<Map<String, Value>>,
 ) -> Option<Map<String, Value>> {
-    let merged: Map<String, Value> = forwarded
-        .into_iter()
-        .flatten()
-        .chain(extra_headers.into_iter().flatten())
-        .collect();
+    let merged = litellm_inference_messages::merge_messages_header_sources(
+        forwarded.into_iter().chain(extra_headers),
+    );
     (!merged.is_empty()).then_some(merged)
 }
 
-/// Reads `litellm.<name>`, the module global a param spec names, the way
-/// `VertexBase.get_vertex_ai_project` reads `litellm.vertex_project`.
 fn module_global<'py>(py: Python<'py>, name: &str) -> PyResult<Option<Bound<'py, PyAny>>> {
-    let module = match py.import("litellm") {
-        Ok(module) => module,
-        Err(error) if missing_module(py, &error, "litellm")? => return Ok(None),
-        Err(error) => return Err(error),
-    };
-    let value = module.getattr(name)?;
-    Ok((!value.is_none()).then_some(value))
+    PythonSettings::ProviderDefaults
+        .read_or_unset(py)?
+        .map_or(Ok(None), |defaults| defaults.attribute(name))
 }
 
 /// The caller's litellm params, read from the kwargs by the names the typed params declare,
@@ -66,29 +60,6 @@ fn project_litellm_params<'py>(
         .filter_map(|spec| spec.module_global);
     let folded = project_optional_fields(globals, &global)?;
     Ok(litellm_params(fields.into_iter().chain(folded).collect()))
-}
-
-fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
-    match error {
-        Error::Transport(TransportError::Http { status, body }) => {
-            let error = RustUpstreamError::new_err((status, body));
-            error
-                .value(py)
-                .setattr("headers", Vec::<(String, String)>::new())?;
-            Ok(error)
-        }
-        Error::InvalidRequest(message) => {
-            let error = PyValueError::new_err(message.to_string());
-            error.value(py).setattr(REQUEST_ERROR_MARKER, true)?;
-            Ok(error)
-        }
-        Error::MissingField(field) => {
-            let error = PyValueError::new_err(format!("missing required field: {field}"));
-            error.value(py).setattr(REQUEST_ERROR_MARKER, true)?;
-            Ok(error)
-        }
-        other => Ok(route_error_to_pyerr(other)),
-    }
 }
 
 /// The Python side of the Messages route: projects the prepared arguments and builds the
@@ -115,9 +86,8 @@ impl MessagesPythonHost {
         let string = |name: &str| -> PyResult<Option<String>> {
             argument(name)?.map(|value| value.extract()).transpose()
         };
-        let model = string("model")?.ok_or_else(|| PyValueError::new_err("model is required"))?;
-        let messages =
-            argument("messages")?.ok_or_else(|| PyValueError::new_err("messages is required"))?;
+        let model = string("model")?.ok_or(ArgumentError::Required("model"))?;
+        let messages = argument("messages")?.ok_or(ArgumentError::Required("messages"))?;
         let fields = self.view.body_params(py, arguments, ROUTE_HOST_MODULE)?;
         let body = [
             ("model".to_string(), Value::String(model.clone())),
@@ -130,10 +100,19 @@ impl MessagesPythonHost {
             .map(|value| python_timeout_seconds(py, value.unbind()))
             .transpose()?
             .flatten();
-        let custom_llm_provider = string("custom_llm_provider")?;
-        let shaping = self.shaping(py, &model, custom_llm_provider.as_deref(), arguments)?;
         let api_key = string("api_key")?;
         let api_base = string("api_base")?;
+        // Python's handler resolves a bare model name (`claude-sonnet-4-5`) through
+        // `get_llm_provider`'s model lists, which the native prefix lookup does not carry.
+        let custom_llm_provider = match string("custom_llm_provider")? {
+            Some(provider) => Some(provider),
+            None => py
+                .import(ROUTE_HOST_MODULE)?
+                .getattr("inferred_provider")?
+                .call1((&model, api_base.as_deref()))?
+                .extract()?,
+        };
+        let shaping = self.shaping(py, &model, custom_llm_provider.as_deref(), arguments)?;
         let extra_headers = self.merged_headers(py, arguments)?;
         let provider_specific_header = self.provider_specific_header(py, arguments)?;
         let litellm_params = project_litellm_params(argument, |name| module_global(py, name))?;
@@ -189,7 +168,7 @@ impl MessagesPythonHost {
     ) -> PyResult<MessagesShaping> {
         let module = py.import(ROUTE_HOST_MODULE)?;
         let capabilities: MessagesModelCapabilities = from_py(
-            &py.import("litellm.rust_bridge.host.model_capabilities")?
+            &py.import(MODEL_CAPABILITIES_MODULE)?
                 .getattr("anthropic_model_capabilities")?
                 .call1((model, custom_llm_provider))?,
         )?;
@@ -255,9 +234,13 @@ impl PythonBinding for MessagesPythonHost {
     fn encode_response(
         &mut self,
         py: Python<'_>,
-        response: Box<litellm_llms_types::formats::messages::MessagesResponse>,
+        response: litellm_inference_messages::MessagesBody,
     ) -> PyResult<Py<PyAny>> {
-        public_response(py, ROUTE_HOST_MODULE, response.as_ref())
+        public_response(py, ROUTE_HOST_MODULE, &response)
+    }
+
+    fn deliver_response(&mut self, py: Python<'_>, response: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.cache.store_response(py, response)
     }
 
     fn encode_stream_head(
@@ -276,16 +259,13 @@ impl PythonBinding for MessagesPythonHost {
     }
 
     fn map_error(&self, py: Python<'_>, error: Error) -> PyResult<PyErr> {
-        if let Error::Secret(source) = &error
-            && let Some(original) = crate::secrets::python_error(py, source.source_error())
-        {
-            return Ok(original);
-        }
-        Ok(self.map_failure(py, native_error(py, error)?))
+        route_failure(py, error, RequestMarker::Messages, |native| {
+            Ok(self.map_failure(py, native))
+        })
     }
 
     fn host_error(error: &PyErr) -> Error {
-        Error::InvalidRequest(error.to_string().into())
+        crate::routes::inference::host_call_error(error)
     }
 }
 
@@ -459,33 +439,9 @@ mod tests {
                     projected,
                     litellm_params(serde_json::from_value(fields).unwrap()).unwrap()
                 ),
-                (Err(error), Err(())) => assert!(matches!(error, Error::InvalidRequest(_))),
+                (Err(error), Err(())) => assert!(error.is_request(), "{error:?}"),
                 (projected, expected) => panic!("got {projected:?}, expected {expected:?}"),
             }
-        });
-    }
-
-    #[rstest]
-    #[case::rejected_request(Error::InvalidRequest("does not support top_k=5".into()), true)]
-    #[case::missing_field(Error::MissingField("max_tokens"), true)]
-    #[case::unresolvable_provider(Error::InvalidProvider("openai".into()), false)]
-    #[case::upstream_failure(
-        Error::Transport(TransportError::Http { status: 400, body: "bad".into() }),
-        false,
-    )]
-    fn only_request_rejections_carry_the_request_error_marker(
-        #[case] error: Error,
-        #[case] marked: bool,
-    ) {
-        Python::initialize();
-        Python::attach(|py| {
-            let native = native_error(py, error).unwrap();
-            let marker = native
-                .value(py)
-                .getattr_opt(REQUEST_ERROR_MARKER)
-                .unwrap()
-                .map(|value| value.extract::<bool>().unwrap());
-            assert_eq!(marker.unwrap_or(false), marked);
         });
     }
 }

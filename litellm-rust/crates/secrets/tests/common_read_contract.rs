@@ -9,8 +9,9 @@ use std::sync::Arc;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_core_utils::settings::Lookup;
+use litellm_secret_value::SecretValue;
 use litellm_secrets::{
-    KeyManagementSettings, SecretManager, SecretValue,
+    KeyManagementSettings, SecretManager,
     aws::AwsSecretsManagerV2,
     azure::AzureKeyVault,
     cyberark::CyberArkSecretManager,
@@ -18,6 +19,7 @@ use litellm_secrets::{
     google::GoogleSecretManager,
     hashicorp::{HashicorpVault, HashicorpVaultConfig},
 };
+
 use rstest::rstest;
 use serde_json::json;
 use wiremock::{
@@ -59,7 +61,7 @@ fn manager(provider: Provider, server: &MockServer) -> SecretManager {
         ),
         Provider::Azure => SecretManager::AzureKeyVault(
             AzureKeyVault::with_client(
-                litellm_http::Client::plain_for_test(),
+                litellm_http::Client::for_test(),
                 server.uri().parse().unwrap(),
                 environment,
             )
@@ -67,7 +69,7 @@ fn manager(provider: Provider, server: &MockServer) -> SecretManager {
         ),
         Provider::Google => SecretManager::GoogleSecretManager(
             GoogleSecretManager::with_client(
-                litellm_http::Client::plain_for_test(),
+                litellm_http::Client::for_test(),
                 server.uri().parse().unwrap(),
                 "project".into(),
                 environment,
@@ -84,7 +86,7 @@ fn manager(provider: Provider, server: &MockServer) -> SecretManager {
             .unwrap(),
         ),
         Provider::Cyberark => SecretManager::Cyberark(CyberArkSecretManager::with_client(
-            litellm_http::Client::plain_for_test(),
+            litellm_http::Client::for_test(),
             server.uri().parse().unwrap(),
             "acct".into(),
             "admin".into(),
@@ -240,7 +242,7 @@ async fn python_read_failures_preserve_provider_fallback_rules(
             KeyManagementSettings::default(),
         )),
         Arc::new(move |_: &str| environment_value.map(str::to_owned)),
-        OidcResolver::new(litellm_http::Client::plain_for_test()),
+        OidcResolver::new(litellm_http::Client::for_test()),
     );
     let expected = if matches!(provider, Provider::Aws) {
         None

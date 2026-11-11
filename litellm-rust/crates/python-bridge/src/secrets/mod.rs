@@ -11,7 +11,9 @@ mod vault;
 
 use std::sync::Arc;
 
-pub(crate) use error::python_error;
+#[cfg(test)]
+pub(crate) use error::read_error;
+pub(crate) use error::{ManagerError, python_error};
 use litellm_secrets::source::{EnvironmentSecrets, SecretSource};
 use pyo3::prelude::*;
 use python::PythonSecrets;
@@ -19,6 +21,7 @@ use resolved::ResolvedSecrets;
 
 use crate::{coercion::FieldSpec, python_settings::PythonSettings};
 
+const SECRET_MANAGER_MODULE: &str = "litellm.rust_bridge.host.secret_manager";
 const NATIVE: FieldSpec<bool> = FieldSpec::new("native", |field| field.schema_bool());
 
 /// Where a Rust route reads provider secrets from. Python's `get_secret_str` when the settings

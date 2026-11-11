@@ -1,34 +1,62 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import (
+    TYPE_CHECKING,
     Annotated,
-    Any,  # noqa: TID251  # jsonify_object in proxy/utils.py is annotated with a bare dict
     Final,
+    Protocol,
     cast,  # noqa: TID251  # jsonify_object in proxy/utils.py is annotated with a bare dict
 )
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from pydantic import TypeAdapter
 
 from litellm.constants import VECTOR_STORE_CALLER_METADATA_KWARG
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     LiteLLM_ManagedVectorStore,
 )
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    as_str_mapping,
+    decoded_json_object,
+    require_attributes,
+)
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import read_raw_json_body
+from litellm.proxy.route_llm_request import JSON_OBJECT_ADAPTER
 from litellm.proxy.utils import jsonify_object
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_proxy_admin_for_vector_store_index_management,
     assert_user_can_access_vector_store,
     get_litellm_managed_vector_store,
+    with_managed_search_file_ids,
 )
 from litellm.repositories.table_repositories import ManagedVectorStoreIndexRepository
+from litellm.types.utils import LlmProviders
 from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse
 from litellm.vector_stores.utils import VectorStoreWriteBody, callers_metadata_snapshot
 from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
 
+if TYPE_CHECKING:
+    from litellm import Router
+
 router: Final = APIRouter()
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _CreatesManagedVectorStores(Protocol):
+    async def acreate_vector_store(
+        self,
+        create_request: Mapping[str, object],
+        llm_router: "Router",
+        target_model_names_list: Sequence[object],
+        litellm_parent_otel_span: object,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> object: ...
+
 
 BLOCKED_QUERY_EMBEDDING_SELECTION_PARAMS: Final = frozenset(
     {
@@ -48,6 +76,24 @@ def reject_caller_embedding_selection_params(payload: Mapping[str, object], sour
             detail={
                 "error": f"'{blocked[0]}' cannot be set in {source}. "
                 "Embedding configuration comes from the vector store's server-side registration."
+            },
+        )
+
+
+def reject_caller_opensearch_index_name(
+    caller_body: Mapping[str, object], request_fields: Mapping[str, object], source: str
+) -> None:
+    provider: Final = request_fields.get("custom_llm_provider")
+    if (
+        isinstance(provider, str)
+        and provider.split("/", 1)[0] == LlmProviders.OPENSEARCH.value
+        and "opensearch_index_name" in caller_body
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"'opensearch_index_name' cannot be set in {source}. "
+                "The index comes from the vector store's server-side registration."
             },
         )
 
@@ -138,10 +184,16 @@ async def vector_store_search(
     data = await read_request_body(request=request)  # rebind-ok: pre-existing rebinding on a rename-only line
     reject_caller_embedding_selection_params(payload=data, source="the search request body")
     data["vector_store_id"] = vector_store_id
+    caller_body: Final = JSON_OBJECT_ADAPTER.validate_python(data)
 
     # Check for legacy vector store registry (non-managed vector stores)
     data = await _update_request_data_with_litellm_managed_vector_store_registry(
         data=data, vector_store_id=vector_store_id, user_api_key_dict=user_api_key_dict
+    )
+    reject_caller_opensearch_index_name(
+        caller_body=caller_body,
+        request_fields=JSON_OBJECT_ADAPTER.validate_python(data),
+        source="the search request body",
     )
 
     # The managed_vector_stores pre-call hook will handle:
@@ -152,7 +204,7 @@ async def vector_store_search(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        search_response: Final = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -169,6 +221,12 @@ async def vector_store_search(
             user_max_tokens=user_max_tokens,
             user_api_base=user_api_base,
             version=version,
+        )
+        search_page: Final = as_str_mapping(search_response)
+        if search_page is None:
+            return search_response
+        return await with_managed_search_file_ids(
+            search_page, proxy_logging_obj.get_proxy_hook("managed_files"), user_api_key_dict
         )
     except Exception as e:
         raise await processor.handle_llm_api_exception(
@@ -221,22 +279,23 @@ async def vector_store_create(
     )
 
     # Check for target_model_names parameter
-    target_model_names: Final = data.pop("target_model_names", None)
+    target_model_names: Final = _DECODED_JSON.validate_python(data.pop("target_model_names", None))
 
     if target_model_names:
         # Use managed vector stores for multi-model support
-        if isinstance(target_model_names, str):
-            target_model_names_list = [m.strip() for m in target_model_names.split(",")]
-        elif isinstance(target_model_names, list):
-            target_model_names_list = target_model_names
-        else:
+        target_model_names_list: Final = (
+            [m.strip() for m in target_model_names.split(",")]
+            if isinstance(target_model_names, str)
+            else as_object_list(target_model_names)
+        )
+        if target_model_names_list is None:
             raise HTTPException(
                 status_code=400,
                 detail="target_model_names must be a comma-separated string or list of model names",
             )
 
         # Get managed vector stores hook
-        managed_vector_stores: Final[Any] = proxy_logging_obj.get_proxy_hook("managed_vector_stores")
+        managed_vector_stores: Final = proxy_logging_obj.get_proxy_hook("managed_vector_stores")
         if managed_vector_stores is None:
             raise HTTPException(
                 status_code=500,
@@ -250,8 +309,10 @@ async def vector_store_create(
             )
 
         # Create vector store across multiple models
-        response: Final[object] = await managed_vector_stores.acreate_vector_store(
-            create_request=data,
+        response: Final = await require_attributes(
+            managed_vector_stores, _CreatesManagedVectorStores, "acreate_vector_store"
+        ).acreate_vector_store(
+            create_request=decoded_json_object(_DECODED_JSON.validate_python(data)),
             llm_router=llm_router,
             target_model_names_list=target_model_names_list,
             litellm_parent_otel_span=user_api_key_dict.parent_otel_span,

@@ -2,12 +2,15 @@ from typing import Final
 
 import pytest
 
-from litellm.llms.anthropic.pass_through.responses_adapters.transformation import (
+from litellm.llms.anthropic.messages.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
+from litellm.litellm_core_utils.tool_fields import DropPolicy
 from litellm.llms.openai.responses.count_tokens.transformation import (
     OpenAICountTokensConfig,
+    native_count_request,
 )
+from tests.unit.litellm_core_utils.attribute_forwarder import AttributeForwarder
 
 
 def test_transform_basic_request():
@@ -204,6 +207,23 @@ def test_messages_to_responses_input_with_tool():
         "type": "function_call_output",
         "call_id": "call_123",
         "output": "72°F",
+    }
+
+
+def test_messages_to_responses_input_reads_a_tool_call_that_forwards_its_fields():
+    tool_call: Final = {"id": "call_123", "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'}}
+    messages: Final = [
+        {"role": "user", "content": "What's the weather?"},
+        {"role": "assistant", "content": None, "tool_calls": [AttributeForwarder(tool_call)]},
+    ]
+
+    input_items, _ = OpenAICountTokensConfig.messages_to_responses_input(messages)
+
+    assert input_items[1] == {
+        "type": "function_call",
+        "call_id": "call_123",
+        "name": "get_weather",
+        "arguments": '{"city": "Paris"}',
     }
 
 
@@ -592,3 +612,56 @@ def test_anthropic_list_system_becomes_joined_instruction_text() -> None:
     )
 
     assert instructions == "First rule.\nSecond rule."
+
+
+def test_a_saved_conversation_with_a_null_created_by_is_counted_without_it() -> None:
+    compaction: Final = {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA"}
+    tool_output: Final = {"type": "function_call_output", "call_id": "call_1", "output": "42"}
+    sent_created_by: Final = {
+        "type": "function_call_output",
+        "call_id": "call_2",
+        "output": "7",
+        "created_by": "user_1",
+    }
+    request: Final = {
+        "model": "gpt-5.6",
+        "input": [{**compaction, "created_by": None}, {**tool_output, "created_by": None}, sent_created_by],
+    }
+
+    policy: Final = DropPolicy(drop_params=False, additional_drop_params=frozenset())
+
+    body: Final = native_count_request(request, "gpt-5.6", policy)
+
+    assert body["input"] == [compaction, tool_output, sent_created_by]
+
+
+
+def test_a_set_created_by_is_counted_without_it_under_drop_params() -> None:
+    tool_output: Final = {"type": "function_call_output", "call_id": "call_1", "output": "42"}
+    request: Final = {"model": "gpt-5.6", "input": [{**tool_output, "created_by": "user_1"}]}
+    policy: Final = DropPolicy(drop_params=True, additional_drop_params=frozenset())
+
+    body: Final = native_count_request(request, "gpt-5.6", policy)
+
+    assert body["input"] == [tool_output]
+
+
+def test_a_text_input_is_counted_as_sent() -> None:
+    policy: Final = DropPolicy(drop_params=False, additional_drop_params=frozenset())
+
+    body: Final = native_count_request({"model": "gpt-5.6", "input": "Hello"}, "gpt-5.6", policy)
+
+    assert body["input"] == "Hello"
+
+
+def test_a_reasoning_item_is_counted_without_its_null_fields() -> None:
+    reasoning: Final = {"id": "rs_1", "type": "reasoning", "summary": []}
+    request: Final = {
+        "model": "gpt-5.6",
+        "input": [{**reasoning, "status": None, "content": None, "encrypted_content": None}],
+    }
+    policy: Final = DropPolicy(drop_params=False, additional_drop_params=frozenset())
+
+    body: Final = native_count_request(request, "gpt-5.6", policy)
+
+    assert body["input"] == [reasoning]

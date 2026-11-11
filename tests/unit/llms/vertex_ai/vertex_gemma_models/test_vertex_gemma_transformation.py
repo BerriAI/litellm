@@ -632,7 +632,7 @@ class TestVertexGemmaCompletion:
         assert chunks[0].choices[0].delta.content == "READY"
         assert chunks[1].choices[0].finish_reason == "stop"
         if stream_options and stream_options["include_usage"]:
-            assert chunks[-1].choices[0].delta.content is None
+            assert chunks[-1].choices == []
             assert chunks[-1].usage.total_tokens == 114
             assert span.get_metric("_dd.llmobs.total_tokens") == 114
         else:

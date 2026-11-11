@@ -254,6 +254,34 @@ describe("DataTable sorting", () => {
   });
 });
 
+describe("DataTable error state", () => {
+  it("shows the failure and a Retry button instead of the empty state when the fetch failed", async () => {
+    const onRetry = vi.fn();
+    render(
+      <DataTable
+        data={[]}
+        columns={numericColumns}
+        isError
+        errorMessage="Request timed out after 30s"
+        onRetry={onRetry}
+        noDataMessage="No people"
+      />,
+    );
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent("Failed to load");
+    expect(alert).toHaveTextContent("Request timed out after 30s");
+    expect(screen.queryByText("No people")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps showing rows it already has when a refetch fails", () => {
+    render(<DataTable data={[person("a", "Alice")]} columns={numericColumns} isError />);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByText("Alice")).toBeInTheDocument();
+  });
+});
+
 describe("DataTable layout", () => {
   it("stretches the table to fill the container when resizing is on, so hidden columns leave no right-side gap", () => {
     render(<DataTable data={CHARLIE_ALICE_BOB} columns={nameCellColumns} enableColumnResizing />);

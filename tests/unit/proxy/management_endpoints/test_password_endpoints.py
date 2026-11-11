@@ -490,3 +490,30 @@ async def test_change_password_requires_db():
             )
 
     assert exc_info.value.status_code == 500
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fips_mode")
+async def test_fips_password_change_runs_both_pbkdf2_off_the_event_loop(pbkdf2_on_event_loop: list[bool]) -> None:
+    from litellm.proxy._types import ChangePasswordRequest
+
+    prisma: Final = _make_prisma(
+        _make_user_row("pbkdf2:AAECAwQFBgcICQoLDA0OD+uxhNqRo/3ZFLEaKARqFBT+N3Kqek/SGM/5AvocSN0T")
+    )
+
+    with (
+        patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.prisma_client", prisma
+        ),
+        patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.general_settings", _POLICY_NO_BREACH_CHECK
+        ),
+    ):
+        await change_password(
+            data=ChangePasswordRequest(current_password="Seed-Lamp-4-River", new_password=NEW_PASSWORD),
+            user_api_key_dict=_caller(),
+            hibp_client=_hibp_client_never_called(),
+        )
+
+    assert pbkdf2_on_event_loop == [False, False]
+    assert prisma.db.litellm_usertable.update.call_args.kwargs["data"]["password"].startswith("pbkdf2:")

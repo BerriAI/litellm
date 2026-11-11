@@ -125,8 +125,40 @@ describe("useModelsInfo", () => {
       undefined,
       false,
       undefined,
+      {},
     );
     expect(modelInfoCall).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps saved model parameters separate from hydrated parameters in the query cache", async () => {
+    vi.mocked(modelInfoCall).mockImplementation(async (...args) => ({
+      ...mockPaginatedModelInfoResponse,
+      data: [{ litellm_params: args[15]?.useStoredParams ? {} : { litellm_image_enabled: false } }],
+    }));
+    const { result } = renderHook(
+      () => ({
+        hydrated: useModelsInfo(1, 50, undefined, "model-1"),
+        stored: useModelsInfo(
+          1,
+          50,
+          undefined,
+          "model-1",
+          undefined,
+          undefined,
+          undefined,
+          false,
+          undefined,
+          undefined,
+          false,
+          undefined,
+          { useStoredParams: true },
+        ),
+      }),
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.stored.isSuccess && result.current.hydrated.isSuccess).toBe(true));
+    expect(result.current.stored.data?.data[0].litellm_params).toEqual({});
+    expect(result.current.hydrated.data?.data[0].litellm_params).toEqual({ litellm_image_enabled: false });
   });
 
   it("should use custom page and size parameters", async () => {
@@ -156,6 +188,7 @@ describe("useModelsInfo", () => {
       undefined,
       false,
       undefined,
+      {},
     );
   });
 

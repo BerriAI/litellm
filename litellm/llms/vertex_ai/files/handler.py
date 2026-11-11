@@ -3,7 +3,7 @@ import json
 import os
 import time
 from collections.abc import Coroutine, Mapping
-from typing import Any, Final
+from typing import Final
 from urllib.parse import unquote
 
 import httpx
@@ -197,7 +197,7 @@ class VertexAIFilesHandler(GCSBucketBase):
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         litellm_params: dict | None = None,
-    ) -> HttpxBinaryResponseContent | Coroutine[Any, Any, HttpxBinaryResponseContent]:
+    ) -> HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent]:
         """
         Download file content from GCS bucket for VertexAI files.
         Supports both sync and async operations.

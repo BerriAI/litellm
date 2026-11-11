@@ -20,7 +20,7 @@ from botocore.awsrequest import AWSRequest
 import litellm
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.bedrock_mantle.chat.transformation import BedrockMantleChatConfig
-from litellm.llms.bedrock.base_aws_llm import sign_request_off_loop_if_aws
+from litellm.llms.bedrock.base_aws_llm import run_off_loop_if_aws
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.utils import LlmProviders
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
@@ -1096,6 +1096,25 @@ class TestBedrockMantleClaudeChatRoute:
         )
         assert response._hidden_params["response_cost"] != pytest.approx(_row_cost("anthropic.claude-opus-5-5", 10, 5))
 
+    def test_claude_completion_without_max_tokens_sends_the_mantle_rows_output_limit(self, monkeypatch, local_cost_map):
+        from litellm.constants import DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+        mapped_cap: Final = litellm.model_cost["bedrock_mantle/anthropic.claude-haiku-4-5"]["max_output_tokens"]
+        assert mapped_cap != DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS, "the model's mapped cap must differ from the fallback"
+        monkeypatch.setenv("BEDROCK_MANTLE_API_KEY", "mantle-key")
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        handler: Final = Mock(side_effect=_anthropic_message)
+
+        litellm.completion(
+            model="bedrock_mantle/anthropic.claude-haiku-4-5",
+            messages=[{"role": "user", "content": "hello"}],
+            aws_region_name="us-east-1",
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler))),
+        )
+
+        assert json.loads(handler.call_args.args[0].content)["max_tokens"] == mapped_cap
+
     def test_claude_streaming_completion_uses_native_messages_endpoint(self, monkeypatch, local_cost_map):
         from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
@@ -1234,9 +1253,7 @@ async def test_mantle_signing_runs_off_the_event_loop():
         return dict(request.headers)
 
     release = asyncio.create_task(probe.release_refresh_from_the_loop())
-    signed = await sign_request_off_loop_if_aws(
-        BedrockMantleChatConfig(), sign, headers={"Content-Type": "application/json"}
-    )
+    signed = await run_off_loop_if_aws(BedrockMantleChatConfig(), sign, headers={"Content-Type": "application/json"})
     await release
 
     assert "Authorization" in signed

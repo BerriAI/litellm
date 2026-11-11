@@ -7,7 +7,7 @@ use litellm_tracing::{DiagnosticInput, Level, Logger, Metadata, Policy, Processo
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
-const MODULE: &str = "litellm.rust_bridge.logger";
+const MODULE: &str = "litellm.rust_bridge.host.logger";
 type NativeDiagnosticOutput = (String, Option<String>, Option<String>, Vec<String>, bool);
 
 #[pyclass]
@@ -81,8 +81,12 @@ impl NativeDiagnosticProcessor {
     }
 }
 
-fn processing_error(_: fancy_regex::Error) -> PyErr {
-    PyRuntimeError::new_err("diagnostic processing failed")
+#[derive(Debug, thiserror::Error)]
+#[error("diagnostic processing failed")]
+struct ProcessingError(#[source] fancy_regex::Error);
+
+fn processing_error(error: fancy_regex::Error) -> PyErr {
+    PyRuntimeError::new_err(litellm_error::Report::new(&ProcessingError(error)).to_string())
 }
 
 struct PythonSink {

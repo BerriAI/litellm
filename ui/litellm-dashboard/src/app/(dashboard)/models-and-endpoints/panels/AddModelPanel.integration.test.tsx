@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { act, renderWithProviders, screen, waitFor, within } from "../../../../../tests/test-utils";
+import { act, fireEvent, renderWithProviders, screen, waitFor, within } from "../../../../../tests/test-utils";
 import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -80,6 +80,13 @@ vi.mock("@/app/(dashboard)/hooks/providers/useProviderFields", () => ({
         default_model_placeholder: "jev-latest",
         credential_fields: [{ key: "api_key", label: "API Key", field_type: "password", required: false }],
       },
+      {
+        provider: "StreamLake",
+        provider_display_name: "StreamLake",
+        litellm_provider: "streamlake",
+        default_model_placeholder: "streamlake/<model-or-endpoint>",
+        credential_fields: [{ key: "api_key", label: "API Key", field_type: "password", required: false }],
+      },
     ],
     isLoading: false,
     error: null,
@@ -132,6 +139,7 @@ const alwaysMounted = {
 
 const advancedOpenExtras = {
   guardrails: undefined,
+  kubernetes_pod_discovery: undefined,
   tags: undefined,
   use_in_pass_through: undefined,
   vector_store_ids: undefined,
@@ -277,6 +285,28 @@ describe("AddModelPanel submit payload contract", () => {
     });
   });
 
+  it("creates a StreamLake model from a public model selection and API key", async () => {
+    mockUseModelCostMap.mockReturnValue({ data: { "streamlake/GLM-5.3": { litellm_provider: "streamlake" } } });
+    const { user, submit } = await setup();
+
+    await user.click(screen.getByRole("combobox", { name: /provider/i }));
+    await user.click(await screen.findByText("StreamLake"));
+    await user.click(screen.getByRole("combobox", { name: "Select models" }));
+    await user.click(await screen.findByText("streamlake/GLM-5.3"));
+    fireEvent.change(screen.getByLabelText("API Key"), { target: { value: "sk-streamlake-test" } });
+    await submit();
+
+    expect(lastCreatedModel()).toStrictEqual({
+      model_name: "streamlake/GLM-5.3",
+      litellm_params: {
+        model: "streamlake/GLM-5.3",
+        custom_llm_provider: "streamlake",
+        api_key: "sk-streamlake-test",
+      },
+      model_info: { ...baseModelInfo },
+    });
+  });
+
   it("registers four more keys as undefined once Advanced Settings opens", async () => {
     const { openAdvanced, fillRequired, submit } = await setup();
     await fillRequired();
@@ -300,6 +330,24 @@ describe("AddModelPanel submit payload contract", () => {
     expect(lastCreatedModel()).toStrictEqual({
       model_name: "gpt-4o",
       litellm_params: { ...alwaysMounted, ...advancedOpenExtras, rpm: 7 },
+      model_info: { ...baseModelInfo },
+    });
+  });
+
+  it("submits Kubernetes pod discovery in litellm_params", async () => {
+    const { user, openAdvanced, fillRequired, submit } = await setup();
+    await fillRequired();
+    await openAdvanced();
+    await user.click(screen.getByRole("switch", { name: "Kubernetes pod discovery" }));
+    await submit();
+
+    expect(lastCreatedModel()).toStrictEqual({
+      model_name: "gpt-4o",
+      litellm_params: {
+        ...alwaysMounted,
+        ...advancedOpenExtras,
+        kubernetes_pod_discovery: true,
+      },
       model_info: { ...baseModelInfo },
     });
   });

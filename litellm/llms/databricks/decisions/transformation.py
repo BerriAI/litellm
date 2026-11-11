@@ -6,7 +6,10 @@ from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
+from litellm.llms.databricks.common_utils import DatabricksBase
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.decisions import DecisionsIRRequest, UnsupportedDecisionsRequest
 
 DATABRICKS_AI_DECIDE_MODEL: Final = "ai_decide"
@@ -73,6 +76,17 @@ class DatabricksDecisionsConfig(BaseDecisionsConfig):
     api_key_env = ("DATABRICKS_API_KEY", "DATABRICKS_TOKEN")
     api_base_env = ("DATABRICKS_API_BASE",)
 
+    def resolve_credential(
+        self, api_key: str | None, api_base: str, litellm_params: Mapping[str, object]
+    ) -> str | None:
+        if api_key:
+            return api_key
+        client_id: Final = get_secret_str("DATABRICKS_CLIENT_ID")
+        client_secret: Final = get_secret_str("DATABRICKS_CLIENT_SECRET")
+        if not client_id or not client_secret:
+            return None
+        return DatabricksBase().get_cached_oauth_m2m_token(api_base, client_id, client_secret)
+
     def missing_api_base_message(self, custom_llm_provider: str) -> str:
         return (
             f"api_base is required for Decisions provider '{custom_llm_provider}': set DATABRICKS_API_BASE to "
@@ -84,8 +98,8 @@ class DatabricksDecisionsConfig(BaseDecisionsConfig):
 
     def get_complete_url(self, api_base: str, model: str) -> str:
         if is_ai_decide_model(model):
-            return f"{databricks_workspace_host(api_base)}{_AI_DECIDE_PATH}"
-        return f"{api_base.rstrip('/')}/{validate_databricks_decisions_model(model)}/invocations"
+            return join_api_base(databricks_workspace_host(api_base), _AI_DECIDE_PATH)
+        return join_api_base(api_base, f"{validate_databricks_decisions_model(model)}/invocations")
 
     def transform_decisions_request(
         self,

@@ -1,8 +1,11 @@
-use litellm_auth_types::Error;
+use crate::native::CredentialAttempt;
 use litellm_auth_types::{
-    CredentialFileRef, CredentialLookup, CredentialRef, InputSource, ResolvedCredential,
-    SecretValue, Sourced, TokenProviderHandle,
+    CredentialFileRef, CredentialLookup, CredentialRef, InputSource, ResolvedCredential, Sourced,
+    TokenProviderHandle,
 };
+use litellm_secret_value::SecretValue;
+
+use litellm_auth_types::{Error, ErrorDetail};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -10,25 +13,31 @@ use std::sync::Arc;
 use super::native::{NativeAzureRequest, NativeAzureTokenAcquirer, ValidatedAzureRequest};
 use super::types::{AzureAuthInputs, AzureCredentialType, ConfigValue, DEFAULT_AZURE_SCOPE};
 
-const AZURE_AD_TOKEN_ENV: &str = "AZURE_AD_TOKEN";
-const AZURE_TENANT_ID_ENV: &str = "AZURE_TENANT_ID";
-const AZURE_CLIENT_ID_ENV: &str = "AZURE_CLIENT_ID";
-const AZURE_CLIENT_SECRET_ENV: &str = "AZURE_CLIENT_SECRET";
-const AZURE_SCOPE_ENV: &str = "AZURE_SCOPE";
-const AZURE_AUTHORITY_HOST_ENV: &str = "AZURE_AUTHORITY_HOST";
-const AZURE_CREDENTIAL_ENV: &str = "AZURE_CREDENTIAL";
-const AZURE_FEDERATED_TOKEN_FILE_ENV: &str = "AZURE_FEDERATED_TOKEN_FILE";
+#[derive(strum::IntoStaticStr, strum::VariantArray, strum::VariantNames)]
+enum AzureSecretName {
+    #[strum(serialize = "AZURE_AD_TOKEN")]
+    AdToken,
+    #[strum(serialize = "AZURE_TENANT_ID")]
+    TenantId,
+    #[strum(serialize = "AZURE_CLIENT_ID")]
+    ClientId,
+    #[strum(serialize = "AZURE_CLIENT_SECRET")]
+    ClientSecret,
+    #[strum(serialize = "AZURE_SCOPE")]
+    Scope,
+    #[strum(serialize = "AZURE_AUTHORITY_HOST")]
+    AuthorityHost,
+    #[strum(serialize = "AZURE_CREDENTIAL")]
+    Credential,
+    #[strum(serialize = "AZURE_FEDERATED_TOKEN_FILE")]
+    FederatedTokenFile,
+    #[strum(serialize = "IDENTITY_ENDPOINT")]
+    IdentityEndpoint,
+    #[strum(serialize = "MSI_ENDPOINT")]
+    MsiEndpoint,
+}
 
-pub const SECRET_NAMES: &[&str] = &[
-    AZURE_AD_TOKEN_ENV,
-    AZURE_TENANT_ID_ENV,
-    AZURE_CLIENT_ID_ENV,
-    AZURE_CLIENT_SECRET_ENV,
-    AZURE_SCOPE_ENV,
-    AZURE_AUTHORITY_HOST_ENV,
-    AZURE_CREDENTIAL_ENV,
-    AZURE_FEDERATED_TOKEN_FILE_ENV,
-];
+pub const SECRET_NAMES: &[&str] = <AzureSecretName as strum::VariantNames>::VARIANTS;
 
 #[derive(Clone, Debug)]
 pub(crate) enum AzureCredentialPlan {
@@ -55,14 +64,14 @@ trait AzureTokenAcquirer: Send + Sync {
     fn acquire(
         &self,
         request: ValidatedAzureRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<ResolvedCredential, Error>> + Send + '_>>;
+    ) -> Pin<Box<dyn Future<Output = CredentialAttempt> + Send + '_>>;
 }
 
 impl AzureTokenAcquirer for NativeAzureTokenAcquirer {
     fn acquire(
         &self,
         request: ValidatedAzureRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<ResolvedCredential, Error>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = CredentialAttempt> + Send + '_>> {
         Box::pin(NativeAzureTokenAcquirer::acquire(self, request))
     }
 }
@@ -81,19 +90,43 @@ impl AzureAuthService {
         Self { native }
     }
 
+    pub async fn identity_token(
+        &self,
+        identity: &AzureIdentity,
+        scope: &str,
+        env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
+    ) -> Result<Option<ResolvedCredential>, Error> {
+        let plan = identity_plan(identity, scope, env_lookup)?;
+        let inputs = AzureAuthInputs::default_credential_for_scope(scope);
+        Ok(self
+            .run_plan(plan, &inputs, env_lookup)
+            .await?
+            .map(Sourced::into_value))
+    }
+
     pub async fn get_azure_ad_token(
         &self,
         inputs: &AzureAuthInputs,
         env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
     ) -> Result<Option<Sourced<ResolvedCredential>>, Error> {
-        match select_auth_plan(inputs, env_lookup)? {
+        self.run_plan(select_auth_plan(inputs, env_lookup)?, inputs, env_lookup)
+            .await
+    }
+
+    async fn run_plan(
+        &self,
+        plan: AzureCredentialPlan,
+        inputs: &AzureAuthInputs,
+        env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
+    ) -> Result<Option<Sourced<ResolvedCredential>>, Error> {
+        match plan {
             AzureCredentialPlan::Supplied(credential) => Ok(Some(credential)),
             AzureCredentialPlan::Caller(caller) => {
                 let credential = caller.acquire().await?;
                 if credential.secret().expose().is_empty() {
-                    return Err(Error::EmptyCallerCredential(
-                        "Azure AD token provider returned an empty token",
-                    ));
+                    return Err(Error::EmptyCallerCredential {
+                        caller: "Azure AD token provider",
+                    });
                 }
                 Ok(Some(Sourced::new(credential, InputSource::Deployment)))
             }
@@ -106,11 +139,9 @@ impl AzureAuthService {
             } => {
                 let assertion = resolve_reference(inputs, env_lookup, reference.value())
                     .await?
-                    .ok_or_else(|| {
-                        Error::CredentialAcquisition(
-                            "Azure OIDC reference did not resolve to a value".into(),
-                        )
-                    })?;
+                    .ok_or(Error::CredentialAcquisition(ErrorDetail::Unresolved {
+                        subject: "Azure OIDC reference",
+                    }))?;
                 let request = ValidatedAzureRequest::new(NativeAzureRequest::ClientAssertion {
                     tenant_id,
                     client_id,
@@ -123,6 +154,7 @@ impl AzureAuthService {
                 self.native
                     .acquire(request)
                     .await
+                    .into_result()
                     .map(|credential| Sourced::new(credential, source))
                     .map(Some)
             }
@@ -131,6 +163,7 @@ impl AzureAuthService {
                 self.native
                     .acquire(request)
                     .await
+                    .into_result()
                     .map(|credential| Some(Sourced::new(credential, source)))
             }
             AzureCredentialPlan::Chain(requests) => {
@@ -138,13 +171,126 @@ impl AzureAuthService {
                 for request in requests {
                     let source = request.credential_source();
                     match self.native.acquire(request).await {
-                        Ok(credential) => return Ok(Some(Sourced::new(credential, source))),
-                        Err(error) => failures.push(error),
+                        CredentialAttempt::Resolved(credential) => {
+                            return Ok(Some(Sourced::new(credential, source)));
+                        }
+                        CredentialAttempt::Unavailable(error) => failures.push(error),
+                        CredentialAttempt::Failed(error) => {
+                            return Err(Error::CredentialChain {
+                                last: Box::new(error),
+                                earlier: failures,
+                            });
+                        }
                     }
                 }
-                Err(Error::CredentialChain(failures))
+                match failures.pop() {
+                    Some(last) => Err(Error::CredentialChain {
+                        last: Box::new(last),
+                        earlier: failures,
+                    }),
+                    None => Ok(None),
+                }
             }
             AzureCredentialPlan::Missing => Ok(None),
+        }
+    }
+}
+
+/// The identity azure-identity builds for one explicit credential class, without LiteLLM's provider settings
+/// (`AZURE_AD_TOKEN`, `AZURE_CREDENTIAL`, `AZURE_SCOPE`) that `get_azure_ad_token` also reads.
+#[derive(Clone, Debug)]
+pub enum AzureIdentity {
+    ClientSecret {
+        tenant_id: String,
+        client_id: String,
+        client_secret: SecretValue,
+    },
+    ManagedIdentity {
+        client_id: String,
+    },
+    Default,
+}
+
+fn identity_plan(
+    identity: &AzureIdentity,
+    scope: &str,
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+) -> Result<AzureCredentialPlan, Error> {
+    let deployment = |value: &str| Sourced::new(value.to_owned(), InputSource::Deployment);
+    let environment = |name: &str| {
+        env_lookup(name)
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| Sourced::new(value, InputSource::Environment))
+    };
+    let scope = deployment(scope);
+    let authority = environment(AzureSecretName::AuthorityHost.into());
+    match identity {
+        AzureIdentity::ClientSecret {
+            tenant_id,
+            client_id,
+            client_secret,
+        } => Ok(AzureCredentialPlan::Native(ValidatedAzureRequest::new(
+            NativeAzureRequest::ClientSecret {
+                tenant_id: deployment(tenant_id),
+                client_id: deployment(client_id),
+                client_secret: Sourced::new(client_secret.clone(), InputSource::Deployment),
+                scope,
+                authority,
+            },
+        )?)),
+        AzureIdentity::ManagedIdentity { client_id } => Ok(AzureCredentialPlan::Native(
+            ValidatedAzureRequest::new(NativeAzureRequest::ManagedIdentity {
+                client_id: Some(deployment(client_id)),
+                scope,
+                selection_source: InputSource::Deployment,
+            })?,
+        )),
+        AzureIdentity::Default => {
+            let tenant_id = environment(AzureSecretName::TenantId.into());
+            let client_id = environment(AzureSecretName::ClientId.into());
+            let from_environment = match (
+                tenant_id.clone(),
+                client_id.clone(),
+                environment(AzureSecretName::ClientSecret.into()),
+            ) {
+                (Some(tenant_id), Some(client_id), Some(client_secret)) => {
+                    Some(NativeAzureRequest::ClientSecret {
+                        tenant_id,
+                        client_id,
+                        client_secret: client_secret.map(SecretValue::new),
+                        scope: scope.clone(),
+                        authority: authority.clone(),
+                    })
+                }
+                _ => None,
+            };
+            let probe_imds = env_lookup(AzureSecretName::IdentityEndpoint.into()).is_none()
+                && env_lookup(AzureSecretName::MsiEndpoint.into()).is_none();
+            let AzureCredentialPlan::Chain(chain) = select_native_plan(
+                Some(Sourced::new(
+                    AzureCredentialType::DefaultAzureCredential,
+                    InputSource::Deployment,
+                )),
+                tenant_id,
+                client_id,
+                environment(AzureSecretName::FederatedTokenFile.into()),
+                scope,
+                authority,
+                InputSource::Environment,
+            )?
+            else {
+                unreachable!("DefaultAzureCredential always plans a chain")
+            };
+            let environment_request = from_environment
+                .map(ValidatedAzureRequest::new)
+                .transpose()?;
+            Ok(AzureCredentialPlan::Chain(
+                environment_request
+                    .into_iter()
+                    .chain(chain)
+                    .map(|request| request.with_imds_probe(probe_imds))
+                    .collect(),
+            ))
         }
     }
 }
@@ -153,30 +299,58 @@ pub(crate) fn select_auth_plan(
     inputs: &AzureAuthInputs,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Result<AzureCredentialPlan, Error> {
-    let token = configured_secret(&inputs.azure_ad_token, AZURE_AD_TOKEN_ENV, env_lookup);
-    let tenant_id = configured_string(&inputs.tenant_id, AZURE_TENANT_ID_ENV, env_lookup);
-    let client_id = configured_string(&inputs.client_id, AZURE_CLIENT_ID_ENV, env_lookup);
-    let client_secret =
-        configured_secret(&inputs.client_secret, AZURE_CLIENT_SECRET_ENV, env_lookup);
-    let scope = configured_string(&inputs.azure_scope, AZURE_SCOPE_ENV, env_lookup)
-        .unwrap_or_else(|| Sourced::new(DEFAULT_AZURE_SCOPE.to_string(), InputSource::Environment));
-    let authority = configured_string(
-        &inputs.azure_authority_host,
-        AZURE_AUTHORITY_HOST_ENV,
+    let token = configured_secret(
+        &inputs.azure_ad_token,
+        AzureSecretName::AdToken.into(),
         env_lookup,
     );
-    let selector = configured_string(&inputs.azure_credential, AZURE_CREDENTIAL_ENV, env_lookup)
-        .map(|value| {
-            value
-                .value()
-                .parse::<AzureCredentialType>()
-                .map(|selector| Sourced::new(selector, value.source()))
-        })
-        .transpose()
-        .map_err(|_| Error::InvalidConfiguration("invalid Azure credential selector".into()))?;
+    let tenant_id = configured_string(
+        &inputs.tenant_id,
+        AzureSecretName::TenantId.into(),
+        env_lookup,
+    );
+    let client_id = configured_string(
+        &inputs.client_id,
+        AzureSecretName::ClientId.into(),
+        env_lookup,
+    );
+    let client_secret = configured_secret(
+        &inputs.client_secret,
+        AzureSecretName::ClientSecret.into(),
+        env_lookup,
+    );
+    let scope = configured_string(
+        &inputs.azure_scope,
+        AzureSecretName::Scope.into(),
+        env_lookup,
+    )
+    .unwrap_or_else(|| Sourced::new(DEFAULT_AZURE_SCOPE.to_string(), InputSource::Environment));
+    let authority = configured_string(
+        &inputs.azure_authority_host,
+        AzureSecretName::AuthorityHost.into(),
+        env_lookup,
+    );
+    let selector = configured_string(
+        &inputs.azure_credential,
+        AzureSecretName::Credential.into(),
+        env_lookup,
+    )
+    .map(|value| {
+        value
+            .value()
+            .parse::<AzureCredentialType>()
+            .map(|selector| Sourced::new(selector, value.source()))
+    })
+    .transpose()
+    .map_err(|error| {
+        Error::InvalidConfiguration(ErrorDetail::failed(
+            "Azure credential selector parsing",
+            error,
+        ))
+    })?;
     let federated_token_file = configured_string(
         &inputs.federated_token_file,
-        AZURE_FEDERATED_TOKEN_FILE_ENV,
+        AzureSecretName::FederatedTokenFile.into(),
         env_lookup,
     );
 
@@ -226,7 +400,12 @@ pub(crate) fn select_auth_plan(
         return Ok(AzureCredentialPlan::Missing);
     }
 
-    select_native_plan(
+    let probe_imds = selector
+        .as_ref()
+        .is_none_or(|selector| *selector.value() == AzureCredentialType::DefaultAzureCredential)
+        && env_lookup(AzureSecretName::IdentityEndpoint.into()).is_none()
+        && env_lookup(AzureSecretName::MsiEndpoint.into()).is_none();
+    match select_native_plan(
         selector,
         tenant_id,
         client_id,
@@ -234,7 +413,15 @@ pub(crate) fn select_auth_plan(
         scope,
         authority,
         inputs.enable_azure_ad_token_refresh.source(),
-    )
+    )? {
+        AzureCredentialPlan::Chain(requests) => Ok(AzureCredentialPlan::Chain(
+            requests
+                .into_iter()
+                .map(|request| request.with_imds_probe(probe_imds))
+                .collect(),
+        )),
+        plan => Ok(plan),
+    }
 }
 
 fn select_native_plan(
@@ -263,9 +450,12 @@ fn select_native_plan(
     let selection_source = selected.source();
 
     match selected.into_value() {
-        AzureCredentialType::ClientSecretCredential => Err(Error::InvalidConfiguration(
-            "ClientSecretCredential requires tenant_id, client_id, and client_secret".into(),
-        )),
+        AzureCredentialType::ClientSecretCredential => {
+            Err(Error::InvalidConfiguration(ErrorDetail::MissingSettings {
+                credential: "ClientSecretCredential",
+                settings: "tenant_id, client_id, and client_secret",
+            }))
+        }
         AzureCredentialType::WorkloadIdentityCredential => {
             Ok(AzureCredentialPlan::Native(ValidatedAzureRequest::new(
                 workload_request(tenant_id, client_id, federated_token_file, scope, authority)?,
@@ -349,19 +539,18 @@ fn workload_request(
     authority: Option<Sourced<String>>,
 ) -> Result<NativeAzureRequest, Error> {
     Ok(NativeAzureRequest::WorkloadIdentity {
-        tenant_id: tenant_id.ok_or_else(|| {
-            Error::InvalidConfiguration("WorkloadIdentityCredential requires tenant_id".into())
-        })?,
-        client_id: client_id.ok_or_else(|| {
-            Error::InvalidConfiguration("WorkloadIdentityCredential requires client_id".into())
-        })?,
-        token_file_path: token_file_path.ok_or_else(|| {
-            Error::InvalidConfiguration(
-                "WorkloadIdentityCredential requires azure_federated_token_file".into(),
-            )
-        })?,
+        tenant_id: tenant_id.ok_or(workload_requires("tenant_id"))?,
+        client_id: client_id.ok_or(workload_requires("client_id"))?,
+        token_file_path: token_file_path.ok_or(workload_requires("azure_federated_token_file"))?,
         scope,
         authority,
+    })
+}
+
+fn workload_requires(settings: &'static str) -> Error {
+    Error::InvalidConfiguration(ErrorDetail::MissingSettings {
+        credential: "WorkloadIdentityCredential",
+        settings,
     })
 }
 
@@ -410,11 +599,10 @@ async fn resolve_reference(
             .map_or(CredentialLookup::Missing, CredentialLookup::Found),
         CredentialRef::None => return Ok(None),
         CredentialRef::File(_) | CredentialRef::Request(_) | CredentialRef::Host(_) => {
-            let resolver = inputs.credential_resolver.as_ref().ok_or_else(|| {
-                Error::InvalidConfiguration(
-                    "credential reference requires a host credential resolver".into(),
-                )
-            })?;
+            let resolver = inputs
+                .credential_resolver
+                .as_ref()
+                .ok_or(Error::InvalidConfiguration(ErrorDetail::MissingResolver))?;
             resolver.resolve(reference).await?
         }
     };
@@ -433,7 +621,7 @@ fn oidc_reference(
     let value = token.value().expose();
     if token.source() == InputSource::Request && value.starts_with("oidc/") {
         return Err(Error::InvalidConfiguration(
-            "request-controlled Azure credential references are not allowed".into(),
+            ErrorDetail::RequestControlledReference { provider: "Azure" },
         ));
     }
     if let Some(name) = value.strip_prefix("oidc/env/") {
@@ -457,19 +645,17 @@ fn oidc_reference(
     }
     if value.starts_with("oidc/") {
         return Err(Error::InvalidConfiguration(
-            "unsupported OIDC reference".into(),
+            ErrorDetail::UnsupportedReference,
         ));
     }
     Ok(None)
 }
 
-fn non_empty_reference(value: &str, kind: &str) -> Result<String, Error> {
+fn non_empty_reference(value: &str, kind: &'static str) -> Result<String, Error> {
     if value.is_empty() {
-        return Err(Error::InvalidConfiguration(
-            litellm_auth_types::ErrorDetail::Empty {
-                subject: kind.into(),
-            },
-        ));
+        return Err(Error::InvalidConfiguration(ErrorDetail::Empty {
+            subject: kind,
+        }));
     }
     Ok(value.to_string())
 }
@@ -492,13 +678,17 @@ mod tests {
     use litellm_auth_types::ResolvedCredential;
     use litellm_auth_types::{
         CredentialFileRef, CredentialLookup, CredentialLookupFuture, CredentialRef,
-        CredentialResolver, CredentialResolverHandle, InputSource, SecretValue, Sourced,
+        CredentialResolver, CredentialResolverHandle, InputSource, Sourced,
     };
+    use litellm_secret_value::SecretValue;
 
     #[derive(Debug)]
     struct FileResolver;
 
+    use crate::native::CredentialAttempt;
+
     struct ChainAcquirer {
+        terminal_on: Option<&'static str>,
         requests: Mutex<Vec<&'static str>>,
         succeed_on: Option<&'static str>,
     }
@@ -507,18 +697,25 @@ mod tests {
         fn acquire(
             &self,
             request: ValidatedAzureRequest,
-        ) -> std::pin::Pin<Box<dyn Future<Output = Result<ResolvedCredential, Error>> + Send + '_>>
-        {
+        ) -> std::pin::Pin<Box<dyn Future<Output = CredentialAttempt> + Send + '_>> {
             let kind = request.kind();
             self.requests.lock().unwrap().push(kind);
             Box::pin(async move {
                 if self.succeed_on == Some(kind) {
-                    Ok(ResolvedCredential::AccessToken {
+                    CredentialAttempt::Resolved(ResolvedCredential::AccessToken {
                         token: SecretValue::new("chain-token"),
                         expires_on: None,
                     })
                 } else {
-                    Err(Error::CredentialAcquisition(kind.into()))
+                    let error =
+                        Error::CredentialAcquisition(litellm_auth_types::ErrorDetail::Unresolved {
+                            subject: kind,
+                        });
+                    if self.terminal_on == Some(kind) {
+                        CredentialAttempt::Failed(error)
+                    } else {
+                        CredentialAttempt::Unavailable(error)
+                    }
                 }
             })
         }
@@ -624,7 +821,11 @@ mod tests {
         )))
         .expect_err("unsupported backend must fail validation");
 
-        assert!(error.to_string().contains("unsupported OIDC reference"));
+        assert!(
+            litellm_error::Report::new(&error)
+                .to_string()
+                .contains("unsupported OIDC reference")
+        );
     }
 
     #[rstest::rstest]
@@ -649,11 +850,11 @@ mod tests {
         })
         .unwrap_err();
 
-        assert_eq!(
-            error,
-            Error::InvalidConfiguration(
-                "request-controlled Azure credential references are not allowed".into()
-            )
+        assert!(
+            litellm_error::Report::new(&error)
+                .to_string()
+                .contains("request-controlled Azure credential references are not allowed"),
+            "{error:?}"
         );
     }
 
@@ -673,9 +874,210 @@ mod tests {
         assert_eq!(resolved, Some(SecretValue::new("rotated-assertion")));
     }
 
+    #[derive(Debug)]
+    struct UnavailableImdsClient;
+
+    impl azure_core::http::HttpClient for UnavailableImdsClient {
+        fn execute_request<'life0, 'life1, 'async_trait>(
+            &'life0 self,
+            _request: &'life1 azure_core::http::Request,
+        ) -> std::pin::Pin<
+            Box<
+                dyn Future<Output = azure_core::Result<azure_core::http::AsyncRawResponse>>
+                    + Send
+                    + 'async_trait,
+            >,
+        >
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            Self: 'async_trait,
+        {
+            Box::pin(std::future::pending())
+        }
+    }
+
+    struct OfflineChainAcquirer(super::NativeAzureTokenAcquirer);
+
+    impl AzureTokenAcquirer for OfflineChainAcquirer {
+        fn acquire(
+            &self,
+            request: ValidatedAzureRequest,
+        ) -> std::pin::Pin<Box<dyn Future<Output = CredentialAttempt> + Send + '_>> {
+            Box::pin(async move {
+                if request.kind() == "developer-tools" {
+                    return CredentialAttempt::Resolved(ResolvedCredential::AccessToken {
+                        token: SecretValue::new("cli-token"),
+                        expires_on: None,
+                    });
+                }
+                self.0.acquire(request).await
+            })
+        }
+    }
+
+    #[rstest::rstest]
+    #[case::default_off_azure("DefaultAzureCredential", None, true)]
+    #[case::explicit_managed_identity("ManagedIdentityCredential", None, false)]
+    #[case::app_service("DefaultAzureCredential", Some("http://app-service.test"), false)]
+    #[tokio::test(start_paused = true)]
+    async fn only_default_imds_discovery_is_bounded(
+        #[case] selector: &str,
+        #[case] identity_endpoint: Option<&str>,
+        #[case] expect_cli: bool,
+    ) {
+        let native = super::NativeAzureTokenAcquirer::with_transport(
+            4,
+            azure_core::http::Transport::new(Arc::new(UnavailableImdsClient)),
+        );
+        let service = AzureAuthService::with_acquirer(Arc::new(OfflineChainAcquirer(native)));
+        let inputs = AzureAuthInputs {
+            azure_credential: crate::types::ConfigValue::Value(Sourced::new(
+                selector.into(),
+                InputSource::Deployment,
+            )),
+            enable_azure_ad_token_refresh: Sourced::new(true, InputSource::Deployment),
+            ..Default::default()
+        };
+        let environment = |name: &str| {
+            (name == "IDENTITY_ENDPOINT")
+                .then_some(identity_endpoint)
+                .flatten()
+                .map(str::to_string)
+        };
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            service.get_azure_ad_token(&inputs, &environment),
+        )
+        .await;
+
+        assert_eq!(outcome.is_ok(), expect_cli);
+        if expect_cli {
+            assert_eq!(
+                outcome.unwrap().unwrap().unwrap().value().secret().expose(),
+                "cli-token"
+            );
+        }
+    }
+
+    #[rstest::rstest]
+    #[case::app_service(Some("IDENTITY_ENDPOINT"), false)]
+    #[case::legacy_app_service(Some("MSI_ENDPOINT"), false)]
+    #[case::off_azure(None, true)]
+    #[tokio::test(start_paused = true)]
+    async fn default_chain_uses_endpoints_from_the_secret_snapshot(
+        #[case] endpoint: Option<&str>,
+        #[case] expect_cli: bool,
+        #[values(false, true)] consumer_identity: bool,
+    ) {
+        use litellm_secrets::source::SecretSource;
+
+        struct EndpointSecrets<'a>(Option<&'a str>);
+
+        impl SecretSource for EndpointSecrets<'_> {
+            fn get_secret_str<'a>(
+                &'a self,
+                name: &'a str,
+            ) -> std::pin::Pin<
+                Box<
+                    dyn Future<Output = Result<Option<SecretValue>, litellm_secrets::Error>>
+                        + Send
+                        + 'a,
+                >,
+            > {
+                Box::pin(async move {
+                    Ok((self.0 == Some(name)).then(|| SecretValue::new("http://app-service.test")))
+                })
+            }
+        }
+
+        let snapshot = EndpointSecrets(endpoint)
+            .resolve(SECRET_NAMES)
+            .await
+            .unwrap();
+        let native = super::NativeAzureTokenAcquirer::with_transport(
+            4,
+            azure_core::http::Transport::new(Arc::new(UnavailableImdsClient)),
+        );
+        let service = AzureAuthService::with_acquirer(Arc::new(OfflineChainAcquirer(native)));
+        let lookup = |name: &str| snapshot.get(name);
+        let scope = "https://service.test/.default";
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            if consumer_identity {
+                service
+                    .identity_token(&super::AzureIdentity::Default, scope, &lookup)
+                    .await
+            } else {
+                service
+                    .get_azure_ad_token(
+                        &AzureAuthInputs::default_credential_for_scope(scope),
+                        &lookup,
+                    )
+                    .await
+                    .map(|token| token.map(Sourced::into_value))
+            }
+        })
+        .await;
+
+        assert_eq!(outcome.is_ok(), expect_cli);
+        if expect_cli {
+            assert_eq!(
+                outcome.unwrap().unwrap().unwrap().secret().expose(),
+                "cli-token"
+            );
+        }
+    }
+
+    #[rstest::rstest]
+    #[case::litellm_provider_settings_are_ignored(
+        &[("AZURE_AD_TOKEN", "provider-token"), ("AZURE_CREDENTIAL", "ClientSecretCredential")],
+        &["managed-identity", "developer-tools"]
+    )]
+    #[case::environment_client_secret_comes_first(
+        &[("AZURE_TENANT_ID", "tenant"), ("AZURE_CLIENT_ID", "client"), ("AZURE_CLIENT_SECRET", "secret")],
+        &["client-secret", "managed-identity", "developer-tools"]
+    )]
+    #[case::aks_workload_identity(
+        &[("AZURE_TENANT_ID", "tenant"), ("AZURE_CLIENT_ID", "client"), ("AZURE_FEDERATED_TOKEN_FILE", "/var/run/token")],
+        &["workload-identity", "managed-identity", "developer-tools"]
+    )]
+    #[tokio::test]
+    async fn the_default_identity_follows_azure_identity_defaults(
+        #[case] environment: &[(&str, &str)],
+        #[case] expected: &[&str],
+    ) {
+        let acquirer = Arc::new(ChainAcquirer {
+            terminal_on: None,
+            requests: Mutex::new(Vec::new()),
+            succeed_on: Some("developer-tools"),
+        });
+        let service = AzureAuthService::with_acquirer(acquirer.clone());
+        let lookup = |name: &str| {
+            environment
+                .iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| (*value).to_owned())
+        };
+
+        let credential = service
+            .identity_token(
+                &super::AzureIdentity::Default,
+                "https://redis.azure.com/.default",
+                &lookup,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(credential.secret().expose(), "chain-token");
+        assert_eq!(*acquirer.requests.lock().unwrap(), expected);
+    }
+
+    #[rstest::rstest]
     #[tokio::test]
     async fn default_chain_uses_declared_order_and_stops_after_success() {
         let acquirer = Arc::new(ChainAcquirer {
+            terminal_on: None,
             requests: Mutex::new(Vec::new()),
             succeed_on: Some("developer-tools"),
         });
@@ -698,9 +1100,13 @@ mod tests {
         );
     }
 
+    #[rstest::rstest]
+    #[case::all_unavailable(false)]
+    #[case::terminal_failure_after_unavailable(true)]
     #[tokio::test]
-    async fn chain_reports_each_acquisition_failure() {
+    async fn chain_reports_each_acquisition_failure(#[case] terminal: bool) {
         let acquirer = Arc::new(ChainAcquirer {
+            terminal_on: terminal.then_some("developer-tools"),
             requests: Mutex::new(Vec::new()),
             succeed_on: None,
         });
@@ -715,7 +1121,37 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(matches!(error, Error::CredentialChain(errors) if errors.len() == 2));
+        assert!(matches!(&error, Error::CredentialChain { earlier, .. } if earlier.len() == 1));
+        let report = litellm_error::Report::new(&error).to_string();
+        assert!(
+            report.contains("managed-identity did not resolve"),
+            "{report}"
+        );
+        assert!(
+            report.contains("developer-tools did not resolve"),
+            "{report}"
+        );
+    }
+
+    #[rstest::rstest]
+    #[tokio::test]
+    async fn a_configured_identity_failure_does_not_fall_back_to_a_developer_identity() {
+        let acquirer = Arc::new(ChainAcquirer {
+            terminal_on: Some("managed-identity"),
+            requests: Mutex::new(Vec::new()),
+            succeed_on: Some("developer-tools"),
+        });
+        let service = AzureAuthService::with_acquirer(acquirer.clone());
+        let inputs = AzureAuthInputs {
+            enable_azure_ad_token_refresh: Sourced::new(true, InputSource::Deployment),
+            ..Default::default()
+        };
+        let error = service
+            .get_azure_ad_token(&inputs, &|_| None)
+            .await
+            .unwrap_err();
+        assert_eq!(*acquirer.requests.lock().unwrap(), ["managed-identity"]);
+        assert!(matches!(error, Error::CredentialChain { earlier, .. } if earlier.is_empty()));
     }
 
     #[derive(Debug)]
@@ -763,7 +1199,9 @@ mod tests {
 
         assert_eq!(
             error,
-            Error::EmptyCallerCredential("Azure AD token provider returned an empty token")
+            Error::EmptyCallerCredential {
+                caller: "Azure AD token provider"
+            }
         );
     }
 }

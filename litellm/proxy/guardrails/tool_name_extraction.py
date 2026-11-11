@@ -6,8 +6,8 @@ knowledge lives in one place. Uses guardrail translation handlers where availabl
 with standalone extractors for generate_content and MCP.
 """
 
-from collections.abc import Mapping
-from typing import Any, Final
+from collections.abc import Callable, Mapping
+from typing import Final
 
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.llms import load_guardrail_translation_mappings
@@ -15,7 +15,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import list_field
 from litellm.types.utils import CallTypes
 
 # Call types that have no guardrail translation handler; we use standalone extractors
-STANDALONE_EXTRACTORS: Final[dict[str, Any]] = {}
+STANDALONE_EXTRACTORS: Final[dict[str, Callable[[Mapping[str, object]], list[str]]]] = {}
 
 
 def _extract_generate_content_tool_names(data: Mapping[str, object]) -> list[str]:
@@ -28,7 +28,7 @@ def _extract_generate_content_tool_names(data: Mapping[str, object]) -> list[str
     return names
 
 
-def _extract_mcp_tool_names(data: dict) -> list[str]:
+def _extract_mcp_tool_names(data: Mapping[str, object]) -> list[str]:
     """MCP call_tool: name or mcp_tool_name in body"""
     names: Final[list[str]] = []
     name: Final = data.get("name") or data.get("mcp_tool_name")

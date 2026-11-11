@@ -2,12 +2,15 @@ import { type UrlUpdateEvent } from "nuqs/adapters/testing";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import GuardrailsPanel from "./GuardrailsPanel";
 import { getGuardrailsList, deleteGuardrailCall } from "@/components/networking";
+import { toast } from "@/lib/toast";
 import { fireEvent, renderWithProviders, screen, waitFor, within } from "@/../tests/test-utils";
 
 vi.mock("@/components/networking", () => ({
   getGuardrailsList: vi.fn(),
   deleteGuardrailCall: vi.fn(),
 }));
+
+vi.mock("@/lib/toast", () => ({ toast: { success: vi.fn(), fromError: vi.fn() } }));
 
 vi.mock("./add_guardrail_form", () => ({
   __esModule: true,
@@ -140,13 +143,36 @@ describe("GuardrailsPanel", () => {
     expect(modal.getByText("Delete Guardrail")).toBeInTheDocument();
     expect(modal.getByText("test-guardrail-1")).toBeInTheDocument();
     expect(modal.getByText("Test Provider")).toBeInTheDocument();
+    expect(
+      modal.getByText(/pipeline steps that use it will block every request with a 400 error/i),
+    ).toBeInTheDocument();
 
-    fireEvent.click(modal.getByRole("button", { name: "Delete" }));
+    const confirmButton = modal.getByRole("button", { name: "Delete" });
+    expect(confirmButton).toBeDisabled();
+    fireEvent.change(modal.getByPlaceholderText("Test Guardrail"), { target: { value: "Test Guardrail" } });
+    fireEvent.click(confirmButton);
 
     await waitFor(() => {
       expect(mockDeleteGuardrailCall).toHaveBeenCalledWith("test-token", "test-guardrail-1");
     });
-    expect(mockGetGuardrailsList).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(mockGetGuardrailsList).toHaveBeenCalledTimes(2));
+    expect(toast.success).toHaveBeenCalledWith('Guardrail "Test Guardrail" deleted successfully');
+  });
+
+  it("should show an error toast and not refetch when the row delete fails", async () => {
+    mockDeleteGuardrailCall.mockRejectedValue(new Error("boom"));
+    renderWithProviders(<GuardrailsPanel {...defaultProps} />);
+    fireEvent.click(screen.getByText("Guardrails"));
+
+    fireEvent.click(await screen.findByTestId("delete-button"));
+    const modal = within(await screen.findByRole("dialog"));
+    fireEvent.change(modal.getByPlaceholderText("Test Guardrail"), { target: { value: "Test Guardrail" } });
+    fireEvent.click(modal.getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(toast.fromError).toHaveBeenCalledWith("Failed to delete guardrail");
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(mockGetGuardrailsList).toHaveBeenCalledTimes(1);
   });
 
   it("should mount every tab panel up front so panel state survives tab switches", async () => {

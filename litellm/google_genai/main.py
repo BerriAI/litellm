@@ -16,6 +16,7 @@ from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes
@@ -194,12 +195,14 @@ class GenerateContentHelper:
         if litellm_logging_obj is None:
             raise ValueError("litellm_logging_obj is required, but got None")
 
+        vertex_location: Final = VertexBase.explicit_vertex_ai_location(dict(litellm_params))
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
             model=model,
             optional_params=dict(generate_content_config_dict),
             litellm_params={
                 "litellm_call_id": litellm_call_id,
+                **({"vertex_location": vertex_location} if vertex_location else {}),
             },
             custom_llm_provider=custom_llm_provider,
         )

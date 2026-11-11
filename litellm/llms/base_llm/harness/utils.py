@@ -70,6 +70,22 @@ def structured_output_instruction(schema: Mapping[str, object]) -> str:
     )
 
 
+def build_instructions(ctx: SessionContext) -> str | None:
+    """System instructions plus the structured-output instruction, for runtimes that take one prompt file."""
+    schema_part: Final = (
+        structured_output_instruction(ctx.output.model_json_schema()) if ctx.output is not None else None
+    )
+    sections: Final = tuple(section for section in (ctx.instructions, schema_part) if section)
+    return "\n\n".join(sections) if sections else None
+
+
+def turn_prompt(ctx: SessionContext, prompt: str) -> str:
+    """Repeat the schema instruction in the user turn; system instructions alone are too weak."""
+    if ctx.output is None:
+        return prompt
+    return f"{prompt}\n\n{structured_output_instruction(ctx.output.model_json_schema())}"
+
+
 def strict_json_schema(schema: JSONValue, depth: int = 0) -> JSONValue:
     """Make a JSON schema acceptable to OpenAI strict structured outputs.
 

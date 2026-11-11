@@ -3,7 +3,7 @@ Transformation for Calling Google models in their native format.
 """
 
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
 
 import httpx
 
@@ -15,8 +15,9 @@ from litellm.llms.base_llm.google_genai.transformation import (
 from litellm.llms.vertex_ai.common_utils import (
     build_vertex_schema,
     supports_response_json_schema,
+    with_integer_enums_that_fit,
 )
-from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
+from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig, VertexLLM
 from litellm.types.router import GenericLiteLLMParams
 
 if TYPE_CHECKING:
@@ -33,6 +34,14 @@ else:
     ToolConfigDict = Any
 
 from ..common_utils import get_api_key_from_env
+
+
+class _JsonResponse(Protocol):
+    def json(self) -> object: ...
+
+
+def _json_body(response: _JsonResponse) -> object:
+    return response.json()
 
 
 class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
@@ -327,8 +336,11 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         else:
             if json_schema_key is not None:
                 generate_content_config_dict.pop(json_schema_key)
-            generate_content_config_dict[schema_key] = build_vertex_schema(
-                parameters=deepcopy(value), add_property_ordering=True
+            generate_content_config_dict[schema_key] = with_integer_enums_that_fit(
+                lambda send_integer_enums: build_vertex_schema(
+                    parameters=deepcopy(value), add_property_ordering=True, send_integer_enums=send_integer_enums
+                ),
+                VertexGeminiConfig.is_gemini_3_or_newer(model),
             )
 
     def transform_generate_content_request(
@@ -378,7 +390,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         from litellm.types.google_genai.main import GenerateContentResponse
 
         try:
-            response = raw_response.json()
+            decoded: Final = _json_body(raw_response)
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming generate content response: {e}",
@@ -387,7 +399,9 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
             )
 
         logging_obj.model_call_details["httpx_response"] = raw_response
-        response = self.convert_citation_sources_to_citations(response)
+        response: Final = self.convert_citation_sources_to_citations(
+            cast(dict[str, object], decoded)  # cast-ok: the body passes through unvalidated, as before it was typed
+        )
 
         return GenerateContentResponse(**response)
 

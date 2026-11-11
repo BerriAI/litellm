@@ -7,6 +7,7 @@ the callback raise before any spend was recorded, so those budgets never moved.
 """
 
 from datetime import datetime, timezone
+from functools import partial
 from typing import Final
 
 import litellm
@@ -17,6 +18,7 @@ from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.types.utils import BudgetConfig
+from litellm.types.videos.utils import POLLED_VIDEO_STATUS_KWARG
 import sys, os, asyncio, time, random
 
 
@@ -38,6 +40,7 @@ def _success_kwargs(
     call_type: str = "aresponses",
     response_cost: float = 0.25,
     model_id: str = "deployment-1",
+    guardrail_information: tuple[dict[str, object], ...] = (),
 ) -> dict[str, object]:
     provider_params: Final[dict[str, str]] = (
         {} if provider_in_litellm_params is None else {"custom_llm_provider": provider_in_litellm_params}
@@ -51,6 +54,7 @@ def _success_kwargs(
             "response_cost": response_cost,
             "model_id": model_id,
             "custom_llm_provider": provider_in_payload,
+            "guardrail_information": guardrail_information,
         },
     }
 
@@ -60,7 +64,9 @@ async def _log_success(limiter: RouterBudgetLimiting, kwargs: dict[str, object])
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("call_type", ["aresponses", "anthropic_messages", "aembedding", "arerank"])
+@pytest.mark.parametrize(
+    "call_type", ["aresponses", "_aresponses_websocket", "anthropic_messages", "aembedding", "arerank"]
+)
 async def test_provider_spend_tracked_when_litellm_params_omits_provider(disable_budget_sync, call_type):
     """Non-chat surfaces carry the provider only on the standard logging payload."""
     limiter = RouterBudgetLimiting(
@@ -447,3 +453,216 @@ def cleanup_redis():
             redis_client.delete(key)
     except Exception as e:
         print(f"Error cleaning up Redis: {str(e)}")
+
+
+def _completed_budget_batch(batch_id: str):
+    from litellm.types.utils import LiteLLMBatch
+
+    return LiteLLMBatch(
+        id=batch_id,
+        completion_window="24h",
+        created_at=1,
+        endpoint="/v1/chat/completions",
+        input_file_id="file-budget",
+        object="batch",
+        status="completed",
+        output_file_id="file-budget-output",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ("aretrieve_batch", "retrieve_batch"))
+async def test_batch_polls_charge_each_router_budget_once(monkeypatch, call_type):
+    monkeypatch.setattr(litellm, "tag_budget_config", {"release": {"budget_limit": 100, "time_period": "1d"}})
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    cache: Final = DualCache()
+    limiter: Final = RouterBudgetLimiting(
+        dual_cache=cache,
+        provider_budget_config={"openai": {"budget_limit": 100, "time_period": "1d"}},
+        model_list=[
+            {
+                "model_name": "batch-budget",
+                "litellm_params": {"model": "openai/batch-budget", "max_budget": 100, "budget_duration": "1d"},
+                "model_info": {"id": "deployment-1"},
+            }
+        ],
+    )
+    kwargs: Final = {
+        **_success_kwargs(provider_in_litellm_params=None, provider_in_payload="openai", call_type=call_type),
+        "metadata": {"tags": ["release"]},
+    }
+    response: Final = _completed_budget_batch("batch-first")
+    await asyncio.gather(*(limiter.async_log_success_event(kwargs, response, None, None) for _ in range(10)))
+    keys: Final = ("provider_spend:openai:1d", "deployment_spend:deployment-1:1d", "tag_spend:release:1d")
+    assert tuple([await cache.async_get_cache(key) for key in keys]) == (0.25, 0.25, 0.25)
+    await limiter.async_log_success_event(kwargs, _completed_budget_batch("batch-second"), None, None)
+    await limiter.async_log_success_event({**kwargs, "call_type": "acompletion"}, response, None, None)
+    await limiter.async_log_success_event({**kwargs, "call_type": "acompletion"}, response, None, None)
+    assert tuple([await cache.async_get_cache(key) for key in keys]) == (1.0, 1.0, 1.0)
+    await limiter.async_log_success_event({**kwargs, "call_type": "_arealtime"}, response, None, None)
+    assert tuple([await cache.async_get_cache(key) for key in keys]) == (1.0, 1.0, 1.0)
+
+
+
+@pytest.mark.asyncio
+async def test_a_batch_retrieve_before_its_cost_is_final_charges_no_router_budget_even_for_its_guardrail():
+    from litellm.types.utils import LiteLLMBatch
+
+    cache: Final = DualCache()
+    limiter: Final = RouterBudgetLimiting(
+        dual_cache=cache,
+        provider_budget_config={"openai": {"budget_limit": 100, "time_period": "1d"}},
+        model_list=[
+            {
+                "model_name": "batch-budget",
+                "litellm_params": {"model": "openai/batch-budget", "max_budget": 100, "budget_duration": "1d"},
+                "model_info": {"id": "deployment-1"},
+            }
+        ],
+    )
+    retrieve: Final = partial(
+        _success_kwargs,
+        provider_in_litellm_params=None,
+        provider_in_payload="openai",
+        call_type="aretrieve_batch",
+        guardrail_information=({"guardrail_name": "priced", "guardrail_cost": 0.01},),
+    )
+
+    def polled(status: str, output_file_id: str | None = None) -> LiteLLMBatch:
+        return LiteLLMBatch(
+            id="batch-running",
+            completion_window="24h",
+            created_at=1,
+            endpoint="/v1/chat/completions",
+            input_file_id="file-budget",
+            object="batch",
+            status=status,
+            output_file_id=output_file_id,
+        )
+
+    for response_cost, batch in (
+        (0.01, polled("in_progress")),
+        (0.01, polled("completed")),
+        (0.26, polled("completed", "file-out")),
+        (0.26, polled("completed", "file-out")),
+    ):
+        await limiter.async_log_success_event(retrieve(response_cost=response_cost), batch, None, None)
+
+    keys: Final = ("provider_spend:openai:1d", "deployment_spend:deployment-1:1d")
+    assert tuple([await cache.async_get_cache(key) for key in keys]) == pytest.approx((0.26, 0.26))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ("avideo_status", "video_status"))
+async def test_video_polls_charge_each_router_budget_once(call_type):
+    from litellm.types.videos.main import VideoObject
+
+    cache: Final = DualCache()
+    limiter: Final = RouterBudgetLimiting(
+        dual_cache=cache,
+        provider_budget_config={"openai": {"budget_limit": 100, "time_period": "1d"}},
+        model_list=[
+            {
+                "model_name": "video-budget",
+                "litellm_params": {"model": "openai/sora-2", "max_budget": 100, "budget_duration": "1d"},
+                "model_info": {"id": "deployment-1"},
+            }
+        ],
+    )
+    kwargs: Final = {
+        **_success_kwargs(provider_in_litellm_params=None, provider_in_payload="openai", call_type=call_type),
+        POLLED_VIDEO_STATUS_KWARG: "completed",
+    }
+    video: Final = VideoObject(id="video-first", object="video", status="completed")
+    keys: Final = ("provider_spend:openai:1d", "deployment_spend:deployment-1:1d")
+
+    await asyncio.gather(*(limiter.async_log_success_event(kwargs, video, None, None) for _ in range(10)))
+    assert tuple([await cache.async_get_cache(key) for key in keys]) == (0.25, 0.25)
+
+    await limiter.async_log_success_event(
+        kwargs, VideoObject(id="video-second", object="video", status="completed"), None, None
+    )
+    assert tuple([await cache.async_get_cache(key) for key in keys]) == (0.5, 0.5)
+
+
+@pytest.mark.asyncio
+async def test_every_video_poll_pays_its_guardrail_and_only_the_finished_poll_pays_the_router_for_the_video():
+    from litellm.types.videos.main import VideoObject
+
+    cache: Final = DualCache()
+    limiter: Final = RouterBudgetLimiting(
+        dual_cache=cache,
+        provider_budget_config={"openai": {"budget_limit": 100, "time_period": "1d"}},
+        model_list=[
+            {
+                "model_name": "video-budget",
+                "litellm_params": {"model": "openai/sora-2", "max_budget": 100, "budget_duration": "1d"},
+                "model_info": {"id": "deployment-1"},
+            }
+        ],
+    )
+    priced: Final = ({"guardrail_name": "priced", "guardrail_cost": 0.01},)
+    poll: Final = partial(
+        _success_kwargs,
+        provider_in_litellm_params=None,
+        provider_in_payload="openai",
+        call_type="avideo_status",
+        guardrail_information=priced,
+    )
+
+    await limiter.async_log_success_event(
+        {**poll(response_cost=0.01), POLLED_VIDEO_STATUS_KWARG: "in_progress"},
+        VideoObject(id="video-first", object="video", status="in_progress"),
+        None,
+        None,
+    )
+    for _ in range(3):
+        await limiter.async_log_success_event(
+            {**poll(response_cost=0.26), POLLED_VIDEO_STATUS_KWARG: "completed"},
+            VideoObject(id="video-first", object="video", status="completed"),
+            None,
+            None,
+        )
+
+    keys: Final = ("provider_spend:openai:1d", "deployment_spend:deployment-1:1d")
+    assert tuple([await cache.async_get_cache(key) for key in keys]) == pytest.approx((0.29, 0.29))
+
+@pytest.mark.asyncio
+async def test_batch_charge_is_shared_across_workers_and_requires_redis_confirmation():
+    from fakeredis import FakeServer, FakeRedis as FakeSyncRedis
+    from redis.exceptions import ConnectionError as RedisConnectionError
+    from fakeredis.aioredis import FakeRedis
+    from litellm.caching.redis_cache import RedisCache
+
+    server: Final = FakeServer()
+    client: Final = FakeRedis(server=server)
+    sync_client: Final = FakeSyncRedis(server=server)
+    redis_cache: Final = RedisCache(host="router-batch-fixture", connection_pool=sync_client.connection_pool)
+    litellm.in_memory_llm_clients_cache.set_cache(key=redis_cache._get_async_client_cache_key(), value=client)
+    first: Final = RouterBudgetLimiting(
+        dual_cache=DualCache(redis_cache=redis_cache),
+        provider_budget_config={"openai": {"budget_limit": 100, "time_period": "1d"}},
+    )
+    second: Final = RouterBudgetLimiting(
+        dual_cache=DualCache(redis_cache=redis_cache),
+        provider_budget_config={"openai": {"budget_limit": 100, "time_period": "1d"}},
+    )
+    kwargs: Final = _success_kwargs(
+        provider_in_litellm_params=None, provider_in_payload="openai", call_type="aretrieve_batch"
+    )
+    response: Final = _completed_budget_batch("batch-shared")
+    await asyncio.gather(
+        first.async_log_success_event(kwargs, response, None, None),
+        second.async_log_success_event(kwargs, response, None, None),
+    )
+    await first._push_in_memory_increments_to_redis()
+    await second._push_in_memory_increments_to_redis()
+    assert float(await client.get("provider_spend:openai:1d")) == 0.25
+    server.connected = False
+    with pytest.raises(RedisConnectionError):
+        await second.async_log_success_event(kwargs, _completed_budget_batch("batch-unconfirmed"), None, None)
+    server.connected = True
+    await second.async_log_success_event(kwargs, _completed_budget_batch("batch-unconfirmed"), None, None)
+    await second._push_in_memory_increments_to_redis()
+    assert float(await client.get("provider_spend:openai:1d")) == 0.5
+    await client.aclose()

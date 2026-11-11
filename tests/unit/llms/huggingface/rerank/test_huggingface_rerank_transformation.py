@@ -5,11 +5,14 @@ Based on the test patterns from other rerank providers and the current HuggingFa
 
 import asyncio
 import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 import litellm
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 
 def assert_response_shape(response, custom_llm_provider):
@@ -219,11 +222,11 @@ def test_huggingface_rerank_return_documents(mock_post):
             assert "text" in result["document"]
 
 
-def test_huggingface_rerank_config():
+def test_huggingface_rerank_config() -> None:
     """Test HuggingFaceRerankConfig class functionality."""
     from litellm.llms.huggingface.rerank.transformation import HuggingFaceRerankConfig
 
-    config = HuggingFaceRerankConfig()
+    config: Final = HuggingFaceRerankConfig()
 
     # Test complete URL generation
     assert config.get_complete_url(None, "test") == "https://api-inference.huggingface.co/rerank"
@@ -233,14 +236,16 @@ def test_huggingface_rerank_config():
     assert custom_url == "https://custom.huggingface.co/rerank"
 
     # Test supported parameters
-    supported_params = config.get_supported_cohere_rerank_params("test")
+    supported_params: Final = config.get_supported_cohere_rerank_params("test")
     assert "query" in supported_params
     assert "documents" in supported_params
     assert "top_n" in supported_params
     assert "return_documents" in supported_params
+    assert "truncate" in supported_params
+    assert "truncation_direction" in supported_params
 
     # Test parameter mapping
-    params = config.map_cohere_rerank_params(
+    params: Final = config.map_cohere_rerank_params(
         non_default_params={
             "query": "hello",
             "documents": ["hello", "world"],
@@ -259,24 +264,28 @@ def test_huggingface_rerank_config():
     assert params["return_text"] is True
 
 
-def test_request_transformation():
+def test_request_transformation() -> None:
     """Test request transformation logic."""
     from litellm.llms.huggingface.rerank.transformation import HuggingFaceRerankConfig
     from litellm.types.rerank import OptionalRerankParams
 
-    config = HuggingFaceRerankConfig()
+    config: Final = HuggingFaceRerankConfig()
 
-    optional_params = OptionalRerankParams(query="hello", texts=["hello", "world"], top_n=2, return_text=True)
+    optional_params: Final = OptionalRerankParams(query="hello", texts=["hello", "world"], top_n=2, return_text=True)
 
-    request_body = config.transform_rerank_request(model="test", optional_rerank_params=optional_params, headers={})
+    request_body: Final = config.transform_rerank_request(
+        model="test", optional_rerank_params=optional_params, headers={}
+    )
 
-    assert request_body["query"] == "hello"
-    assert request_body["texts"] == ["hello", "world"]
-    assert request_body["top_n"] == 2
-    assert request_body["return_text"] is True
-    assert request_body["raw_scores"] is False
-    assert request_body["truncate"] is False
-    assert request_body["truncation_direction"] == "Right"
+    expected_request: Final = {
+        "query": "hello",
+        "texts": ["hello", "world"],
+        "top_n": 2,
+        "return_text": True,
+        "raw_scores": False,
+        "truncation_direction": "Right",
+    }
+    assert request_body == expected_request
 
 
 def test_response_transformation():
@@ -345,20 +354,20 @@ def test_validate_environment():
 
 
 @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
-def test_huggingface_rerank_request_payload(mock_post):
+def test_huggingface_rerank_request_payload(mock_post: MagicMock) -> None:
     """Test that the request payload is correctly formatted for HuggingFace API."""
-    mock_response_data = [{"index": 0, "score": 0.9}, {"index": 1, "score": 0.1}]
+    mock_response_data: Final = [{"index": 0, "score": 0.9}, {"index": 1, "score": 0.1}]
 
     def return_val():
         return mock_response_data
 
-    mock_response = MagicMock()
+    mock_response: Final = MagicMock()
     mock_response.json = return_val
     mock_response.status_code = 200
     mock_response.headers = {"content-type": "application/json"}
     mock_post.return_value = mock_response
 
-    response = litellm.rerank(
+    response: Final = litellm.rerank(
         model="huggingface/BAAI/bge-reranker-base",
         query="hello",
         documents=["hello", "world"],
@@ -370,28 +379,58 @@ def test_huggingface_rerank_request_payload(mock_post):
     mock_post.assert_called_once()
 
     # Verify URL
-    call_url = mock_post.call_args.kwargs["url"]
+    call_url: Final = mock_post.call_args.kwargs["url"]
     assert call_url == "https://api-inference.huggingface.co/rerank"
 
     # Verify headers
-    headers = mock_post.call_args.kwargs["headers"]
+    headers: Final = mock_post.call_args.kwargs["headers"]
     assert "Bearer test_api_key" in headers["Authorization"]
     assert headers["content-type"] == "application/json"
 
     # Verify request body
-    request_data = json.loads(mock_post.call_args.kwargs["data"])
-    expected_request = {
+    request_data: Final = json.loads(mock_post.call_args.kwargs["data"])
+    expected_request: Final = {
         "query": "hello",
         "texts": ["hello", "world"],
         "raw_scores": False,
         "return_text": True,
-        "truncate": False,
         "truncation_direction": "Right",
         "top_n": 2,
     }
 
-    for key, value in expected_request.items():
-        assert request_data[key] == value
+    assert request_data == expected_request
 
     assert response.results is not None
     assert len(response.results) == 2
+
+
+def test_huggingface_rerank_forwards_truncate_options() -> None:
+    expected_request: Final = {
+        "query": "hello",
+        "texts": ["hello", "world"],
+        "raw_scores": False,
+        "return_text": False,
+        "truncation_direction": "Left",
+        "truncate": True,
+    }
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.url == "https://api-inference.huggingface.co/rerank"
+        assert request.headers["Authorization"] == "Bearer test_api_key"
+        assert json.loads(request.content) == expected_request
+        return httpx.Response(200, json=[{"index": 0, "score": 0.9}])
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as http_client:
+        response: Final = litellm.rerank(
+            model="huggingface/BAAI/bge-reranker-base",
+            query="hello",
+            documents=["hello", "world"],
+            api_key="test_api_key",
+            return_documents=False,
+            truncate=True,
+            truncation_direction="Left",
+            client=HTTPHandler(client=http_client),
+        )
+
+    assert response.results is not None
+    assert response.results[0]["relevance_score"] == 0.9

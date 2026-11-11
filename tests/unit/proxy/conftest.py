@@ -1,22 +1,33 @@
 # conftest.py
 
+import _hashlib
 import asyncio
 import copy
+import hashlib
 import inspect
+import logging
 import os
 import tempfile
 import warnings
 from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
 from typing import Dict, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import yaml
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from prisma.errors import ClientNotConnectedError
 
 import litellm
 import litellm.proxy.proxy_server
+from litellm._logging import verbose_proxy_logger
+from litellm.proxy.common_utils.fips import enforce_fips_mode
+from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+    InitPassThroughEndpointHelpers,
+    _registered_pass_through_routes,
+)
 from litellm._service_logger import ServiceTypes
 from litellm.integrations.otel.model.payloads import ServiceSpanData
 from litellm.integrations.otel.model.spans import service_span_name
@@ -237,6 +248,40 @@ def secret_vault_factory() -> type[FakeSecretVault]:
     return FakeSecretVault
 
 
+@contextmanager
+def _eu_jev_route_configured_at(path: str) -> Iterator[None]:
+    saved_registry: Final = dict(_registered_pass_through_routes)
+    InitPassThroughEndpointHelpers.add_exact_path_route(
+        app=FastAPI(),
+        path=path,
+        target="https://operator.example/decide",
+        custom_headers=None,
+        forward_headers=None,
+        merge_query_params=None,
+        dependencies=None,
+        cost_per_request=None,
+        endpoint_id="operator-eu-jev",
+        methods=["POST"],
+    )
+    try:
+        yield
+    finally:
+        _registered_pass_through_routes.clear()
+        _registered_pass_through_routes.update(saved_registry)
+
+
+@pytest.fixture
+def configured_eu_jev_route() -> Iterator[None]:
+    with _eu_jev_route_configured_at("/eu_jev/v1/systemone"):
+        yield
+
+
+@pytest.fixture
+def configured_eu_jev_route_with_trailing_slash() -> Iterator[None]:
+    with _eu_jev_route_configured_at("/eu_jev/v1/systemone/"):
+        yield
+
+
 @pytest.fixture
 def httpx_transport(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -424,6 +469,31 @@ def fresh_agent_read_through(monkeypatch):
     return read_through
 
 
+TOKEN_COUNT_LOG_FIELDS: Final = (
+    "litellm_call_id",
+    "request_model",
+    "model_id",
+    "model_used",
+    "input_tokens",
+    "count_source",
+    "status_code",
+)
+
+
+@pytest.fixture
+def token_count_log_lines(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[Callable[[], tuple[dict[str, object], ...]]]:
+    """The structured fields of every INFO token count line the proxy logger writes while the test runs."""
+    monkeypatch.setattr(verbose_proxy_logger, "propagate", True)
+    with caplog.at_level(logging.INFO, logger=verbose_proxy_logger.name):
+        yield lambda: tuple(
+            {field: record.__dict__[field] for field in TOKEN_COUNT_LOG_FIELDS}
+            for record in caplog.records
+            if record.levelno == logging.INFO and "count_source" in record.__dict__
+        )
+
+
 @pytest.fixture
 def postgres_span_names() -> Iterator[Callable[[], Awaitable[tuple[str, ...]]]]:
     """The ``postgres.{verb} {table}`` names OTel would render for every DB service event
@@ -447,3 +517,56 @@ def postgres_span_names() -> Iterator[Callable[[], Awaitable[tuple[str, ...]]]]:
 
     with patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock(service_logging_obj=service_logging)):
         yield rendered
+
+
+@pytest.fixture
+def fips_openssl(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(_hashlib, "get_fips_mode", lambda: 1)
+    monkeypatch.setattr(_hashlib, "scrypt", MagicMock(side_effect=ValueError("[digital envelope routines] unsupported")))
+    monkeypatch.setattr("litellm.proxy.common_utils.encrypt_decrypt_utils._KBKDF_PROPERTIES", None)
+
+
+@pytest.fixture
+def fips_mode(fips_openssl: None, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setattr("litellm.proxy.common_utils.fips.cryptography_enforces_fips", lambda: True)
+    enforce_fips_mode({"fips_mode": True})
+    yield
+    enforce_fips_mode({})
+
+
+@pytest.fixture
+def pbkdf2_on_event_loop(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
+    """One entry per PBKDF2 call: whether it ran on the event loop's thread."""
+    real_pbkdf2: Final = hashlib.pbkdf2_hmac
+    on_event_loop: Final[list[bool]] = []
+
+    def recording_pbkdf2(hash_name: str, password: bytes, salt: bytes, iterations: int, dklen: int) -> bytes:
+        on_event_loop.append(asyncio._get_running_loop() is not None)
+        return real_pbkdf2(hash_name, password, salt, iterations, dklen)
+
+    monkeypatch.setattr(hashlib, "pbkdf2_hmac", recording_pbkdf2)
+    return on_event_loop
+
+
+def _per_token_priced(model_name: str, backend: str, input_cost: float, output_cost: float) -> dict[str, object]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": backend,
+            "api_key": "sk-fixture",
+            "input_cost_per_token": input_cost,
+            "output_cost_per_token": output_cost,
+        },
+    }
+
+
+@pytest.fixture
+def free_and_paid_router() -> "litellm.Router":
+    import litellm
+
+    return litellm.Router(
+        model_list=[
+            _per_token_priced("free-model", "openai/free-backend", 0.0, 0.0),
+            _per_token_priced("paid-model", "openai/paid-backend", 1e-6, 2e-6),
+        ]
+    )

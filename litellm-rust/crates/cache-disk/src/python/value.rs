@@ -3,8 +3,8 @@ use py_literal::Value;
 use serde_json::{Map, Number};
 
 pub(crate) fn from_pickle(bytes: &[u8]) -> Result<Value, Error> {
-    let value = serde_pickle::value_from_slice(bytes, Default::default())
-        .map_err(|_| Error::InvalidEntry)?;
+    let value =
+        serde_pickle::value_from_slice(bytes, Default::default()).map_err(Error::invalid_entry)?;
     from_pickle_value(value)
 }
 
@@ -70,7 +70,7 @@ fn from_pickle_hashable(value: serde_pickle::HashableValue) -> Result<Value, Err
 }
 
 fn integer(value: String) -> Result<Value, Error> {
-    value.parse().map_err(|_| Error::InvalidEntry)
+    value.parse().map_err(Error::invalid_entry)
 }
 
 pub(crate) fn from_json(value: serde_json::Value) -> Value {
@@ -101,7 +101,7 @@ pub(crate) fn from_json(value: serde_json::Value) -> Value {
 pub(crate) fn from_json_text(value: &str) -> Result<Value, Error> {
     serde_json::from_str(value)
         .map(from_json)
-        .map_err(|_| Error::InvalidEntry)
+        .map_err(Error::invalid_entry)
 }
 
 pub(crate) fn is_truthy(value: &Value) -> bool {
@@ -131,7 +131,7 @@ pub(crate) fn to_f64(value: &Value) -> Option<f64> {
 }
 
 pub(crate) fn to_json(value: &Value) -> Result<Vec<u8>, Error> {
-    serde_json::to_vec(&to_json_value(value)?).map_err(|_| Error::InvalidEntry)
+    serde_json::to_vec(&to_json_value(value)?).map_err(Error::invalid_entry)
 }
 
 fn to_json_value(value: &Value) -> Result<serde_json::Value, Error> {
@@ -142,12 +142,12 @@ fn to_json_value(value: &Value) -> Result<serde_json::Value, Error> {
             value
                 .to_string()
                 .parse::<Number>()
-                .map_err(|_| Error::InvalidEntry)?,
+                .map_err(Error::invalid_entry)?,
         ),
         Value::Float(value) => {
-            serde_json::Value::Number(Number::from_f64(*value).ok_or(Error::InvalidEntry)?)
+            serde_json::Value::Number(Number::from_f64(*value).ok_or(Error::InvalidEntry(None))?)
         }
-        Value::Complex(_) | Value::Bytes(_) => return Err(Error::InvalidEntry),
+        Value::Complex(_) | Value::Bytes(_) => return Err(Error::InvalidEntry(None)),
         Value::String(value) => serde_json::Value::String(value.clone()),
         Value::Tuple(values) | Value::List(values) | Value::Set(values) => {
             serde_json::Value::Array(
@@ -162,7 +162,7 @@ fn to_json_value(value: &Value) -> Result<serde_json::Value, Error> {
                 .iter()
                 .map(|(key, value)| {
                     let Value::String(key) = key else {
-                        return Err(Error::InvalidEntry);
+                        return Err(Error::InvalidEntry(None));
                     };
                     Ok((key.clone(), to_json_value(value)?))
                 })

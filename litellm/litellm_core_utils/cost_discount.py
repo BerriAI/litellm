@@ -23,7 +23,7 @@ def parse_cost_discount_key(key: str) -> CostDiscountKey:
 
 
 def _literal_length(pattern: str) -> int:
-    return sum(1 for token in _GLOB_TOKEN.findall(pattern) if len(token) == 1 and token not in "*?")
+    return sum(1 for match in _GLOB_TOKEN.finditer(pattern) if len(match.group()) == 1 and match.group() not in "*?")
 
 
 def _model_names(model: str, provider_prefix: str) -> tuple[str, ...]:

@@ -1,7 +1,9 @@
 """Unit tests for the Microsoft Purview DLP guardrail."""
 
 import asyncio
+import json
 import time
+from typing import Final
 from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
@@ -535,6 +537,61 @@ class TestTextCompletionHooks:
             combined = mock_check.call_args.kwargs["text"]
             assert "alpha" in combined
             assert "beta" in combined
+
+    @pytest.mark.asyncio
+    async def test_streamed_multi_choice_text_completion_is_blocked_like_the_non_streamed_one(self):
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+        from litellm.types.utils import TextChoices, TextCompletionResponse
+
+        sensitive: Final = "4111 1111 1111 1111"
+        choice_pieces: Final = ((sensitive[:9], sensitive[9:]), ("Hey", " you"))
+        user: Final = UserAPIKeyAuth(api_key="test", user_id="user-123")
+
+        def graph(request: httpx.Request) -> httpx.Response:
+            if request.url.host == "login.microsoftonline.com":
+                return httpx.Response(200, json={"access_token": "graph-token", "expires_in": 3600})
+            if not request.url.path.endswith("/processContent"):
+                return httpx.Response(200, json={"value": []}, headers={"ETag": "scope-etag"})
+            entry: Final = json.loads(request.content)["contentToProcess"]["contentEntries"][0]
+            block: Final = {"@odata.type": "#microsoft.graph.restrictAccessAction", "restrictionAction": "block"}
+            actions: Final = [block] if sensitive in entry["content"]["data"] else []
+            return httpx.Response(200, json={"protectionScopeState": "unchanged", "policyActions": actions})
+
+        def guardrail_on_graph() -> MicrosoftPurviewDLPGuardrail:
+            guardrail: Final = _make_guardrail()
+            guardrail.async_handler = AsyncHTTPHandler(transport=httpx.MockTransport(graph))
+            return guardrail
+
+        def chunk(index: int, text: str) -> TextCompletionResponse:
+            return TextCompletionResponse(
+                id="cmpl-n2", model="gpt-3.5-turbo-instruct", choices=[TextChoices(text=text, index=index)]
+            )
+
+        async def interleaved_stream():
+            for step in range(2):
+                for index, pieces in enumerate(choice_pieces):
+                    yield chunk(index, pieces[step])
+
+        non_streamed: Final = TextCompletionResponse(
+            id="cmpl-n2",
+            model="gpt-3.5-turbo-instruct",
+            choices=[TextChoices(text="".join(pieces), index=index) for index, pieces in enumerate(choice_pieces)],
+        )
+        with pytest.raises(HTTPException) as non_streamed_block:
+            await guardrail_on_graph().async_post_call_success_hook(
+                data={}, user_api_key_dict=user, response=non_streamed
+            )
+
+        async def drain_guarded_stream() -> None:
+            async for _ in guardrail_on_graph().async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user, response=interleaved_stream(), request_data={}
+            ):
+                pass
+
+        with pytest.raises(HTTPException) as streamed_block:
+            await drain_guarded_stream()
+
+        assert streamed_block.value.status_code == non_streamed_block.value.status_code == 400
 
 
 # ---------------------------------------------------------------
@@ -2015,6 +2072,63 @@ class TestCompletionResponseTextPartsToolCalls:
             sent_text = mock_check.call_args.kwargs["text"]
             assert '{"credit_card": "4111-1111-1111-1111"}' in sent_text
 
+    @pytest.mark.asyncio
+    async def test_post_call_hook_sends_server_tool_call_args_to_purview(self):
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        def graph(request: httpx.Request) -> httpx.Response:
+            if request.url.host == "login.microsoftonline.com":
+                return httpx.Response(200, json={"access_token": "graph-token", "expires_in": 3600})
+            if not request.url.path.endswith("/processContent"):
+                return httpx.Response(200, json={"value": []}, headers={"ETag": "scope-etag"})
+            return httpx.Response(200, json={"protectionScopeState": "unchanged", "policyActions": []})
+
+        transport: Final = Mock(side_effect=graph)
+        guardrail: Final = _make_guardrail()
+        guardrail.async_handler = AsyncHTTPHandler(transport=httpx.MockTransport(transport))
+        response: Final = ModelResponse(
+            choices=[
+                Choices(
+                    index=0,
+                    finish_reason="tool_calls",
+                    message=Message(
+                        role="assistant",
+                        content=None,
+                        tool_calls=[
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                            }
+                        ],
+                        provider_specific_fields={
+                            "server_tool_calls": [
+                                {
+                                    "id": "srvtoolu_01",
+                                    "type": "function",
+                                    "function": {"name": "web_search", "arguments": '{"query": "persimmon"}'},
+                                }
+                            ]
+                        },
+                    ),
+                )
+            ],
+        )
+
+        await guardrail.async_post_call_success_hook(
+            data={},
+            user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="user-123"),
+            response=response,
+        )
+
+        scanned: Final = [
+            json.loads(call.args[0].content)["contentToProcess"]["contentEntries"][0]["content"]["data"]
+            for call in transport.call_args_list
+            if call.args[0].url.path.endswith("/processContent")
+        ]
+        assert scanned == ['{"query": "persimmon"}\n\n---\n\n{"city": "Paris"}']
+
     def test_responses_api_function_call_args_included(self):
         """Function-call arguments in ``ResponsesAPIResponse.output`` must be DLP-scanned."""
         from litellm.types.llms.openai import ResponsesAPIResponse
@@ -2065,6 +2179,29 @@ class TestCompletionResponseTextPartsToolCalls:
         )
         parts = guardrail._completion_response_text_parts(response)
         assert any('{"secret": "hunter2"}' in p for p in parts)
+
+    def test_responses_api_claude_hosted_web_fetch_url_included(self):
+        from openai.types.responses import ResponseFunctionWebSearch
+        from openai.types.responses.response_function_web_search import ActionOpenPage
+
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        guardrail: Final = _make_guardrail()
+        response: Final = ResponsesAPIResponse(
+            id="resp-ws-1",
+            created_at=0,
+            output=[
+                ResponseFunctionWebSearch(
+                    id="ws_srvtoolu_01",
+                    type="web_search_call",
+                    status="completed",
+                    action=ActionOpenPage(type="open_page", url="https://example.com/?ssn=123-45-6789"),
+                )
+            ],
+        )
+        assert guardrail._completion_response_text_parts(response) == [
+            '{"url": "https://example.com/?ssn=123-45-6789"}'
+        ]
 
 
 # ---------------------------------------------------------------
@@ -2666,3 +2803,51 @@ class TestRegistration:
             guardrail_class_registry["microsoft_purview"]
             is MicrosoftPurviewDLPGuardrail
         )
+
+
+def test_responses_input_scan_includes_the_arguments_of_a_replayed_claude_tool_search():
+    guardrail = _make_guardrail()
+    data = {
+        "model": "claude-sonnet-5-5",
+        "input": [
+            {"role": "user", "content": "What is the weather?"},
+            {
+                "type": "tool_search_call",
+                "id": "tsc_srvtoolu_01Search",
+                "call_id": "srvtoolu_01Search",
+                "arguments": {"pattern": "ssn 123-45-6789"},
+                "execution": "server",
+                "status": "completed",
+            },
+            {
+                "type": "tool_search_output",
+                "id": "tso_01Search",
+                "call_id": "srvtoolu_01Search",
+                "tools": [{"type": "function", "name": "get_weather"}],
+                "status": "completed",
+            },
+            {
+                "type": "function_call",
+                "id": "fc_01Weather",
+                "call_id": "toolu_01Weather",
+                "name": "get_weather",
+                "arguments": '{"city": "Paris"}',
+                "status": "completed",
+            },
+            {"type": "function_call_output", "call_id": "toolu_01Weather", "output": "14C"},
+        ],
+    }
+
+    scanned = guardrail._responses_api_input_to_str(data)
+
+    assert scanned is not None
+    assert "123-45-6789" in scanned
+    assert "Paris" in scanned
+
+
+@pytest.mark.parametrize("odata_type", [None, 7], ids=["null", "number"])
+def test_should_block_rejects_a_policy_action_whose_odata_type_is_not_text(odata_type: object) -> None:
+    response: Final = {"policyActions": [{"@odata.type": odata_type, "restrictionAction": "block"}]}
+
+    with pytest.raises(TypeError, match=f"argument of type '{type(odata_type).__name__}'"):
+        PurviewGuardrailBase._should_block(response)

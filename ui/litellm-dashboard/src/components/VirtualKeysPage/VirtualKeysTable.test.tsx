@@ -1,7 +1,7 @@
 import { act, screen, waitFor, within, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
-import { vi, it, expect, beforeEach, describe, Mock, MockedFunction } from "vitest";
+import { vi, it, expect, beforeEach, afterEach, describe, Mock, MockedFunction } from "vitest";
 import { chooseSelectOption, renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import { VirtualKeysTable } from "./VirtualKeysTable";
 import { KEY_TABLE_HIDDEN_COLUMNS, KEY_TABLE_SORT_FIELDS } from "./keyTableColumns";
@@ -427,6 +427,57 @@ it("sorts by spend ascending when 'Spend ascending' is chosen from the Spend / B
   });
 });
 
+it.each([
+  ["expires", "Expires", "asc"],
+  ["last_active", "Last Active", "asc"],
+  ["budget_reset_at", "Budget Reset", "asc"],
+  ["total_spend", "Lifetime Spend", "desc"],
+])("sorts %s in both directions and resets pagination", async (field, label, direction) => {
+  const user = userEvent.setup();
+  renderWithProviders(<VirtualKeysTable />, { searchParams: { page: "2" } });
+  if (field === "expires") {
+    await user.click(screen.getByRole("button", { name: "Columns" }));
+    await user.click(await screen.findByText("Expires"));
+    await user.keyboard("{Escape}");
+  }
+  await user.click(screen.getByRole("button", { name: label, exact: true }));
+  await waitFor(() => {
+    expect(mockUseKeys).toHaveBeenLastCalledWith(
+      1,
+      50,
+      expect.objectContaining({ sortBy: field, sortOrder: direction }),
+    );
+  });
+  await user.click(screen.getByRole("button", { name: label, exact: true }));
+  await waitFor(() => {
+    expect(mockUseKeys).toHaveBeenLastCalledWith(
+      1,
+      50,
+      expect.objectContaining({ sortBy: field, sortOrder: direction === "asc" ? "desc" : "asc" }),
+    );
+  });
+});
+
+it.each([
+  ["TPM", "tpm_limit"],
+  ["RPM", "rpm_limit"],
+])("sorts by %s through the rate-limit menu", async (label, field) => {
+  const user = userEvent.setup();
+  renderWithProviders(<VirtualKeysTable />);
+  await user.click(screen.getByRole("button", { name: "Columns" }));
+  await user.click(await screen.findByText("Rate Limits"));
+  await user.keyboard("{Escape}");
+  await chooseSelectOption(
+    user,
+    screen.getByRole("button", { name: "Sort options for TPM or RPM" }),
+    `${label} ascending`,
+    "menuitem",
+  );
+  await waitFor(() => {
+    expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ sortBy: field, sortOrder: "asc" }));
+  });
+});
+
 it("clicking the key cell deep-links via ?key=", async () => {
   const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
   renderWithProviders(<VirtualKeysTable />, { onUrlUpdate });
@@ -531,6 +582,27 @@ it("should display 'Default Proxy Admin' for user_id when value is 'default_user
 
   await waitFor(() => {
     expect(screen.getByText("Default Proxy Admin")).toBeInTheDocument();
+  });
+});
+
+describe("Budget Reset column", () => {
+  const originalTimezone: string | undefined = process.env.TZ;
+
+  afterEach(() => {
+    if (originalTimezone === undefined) {
+      delete process.env.TZ;
+      return;
+    }
+    process.env.TZ = originalTimezone;
+  });
+
+  it("shows the reset time in UTC with a UTC label for a viewer in another timezone", async () => {
+    process.env.TZ = "America/Los_Angeles";
+    mockUseKeys.mockReturnValue(keysResult([{ ...mockKey, budget_reset_at: "2026-11-01T00:00:00Z" }]));
+
+    renderWithProviders(<VirtualKeysTable />);
+
+    expect(await screen.findByText("Nov 1, 00:00:00 UTC")).toBeInTheDocument();
   });
 });
 

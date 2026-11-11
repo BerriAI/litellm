@@ -265,7 +265,7 @@ class TestImageGenerationEntryPointHeaders:
         test_headers = {"cf-aig-authorization": "Bearer my-secret"}
 
         await litellm.aimage_generation(
-            model="dall-e-3",
+            model="gpt-image-2.5-sunburst",
             prompt="A white cat",
             extra_headers=test_headers,
             client=mock_openai_client,

@@ -1,6 +1,7 @@
 import json
 import re
 from collections.abc import Callable, Mapping
+from itertools import chain
 from typing import Final
 from uuid import uuid4
 
@@ -69,10 +70,18 @@ def _chat_messages(marker: str) -> list[JsonValue]:
     return [{"role": "user", "content": _prompt(marker)}]
 
 
-def _outbound(backend: str, messages: list[JsonValue], **fields: JsonValue) -> dict[str, JsonValue]:
+def _default_max_tokens(gateway: Gateway, backend: str) -> int:
+    match gateway.get("/public/litellm_model_cost_map").get(f"bedrock_mantle/{backend}"):
+        case {"max_output_tokens": int() as mapped}:
+            return mapped
+        case _:
+            return DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
+
+
+def _outbound(gateway: Gateway, backend: str, messages: list[JsonValue], **fields: JsonValue) -> dict[str, JsonValue]:
     return {
         "messages": messages,
-        "max_tokens": DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS,
+        "max_tokens": _default_max_tokens(gateway, backend),
         "anthropic_version": _BRIDGE_VERSION,
         "model": backend,
         **fields,
@@ -263,13 +272,17 @@ def _assert_chunk_envelope(chunks: tuple[dict[str, JsonValue], ...], model: str,
     return next(iter(identities))
 
 
+def _content_chunks(chunks: tuple[dict[str, JsonValue], ...]) -> tuple[dict[str, JsonValue], ...]:
+    return tuple(chunk for chunk in chunks if chunk.get("usage") is None)
+
+
 def _finish_reasons(chunks: tuple[dict[str, JsonValue], ...]) -> list[JsonValue]:
-    reasons: Final = (_only_choice(chunk).get("finish_reason") for chunk in chunks)
+    reasons: Final = (_only_choice(chunk).get("finish_reason") for chunk in _content_chunks(chunks))
     return [reason for reason in reasons if reason is not None]
 
 
 def _deltas(chunks: tuple[dict[str, JsonValue], ...]) -> tuple[dict[str, JsonValue], ...]:
-    return tuple(object_value(_only_choice(chunk)["delta"]) for chunk in chunks)
+    return tuple(object_value(_only_choice(chunk)["delta"]) for chunk in _content_chunks(chunks))
 
 
 def _sdk_base(gateway: Gateway) -> str:
@@ -285,7 +298,7 @@ def test_chat_completion_on_a_mantle_claude_id_posts_native_messages_and_spends_
     gateway: Gateway, backend: str
 ) -> None:
     marker: Final = uuid4().hex
-    expected: Final = _outbound(backend, [_user_turn(marker)])
+    expected: Final = _outbound(gateway, backend, [_user_turn(marker)])
     with wire_server(_bearer_peer(expected, _text_reply(marker, backend))) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"bedrock_mantle/{backend}", api_base=wire.url, api_key=_API_KEY)
         response: Final = gateway.request(
@@ -301,15 +314,15 @@ def test_chat_completion_on_a_mantle_claude_id_posts_native_messages_and_spends_
 @pytest.mark.parametrize(
     ("stream_options", "usage_chunks"),
     [
-        pytest.param({"stream_options": {"include_usage": True}}, [_USAGE], id="include_usage"),
+        pytest.param({"stream_options": {"include_usage": True}}, [(True, *_USAGE)], id="include_usage"),
         pytest.param({}, [], id="no_usage"),
     ],
 )
 def test_chat_stream_on_a_mantle_claude_id_relays_openai_chunks_from_the_native_stream(
-    gateway: Gateway, stream_options: dict[str, JsonValue], usage_chunks: list[tuple[int, int, int]]
+    gateway: Gateway, stream_options: dict[str, JsonValue], usage_chunks: list[tuple[JsonValue, ...]]
 ) -> None:
     marker: Final = uuid4().hex
-    expected: Final = _outbound(_HAIKU, [_user_turn(marker)], stream=True)
+    expected: Final = _outbound(gateway, _HAIKU, [_user_turn(marker)], stream=True)
     with wire_server(_bearer_peer(expected, _text_stream(marker))) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"bedrock_mantle/{_HAIKU}", api_base=wire.url, api_key=_API_KEY)
         response: Final = gateway.request(
@@ -322,9 +335,9 @@ def test_chat_stream_on_a_mantle_claude_id_relays_openai_chunks_from_the_native_
         identity: Final = _assert_chunk_envelope(chunks, model, response.text)
         assert "".join(str(delta.get("content") or "") for delta in _deltas(chunks)) == _answer(marker), response.text
         assert _finish_reasons(chunks) == ["stop"], response.text
-        assert [_token_usage(chunk) for chunk in chunks if chunk.get("usage") is not None] == usage_chunks, (
-            response.text
-        )
+        assert [
+            (chunk["choices"] == [], *_token_usage(chunk)) for chunk in chunks if chunk.get("usage") is not None
+        ] == usage_chunks, response.text
         _assert_success_row(
             _spend_row(_BY_REQUEST_ID, identity), model, _HAIKU, "acompletion", _mantle_cost(gateway, _HAIKU)
         )
@@ -350,7 +363,7 @@ def test_chat_request_fields_are_translated_to_the_native_messages_shape(
     outbound_fields: dict[str, JsonValue],
 ) -> None:
     marker: Final = uuid4().hex
-    expected: Final = _outbound(_HAIKU, [_user_turn(marker)], **outbound_fields)
+    expected: Final = _outbound(gateway, _HAIKU, [_user_turn(marker)], **outbound_fields)
     with wire_server(_bearer_peer(expected, _text_reply(marker))) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"bedrock_mantle/{_HAIKU}", api_base=wire.url, api_key=_API_KEY)
         response: Final = gateway.request(
@@ -372,7 +385,7 @@ def test_chat_tools_reach_mantle_as_input_schema_and_the_tool_use_block_returns_
     marker: Final = uuid4().hex
     backend: Final = _mantle_claude_where(gateway, "supports_forced_tool_use", disabled=False)
     expected: Final = _outbound(
-        backend, [_user_turn(marker)], tools=[_WEATHER_TOOL_OUTBOUND], tool_choice=outbound_choice
+        gateway, backend, [_user_turn(marker)], tools=[_WEATHER_TOOL_OUTBOUND], tool_choice=outbound_choice
     )
     reply: Final = _tool_reply(marker, backend, "get_weather")
     with wire_server(_bearer_peer(expected, reply)) as wire, gateway.scenario() as scenario:
@@ -402,7 +415,7 @@ def test_chat_tools_reach_mantle_as_input_schema_and_the_tool_use_block_returns_
 
 def test_chat_stream_relays_a_native_tool_use_block_as_tool_call_chunks(gateway: Gateway) -> None:
     marker: Final = uuid4().hex
-    expected: Final = _outbound(_HAIKU, [_user_turn(marker)], tools=[_WEATHER_TOOL_OUTBOUND], stream=True)
+    expected: Final = _outbound(gateway, _HAIKU, [_user_turn(marker)], tools=[_WEATHER_TOOL_OUTBOUND], stream=True)
     with wire_server(_bearer_peer(expected, _tool_stream(marker))) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"bedrock_mantle/{_HAIKU}", api_base=wire.url, api_key=_API_KEY)
         response: Final = gateway.request(
@@ -434,7 +447,7 @@ def test_chat_tool_result_turn_reaches_mantle_as_tool_use_and_tool_result_blocks
     marker: Final = uuid4().hex
     tool_call: Final = f"toolu_{marker}"
     expected: Final = _outbound(
-        _HAIKU,
+        gateway, _HAIKU,
         [
             _user_turn(marker),
             {
@@ -479,7 +492,7 @@ def test_chat_json_schema_response_format_is_sent_as_a_forced_tool_and_returned_
 ) -> None:
     marker: Final = uuid4().hex
     expected: Final = _outbound(
-        _HAIKU,
+        gateway, _HAIKU,
         [_user_turn(marker)],
         tools=[{"name": "json_tool_call", "input_schema": _CITY_SCHEMA}],
         tool_choice={"name": "json_tool_call", "type": "tool"},
@@ -532,7 +545,7 @@ def _sigv4_peer(expected: Mapping[str, JsonValue], reply: Reply) -> Callable[[Re
 
 def test_chat_completion_signs_the_native_messages_request_with_the_deployment_aws_keys(gateway: Gateway) -> None:
     marker: Final = uuid4().hex
-    expected: Final = _outbound(_HAIKU, [_user_turn(marker)])
+    expected: Final = _outbound(gateway, _HAIKU, [_user_turn(marker)])
     with wire_server(_sigv4_peer(expected, _text_reply(marker))) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(
             model=f"bedrock_mantle/{_HAIKU}",
@@ -551,7 +564,7 @@ def test_chat_completion_signs_the_native_messages_request_with_the_deployment_a
 
 def test_region_prefix_in_a_mantle_claude_id_is_routing_only_and_keeps_the_mantle_price(gateway: Gateway) -> None:
     marker: Final = uuid4().hex
-    expected: Final = _outbound(_HAIKU, [_user_turn(marker)])
+    expected: Final = _outbound(gateway, _HAIKU, [_user_turn(marker)])
     with wire_server(_bearer_peer(expected, _text_reply(marker))) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"bedrock_mantle/us-east-2/{_HAIKU}", api_base=wire.url, api_key=_API_KEY)
         response: Final = gateway.request(
@@ -572,7 +585,7 @@ def test_region_prefix_in_a_mantle_claude_id_is_routing_only_and_keeps_the_mantl
 
 def test_openai_sdk_chat_completion_on_a_mantle_claude_id(gateway: Gateway) -> None:
     marker: Final = uuid4().hex
-    expected: Final = _outbound(_HAIKU, [_user_turn(marker)])
+    expected: Final = _outbound(gateway, _HAIKU, [_user_turn(marker)])
     with wire_server(_bearer_peer(expected, _text_reply(marker))) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"bedrock_mantle/{_HAIKU}", api_base=wire.url, api_key=_API_KEY)
         with OpenAI(
@@ -601,7 +614,7 @@ def test_openai_sdk_chat_completion_on_a_mantle_claude_id(gateway: Gateway) -> N
 
 def test_openai_sdk_chat_stream_on_a_mantle_claude_id(gateway: Gateway) -> None:
     marker: Final = uuid4().hex
-    expected: Final = _outbound(_HAIKU, [_user_turn(marker)], stream=True)
+    expected: Final = _outbound(gateway, _HAIKU, [_user_turn(marker)], stream=True)
     with wire_server(_bearer_peer(expected, _text_stream(marker))) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"bedrock_mantle/{_HAIKU}", api_base=wire.url, api_key=_API_KEY)
         with OpenAI(
@@ -620,15 +633,14 @@ def test_openai_sdk_chat_stream_on_a_mantle_claude_id(gateway: Gateway) -> None:
             )
         identities: Final = {chunk.id for chunk in chunks}
         assert len(identities) == 1 and {chunk.model for chunk in chunks} == {model}, chunks
-        assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == _answer(marker), chunks
-        assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == ["stop"], (
-            chunks
-        )
+        choices: Final = tuple(chain.from_iterable(chunk.choices for chunk in chunks))
+        assert "".join(choice.delta.content or "" for choice in choices) == _answer(marker), chunks
+        assert [choice.finish_reason for choice in choices if choice.finish_reason] == ["stop"], chunks
         assert [
-            (chunk.usage.prompt_tokens, chunk.usage.completion_tokens, chunk.usage.total_tokens)
+            (len(chunk.choices), chunk.usage.prompt_tokens, chunk.usage.completion_tokens, chunk.usage.total_tokens)
             for chunk in chunks
             if chunk.usage is not None
-        ] == [_USAGE], chunks
+        ] == [(0, *_USAGE)], chunks
         _assert_success_row(
             _spend_row(_BY_REQUEST_ID, next(iter(identities))),
             model,
@@ -641,7 +653,7 @@ def test_openai_sdk_chat_stream_on_a_mantle_claude_id(gateway: Gateway) -> None:
 
 async def test_async_openai_sdk_chat_completion_on_a_mantle_claude_id(gateway: Gateway) -> None:
     marker: Final = uuid4().hex
-    expected: Final = _outbound(_HAIKU, [_user_turn(marker)])
+    expected: Final = _outbound(gateway, _HAIKU, [_user_turn(marker)])
     with wire_server(_bearer_peer(expected, _text_reply(marker))) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"bedrock_mantle/{_HAIKU}", api_base=wire.url, api_key=_API_KEY)
         async with AsyncOpenAI(
@@ -670,7 +682,7 @@ async def test_async_openai_sdk_chat_completion_on_a_mantle_claude_id(gateway: G
 
 async def test_async_openai_sdk_chat_stream_on_a_mantle_claude_id(gateway: Gateway) -> None:
     marker: Final = uuid4().hex
-    expected: Final = _outbound(_HAIKU, [_user_turn(marker)], stream=True)
+    expected: Final = _outbound(gateway, _HAIKU, [_user_turn(marker)], stream=True)
     with wire_server(_bearer_peer(expected, _text_stream(marker))) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"bedrock_mantle/{_HAIKU}", api_base=wire.url, api_key=_API_KEY)
         async with AsyncOpenAI(
@@ -688,15 +700,14 @@ async def test_async_openai_sdk_chat_stream_on_a_mantle_claude_id(gateway: Gatew
             chunks: Final = tuple([chunk async for chunk in stream])
         identities: Final = {chunk.id for chunk in chunks}
         assert len(identities) == 1 and {chunk.model for chunk in chunks} == {model}, chunks
-        assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == _answer(marker), chunks
-        assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == ["stop"], (
-            chunks
-        )
+        choices: Final = tuple(chain.from_iterable(chunk.choices for chunk in chunks))
+        assert "".join(choice.delta.content or "" for choice in choices) == _answer(marker), chunks
+        assert [choice.finish_reason for choice in choices if choice.finish_reason] == ["stop"], chunks
         assert [
-            (chunk.usage.prompt_tokens, chunk.usage.completion_tokens, chunk.usage.total_tokens)
+            (len(chunk.choices), chunk.usage.prompt_tokens, chunk.usage.completion_tokens, chunk.usage.total_tokens)
             for chunk in chunks
             if chunk.usage is not None
-        ] == [_USAGE], chunks
+        ] == [(0, *_USAGE)], chunks
         _assert_success_row(
             _spend_row(_BY_REQUEST_ID, next(iter(identities))),
             model,
@@ -711,7 +722,7 @@ def test_identical_chat_request_is_served_from_the_response_cache_and_logged_as_
     gateway: Gateway,
 ) -> None:
     marker: Final = uuid4().hex
-    expected: Final = _outbound(_HAIKU, [_user_turn(marker)])
+    expected: Final = _outbound(gateway, _HAIKU, [_user_turn(marker)])
     with wire_server(_bearer_peer(expected, _text_reply(marker))) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"bedrock_mantle/{_HAIKU}", api_base=wire.url, api_key=_API_KEY)
         request: Final[dict[str, JsonValue]] = {"model": model, "messages": _chat_messages(marker)}
@@ -799,7 +810,7 @@ def test_open_weight_mantle_id_keeps_the_openai_compatible_chat_route_and_its_sa
 )
 def test_api_base_with_a_route_suffix_still_posts_to_the_native_messages_path(gateway: Gateway, suffix: str) -> None:
     marker: Final = uuid4().hex
-    expected: Final = _outbound(_HAIKU, [_user_turn(marker)])
+    expected: Final = _outbound(gateway, _HAIKU, [_user_turn(marker)])
     with wire_server(_bearer_peer(expected, _text_reply(marker))) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"bedrock_mantle/{_HAIKU}", api_base=wire.url + suffix, api_key=_API_KEY)
         response: Final = gateway.request(
@@ -811,7 +822,7 @@ def test_api_base_with_a_route_suffix_still_posts_to_the_native_messages_path(ga
 
 def test_responses_api_on_a_mantle_claude_id_bridges_to_native_messages(gateway: Gateway) -> None:
     marker: Final = uuid4().hex
-    expected: Final = _outbound(_HAIKU, [_user_turn(marker)])
+    expected: Final = _outbound(gateway, _HAIKU, [_user_turn(marker)])
     with wire_server(_bearer_peer(expected, _text_reply(marker))) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"bedrock_mantle/{_HAIKU}", api_base=wire.url, api_key=_API_KEY)
         response: Final = gateway.request("POST", "/v1/responses", {"model": model, "input": _prompt(marker)})
@@ -836,14 +847,19 @@ def test_responses_api_on_a_mantle_claude_id_bridges_to_native_messages(gateway:
 
 def test_responses_api_stream_on_a_mantle_claude_id_bridges_to_the_native_stream(gateway: Gateway) -> None:
     marker: Final = uuid4().hex
-    expected: Final = _outbound(_HAIKU, [_user_turn(marker)], stream=True)
+    expected: Final = _outbound(gateway, _HAIKU, [_user_turn(marker)], stream=True)
     with wire_server(_bearer_peer(expected, _text_stream(marker))) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"bedrock_mantle/{_HAIKU}", api_base=wire.url, api_key=_API_KEY)
         response: Final = gateway.request(
             "POST", "/v1/responses", {"model": model, "input": _prompt(marker), "stream": True}
         )
         assert response.status_code == 200, response.text
-        events: Final = _sse_objects(response.text)
+        assert "data: [DONE]" not in response.text, response.text
+        events: Final = tuple(
+            _JSON_OBJECT.validate_json(line.removeprefix("data: "))
+            for line in response.text.splitlines()
+            if line.startswith("data: ")
+        )
         kinds: Final = [event["type"] for event in events]
         assert (kinds[0], kinds[-1]) == ("response.created", "response.completed"), kinds
         assert "".join(
@@ -945,7 +961,7 @@ _UNSUPPORTED: Final = (
         "supports_sampling_params",
         {"temperature": 0.2},
         {},
-        "Only temperature=1 is supported",
+        "does not support parameters: ['temperature']",
         id="temperature_on_a_fixed_sampling_model",
     ),
     pytest.param(
@@ -993,7 +1009,7 @@ def test_unsupported_claude_param_is_dropped_under_drop_params(
 ) -> None:
     marker: Final = uuid4().hex
     backend: Final = _backend_without(gateway, flag)
-    expected: Final = _outbound(backend, [_user_turn(marker)], **outbound_fields)
+    expected: Final = _outbound(gateway, backend, [_user_turn(marker)], **outbound_fields)
     with wire_server(_bearer_peer(expected, _text_reply(marker, backend))) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"bedrock_mantle/{backend}", api_base=wire.url, api_key=_API_KEY)
         response: Final = gateway.request(
@@ -1111,7 +1127,7 @@ def _wildcard_prefix(gateway: Gateway, scenario: Scenario, api_base: str) -> str
 def test_uppercase_claude_id_through_a_mantle_wildcard_is_sent_to_native_messages(gateway: Gateway) -> None:
     marker: Final = uuid4().hex
     backend: Final = _HAIKU.upper()
-    expected: Final = _outbound(backend, [_user_turn(marker)])
+    expected: Final = _outbound(gateway, backend, [_user_turn(marker)])
     with wire_server(_bearer_peer(expected, _text_reply(marker, backend))) as wire, gateway.scenario() as scenario:
         model: Final = f"{_wildcard_prefix(gateway, scenario, wire.url)}/{backend}"
         response: Final = gateway.request(
@@ -1126,7 +1142,7 @@ def test_five_kilobyte_claude_id_through_a_mantle_wildcard_reaches_mantle_and_it
 ) -> None:
     marker: Final = uuid4().hex
     backend: Final = f"{_HAIKU}-{'x' * 5000}"
-    expected: Final = _outbound(backend, [_user_turn(marker)])
+    expected: Final = _outbound(gateway, backend, [_user_turn(marker)])
     unknown: Final = _error_reply(404, "not_found_error", "model: synthetic unknown model")
     with wire_server(_bearer_peer(expected, unknown)) as wire, gateway.scenario() as scenario:
         model: Final = f"{_wildcard_prefix(gateway, scenario, wire.url)}/{backend}"
@@ -1200,6 +1216,6 @@ def test_non_claude_mantle_id_with_a_bare_bedrock_twin_keeps_its_route_and_spend
         cost: Final = _mantle_cost(gateway, _LUNA)
         assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(cost), response.text
         _assert_success_row(
-            _spend_row(_BY_CALL_ID, response.headers["x-litellm-call-id"]), model, _LUNA, "responses", cost
+            _spend_row(_BY_CALL_ID, response.headers["x-litellm-call-id"]), model, _LUNA, "acompletion", cost
         )
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", _RESPONSES_PATH)]

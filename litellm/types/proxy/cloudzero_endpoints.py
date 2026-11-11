@@ -46,7 +46,7 @@ class CloudZeroExportResponse(LiteLLMBaseModel):
     dry_run_data: dict[str, Any] | None = Field(
         None, description="Dry run data including usage data and CBF transformed data"
     )
-    summary: dict[str, Any] | None = Field(None, description="Summary statistics for dry run")
+    summary: dict[str, object] | None = Field(None, description="Summary statistics for dry run")
 
 
 class CloudZeroSettingsView(LiteLLMBaseModel):

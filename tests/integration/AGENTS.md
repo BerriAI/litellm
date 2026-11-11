@@ -27,8 +27,11 @@ tests. A product bug the test exposes is `pytest.skip("BUG: <symptom>")` at the 
 fix in the test and not a deletion. Needs no network, proxy, DB or Redis: `tests/unit`
 
 CircleCI's integration groups run every file here except the OCI and sandbox tests, which no CI runs, and
-the files in `GITHUB_FILES` in `run.py`. CircleCI runs on main, not on pull requests, so a new file here
-first runs after its PR merges. Wanting a file to run before merge is no reason to change CI, and a new
+the files in `GITHUB_FILES` in `run.py`. `test-integration.yml` runs the same groups through the same
+`run_integration.sh` on GitHub Actions, on main every three hours from 8am to 8pm Pacific Monday to Saturday,
+and on a pull request when someone adds the `run-ci` label. Neither runs every pull request, so a new file here
+first runs on main after its PR merges, or earlier if the PR gets `run-ci`. Wanting a file to run before merge
+is no reason to change CI, and a new
 dedicated workflow for it is the same mistake as a shared shard. Write the file, leave `GITHUB_FILES` and
 every workflow alone, and tell the user it first runs on main. `GITHUB_FILES` is only for a file that
 needs what CircleCI's groups cannot give it, like the images `image-scan.yml` builds or the plain pytest
@@ -37,3 +40,14 @@ together with its dedicated job, and list a new dedicated GitHub workflow with t
 `DEDICATED_INTEGRATION_WORKFLOWS` in `.github/scripts/assert_ci_coverage.py`. The `ci-coverage` check
 fails a file here that a GitHub workflow runs unless it is in `GITHUB_FILES` and that workflow owns its
 directory (#46780)
+
+## Fixtures that boot a proxy
+
+Scope them to the module or class, or pin a session one to a single worker with an `xdist_group` mark
+as `_llm_gateway` in `mcp/test_mcp_llm_endpoints.py` does, and request them as arguments, never through
+`request.getfixturevalue`. The harness puts tests that request the same set of module or class fixtures
+on one xdist worker, so the proxy they share boots there once and stops when that worker moves to another
+file. A test that requests one more of those fixtures than its neighbors gets its own group and can boot
+the proxy again on another worker, so keep that set the same across the tests that share a proxy. An
+unpinned session fixture boots a copy on every worker that runs one of its tests and keeps them all until
+the node ends, and those copies ran CircleCI integration-extensions nodes out of memory
