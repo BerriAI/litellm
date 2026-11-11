@@ -1,7 +1,7 @@
 from collections.abc import Mapping, Sequence
 from typing import Annotated
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import ReadOnly, Required, TypedDict
 
 from .base import GuardrailConfigModel
@@ -45,6 +45,7 @@ class RealmLabsPIISpan(TypedDict, total=False):
     text: ReadOnly[str | None]
     start: ReadOnly[int | None]
     end: ReadOnly[int | None]
+    message_indices: ReadOnly[Sequence[Annotated[int, Field(strict=True, ge=0)]] | None]
 
 
 class RealmLabsGuardrailResponse(TypedDict, total=False):
@@ -57,6 +58,8 @@ class RealmLabsGuardrailResponse(TypedDict, total=False):
 
 class RealmLabsGuardrailOptionalParams(BaseModel):
     """Nested tuning settings; explicitly supplied non-null values override the top-level settings."""
+
+    model_config = ConfigDict(frozen=True)
 
     probes: Sequence[str] | str | None = Field(
         default=None,

@@ -6,6 +6,8 @@ Checks prompts and model replies with RealmLabs MLS. It blocks hazardous prompts
 
 Add the guardrail to your proxy configuration. The [complete example](example_config.yaml) also configures Claude Haiku 4.5 as the model
 
+This configuration enables both request and response screening. Before using `post_call`, confirm that your MLS endpoint meets the [response screening requirements](#response-screening-requirements). If it does not, use `mode: pre_call` for request screening only
+
 ```yaml
 guardrails:
   - guardrail_name: realmlabs-guard
@@ -28,10 +30,10 @@ guardrails:
 
 | Setting | Meaning |
 | --- | --- |
-| `api_key` | Required MLS guardrail bearer token; falls back to `REALMLABS_API_KEY` when omitted |
+| `api_key` | Bearer API key authorized to access `/guardrail`; falls back to `REALMLABS_API_KEY` when omitted |
 | `api_base` | MLS base URL; falls back to `REALMLABS_API_BASE`, then `https://mls.realmlabs.ai` |
 
-The integration appends `/guardrail` to the base URL. This route uses a guardrail API key, separate from the token for `/llm/*` routes
+The integration appends `/guardrail` to the base URL and sends the API key as a bearer token. Depending on your MLS deployment, the endpoint may accept a guardrail-specific key or a standard MLS API key. Confirm that your key is authorized for `/guardrail`; access to another route alone does not guarantee access to this endpoint
 
 ### Tuning parameters
 
@@ -82,7 +84,17 @@ The example's `default_on: true` applies the guardrail automatically. For opt-in
 | `pre_call` | Checks the request, enforcing hazard before masking or blocking PII |
 | `post_call` | Checks the reply with conversation context, masking or blocking PII; hazard scores do not block replies |
 
-A hazard verdict marked `role_mismatch` is not enforced. Conversation context comes from Chat Completions-style `messages`. Streaming uses LiteLLM's existing delivery settings, which do not enable text rewrites by default
+A hazard verdict marked `role_mismatch` is not enforced. Conversation context comes from Chat Completions-style `messages`. When response PII masking is enabled, Chat Completions streaming buffers the full reply and releases the masked chunks only after screening. This delays the first response chunk until generation and screening finish. Streaming delivery settings cannot disable this buffering. Other streaming formats are rejected in this mode, use `stream=false` instead. MLS errors still follow `block_on_error`, so use `true` to prevent unscreened output when MLS fails
+
+Standalone streaming uses the RealmLabs buffering hook. Chat Completions streaming policy pipelines use LiteLLM's existing buffered pipeline execution, preserving step ordering and conditional actions while delivering masked text
+
+### Response screening requirements
+
+Response screening requires an MLS endpoint that returns a nonempty `message_indices` array for each PII detection. Each entry must be a valid zero-based index into the messages submitted to MLS. Confirm this capability with your MLS provider before enabling `post_call`; availability is not implied by this integration or its default endpoint
+
+The integration sends request history and the current reply together so MLS retains conversation context. Only detections associated with the current reply are blocked or masked. Earlier user and assistant messages remain context, and each response text is masked using only its own detections
+
+Missing, null, empty, or invalid message locations follow `block_on_error`. With `true`, the request fails with an MLS error. With the default `false`, the response passes through unchanged, without PII masking. An MLS response with no PII detections needs no location metadata. Request screening with `pre_call` does not require message locations
 
 ## Error handling
 
@@ -90,7 +102,7 @@ Hazard and PII policy blocks raise `GuardrailRaisedException` with HTTP status 4
 
 An MLS connection failure, timeout, HTTP error, or unreadable response follows `block_on_error`: the default `false` passes text through unchanged; `true` raises an error. A successful completion alone does not prove MLS returned an allow verdict
 
-Responses must include `results` and `pii_spans` arrays, which may be empty. Each probe result needs a name and a finite probability between zero and one. Missing verdict fields are errors, not clean results. When masking is enabled, a PII span without a nonempty type and text also follows `block_on_error`. When masking is disabled, spans without text still trigger a PII content block
+Responses must include `results` and `pii_spans` arrays, which may be empty. Each probe result needs a name and a finite probability between zero and one. Missing verdict fields are errors, not clean results. When masking is enabled, a PII span without a nonempty type and text also follows `block_on_error`. When masking is disabled, detected PII can trigger a content block without span text; response screening also requires valid message locations as described above
 
 Request fields are defined by `RealmLabsGuardrailRequest` and assembled by `_build_request`. Response types and `_parse_response` define what blocking and masking consume. Additional response fields are ignored, including fields inside probe results and PII spans. Update these boundaries and their behavior tests when adding supported fields or changing the contract
 

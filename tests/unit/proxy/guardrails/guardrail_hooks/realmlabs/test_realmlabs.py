@@ -1,33 +1,49 @@
+import asyncio
 import json
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 from http import HTTPStatus
 from typing import Final, Literal
 
 import httpx
 import pytest
 import respx
+from fastapi import HTTPException
 from pydantic import TypeAdapter
 
 import litellm
 from litellm.exceptions import GuardrailRaisedException
 from litellm.llms.openai.chat.guardrail_translation.handler import OpenAIChatCompletionsHandler
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.guardrails.guardrail_hooks.realmlabs import guardrail_initializer_registry
 from litellm.proxy.guardrails.guardrail_hooks.realmlabs.realmlabs import (
     RealmLabsGuardrail,
     RealmLabsMissingCredentials,
 )
+from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
+from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.guardrails.guardrail_hooks.realmlabs import RealmLabsGuardrailOptionalParams
-from litellm.types.utils import Choices, GenericGuardrailAPIInputs, Message, ModelResponse
+from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
+from litellm.types.utils import (
+    Choices,
+    Delta,
+    GenericGuardrailAPIInputs,
+    Message,
+    ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
+    Usage,
+)
 
 _API_KEY = "mls_gr_test"
 _API_BASE = "https://mls.example.test"
 _URL = f"{_API_BASE}/guardrail"
 _DEFAULT_THRESHOLD = 0.703
 
-_NAME_SPAN: dict[str, object] = {"type": "name", "text": "Alex"}
-_EMAIL_SPAN: dict[str, object] = {"type": "email", "text": "alex@example.com"}
+_NAME_SPAN: dict[str, object] = {"type": "name", "text": "Alex", "message_indices": [0]}
+_EMAIL_SPAN: dict[str, object] = {"type": "email", "text": "alex@example.com", "message_indices": [0]}
 
 _JSON_OBJECT = TypeAdapter(dict[str, object])
 
@@ -191,7 +207,10 @@ async def test_hazardous_prompt_is_blocked_before_its_pii_is_masked(respx_mock: 
         ),
         pytest.param(
             ["Contact Ann at Ann.Smith@example.com"],
-            [{"type": "name", "text": "Ann"}, {"type": "email", "text": "Ann.Smith@example.com"}],
+            [
+                {"type": "name", "text": "Ann", "message_indices": [0]},
+                {"type": "email", "text": "Ann.Smith@example.com", "message_indices": [0]},
+            ],
             ["Contact [name] at [email]"],
             id="name-prefix-before-email",
         ),
@@ -307,6 +326,10 @@ async def test_empty_inputs_are_returned_without_calling_mls(
     ("mls_reply", "reason"),
     [
         pytest.param(httpx.ConnectError("connection refused"), "connection refused", id="connection-error"),
+        pytest.param(httpx.ConnectTimeout("MLS timeout"), "Connection timed out", id="connect-timeout"),
+        pytest.param(httpx.ReadTimeout("MLS timeout"), "Read timed out", id="read-timeout"),
+        pytest.param(httpx.WriteTimeout("MLS timeout"), "Write timed out", id="write-timeout"),
+        pytest.param(httpx.PoolTimeout("MLS timeout"), "Connection pool timed out", id="pool-timeout"),
         pytest.param(
             httpx.Response(HTTPStatus.SERVICE_UNAVAILABLE),
             f"{HTTPStatus.SERVICE_UNAVAILABLE.value} {HTTPStatus.SERVICE_UNAVAILABLE.phrase}",
@@ -760,7 +783,9 @@ async def test_post_call_masks_the_reply_in_conversation_context(name: str, resp
         {"role": "assistant", "content": "Hello!"},
         {"role": "user", "content": "What is my name?"},
     ]
-    route: Final = _serve(respx_mock, _mls_body(pii_spans=[{"type": "name", "text": name.removesuffix("]")}]))
+    route: Final = _serve(
+        respx_mock, _mls_body(pii_spans=[{"type": "name", "text": name.removesuffix("]"), "message_indices": [4]}])
+    )
     response: Final = ModelResponse(
         choices=[
             Choices(index=0, message=Message(content=f"Your name is {name}.", role="assistant"), finish_reason="stop")
@@ -861,7 +886,10 @@ async def test_response_ignores_hazard_scores_and_merges_overlapping_pii(
         respx_mock,
         {
             "results": [{"probe": "hazard_prompt", "prob": 0.99, "role_mismatch": role_mismatch}],
-            "pii_spans": [{"type": "name", "text": "Ann"}, {"type": "email", "text": "Ann.Smith@example.com"}],
+            "pii_spans": [
+                {"type": "name", "text": "Ann", "message_indices": [0]},
+                {"type": "email", "text": "Ann.Smith@example.com", "message_indices": [0]},
+            ],
         },
     )
     inputs: Final[GenericGuardrailAPIInputs] = {"texts": ["Contact Ann at Ann.Smith@example.com.", "No PII here."]}
@@ -882,3 +910,425 @@ async def test_pii_only_in_history_leaves_the_reply_unchanged(respx_mock: respx.
 
     assert result is inputs
     assert conversation == [{"role": "user", "content": "My name is Alex."}], conversation
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pii_mask", [False, True])
+@pytest.mark.parametrize("indices", [[0], [1], [2], [0, 2]])
+async def test_response_pii_uses_current_message_locations(
+    pii_mask: bool, indices: list[int], respx_mock: respx.MockRouter
+) -> None:
+    conversation: Final = [
+        {"role": "user", "content": "My name is May."},
+        {"role": "assistant", "content": "Hello May."},
+    ]
+    route: Final = _serve(
+        respx_mock, _mls_body(pii_spans=[{"type": "name", "text": "May", "message_indices": indices}])
+    )
+    inputs: Final[GenericGuardrailAPIInputs] = {"texts": ["May I help?"]}
+    if not pii_mask and 2 in indices:
+        with pytest.raises(GuardrailRaisedException) as exc:
+            await _apply(
+                _guardrail(pii_mask=pii_mask), inputs, input_type="response", request_data={"messages": conversation}
+            )
+        assert exc.value.blocked_content is True
+    else:
+        result: Final = await _apply(
+            _guardrail(pii_mask=pii_mask), inputs, input_type="response", request_data={"messages": conversation}
+        )
+        assert result == {"texts": ["[name] I help?" if 2 in indices else "May I help?"]}
+    assert _sent_body(route)["messages"] == [*conversation, {"role": "assistant", "content": "May I help?"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "location",
+    [
+        {},
+        {"message_indices": None},
+        {"message_indices": []},
+        {"message_indices": [2]},
+        {"message_indices": [-1]},
+        {"message_indices": [True]},
+        {"message_indices": ["1"]},
+    ],
+)
+@pytest.mark.parametrize("block_on_error", [False, True])
+async def test_unknown_response_pii_location_follows_error_policy(
+    location: dict[str, object], block_on_error: bool, respx_mock: respx.MockRouter
+) -> None:
+    _serve(respx_mock, _mls_body(pii_spans=[{"type": "name", "text": "Alex", **location}]))
+    inputs: Final[GenericGuardrailAPIInputs] = {"texts": ["Hello Alex."]}
+    if block_on_error:
+        with pytest.raises(GuardrailRaisedException) as exc:
+            await _apply(_guardrail(block_on_error=True), inputs, input_type="response")
+        assert exc.value.blocked_content is False
+    else:
+        assert await _apply(_guardrail(block_on_error=False), inputs, input_type="response") is inputs
+
+
+@pytest.mark.asyncio
+async def test_response_masking_does_not_spread_detections_between_choices(respx_mock: respx.MockRouter) -> None:
+    _serve(respx_mock, _mls_body(pii_spans=[{"type": "name", "text": "May", "message_indices": [1]}]))
+    result: Final = await _apply(
+        _guardrail(),
+        {"texts": ["Hello May.", "May I help?"]},
+        input_type="response",
+        request_data={"messages": [{"role": "user", "content": "Please reply."}]},
+    )
+    assert result == {"texts": ["Hello [name].", "May I help?"]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("image_url", ["https://example.test/private.png", "data:image/png;base64,c2VjcmV0"])
+async def test_structured_mls_request_excludes_media(image_url: str, respx_mock: respx.MockRouter) -> None:
+    messages: Final[list[AllMessageValues]] = [
+        {"role": "system", "content": "Be brief."},
+        {
+            "role": "user",
+            "name": "private-user",
+            "content": [
+                {"type": "text", "text": "Hello Alex."},
+                {"type": "image_url", "image_url": {"url": image_url}},
+                {"type": "text", "text": "Read this receipt."},
+            ],
+        },
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": image_url}}]},
+    ]
+    original: Final = json.dumps(messages)
+    route: Final = _serve(respx_mock, _mls_body(pii_spans=[_NAME_SPAN]))
+    inputs: Final[GenericGuardrailAPIInputs] = {
+        "texts": ["Hello Alex.", "Read this receipt."],
+        "structured_messages": messages,
+    }
+
+    result: Final = await _apply(
+        _guardrail(),
+        inputs,
+        request_data={"messages": [{"role": "user", "content": "Outside the selected scope."}]},
+    )
+
+    assert _sent_body(route)["messages"] == [
+        {"role": "system", "content": "Be brief."},
+        {"role": "user", "content": "Hello Alex.\n\nRead this receipt."},
+    ]
+    assert result["texts"] == ["Hello [name].", "Read this receipt."]
+    assert inputs["texts"] == ["Hello Alex.", "Read this receipt."]
+    assert json.dumps(messages) == original
+
+
+@pytest.mark.asyncio
+async def test_structured_text_parts_are_flattened_for_mls(respx_mock: respx.MockRouter) -> None:
+    route: Final = _serve(respx_mock, _mls_body())
+    inputs: Final[GenericGuardrailAPIInputs] = {
+        "texts": ["Hello."],
+        "structured_messages": [{"role": "user", "content": [{"type": "text", "text": "Hello."}]}],
+    }
+
+    assert await _apply(_guardrail(), inputs) is inputs
+    assert _sent_body(route)["messages"] == [{"role": "user", "content": "Hello."}]
+
+
+@pytest.mark.asyncio
+async def test_structured_image_only_input_does_not_call_mls(respx_mock: respx.MockRouter) -> None:
+    route: Final = _serve(respx_mock, _mls_body())
+    inputs: Final[GenericGuardrailAPIInputs] = {
+        "texts": [],
+        "structured_messages": [
+            {
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {"url": "https://example.test/private.png"}}],
+            }
+        ],
+    }
+
+    result: Final = await _apply(
+        _guardrail(),
+        inputs,
+        request_data={"messages": [{"role": "user", "content": "Outside the selected scope."}]},
+    )
+
+    assert result is inputs
+    assert route.call_count == 0
+
+
+def _pii_stream_chunk(text: str | None, *, finish: bool = False, choices: int = 1) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-pii-test",
+        created=1,
+        model="test-model",
+        choices=[
+            StreamingChoices(
+                index=index,
+                delta=Delta(content=text, role="assistant"),
+                finish_reason="stop" if finish else None,
+            )
+            for index in range(choices)
+        ],
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("choices", [1, 2])
+@pytest.mark.parametrize("override", [False, True])
+@pytest.mark.parametrize("pipeline", [False, True])
+async def test_streaming_masks_before_any_chunk_is_delivered(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, choices: int, override: bool, pipeline: bool
+) -> None:
+    guardrail: Final = _guardrail(event_hook=GuardrailEventHooks.post_call, block_on_error=True)
+    route: Final = _serve(respx_mock, _mls_body(pii_spans=[{**_EMAIL_SPAN, "message_indices": [1]}]))
+    completed: Final = asyncio.Event()
+
+    async def upstream() -> AsyncIterator[ModelResponseStream]:
+        for text in ("Contact ", "alex@", "example.com"):
+            yield _pii_stream_chunk(text, choices=choices)
+        yield _pii_stream_chunk(None, finish=True, choices=choices)
+        yield ModelResponseStream(
+            id="chatcmpl-pii-test",
+            created=1,
+            model="test-model",
+            choices=[],
+            usage=Usage(prompt_tokens=2, completion_tokens=3, total_tokens=5),
+        )
+        completed.set()
+
+    unified: Final = UnifiedLLMGuardrails(
+        **(
+            {
+                "streaming_buffer_until_moderated": False,
+                "streaming_buffer_release_on_scan": True,
+                "streaming_end_of_stream_only": False,
+                "streaming_scan_in_background": True,
+                "streaming_transform_mode": "incremental_diff",
+                "streaming_sampling_rate": 1,
+            }
+            if override
+            else {}
+        )
+    )
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    monkeypatch.setattr("litellm.proxy.utils.unified_guardrail", unified)
+    data: Final = {
+        "messages": [{"role": "user", "content": "Contact details?"}],
+        "stream": True,
+        "metadata": {
+            "_guardrail_pipelines": [
+                (
+                    "pii-policy",
+                    GuardrailPipeline(
+                        mode="post_call",
+                        steps=[PipelineStep(guardrail="realmlabs-guard")],
+                    ),
+                )
+            ]
+        }
+        if pipeline
+        else {},
+    }
+    received: Final = []
+    async for chunk in ProxyLogging(UserApiKeyCache()).async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
+        response=upstream(),
+        request_data=data,
+    ):
+        assert completed.is_set(), "Response escaped before generation finished"
+        assert route.call_count == 1, "Response escaped before MLS screening"
+        received.append(chunk)
+    assert tuple(
+        "".join(choice.delta.content or "" for chunk in received for choice in chunk.choices if choice.index == index)
+        for index in range(choices)
+    ) == ("Contact [email]",) + ("Contact alex@example.com",) * (choices - 1)
+    assert (
+        tuple(choice.finish_reason for chunk in received for choice in chunk.choices if choice.finish_reason)
+        == ("stop",) * choices
+    )
+    assert received[-1].usage.total_tokens == 5
+    assert _sent_body(route)["messages"][0] == {"role": "user", "content": "Contact details?"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("block_on_error", [False, True])
+async def test_streaming_mls_failure_obeys_error_policy_without_early_output(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, block_on_error: bool
+) -> None:
+    guardrail: Final = _guardrail(event_hook=GuardrailEventHooks.post_call, block_on_error=block_on_error)
+    route: Final = respx_mock.post(_URL).mock(side_effect=httpx.ReadTimeout("MLS unavailable"))
+
+    async def upstream() -> AsyncIterator[ModelResponseStream]:
+        yield _pii_stream_chunk("alex@example.com")
+        yield _pii_stream_chunk(None, finish=True)
+
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    stream: Final = ProxyLogging(UserApiKeyCache()).async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
+        response=upstream(),
+        request_data={},
+    )
+    if block_on_error:
+        with pytest.raises(GuardrailRaisedException):
+            await anext(stream)
+    else:
+        chunks: Final = [chunk async for chunk in stream]
+        assert "".join(choice.delta.content or "" for chunk in chunks for choice in chunk.choices) == "alex@example.com"
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/v1/responses", "/v1/messages", None])
+async def test_streaming_masking_rejects_unsupported_routes_before_reading_upstream(
+    route: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def upstream() -> AsyncIterator[ModelResponseStream]:
+        pytest.fail("Unsupported streaming route consumed upstream content")
+        yield _pii_stream_chunk("alex@example.com")
+
+    monkeypatch.setattr(litellm, "callbacks", [_guardrail(event_hook=GuardrailEventHooks.post_call)])
+    stream: Final = ProxyLogging(UserApiKeyCache()).async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(request_route=route),
+        response=upstream(),
+        request_data={},
+    )
+    with pytest.raises(HTTPException, match="stream=false") as exc:
+        await anext(stream)
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hook", ["pre_call", "post_call"])
+async def test_dispatch_preserves_nonstreaming_masking(respx_mock: respx.MockRouter, hook: str) -> None:
+    guardrail: Final = _guardrail(event_hook=GuardrailEventHooks(hook))
+    route: Final = _serve(respx_mock, _mls_body(pii_spans=[_EMAIL_SPAN]))
+    data: Final = {"messages": [{"role": "user", "content": "alex@example.com"}]}
+    response: Final = ModelResponse(choices=[Choices(message=Message(content="alex@example.com", role="assistant"))])
+    result: Final = await ProxyLogging(UserApiKeyCache())._execute_guardrail_hook(
+        callback=guardrail,
+        hook_type=hook,
+        data=data if hook == "pre_call" else {},
+        user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
+        call_type="acompletion",
+        response=response,
+    )
+    if hook == "pre_call":
+        assert result["messages"][0]["content"] == "[email]"
+    else:
+        assert result.choices[0].message.content == "[email]"
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_stream_does_not_release_partial_output_when_upstream_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_guardrail(event_hook=GuardrailEventHooks.post_call)])
+
+    async def upstream() -> AsyncIterator[ModelResponseStream]:
+        yield _pii_stream_chunk("alex@")
+        raise RuntimeError("upstream disconnected")
+
+    stream: Final = ProxyLogging(UserApiKeyCache()).async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
+        response=upstream(),
+        request_data={"stream": True},
+    )
+    with pytest.raises(RuntimeError, match="upstream disconnected"):
+        await anext(stream)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("first_blocks", [False, True])
+@pytest.mark.parametrize("action", ["next", "allow", "block"])
+async def test_streaming_pipeline_preserves_order_conditions_and_masks(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, first_blocks: bool, action: str
+) -> None:
+    first: Final = RealmLabsGuardrail(
+        api_key=_API_KEY,
+        api_base="https://first.example.test",
+        guardrail_name="first",
+        pii_mask=not first_blocks,
+        event_hook=GuardrailEventHooks.post_call,
+        default_on=True,
+        block_on_error=True,
+    )
+    second: Final = RealmLabsGuardrail(
+        api_key=_API_KEY,
+        api_base="https://second.example.test",
+        guardrail_name="second",
+        event_hook=GuardrailEventHooks.post_call,
+        default_on=True,
+        block_on_error=True,
+    )
+    first_route: Final = _serve(respx_mock, _mls_body(pii_spans=[_NAME_SPAN]), "https://first.example.test/guardrail")
+    second_route: Final = respx_mock.post("https://second.example.test/guardrail").mock(
+        return_value=httpx.Response(200, json=_mls_body(pii_spans=[_EMAIL_SPAN]))
+    )
+    monkeypatch.setattr(litellm, "callbacks", [second, first])
+    monkeypatch.setattr(
+        "litellm.proxy.utils.unified_guardrail",
+        UnifiedLLMGuardrails(
+            streaming_buffer_until_moderated=False,
+            streaming_buffer_release_on_scan=True,
+            streaming_scan_in_background=True,
+            streaming_sampling_rate=1,
+        ),
+    )
+    completed: Final = asyncio.Event()
+
+    async def upstream() -> AsyncIterator[ModelResponseStream]:
+        for text in ("Alex: ", "alex@", "example.com"):
+            yield _pii_stream_chunk(text)
+        yield _pii_stream_chunk(None, finish=True)
+        completed.set()
+
+    stream: Final = ProxyLogging(UserApiKeyCache()).async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
+        response=upstream(),
+        request_data={
+            "stream": True,
+            "metadata": {
+                "_guardrail_pipelines": [
+                    (
+                        "ordered-policy",
+                        GuardrailPipeline(
+                            mode="post_call",
+                            steps=[
+                                PipelineStep(
+                                    guardrail="first",
+                                    on_pass=action if not first_blocks else ("allow" if action == "block" else "block"),
+                                    on_fail=action if first_blocks else ("allow" if action == "block" else "block"),
+                                ),
+                                PipelineStep(guardrail="second"),
+                            ],
+                        ),
+                    )
+                ]
+            },
+        },
+    )
+    if action == "block":
+        with pytest.raises(GuardrailRaisedException if first_blocks else HTTPException):
+            await anext(stream)
+    else:
+        received: Final = []
+        async for chunk in stream:
+            assert completed.is_set(), "Pipeline released text before upstream completed"
+            assert first_route.call_count == 1
+            assert second_route.call_count == int(action == "next")
+            received.append(chunk)
+        expected_name: Final = "Alex" if first_blocks else "[name]"
+        expected_email: Final = "[email]" if action == "next" else "alex@example.com"
+        assert "".join(choice.delta.content or "" for chunk in received for choice in chunk.choices) == (
+            f"{expected_name}: {expected_email}"
+        )
+    assert completed.is_set()
+    assert first_route.call_count == 1
+    assert second_route.call_count == int(action == "next")
+    assert [str(call.request.url) for call in respx_mock.calls] == ["https://first.example.test/guardrail"] + (
+        ["https://second.example.test/guardrail"] if action == "next" else []
+    )
+    if action == "next":
+        assert _sent_body(second_route)["messages"] == [
+            {
+                "role": "assistant",
+                "content": "Alex: alex@example.com" if first_blocks else "[name]: alex@example.com",
+            }
+        ]

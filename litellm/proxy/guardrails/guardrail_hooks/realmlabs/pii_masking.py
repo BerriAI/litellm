@@ -23,7 +23,6 @@ class _PIIMatch:
 
 def _unique_pii_values(spans: Sequence[RealmLabsPIISpan]) -> Iterator[tuple[str, str]]:
     """Yield one label per literal value; conflicting types become ``pii``."""
-
     pairs: Final = (
         (value, entity_type) for span in spans if (value := span.get("text")) and (entity_type := span.get("type"))
     )
@@ -34,7 +33,6 @@ def _unique_pii_values(spans: Sequence[RealmLabsPIISpan]) -> Iterator[tuple[str,
 
 def _matches_for_value(text: str, value: str, entity_type: str) -> Iterator[_PIIMatch]:
     """Yield literal occurrences in position order, including overlapping occurrences."""
-
     length: Final = len(value)
     start = text.find(value)  # rebind-ok: advancing search cursor finds overlaps without rescanning earlier positions
     while start != -1:
@@ -44,7 +42,6 @@ def _matches_for_value(text: str, value: str, entity_type: str) -> Iterator[_PII
 
 def _matches_for_group(text: str, values: Sequence[str], entity_types: Mapping[str, str]) -> Iterator[_PIIMatch]:
     """Search values sharing their first character together, longest first at each position."""
-
     if len(values) == 1:
         yield from _matches_for_value(text, values[0], entity_types[values[0]])
         return
@@ -59,7 +56,6 @@ def _matches_for_group(text: str, values: Sequence[str], entity_types: Mapping[s
 
 def _merged_pii_matches(matches: Iterable[_PIIMatch]) -> Iterator[_PIIMatch]:
     """Merge ordered overlaps; keep an enclosing type, otherwise label the union ``pii``."""
-
     remaining: Final = iter(matches)
     region = next(remaining, None)  # rebind-ok: keep one pending region while consuming the ordered stream
     if region is None:
@@ -77,7 +73,6 @@ def _merged_pii_matches(matches: Iterable[_PIIMatch]) -> Iterator[_PIIMatch]:
 
 def _masked_parts(text: str, regions: Iterable[_PIIMatch]) -> Iterator[str]:
     """Yield unchanged gaps and one mask per region, then the trailing text."""
-
     previous_end = 0  # rebind-ok: rendering cursor tracks the next unchanged slice without storing all regions
     for region in regions:
         yield text[previous_end : region.start]
@@ -97,7 +92,6 @@ def mask_pii_in_text(text: str, spans: Sequence[RealmLabsPIISpan]) -> str:
     is O(M). Pattern preparation, searches, and output assembly have their own costs; regex search time
     depends on the values and input text.
     """
-
     placeholders: Final = {f"[{label}]": label for span in spans if (label := span.get("type"))}
     entity_types: Final = MappingProxyType({"[pii]": "pii", **placeholders, **dict(_unique_pii_values(spans))})
     groups: Final = groupby(sorted(entity_types), key=lambda value: value[0])

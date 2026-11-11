@@ -5,23 +5,30 @@ the request. On ``post_call`` MLS checks the assistant reply with the request's 
 Both hooks mask detected PII as ``[type]``, or block when ``pii_mask`` is False.
 
 Conversation context comes from Chat Completions-style ``request_data.messages``; nothing is kept between
-hooks. Streaming uses LiteLLM's existing delivery settings, which do not enable text rewrites by default.
+hooks. Streaming PII masking buffers the complete reply before delivering the screened text.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, Literal
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    Literal,
+    cast,  # noqa: TID251  # widen shared hook chunks from Any to opaque object
+)
 
+from fastapi import HTTPException
 from httpx import HTTPError
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
-from litellm.exceptions import GuardrailRaisedException
+from litellm.exceptions import GuardrailRaisedException, Timeout
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
+    ModifyResponseException,
     log_guardrail_information,  # pyright: ignore[reportUnknownVariableType]  # decorator is untyped in custom_guardrail
 )
 from litellm.llms.custom_httpx.http_handler import (
@@ -39,12 +46,14 @@ from litellm.types.proxy.guardrails.guardrail_hooks.realmlabs import (
     RealmLabsGuardrailResponse,
     RealmLabsPIISpan,
 )
+from litellm.types.utils import ModelResponseStream
 
 if TYPE_CHECKING:
     from httpx import Response as HttpxResponse
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.guardrails import Mode
     from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -112,7 +121,76 @@ class RealmLabsGuardrail(CustomGuardrail):
             supported_event_hooks=self.get_supported_event_hooks(),
             event_hook=event_hook,
             default_on=default_on,
+            mask_response_content=self.pii and self.pii_mask,
         )
+
+    async def async_post_call_streaming_iterator_hook(  # pyright: ignore[reportIncompatibleMethodOverride]  # native streams and block replies can yield bytes, unlike the base annotation
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: AsyncIterable[object],
+        request_data: dict[str, object],  # mutable-ok: shared hooks record verdict metadata in the request
+    ) -> AsyncGenerator[object, None]:
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.llms.openai.chat.guardrail_translation.handler import OpenAIChatCompletionsHandler
+        from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
+            UnifiedLLMGuardrails,
+            resolve_endpoint_translation,
+        )
+
+        if not self.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_call):  # pyright: ignore[reportUnknownMemberType]  # inherited method leaves data untyped
+            async for item in response:
+                yield item
+            return
+        if not (self.pii and self.pii_mask):
+            delegated_stream: Final[AsyncIterable[object]] = (
+                UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(  # pyright: ignore[reportUnknownMemberType]  # shared hook leaves request_data untyped
+                    user_api_key_dict=user_api_key_dict,
+                    response=response,
+                    request_data=request_data,
+                    guardrail_to_apply=self,
+                )
+            )
+            async for item in cast(  # cast-ok: shared hook yields Any; this path passes opaque chunks through unchanged
+                "AsyncIterable[object]", delegated_stream
+            ):
+                yield item
+            return
+
+        translation: Final = resolve_endpoint_translation(user_api_key_dict, None)
+        if translation is None or not isinstance(translation[1], OpenAIChatCompletionsHandler):
+            raise HTTPException(
+                status_code=400,
+                detail="Response PII masking requires an OpenAI Chat Completions streaming route. Use stream=false.",
+            )
+        handler: Final = translation[1]
+        chunks: Final[list[ModelResponseStream]] = []  # mutable-ok: buffer provider chunks until screening completes
+        async for item in response:
+            if not isinstance(item, ModelResponseStream):
+                raise HTTPException(status_code=400, detail="Unsupported PII masking stream format")
+            chunks.append(item)
+        if not chunks:
+            return
+        logging_obj: Final = request_data.get("litellm_logging_obj")
+        try:
+            await handler.process_output_streaming_response(  # pyright: ignore[reportUnknownMemberType]  # shared translation leaves request_data untyped
+                responses_so_far=chunks,
+                guardrail_to_apply=self,
+                user_api_key_dict=user_api_key_dict,
+                request_data=request_data,
+                litellm_logging_obj=logging_obj if isinstance(logging_obj, Logging) else None,
+                deliver_ended_stream_rewrites=True,
+            )
+        except ModifyResponseException as exc:
+            async for blocked in UnifiedLLMGuardrails().handle_streaming_block(
+                exc,
+                handler,
+                stream_started=False,
+                responses_so_far=(),
+            ):
+                yield blocked
+            return
+        for chunk in chunks:
+            yield chunk
 
     @staticmethod
     def get_config_model() -> type[RealmLabsGuardrailConfigModel] | None:
@@ -211,7 +289,7 @@ class RealmLabsGuardrail(CustomGuardrail):
 
         try:
             result: Final = await self._call_mls(messages)
-        except (HTTPError, TypeError, ValueError) as exc:
+        except (HTTPError, Timeout, TypeError, ValueError) as exc:
             return self._handle_mls_error(inputs, str(exc))
 
         if isinstance(result, _InvalidResponse):
@@ -239,23 +317,53 @@ class RealmLabsGuardrail(CustomGuardrail):
         if not spans:
             return inputs
 
+        response_start: Final = len(messages) - len(texts)
+        if input_type == "response" and any(
+            not span.get("message_indices")
+            or any(index >= len(messages) for index in (span.get("message_indices") or ()))
+            for span in spans
+        ):
+            return self._handle_mls_error(inputs, "PII message locations are missing or invalid")
+        scoped_spans: Final = (
+            tuple(span for span in spans if _span_in_response(span, response_start))
+            if input_type == "response"
+            else spans
+        )
+        if not scoped_spans:
+            return inputs
+
         if not self.pii_mask:
             raise GuardrailRaisedException(
                 guardrail_name=self.guardrail_name,
-                message=f"Blocked by RealmLabs: PII detected in the {input_type} ({self._span_types(spans)})",
+                message=f"Blocked by RealmLabs: PII detected in the {input_type} ({self._span_types(scoped_spans)})",
                 blocked_content=True,
             )
 
-        masked_texts: Final = tuple(mask_pii_in_text(text, spans) for text in texts)
+        masked_texts: Final = tuple(
+            _mask_scoped_text(text, scoped_spans, response_start + i if input_type == "response" else None)
+            for i, text in enumerate(texts)
+        )
         if masked_texts == texts:
             return inputs
         verbose_proxy_logger.debug("RealmLabs MLS masked PII types in the %s: %s", input_type, self._span_types(spans))
         return {**inputs, "texts": list(masked_texts)}
 
 
+def _span_in_response(span: RealmLabsPIISpan, response_start: int) -> bool:
+    return any(index >= response_start for index in (span.get("message_indices") or ()))
+
+
+def _mask_scoped_text(text: str, spans: Sequence[RealmLabsPIISpan], message_index: int | None) -> str:
+    relevant: Final = (
+        tuple(span for span in spans if message_index in (span.get("message_indices") or ()))
+        if message_index is not None
+        else spans
+    )
+    return mask_pii_in_text(text, relevant) if relevant else text
+
+
 def _conversation_message(message: object) -> RealmLabsChatMessage | None:
     """Extract a plain-text turn without carrying images or unrelated message fields to MLS."""
-
     if not isinstance(message, dict):
         return None
     row: Final = _MESSAGE_ADAPTER.validate_python(message)
@@ -268,7 +376,6 @@ def _conversation_message(message: object) -> RealmLabsChatMessage | None:
 
 def _conversation_messages(request_data: Mapping[str, object]) -> tuple[RealmLabsChatMessage, ...]:
     """Preserve roles and text from request history, skipping empty or non-message entries."""
-
     raw_messages: Final = request_data.get("messages")
     if not isinstance(raw_messages, list):
         return ()
@@ -283,9 +390,8 @@ def _messages_for_scan(
     input_type: Literal["request", "response"],
 ) -> Sequence[Mapping[str, object]]:
     """Prefer scoped request messages; append response texts as assistant turns to the request history."""
-
     if input_type == "request" and (structured_messages := inputs.get("structured_messages")):
-        return tuple(structured_messages)
+        return tuple(message for item in structured_messages if (message := _conversation_message(item)) is not None)
 
     conversation: Final = _conversation_messages(request_data)
     texts: Final = inputs.get("texts") or ()
