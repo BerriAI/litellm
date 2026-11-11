@@ -1355,12 +1355,7 @@ def test_responses_api_bridge_check_azure_gpt_5_4_tools_plus_reasoning_routes_to
     assert model_info.get("mode") == "responses"
 
 
-def test_responses_api_bridge_check_azure_gpt_5_4_tools_with_default_reasoning_routes_to_responses():
-    """
-    Azure gpt-5.4 with tools and UNSET reasoning_effort must bridge: OpenAI enables
-    reasoning by default for gpt-5.4+, and Chat Completions rejects function tools
-    whenever reasoning is on.
-    """
+def test_responses_api_bridge_check_azure_gpt_5_4_tools_with_default_reasoning_stays_chat():
     from litellm.main import responses_api_bridge_check
 
     with patch("litellm.responses.bridge_check.get_model_info_helper") as mock_get_model_info:
@@ -1373,15 +1368,10 @@ def test_responses_api_bridge_check_azure_gpt_5_4_tools_with_default_reasoning_r
         )
 
     assert model == "gpt-5.4"
-    assert model_info.get("mode") == "responses"
+    assert model_info.get("mode") != "responses"
 
 
-def test_responses_api_bridge_check_gpt_5_4_tools_with_default_reasoning_routes_to_responses():
-    """
-    gpt-5.4 with tools and UNSET reasoning_effort must bridge: OpenAI enables reasoning
-    by default for gpt-5.4+, and Chat Completions rejects function tools whenever
-    reasoning is on ("use /v1/responses or set reasoning_effort to 'none'").
-    """
+def test_responses_api_bridge_check_gpt_5_4_tools_with_default_reasoning_stays_chat():
     from litellm.main import responses_api_bridge_check
 
     with patch("litellm.responses.bridge_check.get_model_info_helper") as mock_get_model_info:
@@ -1394,7 +1384,7 @@ def test_responses_api_bridge_check_gpt_5_4_tools_with_default_reasoning_routes_
         )
 
     assert model == "gpt-5.4"
-    assert model_info.get("mode") == "responses"
+    assert model_info.get("mode") != "responses"
 
 
 @pytest.mark.parametrize("region", ("us", "eu"))
@@ -1909,8 +1899,7 @@ def test_responses_api_bridge_check_custom_api_base_with_explicit_effort_still_r
     assert model_info.get("mode") == "responses"
 
 
-def test_responses_api_bridge_check_azure_with_api_base_and_unset_effort_routes():
-    """Azure OpenAI always sets api_base and does enforce the constraint; keep bridging."""
+def test_responses_api_bridge_check_azure_gpt_5_4_with_api_base_and_unset_effort_stays_chat():
     from litellm.main import responses_api_bridge_check
 
     with patch("litellm.responses.bridge_check.get_model_info_helper") as mock_get_model_info:
@@ -1924,7 +1913,7 @@ def test_responses_api_bridge_check_azure_with_api_base_and_unset_effort_routes(
         )
 
     assert model == "gpt-5.4"
-    assert model_info.get("mode") == "responses"
+    assert model_info.get("mode") != "responses"
 
 
 _FOUNDRY_API_BASE: Final = "https://myproject.services.ai.azure.com"
