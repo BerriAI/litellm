@@ -2,6 +2,7 @@
 import json
 import os
 import time
+from typing import Final
 from unittest.mock import patch
 
 import pytest
@@ -51,16 +52,22 @@ def mock_models_list(mock_client):
     """Fixture to set up common mocking pattern for models list tests"""
     mock_client.return_value.models.list.return_value = [
         {
-            "id": "model-123",
+            "id": "gpt-4o",
             "object": "model",
             "created": 1699848889,
             "owned_by": "organization-123",
         },
         {
-            "id": "model-456",
+            "id": "Claude-x",
             "object": "model",
             "created": 1699848890,
             "owned_by": "organization-456",
+        },
+        {
+            "id": "azure-y",
+            "object": "model",
+            "created": 1699848890,
+            "owned_by": "organization-789",
         },
     ]
 
@@ -117,12 +124,13 @@ def test_models_list_json_format(mock_models_list, cli_runner):
 
     # Parse the output and verify it matches our mock data
     output_data = json.loads(result.output)
-    assert output_data == mock_models_list.return_value.models.list.return_value
+    assert [model["id"] for model in output_data] == ["azure-y", "Claude-x", "gpt-4o"]
+    assert output_data == sorted(
+        mock_models_list.return_value.models.list.return_value, key=lambda model: model["id"].casefold()
+    )
 
     # Verify the client was called correctly
-    mock_models_list.assert_called_once_with(
-        base_url="http://localhost:4000", api_key="sk-test"
-    )
+    mock_models_list.assert_called_once_with(base_url="http://localhost:4000", api_key="sk-test")
     mock_models_list.return_value.models.list.assert_called_once()
 
 
@@ -139,15 +147,37 @@ def test_models_list_table_format(mock_models_list, cli_runner):
     assert "Object" in result.output
     assert "Created" in result.output
     assert "Owned By" in result.output
-    assert "model-123" in result.output
+    assert result.output.index("azure-y") < result.output.index("Claude-x") < result.output.index("gpt-4o")
     assert "organization-123" in result.output
     assert format_timestamp(1699848889) in result.output
 
     # Verify the client was called correctly
-    mock_models_list.assert_called_once_with(
-        base_url="http://localhost:4000", api_key="sk-test"
-    )
+    mock_models_list.assert_called_once_with(base_url="http://localhost:4000", api_key="sk-test")
     mock_models_list.return_value.models.list.assert_called_once()
+
+
+@pytest.mark.parametrize("output_format", ["json", "table"])
+def test_models_list_no_sort_preserves_proxy_order(mock_models_list, cli_runner, output_format):
+    result: Final = cli_runner.invoke(cli, ["models", "list", "--no-sort", "--format", output_format])
+    assert result.exit_code == 0
+    if output_format == "json":
+        assert json.loads(result.output) == mock_models_list.return_value.models.list.return_value
+    else:
+        assert result.output.index("gpt-4o") < result.output.index("Claude-x") < result.output.index("azure-y")
+
+
+@pytest.mark.parametrize("output_format", ["json", "table"])
+@pytest.mark.parametrize("models", [[], [{"object": "model"}, {"id": "z-model"}, {"id": "a-model"}]])
+def test_models_list_empty_or_missing_id(mock_client, cli_runner, output_format, models):
+    mock_client.return_value.models.list.return_value = models
+    result: Final = cli_runner.invoke(cli, ["models", "list", "--sort", "--format", output_format])
+    assert result.exit_code == 0
+    if output_format == "json":
+        assert json.loads(result.output) == sorted(models, key=lambda model: model.get("id", "").casefold())
+    else:
+        assert "Available Models" in result.output
+        if models:
+            assert result.output.index("a-model") < result.output.index("z-model")
 
 
 def test_models_list_with_base_url(mock_models_list, cli_runner):

@@ -74,12 +74,14 @@ The CLI provides several commands for managing models on your LiteLLM proxy serv
 View all available models:
 
 ```bash
-lite models list [--format table|json]
+lite models list [--format table|json] [--sort|--no-sort]
 ```
 
 Options:
 
 - `--format`: Output format (table or json, default: table)
+- `--sort/--no-sort`: Sort by model ID alphabetically, ignoring case (enabled by default).
+  Use `--no-sort` to preserve the proxy's original order in either output format.
 
 #### Model Information
 
