@@ -313,6 +313,7 @@ def chat_completion_ends_in_responses_api(
     except Exception as error:  # noqa: BLE001  # unknown model names must not fail message translation
         verbose_logger.debug("responses replay check failed for %s: %s", model, error)
         return False
+    declared_base_model: Final = None if deployment_model_info is None else deployment_model_info.get("base_model")
     model_info, _resolved = responses_api_bridge_check(
         model=resolved_model,
         custom_llm_provider=provider,
@@ -321,5 +322,6 @@ def chat_completion_ends_in_responses_api(
         reasoning_summary=reasoning_summary,
         api_base=api_base,
         deployment_model_info=deployment_model_info,
+        base_model=declared_base_model if isinstance(declared_base_model, str) else None,
     )
     return model_info.get("mode") == "responses"
