@@ -37,7 +37,7 @@ export default function ResourceActivity({ scope, id, activity }: ResourceActivi
   const apiKey = scope === "key" ? reportingKeyId(id) : undefined;
   const canView = scope !== "user" || hasProxyWideSpendView(userRole) || id === userId;
   const hasAccess = accessToken && id && canView;
-  const scopedToViewer = (scope === "key" || scope === "model") && !hasProxyWideSpendView(userRole);
+  const scopedToViewer = scope !== "user" && !hasProxyWideSpendView(userRole);
   const request: DailyActivityRequest | null =
     hasAccess && dateValue.from && dateValue.to
       ? {
@@ -102,7 +102,11 @@ export default function ResourceActivity({ scope, id, activity }: ResourceActivi
         <span className="text-sm text-muted-foreground">{t("shared.scopedSavingsTab.bucketedByUtc")}</span>
         <AdvancedDatePicker value={dateValue} onValueChange={onDateChange} />
       </div>
-      {scopedToViewer && <p className="text-sm text-muted-foreground">{t("shared.resourceActivity.ownUsage")}</p>}
+      {scopedToViewer && (
+        <p className="text-sm text-muted-foreground">
+          {t(scope === "team" ? "shared.resourceActivity.teamScope" : "shared.resourceActivity.ownUsage")}
+        </p>
+      )}
       {scope === "model" && (
         <p className="text-sm text-muted-foreground">{t("shared.resourceActivity.modelScope", { model: id })}</p>
       )}
