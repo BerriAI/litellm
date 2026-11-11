@@ -697,7 +697,7 @@ def _parse_env_flag(value: str | None) -> bool:
 
 
 def resolve_log_level(log_level: str) -> int:
-    return getattr(logging, log_level.upper())
+    return getattr(logging, log_level.strip().upper())
 
 
 json_logs: Final = _parse_env_flag(os.getenv("JSON_LOGS"))
@@ -1132,7 +1132,7 @@ def _get_uvicorn_json_log_config():
     json_formatter_class: Final = "litellm._logging.JsonFormatter"
 
     # Use the module-level log_level variable for consistency
-    uvicorn_log_level: Final = log_level.upper()
+    uvicorn_log_level: Final = resolve_log_level(log_level)
 
     log_config: Final = {
         "version": 1,

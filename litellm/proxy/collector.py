@@ -171,7 +171,7 @@ def address_argument(argv: Sequence[str], default: str) -> str | AddressError:
 
 def apply_log_level(litellm_log: str | None) -> None:
     """Mirror the proxy's ``LITELLM_LOG`` handling: the sidecar has no CLI flags to turn logging on."""
-    level: Final = logging.getLevelNamesMapping().get((litellm_log or "").upper())
+    level: Final = logging.getLevelNamesMapping().get((litellm_log or "").strip().upper())
     if level is None:
         return
     for logger in (verbose_logger, verbose_router_logger, verbose_proxy_logger):

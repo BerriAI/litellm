@@ -671,6 +671,35 @@ async def test_initialize_invalid_unexpected_kwarg_raises_type_error():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("configured_level", "expected_level"),
+    [
+        ("INFO", logging.INFO),
+        ("DEBUG", logging.DEBUG),
+        (" info ", logging.INFO),
+        ("DEBUG ", logging.DEBUG),
+        ("\tDeBuG\n", logging.DEBUG),
+    ],
+)
+async def test_initialize_honours_surrounding_whitespace_in_litellm_log(
+    monkeypatch: pytest.MonkeyPatch, configured_level: str, expected_level: int
+) -> None:
+    from litellm._logging import verbose_logger, verbose_proxy_logger, verbose_router_logger
+
+    monkeypatch.setenv("LITELLM_LOG", configured_level)
+    loggers: Final = (verbose_logger, verbose_proxy_logger, verbose_router_logger)
+    saved_levels: Final = tuple(logger.level for logger in loggers)
+    try:
+        for logger in loggers:
+            logger.setLevel(logging.WARNING)
+        await initialize(debug=False, detailed_debug=False)
+        assert tuple(logger.level for logger in loggers) == (expected_level,) * len(loggers)
+    finally:
+        for logger, level in zip(loggers, saved_levels):
+            logger.setLevel(level)
+
+
+@pytest.mark.asyncio
 async def test_initialize_from_worker_config_drops_legacy_telemetry_key():
     with pytest.raises(TypeError):
         await initialize(telemetry=True)

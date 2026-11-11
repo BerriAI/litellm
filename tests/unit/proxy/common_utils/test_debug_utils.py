@@ -1,9 +1,11 @@
 import json
+import logging
 import os
 import socket
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import asdict
 from pathlib import Path
+from typing import Final
 
 import pytest
 from fastapi import FastAPI
@@ -18,6 +20,7 @@ from litellm.proxy.common_utils.debug_utils import (
     _ProcFilesystemProcess,
     _summary_process_memory,
     get_memory_summary,
+    init_verbose_loggers,
 )
 from litellm.proxy.common_utils.debug_utils import router as debug_router
 from litellm.router import Router
@@ -27,6 +30,29 @@ PAGE_SIZE = 4096
 STATM_SIZE_PAGES = 100_000
 STATM_RESIDENT_PAGES = 30_000
 MEMINFO_TOTAL_KB = 1_000_000
+
+
+@pytest.mark.parametrize(
+    ("configured_level", "expected_level"),
+    [("INFO", logging.INFO), ("DEBUG", logging.DEBUG), (" info ", logging.INFO), ("\tDeBuG\n", logging.DEBUG)],
+)
+def test_init_verbose_loggers_honours_surrounding_whitespace(
+    monkeypatch: pytest.MonkeyPatch, configured_level: str, expected_level: int
+) -> None:
+    from litellm._logging import verbose_proxy_logger, verbose_router_logger
+
+    monkeypatch.setenv("LITELLM_LOG", configured_level)
+    monkeypatch.setenv("WORKER_CONFIG", json.dumps({"debug": False, "detailed_debug": False}))
+    loggers: Final = (verbose_proxy_logger, verbose_router_logger)
+    saved_levels: Final = tuple(logger.level for logger in loggers)
+    try:
+        for logger in loggers:
+            logger.setLevel(logging.WARNING)
+        init_verbose_loggers()
+        assert tuple(logger.level for logger in loggers) == (expected_level,) * len(loggers)
+    finally:
+        for logger, level in zip(loggers, saved_levels):
+            logger.setLevel(level)
 
 
 @pytest.fixture

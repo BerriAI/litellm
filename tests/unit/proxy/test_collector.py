@@ -220,10 +220,22 @@ def restore_log_levels() -> Iterator[None]:
 @pytest.mark.usefixtures("restore_log_levels")
 @pytest.mark.parametrize(
     ("litellm_log", "expected"),
-    [("DEBUG", logging.DEBUG), ("info", logging.INFO), (None, logging.WARNING), ("loud", logging.WARNING)],
+    [
+        ("DEBUG", logging.DEBUG),
+        ("info", logging.INFO),
+        ("DEBUG ", logging.DEBUG),
+        ("\tInFo\n", logging.INFO),
+        (None, logging.WARNING),
+        ("loud", logging.WARNING),
+        (" loud ", logging.WARNING),
+        (" ", logging.WARNING),
+    ],
 )
-def test_apply_log_level_mirrors_the_proxy_env_contract(litellm_log: str | None, expected: int):
-    verbose_proxy_logger.setLevel(logging.WARNING)
+def test_apply_log_level_mirrors_the_proxy_env_contract(litellm_log: str | None, expected: int) -> None:
+    loggers: Final = (verbose_logger, verbose_router_logger, verbose_proxy_logger)
+    for logger in loggers:
+        logger.setLevel(logging.WARNING)
     apply_log_level(litellm_log)
+    assert tuple(logger.level for logger in loggers) == (expected,) * len(loggers)
     assert verbose_proxy_logger.isEnabledFor(expected)
     assert not verbose_proxy_logger.isEnabledFor(expected - 10)
