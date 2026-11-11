@@ -1227,6 +1227,7 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
             "PYTHONPATH": os.pathsep.join((str(source), str(source / "tests"))),
             "LITELLM_SALT_KEY": "subscription-pagination-key",
             **({"LITELLM_MCP_TOOL_LISTING_TIMEOUT": "2"} if access == "probe-timeout" else {}),
+            **({"LITELLM_MCP_METADATA_TIMEOUT": "5"} if access == "mixed-capabilities" else {}),
             "STORE_MODEL_IN_DB": "False",
             "DISABLE_SCHEMA_UPDATE": "true",
             "LITELLM_LOCAL_MODEL_COST_MAP": "True",

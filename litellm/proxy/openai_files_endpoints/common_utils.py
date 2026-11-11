@@ -24,6 +24,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import MAX_FILE_LIST_LIMIT
 from litellm.litellm_core_utils.batch_utils import batch_cost_is_final
+from litellm.litellm_core_utils.cloud_storage_security import REQUEST_S3_BUCKET_PARAMS
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.base_llm.managed_resources.utils import is_base64_encoded_unified_id
 from litellm.proxy._types import ProxyException
@@ -884,6 +885,8 @@ def apply_team_provider_credentials(
     llm_router: Optional["Router"],
     user_api_key_dict: "UserAPIKeyAuth",
     custom_llm_provider: str,
+    *,
+    keep_request_buckets: bool = False,
 ) -> None:
     """
     Resolve credentials for a provider-only request (no model pinned) via
@@ -901,7 +904,11 @@ def apply_team_provider_credentials(
     )
     if credentials is None:
         return
-    prepare_data_with_credentials(data=data, credentials={**credentials, **explicit_request_credentials(data)})
+    prepare_data_with_credentials(
+        data=data,
+        credentials={**credentials, **explicit_request_credentials(data)},
+        keep_request_buckets=keep_request_buckets,
+    )
 
 
 def add_deployment_model_info(
@@ -925,10 +932,16 @@ def add_deployment_model_info(
     }
 
 
+_REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object])
+_NO_REQUEST_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
 def prepare_data_with_credentials(
     data: dict,
     credentials: dict,
     file_id: str | None = None,
+    *,
+    keep_request_buckets: bool = False,
 ) -> None:
     """
     Update data dictionary with model credentials (in-place).
@@ -937,8 +950,15 @@ def prepare_data_with_credentials(
         data: Data dictionary to update
         credentials: Credentials from router
         file_id: Optional original file_id to set (for decoded file IDs)
+        keep_request_buckets: Keep an S3 bucket the request already carries over the deployment's. Only
+            file upload and batch create set it, after checking the bucket against the caller's allowlist.
+            Reads keep the deployment's bucket so a request cannot widen which buckets a file id may point at.
     """
-    data.update(credentials)
+    request_fields: Final = _REQUEST_FIELDS.validate_python(data) if keep_request_buckets else _NO_REQUEST_FIELDS
+    request_buckets: Final = MappingProxyType(
+        {key: request_fields[key] for key in REQUEST_S3_BUCKET_PARAMS if key in request_fields}
+    )
+    data.update({**credentials, **request_buckets})
     data.pop("custom_llm_provider", None)
 
     if file_id is not None:

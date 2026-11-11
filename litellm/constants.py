@@ -89,6 +89,7 @@ ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG: Final[frozenset[str]] = frozenset(
         "ignore_invalid_deployments",
         "fallback_access_check",
         "fallback_budget_check",
+        "fallback_rate_limit_check",
         "auto_router_capability_limit",
     }
 )
@@ -1712,6 +1713,7 @@ RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY: Final = "responses_websocket_call_id"
 BILLED_RETRY_ATTEMPT_METADATA_KEY: Final = "billed_retry_attempt"
 MANAGED_BACKGROUND_RESPONSE_METADATA_KEY: Final = "_managed_background_response"
 SESSION_ID_GENERATED_METADATA_KEY: Final = "litellm_session_id_generated"
+SESSION_SPEND_TOTAL_TTL_SECONDS: Final = 3600
 SESSION_ID_OMITTED_METADATA_KEY: Final = "litellm_session_id_omitted"
 CALLER_SESSION_ID_METADATA_KEY: Final = "litellm_caller_session_id"
 COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY: Final = "_complexity_router_child_session_id"
@@ -1969,6 +1971,7 @@ BATCH_LINE_ITEMS_MAX_PART_BYTES: Final = get_env_int_in_range(
 MANAGED_OBJECT_STALENESS_CUTOFF_DAYS: Final = max(1, get_env_int("MANAGED_OBJECT_STALENESS_CUTOFF_DAYS", 7))
 PENDING_RESPONSE_STATUSES: Final = ("queued", "in_progress")
 TERMINAL_RESPONSE_STATUSES: Final = frozenset({"completed", "failed", "cancelled", "incomplete"})
+BACKGROUND_RESPONSE_SETTLEMENT_TIMEOUT_SECONDS: Final = 2.0
 BATCH_OUTPUT_FILE_LOOKUP_TIMEOUT_SECONDS: Final = 10.0
 BATCH_OUTPUT_FILE_FALLBACK_RETRY_AFTER_SECONDS: Final = 60
 STALE_OBJECT_CLEANUP_BATCH_SIZE: Final = max(1, get_env_int("STALE_OBJECT_CLEANUP_BATCH_SIZE", 1000))
@@ -2371,6 +2374,7 @@ ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS: Final = (
     MAX_FILE_DOWNLOADS_PER_MINUTE_KEY,
 )
 FILE_USAGE_MAX_TRACKED_COUNTERS: Final = 20_000
+MESSAGE_THREAD_MAX_TRACKED_OWNERS: Final = 20_000
 
 # Shared read-only empty mapping, for defaulting optional Mapping parameters without
 # constructing a fresh mutable dict at each call site.
