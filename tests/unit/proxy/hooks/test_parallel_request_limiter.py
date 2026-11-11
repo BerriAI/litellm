@@ -444,3 +444,327 @@ async def test_a_rejected_realtime_attempt_does_not_free_a_slot_it_never_took():
     await proxy_logging_obj.arelease_responses_websocket_slot(auth)
     after_socket_close = await handler.internal_usage_cache.async_get_cache(key=bucket, litellm_parent_otel_span=None)
     assert after_socket_close["current_requests"] == 0, after_socket_close
+
+
+@pytest.mark.asyncio
+async def test_team_max_parallel_requests_is_enforced_across_keys_in_the_team():
+    from fastapi import HTTPException
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    cache = DualCache()
+    handler = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache)
+    )
+    team_id = "legacy-team"
+
+    def team_key(raw: str) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(
+            api_key=hash_token(raw), team_id=team_id, team_max_parallel_requests=2
+        )
+
+    for raw in ("sk-a", "sk-b"):
+        await handler.async_pre_call_hook(
+            user_api_key_dict=team_key(raw),
+            cache=cache,
+            data={"model": "gpt-4o-mini"},
+            call_type="",
+        )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=team_key("sk-a"),
+            cache=cache,
+            data={"model": "gpt-4o-mini"},
+            call_type="",
+        )
+    assert exc_info.value.status_code == 429
+    # The gauge-based path emits a different detail string than the old
+    # check_key_in_limits path, but both mention the cap and the entity.
+    assert "max_parallel_requests: 2" in exc_info.value.detail
+    assert "team" in exc_info.value.detail
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key=hash_token("sk-c"),
+            team_id="other-team",
+            team_max_parallel_requests=2,
+        ),
+        cache=cache,
+        data={"model": "gpt-4o-mini"},
+        call_type="",
+    )
+
+
+@pytest.mark.asyncio
+async def test_team_max_parallel_requests_non_windowed_gauge_cross_minute_boundary():
+    """Regression test for #49070.
+
+    With LEGACY_MULTI_INSTANCE_RATE_LIMITING=True the team concurrency check
+    previously used the minute-windowed bucket
+    ``{team_id}::{precise_minute}::request_count``.  When the wall-clock crossed
+    a minute boundary that bucket reset to zero, so a team member who kept a
+    streaming request alive from minute M was allowed to admit another full-quota
+    batch in minute M+1 — bypassing the cap entirely.
+
+    After the fix, team concurrency is tracked via a *non-windowed* slot gauge
+    (``{team_id}::max_parallel_requests``) that persists across minute
+    boundaries: a slot incremented in minute M is decremented only when the
+    request completes, regardless of which minute the completion fires in.
+    """
+    from fastapi import HTTPException
+
+    # --- Minute M: two slots occupied ----------------------------------------
+    t_minute_m = datetime(2026, 1, 31, 23, 59, 30)
+    cache = DualCache()
+    handler = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache), clock=lambda: t_minute_m
+    )
+
+    team_id = "cross-minute-team"
+
+    def team_key(raw: str) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(
+            api_key=hash_token(raw), team_id=team_id, team_max_parallel_requests=2
+        )
+
+    # Admit two requests in minute M — gauge reaches limit
+    for raw in ("sk-a", "sk-b"):
+        await handler.async_pre_call_hook(
+            user_api_key_dict=team_key(raw),
+            cache=cache,
+            data={"model": "gpt-4o-mini"},
+            call_type="",
+        )
+
+    # --- Minute M+1: requests from minute M still in-flight ------------------
+    # Advance the clock to the next minute WITHOUT releasing any slots.
+    t_minute_m_plus_1 = datetime(2026, 2, 1, 0, 0, 10)
+    handler = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache), clock=lambda: t_minute_m_plus_1
+    )
+
+    # A third admission in minute M+1 must still be rejected because the two
+    # slots from minute M have not been released yet.
+    with pytest.raises(HTTPException) as exc_info:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=team_key("sk-c"),
+            cache=cache,
+            data={"model": "gpt-4o-mini"},
+            call_type="",
+        )
+    assert exc_info.value.status_code == 429, (
+        "Expected 429 — team concurrency gauge should still be at limit after "
+        "minute boundary without slot release"
+    )
+
+
+@pytest.mark.asyncio
+async def test_team_gauge_not_incremented_when_rpm_check_rejects():
+    """Regression test for veria-ai review on fd472e5b (Issue 1 — slot leak).
+
+    Before the fix, the team concurrency gauge was incremented BEFORE
+    ``check_key_in_limits`` ran.  When RPM was exhausted, the admission check
+    raised and the slot was leaked: subsequent requests would see a gauge value
+    higher than the actual in-flight count, eventually blocking the team even
+    after all in-flight requests completed.
+
+    After the fix, the gauge is incremented only AFTER all admission checks
+    pass, so a request rejected by RPM never acquires a concurrency slot.
+    """
+    from fastapi import HTTPException
+
+    cache = DualCache()
+    handler = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache), clock=_frozen_clock
+    )
+
+    team_id = "rpm-reject-team"
+    # Set rpm_limit=0 so EVERY request is rejected by check_key_in_limits,
+    # and team_max_parallel_requests=1 so we can verify the gauge stays at 0.
+    rpm_exhausted_key = UserAPIKeyAuth(
+        api_key=hash_token("sk-rpm"),
+        team_id=team_id,
+        team_max_parallel_requests=1,
+        team_rpm_limit=0,  # will reject immediately
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=rpm_exhausted_key,
+            cache=cache,
+            data={"model": "gpt-4o-mini"},
+            call_type="",
+        )
+    assert exc_info.value.status_code == 429
+
+    # The team concurrency gauge must remain 0 — slot was never acquired.
+    gauge_val = await handler.internal_usage_cache.async_get_cache(
+        key=f"{team_id}::max_parallel_requests",
+        local_only=False,
+        litellm_parent_otel_span=None,
+    )
+    assert gauge_val is None or gauge_val == 0, (
+        f"Expected gauge=0 after RPM rejection but got {gauge_val}. "
+        "Slot was leaked — gauge must only be incremented after all admission checks pass."
+    )
+
+
+@pytest.mark.asyncio
+async def test_team_gauge_uses_shared_cache_not_local_only():
+    """Regression test for veria-ai review on fd472e5b (Issue 2 — local_only bypass).
+
+    Before the fix, all team gauge operations used ``local_only=True``.
+    With LEGACY_MULTI_INSTANCE_RATE_LIMITING=True each worker would maintain
+    an independent local gauge, allowing a team member's requests hitting
+    multiple workers to consume a full quota per worker.
+
+    After the fix, gauge reads/increments/decrements all use ``local_only=False``
+    so that when a Redis cache is configured the counter is atomically shared
+    across workers.  For single-instance deployments (no Redis) the
+    DualCache falls back to its in-memory store transparently.
+
+    This test verifies that the gauge key is readable via ``local_only=False``
+    (i.e. it was written there, not only to a local-only store).
+    """
+    cache = DualCache()
+    handler = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache), clock=_frozen_clock
+    )
+
+    team_id = "shared-gauge-team"
+    team_key = UserAPIKeyAuth(
+        api_key=hash_token("sk-shared"),
+        team_id=team_id,
+        team_max_parallel_requests=5,
+    )
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=team_key,
+        cache=cache,
+        data={"model": "gpt-4o-mini"},
+        call_type="",
+    )
+
+    # Read via local_only=False (the shared path) — must reflect the increment.
+    gauge_val = await handler.internal_usage_cache.async_get_cache(
+        key=f"{team_id}::max_parallel_requests",
+        local_only=False,
+        litellm_parent_otel_span=None,
+    )
+    assert gauge_val == 1, (
+        f"Expected gauge=1 via local_only=False but got {gauge_val}. "
+        "Team gauge must be written to the shared cache path."
+    )
+
+
+@pytest.mark.asyncio
+async def test_unadmitted_request_failure_does_not_release_team_slot():
+    """Regression test for veria-ai review on 985cce9c (unadmitted requests releasing slots).
+
+    If a request is blocked prior to or during pre-call admission without successfully
+    acquiring a team concurrency slot (e.g. pre-call guardrail or rate limit), its
+    async_log_failure_event callback must NOT decrement the team concurrency gauge.
+    Otherwise, an attacker or repeated failing caller could drive the gauge negative
+    or release other active requests' slots.
+    """
+    cache = DualCache()
+    handler = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache), clock=_frozen_clock
+    )
+    team_id = "test-team-unadmitted"
+    key = f"{team_id}::max_parallel_requests"
+
+    # Set team concurrency gauge to 1 (representing another active request)
+    await handler.internal_usage_cache.async_increment_cache(
+        key=key,
+        value=1,
+        local_only=False,
+        litellm_parent_otel_span=None,
+    )
+
+    # Simulate a request that failed before acquiring the team slot (_team_slot_acquired=False)
+    failure_kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "some-key",
+                "user_api_key_team_id": team_id,
+                "_team_slot_acquired": False,
+            }
+        },
+        "exception": Exception("Blocked by guardrail"),
+    }
+
+    now = datetime(2026, 1, 31, 23, 59, 30)
+    await handler.async_log_failure_event(
+        kwargs=failure_kwargs,
+        response_obj=None,
+        start_time=now,
+        end_time=now,
+    )
+
+    # Verify the gauge remains 1 and was NOT decremented
+    val = await handler.internal_usage_cache.async_get_cache(
+        key=key, local_only=False, litellm_parent_otel_span=None
+    )
+    assert val == 1, f"Expected gauge to remain 1, but got {val}"
+
+
+@pytest.mark.asyncio
+async def test_caller_supplied_team_slot_acquired_is_stripped_and_sanitized():
+    """Regression test for veria-ai review on f843efbc (caller metadata suppressing release).
+
+    If an external caller provides `_team_slot_acquired: false` in `data["metadata"]`
+    or `data["litellm_metadata"]` (e.g. on /v1/responses), it must be stripped on admission
+    and overwritten with True once the slot is acquired, so that the failure/success
+    callbacks will correctly release the acquired slot instead of leaking it.
+    """
+    cache = DualCache()
+    handler = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache), clock=_frozen_clock
+    )
+    team_id = "test-team-sanitize"
+    key = f"{team_id}::max_parallel_requests"
+
+    team_key = UserAPIKeyAuth(
+        api_key=hash_token("sk-test-sanitize"),
+        team_id=team_id,
+        team_max_parallel_requests=2,
+    )
+
+    # Malicious/crafted caller data attempting to forge _team_slot_acquired=False
+    data = {
+        "model": "gpt-4o-mini",
+        "metadata": {"_team_slot_acquired": False},
+        "litellm_metadata": {"_team_slot_acquired": False},
+    }
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=team_key,
+        cache=cache,
+        data=data,
+        call_type="completion",
+    )
+
+    # Both containers must have _team_slot_acquired=True after successful admission
+    assert data["metadata"]["_team_slot_acquired"] is True
+    assert data["litellm_metadata"]["_team_slot_acquired"] is True
+
+    # Now verify that when failure hook runs with this litellm_metadata, slot is released
+    now = datetime(2026, 1, 31, 23, 59, 30)
+    await handler.async_log_failure_event(
+        kwargs={
+            "litellm_params": {
+                "metadata": {"user_api_key": "sk-test", "user_api_key_team_id": team_id},
+                "litellm_metadata": data["litellm_metadata"],
+            },
+            "exception": Exception("Upstream 500 error"),
+        },
+        response_obj=None,
+        start_time=now,
+        end_time=now,
+    )
+
+    val = await handler.internal_usage_cache.async_get_cache(
+        key=key, local_only=False, litellm_parent_otel_span=None
+    )
+    assert val == 0, f"Expected gauge to be decremented to 0, but got {val}"

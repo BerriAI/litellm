@@ -19573,3 +19573,91 @@ async def test_team_info_keeps_the_auth_label_for_a_caller_outside_the_team(monk
         )
 
     assert (exc_info.value.code, exc_info.value.type) == ("403", "auth_error")
+
+
+@pytest.mark.asyncio
+async def test_new_team_persists_max_parallel_requests(mock_db_client, mock_admin_auth):
+    from fastapi import Request
+    from unittest.mock import AsyncMock, MagicMock
+    from litellm.proxy._types import NewTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    mock_db_client.jsonify_team_object = lambda db_data: db_data
+    mock_db_client.get_data = AsyncMock(return_value=None)
+    mock_db_client.update_data = AsyncMock(return_value=MagicMock())
+    mock_db_client.db = MagicMock()
+    mock_db_client.db.litellm_modeltable = MagicMock()
+    mock_db_client.db.litellm_modeltable.create = AsyncMock(
+        return_value=MagicMock(id="model123")
+    )
+
+    team_create_result = MagicMock(team_id="team-mpr", object_permission_id=None)
+    team_create_result.model_dump.return_value = {
+        "team_id": "team-mpr",
+        "max_parallel_requests": 3,
+    }
+    team_create_result.members_with_roles = []
+    mock_team_create = AsyncMock(return_value=team_create_result)
+    mock_db_client.db.litellm_teamtable = MagicMock()
+    mock_db_client.db.litellm_teamtable.create = mock_team_create
+    mock_db_client.db.litellm_teamtable.count = AsyncMock(return_value=0)
+    mock_db_client.db.litellm_teamtable.update = AsyncMock(
+        return_value=team_create_result
+    )
+    _wire_team_create_tx(mock_db_client)
+    mock_db_client.db.litellm_usertable = MagicMock()
+    mock_db_client.db.litellm_usertable.update = AsyncMock(return_value=MagicMock())
+
+    await new_team(
+        data=NewTeamRequest(team_alias="mpr-team", max_parallel_requests=3),
+        http_request=MagicMock(spec=Request),
+        user_api_key_dict=mock_admin_auth,
+    )
+
+    assert mock_team_create.call_args.kwargs["data"]["max_parallel_requests"] == 3
+
+
+@pytest.mark.asyncio
+async def test_update_team_persists_max_parallel_requests(
+    mock_db_client, disable_audit_logging_for_mocked_team
+):
+    from fastapi import Request
+    from unittest.mock import AsyncMock, MagicMock
+    from litellm.proxy._types import UpdateTeamRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    existing_team = MagicMock()
+    existing_team.team_id = "team-mpr"
+    existing_team.organization_id = None
+    existing_team.model_id = None
+    existing_team.metadata = None
+    existing_team.model_dump.return_value = {
+        "team_id": "team-mpr",
+        "organization_id": None,
+        "members_with_roles": [],
+    }
+    updated_team = MagicMock()
+    updated_team.team_id = "team-mpr"
+    updated_team.organization_id = None
+    updated_team.litellm_model_table = None
+    updated_team.model_dump.return_value = {
+        "team_id": "team-mpr",
+        "organization_id": None,
+        "max_parallel_requests": 7,
+    }
+    mock_db_client.jsonify_team_object = lambda db_data: db_data
+    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=existing_team
+    )
+    mock_db_client.db.litellm_teamtable.update = AsyncMock(return_value=updated_team)
+
+    await update_team(
+        data=UpdateTeamRequest(team_id="team-mpr", max_parallel_requests=7),
+        http_request=MagicMock(spec=Request),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"
+        ),
+    )
+
+    update_data = mock_db_client.db.litellm_teamtable.update.call_args.kwargs["data"]
+    assert update_data["max_parallel_requests"] == 7

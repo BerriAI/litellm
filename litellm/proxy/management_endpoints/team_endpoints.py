@@ -1383,6 +1383,22 @@ async def _check_user_team_limits(
             },
         )
 
+    if (
+        data.max_parallel_requests is not None
+        and user_api_key_dict.max_parallel_requests is not None
+        and data.max_parallel_requests > user_api_key_dict.max_parallel_requests
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": (
+                    "max parallel requests higher than user max. "
+                    f"User max parallel requests={user_api_key_dict.max_parallel_requests}. "
+                    f"User role={user_api_key_dict.user_role}"
+                )
+            },
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class _MaxBudgetGuard:

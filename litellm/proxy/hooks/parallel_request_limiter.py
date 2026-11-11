@@ -289,6 +289,12 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             max_parallel_requests = sys.maxsize
         if data is None:
             data = {}
+        # Sanitize client-supplied internal state flags from both metadata containers
+        # so external callers cannot forge slot-acquisition state (#49070).
+        if isinstance(data.get("metadata"), dict):
+            data["metadata"].pop("_team_slot_acquired", None)
+        if isinstance(data.get("litellm_metadata"), dict):
+            data["litellm_metadata"].pop("_team_slot_acquired", None)
         global_max_parallel_requests: Final = data.get("metadata", {}).get("global_max_parallel_requests", None)
         throttle_pct: Final = getattr(user_api_key_dict, "budget_throttle_pct", None)
         tpm_limit = throttled_limit(getattr(user_api_key_dict, "tpm_limit", sys.maxsize), throttle_pct)
@@ -459,27 +465,105 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         if team_id is not None:
             team_tpm_limit = user_api_key_dict.team_tpm_limit
             team_rpm_limit = user_api_key_dict.team_rpm_limit
+            team_max_parallel_requests = (
+                user_api_key_dict.team_max_parallel_requests
+                if user_api_key_dict.team_max_parallel_requests is not None
+                else sys.maxsize
+            )
 
             if team_tpm_limit is None:
                 team_tpm_limit = sys.maxsize
             if team_rpm_limit is None:
                 team_rpm_limit = sys.maxsize
 
+            # --- Non-windowed team concurrency gauge (fix for #49070) ---
+            # `{team_id}::{precise_minute}::request_count` resets every minute,
+            # so a team member who keeps a stream open across a minute boundary
+            # would start a fresh full quota.  Track concurrency in a
+            # persistent, non-windowed slot gauge (same pattern as the global
+            # `global_max_parallel_requests` key) so in-flight requests from a
+            # previous minute are still counted.
+            #
+            # Fix (veria-ai review fd472e5b & 985cce9c):
+            # 1. Atomic optimistic increment + rollback: atomically increment
+            #    the shared gauge via Redis/DualCache FIRST. If the returned
+            #    post-increment value exceeds team_max_parallel_requests,
+            #    immediately rollback (-1) and reject. This closes the TOCTOU
+            #    race condition where concurrent requests observe the same below-limit
+            #    value and proceed.
+            # 2. Rollback on subsequent admission failure: if check_key_in_limits
+            #    fails (e.g. RPM/TPM limit exceeded), decrement the gauge so the
+            #    slot is never leaked.
+            # 3. Request-scoped ownership tracking: stamp `_team_slot_acquired=True`
+            #    onto `data["metadata"]` only when the slot is successfully held.
+            #    Both async_log_success_event and async_log_failure_event check
+            #    this flag, preventing unadmitted requests (e.g. rejected by pre-call
+            #    guardrails) from decrementing the gauge or driving it negative.
+            _acquired_team_slot = False
+            if team_max_parallel_requests < sys.maxsize:
+                _team_parallel_key: Final = f"{team_id}::max_parallel_requests"
+                _new_team_parallel = await self.internal_usage_cache.async_increment_cache(
+                    key=_team_parallel_key,
+                    value=1,
+                    local_only=False,
+                    litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                )
+                if _new_team_parallel is not None and _new_team_parallel > team_max_parallel_requests:
+                    # Over limit: atomic rollback immediately
+                    await self.internal_usage_cache.async_increment_cache(
+                        key=_team_parallel_key,
+                        value=-1,
+                        local_only=False,
+                        litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                    )
+                    self.raise_rate_limit_error(
+                        additional_details=(
+                            f"{CommonProxyErrors.max_parallel_request_limit_reached.value}. "
+                            f"Hit limit for team. Current limits: max_parallel_requests: "
+                            f"{team_max_parallel_requests}, current: {_new_team_parallel - 1}"
+                        ),
+                        rate_limit_type=RateLimitType.CONCURRENT_REQUESTS,
+                        requested_model=data.get("model") if data else None,
+                        descriptor_key="team",
+                    )
+                _acquired_team_slot = True
+                if "metadata" not in data or data["metadata"] is None:
+                    data["metadata"] = {}
+                data["metadata"]["_team_slot_acquired"] = True
+                if isinstance(data.get("litellm_metadata"), dict):
+                    data["litellm_metadata"]["_team_slot_acquired"] = True
+
             request_count_api_key = f"{team_id}::{precise_minute}::request_count"
             # print(f"Checking if {request_count_api_key} is allowed to make request for minute {precise_minute}")
-            await self.check_key_in_limits(
-                user_api_key_dict=user_api_key_dict,
-                cache=cache,
-                data=data,
-                call_type=call_type,
-                max_parallel_requests=sys.maxsize,  # TODO: Support max parallel requests for a team
-                current=cache_objects["request_count_team_id"],
-                request_count_api_key=request_count_api_key,
-                tpm_limit=team_tpm_limit,
-                rpm_limit=team_rpm_limit,
-                rate_limit_type="team",
-                values_to_update_in_cache=values_to_update_in_cache,
-            )
+            try:
+                await self.check_key_in_limits(
+                    user_api_key_dict=user_api_key_dict,
+                    cache=cache,
+                    data=data,
+                    call_type=call_type,
+                    # Pass sys.maxsize so the minute-bucket is used only for RPM/TPM;
+                    # concurrency is now enforced above via the persistent gauge.
+                    max_parallel_requests=sys.maxsize,
+                    current=cache_objects["request_count_team_id"],
+                    request_count_api_key=request_count_api_key,
+                    tpm_limit=team_tpm_limit,
+                    rpm_limit=team_rpm_limit,
+                    rate_limit_type="team",
+                    values_to_update_in_cache=values_to_update_in_cache,
+                )
+            except Exception:
+                if _acquired_team_slot:
+                    await self.internal_usage_cache.async_increment_cache(
+                        key=_team_parallel_key,
+                        value=-1,
+                        local_only=False,
+                        litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                    )
+                    if isinstance(data.get("metadata"), dict):
+                        data["metadata"]["_team_slot_acquired"] = False
+                    if isinstance(data.get("litellm_metadata"), dict):
+                        data["litellm_metadata"]["_team_slot_acquired"] = False
+                raise
 
         # End-User Rate Limits
         # Only enforce if user passed `user` to /chat, /completions, /embeddings
@@ -687,6 +771,28 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 self.print_verbose(f"updated_value in success call: {new_val}, precise_minute: {precise_minute}")
                 values_to_update_in_cache.append((request_count_api_key, new_val))
 
+                # Decrement non-windowed team concurrency gauge (fix for #49070)
+                # local_only=False: share gauge across workers via Redis when
+                # available, matching the increment in async_pre_call_hook.
+                # Only decrement if this request actually acquired a team slot.
+                # Check both metadata and litellm_metadata containers.
+                _lp = kwargs.get("litellm_params", {}) or {}
+                _meta = _lp.get("metadata", {}) or {}
+                _lmeta = _lp.get("litellm_metadata", {}) or {}
+                _has_slot = _meta.get("_team_slot_acquired")
+                if _has_slot is None:
+                    _has_slot = _lmeta.get("_team_slot_acquired", True)
+                if released > 0 and _has_slot:
+                    _team_parallel_key: Final = f"{user_api_key_team_id}::max_parallel_requests"
+                    await self.internal_usage_cache.async_increment_cache(
+                        key=_team_parallel_key,
+                        value=-released,
+                        local_only=False,
+                        litellm_parent_otel_span=litellm_parent_otel_span,
+                    )
+                    _meta["_team_slot_acquired"] = False
+                    _lmeta["_team_slot_acquired"] = False
+
             # ------------
             # Update usage - End User
             # ------------
@@ -787,6 +893,28 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     ttl=60,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 )  # save in cache for up to 1 min.
+
+                # Decrement non-windowed team concurrency gauge (fix for #49070)
+                # local_only=False: share gauge across workers via Redis when
+                # available, matching the increment in async_pre_call_hook.
+                # Only decrement if this request actually acquired a team slot.
+                # Check both metadata and litellm_metadata containers.
+                _failure_team_id: Final = _metadata.get("user_api_key_team_id", None)
+                _lp_fail = kwargs.get("litellm_params", {}) or {}
+                _lmeta_fail = _lp_fail.get("litellm_metadata", {}) or {}
+                _has_slot_fail = _metadata.get("_team_slot_acquired")
+                if _has_slot_fail is None:
+                    _has_slot_fail = _lmeta_fail.get("_team_slot_acquired", True)
+                if released > 0 and _failure_team_id is not None and _has_slot_fail:
+                    _team_parallel_key_f: Final = f"{_failure_team_id}::max_parallel_requests"
+                    await self.internal_usage_cache.async_increment_cache(
+                        key=_team_parallel_key_f,
+                        value=-released,
+                        local_only=False,
+                        litellm_parent_otel_span=litellm_parent_otel_span,
+                    )
+                    _metadata["_team_slot_acquired"] = False
+                    _lmeta_fail["_team_slot_acquired"] = False
         except Exception as e:
             verbose_proxy_logger.exception("Inside Parallel Request Limiter: An exception occurred - %s", e)
 

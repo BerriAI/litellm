@@ -1960,6 +1960,7 @@ RouterSettingsDict = Annotated[
 
 
 class NewTeamRequest(TeamBase):
+    max_parallel_requests: NonNegativeInt | None = None
     tpm_limit: int | None = Field(default=None, ge=0)
     rpm_limit: int | None = Field(default=None, ge=0)
     router_settings: RouterSettingsDict | None = None
@@ -2027,6 +2028,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     team_alias: Optional[str] = None
     organization_id: Optional[str] = None
     metadata: Optional[dict] = None
+    max_parallel_requests: Optional[int] = None
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
     max_budget: Optional[float] = None
@@ -2043,6 +2045,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     metadata: dict | None = None
     tpm_limit: int | None = Field(default=None, ge=0)
     rpm_limit: int | None = Field(default=None, ge=0)
+    max_parallel_requests: NonNegativeInt | None = None
     tpd_limit: int | None = None
     max_budget: float | None = None
     soft_budget: float | None = None
