@@ -967,9 +967,11 @@ async def _raise_if_team_write_leaves_projects_short(
     policy: Final = _quota_policy(general_settings, ENFORCE_PROJECT_MODEL_QUOTA_SETTING)
     if policy is None or not exempts_any_route(policy):
         return
-    llm_router: Final = await model_router_reconciled_with_db()
     projects: Final = await ProjectRepository(prisma_client).table.find_many(where={"team_id": team_id})
     listed: Final = frozenset(itertools.chain.from_iterable(project.models for project in projects))
+    if not listed:
+        return
+    llm_router: Final = await model_router_reconciled_with_db()
     served: Final = sorted(model for model in listed if team_write_serves(llm_router, team_id, public_name, model))
     shortfall: Final = next(
         (

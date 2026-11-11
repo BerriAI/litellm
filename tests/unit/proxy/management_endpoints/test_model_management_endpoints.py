@@ -8304,9 +8304,8 @@ def _use_db_backed_quota_proxy(monkeypatch: pytest.MonkeyPatch, prisma: MagicMoc
     from litellm.proxy import proxy_server
 
     async def reload_finds_the_router_current(prisma_client: object, proxy_logging_obj: object) -> ReconcileOutcome:
-        return ReconcileOutcome(
-            still_desired=frozenset(router.get_model_ids()), live_after=frozenset(router.get_model_ids())
-        )
+        model_ids: Final = frozenset(router.registry().names(kind="ids"))
+        return ReconcileOutcome(still_desired=model_ids, live_after=model_ids)
 
     _use_quota_proxy(monkeypatch, prisma, router)
     monkeypatch.setattr(proxy_server, "store_model_in_db", True)
@@ -8538,6 +8537,62 @@ async def test_team_model_patch_rejects_a_removal_that_moves_its_route_where_its
 
     assert error.value.code == "400"
     assert error.value.message.startswith("projects video-gen list 'jev-latest' without a positive rpm and tpm quota")
+
+
+def _use_quota_proxy_whose_model_reload_fails(monkeypatch: pytest.MonkeyPatch, prisma: MagicMock) -> None:
+    from litellm.proxy import proxy_server
+
+    _use_quota_proxy(monkeypatch, prisma, _quota_router("jev-latest", {"model": "openai/jev-latest"}, _TEAM_RUNWAY))
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(
+        proxy_server.proxy_config,
+        "add_deployment",
+        AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
+    )
+
+
+@pytest.mark.asyncio
+async def test_team_model_patch_answers_503_when_the_model_reload_fails_and_a_team_project_lists_a_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prisma: Final = _media_team_db("jev-latest", {})
+    prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=_team_model_row("jev-latest", _TEAM_RUNWAY))
+    _use_quota_proxy_whose_model_reload_fails(monkeypatch, prisma)
+
+    with pytest.raises(ProxyException) as error:
+        await patch_model(
+            model_id="team-row",
+            patch_data=updateDeployment(litellm_params=updateLiteLLMParams(**_TEAM_VERTEX)),
+            user_api_key_dict=_ADMIN,
+        )
+
+    assert error.value.code == "503"
+    prisma.db.litellm_proxymodeltable.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_team_model_check_needs_no_model_reload_when_no_team_project_lists_a_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.management_endpoints.model_management_endpoints import (
+        _raise_if_team_write_leaves_projects_short,
+    )
+
+    prisma: Final = _media_team_db("jev-latest", {})
+    prisma.db.litellm_projecttable.find_many = AsyncMock(return_value=[])
+    _use_quota_proxy_whose_model_reload_fails(monkeypatch, prisma)
+
+    assert (
+        await _raise_if_team_write_leaves_projects_short(
+            prisma_client=prisma,
+            general_settings=_PROJECT_QUOTA_SETTINGS,
+            team_id="media-team",
+            public_name="jev-latest",
+            replaced_id="team-row",
+            written_params=_TEAM_VERTEX,
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio
