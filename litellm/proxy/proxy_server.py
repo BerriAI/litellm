@@ -55,6 +55,7 @@ from typing import (
     get_origin,
     get_type_hints,
 )
+from urllib.parse import urlparse
 
 import anyio
 import anyio.lowlevel
@@ -369,6 +370,7 @@ from litellm.constants import (
     SPEND_LOG_SIZE_CHECK_INTERVAL,
     USER_SPEND_ALERTS_JOB_ID,
     WEEKLY_SPEND_REPORT_JOB_ID,
+    XAI_API_BASE,
 )
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException
@@ -15719,7 +15721,15 @@ def _deployment_served_model(
     deployment: _TokenCountDeployment, request_model: str, responses_request: Mapping[str, object] | None
 ) -> str | None:
     resolved: Final = _deployment_llm_provider(deployment, request_model, responses_request)
-    return None if resolved is None else f"{resolved[1]}/{resolved[0]}"
+    if resolved is None:
+        return None
+    model, provider = resolved
+    served_by: Final = "xai" if _is_xai_api_base(_deployment_api_base(deployment, responses_request)) else provider
+    return f"{served_by}/{model}"
+
+
+def _is_xai_api_base(api_base: str | None) -> bool:
+    return api_base is not None and urlparse(api_base).hostname == urlparse(XAI_API_BASE).hostname
 
 
 def _deployment_llm_provider(
@@ -16089,6 +16099,7 @@ async def _count_request_tokens(
         request.tool_choice
         if counted_messages is not None
         and isinstance(request.tool_choice, (str, Mapping))
+        and "tool_choice" not in _count_drop_policy(deployment_view, responses_request or {}).additional_drop_params
         and not _xai_tool_choice_off_xai(
             template_model, tool_section, _deployment_served_model(deployment_view, request.model, responses_request)
         )

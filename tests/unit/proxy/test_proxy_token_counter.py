@@ -5476,6 +5476,7 @@ _AZURE_GROK_PARAMS: Final = {"api_base": "https://example.services.ai.azure.com"
     [
         ({"litellm_params": {"model": "xai/grok-4-1-fast-reasoning", "api_key": "sk-test"}}, True),
         ({"litellm_params": {"model": "openrouter/x-ai/grok-4.3", "api_key": "sk-test"}}, True),
+        ({"litellm_params": {"model": "openai/grok-4.3", "api_base": "https://api.x.ai/v1", "api_key": "sk-test"}}, True),
         (
             {
                 "litellm_params": {"model": "azure_ai/grok-4-1", **_AZURE_GROK_PARAMS},
@@ -5514,6 +5515,43 @@ async def test_utils_token_counter_counts_xai_tool_choice_costs_only_on_grok_tha
 
     assert route_added == (sdk_added if served_by_xai else 0)
     assert sdk_added > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route_count", "tool_choice"),
+    [(_utils_route_count, "none"), (_messages_route_count, {"type": "none"}), (_responses_route_count, "none")],
+    ids=["utils", "messages", "responses"],
+)
+@pytest.mark.parametrize(
+    ("drop_params", "counts_choice"),
+    [({"additional_drop_params": ["tool_choice"]}, False), ({"drop_params": True}, True)],
+    ids=["tool-choice-dropped", "only-unsupported-dropped"],
+)
+async def test_count_routes_count_no_tool_choice_the_deployment_drops(
+    monkeypatch: pytest.MonkeyPatch,
+    route_count: Callable[[Mapping[str, JsonValue]], Coroutine[None, None, int]],
+    tool_choice: JsonValue,
+    drop_params: dict[str, JsonValue],
+    counts_choice: bool,
+) -> None:
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "no-count-api",
+                    "litellm_params": {"model": f"mistral/{_TOOL_CHOICE_MODEL}", "api_key": "sk-test", **drop_params},
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "proxy_config", litellm.proxy.proxy_server.ProxyConfig())
+
+    route_added: Final = await route_count({"tool_choice": tool_choice}) - await route_count({})
+
+    assert (route_added > 0) == counts_choice
 
 
 @pytest.mark.asyncio
