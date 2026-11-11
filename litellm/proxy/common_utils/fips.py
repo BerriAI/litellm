@@ -2,7 +2,8 @@ import threading
 from collections.abc import Mapping
 from typing import Final
 
-from litellm.proxy.common_utils.fips_jwt import compute_jwt_hmac_in_fips_provider
+from litellm.proxy.common_utils.fips_jwt import compute_jwt_signatures_in_fips_provider
+from litellm.proxy.common_utils.fips_signature import openssl_signs_whole_messages
 from litellm.secret_managers.main import str_to_bool
 
 FIPS_MODE_SETTING: Final = "fips_mode"
@@ -83,6 +84,11 @@ def fips_mode_refusal(general_settings: Mapping[str, object]) -> str | None:
             "against the system OpenSSL (pip install --no-binary cryptography cryptography), or turn "
             f"{_SETTING} off."
         )
+    if not openssl_signs_whole_messages():
+        return (
+            f"{_SETTING} is on but Python's OpenSSL is out of reach for message-level signatures. Run a Python that "
+            f"links OpenSSL 3 or later as a shared library, or turn {_SETTING} off."
+        )
     return None
 
 
@@ -94,7 +100,7 @@ def enforce_fips_mode(general_settings: Mapping[str, object]) -> None:
         _FIPS_MODE_ACTIVE.set()
     else:
         _FIPS_MODE_ACTIVE.clear()
-    compute_jwt_hmac_in_fips_provider(fips_mode_active())
+    compute_jwt_signatures_in_fips_provider(fips_mode_active())
 
 
 def fips_mode_active() -> bool:

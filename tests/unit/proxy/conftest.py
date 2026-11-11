@@ -529,6 +529,7 @@ def fips_openssl(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def fips_mode(fips_openssl: None, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setattr("litellm.proxy.common_utils.fips.cryptography_enforces_fips", lambda: True)
+    monkeypatch.setattr("litellm.proxy.common_utils.fips.openssl_signs_whole_messages", lambda: True)
     enforce_fips_mode({"fips_mode": True})
     yield
     enforce_fips_mode({})
