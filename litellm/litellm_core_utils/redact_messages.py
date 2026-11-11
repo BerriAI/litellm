@@ -12,7 +12,7 @@ import copy
 import inspect
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
@@ -21,7 +21,9 @@ from litellm.constants import REDACTED_BY_LITELLM
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.classifier_logging import without_classifier_audit
 from litellm.litellm_core_utils.core_helpers import (
+    attribute_or_none,
     get_metadata_variable_name_from_kwargs,
+    has_attributes,
 )
 from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
 from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field, stream_item_items
@@ -41,6 +43,11 @@ if TYPE_CHECKING:
     LiteLLMLoggingObject = _LiteLLMLoggingObject
 else:
     LiteLLMLoggingObject = Any
+
+
+class _HasArguments(Protocol):
+    arguments: str
+
 
 MESSAGE_REDACTION_ENABLE_HEADERS: Final = ("litellm-enable-message-redaction", "x-litellm-enable-message-redaction")
 
@@ -163,7 +170,7 @@ def _redact_bedrock_guardrail_trace(response: object) -> None:
         }
         response.update(traces)
         return
-    for field, value in ((name, getattr(response, name, None)) for name in BEDROCK_GUARDRAIL_TRACE_FIELDS):
+    for field, value in ((name, attribute_or_none(response, name)) for name in BEDROCK_GUARDRAIL_TRACE_FIELDS):
         if value is not None:
             setattr(response, field, _redacted_bedrock_trace(value))
 
@@ -191,8 +198,8 @@ def _redact_tool_calls(tool_calls) -> None:
     if not tool_calls:
         return
     for tool_call in tool_calls:
-        function = getattr(tool_call, "function", None)
-        if function is not None and hasattr(function, "arguments"):
+        function = attribute_or_none(tool_call, "function")
+        if function is not None and has_attributes(function, _HasArguments, "arguments"):
             function.arguments = REDACTED_BY_LITELLM
 
 
@@ -344,7 +351,7 @@ def _redacted_web_search_action(action: object) -> object:
 
 def _redacted_web_search_call(item: object) -> object:
     if isinstance(item, BaseModel):
-        action: Final = getattr(item, "action", None)
+        action: Final = attribute_or_none(item, "action")
         return item if action is None else item.model_copy(update={"action": _redacted_web_search_action(action)})
     mapping: Final = _as_mapping(item)
     if mapping is None or mapping.get("action") is None:

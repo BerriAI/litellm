@@ -7,7 +7,7 @@ use pyo3::{
 };
 use strum::{IntoStaticStr, VariantArray};
 
-const MODULE: &str = "litellm.rust_bridge.preflight";
+const MODULE: &str = "litellm.rust_bridge.host.preflight";
 
 /// The litellm globals the preflight still reads through Python. `preflight_contract.json`
 /// pins each function's parameters on both sides.
@@ -115,7 +115,7 @@ mod tests {
     /// tests that install it run one at a time.
     static PREFLIGHT_MODULE: Mutex<()> = Mutex::new(());
 
-    /// A fresh stand-in for `litellm.rust_bridge.preflight` that records every call, then
+    /// A fresh stand-in for `litellm.rust_bridge.host.preflight` that records every call, then
     /// `script` run against it with the module bound as `preflight`.
     fn preflight_stubs<'py>(py: Python<'py>, script: &std::ffi::CStr) -> Bound<'py, PyDict> {
         let locals = PyDict::new(py);
@@ -124,15 +124,15 @@ mod tests {
 import sys
 import types
 
-for name in ('litellm', 'litellm.rust_bridge'):
+for name in ('litellm', 'litellm.rust_bridge', 'litellm.rust_bridge.host'):
     sys.modules.setdefault(name, types.ModuleType(name))
-preflight = types.ModuleType('litellm.rust_bridge.preflight')
+preflight = types.ModuleType('litellm.rust_bridge.host.preflight')
 preflight.warnings = []
 preflight.checked = []
 preflight.credential_list = lambda: []
 preflight.warn_unknown_credential = lambda name, loaded: preflight.warnings.append((name, loaded))
 preflight.check_limits = lambda kwargs: preflight.checked.append(kwargs)
-sys.modules['litellm.rust_bridge.preflight'] = preflight
+sys.modules['litellm.rust_bridge.host.preflight'] = preflight
 ",
             Some(&locals),
             Some(&locals),

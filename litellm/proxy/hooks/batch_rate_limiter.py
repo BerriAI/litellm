@@ -26,6 +26,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from fastapi import HTTPException
 from pydantic import Field, TypeAdapter, ValidationError
+from typing_extensions import TypedDict
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -39,6 +40,7 @@ from litellm.batches.batch_utils import (
 from litellm.constants import BATCH_TPD_DESCRIPTOR_SUFFIX, BATCH_TPD_WINDOW_SECONDS
 from litellm.exceptions import RateLimitErrorCategory
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.proxy._types import (
     ProxyErrorTypes,
     ProxyException,
@@ -100,7 +102,12 @@ else:
 
 
 _BATCH_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
 _WINDOW_START_ADAPTER: Final[TypeAdapter[int | float | str | None]] = TypeAdapter(int | float | str | None)
+
+
+class _FileContentFetchKwargs(TypedDict, total=False, extra_items=object):
+    pass
 
 
 def _batch_create_routing_model(data: Mapping[str, object]) -> str | None:
@@ -535,7 +542,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         custom_llm_provider: str,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth | None = None,
-    ) -> tuple[str, dict[str, Any]]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Map proxy-facing file IDs to provider file IDs and credentials.
 
@@ -952,7 +959,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 file_content = await litellm.afile_content(
                     file_id=provider_file_id,
                     user_api_key_dict=user_api_key_dict,
-                    **fetch_kwargs,
+                    **_FileContentFetchKwargs(**fetch_kwargs),
                 )
 
             file_content_bytes: Final = getattr(file_content, "content", None)
@@ -985,7 +992,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             for raw_line in iter_batch_input_lines(file_content_bytes):
                 request_count += 1
                 try:
-                    entry = json.loads(raw_line)
+                    entry = _DECODED_JSON.validate_python(json.loads(raw_line))
                 except Exception:
                     entry_total_tokens = estimate_batch_entry_tokens(raw_line)
                     entry_output_tokens = self.parallel_request_limiter.no_max_tokens_output_floor(
@@ -1008,7 +1015,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 output_tokens += entry_output_tokens
 
                 try:
-                    entry_total_tokens = count_entry_tokens(entry)
+                    entry_total_tokens = count_entry_tokens(decoded_json_object(entry))
                 except Exception:
                     entry_total_tokens = estimate_batch_entry_tokens(raw_line)
                 total_tokens += entry_total_tokens

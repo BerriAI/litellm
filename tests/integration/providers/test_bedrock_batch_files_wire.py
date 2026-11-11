@@ -89,8 +89,13 @@ _SCHEMA: Final = {
 
 @pytest.mark.parametrize(
     ("backend", "native_output"),
-    [("us.anthropic.claude-sonnet-5-5", False), ("us.anthropic.claude-haiku-5-5", True)],
-    ids=["opt_in_native_output_model", "native_output_model"],
+    [
+        ("us.anthropic.claude-sonnet-5-5", False),
+        ("us.anthropic.claude-haiku-5-5", True),
+        ("us.anthropic.claude-opus-4-7", False),
+        ("us.anthropic.claude-opus-4-8", True),
+    ],
+    ids=["opt_in_native_output_model", "native_output_model", "opus_4_7", "opus_4_8"],
 )
 def test_json_schema_batch_record_with_thinking_uploads_native_output_only_on_models_that_always_take_it(
     gateway: Gateway, backend: str, native_output: bool
@@ -130,7 +135,10 @@ def test_json_schema_batch_record_with_thinking_uploads_native_output_only_on_mo
     output_format: Final = object_value(model_input.get("output_config", {})).get("format")
     tools: Final = tuple(object_value(entry) for entry in list_value(model_input.get("tools", [])))
     if native_output:
-        assert object_value(object_value(output_format)["schema"])["properties"] == _SCHEMA["properties"], model_input
+        assert model_input["output_config"] == {"format": {"type": "json_schema", "schema": _SCHEMA}}, model_input
+        assert model_input["anthropic_beta"] == ["structured-outputs-2025-11-13"], model_input
+        assert "tools" not in model_input, model_input
+        assert model_input["thinking"] == {"type": "adaptive"}, model_input
         assert not tools, model_input
         return
     assert output_format is None, model_input

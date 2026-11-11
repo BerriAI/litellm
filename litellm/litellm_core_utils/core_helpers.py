@@ -4,6 +4,7 @@ import copy
 import logging
 import math
 import re
+import sys
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
@@ -101,7 +102,7 @@ _LAX_BOOL: Final = TypeAdapter(bool)
 
 
 def as_str_mapping(value: object) -> Mapping[str, object] | None:
-    return value if isinstance(value, Mapping) else None
+    return value if isinstance(value, (dict, Mapping)) else None
 
 
 def as_object_list(value: object) -> Sequence[object] | None:
@@ -110,6 +111,27 @@ def as_object_list(value: object) -> Sequence[object] | None:
 
 _Key = TypeVar("_Key")  # rebind-ok: a TypeVar cannot be Final
 _Value = TypeVar("_Value")  # rebind-ok: a TypeVar cannot be Final
+
+
+INCLUDE_COST_IN_STREAMING_USAGE_HEADER: Final = "x-litellm-include-cost-in-streaming-usage"
+
+
+def proxy_request_headers(container: Mapping[str, object] | None) -> Mapping[str, object] | None:
+    proxy_server_request: Final = as_str_mapping(container.get("proxy_server_request")) if container else None
+    return as_str_mapping(proxy_server_request.get("headers")) if proxy_server_request else None
+
+
+def stream_cost_injection_requested(request_headers: Mapping[str, object] | None) -> bool:
+    """The global include_cost_in_streaming_usage flag or the per-request header asks for usage.cost on streams."""
+    if litellm.include_cost_in_streaming_usage:
+        return True
+    if not request_headers:
+        return False
+    header_value: Final = next(
+        (value for name, value in request_headers.items() if name.lower() == INCLUDE_COST_IN_STREAMING_USAGE_HEADER),
+        None,
+    )
+    return isinstance(header_value, str) and header_value.strip().lower() == "true"
 
 
 def without(
@@ -133,7 +155,7 @@ class _SupportsIter(Protocol):
 
 @runtime_checkable
 class _SupportsGetItem(Protocol):
-    def __getitem__(self, index: int, /) -> object: ...
+    def __getitem__(self, key: str | int, /) -> object: ...
 
 
 def attribute_or_none(source: object, name: str) -> object:
@@ -158,12 +180,51 @@ def require_attributes(value: object, shape: type[_Shape], *names: str) -> _Shap
     raise AttributeError(f"'{type(value).__name__}' object has no attribute '{missing}'", name=missing, obj=value)
 
 
+class KeywordArguments(Protocol):
+    def keys(self) -> Iterable[str]: ...
+
+    def __getitem__(self, key: str, /) -> object: ...
+
+
+def keyword_arguments(value: object, target: type[object]) -> KeywordArguments:
+    if has_attributes(value, KeywordArguments, "keys"):
+        return value
+    raise TypeError(
+        f"{target.__module__}.{target.__qualname__}() argument after ** must be a mapping, not {type(value).__name__}"
+    )
+
+
 def iter_items(value: object) -> Iterable[object]:
+    listed: Final = as_object_list(value)
+    if listed is not None:
+        return listed
     if isinstance(value, _SupportsIter):
         return value
     if isinstance(value, _SupportsGetItem):
         return iter(value)
     raise TypeError(f"'{type(value).__name__}' object is not iterable")
+
+
+@runtime_checkable
+class _SupportsContains(Protocol):
+    def __contains__(self, key: object, /) -> bool: ...
+
+
+_NOT_A_CONTAINER: Final = "is not a container or iterable" if sys.version_info >= (3, 14) else "is not iterable"
+
+
+def json_contains(value: object, key: object) -> bool:
+    if isinstance(value, _SupportsContains):
+        return key in value
+    if isinstance(value, (_SupportsIter, _SupportsGetItem)):
+        return key in tuple(iter_items(value))
+    raise TypeError(f"argument of type '{type(value).__name__}' {_NOT_A_CONTAINER}")
+
+
+def subscript(value: object, key: str | int) -> object:
+    if isinstance(value, _SupportsGetItem):
+        return value[key]
+    raise TypeError(f"'{type(value).__name__}' object is not subscriptable")
 
 
 def attribute_items(source: object, name: str) -> Iterable[object]:
@@ -702,17 +763,22 @@ def process_response_headers(
     return {**additional_headers, **({"request-id": request_id} if request_id is not None else {})}
 
 
-def preserve_upstream_non_openai_attributes(
-    model_response: "ModelResponseStream", original_chunk: "ModelResponseStream"
-):
+def preserve_upstream_non_openai_attributes(model_response: "ModelResponseStream", original_chunk: object):
     """
     Preserve non-OpenAI attributes from the original chunk.
     """
     # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
     expected_keys: Final = frozenset(type(model_response).model_fields) | frozenset({"usage"})
+    chunk_model: Final = original_chunk if isinstance(original_chunk, BaseModel) else None
+    if chunk_model is None:
+        raise AttributeError(
+            f"type object '{type(original_chunk).__name__}' has no attribute 'model_fields'",
+            name="model_fields",
+            obj=type(original_chunk),
+        )
     candidate_keys: Final = tuple(
         key
-        for key in (*type(original_chunk).model_fields, *(original_chunk.__pydantic_extra__ or {}))
+        for key in (*type(chunk_model).model_fields, *(chunk_model.__pydantic_extra__ or {}))
         if key not in expected_keys
     )
     if not candidate_keys:
@@ -722,7 +788,7 @@ def preserve_upstream_non_openai_attributes(
             key,
             cast(  # cast-ok: Pydantic extras are scalar-checked before assignment
                 object,
-                getattr(original_chunk, key),
+                getattr(chunk_model, key),
             ),
         )
         for key in candidate_keys
@@ -730,7 +796,7 @@ def preserve_upstream_non_openai_attributes(
     if all(value is None or isinstance(value, (str, int, float, bool)) for _, value in candidate_values):
         _assign_attributes(model_response, candidate_values)
         return
-    _assign_attributes(model_response, original_chunk.model_dump(include=frozenset(candidate_keys)).items())
+    _assign_attributes(model_response, chunk_model.model_dump(include=set(candidate_keys)).items())
 
 
 def _assign_attributes(target: BaseModel, values: Iterable[tuple[str, object]]) -> None:

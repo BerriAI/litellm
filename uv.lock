@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.10, <3.16"
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -1115,6 +1115,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/ff/e2/85f227594656000ff4d8adadae91a21f536d4a84c6c716a86bd6685874be/cachetools-7.1.1.tar.gz", hash = "sha256:27bdf856d68fd3c71c26c01b5edc312124ed427524d1ddb31aa2b7746fe20d4b", size = 40202, upload-time = "2026-05-03T20:00:29.391Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/bf/0f/f897abe4ea0a8c408ae65c8c83bffab4936ad65d6032d4fb4cd35bbdc3ee/cachetools-7.1.1-py3-none-any.whl", hash = "sha256:0335cd7a0952d2b22327441fb0628139e234c565559eeb91a8a4ac7551c5353d", size = 16775, upload-time = "2026-05-03T20:00:27.857Z" },
+]
+
+[[package]]
+name = "casbin"
+version = "1.43.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "simpleeval" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ad/df/ff2aa55cf0d7c14622ce4f9252cdc34c828c81d4213965d73207ac5434ae/casbin-1.43.0.tar.gz", hash = "sha256:d2e90ce8e72f912877851e94d37999f32c558c6ba7aba0437d483275262e86e0", size = 425727, upload-time = "2025-05-10T06:57:18.902Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/08/07/facef6abd81378e6153b757dc1848621675d971fbc88ebb5d182ebc1c37f/casbin-1.43.0-py3-none-any.whl", hash = "sha256:63a3d1228870250e859ccd94133fe478821093f71dd37f05e0baa0c6fea26623", size = 475059, upload-time = "2025-05-10T06:57:16.89Z" },
 ]
 
 [[package]]
@@ -5020,7 +5032,7 @@ wheels = [
 
 [[package]]
 name = "litellm"
-version = "1.109.0"
+version = "1.110.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -5096,6 +5108,7 @@ proxy = [
     { name = "backoff" },
     { name = "backports-zstd", marker = "python_full_version < '3.14'" },
     { name = "boto3" },
+    { name = "casbin" },
     { name = "cryptography" },
     { name = "expression" },
     { name = "fastapi" },
@@ -5125,6 +5138,7 @@ proxy = [
     { name = "soundfile" },
     { name = "starlette" },
     { name = "tomlkit" },
+    { name = "tzdata" },
     { name = "uvicorn" },
     { name = "uvloop", marker = "sys_platform != 'win32'" },
     { name = "websockets" },
@@ -5167,6 +5181,9 @@ stt-nvidia-riva = [
 ]
 stt-vertex-chirp = [
     { name = "google-cloud-speech" },
+]
+switchyard = [
+    { name = "nemo-switchyard" },
 ]
 utils = [
     { name = "numpydoc" },
@@ -5214,6 +5231,7 @@ ci = [
     { name = "pytest-retry" },
     { name = "tenacity" },
     { name = "traceloop-sdk" },
+    { name = "tzdata" },
 ]
 dev = [
     { name = "basedpyright" },
@@ -5277,6 +5295,7 @@ proxy-dev = [
     { name = "httptools" },
     { name = "hypercorn" },
     { name = "litellm-admin-mcp", marker = "python_full_version >= '3.12'" },
+    { name = "nemo-switchyard" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp" },
     { name = "opentelemetry-instrumentation-fastapi" },
@@ -5308,6 +5327,7 @@ requires-dist = [
     { name = "backports-zstd", marker = "python_full_version < '3.14' and extra == 'proxy'", specifier = ">=1.0.0,<2.0" },
     { name = "boto3", specifier = ">=1.43.117,<2.0" },
     { name = "boto3", marker = "extra == 'proxy'", specifier = ">=1.43.117,<2.0" },
+    { name = "casbin", marker = "extra == 'proxy'", specifier = "==1.43.0" },
     { name = "certifi", specifier = ">=2026.10.19" },
     { name = "click", specifier = ">=8.0.0,<9.0" },
     { name = "cryptography", marker = "extra == 'proxy'", specifier = ">=49.0.0,<51.0" },
@@ -5351,6 +5371,7 @@ requires-dist = [
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2.3.0,<3" },
     { name = "mcp", marker = "extra == 'proxy'", specifier = ">=2.3.0,<3" },
     { name = "mlflow", marker = "extra == 'mlflow'", specifier = ">=3.17.2,<4.0" },
+    { name = "nemo-switchyard", marker = "extra == 'switchyard'", specifier = "==0.4.0a1" },
     { name = "numpy", marker = "extra == 'stt-nvidia-riva'", specifier = ">=1.26.0" },
     { name = "numpydoc", marker = "extra == 'utils'", specifier = ">=1.8.0,<2.0" },
     { name = "openai", specifier = ">=2.20.0,<4.0.0" },
@@ -5403,11 +5424,12 @@ requires-dist = [
     { name = "tomlkit", marker = "extra == 'cli'", specifier = ">=0.13.3,<1.0" },
     { name = "tomlkit", marker = "extra == 'proxy'", specifier = ">=0.13.3,<1.0" },
     { name = "typing-extensions", specifier = ">=4.13.0,<5.0" },
+    { name = "tzdata", marker = "extra == 'proxy'", specifier = ">=2024.1" },
     { name = "uvicorn", marker = "extra == 'proxy'", specifier = ">=0.33.0,<1.0" },
     { name = "uvloop", marker = "sys_platform != 'win32' and extra == 'proxy'", specifier = ">=0.22.1,<1.0" },
     { name = "websockets", marker = "extra == 'proxy'", specifier = ">=15.0.1,<16.0" },
 ]
-provides-extras = ["proxy", "cli", "extra-proxy", "utils", "mcp", "saml", "semantic-router", "mlflow", "grpc", "stt-vertex-chirp", "stt-nvidia-riva", "google", "bedrock-realtime", "proxy-runtime"]
+provides-extras = ["switchyard", "proxy", "cli", "extra-proxy", "utils", "mcp", "saml", "semantic-router", "mlflow", "grpc", "stt-vertex-chirp", "stt-nvidia-riva", "google", "bedrock-realtime", "proxy-runtime"]
 
 [package.metadata.requires-dev]
 admin-mcp = [{ name = "litellm-admin-mcp", marker = "python_full_version >= '3.12'", url = "https://github.com/BerriAI/liteadmin-mcp/archive/31fb096904ae05684c0779110a93b135b5601182.tar.gz" }]
@@ -5449,6 +5471,7 @@ ci = [
     { name = "pytest-retry", specifier = "==1.7.0" },
     { name = "tenacity", specifier = "==8.5.0" },
     { name = "traceloop-sdk", specifier = "==0.34.0" },
+    { name = "tzdata", specifier = "==2026.2" },
 ]
 dev = [
     { name = "basedpyright", specifier = "==1.39.7" },
@@ -5511,6 +5534,7 @@ proxy-dev = [
     { name = "httptools", specifier = ">=0.7.1,<0.8" },
     { name = "hypercorn", specifier = "==0.17.3" },
     { name = "litellm-admin-mcp", marker = "python_full_version >= '3.12'", url = "https://github.com/BerriAI/liteadmin-mcp/archive/31fb096904ae05684c0779110a93b135b5601182.tar.gz" },
+    { name = "nemo-switchyard", specifier = "==0.4.0a1" },
     { name = "opentelemetry-api", specifier = "==1.45.1" },
     { name = "opentelemetry-exporter-otlp", specifier = "==1.45.1" },
     { name = "opentelemetry-instrumentation-fastapi", specifier = "==0.66b1" },
@@ -5547,7 +5571,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "litellm-enterprise"
-version = "0.1.81"
+version = "0.1.83"
 source = { editable = "enterprise" }
 
 [[package]]
@@ -5557,7 +5581,7 @@ source = { editable = "packaging/litellm-proxy" }
 
 [[package]]
 name = "litellm-proxy-extras"
-version = "0.4.112"
+version = "0.4.114"
 source = { editable = "litellm-proxy-extras" }
 dependencies = [
     { name = "psycopg" },
@@ -6577,6 +6601,20 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/a2/6e/371856a3fb9d31ca8dac321cda606860fa4548858c0cc45d9d1d4ca2628b/mypy_extensions-1.1.0.tar.gz", hash = "sha256:52e68efc3284861e772bbcd66823fde5ae21fd2fdb51c62a211403730b916558", size = 6343, upload-time = "2025-04-22T14:54:24.164Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/79/7b/2c79738432f5c924bef5071f933bcc9efd0473bac3b4aa584a6f7c1c8df8/mypy_extensions-1.1.0-py3-none-any.whl", hash = "sha256:1be4cccdb0f2482337c4743e60421de3a356cd97508abadd57d47403e94f5505", size = 4963, upload-time = "2025-04-22T14:54:22.983Z" },
+]
+
+[[package]]
+name = "nemo-switchyard"
+version = "0.4.0a1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/8d/f8/088042a9e7152402384107a900d252f9aae1a9ad92764b1f866387413929/nemo_switchyard-0.4.0a1.tar.gz", hash = "sha256:8399becc03cc6f77e4885a95f70c0565d9aba27f15bfea6758596fdf81043097", size = 768645, upload-time = "2026-10-29T22:20:19.364Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0d/38/e1b2473dac6c847d7513c17d75eca220d8a9088b991c5fb73a4934791027/nemo_switchyard-0.4.0a1-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:1f34de8c0a4626c34b566db8b55c9591acda5121e249b8fffc9010cbe4578d3f", size = 9101897, upload-time = "2026-10-29T22:20:08.381Z" },
+    { url = "https://files.pythonhosted.org/packages/38/82/4e6cefc7db47967f903718d54e7b08b9c48ffbd71f74f3dc06fc37fbe0ee/nemo_switchyard-0.4.0a1-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:2c9777180635fceb30ff6144ec03443337fc0ab0e008b9ad25ab6802433214a7", size = 8796148, upload-time = "2026-10-29T22:20:10.886Z" },
+    { url = "https://files.pythonhosted.org/packages/7c/6b/abc7e73629e4d34ad2c923e63996bbdcbb3c96e515c44fdd2b5734688e45/nemo_switchyard-0.4.0a1-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:a943433bd0294e86942f9c29ffc6ff6ad2717c27619a59dd730635603f1dea12", size = 9841418, upload-time = "2026-10-29T22:20:12.703Z" },
+    { url = "https://files.pythonhosted.org/packages/a2/92/c53d48d794fc11c59c1219f8839f7313fa9d499e75753d22a58407be2535/nemo_switchyard-0.4.0a1-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:5a63b3d26b49802827dec3ba6a187765c0b6e26b732bf0a16de59f593ad32a9e", size = 9709820, upload-time = "2026-10-29T22:20:14.612Z" },
+    { url = "https://files.pythonhosted.org/packages/ff/95/058f0fbb48670c904fe2c93b8d9959073402293cc6dfbb6ac074b70c2c3f/nemo_switchyard-0.4.0a1-cp310-abi3-win_amd64.whl", hash = "sha256:ae42923283f3b88ebf0a92d3161729654a9987a1208478498e764e06cb8bd7dc", size = 8273177, upload-time = "2026-10-29T22:20:16.372Z" },
+    { url = "https://files.pythonhosted.org/packages/7c/52/7561cc1988733e87fce82df8cf4a52beaa109e6b0bf5eff52661db113f97/nemo_switchyard-0.4.0a1-cp310-abi3-win_arm64.whl", hash = "sha256:6e7517ff21b7c8a4f1617e84e45ed03686ed30c31709c0a6d3be8b8f4a50ae23", size = 7910792, upload-time = "2026-10-29T22:20:17.997Z" },
 ]
 
 [[package]]
@@ -10355,6 +10393,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/b0/d4/bfa032f961103eba93de583b161f0e6a5b63cebb8f2c7d0c6e6efe1e3d2e/simple_websocket-1.1.0.tar.gz", hash = "sha256:7939234e7aa067c534abdab3a9ed933ec9ce4691b0713c78acb195560aa52ae4", size = 17300, upload-time = "2024-10-10T22:39:31.412Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/52/59/0782e51887ac6b07ffd1570e0364cf901ebc36345fea669969d2084baebb/simple_websocket-1.1.0-py3-none-any.whl", hash = "sha256:4af6069630a38ed6c561010f0e11a5bc0d4ca569b36306eb257cd9a192497c8c", size = 13842, upload-time = "2024-10-10T22:39:29.645Z" },
+]
+
+[[package]]
+name = "simpleeval"
+version = "1.0.8"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/89/3e/25326f373871a34e78cac231c0d3c18a0a5c3a80aa4813b50b9f26a5d460/simpleeval-1.0.8.tar.gz", hash = "sha256:b417f869c11f2de034eb919820a825f35d12ce99f63a43971947ce73679eb9ba", size = 31846, upload-time = "2026-09-12T10:16:08.103Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/12/33/d1ecd9f4f5f272b36ad7b268e307ba0a59c109d8ad134a231cda780baac9/simpleeval-1.0.8-py3-none-any.whl", hash = "sha256:c9c4ff42879ebf0c05f6562cb81031869948916be343bcc950b81fcc081fe9ce", size = 18925, upload-time = "2026-09-12T10:16:06.862Z" },
 ]
 
 [[package]]

@@ -10,6 +10,7 @@ import {
   DataTable,
   DataTableFilterDrawer,
   DataTableFilterField,
+  type FilterDraft,
   DataTableToolbar,
 } from "@/components/shared/DataTable";
 import { Input } from "@/components/ui/input";
@@ -167,7 +168,10 @@ export function AuditLogsTable({
             title={t("logs.audit.table.filtersTitle")}
             description={t("logs.audit.table.filtersDescription")}
           >
-            {({ get, set }) => (
+            {({
+              get,
+              set,
+            }: FilterDraft<"action" | "changed_by" | "key_hash" | "object_id" | "table_name" | "team_id">) => (
               <>
                 <DataTableFilterField label={t("logs.audit.table.objectId")}>
                   <Input

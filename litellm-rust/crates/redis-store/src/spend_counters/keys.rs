@@ -1,6 +1,9 @@
 /// One budget's spend counter. `parse` and `key` round-trip `main`'s `spend:*` keys exactly.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum SpendCounter {
+    /// The charges-only twin of a key, team, user, org or end user lifetime counter, which budget
+    /// holds never touch: `spend:committed:` and the twin's key past its `spend:`.
+    Committed(Box<SpendCounter>),
     Key {
         token: String,
         window: Option<String>,
@@ -33,6 +36,9 @@ impl SpendCounter {
             None => format!("spend:{scope}:{id}"),
         };
         match self {
+            Self::Committed(counter) => {
+                format!("spend:committed:{}", &counter.key()["spend:".len()..])
+            }
             Self::Key { token, window } => windowed("key", token, window),
             Self::Team { team_id, window } => windowed("team", team_id, window),
             Self::TeamMember { user_id, team_id } => {
@@ -51,6 +57,16 @@ impl SpendCounter {
     pub fn parse(key: &str) -> Result<Self, NotASpendCounter> {
         let invalid = || NotASpendCounter(key.to_owned());
         let rest = key.strip_prefix("spend:").ok_or_else(invalid)?;
+        if let Some(twin) = rest.strip_prefix("committed:") {
+            return match Self::parse(&format!("spend:{twin}")).map_err(|_| invalid())? {
+                counter @ (Self::Key { window: None, .. }
+                | Self::Team { window: None, .. }
+                | Self::User(_)
+                | Self::Org(_)
+                | Self::EndUser(_)) => Ok(Self::Committed(Box::new(counter))),
+                _ => Err(invalid()),
+            };
+        }
         let (scope, id) = rest.split_once(':').ok_or_else(invalid)?;
         let windowed = || match id.rsplit_once(":window:") {
             Some((id, window)) if !window.is_empty() => (id.to_owned(), Some(window.to_owned())),

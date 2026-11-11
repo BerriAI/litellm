@@ -551,11 +551,13 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
               ${formatNumberWithCommas(logEntry.spend || 0, 8)}
             </DescriptionItem>
             <DescriptionItem label={t("logs.detail.metrics.duration")}>
-              {logEntry.request_duration_ms != null ? (logEntry.request_duration_ms / 1000).toFixed(3) : "-"} s
+              {logEntry.request_duration_ms != null ? (logEntry.request_duration_ms / 1000).toFixed(3) : "-"}
+              {t("logs.detail.metrics.secondsSuffix")}
             </DescriptionItem>
             {ttftMs != null && ttftMs > 0 && (
               <DescriptionItem label={t("logs.detail.metrics.timeToFirstToken")}>
-                {(ttftMs / 1000).toFixed(3)} s
+                {(ttftMs / 1000).toFixed(3)}
+                {t("logs.detail.metrics.secondsSuffix")}
               </DescriptionItem>
             )}
 

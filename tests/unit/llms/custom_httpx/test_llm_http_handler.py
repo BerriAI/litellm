@@ -455,6 +455,95 @@ def test_response_api_handler_sends_no_stream_options_when_web_search_forces_a_n
     assert "stream_options" not in recorder.seen_kwargs
 
 
+class _LookupLoop(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.runs = 0
+
+    async def async_should_run_agentic_loop(
+        self,
+        response: object,
+        model: str,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: dict[str, object],
+    ) -> tuple[bool, dict[str, object]]:
+        return True, {"tool_calls": [{"id": "call_lookup", "name": "lookup"}]}
+
+    async def async_run_agentic_loop(
+        self,
+        tools: dict,
+        model: str,
+        messages: list[dict],
+        response: object,
+        anthropic_messages_provider_config: object,
+        anthropic_messages_optional_request_params: dict,
+        logging_obj: object,
+        stream: bool,
+        kwargs: dict,
+    ) -> object:
+        self.runs += 1
+        return response
+
+
+def _a_lookup_call(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "resp_1",
+            "object": "response",
+            "created_at": 0,
+            "status": "completed",
+            "model": "gpt-4o",
+            "output": [
+                {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_lookup",
+                    "name": "lookup",
+                    "arguments": "{}",
+                    "status": "completed",
+                }
+            ],
+            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        },
+    )
+
+
+@pytest.mark.parametrize("allowed_name,runs", [("get_time", 0), ("lookup", 1)])
+def test_response_api_handler_runs_no_hook_call_the_allowed_tools_choice_excludes(allowed_name: str, runs: int):
+    hook: Final = _LookupLoop()
+
+    response: Final = BaseLLMHTTPHandler().response_api_handler(
+        model="gpt-4o",
+        input="what time is it?",
+        responses_api_provider_config=AzureOpenAIResponsesAPIConfig(),
+        response_api_optional_request_params={
+            "tools": [
+                {"type": "function", "name": "get_time", "parameters": {"type": "object", "properties": {}}},
+                {"type": "function", "name": "lookup", "parameters": {"type": "object", "properties": {}}},
+            ],
+            "tool_choice": {
+                "type": "allowed_tools",
+                "mode": "auto",
+                "tools": [{"type": "function", "name": allowed_name}],
+            },
+        },
+        custom_llm_provider="azure",
+        litellm_params=GenericLiteLLMParams(
+            api_key="sk-test", api_base="https://example.openai.azure.com", api_version="2025-04-01-preview"
+        ),
+        logging_obj=Mock(litellm_call_id="call-1", dynamic_success_callbacks=[hook], model_call_details={}),
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_a_lookup_call))),
+    )
+
+    assert hook.runs == runs
+    assert isinstance(response, ResponsesAPIResponse)
+    assert len(response.output) == runs
+
+
 @pytest.mark.asyncio
 async def test_async_response_api_handler_streams_when_provider_transform_adds_stream():
     handler = BaseLLMHTTPHandler()
@@ -4253,12 +4342,14 @@ def test_video_generation_with_input_reference_keeps_file_multipart():
 AZURE_AI_BASE = "https://myfoundry.services.ai.azure.com"
 AZURE_AI_CHAT_COMPLETIONS_URL = f"{AZURE_AI_BASE}/models/chat/completions"
 
+
 def _a_tool_with_an_unsupported_field() -> dict:
     return {
         "type": "function",
         "function": {"name": "lookup", "parameters": {"type": "object", "properties": {}}},
         "strict": True,
     }
+
 
 A_COMPLETION = {
     "id": "chatcmpl-1",
@@ -4457,6 +4548,45 @@ async def test_create_file_async_awaits_the_provider_credential_hook_instead_of_
     provider_config.avalidate_environment.assert_awaited_once()
     assert client.post.call_args.kwargs["headers"] == {"x-api-key": "federated"}
     assert client.post.call_args.kwargs["url"] == "https://files.example/v1/files"
+
+
+def test_create_file_sync_sends_a_presigned_upload_with_its_own_method_url_headers_and_body():
+    provider_config = Mock(spec=BaseFilesConfig)
+    provider_config.validate_environment.return_value = {"x-api-key": "unused-for-presigned"}
+    provider_config.get_complete_file_url.return_value = "https://files.example/v1/files"
+    provider_config.transform_create_file_request.return_value = {
+        "method": "PUT",
+        "url": "https://bucket.s3.example/batch.jsonl",
+        "headers": {"Authorization": "AWS4-HMAC-SHA256 signed"},
+        "data": b'{"recordId": "req-1"}',
+    }
+    file_object = object()
+    provider_config.transform_create_file_response.return_value = file_object
+    upload_response = Mock(spec=httpx.Response)
+    client = Mock(spec=HTTPHandler)
+    client.put.return_value = upload_response
+
+    result = BaseLLMHTTPHandler().create_file(
+        create_file_data={"file": b"{}", "purpose": "batch"},
+        litellm_params={},
+        provider_config=provider_config,
+        headers={},
+        api_base=None,
+        api_key=None,
+        logging_obj=Mock(),
+        client=client,
+        timeout=30,
+    )
+
+    assert result is file_object
+    client.post.assert_not_called()
+    client.put.assert_called_once_with(
+        url="https://bucket.s3.example/batch.jsonl",
+        headers={"Authorization": "AWS4-HMAC-SHA256 signed"},
+        data=b'{"recordId": "req-1"}',
+        timeout=30,
+    )
+    assert provider_config.transform_create_file_response.call_args.kwargs["raw_response"] is upload_response
 
 
 @pytest.mark.asyncio

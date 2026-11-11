@@ -2,6 +2,7 @@ from collections.abc import AsyncIterator, Coroutine, Mapping
 from typing import Final, cast
 
 from openai.types.chat import ChatCompletionStreamOptionsParam
+from typing_extensions import TypedDict
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -14,6 +15,10 @@ from .transformation import GoogleGenAIAdapter
 # Initialize adapter
 GOOGLE_GENAI_ADAPTER: Final = GoogleGenAIAdapter()
 CUSTOM_PRICING_PARAMS: Final = frozenset(CustomPricingLiteLLMParams.model_fields)
+
+
+class _TranslatedCompletionKwargs(TypedDict, total=False, extra_items=object):
+    pass
 
 
 def _mark_failure_logged_by_inner_completion(adapter_kwargs: Mapping[str, object]) -> None:
@@ -57,7 +62,7 @@ class GenerateContentToCompletionHandler:
             **(extra_kwargs or {}),
         )
 
-        completion_kwargs: Final = dict(completion_request)
+        completion_kwargs: Final = dict[str, object](completion_request)
 
         # Forward extra_kwargs that should be passed to completion call
         if extra_kwargs is not None:
@@ -85,7 +90,7 @@ class GenerateContentToCompletionHandler:
             if stream_options is not None:
                 completion_kwargs["stream_options"] = stream_options
 
-        return GenerateContentCompletionKwargs(**completion_kwargs)
+        return GenerateContentCompletionKwargs(**_TranslatedCompletionKwargs(**completion_kwargs))
 
     @staticmethod
     async def async_generate_content_handler(

@@ -53,6 +53,7 @@ import { Tag } from "./tag_management/types";
 import { getDisplayModelName } from "./view_model/model_name_display";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import KubernetesPodsCard from "./model_info/KubernetesPodsCard";
+import { modelKeys } from "@/app/(dashboard)/hooks/models/useModels";
 
 interface ModelInfoViewProps {
   modelId: string;
@@ -402,7 +403,7 @@ export default function ModelInfoView({
       setIsEditing(false);
     } catch (error) {
       console.error("Error updating model:", error);
-      toast.fromError(t("modelInfoView.toasts.updateFailed"));
+      toast.fromError(error);
     } finally {
       setIsSaving(false);
     }
@@ -830,7 +831,7 @@ export default function ModelInfoView({
           accessToken={accessToken}
           modelId={modelId}
           onUpdated={() => {
-            queryClient.invalidateQueries({ queryKey: ["models", "list"] });
+            queryClient.invalidateQueries({ queryKey: modelKeys.lists() });
           }}
         />
       )}
