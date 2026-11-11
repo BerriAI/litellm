@@ -481,6 +481,7 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     safeguards: ReadOnly[list[dict[str, object]] | None]
     service_tier: ReadOnly[str | None]
     thread: ReadOnly[AnthropicMessageThread | None]
+    diagnostics: ReadOnly[dict[str, object] | None]
 
 
 class AnthropicMessagesRequest(AnthropicMessagesRequestOptionalParams, total=False):

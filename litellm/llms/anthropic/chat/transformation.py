@@ -614,6 +614,10 @@ DROP_SERVICE_TIER_PROVIDER_WARNING: Final = (
     "Dropping `service_tier` for model=%s on provider=%s. Only the Anthropic API routes accept it."
 )
 
+DROP_DIAGNOSTICS_PROVIDER_WARNING: Final = (
+    "Dropping `diagnostics` for model=%s on provider=%s. Only the Anthropic API routes accept it."
+)
+
 DROP_UNSUPPORTED_TOOL_SEARCH_WARNING: Final = (
     "Dropping the OpenAI `tool_search` tool and the `defer_loading` of the other tools for model=%s on %s "
     "(drop_params=True) because this route cannot run that tool search."
@@ -898,6 +902,23 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             return
         litellm.verbose_logger.warning(DROP_SERVICE_TIER_PROVIDER_WARNING, model, custom_llm_provider)
         optional_params.pop("service_tier", None)
+
+    @staticmethod
+    def provider_supports_diagnostics(custom_llm_provider: str | None) -> bool:
+        """Anthropic's ``diagnostics`` is accepted by the direct Anthropic API and Azure AI gateway."""
+        return custom_llm_provider is None or custom_llm_provider in ("anthropic", "azure_ai")
+
+    @classmethod
+    def maybe_drop_diagnostics_param(
+        cls,
+        model: str,
+        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+        custom_llm_provider: str | None = None,
+    ) -> None:
+        if "diagnostics" not in optional_params or cls.provider_supports_diagnostics(custom_llm_provider):
+            return
+        litellm.verbose_logger.warning(DROP_DIAGNOSTICS_PROVIDER_WARNING, model, custom_llm_provider)
+        optional_params.pop("diagnostics", None)
 
     @staticmethod
     def _raise_invalid_reasoning_effort(model: str, value: object, llm_provider: str) -> NoReturn:
