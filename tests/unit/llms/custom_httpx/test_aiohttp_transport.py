@@ -5,6 +5,7 @@ import socket
 import sys
 import struct
 import threading
+import weakref
 from typing import Final
 
 import aiohttp
@@ -141,6 +142,49 @@ async def test_client_payload_error_mid_stream_raises_read_error():
 
     assert received_chunks == [b"chunk1"]
     assert mock_response.closed is True
+
+
+@pytest.mark.asyncio
+async def test_bytes_buffered_before_a_dropped_connection_are_yielded_before_the_read_error():
+    loop: Final = asyncio.get_running_loop()
+    content: Final = aiohttp.StreamReader(aiohttp.base_protocol.BaseProtocol(loop), 2**16, loop=loop)
+    content.feed_data(b"event: message_start\n\n")
+    content.set_exception(aiohttp.ClientPayloadError("Response payload is not completed"))
+    mock_response: Final = MockAiohttpResponse()
+    mock_response.content = content
+    received: Final[list[bytes]] = []
+
+    async def _drain() -> None:
+        async for chunk in AiohttpResponseStream(mock_response):  # pyright: ignore[reportArgumentType]  # mock response
+            received.append(chunk)
+
+    with pytest.raises(httpx.ReadError):
+        await _drain()
+
+    assert received == [b"event: message_start\n\n"]
+    assert mock_response.closed is True
+
+
+@pytest.mark.asyncio
+async def test_bytes_already_read_before_a_dropped_connection_are_not_yielded_again():
+    loop: Final = asyncio.get_running_loop()
+    content: Final = aiohttp.StreamReader(aiohttp.base_protocol.BaseProtocol(loop), 2**16, loop=loop)
+    content.feed_data(b"event: message_start\n\n")
+    content.feed_data(b"event: ping\n\n")
+    assert await content.read(7) == b"event: "
+    content.set_exception(aiohttp.ClientPayloadError("Response payload is not completed"))
+    mock_response: Final = MockAiohttpResponse()
+    mock_response.content = content
+    received: Final[list[bytes]] = []
+
+    async def _drain() -> None:
+        async for chunk in AiohttpResponseStream(mock_response):  # pyright: ignore[reportArgumentType]  # mock response
+            received.append(chunk)
+
+    with pytest.raises(httpx.ReadError):
+        await _drain()
+
+    assert received == [b"message_start\n\nevent: ping\n\n"]
 
 
 @pytest.mark.asyncio
@@ -1383,3 +1427,57 @@ def test_a_transport_collected_while_its_loop_runs_elsewhere_closes_its_session_
         loop.call_soon_threadsafe(loop.stop)
         thread.join(timeout=10)
         loop.close()
+
+
+@pytest.mark.asyncio
+async def test_a_stream_keeps_reading_after_the_client_that_opened_it_is_collected():
+    from aiohttp import web
+
+    release: Final = asyncio.Event()
+    body: Final = tuple(f"chunk{i}\n".encode() for i in range(4))
+
+    async def handler(request: web.Request) -> web.StreamResponse:
+        response: Final = web.StreamResponse()
+        await response.prepare(request)
+        await response.write(body[0])
+        await release.wait()
+        for chunk in body[1:]:
+            await response.write(chunk)
+        await response.write_eof()
+        return response
+
+    app: Final = web.Application()
+    app.router.add_get("/stream", handler)
+    runner: Final = web.AppRunner(app)
+    await runner.setup()
+    sock: Final = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port: Final[int] = sock.getsockname()[1]
+    await web.SockSite(runner, sock).start()
+
+    transport: Final = LiteLLMAiohttpTransport(client=aiohttp.ClientSession)
+    client: Final = httpx.AsyncClient(transport=transport)
+    transport_ref: Final = weakref.ref(transport)
+    try:
+        response: Final = await client.send(client.build_request("GET", f"http://127.0.0.1:{port}/stream"), stream=True)
+        session: Final = transport.client
+        assert isinstance(session, aiohttp.ClientSession)
+        chunks: Final = response.aiter_bytes()
+        first: Final = await chunks.__anext__()
+
+        del client, transport
+        gc.collect()
+        await asyncio.gather(*LiteLLMAiohttpTransport._background_close_tasks)
+        release.set()
+
+        rest: Final = [chunk async for chunk in chunks]
+        assert first + b"".join(rest) == b"".join(body), (first, rest)
+        assert not session.closed, "the session was closed under a stream that was still being read"
+
+        del response, chunks
+        gc.collect()
+        await asyncio.gather(*LiteLLMAiohttpTransport._background_close_tasks)
+        assert transport_ref() is None, "the finished stream kept the transport alive"
+        assert session.closed, "the owned session stayed open after its last stream finished"
+    finally:
+        await runner.cleanup()

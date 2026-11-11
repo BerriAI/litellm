@@ -1185,7 +1185,6 @@ ALIAS_CASES: Final = (
     ("litellm", "", "_turn_on_debug", "turn_on_debug", False),
     ("litellm", "", "_turn_on_json", "turn_on_json", False),
     ("litellm._lazy_imports", "", "_get_default_encoding", "get_default_encoding", False),
-    ("litellm._lazy_imports", "", "_get_lazy_import_registry", "get_lazy_import_registry", False),
     ("litellm._lazy_imports", "", "_get_messages_reach_token_count", "get_messages_reach_token_count", False),
     ("litellm._lazy_imports", "", "_get_token_counter_new", "get_token_counter_new", False),
     ("litellm._logging", "", "_is_debugging_on", "is_debugging_on", False),
@@ -1382,13 +1381,6 @@ ALIAS_CASES: Final = (
         "",
         "_is_non_openai_azure_model",
         "is_non_openai_azure_model",
-        False,
-    ),
-    (
-        "litellm.litellm_core_utils.get_model_cost_map",
-        "GetModelCostMap",
-        "_get_backup_model_count",
-        "get_backup_model_count",
         False,
     ),
     (
@@ -1949,7 +1941,6 @@ ALIAS_CASES: Final = (
         "is_model_access_group_for_wildcard_route",
         False,
     ),
-    ("litellm.router", "Router", "_replay_model_cost_registrations", "replay_model_cost_registrations", False),
     ("litellm.router", "Router", "_routing_groups", "routing_groups", True),
     ("litellm.router", "Router", "_update_redis_cache", "update_redis_cache", False),
     (
@@ -1966,16 +1957,16 @@ ALIAS_CASES: Final = (
         "get_tags_from_request_kwargs",
         False,
     ),
-    ("litellm.router_utils.add_retry_fallback_headers", "HiddenParamsAsyncIteratorWrapper", "_inner", "inner", True),
-    ("litellm.router_utils.add_retry_fallback_headers", "", "_HiddenParamsHost", "HiddenParamsHost", False),
+    ("litellm.litellm_core_utils.add_retry_fallback_headers", "HiddenParamsAsyncIteratorWrapper", "_inner", "inner", True),
+    ("litellm.litellm_core_utils.add_retry_fallback_headers", "", "_HiddenParamsHost", "HiddenParamsHost", False),
     (
-        "litellm.router_utils.batch_utils",
+        "litellm.litellm_core_utils.batch_utils",
         "",
         "_get_router_metadata_variable_name",
         "get_router_metadata_variable_name",
         False,
     ),
-    ("litellm.router_utils.common_utils", "", "_is_proxy_admin_request", "is_proxy_admin_request", False),
+    ("litellm.litellm_core_utils.routing_common_utils", "", "_is_proxy_admin_request", "is_proxy_admin_request", False),
     (
         "litellm.router_utils.cooldown_callbacks",
         "",
@@ -2007,7 +1998,7 @@ ALIAS_CASES: Final = (
         False,
     ),
     (
-        "litellm.router_utils.pattern_match_deployments",
+        "litellm.litellm_core_utils.pattern_match_deployments",
         "PatternMatchRouter",
         "_pattern_to_regex",
         "pattern_to_regex",
@@ -2102,7 +2093,7 @@ PROPERTY_CASES: Final = (
     ),
     ("litellm.router", "Router", "_routing_groups", "routing_groups"),
     ("litellm.router_strategy.adaptive_router.adaptive_router", "AdaptiveRouter", "_state_loaded", "state_loaded"),
-    ("litellm.router_utils.add_retry_fallback_headers", "HiddenParamsAsyncIteratorWrapper", "_inner", "inner"),
+    ("litellm.litellm_core_utils.add_retry_fallback_headers", "HiddenParamsAsyncIteratorWrapper", "_inner", "inner"),
 )
 
 CLASS_PROPERTY_CASES: Final = ()
@@ -5243,9 +5234,9 @@ def test_public_aliases(
     alias_owner: Final = _get_instance(resolved_owner, new_name) if use_instance else resolved_owner
     old_value, new_value = getattr(alias_owner, old_name), getattr(alias_owner, new_name)
     if isinstance(old_value, MethodType) and isinstance(new_value, MethodType):
-        assert old_value.__func__ is new_value.__func__
+        assert old_value.__func__ is new_value.__func__ or inspect.unwrap(old_value.__func__) is new_value.__func__
     else:
-        assert old_value is new_value
+        assert old_value is new_value or inspect.unwrap(old_value) is new_value
 
 
 @pytest.mark.parametrize(

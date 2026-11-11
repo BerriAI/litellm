@@ -7,6 +7,7 @@ import openai
 import pytest
 from integration._support.client import Gateway, Scenario, eventually, list_value, object_value, string_value
 from integration._support.database import read_rows
+from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, wire_server
 from integration.providers._api_base_trailing_slash_support import (
     KEY,
@@ -22,7 +23,7 @@ from integration.providers._api_base_trailing_slash_support import (
     reply_text,
     request_json,
 )
-from integration.providers._api_base_url_join_support import COUNTED_TOKENS, RELEVANCE, join_peer
+from integration.providers._api_base_url_join_support import AZURE_DEPLOYMENT, COUNTED_TOKENS, RELEVANCE, join_peer
 from pydantic import JsonValue
 
 _HAIKU: Final = "anthropic.claude-haiku-5-5"
@@ -49,10 +50,20 @@ _RESPONSES_ROWS: Final = (_ANTHROPIC, _GEMINI)
 _EMBEDDING_ROWS: Final = (
     Row("mistral/mistral-embed", "/mi/v1", "/embeddings"),
     Row("gemini/gemini-embedding-2", "/gm/v1beta", "/models/gemini-embedding-2:batchEmbedContents"),
+    Row("bedrock/amazon.titan-embed-text-v2:0", "/be", "/model/amazon.titan-embed-text-v2%3A0/invoke"),
 )
 _TRANSCRIPTION: Final = Row("mistral/voxtral-mini-latest", "/mi/v1", "/audio/transcriptions")
-_FULL_ROUTE_SUFFIXES: Final = ("", "/", "?beta=true")
-_FULL_ROUTE_IDS: Final = ("exact", "slash", "query")
+_FULL_ROUTE_SUFFIXES: Final = (("", ""), ("/", ""), ("?beta=true", "?beta=true"), ("/?beta=true", "?beta=true"))
+_FULL_ROUTE_IDS: Final = ("exact", "slash", "query", "slash-query")
+_VERTEX_PROJECT: Final = "url-join-project"
+_VERTEX_LOCATION: Final = "us-east5"
+_VERTEX_GEMINI_PATH: Final = (
+    f"/vx/v1/projects/{_VERTEX_PROJECT}/locations/{_VERTEX_LOCATION}/publishers/google/models/gemini-3.8-flash"
+)
+_AZURE_V1_BASES: Final = ("/az", "/az/", "/az/openai/v1", "/az/openai/v1/")
+_AZURE_V1_IDS: Final = ("host", "host-slash", "route", "route-slash")
+_AZURE_ANTHROPIC_BASES: Final = ("/fd/anthropic", "/fd/anthropic/v1/messages")
+_AZURE_ANTHROPIC_IDS: Final = ("anthropic-root", "messages-route")
 
 
 def _ids(rows: tuple[Row, ...]) -> tuple[str, ...]:
@@ -63,6 +74,17 @@ def _deploy(scenario: Scenario, row: Row, api_base: str) -> str:
     if row.model.startswith("bedrock/"):
         return scenario.model(model=row.model, api_base=api_base, api_key=KEY, aws_region_name="us-east-1")
     return scenario.model(model=row.model, api_base=api_base, api_key=KEY)
+
+
+def _deploy_vertex(gateway: Gateway, scenario: Scenario, model: str, api_base: str) -> str:
+    return scenario.model(
+        model=model,
+        api_base=api_base,
+        api_key=None,
+        vertex_project=_VERTEX_PROJECT,
+        vertex_location=_VERTEX_LOCATION,
+        vertex_credentials=service_account_json(_VERTEX_PROJECT, gateway.upstream_url.rstrip("/")),
+    )
 
 
 def _openai(gateway: Gateway) -> openai.OpenAI:
@@ -78,6 +100,13 @@ def _chat(gateway: Gateway, model: str, marker: str) -> str | None:
         model=model, messages=[{"role": "user", "content": marker}]
     )
     return completion.choices[0].message.content
+
+
+def _streamed_chat(gateway: Gateway, model: str, marker: str) -> str:
+    stream: Final = _openai(gateway).chat.completions.create(
+        model=model, messages=[{"role": "user", "content": marker}], stream=True
+    )
+    return "".join(chunk.choices[0].delta.content or "" for chunk in stream if chunk.choices)
 
 
 def _message_text(gateway: Gateway, model: str, marker: str) -> list[str]:
@@ -270,22 +299,74 @@ def test_cache_hit_on_a_slash_base_skips_the_upstream_and_logs_its_own_row(gatew
         assert "//" not in urlsplit(string_value(hit["api_base"])).path, hit
 
 
-@pytest.mark.parametrize("suffix", _FULL_ROUTE_SUFFIXES, ids=_FULL_ROUTE_IDS)
-def test_chat_base_that_already_names_the_route_keeps_its_path_and_query(gateway: Gateway, suffix: str) -> None:
+@pytest.mark.parametrize(("suffix", "sent"), _FULL_ROUTE_SUFFIXES, ids=_FULL_ROUTE_IDS)
+def test_chat_base_that_already_names_the_route_keeps_its_path_and_query(
+    gateway: Gateway, suffix: str, sent: str
+) -> None:
     marker: Final = new_marker()
     with wire_server(join_peer) as wire, gateway.scenario() as scenario:
         model: Final = _deploy(scenario, _ANTHROPIC, f"{wire.url}/an/v1/messages{suffix}")
         assert _chat(gateway, model, marker) == reply_text(marker)
-        assert_one_request(wire.drain(), f"/an/v1/messages{suffix.rstrip('/')}", marker)
+        assert_one_request(wire.drain(), f"/an/v1/messages{sent}", marker)
 
 
-@pytest.mark.parametrize("suffix", _FULL_ROUTE_SUFFIXES, ids=_FULL_ROUTE_IDS)
-def test_messages_base_that_already_names_the_route_keeps_its_path_and_query(gateway: Gateway, suffix: str) -> None:
+@pytest.mark.parametrize(("suffix", "sent"), _FULL_ROUTE_SUFFIXES, ids=_FULL_ROUTE_IDS)
+def test_messages_base_that_already_names_the_route_keeps_its_path_and_query(
+    gateway: Gateway, suffix: str, sent: str
+) -> None:
     marker: Final = new_marker()
     with wire_server(join_peer) as wire, gateway.scenario() as scenario:
         model: Final = _deploy(scenario, _ANTHROPIC, f"{wire.url}/an/v1/messages{suffix}")
         assert _message_text(gateway, model, marker) == [reply_text(marker)]
-        assert_one_request(wire.drain(), f"/an/v1/messages{suffix.rstrip('/')}", marker)
+        assert_one_request(wire.drain(), f"/an/v1/messages{sent}", marker)
+
+
+@pytest.mark.parametrize("trailing", TRAILING, ids=TRAILING_IDS)
+def test_vertex_model_url_base_calls_its_method_with_no_slash_before_the_colon(gateway: Gateway, trailing: str) -> None:
+    marker: Final = new_marker()
+    with wire_server(join_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _deploy_vertex(
+            gateway, scenario, "vertex_ai/gemini-3.8-flash", f"{wire.url}{_VERTEX_GEMINI_PATH}{trailing}"
+        )
+        assert _chat(gateway, model, marker) == reply_text(marker)
+        assert_one_request(wire.drain(), f"{_VERTEX_GEMINI_PATH}:generateContent", marker, keyed=False)
+
+
+@pytest.mark.parametrize("trailing", TRAILING, ids=TRAILING_IDS)
+def test_vertex_model_url_base_streams_with_no_slash_before_the_colon(gateway: Gateway, trailing: str) -> None:
+    marker: Final = new_marker()
+    with wire_server(join_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _deploy_vertex(
+            gateway, scenario, "vertex_ai/gemini-3.8-flash", f"{wire.url}{_VERTEX_GEMINI_PATH}{trailing}"
+        )
+        assert _streamed_chat(gateway, model, marker) == reply_text(marker)
+        assert_one_request(wire.drain(), f"{_VERTEX_GEMINI_PATH}:streamGenerateContent?alt=sse", marker, keyed=False)
+
+
+@pytest.mark.parametrize("base", _AZURE_V1_BASES, ids=_AZURE_V1_IDS)
+def test_azure_v1_chat_reaches_one_openai_v1_route(gateway: Gateway, base: str) -> None:
+    marker: Final = new_marker()
+    with wire_server(join_peer) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model=f"azure/{AZURE_DEPLOYMENT}", api_base=f"{wire.url}{base}", api_key=KEY, api_version="v1"
+        )
+        assert _chat(gateway, model, marker) == reply_text(marker)
+        assert_one_request(wire.drain(), "/az/openai/v1/chat/completions", marker)
+
+
+@pytest.mark.parametrize("trailing", TRAILING, ids=TRAILING_IDS)
+@pytest.mark.parametrize("base", _AZURE_ANTHROPIC_BASES, ids=_AZURE_ANTHROPIC_IDS)
+def test_azure_ai_count_tokens_reaches_one_count_tokens_route(gateway: Gateway, base: str, trailing: str) -> None:
+    marker: Final = new_marker()
+    with wire_server(join_peer) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="azure_ai/claude-haiku-5-5", api_base=f"{wire.url}{base}{trailing}", api_key=KEY
+        )
+        response: Final = gateway.request(
+            "POST", "/v1/messages/count_tokens", {"model": model, "messages": [{"role": "user", "content": marker}]}
+        )
+        assert body_of(response)["input_tokens"] == COUNTED_TOKENS
+        assert_one_request(wire.drain(), "/fd/anthropic/v1/messages/count_tokens", marker)
 
 
 @pytest.mark.parametrize("suffix", ("", "/", "?tier=a"), ids=("exact", "slash", "query"))

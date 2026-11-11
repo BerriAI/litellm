@@ -19,7 +19,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AddAutoRouterTab from "./add_auto_router_tab";
 import { toast } from "@/lib/toast";
-import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
+import { handleAddAutoRouterSubmit, handleAddSwitchyardSubmit } from "./handle_add_auto_router_submit";
 import { getMissingTiersError } from "./build_complexity_router_config";
 import { getSubmitBlockedReason } from "./add_auto_router_tab";
 import { buildModelAvailability } from "@/lib/autorouter_presets";
@@ -113,8 +113,9 @@ const { mockFetchAvailableModels, mockFetchAllModelDeployments } = vi.hoisted(()
   mockFetchAllModelDeployments: vi.fn(),
 }));
 
-const { validateAutoRouterConfig } = vi.hoisted(() => ({
+const { validateAutoRouterConfig, getRouterSettingsCall } = vi.hoisted(() => ({
   validateAutoRouterConfig: vi.fn().mockResolvedValue({ valid: true }),
+  getRouterSettingsCall: vi.fn(),
 }));
 
 vi.mock("../networking", () => ({
@@ -129,6 +130,7 @@ vi.mock("../networking", () => ({
   modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
   testAutoRouterRouting: vi.fn(),
   validateAutoRouterConfig,
+  getRouterSettingsCall,
 }));
 
 vi.mock("@/components/llm_calls/fetch_models", () => ({
@@ -143,6 +145,7 @@ vi.mock("@/app/(dashboard)/hooks/models/useModels", async (importOriginal) => {
 
 vi.mock("./handle_add_auto_router_submit", () => ({
   handleAddAutoRouterSubmit: vi.fn(),
+  handleAddSwitchyardSubmit: vi.fn(),
 }));
 
 // Kept real by default so the "mandatory field" test still sees genuine tier validation; one
@@ -177,7 +180,7 @@ vi.mock("../common_components/team_dropdown", () => ({
 
 const renderAdvanced: typeof renderWithProviders = (...args) => {
   const result = renderWithProviders(...args);
-  fireEvent.click(screen.getByRole("button", { name: "Advanced configuration", exact: true }));
+  fireEvent.click(screen.getByRole("button", { name: "Customize tiers and keywords", exact: true }));
   return result;
 };
 
@@ -196,7 +199,66 @@ describe("AddAutoRouterTab", () => {
     testQueryClient.clear();
     mockFetchAvailableModels.mockResolvedValue([]);
     mockFetchAllModelDeployments.mockResolvedValue([]);
+    getRouterSettingsCall.mockResolvedValue({ current_values: {} });
     vi.mocked(modelCostMap).mockResolvedValue({});
+  });
+
+  it("swaps the tiers for the Switchyard fields and saves Switchyard through the same form", async () => {
+    renderAdvanced(<Harness />);
+    fireEvent.click(screen.getByRole("radio", { name: "Switchyard", exact: true }));
+    expect(screen.getByText("Stage Router", { exact: true })).toBeVisible();
+    expect(screen.queryByText("Define your tiers")).not.toBeInTheDocument();
+    expect(screen.getByTestId("auto-router-test-connect-btn")).not.toBeVisible();
+
+    fireEvent.click(screen.getByRole("radio", { name: "Heuristics", exact: true }));
+    expect(screen.getByText("Define your tiers")).toBeVisible();
+    expect(screen.queryByText("Stage Router", { exact: true })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("radio", { name: "Switchyard", exact: true }));
+    fireEvent.change(screen.getByLabelText(/Auto Router Name/), { target: { value: "stage-test" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add Auto Router" }));
+    await waitFor(() => expect(handleAddSwitchyardSubmit).toHaveBeenCalledOnce());
+    expect(vi.mocked(handleAddSwitchyardSubmit).mock.calls[0][0].name).toBe("stage-test");
+    expect(handleAddAutoRouterSubmit).not.toHaveBeenCalled();
+  });
+
+  it("starts Switchyard from the quick setup models and creates it for the selected team", async () => {
+    mockFetchAvailableModels.mockResolvedValue(
+      ["claude-haiku-5-5", "claude-opus-5-5"].map((model_group) => ({ model_group, mode: "chat" })),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(
+      <AddAutoRouterTab handleOk={vi.fn()} accessToken="token" userRole="Admin" createScope="team-required" />,
+    );
+    fireEvent.click(screen.getByRole("radio", { name: "Switchyard", exact: true }));
+    fireEvent.change(screen.getByLabelText(/Auto Router Name/), { target: { value: "stage-test" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add Auto Router" }));
+    await waitFor(() => expect(screen.getByLabelText(/Auto Router Name/)).toHaveValue("stage-test"));
+    expect(handleAddSwitchyardSubmit).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("radio", { name: "Heuristics", exact: true }));
+    await user.selectOptions(screen.getByTestId("team-dropdown"), "team-1");
+    expect(await screen.findByRole("combobox", { name: "Everyday model" })).toHaveTextContent("claude-haiku-5-5");
+    fireEvent.click(screen.getByRole("radio", { name: "Switchyard", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Add Auto Router" }));
+    await waitFor(() => expect(handleAddSwitchyardSubmit).toHaveBeenCalledOnce());
+    expect(vi.mocked(handleAddSwitchyardSubmit).mock.calls[0][0]).toMatchObject({
+      config: { models: { capable: "claude-opus-5-5", efficient: "claude-haiku-5-5" } },
+      modelInfo: { team_id: "team-1" },
+    });
+  });
+
+  it("forgets a tool semantics error once Switchyard is reopened from the saved settings", async () => {
+    renderAdvanced(<Harness />);
+    fireEvent.click(screen.getByRole("radio", { name: "Switchyard", exact: true }));
+    fireEvent.change(screen.getByLabelText("Tool semantics"), { target: { value: "{not json" } });
+    fireEvent.click(screen.getByRole("radio", { name: "Heuristics", exact: true }));
+    fireEvent.click(screen.getByRole("radio", { name: "Switchyard", exact: true }));
+    expect(screen.getByLabelText("Tool semantics")).toHaveValue("");
+    fireEvent.change(screen.getByLabelText(/Auto Router Name/), { target: { value: "stage-test" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add Auto Router" }));
+    await waitFor(() => expect(handleAddSwitchyardSubmit).toHaveBeenCalledOnce());
+    expect(vi.mocked(handleAddSwitchyardSubmit).mock.calls[0][0].toolSemanticsError).toBeNull();
   });
 
   it("creates the goal-selected latest OpenAI pair using its Bedrock deployment aliases", async () => {
@@ -319,6 +381,46 @@ describe("AddAutoRouterTab", () => {
     },
   );
 
+  it("shows every strategy up front and carries the quick setup models into the one picked", async () => {
+    mockFetchAvailableModels.mockResolvedValue(
+      ["claude-haiku-5-5", "claude-opus-5-5"].map((model_group) => ({ model_group, mode: "chat" })),
+    );
+    renderWithProviders(<Harness />);
+    expect(await screen.findByRole("combobox", { name: "Everyday model" })).toHaveTextContent("claude-haiku-5-5");
+    expect(screen.getByRole("radio", { name: "Heuristics", exact: true })).toBeChecked();
+
+    fireEvent.click(screen.getByRole("radio", { name: "Switchyard", exact: true }));
+    expect(screen.queryByRole("combobox", { name: "Everyday model" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("radio", { name: "Heuristics", exact: true }));
+    expect(screen.getByRole("combobox", { name: "Everyday model" })).toHaveTextContent("claude-haiku-5-5");
+
+    fireEvent.click(screen.getByRole("radio", { name: "LLM", exact: true }));
+    expect(screen.getByRole("combobox", { name: "Judge model" })).toBeInTheDocument();
+    expectTierModel("Simple", "claude-haiku-5-5");
+    expectTierModel("Reasoning", "claude-opus-5-5");
+  });
+
+  it("carries Responses model choices from simple setup into Advanced tiers", async () => {
+    const models = ["gpt-6-luna", "gpt-6-astra"];
+    mockFetchAvailableModels.mockResolvedValue(models.map((model_group) => ({ model_group, mode: "responses" })));
+    mockFetchAllModelDeployments.mockResolvedValue(
+      models.map((model_name) => ({
+        model_name,
+        litellm_params: { model: `chatgpt/${model_name}` },
+        model_info: { mode: "responses" },
+      })),
+    );
+    renderWithProviders(<Harness />);
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Everyday model" })).toHaveTextContent("gpt-6-luna"),
+    );
+    expect(screen.getByRole("combobox", { name: "Hard tasks model" })).toHaveTextContent("gpt-6-astra");
+    expect(screen.queryByText(/Two deployed models are needed/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Customize tiers and keywords", exact: true }));
+    expectTierModel("Simple", "gpt-6-luna");
+    expectTierModel("Reasoning", "gpt-6-astra");
+  });
+
   it("keeps manual solver choices on goal changes and carries them into Advanced", async () => {
     mockFetchAvailableModels.mockResolvedValue(
       ["claude-haiku-5-5", "custom-fast", "claude-opus-5-5"].map((model_group) => ({
@@ -333,7 +435,7 @@ describe("AddAutoRouterTab", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cheapest", exact: true }));
     expect(screen.getByRole("combobox", { name: "Everyday model" })).toHaveTextContent("custom-fast");
     expect(screen.getByRole("combobox", { name: "Hard tasks model" })).toHaveTextContent("claude-opus-5-5");
-    fireEvent.click(screen.getByRole("button", { name: "Advanced configuration", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Customize tiers and keywords", exact: true }));
     expectTierModel("Simple", "custom-fast");
     expectTierModel("Reasoning", "claude-opus-5-5");
   });
@@ -368,7 +470,7 @@ describe("AddAutoRouterTab", () => {
     renderWithProviders(<Harness />);
     expect(await screen.findByText(/Two deployed models are needed/)).toBeVisible();
     expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "Advanced configuration", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Customize tiers and keywords", exact: true }));
     expect(screen.getByText("Define your tiers")).toBeVisible();
   });
 
@@ -2171,6 +2273,102 @@ describe("AddAutoRouterTab", () => {
         expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false);
       });
       expect(optionByLabel("Anthropic Family")!).toHaveTextContent(/Matches your deployments/);
+    });
+
+    it("enables a preset whose models a bare-star catch-all lists over a partial wildcard", async () => {
+      mockFetchAvailableModels.mockResolvedValue(
+        [...getRequiredModelsInPreset(ANTHROPIC_PRESET)].map((model) => ({
+          model_group: model.replace(/^claude-/, ""),
+          mode: "chat",
+          providers: ["anthropic"],
+        })),
+      );
+      mockFetchAllModelDeployments.mockResolvedValue([
+        { model_name: "*", litellm_params: { model: "anthropic/claude-*" } },
+      ]);
+
+      renderAdvanced(<Harness />);
+      openTemplateDropdown();
+
+      await waitFor(() => {
+        expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false);
+      });
+    });
+
+    it("names a preset model missing when an alias over its listed id routes elsewhere", async () => {
+      mockFetchAvailableModels.mockResolvedValue(
+        [...getRequiredModelsInPreset(ANTHROPIC_PRESET)].map((model) => ({
+          model_group: model.replace(/^claude-/, ""),
+          mode: "chat",
+          providers: ["anthropic"],
+        })),
+      );
+      mockFetchAllModelDeployments.mockResolvedValue([
+        { model_name: "*", litellm_params: { model: "anthropic/claude-*" } },
+        { model_name: "corp-opus", litellm_params: { model: "anthropic/claude-opus-5-5" } },
+      ]);
+      getRouterSettingsCall.mockResolvedValue({ current_values: { model_group_alias: { "haiku-4-5": "corp-opus" } } });
+
+      renderAdvanced(<Harness />);
+      openTemplateDropdown();
+
+      await waitFor(() => {
+        expect(optionByLabel("Anthropic Family")!).toHaveTextContent(/Missing: claude-haiku-4-5$/);
+      });
+      expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(true);
+    });
+
+    it("withholds templates until the alias over a listed id has loaded", async () => {
+      let completeSettings: ((settings: unknown) => void) | undefined;
+      getRouterSettingsCall.mockReturnValue(
+        new Promise((resolve) => {
+          completeSettings = resolve;
+        }),
+      );
+      mockFetchAvailableModels.mockResolvedValue(
+        [...getRequiredModelsInPreset(ANTHROPIC_PRESET)].map((model) => ({
+          model_group: model.replace(/^claude-/, ""),
+          mode: "chat",
+          providers: ["anthropic"],
+        })),
+      );
+      mockFetchAllModelDeployments.mockResolvedValue([
+        { model_name: "*", litellm_params: { model: "anthropic/claude-*" } },
+        { model_name: "corp-opus", litellm_params: { model: "anthropic/claude-opus-5-5" } },
+      ]);
+
+      renderAdvanced(<Harness />);
+      openTemplateDropdown();
+      await waitFor(() => expect(screen.getByLabelText("Auto Router Name")).toHaveValue("auto-router"));
+
+      expect(optionByLabel("Anthropic Family")!).toHaveTextContent("Checking model availability...");
+      expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(true);
+
+      completeSettings?.({ current_values: { model_group_alias: { "haiku-4-5": "corp-opus" } } });
+      await waitFor(() => {
+        expect(optionByLabel("Anthropic Family")!).toHaveTextContent(/Missing: claude-haiku-4-5$/);
+      });
+    });
+
+    it("credits a catch-all's listed ids for a non-admin without reading admin-only router settings", async () => {
+      mockFetchAvailableModels.mockResolvedValue(
+        [...getRequiredModelsInPreset(ANTHROPIC_PRESET)].map((model) => ({
+          model_group: model.replace(/^claude-/, ""),
+          mode: "chat",
+          providers: ["anthropic"],
+        })),
+      );
+      mockFetchAllModelDeployments.mockResolvedValue([
+        { model_name: "*", litellm_params: { model: "anthropic/claude-*" } },
+      ]);
+
+      renderAdvanced(<AddAutoRouterTab handleOk={vi.fn()} accessToken="token" userRole="Internal User" />);
+      openTemplateDropdown();
+
+      await waitFor(() => {
+        expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false);
+      });
+      expect(getRouterSettingsCall).not.toHaveBeenCalled();
     });
 
     it("prefills the expanded group names and submits them", async () => {

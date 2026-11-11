@@ -1,7 +1,7 @@
 use std::{path::PathBuf, time::Duration};
 
 use litellm_core_utils::settings::Lookup;
-use litellm_secrets_types::SecretValue;
+use litellm_secret_value::SecretValue;
 
 use crate::Error;
 
@@ -153,9 +153,11 @@ fn refresh_interval(environment: &dyn Lookup) -> Result<Duration, Error> {
     let Some(value) = value else {
         return Ok(DEFAULT_REFRESH_INTERVAL);
     };
-    let seconds: i64 = value.parse().map_err(|_| Error::RefreshInterval)?;
+    let seconds: i64 = value
+        .parse()
+        .map_err(|error| Error::RefreshInterval(Some(error)))?;
     if seconds < 0 {
-        return Err(Error::RefreshInterval);
+        return Err(Error::RefreshInterval(None));
     }
     Ok(Duration::from_secs(seconds as u64))
 }

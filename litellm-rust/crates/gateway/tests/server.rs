@@ -94,7 +94,10 @@ async fn authenticates_before_serving_mounted_inference_routes(
     let response = request.send().await.unwrap();
     assert_eq!(response.status().as_u16(), status);
     if status == 400 {
-        let expected = Error::UnknownModel("unconfigured-model".into());
+        let expected = Error::UnknownModel {
+            route: "/v1/messages",
+            model: "unconfigured-model".into(),
+        };
         assert_eq!(
             response.json::<Value>().await.unwrap(),
             expected.body(Some("gateway-test"))
@@ -156,7 +159,7 @@ async fn mounts_ui_without_exposing_credentials_or_authorizing_inference(inferen
     std::fs::write(assets.path().join("index.html"), "dashboard").unwrap();
     let backend = litellm_gateway_auth::UiBackend::new(
         "admin".into(),
-        litellm_auth_types::SecretValue::new("ui-password"),
+        litellm_secret_value::SecretValue::new("ui-password"),
     )
     .unwrap();
     let ui = litellm_gateway_ui::router(

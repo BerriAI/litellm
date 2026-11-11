@@ -3,8 +3,14 @@ from collections.abc import Mapping
 from typing import Any, Final
 
 import requests
+from pydantic import ConfigDict, TypeAdapter
+
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 
 from .exceptions import NotFoundError, UnauthorizedError
+
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class ModelsManagementClient:
@@ -109,7 +115,7 @@ class ModelsManagementClient:
         try:
             response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
-            return response.json()
+            return _JSON_OBJECT.validate_python(response.json())
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 401:
                 raise UnauthorizedError(e)
@@ -145,7 +151,7 @@ class ModelsManagementClient:
         try:
             response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
-            return response.json()
+            return _JSON_OBJECT.validate_python(response.json())
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 401:
                 raise UnauthorizedError(e)
@@ -192,9 +198,11 @@ class ModelsManagementClient:
 
         # Find the matching model
         for model in models:
-            if (model_id and model.get("model_info", {}).get("id") == model_id) or (
-                model_name and model.get("model_name") == model_name
-            ):
+            if (
+                model_id
+                and decoded_json_object(_DECODED_JSON.validate_python(model.get("model_info", {}))).get("id")
+                == model_id
+            ) or (model_name and model.get("model_name") == model_name):
                 return model
 
         # If we get here, no model was found
@@ -287,7 +295,7 @@ class ModelsManagementClient:
         try:
             response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
-            return response.json()
+            return _JSON_OBJECT.validate_python(response.json())
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 401:
                 raise UnauthorizedError(e)

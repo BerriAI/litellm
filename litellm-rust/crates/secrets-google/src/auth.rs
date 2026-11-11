@@ -3,7 +3,7 @@ use std::sync::Arc;
 use litellm_auth_gcp::{GoogleCredentials, VertexConfig};
 use litellm_auth_types::{InputSource, Sourced};
 use litellm_core_utils::settings::Lookup;
-use litellm_secrets_types::SecretValue;
+use litellm_secret_value::SecretValue;
 
 pub(crate) fn credentials(
     project: Option<String>,

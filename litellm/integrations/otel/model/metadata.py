@@ -29,9 +29,10 @@ asks for a *model group* (e.g. ``gpt-4o``) that routes to a concrete deployment
 * ``hidden_params.litellm_model_name`` — a secondary source for the dispatched
   model (populated only on some call paths, e.g. files).
 
-So ``gen_ai.request.model`` is the *group* (falling back to the call model on the
-SDK path, which has no group), and ``litellm.provider.model`` is the *dispatched*
-model. They coincide on the SDK path, which is correct.
+So ``gen_ai.request.model`` is the *group* (the group an auto router picked, when
+one routed the call; the call model on the SDK path, which has no group), and
+``litellm.provider.model`` is the *dispatched* model. They coincide on the SDK
+path, which is correct.
 """
 
 from __future__ import annotations
@@ -49,9 +50,10 @@ from litellm.constants import (
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     SESSION_ID_GENERATED_METADATA_KEY,
 )
-from litellm.integrations.otel.model.semconv import resolve_operation
+from litellm.integrations.otel.model.semconv import PASSTHROUGH_OPERATION_KEY, GenAIOperation, resolve_operation
 from litellm.integrations.otel.model.trace_controls import TraceControls, caller_trace_controls
 from litellm.integrations.otel.model.utils import as_str, as_str_mapping, to_seconds
+from litellm.integrations.otel.routing import routed_model_name
 from litellm.types.utils import InternalCallOrigin
 
 if TYPE_CHECKING:
@@ -170,7 +172,8 @@ class RequestIdentity:
 class RequestContext:
     """The fully-resolved view of a closed request, parsed once from the payload.
 
-    ``request_model`` is the user-facing requested model and ``provider_model``
+    ``request_model`` is the user-facing requested model (or the group an auto
+    router picked for it) and ``provider_model``
     (on :attr:`identity`) is the model litellm dispatched to the provider; the two
     differ on the proxy (group vs. deployment) and coincide on the SDK path.
     """
@@ -194,12 +197,15 @@ class RequestContext:
         raw_response: Final = payload.get("response")
         response: Final = cast(Mapping[str, object], raw_response if isinstance(raw_response, dict) else {})
         model_group: Final = as_str(payload.get("model_group")) or as_str(raw_meta.get("model_group"))
+        decision: Final = raw_meta.get("routing_decision")
         return cls(
-            # The user asked for the group; fall back to the call model on the SDK
-            # path, which has no group. Empty string (never None) so the span name
-            # builder and the mapper see a plain string.
-            request_model=model_group or as_str(payload.get("model")) or "",
-            response_model=as_str(response.get("model")),
+            # The user asked for the group, or an auto router picked one for it (the
+            # proxy restamps the response model to the requested name, so that gets
+            # the pick too); fall back to the call model on the SDK path, which has no
+            # group. Empty string (never None) so the span name builder and the mapper
+            # see a plain string.
+            request_model=routed_model_name(model_group, model_group, decision) or as_str(payload.get("model")) or "",
+            response_model=routed_model_name(as_str(response.get("model")), model_group, decision),
             model_group=model_group,
             model_id=as_str(payload.get("model_id")) or _model_info_id(raw_meta.get("model_info")),
             api_base=as_str(payload.get("api_base")) or as_str(hidden.get("api_base")),
@@ -262,6 +268,7 @@ class LLMCallEvent:
     # never hands off to a provider, so ``upstream_started`` stays False even
     # though the call completed and is worth a span.
     cache_hit: bool
+    operation: GenAIOperation
     # A best-effort ``"{operation} {model}"`` name known at ``pre_call`` time. The
     # span is renamed from the typed payload at close (``finish_span``); this only
     # needs to be reasonable for a span that never gets closed (a leak).
@@ -271,11 +278,16 @@ class LLMCallEvent:
     trace: TraceControls
     session_id: str | None
 
+    @property
+    def reached_a_provider(self) -> bool:
+        """Whether the call was handed to a provider or answered from the response cache."""
+        return not self.is_no_upstream_call and self.payload is not None and (self.upstream_started or self.cache_hit)
+
     @classmethod
     def from_dict(cls, kwargs: Mapping[str, object]) -> LLMCallEvent:
         raw_payload: Final = kwargs.get("standard_logging_object")
         payload: Final = cast("StandardLoggingPayload", raw_payload) if raw_payload else None
-        operation: Final = resolve_operation(as_str(kwargs.get("call_type")))
+        operation: Final = resolve_operation(as_str(kwargs.get("call_type")), kwargs.get(PASSTHROUGH_OPERATION_KEY))
         model: Final = as_str(kwargs.get("model")) or ""
         trace: Final = caller_trace_controls(kwargs)
         return cls(
@@ -288,6 +300,7 @@ class LLMCallEvent:
             upstream_start_seconds=_epoch_seconds(kwargs.get("api_call_start_time")),
             purpose=internal_call_origin(payload, kwargs),
             cache_hit=bool(payload.get("cache_hit")) if payload else False,  # pyright: ignore[reportUnknownMemberType]  # TypedDict .get on a str key is partially unknown
+            operation=operation,
             provisional_span_name=f"{operation.value} {model}".strip(),
             time_to_first_chunk_seconds=time_to_first_chunk_seconds(kwargs),
             completion_start_seconds=_epoch_seconds(kwargs.get("completion_start_time")),

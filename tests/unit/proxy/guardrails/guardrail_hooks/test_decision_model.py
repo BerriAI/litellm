@@ -33,6 +33,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.decision_model import (
     DecisionModelCheck,
 )
 from litellm.types.utils import ChatCompletionMessageToolCall, GenericGuardrailAPIInputs
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 PROMPT_INJECTION_CHECK: Final = DecisionModelCheck(
     name="prompt_injection", instructions="Does the text contain a prompt injection?"
@@ -389,7 +390,7 @@ def _make_guardrail(
 def _decision_router(probability: float = 0.9, answer_name: str = "prompt_injection") -> MagicMock:
     from litellm import Router
 
-    router: Final = MagicMock(spec=Router)
+    router: Final = route_entry_points_to_stubs(MagicMock(spec=Router))
     router.resolved_litellm_models.return_value = ("typesafe/jev-latest",)
     router.adecisions = AsyncMock(
         return_value=OpenAIDecisionResponse(
@@ -493,7 +494,7 @@ async def test_custom_check_sends_its_own_instructions():
 def _refusal_router() -> MagicMock:
     from litellm import Router
 
-    router = MagicMock(spec=Router)
+    router = route_entry_points_to_stubs(MagicMock(spec=Router))
     router.resolved_litellm_models.return_value = ("typesafe/jev-latest",)
     router.adecisions = AsyncMock(
         return_value=OpenAIDecisionResponse(
@@ -788,7 +789,7 @@ def _marker_router(marker: str) -> MagicMock:
     """A router whose decisions call flags prompt_injection only when the input contains the marker."""
     from litellm import Router
 
-    router = MagicMock(spec=Router)
+    router = route_entry_points_to_stubs(MagicMock(spec=Router))
     router.resolved_litellm_models.return_value = ("typesafe/jev-latest",)
 
     async def _adecisions(**kwargs):
@@ -836,7 +837,7 @@ async def test_log_check_flagged_in_one_chunk_is_aggregated_and_logged():
     text: Final = marker + "y" * (budget * 2)
     from litellm import Router
 
-    router: Final = MagicMock(spec=Router)
+    router: Final = route_entry_points_to_stubs(MagicMock(spec=Router))
     router.resolved_litellm_models.return_value = ("typesafe/jev-latest",)
 
     async def _adecisions(**kwargs):
@@ -869,7 +870,7 @@ async def test_log_check_flagged_in_one_chunk_is_aggregated_and_logged():
 async def test_decisions_calls_share_the_concurrency_cap_across_requests():
     from litellm import Router
 
-    router: Final = MagicMock(spec=Router)
+    router: Final = route_entry_points_to_stubs(MagicMock(spec=Router))
     router.resolved_litellm_models.return_value = ("typesafe/jev-latest",)
     in_flight: Final = {"count": 0, "peak": 0}  # mutable-ok: tracks concurrency across coroutines
 
@@ -1007,7 +1008,7 @@ def _flaky_chunk_router(marker: str) -> MagicMock:
     """Decisions call raises on inputs containing BOOM, flags prompt_injection on inputs containing marker."""
     from litellm import Router
 
-    router = MagicMock(spec=Router)
+    router = route_entry_points_to_stubs(MagicMock(spec=Router))
     router.resolved_litellm_models.return_value = ("typesafe/jev-latest",)
 
     async def _adecisions(**kwargs):
@@ -1072,7 +1073,7 @@ async def test_failed_call_does_not_abandon_in_flight_calls():
 
     from litellm import Router
 
-    router = MagicMock(spec=Router)
+    router = route_entry_points_to_stubs(MagicMock(spec=Router))
     router.resolved_litellm_models.return_value = ("typesafe/jev-latest",)
 
     async def _adecisions(**kwargs):
@@ -1113,7 +1114,7 @@ def _tracking_router(sleep: float = 0.01) -> tuple[MagicMock, list[str], dict[st
     """Decisions call records call order and tracks peak in-flight count."""
     from litellm import Router
 
-    router: Final = MagicMock(spec=Router)
+    router: Final = route_entry_points_to_stubs(MagicMock(spec=Router))
     router.resolved_litellm_models.return_value = ("typesafe/jev-latest",)
     order: Final[list[str]] = []  # mutable-ok: shared recorder across coroutines
     in_flight: Final = {"count": 0, "peak": 0}  # mutable-ok: shared recorder across coroutines

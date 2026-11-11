@@ -29,6 +29,7 @@ from litellm.llms.anthropic.messages.stream_assembly import (
     split_sse_chunk_into_events,
 )
 from litellm.llms.bedrock.common_utils import BEDROCK_INVOKE_TRACE_FIELD
+from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
@@ -61,7 +62,7 @@ _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_i
 
 def _event_payload(event: str) -> Mapping[str, object] | None:
     data_lines: Final = tuple(
-        line.strip()[len("data:") :].strip() for line in event.splitlines() if line.strip().startswith("data:")
+        line.strip()[len("data:") :].strip() for line in split_sse_lines(event) if line.strip().startswith("data:")
     )
     if not data_lines or data_lines[0] in ("", "[DONE]"):
         return None
@@ -362,7 +363,7 @@ class AnthropicPassthroughLoggingHandler:
     ) -> str | None:
         for raw in all_chunks:
             text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
-            for line in text.splitlines():
+            for line in split_sse_lines(text):
                 if not line.startswith("data:"):
                     continue
                 try:
@@ -402,7 +403,7 @@ class AnthropicPassthroughLoggingHandler:
         """
         for raw in reversed(all_chunks):
             text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
-            for line in reversed(text.splitlines()):
+            for line in reversed(split_sse_lines(text)):
                 if not line.startswith("data:"):
                     continue
                 try:
@@ -868,8 +869,7 @@ class AnthropicPassthroughLoggingHandler:
 
         if llm_router is not None:
             # Try to find the model in the router by the model name
-            # Use the existing get_model_ids method from router
-            model_ids: Final = llm_router.get_model_ids(model_name=model_name)
+            model_ids: Final = llm_router.registry().names(model_name, kind="ids")
             if model_ids and len(model_ids) > 0:
                 # Use the first model ID found
                 actual_model_id = model_ids[0]

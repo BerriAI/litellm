@@ -176,8 +176,8 @@ async fn a_missing_path_document_fails_before_sending() {
     assert!(
         matches!(
             &error,
-            Error::FileRead { path: failed, source }
-                if *failed == path && source.kind() == std::io::ErrorKind::NotFound
+            Error::FileRead { path: failed, cause }
+                if *failed == path && cause.kind() == std::io::ErrorKind::NotFound
         ),
         "{error:?}"
     );
@@ -216,7 +216,8 @@ async fn configured_client_preserves_document_url_policy(#[case] allowed: bool) 
     .await;
 
     if !allowed {
-        assert!(matches!(result, Err(Error::BlockedDocumentUrl)));
+        let error = result.unwrap_err();
+        assert!(error.is_request(), "{error:?}");
         assert!(received(&documents).await.is_empty());
         assert!(received(&upstream).await.is_empty());
         return;

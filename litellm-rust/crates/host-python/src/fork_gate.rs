@@ -12,13 +12,23 @@ pub(crate) struct ForkGate {
     fork_only_pid: AtomicU32,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum Refused {
+    #[error(
+        "this process is reserved for forking workers and cannot run native routes; \
+         move the call into a worker, after the fork"
+    )]
     ReservedForForking,
+    #[error(
+        "this process was forked after the native runtime started, and runtime threads \
+         do not survive fork(); start workers with spawn or forkserver, or fork before \
+         the first native call"
+    )]
     ForkedAfterStart,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+#[error("the native runtime already started in this process")]
 pub struct RuntimeAlreadyStarted;
 
 impl ForkGate {

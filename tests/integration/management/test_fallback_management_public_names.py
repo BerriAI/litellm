@@ -1,6 +1,7 @@
 import uuid
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from functools import partial
 from itertools import chain
 from pathlib import Path
@@ -10,6 +11,7 @@ import httpx
 import psutil
 import pytest
 from pydantic import JsonValue
+from redis import Redis
 
 from tests.integration._support.client import (
     Gateway,
@@ -27,7 +29,7 @@ from tests.integration._support.process import (
     setup_only_proxy_run,
     worker_configuration,
 )
-from tests.integration._support.redis_process import owned_redis
+from tests.integration._support.redis_process import OwnedRedis, owned_redis
 
 pytestmark: Final = [pytest.mark.timeout(300), pytest.mark.shares_worker_state]
 
@@ -383,6 +385,39 @@ def test_fallback_write_survives_a_redis_outage(gateway: Gateway, tmp_path: Path
                 assert {first, second, third} <= covered, covered
                 assert EVICTION_WARNING in owned.log.read_text(), owned.log.read_text()[-3000:]
                 cache.start()
+
+
+@contextmanager
+def _refusing_cache_deletes(cache: OwnedRedis) -> Iterator[None]:
+    with Redis(host=cache.host, port=cache.port) as client:
+        client.acl_setuser("default", enabled=True, commands=["-del", "-unlink"])
+        try:
+            yield
+        finally:
+            client.acl_setuser("default", enabled=True, commands=["+del", "+unlink"])
+
+
+@pytest.mark.usefixtures("migrated_database")
+def test_consecutive_creates_keep_every_rule_when_redis_refuses_the_cache_eviction(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with owned_redis(tmp_path) as cache:
+        overrides: Final = {"REDIS_HOST": cache.host, "REDIS_PORT": str(cache.port)}
+        with owned_proxy_process(gateway, tmp_path, overrides, database_setup=()) as owned:
+            with owned.gateway.scenario() as scenario:
+                target: Final = scenario.model(model=f"openai/x3t-{uuid.uuid4().hex}")
+                first: Final = scenario.model(model=f"openai/x3a-{uuid.uuid4().hex}")
+                second: Final = scenario.model(model=f"openai/x3b-{uuid.uuid4().hex}")
+                for model in (target, first, second):
+                    _wait_until_served(owned.gateway, model)
+                with _refusing_cache_deletes(cache):
+                    created: Final = tuple(
+                        _create_fallback(owned.gateway, scenario, model, [target]) for model in (first, second)
+                    )
+                    assert all(response.status_code == 200 for response in created), [r.text for r in created]
+                    covered: Final = _covered_models(_stored_fallbacks())
+                    assert {first, second} <= covered, covered
+                    assert EVICTION_WARNING in owned.log.read_text(), owned.log.read_text()[-3000:]
 
 
 @pytest.mark.usefixtures("migrated_database")

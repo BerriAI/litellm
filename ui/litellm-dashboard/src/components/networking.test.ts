@@ -1225,3 +1225,45 @@ describe("searchToolQueryCall", () => {
     await expect(Networking.searchToolQueryCall("token", "exa-search-2", "litellm")).rejects.toThrow(errorMessage);
   });
 });
+
+describe("uploadClaudeCodeSkill", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("sends the archive bytes and metadata as one authenticated multipart request", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(Response.json({ status: "success" }));
+    vi.stubGlobal("fetch", fetch);
+    const file = new File(["skill archive bytes"], "personal.zip", { type: "application/zip" });
+    const metadata = { name: "personal", description: "Personal workflow", keywords: ["workflow"] };
+
+    await Networking.uploadClaudeCodeSkill("upload-token", file, metadata);
+    const [url, init] = fetch.mock.calls[0];
+    expect(url).toBe(`${Networking.getProxyBaseUrl()}/claude-code/plugins/upload`);
+    expect(init?.method).toBe("POST");
+    const headers = new Headers(init?.headers);
+    expect(headers.get("Authorization")).toBe("Bearer upload-token");
+    expect(headers.has("Content-Type")).toBe(false);
+    expect(Object.fromEntries(init?.body as FormData)).toEqual({ file, metadata: JSON.stringify(metadata) });
+  });
+});
+
+describe("modelPatchUpdateCall", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("surfaces the server's error message", async () => {
+    const rejected = {
+      ok: false,
+      status: 400,
+      headers: new Headers(),
+      text: async () => JSON.stringify({ detail: { error: "tool Read already has built-in semantics" } }),
+    };
+    global.fetch = vi.fn().mockResolvedValue(rejected) as unknown as typeof global.fetch;
+
+    await expect(Networking.modelPatchUpdateCall("token", { model_name: "router" }, "model-1")).rejects.toThrow(
+      "tool Read already has built-in semantics",
+    );
+  });
+});

@@ -1,6 +1,9 @@
+import type { ParseKeys, TFunction } from "i18next";
 import type { AutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useModels";
 import { isAutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useModels";
 import type { ModelGroup } from "@/components/llm_calls/fetch_models";
+import i18n from "@/i18n/i18n";
+import { type WildcardDeployment, type WildcardRoute, wildcardRoutes } from "@/lib/wildcard_routes";
 import type { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 
 export const ROUTER_FAMILIES = {
@@ -11,7 +14,11 @@ export const ROUTER_FAMILIES = {
   glm: "GLM",
   deepseek: "DeepSeek",
 } as const;
-export const ROUTER_GOALS = { cheapest: "Cheapest", balanced: "Balanced", quality: "Best quality" } as const;
+export const ROUTER_GOALS = {
+  cheapest: "addModel.autoSetup.goals.cheapest",
+  balanced: "addModel.autoSetup.goals.balanced",
+  quality: "addModel.autoSetup.goals.quality",
+} as const satisfies Record<string, ParseKeys>;
 export type RouterFamily = keyof typeof ROUTER_FAMILIES;
 export type RouterGoal = keyof typeof ROUTER_GOALS;
 export type FamilyPreference = RouterFamily | "auto";
@@ -105,6 +112,19 @@ const identityOf = (deployment: AutoRouterDeployment): ModelIdentity | null =>
   parseModel(deployment.litellm_params?.model ?? "") ??
   parseModel(deployment.model_info?.base_model ?? deployment.litellm_params?.base_model ?? "");
 
+const wildcardDeployments = (deployments: readonly AutoRouterDeployment[]): WildcardDeployment[] =>
+  deployments.flatMap((row) => {
+    const model = row.litellm_params?.model;
+    return row.model_name?.includes("*") && model
+      ? [{ modelGroup: row.model_name, underlyingModels: [model], blocked: Boolean(row.model_info?.blocked) }]
+      : [];
+  });
+
+const routedIdentities = (routes: readonly WildcardRoute[], group: ModelGroup): (ModelIdentity | null)[] => {
+  const routed = routes.filter(({ paused }) => !paused).map(({ model }) => parseModel(model));
+  return routed.some((identity) => identity !== null) ? routed : [parseModel(group.model_group)];
+};
+
 const providerOf = (deployment: AutoRouterDeployment, group: ModelGroup, family?: RouterFamily): string => {
   const raw = deployment.litellm_params?.model ?? "";
   const provider =
@@ -146,25 +166,27 @@ const compareVersion = (left: readonly number[], right: readonly number[]): numb
 const compareRelease = (left: ModelIdentity, right: ModelIdentity): number =>
   compareVersion(left.version, right.version) || left.snapshot - right.snapshot;
 
+export const routingModelGroups = (groups: readonly ModelGroup[]): ModelGroup[] =>
+  groups.filter((group) => group.mode !== "embedding");
+
 export const deployedRouterModels = (
   groups: readonly ModelGroup[],
   deployments: readonly AutoRouterDeployment[],
-): SolverModel[] =>
-  groups
-    .flatMap((group) => {
-      if (group.mode && group.mode !== "chat") return [];
-      const rows = deployments.filter((row) => row.model_name === group.model_group);
-      if (
-        rows.some(isAutoRouterDeployment) ||
-        group.model_group.includes("*") ||
-        group.model_group.startsWith("auto_router/")
-      )
-        return [];
+  aliasTargets: ReadonlyMap<string, string> = new Map(),
+): SolverModel[] => {
+  const wildcards = wildcardDeployments(deployments);
+  return routingModelGroups(groups)
+    .map((group) => {
+      const routed = { ...group, model_group: aliasTargets.get(group.model_group) ?? group.model_group };
+      const rows = deployments.filter((row) => row.model_name === routed.model_group);
       const active = rows.filter((row) => !row.model_info?.blocked);
-      if (rows.length > 0 && active.length === 0) return [];
-      if (active.some((row) => row.model_info?.mode && row.model_info.mode !== "chat")) return [];
-      if (active.some((row) => row.litellm_params?.model?.includes("*"))) return [];
-      const identities = active.length > 0 ? active.map(identityOf) : [parseModel(group.model_group)];
+      const isRouter = rows.some(isAutoRouterDeployment) || routed.model_group.startsWith("auto_router/");
+      const hasWildcard =
+        routed.model_group.includes("*") || active.some((row) => row.litellm_params?.model?.includes("*"));
+      const routes = rows.length > 0 ? [] : wildcardRoutes(routed.model_group, wildcards, routed.providers ?? []);
+      const paused = rows.length > 0 ? active.length === 0 : routes.length > 0 && routes.every((route) => route.paused);
+      const manualOnly = isRouter || hasWildcard || paused;
+      const identities = active.length > 0 ? active.map(identityOf) : routedIdentities(routes, routed);
       const first = identities[0];
       const homogeneous =
         first &&
@@ -173,21 +195,20 @@ export const deployedRouterModels = (
           const sameLine = identity.family === first.family && identity.line === first.line;
           return sameLine && compareRelease(identity, first) === 0;
         });
-      const identity = homogeneous ? first : undefined;
+      const identity = homogeneous && !manualOnly ? first : undefined;
       const providers =
         active.length > 0
           ? active.map((row) => providerOf(row, group, identity?.family))
           : [providerOf({}, group, identity?.family)];
-      return [
-        {
-          ...identity,
-          name: group.model_group,
-          model: identity?.model ?? group.model_group,
-          provider: [...new Set(providers)].toSorted().join(", "),
-        },
-      ];
+      return {
+        ...identity,
+        name: group.model_group,
+        model: identity?.model ?? group.model_group,
+        provider: [...new Set(providers)].toSorted().join(", "),
+      };
     })
     .toSorted((a, b) => a.name.localeCompare(b.name));
+};
 
 const latestLines = (models: readonly RouterModel[]): RouterModel[] =>
   models.filter(
@@ -204,6 +225,7 @@ export const recommendSolverPair = (
   models: readonly SolverModel[],
   goal: RouterGoal,
   family: FamilyPreference,
+  t: TFunction = i18n.t.bind(i18n),
 ): SolverPair | null => {
   const recognized = models.filter((model): model is RouterModel => model.family !== undefined);
   const latest = latestLines(recognized);
@@ -230,8 +252,8 @@ export const recommendSolverPair = (
   if (!chosen) return null;
   const mixed = chosen.everyday.family !== chosen.hard.family;
   const substituted = chosen.everyday.rank !== low || chosen.hard.rank !== high;
-  const mixedNotice = mixed ? "A complete pair is unavailable in one family. Using two model families." : null;
-  const substituteNotice = substituted ? "Using the closest available pair in this family." : null;
+  const mixedNotice = mixed ? t("addModel.autoSetup.mixedFamiliesNotice") : null;
+  const substituteNotice = substituted ? t("addModel.autoSetup.closestPairNotice") : null;
   return { ...chosen, notice: mixedNotice ?? substituteNotice };
 };
 
@@ -247,10 +269,10 @@ export const simpleSetupError = (
   everyday?: SolverModel,
   hard?: SolverModel,
 ): string | null => {
-  if (loading) return "Loading deployed models";
-  if (failed) return "Could not verify deployed models";
-  if (!everyday || !hard) return "Select two different deployed models";
-  if (everyday.name === hard.name) return "Select two different deployed models";
+  if (loading) return i18n.t("addModel.autoSetup.loadingModels");
+  if (failed) return i18n.t("addModel.autoSetup.couldNotVerifyModels");
+  if (!everyday || !hard) return i18n.t("addModel.autoSetup.selectTwoModels");
+  if (everyday.name === hard.name) return i18n.t("addModel.autoSetup.selectTwoModels");
   return null;
 };
 

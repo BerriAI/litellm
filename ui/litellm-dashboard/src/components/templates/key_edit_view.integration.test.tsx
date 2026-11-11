@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { chooseSelectOption, renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import { MODEL_MAX_BUDGET_PREMIUM_HINT } from "../key_team_helpers/ModelMaxBudgetEditor";
+import i18n from "@/i18n/i18n";
 import {
   fetchMCPServers,
   getPassThroughEndpointsCall,
@@ -15,6 +16,7 @@ import {
   vectorStoreListCall,
 } from "../networking";
 import { KeyEditView } from "./key_edit_view";
+import { teamAdminMemberKeyPayload } from "./teamAdminMemberKeyPayload";
 
 const can = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/useCan", () => ({
@@ -354,6 +356,24 @@ describe("KeyEditView", () => {
     await waitFor(() => {
       expect(screen.getByText("Save Changes")).toBeInTheDocument();
     });
+  });
+
+  it("submits the spend prompt storage restriction in metadata", async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    renderWithProviders(
+      <KeyEditView
+        keyData={MOCK_KEY_DATA}
+        onCancel={() => {}}
+        onSubmit={onSubmit}
+        accessToken=""
+        userID=""
+        userRole="Admin"
+      />,
+    );
+    fireEvent.click(screen.getByRole("switch", { name: "Store prompts in spend logs" }));
+    fireEvent.click(screen.getByText("Save Changes"));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    expect(JSON.parse(onSubmit.mock.calls[0][0].metadata).store_prompts_in_spend_logs).toBe(false);
   });
 
   it("should render tags", async () => {
@@ -1500,14 +1520,14 @@ describe("KeyEditView", () => {
     it("should say why the editor is locked when the proxy has no enterprise license", async () => {
       renderWith(false);
 
-      expect(await screen.findByText(MODEL_MAX_BUDGET_PREMIUM_HINT)).toBeInTheDocument();
+      expect(await screen.findByText(i18n.t(MODEL_MAX_BUDGET_PREMIUM_HINT))).toBeInTheDocument();
     });
 
     it("should leave the editor usable when the proxy has one", async () => {
       renderWith(true);
 
       expect(await screen.findByText(/Cap spend per model over its own window/)).toBeInTheDocument();
-      expect(screen.queryByText(MODEL_MAX_BUDGET_PREMIUM_HINT)).not.toBeInTheDocument();
+      expect(screen.queryByText(i18n.t(MODEL_MAX_BUDGET_PREMIUM_HINT))).not.toBeInTheDocument();
     });
 
     // /key/update validates model_max_budget whenever the field is present and
@@ -1669,6 +1689,148 @@ describe("KeyEditView", () => {
       await userEvent.click(screen.getByLabelText("Organization"));
 
       expect(await screen.findByText("Engineering")).toBeInTheDocument();
+    });
+
+    it("should initialize organization from a key list row that only carries org_id", async () => {
+      const keyFromList = {
+        ...MOCK_KEY_DATA,
+        organization_id: null,
+        org_id: "org-1",
+      };
+
+      renderWithProviders(
+        <KeyEditView
+          keyData={keyFromList}
+          teams={[
+            { team_id: "team-a", team_alias: "Alpha", organization_id: "org-1" },
+            { team_id: "team-b", team_alias: "Beta", organization_id: "org-2" },
+          ]}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken=""
+          userID=""
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Organization")).toHaveValue("Engineering");
+      });
+
+      await userEvent.click(screen.getByRole("combobox", { name: "Team" }));
+
+      expect(await screen.findByRole("option", { name: /Alpha/ })).toBeInTheDocument();
+      expect(screen.queryByRole("option", { name: /Beta/ })).not.toBeInTheDocument();
+    });
+
+    it("should let a non-admin move a key to their team in another organization", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+
+      renderWithProviders(
+        <KeyEditView
+          keyData={{ ...MOCK_KEY_DATA, organization_id: null, org_id: "org-1" }}
+          teams={[
+            { team_id: "team-a", team_alias: "Alpha", organization_id: "org-1" },
+            { team_id: "team-b", team_alias: "Beta", organization_id: "org-2" },
+          ]}
+          onCancel={() => {}}
+          onSubmit={onSubmitMock}
+          accessToken=""
+          userID=""
+          userRole="Internal User"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Organization")).toHaveValue("Engineering");
+      });
+
+      await userEvent.click(screen.getByRole("combobox", { name: "Team" }));
+      await userEvent.click(await screen.findByRole("option", { name: /Beta/ }));
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Organization")).toHaveValue("Sales");
+      });
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0]).toMatchObject({ organization_id: "org-2", team_id: "team-b" });
+    });
+
+    it("should re-scope teams when the edited key switches to another organization", async () => {
+      const sharedProps = {
+        teams: [
+          { team_id: "team-a", team_alias: "Alpha", organization_id: "org-1" },
+          { team_id: "team-b", team_alias: "Beta", organization_id: "org-2" },
+        ],
+        onCancel: () => {},
+        onSubmit: async () => {},
+        accessToken: "",
+        userID: "",
+        userRole: "Admin",
+        premiumUser: false,
+      };
+
+      const { rerender } = renderWithProviders(
+        <KeyEditView keyData={{ ...MOCK_KEY_DATA, organization_id: null, org_id: "org-1" }} {...sharedProps} />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Organization")).toHaveValue("Engineering");
+      });
+
+      rerender(<KeyEditView keyData={{ ...MOCK_KEY_DATA, organization_id: null, org_id: "org-2" }} {...sharedProps} />);
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Organization")).toHaveValue("Sales");
+      });
+
+      await userEvent.click(screen.getByRole("combobox", { name: "Team" }));
+
+      expect(await screen.findByRole("option", { name: /Beta/ })).toBeInTheDocument();
+      expect(screen.queryByRole("option", { name: /Alpha/ })).not.toBeInTheDocument();
+    });
+
+    it("should adopt the organization of a team picked in the form", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+
+      renderWithProviders(
+        <KeyEditView
+          keyData={{ ...MOCK_KEY_DATA, organization_id: null, org_id: null }}
+          teams={[
+            { team_id: "team-a", team_alias: "Alpha", organization_id: "org-1" },
+            { team_id: "team-b", team_alias: "Beta", organization_id: "org-2" },
+          ]}
+          onCancel={() => {}}
+          onSubmit={onSubmitMock}
+          accessToken=""
+          userID=""
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await screen.findByRole("button", { name: /save changes/i });
+      expect(screen.getByLabelText("Organization")).toHaveValue("");
+
+      await userEvent.click(screen.getByRole("combobox", { name: "Team" }));
+      await userEvent.click(await screen.findByRole("option", { name: /Beta/ }));
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Organization")).toHaveValue("Sales");
+      });
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0].organization_id).toBe("org-2");
     });
 
     it("should initialize organization from keyData", async () => {
@@ -3090,6 +3252,60 @@ describe("KeyEditView", () => {
       renderAs("Admin");
 
       expect(await screen.findByRole("switch", { name: /disable global guardrails/i })).toBeInTheDocument();
+    });
+  });
+
+  describe("team admin editing a member's key", () => {
+    const renderAsTeamAdmin = (
+      onSubmit: (values: Record<string, unknown>, dirtyFields: readonly string[]) => Promise<void>,
+    ) =>
+      renderWithProviders(
+        <KeyEditView
+          keyData={{ ...MOCK_KEY_DATA, team_id: "team-1", user_id: "member-user" }}
+          teams={[
+            {
+              team_id: "team-1",
+              team_alias: "Team One",
+              models: [],
+              members_with_roles: [{ user_id: "team-admin-user", role: "admin" }],
+            },
+          ]}
+          onCancel={() => {}}
+          onSubmit={onSubmit}
+          accessToken="test-token"
+          userID="team-admin-user"
+          userRole="Internal User"
+        />,
+      );
+
+    const firstSavePayload = async (onSubmit: ReturnType<typeof vi.fn>) => {
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+      await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+      const [values, dirtyFields] = onSubmit.mock.calls[0];
+      return teamAdminMemberKeyPayload({ ...values, key: values.token }, dirtyFields);
+    };
+
+    it("should block a rename on the first save instead of sending an empty update", async () => {
+      const onSubmit = vi.fn().mockResolvedValue(undefined);
+      renderAsTeamAdmin(onSubmit);
+
+      fireEvent.change(await screen.findByRole("textbox", { name: "Key Alias" }), { target: { value: "renamed" } });
+
+      expect(await firstSavePayload(onSubmit)).toEqual({ kind: "blocked", fields: ["key_alias"] });
+    });
+
+    it("should send a budget change on the first save", async () => {
+      const onSubmit = vi.fn().mockResolvedValue(undefined);
+      renderAsTeamAdmin(onSubmit);
+
+      fireEvent.change(await screen.findByRole("spinbutton", { name: "Max Budget (USD)" }), {
+        target: { value: "25" },
+      });
+
+      expect(await firstSavePayload(onSubmit)).toEqual({
+        kind: "ok",
+        payload: { key: MOCK_KEY_DATA.token, max_budget: "25" },
+      });
     });
   });
 });

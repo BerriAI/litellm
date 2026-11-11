@@ -833,6 +833,12 @@ class LangFuseLogger:
                 ("vertex_location", vertex_location, bool(vertex_location)),
                 ("aws_region_name", aws_region_name, bool(aws_region_name)),
                 ("cache_hit", kwargs.get("cache_hit") or False, "cache_hit" in kwargs),
+                (
+                    "is_silent_experiment",
+                    "is_silent_experiment" in allowlisted_metadata
+                    and allowlisted_metadata["is_silent_experiment"] is True,
+                    "is_silent_experiment" in allowlisted_metadata,
+                ),
             )
             enrichments: Final[Mapping[str, object]] = {
                 key: value for key, value, include in candidate_enrichments if include

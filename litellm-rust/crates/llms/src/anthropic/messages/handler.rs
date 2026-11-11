@@ -208,24 +208,29 @@ mod tests {
     #[case::empty(json!({}), Ok(json!({})))]
     #[case::numeric_user_id(
         json!({"user_id": 123}),
-        Err(Error::InvalidRequest("metadata.user_id must be a string, got 123".to_string().into())),
+        Err(invalid_value("metadata.user_id", "a string", json!(123))),
     )]
     #[case::boolean_user_id(
         json!({"user_id": true}),
-        Err(Error::InvalidRequest("metadata.user_id must be a string, got true".to_string().into())),
+        Err(invalid_value("metadata.user_id", "a string", json!(true))),
     )]
     #[case::not_an_object(
         json!(["u-1"]),
-        Err(Error::InvalidRequest(r#"metadata must be an object, got ["u-1"]"#.to_string().into())),
+        Err(invalid_value("metadata", "an object", json!(["u-1"]))),
     )]
     fn validate_anthropic_api_metadata_passes_only_a_string_user_id(
         #[case] metadata: Value,
         #[case] expected: Result<Value, Error>,
     ) {
-        assert_eq!(
-            validate_anthropic_api_metadata(&metadata).map_err(|error| error.to_string()),
-            expected.map_err(|error| error.to_string()),
-        );
+        assert_eq!(validate_anthropic_api_metadata(&metadata), expected);
+    }
+
+    fn invalid_value(field: &'static str, expected: &'static str, actual: Value) -> Error {
+        Error::InvalidRequest(crate::ErrorDetail::InvalidValue {
+            field,
+            expected,
+            actual,
+        })
     }
 
     #[rstest]

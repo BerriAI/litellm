@@ -128,7 +128,7 @@ fn connect_surfaces_service_failures() {
         ResponseCacheCodec,
         runtime.handle().clone(),
     ));
-    assert!(matches!(result, Err(Error::Unavailable)));
+    assert!(matches!(result, Err(Error::Unavailable(_))));
 }
 
 #[rstest]
@@ -263,7 +263,7 @@ fn malformed_blobs_are_invalid_entries(fixture: Fixture, #[case] key: &str, #[ca
     fixture.service.seed_blob(key, bytes);
     assert!(matches!(
         fixture.cache.get_cache(key, &no_ttl()),
-        Err(Error::InvalidEntry)
+        Err(Error::InvalidEntry(_))
     ));
 }
 
@@ -378,15 +378,15 @@ fn service_failures_map_to_unavailable(fixture: Fixture) {
     fixture.service.set_failing(true);
     assert!(matches!(
         fixture.cache.get_cache("key", &no_ttl()),
-        Err(Error::Unavailable)
+        Err(Error::Unavailable(_))
     ));
     assert!(matches!(
         fixture.cache.set_cache("key", entry(json!(1)), &no_ttl()),
-        Err(Error::Unavailable)
+        Err(Error::Unavailable(_))
     ));
     assert!(matches!(
         fixture.cache.flush_cache(),
-        Err(Error::Unavailable)
+        Err(Error::Unavailable(_))
     ));
     assert!(matches!(
         fixture.runtime.block_on(
@@ -394,7 +394,7 @@ fn service_failures_map_to_unavailable(fixture: Fixture) {
                 .cache
                 .async_set_cache_pipeline(vec![("k".into(), entry(json!(1)))], no_ttl())
         ),
-        Err(Error::Unavailable)
+        Err(Error::Unavailable(_))
     ));
 }
 

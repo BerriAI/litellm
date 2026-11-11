@@ -1,8 +1,11 @@
 import React, { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { ChevronRight } from "lucide-react";
 import type { MCPEvent } from "@/components/mcp_tools/types";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/cva.config";
+
+const mcpCallPanelKey = (index: number) => `mcp-call-${index}`;
 
 interface MCPEventsDisplayProps {
   events: MCPEvent[];
@@ -58,6 +61,7 @@ interface MCPEventsPanelsProps {
 }
 
 function MCPEventsPanels({ toolsEvent, mcpCallEvents }: MCPEventsPanelsProps) {
+  const { t } = useTranslation();
   const [openPanels, setOpenPanels] = useState<Record<string, boolean>>({});
 
   const toggleKey = (key: string, open: boolean) => {
@@ -72,7 +76,7 @@ function MCPEventsPanels({ toolsEvent, mcpCallEvents }: MCPEventsPanelsProps) {
         {toolsEvent && (
           <MCPEventPanel
             panelKey="list-tools"
-            title="List tools"
+            title={t("chatUi.mcpEvents.listTools")}
             open={openPanels["list-tools"] ?? false}
             onOpenChange={(open) => toggleKey("list-tools", open)}
           >
@@ -90,18 +94,20 @@ function MCPEventsPanels({ toolsEvent, mcpCallEvents }: MCPEventsPanelsProps) {
         )}
 
         {mcpCallEvents.map((callEvent, index) => {
-          const key = `mcp-call-${index}`;
+          const key = mcpCallPanelKey(index);
           return (
             <MCPEventPanel
               key={key}
               panelKey={key}
-              title={callEvent.item?.name || "Tool call"}
+              title={callEvent.item?.name || t("chatUi.mcpEvents.toolCall")}
               open={openPanels[key] ?? true}
               onOpenChange={(open) => toggleKey(key, open)}
             >
               <div>
                 <div className="relative z-raised mb-3 bg-card last:mb-0">
-                  <div className="mb-1 text-[13px] font-medium text-muted-foreground">Request</div>
+                  <div className="mb-1 text-[13px] font-medium text-muted-foreground">
+                    {t("chatUi.mcpEvents.request")}
+                  </div>
                   <div className="rounded-md border border-border bg-muted p-2 text-xs">
                     {callEvent.item?.arguments && (
                       <pre className="m-0 whitespace-pre-wrap break-words font-mono text-foreground">
@@ -116,13 +122,15 @@ function MCPEventsPanels({ toolsEvent, mcpCallEvents }: MCPEventsPanelsProps) {
                     <span className="mr-1.5 font-bold text-success" aria-hidden="true">
                       ✓
                     </span>
-                    Approved
+                    {t("chatUi.mcpEvents.approved")}
                   </div>
                 </div>
 
                 {callEvent.item?.output && (
                   <div className="relative z-raised mb-3 bg-card last:mb-0">
-                    <div className="mb-1 text-[13px] font-medium text-muted-foreground">Response</div>
+                    <div className="mb-1 text-[13px] font-medium text-muted-foreground">
+                      {t("chatUi.mcpEvents.response")}
+                    </div>
                     <div className="whitespace-pre-wrap font-mono text-[13px] leading-normal text-foreground">
                       {callEvent.item.output}
                     </div>

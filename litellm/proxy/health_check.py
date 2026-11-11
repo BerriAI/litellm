@@ -27,12 +27,12 @@ from litellm.constants import (
     HEALTH_CHECK_TIMEOUT_SECONDS,
 )
 from litellm.litellm_core_utils.health_check_helpers import native_health_check_mode
-from litellm.router_utils.auto_router_model_naming import (
+from litellm.litellm_core_utils.routing_common_utils import deployment_model_id_pin, is_model_capability_field
+from litellm.router_strategy.auto_router.auto_router_model_naming import (
     StrategyRouterDependency,
     classify_strategy_router_model,
     strategy_router_dependencies,
 )
-from litellm.router_utils.common_utils import is_model_capability_field
 from litellm.types.utils import secret_bearing_wif_litellm_params, server_owned_wif_litellm_params
 
 # Provider routing and server-owned federation or OAuth token-exchange fields. Allowed for proxy
@@ -129,6 +129,52 @@ def _should_inject_health_check_max_tokens(model_info: Mapping[str, object], mod
     if explicit is not None:
         return bool(explicit)
     return (mode or "chat") in _MAX_TOKEN_SUPPORT_MODES
+
+
+_AUDIO_OUTPUT_PROBE_PROVIDERS: Final[frozenset[str]] = frozenset({"openai", "azure"})
+
+
+def _health_check_requires_audio_output(
+    model_info: Mapping[str, object], probe_params: Mapping[str, object], mode: str | None, deployment_model: str | None
+) -> bool:
+    if (mode or "chat") != "chat":
+        return False
+    operator_modalities: Final = probe_params.get("modalities")
+    if isinstance(operator_modalities, list) and "audio" not in operator_modalities:
+        return False
+    model: Final = probe_params.get("model")
+    if not isinstance(model, str):
+        return False
+    provider_param: Final = probe_params.get("custom_llm_provider")
+    try:
+        _, provider, _, _ = litellm.get_llm_provider(
+            model=model, custom_llm_provider=provider_param if isinstance(provider_param, str) else None
+        )
+    except litellm.exceptions.BadRequestError:
+        return False
+    if provider not in _AUDIO_OUTPUT_PROBE_PROVIDERS:
+        return False
+    base_model: Final = model_info.get("base_model") or probe_params.get("base_model")
+    checked_model: Final = base_model if isinstance(base_model, str) and model == deployment_model else model
+    checked_model_prefix: Final = checked_model.partition("/")[0]
+    return litellm.supports_audio_output(
+        model=checked_model,
+        custom_llm_provider=checked_model_prefix if checked_model_prefix in _AUDIO_OUTPUT_PROBE_PROVIDERS else provider,
+    )
+
+
+def _health_check_audio_output_params(
+    model_info: Mapping[str, object], probe_params: Mapping[str, object], mode: str | None, deployment_model: str | None
+) -> Mapping[str, object]:
+    if not _health_check_requires_audio_output(model_info, probe_params, mode, deployment_model):
+        return MappingProxyType({})
+    voice: Final = model_info.get("health_check_voice")
+    return MappingProxyType(
+        {
+            "modalities": ["text", "audio"],
+            "audio": {"voice": voice if isinstance(voice, str) else "alloy", "format": "wav"},
+        }
+    )
 
 
 # Health-check modes that forward `reasoning_effort` to the provider (chat-style calls).
@@ -364,7 +410,7 @@ def _resolved_deployment_ids(router: "Router", model_name: str) -> frozenset[str
     working tier broken. An alias whose target is gone resolves to nothing, which fails a
     request exactly like an unknown name.
     """
-    resolved: Final = router.get_model_list(model_name=model_name)
+    resolved: Final = router.registry().deployments(model_name)
     if not resolved:
         return None
     return frozenset(ident for entry in resolved if (ident := _deployment_id(entry)))
@@ -782,9 +828,12 @@ def _resolve_health_check_max_tokens(model_info: dict, litellm_params: dict) -> 
 
 
 _PROBE_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
+_MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
-def update_litellm_params_for_health_check(model_info: dict, litellm_params: dict) -> dict:
+def update_litellm_params_for_health_check(
+    model_info: dict, litellm_params: dict, deployment_model: str | None = None
+) -> dict:
     """
     Update the litellm params for health check.
 
@@ -800,7 +849,17 @@ def update_litellm_params_for_health_check(model_info: dict, litellm_params: dic
     - updates the `model` param with the `health_check_model` if it exists Doc: https://docs.litellm.ai/docs/proxy/health#wildcard-routes
     - updates the `voice` param with the `health_check_voice` for `audio_speech` mode if it exists Doc: https://docs.litellm.ai/docs/proxy/health#text-to-speech-models
     - for Bedrock models with region routing (bedrock/region/model), strips the litellm routing prefix but preserves the model ID, and pins `custom_llm_provider` to `bedrock` (only when the deployment hasn't already set one, so an explicit `bedrock_converse` survives) so the bare model id still resolves to the provider (e.g. cross-region ids like `us.cohere.embed-v4:0`)
+    - asks OpenAI and Azure chat models that support audio output for `modalities` text + audio and a wav
+      `audio` in the `health_check_voice` (default "alloy"), since those models reject text-only requests.
+      `base_model` (from `model_info`, then `litellm_params`) decides it only while the probe still targets
+      `deployment_model` (default: the incoming `litellm_params` model), so a `health_check_model` or a `model`
+      in `health_check_params` is judged on its own. Keys already set through `health_check_params` are kept,
+      and `modalities` set there without "audio" turns the audio fields off
+    - sends a SageMaker deployment's `X-Amzn-SageMaker-Inference-Component` extra header as `model_id` when the
+      deployment sets none, so legacy `sagemaker/` probes reach that component the way routed requests do
     """
+    incoming_model: Final = _PROBE_PARAMS_ADAPTER.validate_python(litellm_params).get("model")
+    base_model_owner: Final = deployment_model or (incoming_model if isinstance(incoming_model, str) else None)
     mode: Final = resolve_health_check_mode(
         model_info,
         litellm_params,  # any-ok: untyped router config dict
@@ -875,7 +934,16 @@ def update_litellm_params_for_health_check(model_info: dict, litellm_params: dic
             )
 
     probe_params: Final = _PROBE_PARAMS_ADAPTER.validate_python(litellm_params)
-    return {key: value for key, value in probe_params.items() if not is_model_capability_field(key)}
+    audio_output_params: Final = _health_check_audio_output_params(
+        _MODEL_INFO_ADAPTER.validate_python(model_info), probe_params, mode, base_model_owner
+    )
+    model_id_pin: Final = deployment_model_id_pin(probe_params)
+    model_id_params: Final = {} if model_id_pin is None else {"model_id": model_id_pin}
+    return {
+        key: value
+        for key, value in {**audio_output_params, **model_id_params, **probe_params}.items()
+        if not is_model_capability_field(key)
+    }
 
 
 _update_litellm_params_for_health_check: Final = update_litellm_params_for_health_check

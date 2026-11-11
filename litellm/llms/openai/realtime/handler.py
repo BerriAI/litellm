@@ -4,11 +4,17 @@ This file contains the calling OpenAI's `/v1/realtime` endpoint.
 This requires websockets, and is currently only supported on LiteLLM Proxy.
 """
 
+import asyncio
 import ssl
-from typing import Any, Final, cast
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Final, Literal, cast
+
+from pydantic import TypeAdapter
 
 from litellm._logging import redact_string, verbose_logger
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
+from litellm.exceptions import AuthenticationError
+from litellm.responses.streaming_iterator import map_stream_error_to_exception
 from litellm.types.realtime import RealtimeQueryParams
 
 from ....litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -22,6 +28,57 @@ from ....litellm_core_utils.realtime_streaming import (
 from ....llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 from ..common_utils import is_openai_backed_api_base
 from ..openai import OpenAIChatCompletion
+
+if TYPE_CHECKING:
+    from fastapi import WebSocket
+    from openai.types.realtime import RealtimeError
+    from websockets.asyncio.client import ClientConnection
+
+_SERVER_EVENT_FIELDS: Final = TypeAdapter(Mapping[str, object])
+_CREDENTIALS_ACCEPTED_FOR_A_NON_REALTIME_MODEL: Final = "invalid_model"
+_CREDENTIALS_REJECTED: Final = "invalid_api_key"
+
+
+def first_event_error(first_event: str | bytes) -> "RealtimeError | None":
+    event: Final = _SERVER_EVENT_FIELDS.validate_json(first_event)
+    if event.get("type") != "error":
+        return None
+    from openai.types.realtime import RealtimeErrorEvent
+
+    return RealtimeErrorEvent.model_validate(event).error
+
+
+def _confirm_first_event(
+    first_event: str | bytes, model: str, sent_credentials: bool, model_listed_outside_realtime: bool
+) -> Literal[True]:
+    error: Final = first_event_error(first_event)
+    if error is None or (
+        error.code == _CREDENTIALS_ACCEPTED_FOR_A_NON_REALTIME_MODEL and not model_listed_outside_realtime
+    ):
+        return True
+    if error.code == _CREDENTIALS_REJECTED or not sent_credentials:
+        raise AuthenticationError(message=error.message, llm_provider="openai", model=model)
+    raise map_stream_error_to_exception(error, model=model, custom_llm_provider="openai")
+
+
+async def confirm_session_started(
+    connection: "ClientConnection", model: str, sent_credentials: bool, model_listed_outside_realtime: bool
+) -> Literal[True]:
+    return _confirm_first_event(await connection.recv(), model, sent_credentials, model_listed_outside_realtime)
+
+
+async def confirm_gateway_session_started(
+    connection: "ClientConnection",
+    model: str,
+    sent_credentials: bool,
+    model_listed_outside_realtime: bool,
+    first_event_wait_seconds: float,
+) -> Literal[True]:
+    try:
+        first_event: Final = await asyncio.wait_for(connection.recv(), first_event_wait_seconds)
+    except asyncio.TimeoutError:
+        return True
+    return _confirm_first_event(first_event, model, sent_credentials, model_listed_outside_realtime)
 
 
 class OpenAIRealtime(OpenAIChatCompletion):
@@ -84,7 +141,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
 
         return ssl_config
 
-    def _construct_url(self, api_base: str, query_params: RealtimeQueryParams) -> str:
+    def _construct_url(self, api_base: str, query_params: RealtimeQueryParams, realtime_mode: str = "realtime") -> str:
         """
         Construct the backend websocket URL with the client's query parameters.
 
@@ -101,7 +158,8 @@ class OpenAIRealtime(OpenAIChatCompletion):
         api_base = api_base.replace("http://", "ws://")
         url = URL(api_base)
         # Set the correct path
-        url = url.copy_with(path="/v1/realtime")
+        path: Final = "/v1/realtime/translations" if realtime_mode == "translation" else "/v1/realtime"
+        url = url.copy_with(path=path)
         upstream_params: Final = tuple(
             (key, value) for key, value in query_params.items() if not (drops_model and key == "model")
         )
@@ -131,7 +189,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
     async def async_realtime(
         self,
         model: str,
-        websocket: Any,
+        websocket: "WebSocket",
         logging_obj: LiteLLMLogging,
         api_base: str | None = None,
         api_key: str | None = None,
@@ -140,6 +198,8 @@ class OpenAIRealtime(OpenAIChatCompletion):
         query_params: RealtimeQueryParams | None = None,
         user_api_key_dict: object | None = None,
         litellm_metadata: dict | None = None,
+        realtime_mode: str = "realtime",
+        drop_params: bool = False,
         **kwargs: object,
     ):
         import websockets
@@ -153,13 +213,15 @@ class OpenAIRealtime(OpenAIChatCompletion):
         # Use all query params if provided, else fallback to just model
         if query_params is None:
             query_params = {"model": model}
-        url: Final = self._construct_url(api_base, query_params)
+        url: Final = self._construct_url(api_base, query_params, realtime_mode=realtime_mode)
 
         try:
             # Get provider-specific SSL configuration
             ssl_config: Final = self._get_ssl_config(url)
 
-            openai_beta_realtime: Final = client_sent_openai_beta_realtime_header(websocket)
+            openai_beta_realtime: Final = realtime_mode != "translation" and client_sent_openai_beta_realtime_header(
+                websocket
+            )
             if not openai_beta_realtime:
                 verbose_logger.debug(
                     "OpenAI Realtime: connecting with GA protocol (no OpenAI-Beta header). "
@@ -196,6 +258,8 @@ class OpenAIRealtime(OpenAIChatCompletion):
                     ),
                     event_normalizer=self._make_event_normalizer(),
                     usage_meter=self._make_usage_meter(),
+                    translation_session=realtime_mode == "translation",
+                    drop_params=drop_params,
                 )
                 await realtime_streaming.bidirectional_forward()
 

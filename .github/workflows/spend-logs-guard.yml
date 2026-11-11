@@ -1,13 +1,9 @@
 name: Spend logs guard
 
-on: # zizmor: ignore[dangerous-triggers] runs the base branch's code only; the PR's diff is read as data and never executed
-  pull_request_target:
+on:
+  pull_request:
     branches:
       - main
-  pull_request_review:
-    types:
-      - submitted
-      - dismissed
 
 permissions:
   contents: read
@@ -29,11 +25,11 @@ jobs:
         id: revisions
         env:
           GH_TOKEN: ${{ github.token }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
-          merge_base="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${BASE_SHA}...${HEAD_SHA}" --jq '.merge_base_commit.sha')"
+          merge_base="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${BASE_REF}...${HEAD_SHA}" --jq '.merge_base_commit.sha')"
           git fetch --no-tags --depth=1 origin "$merge_base" "$HEAD_SHA"
           gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews" --paginate --slurp | jq 'add // []' > "$RUNNER_TEMP/reviews.json"
           echo "merge_base=$merge_base" >> "$GITHUB_OUTPUT"

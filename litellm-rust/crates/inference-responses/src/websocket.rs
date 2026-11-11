@@ -1,13 +1,17 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use futures_util::{SinkExt, StreamExt};
-use litellm_http::websocket::{UpstreamWebSocket, connect_upstream};
+use litellm_http::{
+    Client,
+    websocket::{self, UpstreamWebSocket},
+};
 use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::{
     Message,
-    client::IntoClientRequest,
-    http::{HeaderName, HeaderValue},
+    http::{HeaderMap, HeaderName, HeaderValue},
 };
+
+use litellm_llms::ErrorDetail;
 
 use super::Error;
 
@@ -24,42 +28,32 @@ impl ResponsesWebSocketConnection {
         fields(outcome)
     )]
     pub async fn connect_url(
+        client: &Client,
         url: &str,
         headers: &HashMap<String, String>,
         timeout: Option<Duration>,
     ) -> Result<Self, Error> {
         litellm_inference::diagnostic::operation("litellm.websocket.connect_url", async {
-            let mut request = url.into_client_request().map_err(|error| {
-                Error::Transport(litellm_http::transport::Error::Network(error.to_string()))
-            })?;
-            for (name, value) in headers {
-                let header_name = name
-                    .parse::<HeaderName>()
-                    .map_err(|error| Error::InvalidRequest(error.to_string().into()))?;
-                let header_value = HeaderValue::from_str(value)
-                    .map_err(|error| Error::InvalidRequest(error.to_string().into()))?;
-                request.headers_mut().insert(header_name, header_value);
-            }
-            let connect = connect_upstream(request);
-            let result = match timeout {
-                Some(timeout) => tokio::time::timeout(timeout, connect).await.map_err(|_| {
-                    Error::Transport(litellm_http::transport::Error::Network(
-                        "Responses WebSocket connection timed out".into(),
+            let headers = headers
+                .iter()
+                .map(|(name, value)| {
+                    Ok((
+                        name.parse::<HeaderName>().map_err(|error| {
+                            Error::invalid_request(ErrorDetail::invalid(
+                                "WebSocket header name",
+                                error,
+                            ))
+                        })?,
+                        HeaderValue::from_str(value).map_err(|error| {
+                            Error::invalid_request(ErrorDetail::invalid(
+                                "WebSocket header value",
+                                error,
+                            ))
+                        })?,
                     ))
-                })?,
-                None => connect.await,
-            };
-            let (socket, _) = result.map_err(|error| match *error {
-                tokio_tungstenite::tungstenite::Error::Http(response) => {
-                    Error::Transport(litellm_http::transport::Error::Http {
-                        status: response.status().as_u16(),
-                        body: String::new(),
-                    })
-                }
-                other => {
-                    Error::Transport(litellm_http::transport::Error::Network(other.to_string()))
-                }
-            })?;
+                })
+                .collect::<Result<HeaderMap, Error>>()?;
+            let socket = websocket::connect(client, url, headers, timeout).await?;
             Ok(Self {
                 socket: Arc::new(Mutex::new(Some(socket))),
             })
@@ -77,13 +71,12 @@ impl ResponsesWebSocketConnection {
         litellm_inference::diagnostic::operation("litellm.websocket.send_text", async {
             let mut socket = self.socket.lock().await;
             let Some(socket) = socket.as_mut() else {
-                return Err(Error::Transport(litellm_http::transport::Error::Network(
-                    "Responses WebSocket is closed".into(),
-                )));
+                return Err(litellm_http::Error::websocket_closed().into());
             };
-            socket.send(Message::Text(text)).await.map_err(|error| {
-                Error::Transport(litellm_http::transport::Error::Network(error.to_string()))
-            })
+            socket
+                .send(Message::Text(text))
+                .await
+                .map_err(|error| litellm_http::Error::from(error).into())
         })
         .await
     }
@@ -104,12 +97,12 @@ impl ResponsesWebSocketConnection {
                 Some(Ok(Message::Text(text))) => Ok(Some(text)),
                 Some(Ok(Message::Binary(bytes))) => String::from_utf8(bytes.to_vec())
                     .map(Some)
-                    .map_err(|error| Error::InvalidResponse(error.to_string().into())),
+                    .map_err(|error| {
+                        Error::invalid_response(ErrorDetail::invalid("WebSocket text frame", error))
+                    }),
                 Some(Ok(Message::Close(_))) | None => Ok(None),
                 Some(Ok(_)) => Ok(None),
-                Some(Err(error)) => Err(Error::Transport(litellm_http::transport::Error::Network(
-                    error.to_string(),
-                ))),
+                Some(Err(error)) => Err(litellm_http::Error::from(error).into()),
             }
         })
         .await
@@ -125,9 +118,10 @@ impl ResponsesWebSocketConnection {
         litellm_inference::diagnostic::operation("litellm.websocket.close", async {
             let mut socket = self.socket.lock().await;
             if let Some(socket) = socket.as_mut() {
-                socket.close(None).await.map_err(|error| {
-                    Error::Transport(litellm_http::transport::Error::Network(error.to_string()))
-                })?;
+                socket
+                    .close(None)
+                    .await
+                    .map_err(litellm_http::Error::from)?;
             }
             *socket = None;
             Ok(())

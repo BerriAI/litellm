@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use litellm_cache::{
     BaseCache, BatchCache, BatchEntry, CacheConnectionResult, CacheContext, ConnectionCache, Error,
-    FlushCache,
+    FlushCache, ShortBatch,
     semantic::{SemanticCache, SemanticLookup},
 };
 use serde_json::Value;
@@ -114,7 +114,7 @@ where
             .get_cache(&cache_key(&request.key), &request.context)
         {
             Ok(entry) => entry,
-            Err(Error::InvalidEntry) => None,
+            Err(Error::InvalidEntry(_)) => None,
             Err(error) => return Err(error),
         };
         Ok(Self::fresh_or_miss(entry, now, request.max_age))
@@ -134,7 +134,7 @@ where
             .await
         {
             Ok(entry) => entry,
-            Err(Error::InvalidEntry) => None,
+            Err(Error::InvalidEntry(_)) => None,
             Err(error) => return Err(error),
         };
         Ok(Self::fresh_or_miss(entry, now, request.max_age))
@@ -338,7 +338,10 @@ where
         now: Duration,
     ) -> Result<PartialHits, Error> {
         if readable.len() != entries.len() {
-            return Err(Error::Unavailable);
+            return Err(Error::unavailable(ShortBatch {
+                requested: readable.len(),
+                returned: entries.len(),
+            }));
         }
         let mut values = vec![None; requests.len()];
         for ((index, request), entry) in readable.into_iter().zip(entries) {
@@ -361,7 +364,7 @@ where
                 value: Self::fresh_or_miss(lookup.value, now, max_age),
                 similarity: lookup.similarity,
             }),
-            Err(Error::InvalidEntry) => Ok(SemanticLookup::miss(None)),
+            Err(Error::InvalidEntry(_)) => Ok(SemanticLookup::miss(None)),
             Err(error) => Err(error),
         }
     }

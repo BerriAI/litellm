@@ -35,6 +35,7 @@ from litellm.llms.azure_ai.agents.transformation import (
     AzureAIAgentsConfig,
     AzureAIAgentsError,
 )
+from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines
 from litellm.types.llms.openai import (
     ChatCompletionAnnotation,
     ChatCompletionAnnotationURLCitation,
@@ -307,7 +308,7 @@ class AzureAIAgentsHandler:
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         litellm_params: dict,
-        timeout: float,
+        timeout: float | str | httpx.Timeout | None,
         client: HTTPHandler | None = None,
         headers: dict | None = None,
     ) -> ModelResponse:
@@ -431,7 +432,7 @@ class AzureAIAgentsHandler:
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         litellm_params: dict,
-        timeout: float,
+        timeout: float | str | httpx.Timeout | None,
         client: AsyncHTTPHandler | None = None,
         headers: dict | None = None,
     ) -> ModelResponse:
@@ -558,7 +559,7 @@ class AzureAIAgentsHandler:
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         litellm_params: dict,
-        timeout: float,
+        timeout: float | str | httpx.Timeout | None,
         headers: dict | None = None,
     ) -> AsyncIterator[ModelResponseStream]:
         """Execute async streaming completion using Azure Agent Service with native SSE."""
@@ -632,7 +633,7 @@ class AzureAIAgentsHandler:
 
         current_event = None
 
-        async for line in response.aiter_lines():
+        async for line in aiter_sse_lines(response.aiter_text()):
             line = line.strip()
 
             if line.startswith("event:"):

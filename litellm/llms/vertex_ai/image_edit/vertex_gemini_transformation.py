@@ -6,11 +6,13 @@ from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 import httpx
 from httpx._types import RequestFiles
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
-from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
+from litellm.llms.gemini.image_usage_transformation import transform_gemini_image_usage
+from litellm.llms.vertex_ai.common_utils import get_vertex_base_url, map_vertex_image_size
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
@@ -20,7 +22,9 @@ from litellm.types.llms.vertex_ai import (
     HttpxPartType,
 )
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import FileTypes, ImageObject, ImageResponse, OpenAIImage
+from litellm.types.utils import FileTypes, ImageObject, ImageResponse
+
+_JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -67,7 +71,7 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
             return {}
 
         size: Final = image_edit_optional_params.get("size")
-        return {"aspectRatio": self._map_size_to_aspect_ratio(size or "")}
+        return dict(map_vertex_image_size(size, model) or {"aspectRatio": "1:1"})
 
     def _resolve_vertex_project(self) -> str | None:
         return (
@@ -166,7 +170,11 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
     ) -> tuple[dict[str, object], RequestFiles | None]:
         inline_parts: Final = self._prepare_inline_image_parts(image) if image else []
         if not inline_parts:
-            raise ValueError("Vertex AI Gemini image edit requires at least one image.")
+            raise litellm.BadRequestError(
+                message="Vertex AI Gemini image edit requires at least one image.",
+                model=model,
+                llm_provider="vertex_ai",
+            )
 
         # Build parts list with image and prompt (if provided)
         text_parts: Final[list[HttpxPartType]] = [{"text": prompt}] if prompt is not None and prompt != "" else []
@@ -176,11 +184,11 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         contents: Final[dict[str, object]] = {"role": "USER", "parts": parts}
 
         # Add image-specific configuration
-        image_config: Final = (
-            {"aspect_ratio": image_edit_optional_request_params["aspectRatio"]}
-            if "aspectRatio" in image_edit_optional_request_params
-            else None
-        )
+        image_config: Final = {
+            field: image_edit_optional_request_params[param]
+            for param, field in (("aspectRatio", "aspect_ratio"), ("imageSize", "image_size"))
+            if param in image_edit_optional_request_params
+        }
 
         generation_config: Final[dict[str, object]] = {
             key: value for key, value in (("response_modalities", ["IMAGE"]), ("image_config", image_config)) if value
@@ -198,7 +206,6 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> ImageResponse:
-        model_response: Final = ImageResponse()
         try:
             response_json: Final = _generate_content_payload(raw_response)
         except Exception as exc:
@@ -219,19 +226,15 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
             if (inline_data := part.get("inlineData")) and (b64_json := inline_data.get("data"))
         ]
 
-        model_response.data = cast(list[OpenAIImage], data_list)
-        return model_response
-
-    def _map_size_to_aspect_ratio(self, size: str) -> str:
-        """Map OpenAI size format to Gemini aspect ratio format"""
-        aspect_ratio_map: Final = {
-            "1024x1024": "1:1",
-            "1792x1024": "16:9",
-            "1024x1792": "9:16",
-            "1280x896": "4:3",
-            "896x1280": "3:4",
-        }
-        return aspect_ratio_map.get(size, "1:1")
+        usage_metadata: Final = _JSON_DICT.validate_python(response_json.get("usageMetadata") or {})
+        traffic_type: Final = usage_metadata.get("trafficType") if usage_metadata else None
+        return ImageResponse(
+            data=data_list,
+            usage=transform_gemini_image_usage(usage_metadata) if usage_metadata else None,
+            hidden_params={"provider_specific_fields": {"traffic_type": traffic_type}}
+            if isinstance(traffic_type, str) and traffic_type
+            else {},
+        )
 
     def _prepare_inline_image_parts(self, image: FileTypes | list[FileTypes]) -> list[HttpxPartType]:
         images: Final[list[FileTypes]] = image if isinstance(image, list) else [image]

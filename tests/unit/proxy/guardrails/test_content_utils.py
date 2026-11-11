@@ -2,6 +2,7 @@
 
 import json
 from functools import reduce
+from typing import Final
 
 import pytest
 from pydantic import JsonValue
@@ -11,6 +12,7 @@ from litellm.proxy.guardrails._content_utils import (
     build_inspection_messages,
     has_non_string_content,
     is_non_conversational_call_type,
+    is_non_conversational_request,
     is_string_batch_input,
     iter_message_text,
     iter_tool_json_text,
@@ -819,6 +821,30 @@ def test_is_non_conversational_call_type_defaults_to_inspecting_unknown_call_typ
 
 
 @pytest.mark.parametrize(
+    ("call_type", "endpoint", "expected"),
+    [
+        ("aembedding", None, True),
+        ("allm_passthrough_route", "embeddings", True),
+        ("allm_passthrough_route", "/v1/embeddings/", True),
+        ("allm_passthrough_route", "chat/completions", False),
+        ("allm_passthrough_route", "model/amazon.titan-embed-text-v2:0/invoke", False),
+        ("allm_passthrough_route", "fine_tuned_embeddings_jobs", False),
+        ("allm_passthrough_route", "chat/completions#embeddings", False),
+        ("allm_passthrough_route", "chat/completions?x=embeddings", False),
+        ("allm_passthrough_route", "chat/completions;embeddings", False),
+        ("allm_passthrough_route", None, False),
+        ("acompletion", "embeddings", False),
+    ],
+)
+def test_is_non_conversational_request_skips_only_embeddings_requests(
+    call_type: str, endpoint: str | None, expected: bool
+):
+    data: Final[dict[str, object]] = {"endpoint": endpoint} if endpoint is not None else {}
+
+    assert is_non_conversational_request(call_type, data) is expected
+
+
+@pytest.mark.parametrize(
     "tool_input",
     (
         {"token": "secret", "path": 'C:\\tmp\\"file"', "nested": [False, 7, None, "secret"]},
@@ -922,6 +948,34 @@ def test_native_tool_arguments_keep_their_bytes_when_nothing_is_masked():
 def test_native_writer_visits_each_tool_and_system_slot(data):
     assert walk_user_text(data, lambda text: text.replace("payload", "[MASKED]")) == 1
     assert "payload" not in json.dumps(data)
+
+
+def test_skip_tool_message_leaves_tool_results_and_masks_the_rest() -> None:
+    data: Final[dict[str, object]] = {
+        "messages": [
+            {"role": "user", "content": "secret"},
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "tool", "name": "read", "input": {"env": "secret"}}],
+                "tool_calls": [{"id": "call", "function": {"name": "read", "arguments": '{"env": "secret"}'}}],
+            },
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tool", "content": "secret"}]},
+            {"role": "tool", "tool_call_id": "call", "content": "secret"},
+        ]
+    }
+    assert walk_user_text(data, lambda text: text.replace("secret", "[MASKED]"), skip_tool_message=True) == 3
+    assert data == {
+        "messages": [
+            {"role": "user", "content": "[MASKED]"},
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "tool", "name": "read", "input": {"env": "[MASKED]"}}],
+                "tool_calls": [{"id": "call", "function": {"name": "read", "arguments": '{"env": "[MASKED]"}'}}],
+            },
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tool", "content": "secret"}]},
+            {"role": "tool", "tool_call_id": "call", "content": "secret"},
+        ]
+    }
 
 
 @pytest.mark.parametrize(

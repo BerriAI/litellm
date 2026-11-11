@@ -1,6 +1,7 @@
 import { zodFunction } from "openai/helpers/zod";
 import { z } from "zod";
 import { apiClient } from "@/components/networking";
+import i18n from "@/i18n/i18n";
 import { ApiError } from "@/lib/http/client";
 import type { components } from "@/lib/http/schema";
 import { generatedKey, projectToolResult, type ResultKind } from "./toolResults";
@@ -192,7 +193,7 @@ export function createLiteAdminOperations(context: OperationContext) {
             if (action) {
               const result: ActionResult = {
                 status: "unknown",
-                message: "The change could not be verified. Check the resource before trying again.",
+                message: i18n.t("aria.actions.unverified"),
               };
               context.onResult(action, result);
               throw new Error(result.message);

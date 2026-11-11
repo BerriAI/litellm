@@ -19,7 +19,7 @@ jobs:
     name: interactions-spec-canary
     if: github.repository == 'BerriAI/litellm'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     permissions:
       contents: read
     outputs:
@@ -39,16 +39,19 @@ jobs:
         with:
           version: "0.10.9"
 
+      - name: Set up the Rust bridge
+        uses: ./.github/actions/rust-bridge
+
       - name: Install dependencies
-        run: .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra proxy --no-install-project
+        run: .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra proxy
 
       - name: Run the compliance tests against Google's live spec
         id: compliance
         run: |
           uv run --no-sync pytest tests/unit/interactions/test_openapi_compliance.py \
-            --interactions-spec-url=https://ai.google.dev/static/api/interactions.openapi.json \
+            --interactions-spec-url=https://aistudio.google.com/api-reference/interactions.openapi.json \
             --tb=short -vv -p no:rerunfailures -p no:pytest-retry \
-            --allow-hosts=127.0.0.1,::1,localhost,ai.google.dev
+            --allow-hosts=127.0.0.1,::1,localhost,ai.google.dev,aistudio.google.com
 
   tracking-issue:
     name: tracking-issue
