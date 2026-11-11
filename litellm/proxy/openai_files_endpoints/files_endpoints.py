@@ -1954,6 +1954,7 @@ async def list_files(
             data=data,
             user_api_key_dict=user_api_key_dict,
             check_file_id_encoding=False,
+            purpose=purpose,
         )
 
         if list_owned_files_only:
@@ -2010,6 +2011,7 @@ async def list_files(
                 model_id=target_model_name,
                 user_api_key_dict=user_api_key_dict,
                 operation_context="file list",
+                deployment_id=batch_deployment_id(llm_router, target_model_name) if purpose == "batch" else None,
             )
             prepare_data_with_credentials(data=data, credentials=credentials)
             response = await litellm.afile_list(

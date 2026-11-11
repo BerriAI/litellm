@@ -969,6 +969,25 @@ def test_batch_deployment_keeps_a_hinted_deployment_only_while_it_is_batch_ready
 
 
 @pytest.mark.parametrize(
+    ("preferred_deployment_id", "expected"),
+    [("hinted-batch-id", "hinted-batch-id"), (None, None), ("removed-chat-id", None), ("paused-batch-id", None)],
+    ids=["still-batch-ready", "no-hint", "removed", "paused"],
+)
+def test_batch_deployment_keeps_a_hinted_deployment_after_the_group_stops_mixing_chat_and_batch(
+    preferred_deployment_id: str | None, expected: str | None
+):
+    router: Final = Router(
+        model_list=[
+            {"model_name": "gpt-mixed", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "dummy-key"}},
+            _azure_deployment("gpt-mixed", "paused-sku", "batch", id="paused-batch-id", blocked=True),
+            _azure_deployment("gpt-mixed", "hinted-batch-sku", "batch", id="hinted-batch-id"),
+        ]
+    )
+
+    assert batch_deployment_id(router, "gpt-mixed", preferred_deployment_id=preferred_deployment_id) == expected
+
+
+@pytest.mark.parametrize(
     ("custom_llm_provider", "openrouter_key", "api_key"),
     [("openai", "sk-or-files-openai", "openai-key"), ("openrouter", "sk-or-files-openrouter", "sk-or-files-openrouter")],
 )

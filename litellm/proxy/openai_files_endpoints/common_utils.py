@@ -606,12 +606,14 @@ def batch_deployment_id(
     )
     with batch_create_routing():
         batch_ready: Final = without_deployments_that_cannot_batch(group, caller_deployments=lambda: group)
-    if len(batch_ready) == len(group):
-        return None
     ready_ids: Final = tuple(
         deployment_id for deployment_id in map(_unpaused_deployment_id, batch_ready) if deployment_id is not None
     )
-    return preferred_deployment_id if preferred_deployment_id in ready_ids else next(iter(ready_ids), None)
+    if preferred_deployment_id is not None and preferred_deployment_id in ready_ids:
+        return preferred_deployment_id
+    if len(batch_ready) == len(group):
+        return None
+    return next(iter(ready_ids), None)
 
 
 def hinted_batch_deployment_id(llm_router: Optional["Router"], model: str, encoded_id: str) -> str | None:
@@ -997,6 +999,7 @@ async def handle_model_based_routing(
     data: dict,
     user_api_key_dict: "UserAPIKeyAuth",
     check_file_id_encoding: bool = True,
+    purpose: str | None = None,
 ) -> tuple[bool, str | None, str | None, dict | None]:
     """
     Orchestrate model-based credential routing for file operations.
@@ -1012,6 +1015,7 @@ async def handle_model_based_routing(
         data: Request data dictionary
         user_api_key_dict: The authenticated caller
         check_file_id_encoding: Whether to check for embedded model in file_id
+        purpose: File purpose; "batch" resolves a header-routed model to its batch-ready deployment
 
     Returns:
         Tuple of (should_use_model_routing, model_used, original_file_id, credentials)
@@ -1049,6 +1053,7 @@ async def handle_model_based_routing(
             model_id=model_from_param,
             user_api_key_dict=user_api_key_dict,
             operation_context="file operation",
+            deployment_id=batch_deployment_id(llm_router, model_from_param) if purpose == "batch" else None,
         )
         return True, model_from_param, None, credentials
 

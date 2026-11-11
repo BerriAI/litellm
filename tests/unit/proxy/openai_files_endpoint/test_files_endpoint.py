@@ -1132,6 +1132,52 @@ def test_file_content_of_a_mixed_azure_group_id_comes_from_the_deployment_its_hi
     assert response.content == f"rows from {reached_sku}".encode()
 
 
+@pytest.mark.parametrize(
+    ("headers", "query", "reached_sku"),
+    [
+        ({"x-litellm-model": "gpt-mixed"}, "?purpose=batch", "batch-sku"),
+        ({"x-litellm-model": "gpt-mixed"}, "?purpose=assistants", "chat-sku"),
+        ({"x-litellm-model": "gpt-mixed"}, "", "chat-sku"),
+        ({}, "?target_model_names=gpt-mixed&purpose=batch", "batch-sku"),
+        ({}, "?target_model_names=gpt-mixed", "chat-sku"),
+    ],
+    ids=["header-batch", "header-other-purpose", "header-no-purpose", "target-batch", "target-no-purpose"],
+)
+def test_file_list_of_a_mixed_azure_group_reads_batch_files_from_where_batch_uploads_go(
+    mixed_azure_group: respx.MockRouter, headers: dict[str, str], query: str, reached_sku: str
+):
+    list_routes: Final = {
+        sku: mixed_azure_group.get(host=f"{sku}.openai.azure.com", path__regex=r"/files$").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "object": "list",
+                    "data": [
+                        {
+                            "id": f"file-on-{sku}",
+                            "object": "file",
+                            "bytes": 1,
+                            "created_at": 0,
+                            "filename": "batch.jsonl",
+                            "purpose": "batch",
+                            "status": "processed",
+                        }
+                    ],
+                },
+            )
+        )
+        for sku in _MIXED_GROUP_SKUS
+    }
+
+    response: Final = client.get(f"/v1/files{query}", headers={"Authorization": "Bearer test-key", **headers})
+
+    assert response.status_code == 200, response.text
+    assert [listed["id"] for listed in response.json()["data"]] == [f"file-on-{reached_sku}"]
+    assert {sku: route.call_count for sku, route in list_routes.items()} == {
+        sku: int(sku == reached_sku) for sku in _MIXED_GROUP_SKUS
+    }
+
+
 @pytest.mark.skip(reason="mock respx fails on ci/cd - unclear why")
 def test_create_file_and_call_chat_completion_e2e(
     mocker: MockerFixture, monkeypatch, llm_router: Router
