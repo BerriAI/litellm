@@ -521,7 +521,7 @@ def _should_cooldown_deployment(
     dep_policy, dep_allowed_fails = _get_deployment_cooldown_policy(ctx, deployment)
     if (
         is_single_deployment_model_group
-        and exception_status_int == 402
+        and exception_status_int in (402, 404)
         and _resolve_allowed_fails_from_policy(dep_policy, original_exception) is None
         and ctx.settings().allowed_fails_for(original_exception) is None
     ):
