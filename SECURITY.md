@@ -4,7 +4,7 @@
 
 LiteLLM maintains a security announcements mailing list that is open to anyone. Subscribers receive advance notice, typically one to two days, before we release a fix for a particularly severe vulnerability or for any vulnerability exploitable by an unauthenticated attacker. This notice is provided on a best-effort basis
 
-To subscribe, visit [https://berriai.github.io/security-announce-signup/](https://berriai.github.io/security-announce-signup/)
+To subscribe, visit [https://security.litellm.ai/mailinglist/](https://security.litellm.ai/mailinglist/)
 
 ## Security Vulnerability Reporting Guidelines
 
@@ -13,10 +13,14 @@ To subscribe, visit [https://berriai.github.io/security-announce-signup/](https:
 
 We value the security community's role in protecting our systems and users. To report a security vulnerability:
 
-- File a private vulnerability report on GitHub: [Report a vulnerability](https://github.com/BerriAI/litellm/security/advisories/new)
+- Submit a report through our vulnerability disclosure form: [https://security.litellm.ai/vdp](https://security.litellm.ai/vdp)
 - Include steps to reproduce the issue
 - Include a video or screen recording demonstrating the full exploit against a live LiteLLM instance, from initial access through to impact. A terminal recording (for example asciinema) is fine for CLI-only exploits.
 - Provide any relevant additional information
+
+Reports submitted through the form go to the LiteLLM program on HackerOne and are triaged there. You do not need a HackerOne account to submit one.
+
+Please do not open a draft GitHub Security Advisory (GHSA) to report a vulnerability to us. Use the form above instead.
 
 ### Reproduction Video Requirement
 
