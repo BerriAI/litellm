@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, Final, Protocol
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 import litellm
-from litellm.constants import REDACTED_BY_LITELLM, VLLM_STREAM_PROMPT_FIELDS
+from litellm.constants import REDACTED_BY_LITELLM, VLLM_PROMPT_DERIVED_FIELDS
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.classifier_logging import without_classifier_audit
 from litellm.litellm_core_utils.core_helpers import (
@@ -375,12 +375,47 @@ def _drop_field_when_present(item: object, field: str) -> None:
         setattr(item, field, None)
 
 
-def _redact_prompt_derived_fields(response: object) -> None:
-    for field in VLLM_STREAM_PROMPT_FIELDS:
+def _drop_prompt_derived_fields(response: object) -> None:
+    for field in VLLM_PROMPT_DERIVED_FIELDS:
         if isinstance(response, dict) and field in response:
             del response[field]  # rebind-ok: redaction scrubs the logged object in place for every caller
         else:
             _drop_field_when_present(response, field)
+
+
+def without_prompt_derived_fields(response: object) -> object:
+    if (mapping := _as_mapping(response)) is not None:
+        return {key: value for key, value in mapping.items() if key not in VLLM_PROMPT_DERIVED_FIELDS}
+    if not isinstance(response, BaseModel):
+        return response
+    logged_copy: Final = response.model_copy()
+    _drop_prompt_derived_fields(logged_copy)
+    return logged_copy
+
+
+def logged_entries_without_prompt_derived_fields(model_call_details: Mapping[str, object]) -> Mapping[str, object]:
+    standard_logging_object: Final = _as_mapping(model_call_details.get("standard_logging_object"))
+    return {
+        **{
+            streaming_key: without_prompt_derived_fields(model_call_details[streaming_key])
+            for streaming_key in ("complete_streaming_response", "async_complete_streaming_response")
+            if model_call_details.get(streaming_key) is not None
+        },
+        **(
+            {
+                "standard_logging_object": {
+                    **standard_logging_object,
+                    "response": without_prompt_derived_fields(standard_logging_object["response"]),
+                }
+            }
+            if standard_logging_object is not None and "response" in standard_logging_object
+            else {}
+        ),
+    }
+
+
+def _redact_prompt_derived_fields(response: object) -> None:
+    _drop_prompt_derived_fields(response)
     redact_vertex_ai_metadata_from_logged_object(response)
 
 

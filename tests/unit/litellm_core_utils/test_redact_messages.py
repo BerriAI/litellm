@@ -769,7 +769,11 @@ class TestPerformRedaction:
         assert details["complete_streaming_response"].choices[0].get("token_ids") is None
 
     def test_drops_the_vllm_prompt_fields_that_carry_the_prompt(self):
-        prompt_fields = {"prompt_token_ids": [151644, 872], "prompt_text": "<|im_start|>user\nsecret"}
+        prompt_fields = {
+            "prompt_token_ids": [151644, 872],
+            "prompt_text": "<|im_start|>user\nsecret",
+            "prompt_logprobs": [None, {"872": {"logprob": -1.5, "rank": 1, "decoded_token": "secret"}}],
+        }
 
         def response():
             return litellm.ModelResponse(

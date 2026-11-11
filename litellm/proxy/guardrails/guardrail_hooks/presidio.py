@@ -32,6 +32,10 @@ from litellm.constants import (
     PRESIDIO_ANALYZE_CHUNK_OVERLAP_CHARS,
 )
 from litellm.litellm_core_utils.core_helpers import attribute_items, attribute_or_none
+from litellm.litellm_core_utils.redact_messages import (
+    logged_entries_without_prompt_derived_fields,
+    without_prompt_derived_fields,
+)
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -1279,7 +1283,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     mode="mask",
                 )
 
-        return kwargs, result
+        return {**kwargs, **logged_entries_without_prompt_derived_fields(kwargs)}, without_prompt_derived_fields(result)
 
     async def async_post_call_success_hook(
         self,
