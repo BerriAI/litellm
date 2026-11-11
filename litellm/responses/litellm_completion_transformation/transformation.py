@@ -460,6 +460,31 @@ def _attribute_fields(value: object) -> dict[str, object]:
     return dict(cast("Iterable[tuple[str, object]]", value))  # cast-ok: dict() raises on non-pair values, as before
 
 
+def _extract_part_blocks(
+    part: Mapping[str, object],
+) -> tuple[tuple[str, ...], tuple[ToolMessageContentPart, ...]]:
+    part_type: Final = part.get("type")
+    if part_type in ("input_text", "output_text", "text"):
+        txt: Final = part.get("text")
+        if isinstance(txt, str):
+            blocks: Final[tuple[ToolMessageContentPart, ...]] = (
+                (cast(ToolMessageContentPart, {"type": "text", "text": txt}),) if txt else ()  # cast-ok: text part
+            )
+            return (txt,), blocks
+        return (), ()
+    media: Final = decode_responses_media(part)
+    if media is not None:
+        return (), (media,)
+    texts: Final = tuple(
+        text
+        for key in ("stdout", "stderr")
+        if isinstance(text := part.get(key), str) and text
+    )
+    return texts, tuple(
+        cast(ToolMessageContentPart, {"type": "text", "text": text}) for text in texts  # cast-ok: text part
+    )
+
+
 def tool_output_to_chat_content(
     output: object,
 ) -> str | list[ToolMessageContentPart]:
@@ -476,17 +501,12 @@ def tool_output_to_chat_content(
         normalized_blocks: Final[list[ToolMessageContentPart]] = []
         text_acc: Final[list[str]] = []
         for part in parts:
-            if not isinstance(part, dict):
-                continue
-            part_type = part.get("type")
-            if part_type in ("input_text", "output_text", "text"):
-                txt = part.get("text")
-                if isinstance(txt, str):
-                    text_acc.append(txt)
-                    if txt:
-                        normalized_blocks.append({"type": "text", "text": txt})
-            elif (media := decode_responses_media(part)) is not None:
-                normalized_blocks.append(media)
+            if isinstance(part, dict):
+                new_texts, new_blocks = _extract_part_blocks(
+                    cast(Mapping[str, object], part)  # cast-ok: checked dict shape
+                )
+                text_acc.extend(new_texts)
+                normalized_blocks.extend(new_blocks)
 
         if any(b.get("type") != "text" for b in normalized_blocks):
             return normalized_blocks
@@ -504,7 +524,15 @@ def tool_output_to_chat_content(
 
 
 TOOL_CALL_OUTPUT_ITEM_TYPES: Final = frozenset(
-    {"function_call_output", "custom_tool_call_output", "computer_call_output", "tool_result"}
+    {
+        "function_call_output",
+        "custom_tool_call_output",
+        "computer_call_output",
+        "tool_result",
+        "local_shell_call_output",
+        "shell_call_output",
+        "apply_patch_call_output",
+    }
 )
 
 
@@ -2699,7 +2727,7 @@ class LiteLLMCompletionResponsesConfig:
         """
         ChatCompletionToolMessage is used to indicate the output from a tool call
         """
-        call_id: Final = tool_call_output.get("call_id")
+        call_id: Final = tool_call_output.get("call_id") or tool_call_output.get("id")
         # If call_id is missing or empty, skip this message
         # Empty call_id means we can't create a valid tool message
         if not call_id:

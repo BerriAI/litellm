@@ -36,7 +36,17 @@ from collections.abc import Iterable, Mapping, MutableSequence, Sequence
 from dataclasses import dataclass
 from itertools import accumulate, chain, groupby, repeat
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, TypeVar, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    NamedTuple,
+    Protocol,
+    TypeAlias,
+    TypeVar,
+    Union,
+    cast,
+)
 
 from openai.types.responses.response_output_refusal import ResponseOutputRefusal
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
@@ -295,7 +305,7 @@ _OUTPUT_TEXT_EVENT_TYPES: Final = frozenset({"response.output_text.delta", "resp
 _TEXT_DELTA_EVENT_TYPES: Final = frozenset({"response.output_text.delta", "response.refusal.delta"})
 _TOOL_OUTPUT_TEXT_PART_TYPES: Final = frozenset({"input_text", "output_text", "text"})
 _PATCHABLE_ITEM_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
-    {"function_call_output": "output", "custom_tool_call_output": "output", "message": "content"}
+    {tool_type: "output" for tool_type in TOOL_CALL_OUTPUT_ITEM_TYPES} | {"message": "content"}
 )
 
 
@@ -316,6 +326,39 @@ def _rewritten_compaction_item(item: Mapping[str, object], rewritten: object) ->
     return {**item, "encrypted_content": with_compaction_summary(encrypted_content, summary)}
 
 
+def _rewritten_shell_call_output_chunks(
+    chunks: Sequence[object], rewritten_text: str
+) -> Sequence[Mapping[str, object]]:
+    if not chunks:
+        return ()
+    first: Final[object] = chunks[0]
+    first_chunk: Final[Mapping[str, object]] = (
+        cast(Mapping[str, object], first) if isinstance(first, Mapping) else {}  # cast-ok: checked Mapping
+    )
+    outcome: Final[object] = first_chunk.get("outcome") or {"type": "exit", "exit_code": 0}
+    updated_first: Final[Mapping[str, object]] = {**first_chunk, "outcome": outcome, "stdout": rewritten_text, "stderr": ""}
+    other_chunks: Final[tuple[Mapping[str, object], ...]] = tuple(
+        {**cast(Mapping[str, object], chunk), "stdout": "", "stderr": ""}  # cast-ok: checked Mapping
+        for chunk in chunks[1:]
+        if isinstance(chunk, Mapping)
+    )
+    return (updated_first, *other_chunks)
+
+
+def _extracted_rewritten_text(rewritten_content: object) -> str | None:
+    if isinstance(rewritten_content, str):
+        return rewritten_content
+    if isinstance(rewritten_content, list):
+        parts: Final = [
+            text
+            for part in rewritten_content
+            if isinstance(part, Mapping) and isinstance(text := part.get("text"), str)
+        ]
+        if parts:
+            return "".join(parts)
+    return None
+
+
 def _rewritten_input_item(item: Mapping[str, object], rewritten: object) -> Mapping[str, object] | None:
     if compaction_summary(item) is not None:
         return _rewritten_compaction_item(item, rewritten)
@@ -325,6 +368,14 @@ def _rewritten_input_item(item: Mapping[str, object], rewritten: object) -> Mapp
     rewritten_content: Final = rewritten.get("content")
     if isinstance(item.get(field), str) and isinstance(rewritten_content, str):
         return {**item, field: rewritten_content}
+    if item.get("type") == "shell_call_output":
+        summary_text: Final = _extracted_rewritten_text(rewritten_content)
+        if summary_text is not None:
+            raw_chunks: Final = item.get("output")
+            chunks: Final[Sequence[object]] = (
+                cast(Sequence[object], raw_chunks) if isinstance(raw_chunks, list) else ()  # cast-ok: checked list shape
+            )
+            return {**item, "output": list(_rewritten_shell_call_output_chunks(chunks, summary_text))}
     rewritten_row: Final = cast("AllMessageValues", rewritten)  # cast-ok: guardrails hand back chat-shaped rows
     converted_items, _ = LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(
         [rewritten_row]
@@ -579,9 +630,12 @@ class _RequestFields(NamedTuple):
     instructions: str | None
 
 
+_InputContentLocator: TypeAlias = int | tuple[int, str] | None
+
+
 class _ExtractedInputs(NamedTuple):
     inputs: GenericGuardrailAPIInputs
-    task_mappings: tuple[tuple[int, int | None], ...]
+    task_mappings: tuple[tuple[int, _InputContentLocator], ...]
     instructions: str | None
 
 
@@ -617,9 +671,37 @@ def _tool_output_part_text(part: object) -> str | None:
     return text if fields.get("type") in _TOOL_OUTPUT_TEXT_PART_TYPES and isinstance(text, str) else None
 
 
-def tool_output_texts(item: object) -> tuple[tuple[int | None, str], ...]:
-    if not stream_item_field(item, "call_id") or stream_item_field(item, "type") == "computer_call_output":
+def _chunk_stream_texts(chunk_idx: int, chunk: Mapping[str, object]) -> tuple[tuple[tuple[int, str], str], ...]:
+    stdout: Final[object] = chunk.get("stdout")
+    stderr: Final[object] = chunk.get("stderr")
+    items: Final = (
+        (((chunk_idx, "stdout"), stdout),) if isinstance(stdout, str) and stdout else ()
+    ) + (
+        (((chunk_idx, "stderr"), stderr),) if isinstance(stderr, str) and stderr else ()
+    )
+    return items
+
+
+def _shell_call_output_texts(chunks: Sequence[object]) -> tuple[tuple[tuple[int, str], str], ...]:
+    return tuple(
+        chain.from_iterable(
+            _chunk_stream_texts(chunk_idx, cast(Mapping[str, object], chunk))  # cast-ok: checked Mapping
+            for chunk_idx, chunk in enumerate(chunks)
+            if isinstance(chunk, Mapping)
+        )
+    )
+
+
+def tool_output_texts(item: object) -> tuple[tuple[_InputContentLocator, str], ...]:
+    if (
+        not (stream_item_field(item, "call_id") or stream_item_field(item, "id"))
+        or stream_item_field(item, "type") == "computer_call_output"
+    ):
         return ()
+    if stream_item_field(item, "type") == "shell_call_output":
+        raw_output: Final = stream_item_field(item, "output")
+        if isinstance(raw_output, list):
+            return _shell_call_output_texts(cast(Sequence[object], raw_output))  # cast-ok: checked list shape
     parts: Final = stream_item_items(item, "output")
     part_texts: Final = tuple(
         (index, text) for index, part in enumerate(parts) if (text := _tool_output_part_text(part))
@@ -650,7 +732,10 @@ def _texts_by_tool_row(
     if isinstance(input_data, str):
         return MappingProxyType({})
     output_texts_by_call_id: Final = _grouped_by_call_id(
-        (str(stream_item_field(item, "call_id")), tuple(text for _, text in tool_output_texts(item)))
+        (
+            str(stream_item_field(item, "call_id") or stream_item_field(item, "id")),
+            tuple(text for _, text in tool_output_texts(item)),
+        )
         for item in input_data
         if stream_item_field(item, "type") in TOOL_CALL_OUTPUT_ITEM_TYPES
     )
@@ -699,6 +784,12 @@ def _rewritten_whole_text(item: object, field: str, guardrail_response: str) -> 
         return guardrail_response
     if tool_output_texts(item) == ((None, guardrail_response),):
         return None
+    if stream_item_field(item, "type") == "shell_call_output":
+        raw_chunks: Final = stream_item_field(item, "output")
+        chunks: Final[Sequence[object]] = (
+            cast(Sequence[object], raw_chunks) if isinstance(raw_chunks, list) else ()  # cast-ok: checked list shape
+        )
+        return list(_rewritten_shell_call_output_chunks(chunks, guardrail_response))
     return guardrail_response
 
 
@@ -981,7 +1072,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         instructions: Final = scannable_instructions(data, skip_system=skip_system or scan_only)
         texts_to_check: Final[list[str]] = [] if instructions is None else [instructions]
         images_to_check: Final[list[str]] = []
-        task_mappings: Final[list[tuple[int, int | None]]] = []
+        task_mappings: Final[list[tuple[int, _InputContentLocator]]] = []
         tools_to_check: Final[list[ChatCompletionToolParam]] = list(  # mutable-ok: guardrail inputs want a list
             copy.deepcopy(
                 tuple(
@@ -1088,7 +1179,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         msg_idx: int,
         texts_to_check: list[str],
         images_to_check: list[str],
-        task_mappings: list[tuple[int, int | None]],
+        task_mappings: list[tuple[int, _InputContentLocator]],
     ) -> None:
         """
         Extract text content and images from an input message.
@@ -1136,7 +1227,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         self,
         messages: Any,  # Can be List[Dict[str, Any]] or ResponseInputParam
         responses: Sequence[str],
-        task_mappings: Sequence[tuple[int, int | None]],
+        task_mappings: Sequence[tuple[int, _InputContentLocator]],
     ) -> None:
         """
         Apply guardrail responses back to input messages.
@@ -1148,7 +1239,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         """
         for guardrail_response, mapping in zip(responses, task_mappings):
             msg_idx = cast(int, mapping[0])
-            content_idx_optional = cast(int | None, mapping[1])
+            content_idx_optional = mapping[1]
 
             if compaction_summary(messages[msg_idx]) is not None:
                 messages[msg_idx]["encrypted_content"] = with_compaction_summary(  # rebind-ok: in-place input rewrite
@@ -1161,13 +1252,22 @@ class OpenAIResponsesHandler(BaseTranslation):
             if content is None:
                 continue
 
+            if isinstance(content_idx_optional, tuple):
+                chunk_idx, field_name = content_idx_optional
+                if isinstance(content, list):
+                    content_list = cast(list[object], content)  # cast-ok: checked list shape
+                    if 0 <= chunk_idx < len(content_list):
+                        target_chunk = content_list[chunk_idx]
+                        if isinstance(target_chunk, dict):
+                            target_chunk[field_name] = guardrail_response
+                continue
+
             if content_idx_optional is None:
                 rewritten = _rewritten_whole_text(messages[msg_idx], field, guardrail_response)
                 if rewritten is not None:
                     messages[msg_idx][field] = rewritten
 
             elif isinstance(content, list):
-                # Replace specific text item in list content
                 self._write_content_part_text(content[content_idx_optional], guardrail_response)
 
     async def process_output_response(

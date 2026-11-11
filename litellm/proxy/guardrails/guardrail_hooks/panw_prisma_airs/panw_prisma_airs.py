@@ -127,6 +127,7 @@ class _ResponsesInputItem(LiteLLMBaseModel):
     content: str | tuple[_ResponsesContentPart, ...] | None = None
     output: object = None
     call_id: object = None
+    id: object = None
 
     def text_count(self, *, skip_system: bool, skip_tool: bool) -> int:
         is_tool_output: Final = self.type in TOOL_CALL_OUTPUT_ITEM_TYPES

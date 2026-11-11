@@ -1082,6 +1082,321 @@ class TestToolResultItemsReachTextsGuardrails:
         assert result["input"][2]["output"] == "SECRET forecast [GUARDRAILED]"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "output_type",
+        ["local_shell_call_output", "apply_patch_call_output"],
+    )
+    async def test_shell_and_patch_tool_outputs_are_scanned_and_rewritten_in_place(
+        self, output_type: str
+    ) -> None:
+        guardrail: Final = RecordingMaskingGuardrail(guardrail_name="test")
+        call_item, _ = _TOOL_TURNS[0]
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(
+            _tool_result_request(call_item, output_type, "SECRET tool output"), guardrail
+        )
+
+        assert guardrail.seen_texts == [["Weather?", "SECRET tool output"]]
+        assert result["input"][2]["output"] == "SECRET tool output [GUARDRAILED]"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "output_type",
+        [
+            "function_call_output",
+            "custom_tool_call_output",
+            "tool_result",
+            "local_shell_call_output",
+            "apply_patch_call_output",
+        ],
+    )
+    async def test_tool_output_only_request_invokes_guardrails_and_rewrites_in_place(
+        self, output_type: str
+    ) -> None:
+        guardrail: Final = RecordingMaskingGuardrail(guardrail_name="test")
+        request: Final[dict[str, object]] = {
+            "model": "gpt-5.4-mini",
+            "input": [
+                {"type": output_type, "call_id": "call_1", "output": "SECRET payload"},
+            ],
+        }
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(request, guardrail)
+
+        assert guardrail.seen_texts == [["SECRET payload"]]
+        assert result["input"] == [
+            {"type": output_type, "call_id": "call_1", "output": "SECRET payload [GUARDRAILED]"},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_headroom_compresses_tool_output_only_responses_request(self) -> None:
+        from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import HeadroomGuardrail
+
+        guardrail: Final = HeadroomGuardrail(
+            api_base="https://headroom.test",
+            api_key="hr-test",
+            guardrail_name="headroom",
+        )
+        request: Final[dict[str, object]] = {
+            "model": "gpt-5.4-mini",
+            "previous_response_id": "resp_previous",
+            "custom_metadata": {"source": "terminal", "session": "abc123"},
+            "input": [
+                {
+                    "type": "local_shell_call_output",
+                    "id": "lso_1",
+                    "output": "long output 1",
+                },
+                {
+                    "type": "apply_patch_call_output",
+                    "call_id": "call_2",
+                    "output": "long output 2",
+                },
+            ],
+        }
+        mock_response: Final = httpx.Response(
+            200,
+            json={
+                "messages": [
+                    {"role": "tool", "content": "short output 1", "tool_call_id": "lso_1"},
+                    {"role": "tool", "content": "short output 2", "tool_call_id": "call_2"},
+                ]
+            },
+            request=httpx.Request("POST", "https://headroom.test/v1/compress"),
+        )
+
+        with patch.object(
+            guardrail.async_handler, "post", new_callable=AsyncMock, return_value=mock_response
+        ) as mock_post:
+            result: Final = await OpenAIResponsesHandler().process_input_messages(request, guardrail)
+
+        assert mock_post.await_count == 1
+        assert result.get("previous_response_id") == "resp_previous"
+        assert result.get("custom_metadata") == {"source": "terminal", "session": "abc123"}
+        assert result["input"] == [
+            {"type": "local_shell_call_output", "id": "lso_1", "output": "short output 1"},
+            {"type": "apply_patch_call_output", "call_id": "call_2", "output": "short output 2"},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_shell_call_output_scans_and_rewrites_chunks_preserving_structure(self) -> None:
+        guardrail: Final = RecordingMaskingGuardrail(guardrail_name="test")
+        chunks: Final[list[dict[str, object]]] = [
+            {
+                "outcome": {"type": "exit", "exit_code": 0},
+                "stdout": "SECRET stdout 1",
+                "stderr": "SECRET stderr 1",
+                "created_by": "user_1",
+            },
+            {
+                "outcome": {"type": "timeout"},
+                "stdout": "SECRET stdout 2",
+                "stderr": "",
+            },
+        ]
+        request: Final[dict[str, object]] = {
+            "model": "gpt-5.4-mini",
+            "input": [
+                {
+                    "type": "shell_call_output",
+                    "id": "sho_1",
+                    "call_id": "call_1",
+                    "output": chunks,
+                }
+            ],
+        }
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(request, guardrail)
+
+        assert guardrail.seen_texts == [["SECRET stdout 1", "SECRET stderr 1", "SECRET stdout 2"]]
+        assert result["input"] == [
+            {
+                "type": "shell_call_output",
+                "id": "sho_1",
+                "call_id": "call_1",
+                "output": [
+                    {
+                        "outcome": {"type": "exit", "exit_code": 0},
+                        "stdout": "SECRET stdout 1 [GUARDRAILED]",
+                        "stderr": "SECRET stderr 1 [GUARDRAILED]",
+                        "created_by": "user_1",
+                    },
+                    {
+                        "outcome": {"type": "timeout"},
+                        "stdout": "SECRET stdout 2 [GUARDRAILED]",
+                        "stderr": "",
+                    },
+                ],
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_headroom_compresses_shell_call_output_preserving_chunk_array_structure(self) -> None:
+        from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import HeadroomGuardrail
+
+        guardrail: Final = HeadroomGuardrail(
+            api_base="https://headroom.test",
+            api_key="hr-test",
+            guardrail_name="headroom",
+        )
+        request: Final[dict[str, object]] = {
+            "model": "gpt-5.4-mini",
+            "input": [
+                {
+                    "type": "shell_call_output",
+                    "id": "sho_1",
+                    "call_id": "call_1",
+                    "output": [
+                        {
+                            "outcome": {"type": "exit", "exit_code": 0},
+                            "stdout": "very long output line 1\nline 2",
+                            "stderr": "",
+                            "created_by": "user_1",
+                        },
+                        {
+                            "outcome": {"type": "timeout"},
+                            "stdout": "timed out after 30s",
+                            "stderr": "error buffer",
+                            "created_by": "user_1",
+                        },
+                    ],
+                }
+            ],
+        }
+        mock_response: Final = httpx.Response(
+            200,
+            json={
+                "messages": [
+                    {"role": "tool", "content": "compressed summary", "tool_call_id": "call_1"},
+                ]
+            },
+            request=httpx.Request("POST", "https://headroom.test/v1/compress"),
+        )
+
+        with patch.object(
+            guardrail.async_handler, "post", new_callable=AsyncMock, return_value=mock_response
+        ):
+            result: Final = await OpenAIResponsesHandler().process_input_messages(request, guardrail)
+
+        assert result["input"] == [
+            {
+                "type": "shell_call_output",
+                "id": "sho_1",
+                "call_id": "call_1",
+                "output": [
+                    {
+                        "outcome": {"type": "exit", "exit_code": 0},
+                        "stdout": "compressed summary",
+                        "stderr": "",
+                        "created_by": "user_1",
+                    },
+                    {
+                        "outcome": {"type": "timeout"},
+                        "stdout": "",
+                        "stderr": "",
+                        "created_by": "user_1",
+                    },
+                ],
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_local_shell_call_output_spec_shape_without_call_id_is_scanned_and_rewritten(self) -> None:
+        guardrail: Final = RecordingMaskingGuardrail(guardrail_name="test")
+        request: Final[dict[str, object]] = {
+            "model": "gpt-5.4-mini",
+            "input": [
+                {
+                    "type": "local_shell_call_output",
+                    "id": "lso_1",
+                    "output": "SECRET shell output",
+                }
+            ],
+        }
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(request, guardrail)
+
+        assert guardrail.seen_texts == [["SECRET shell output"]]
+        assert result["input"] == [
+            {"type": "local_shell_call_output", "id": "lso_1", "output": "SECRET shell output [GUARDRAILED]"},
+        ]
+
+    def test_panw_responses_input_item_counts_local_shell_call_output_with_id_spec_shape(self) -> None:
+        from litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.panw_prisma_airs import _ResponsesInputItem
+
+        item: Final = _ResponsesInputItem(
+            type="local_shell_call_output",
+            id="lso_1",
+            output="test output",
+        )
+        assert item.text_count(skip_system=False, skip_tool=False) == 1
+
+    @pytest.mark.asyncio
+    async def test_headroom_fail_open_forwards_tool_output_uncompressed_on_error(self) -> None:
+        from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import HeadroomGuardrail
+
+        guardrail: Final = HeadroomGuardrail(
+            api_base="https://headroom.test",
+            guardrail_name="headroom",
+            unreachable_fallback="fail_open",
+        )
+        request: Final[dict[str, object]] = {
+            "model": "gpt-5.4-mini",
+            "previous_response_id": "resp_previous",
+            "input": [
+                {
+                    "type": "local_shell_call_output",
+                    "call_id": "call_1",
+                    "output": "uncompressed output",
+                }
+            ],
+        }
+        mock_error: Final = httpx.Response(
+            500,
+            text="Service Error",
+            request=httpx.Request("POST", "https://headroom.test/v1/compress"),
+        )
+
+        with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock, return_value=mock_error):
+            result: Final = await OpenAIResponsesHandler().process_input_messages(request, guardrail)
+
+        assert result.get("previous_response_id") == "resp_previous"
+        assert result["input"] == [
+            {"type": "local_shell_call_output", "call_id": "call_1", "output": "uncompressed output"},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_headroom_fail_closed_raises_error_on_failure(self) -> None:
+        from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import HeadroomGuardrail
+
+        guardrail: Final = HeadroomGuardrail(
+            api_base="https://headroom.test",
+            guardrail_name="headroom",
+            unreachable_fallback="fail_closed",
+        )
+        request: Final[dict[str, object]] = {
+            "model": "gpt-5.4-mini",
+            "input": [
+                {
+                    "type": "local_shell_call_output",
+                    "call_id": "call_1",
+                    "output": "uncompressed output",
+                }
+            ],
+        }
+        mock_error: Final = httpx.Response(
+            500,
+            text="Service Error",
+            request=httpx.Request("POST", "https://headroom.test/v1/compress"),
+        )
+
+        with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock, return_value=mock_error):
+            with pytest.raises(HTTPException) as exc_info:
+                await OpenAIResponsesHandler().process_input_messages(request, guardrail)
+
+        assert exc_info.value.status_code == 502
+
+    @pytest.mark.asyncio
     async def test_text_only_parts_the_guardrail_leaves_unchanged_keep_their_parts(self) -> None:
         call_item, output_type = _TOOL_TURNS[0]
         parts: Final = [{"type": "input_text", "text": "SECRET forecast: "}, {"type": "input_text", "text": "sunny"}]
