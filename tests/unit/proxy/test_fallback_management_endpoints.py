@@ -487,6 +487,20 @@ class TestFallbackWritesSeeTheLatestStoredRules:
         assert response.fallback_models == ["gpt-5.4-mini", "team-fallback"]
         assert response.fallback_type == fallback_type
 
+    @pytest.mark.parametrize(
+        ("fallback_type", "fallback_key"),
+        [("general", "fallbacks"), ("content_policy", "content_policy_fallbacks")],
+    )
+    async def test_a_read_skips_a_malformed_saved_rule_and_serves_the_valid_ones(
+        self, fallback_type: Literal["general", "content_policy"], fallback_key: str
+    ) -> None:
+        stored: Final = _StoredRouterSettings(None)
+        stored.row = SimpleNamespace(param_name="router_settings", param_value={fallback_key: [42, TEAM_RULE, None]})
+
+        response: Final = await self._get("team-primary", stored, fallback_type)
+
+        assert response.fallback_models == ["team-fallback"]
+
     async def test_a_read_resolves_the_saved_wildcard_rule(self) -> None:
         stored: Final = _StoredRouterSettings({"fallbacks": [GATEWAY_RULE, {"*": ["gpt-5.4-mini"]}]})
 
@@ -495,7 +509,8 @@ class TestFallbackWritesSeeTheLatestStoredRules:
         assert response.fallback_models == ["gpt-5.4-mini"]
 
     @pytest.mark.parametrize(
-        "router_settings", [None, {"routing_strategy": "latency-based-routing"}, {"fallbacks": None}]
+        "router_settings",
+        [None, {"routing_strategy": "latency-based-routing"}, {"fallbacks": None}, {"fallbacks": "team-primary"}],
     )
     async def test_a_read_does_not_answer_with_rules_only_the_routers_memory_holds(
         self, router_settings: RouterSettings | None

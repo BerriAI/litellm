@@ -2,11 +2,12 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Annotated, Final, Protocol, TypeAlias
 
-from pydantic import Field, TypeAdapter
+from pydantic import Field, JsonValue, TypeAdapter
 
 FallbackRule = dict[str, list[str]]
 StoredFallback = Annotated[FallbackRule | dict[str, object] | str, Field(union_mode="left_to_right")]
 STORED_FALLBACKS: Final = TypeAdapter(list[StoredFallback])
+SavedFallbackRule: TypeAlias = JsonValue
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,6 +20,6 @@ FallbackRulesEditor: TypeAlias = Callable[[Sequence[StoredFallback]], FallbackRu
 
 
 class RouterFallbackStore(Protocol):
-    async def saved_rules(self, fallback_key: str) -> Sequence[StoredFallback] | None: ...
+    async def saved_rules(self, fallback_key: str) -> Sequence[SavedFallbackRule] | None: ...
 
     async def edit_rules(self, fallback_key: str, edit: FallbackRulesEditor) -> FallbackRulesEdit: ...

@@ -328,14 +328,10 @@ async def _saved_rules_in_effect(
 
 
 def _fallback_chain_for(rules: Sequence[object], model: str) -> object:
-    try:
-        chain, _ = fallback_chain(
-            fallbacks=rules,  # pyright: ignore[reportArgumentType]  # the chain also resolves the string and rich-target rules the router accepts
-            model_group=model,
-        )
-    except Exception as e:
-        verbose_proxy_logger.error("Error getting fallbacks for model %s: %s", model, e)
-        return []
+    chain, _ = fallback_chain(
+        fallbacks=rules,  # pyright: ignore[reportArgumentType]  # the chain also resolves the string and rich-target rules the router accepts
+        model_group=model,
+    )
     return chain or []
 
 

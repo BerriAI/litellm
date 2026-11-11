@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Final, Protocol, cast
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
-from litellm.models.fallback import STORED_FALLBACKS, FallbackRulesEdit, FallbackRulesEditor, StoredFallback
+from litellm.models.fallback import STORED_FALLBACKS, FallbackRulesEdit, FallbackRulesEditor, SavedFallbackRule
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -156,12 +156,14 @@ class ConfigRepository:
         )
         return bool(rows)
 
-    async def saved_rules(self, fallback_key: str) -> Sequence[StoredFallback] | None:
+    async def saved_rules(self, fallback_key: str) -> Sequence[SavedFallbackRule] | None:
         row: Final = await self._config_table.find_unique(where={"param_name": ROUTER_SETTINGS_PARAM})
         if row is None:
             return None
         rules: Final = _stored_router_settings(row.param_value).get(fallback_key)
-        return None if rules is None else STORED_FALLBACKS.validate_python(rules)
+        if rules is None:
+            return None
+        return rules if isinstance(rules, list) else ()
 
     async def edit_rules(self, fallback_key: str, edit: FallbackRulesEditor) -> FallbackRulesEdit:
         param_name: Final = ROUTER_SETTINGS_PARAM
