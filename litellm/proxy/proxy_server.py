@@ -454,6 +454,7 @@ from litellm.proxy.auth.auth_utils import (
 )
 from litellm.proxy.auth.fallback_budget import RouterFallbackBudgetCheck, router_fallback_budget_check
 from litellm.proxy.auth.fallback_model_access import router_fallback_access_check
+from litellm.proxy.auth.fallback_rate_limit import RouterFallbackRateLimitCheck
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.legacy_empty_models_check import warn_about_legacy_empty_models
 from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_REMEDY, LicenseCheck
@@ -7656,6 +7657,9 @@ class ProxyConfig:
                         is_enforced=router_fallback_budget_check.is_enforced,
                         team_member_model_budget_limiter=model_max_budget_limiter,
                     ),
+                    fallback_rate_limit_check=RouterFallbackRateLimitCheck(
+                        limiter=lambda: proxy_logging_obj.get_proxy_hook("parallel_request_limiter"),
+                    ),
                     auto_router_capability_limit=_license_check.auto_router_capability_limit,
                 )
             )
@@ -8161,6 +8165,9 @@ class ProxyConfig:
                                 fallback_budget_check=RouterFallbackBudgetCheck(
                                     is_enforced=router_fallback_budget_check.is_enforced,
                                     team_member_model_budget_limiter=model_max_budget_limiter,
+                                ),
+                                fallback_rate_limit_check=RouterFallbackRateLimitCheck(
+                                    limiter=lambda: proxy_logging_obj.get_proxy_hook("parallel_request_limiter"),
                                 ),
                                 auto_router_capability_limit=_license_check.auto_router_capability_limit,
                             )
@@ -10303,23 +10310,34 @@ def _get_streaming_fallback_metadata(
     return True, None, fallback_errors
 
 
+_FALLBACK_METADATA_ID: Final = "litellm-fallback-metadata"
+_RESPONSES_FALLBACK_METADATA_EVENT_TYPE: Final = "litellm.fallback_metadata"
+
+
 def _format_fallback_metadata_sse_event(
     *,
     fallback_model: str | None,
     fallback_errors: list[dict[str, object]],
+    responses_stream: bool,
+    return_raw_model_name: bool,
 ) -> str:
-    import time
-
+    litellm_fallback: Final = {"fallback_model": fallback_model, "errors": fallback_errors}
+    if responses_stream:
+        stamped_model: Final = None if return_raw_model_name else fallback_model
+        event: Final = {
+            "type": _RESPONSES_FALLBACK_METADATA_EVENT_TYPE,
+            "id": _FALLBACK_METADATA_ID,
+            **({"model": stamped_model} if stamped_model else {}),
+            "litellm_fallback": litellm_fallback,
+        }
+        return f"data: {json.dumps(event)}\n\n"
     payload: Final = {
-        "id": "litellm-fallback-metadata",
+        "id": _FALLBACK_METADATA_ID,
         "object": "chat.completion.chunk",
         "created": int(time.time()),
         "model": fallback_model or "",
         "choices": [],
-        "litellm_fallback": {
-            "fallback_model": fallback_model,
-            "errors": fallback_errors,
-        },
+        "litellm_fallback": litellm_fallback,
     }
     return f"data: {json.dumps(payload)}\n\n"
 
@@ -10328,7 +10346,7 @@ def _restamp_streaming_chunk_model(
     *,
     chunk: object,
     requested_model_from_client: str,
-    request_data: dict,
+    request_data: Mapping[str, object],
     model_mismatch_logged: bool,
     fallback_was_attempted: bool = False,
     fallback_model_from_metadata: str | None = None,
@@ -10906,6 +10924,7 @@ async def async_data_generator(
         model_mismatch_logged = False
         fallback_metadata_event_sent = False
         include_fallback_errors: Final = _should_include_fallback_errors(request_data)
+        return_raw_model_name: Final = should_return_raw_model_name(request_data)
         # Use a running string instead of list + join to avoid O(n^2) overhead.
         # Previously "".join(str_so_far_parts) was called every chunk, re-joining
         # the entire accumulated response. String += is O(n) amortized total.
@@ -11003,6 +11022,8 @@ async def async_data_generator(
                     yield _format_fallback_metadata_sse_event(
                         fallback_model=fallback_model_from_metadata,
                         fallback_errors=fallback_errors,
+                        responses_stream=error_state is not None,
+                        return_raw_model_name=return_raw_model_name,
                     )
                     fallback_metadata_event_sent = True
                 continue
@@ -11059,6 +11080,8 @@ async def async_data_generator(
                 yield _format_fallback_metadata_sse_event(
                     fallback_model=fallback_model_from_metadata,
                     fallback_errors=fallback_errors,
+                    responses_stream=error_state is not None,
+                    return_raw_model_name=return_raw_model_name,
                 )
                 fallback_metadata_event_sent = True
 

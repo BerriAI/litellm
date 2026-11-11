@@ -381,7 +381,7 @@ def resolve_litellm_call_id(client_call_id: str | None) -> str:
     return str(uuid.uuid4())
 
 
-def should_return_raw_model_name(request_data: dict[str, object]) -> bool:
+def should_return_raw_model_name(request_data: Mapping[str, object]) -> bool:
     return any(
         isinstance(metadata, dict) and metadata.get(RETURN_RAW_MODEL_NAME_METADATA_KEY) is True
         for metadata in (request_data.get("metadata"), request_data.get("litellm_metadata"))

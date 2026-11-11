@@ -935,6 +935,38 @@ async def test_add_litellm_data_to_request_body_snapshot_excludes_secret_fields(
 
 
 @pytest.mark.asyncio
+async def test_chat_completions_body_field_named_request_headers_stays_in_the_logged_body():
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    client_field: Final = {"x-client-trace": "client-supplied"}
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/chat/completions",
+            "scheme": "http",
+            "server": ("localhost", 4000),
+            "query_string": b"",
+            "headers": [(b"authorization", b"Bearer sk-litellm-key")],
+        }
+    )
+
+    enriched: Final = await add_litellm_data_to_request(
+        data={
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hello"}],
+            "request_headers": client_field,
+        },
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=ProxyConfig(),
+        general_settings={},
+    )
+
+    assert enriched["proxy_server_request"]["body"]["request_headers"] == client_field
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_body_snapshot_excludes_proxy_server_request():
     """Regression: the body snapshot used to include the proxy_server_request
     key itself, producing the path

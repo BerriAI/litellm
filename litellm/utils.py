@@ -11357,6 +11357,7 @@ class ProviderConfigManager:
         from litellm.llms.serper.search.transformation import SerperSearchConfig
         from litellm.llms.tavily.search.transformation import TavilySearchConfig
         from litellm.llms.tinyfish.search.transformation import TinyfishSearchConfig
+        from litellm.llms.webiq.search.transformation import WebIQSearchConfig
         from litellm.llms.xai.search.transformation import XAISearchConfig
         from litellm.llms.you_com.search.transformation import YouComSearchConfig
 
@@ -11381,6 +11382,7 @@ class ProviderConfigManager:
             SearchProviders.AGENTCORE: AgentCoreSearchConfig,
             SearchProviders.NIMBLE: NimbleSearchConfig,
             SearchProviders.BING_GROUNDING: BingGroundingSearchConfig,
+            SearchProviders.WEBIQ: WebIQSearchConfig,
             SearchProviders.DEEPSEEK: DeepSeekSearchConfig,
             SearchProviders.XAI: XAISearchConfig,
         }
