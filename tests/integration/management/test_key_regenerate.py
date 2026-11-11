@@ -1,7 +1,12 @@
+import json
+from typing import Final
+
 import pytest
 
 from tests.integration._support.actors import TEAM_ALPHA, TEAM_BETA, Actor
 from tests.integration._support.actors import create_scratch_key, owned_settings_client
+from tests.integration._support.client import Gateway, object_value
+from tests.integration._support.wire import Reply, Request, wire_server
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -38,6 +43,56 @@ async def _info(gateway_client, cleartext: str):
     return await gateway_client.get(
         "/key/info", headers={"Authorization": f"Bearer {cleartext}"}
     )
+
+
+async def test_master_key_regeneration_is_rejected_without_rotating_model(gateway: Gateway):
+    master_key_regeneration_error: Final = (
+        "Rotating the master key through /key/regenerate is no longer supported. "
+        "Set the new value in LITELLM_MASTER_KEY or general_settings.master_key and restart every proxy instance. "
+        "If LITELLM_SALT_KEY is not set, first set it to your current master key. "
+        "See https://docs.litellm.ai/docs/proxy/master_key_rotations"
+    )
+
+    def upstream(_: Request) -> Reply:
+        return Reply(
+            body=json.dumps(
+                {
+                    "id": "master-key-regeneration-response",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "gpt-4o-mini",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "available"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                }
+            ).encode()
+        )
+
+    with gateway.scenario() as scenario, wire_server(upstream) as provider:
+        model: Final = scenario.model(api_base=f"{provider.url}/v1")
+        response: Final = gateway.request(
+            "POST",
+            "/key/regenerate",
+            {"key": gateway.key, "new_master_key": "sk-new-master-key"},
+        )
+        assert response.status_code == 400, response.text
+        assert response.json()["error"]["message"] == str({"error": master_key_regeneration_error})
+
+        model_info: Final = gateway.request("GET", "/model/info")
+        assert model_info.status_code == 200, model_info.text
+        listed: Final = model_info.json()["data"]
+        assert isinstance(listed, list)
+        assert any(object_value(entry)["model_name"] == model for entry in listed)
+        served: Final = gateway.chat(model, text="master key regeneration")
+        assert object_value(served["choices"][0])["message"] == {
+            "role": "assistant",
+            "content": "available",
+        }
 
 
 @pytest.mark.parametrize(
