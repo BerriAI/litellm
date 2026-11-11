@@ -28,7 +28,7 @@ from litellm.repositories.table_repositories import (
     RetiredAgentIdentityRepository,
 )
 from litellm.types.agents import AgentConfig, AgentKillSwitchConfig, AgentResponse, PatchAgentRequest
-from litellm.types.proxy.agent_identity import AgentIdentityFailure
+from litellm.types.proxy.agent_identity import AgentIdentityFailure, OktaIdentityConfig
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -166,6 +166,11 @@ async def _permission_write(
     return updated
 
 
+def _registration_conflict(agent: Mapping[str, object]) -> HTTPException:
+    application: Final = "Okta" if isinstance(agent.get("identity"), OktaIdentityConfig) else "Entra"
+    return HTTPException(409, f"Agent name or {application} application is already registered")
+
+
 async def _managed_fields(
     incoming: Mapping[str, object],
     existing: AgentResponse | None,
@@ -190,7 +195,8 @@ async def _managed_fields(
     if prior is None:
         return result
     if existing is None or prior.agent_id != existing.agent_id:
-        raise HTTPException(409, "Entra application was already registered to another agent")
+        provider: Final = "Okta" if entry["provider"] == "okta" else "Entra"
+        raise HTTPException(409, f"{provider} application was already registered to another agent")
     return MappingProxyType({key: value for key, value in result.items() if key != "retired_identities"})
 
 
@@ -662,7 +668,7 @@ class AgentRegistry:
             raise
         except Exception as e:
             if is_unique_violation(e):
-                raise HTTPException(409, "Agent name or Entra application is already registered") from e
+                raise _registration_conflict(agent) from e
             raise
 
     async def delete_agent_from_db(self, agent_id: str, prisma_client: PrismaClient) -> Mapping[str, object]:
@@ -780,7 +786,7 @@ class AgentRegistry:
             raise
         except Exception as e:
             if is_unique_violation(e):
-                raise HTTPException(409, "Agent name or Entra application is already registered") from e
+                raise _registration_conflict(agent) from e
             raise
 
     async def update_agent_in_db(
@@ -887,7 +893,7 @@ class AgentRegistry:
             raise
         except Exception as e:
             if is_unique_violation(e):
-                raise HTTPException(409, "Agent name or Entra application is already registered") from e
+                raise _registration_conflict(agent) from e
             raise
 
     @staticmethod

@@ -2775,6 +2775,9 @@
                   "$ref": "#/components/schemas/EntraIdentityConfig"
                 },
                 {
+                  "$ref": "#/components/schemas/OktaIdentityConfig"
+                },
+                {
                   "type": "null"
                 }
               ]
@@ -2939,7 +2942,10 @@
               "title": "Last Authenticated At"
             },
             "provider": {
-              "const": "microsoft_entra",
+              "enum": [
+                "microsoft_entra",
+                "okta"
+              ],
               "title": "Provider",
               "type": "string"
             },
@@ -4640,6 +4646,42 @@
           "title": "OAuthFlows",
           "type": "object"
         },
+        "OktaIdentityConfig": {
+          "additionalProperties": false,
+          "properties": {
+            "client_id": {
+              "pattern": "^\\S+$",
+              "title": "Client Id",
+              "type": "string"
+            },
+            "issuer": {
+              "pattern": "^https://[^/?#]+/oauth2/[^/?#]+$",
+              "title": "Issuer",
+              "type": "string"
+            },
+            "provider": {
+              "const": "okta",
+              "title": "Provider",
+              "type": "string"
+            },
+            "required_scopes": {
+              "default": [],
+              "items": {
+                "pattern": "^[\\x21\\x23-\\x5B\\x5D-\\x7E]+$",
+                "type": "string"
+              },
+              "title": "Required Scopes",
+              "type": "array"
+            }
+          },
+          "required": [
+            "provider",
+            "issuer",
+            "client_id"
+          ],
+          "title": "OktaIdentityConfig",
+          "type": "object"
+        },
         "OpenIdConnectSecurityScheme": {
           "description": "Defines a security scheme using OpenID Connect.",
           "properties": {
@@ -4725,6 +4767,9 @@
               "anyOf": [
                 {
                   "$ref": "#/components/schemas/EntraIdentityConfig"
+                },
+                {
+                  "$ref": "#/components/schemas/OktaIdentityConfig"
                 },
                 {
                   "type": "null"
@@ -6158,6 +6203,37 @@
             }
           ],
           "summary": "Get Agent Identity Providers",
+          "tags": [
+            "agents"
+          ]
+        }
+      },
+      "/v1/agents/identity/providers/okta": {
+        "get": {
+          "description": "Issuers opted in with agent_identity_provider: okta.",
+          "operationId": "get_okta_agent_identity_providers_v1_agents_identity_providers_okta_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Response Get Okta Agent Identity Providers V1 Agents Identity Providers Okta Get",
+                    "type": "array"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Okta Agent Identity Providers",
           "tags": [
             "agents"
           ]

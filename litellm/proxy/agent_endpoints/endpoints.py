@@ -85,10 +85,12 @@ from litellm.types.agents import (
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.proxy.agent_identity import (
+    AGENT_IDENTITY_CONFIG,
     AgentIdentityBinding,
     AgentIdentityFailure,
-    EntraIdentityConfig,
     ManagedAgentIdentityStatus,
+    OktaIdentityConfig,
+    identity_config_model,
 )
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     DailySpendMetadata,
@@ -570,6 +572,12 @@ def _trusted_agent_issuers() -> tuple[str, ...]:
     )
 
 
+def _okta_agent_issuers() -> frozenset[str]:
+    from litellm.proxy.proxy_server import jwt_handler
+
+    return jwt_handler.okta_agent_issuers().intersection(_trusted_agent_issuers())
+
+
 def _validate_managed_identity_request(
     request: AgentConfig | PatchAgentRequest, existing: AgentResponse | None = None
 ) -> None:
@@ -577,12 +585,20 @@ def _validate_managed_identity_request(
     if raw is None:
         return
     try:
-        identity: Final = raw if isinstance(raw, AgentIdentityBinding) else EntraIdentityConfig.model_validate(raw)
+        identity: Final = raw if isinstance(raw, AgentIdentityBinding) else AGENT_IDENTITY_CONFIG.validate_python(raw)
     except ValidationError as exc:
-        raise HTTPException(400, "Invalid Entra identity configuration") from exc
-    if identity.issuer not in _trusted_agent_issuers():
+        name: Final = "Okta" if identity_config_model(raw) is OktaIdentityConfig else "Entra"
+        raise HTTPException(400, f"Invalid {name} identity configuration") from exc
+    if identity.provider == "okta" and identity.issuer not in _okta_agent_issuers():
+        raise HTTPException(
+            400, "Add this issuer to litellm_jwtauth.issuers with an audience and agent_identity_provider: okta first"
+        )
+    if identity.provider == "microsoft_entra" and identity.issuer not in _trusted_agent_issuers():
         raise HTTPException(400, "Configure trusted JWT issuer and audience validation for this Entra tenant first")
-    if request.get("execution_mode", existing.execution_mode if existing else "autonomous") != "autonomous":
+    if (
+        identity.provider == "microsoft_entra"
+        and request.get("execution_mode", existing.execution_mode if existing else "autonomous") != "autonomous"
+    ):
         if os.getenv("MICROSOFT_TENANT") != identity.tenant_id or not os.getenv("MICROSOFT_CLIENT_ID"):
             raise HTTPException(400, "Delegated agents require Microsoft SSO for the same trusted tenant")
 
@@ -593,6 +609,15 @@ async def get_agent_identity_providers(
 ) -> tuple[str, ...]:
     _check_agent_management_permission(user_api_key_dict)
     return _trusted_agent_issuers()
+
+
+@router.get("/v1/agents/identity/providers/okta", response_model=tuple[str, ...], tags=["[beta] A2A Agents"])
+async def get_okta_agent_identity_providers(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> tuple[str, ...]:
+    """Issuers opted in with agent_identity_provider: okta."""
+    _check_agent_management_permission(user_api_key_dict)
+    return tuple(sorted(_okta_agent_issuers()))
 
 
 @router.get("/v1/agents/{agent_id}/identity", response_model=ManagedAgentIdentityStatus, tags=("[beta] A2A Agents",))

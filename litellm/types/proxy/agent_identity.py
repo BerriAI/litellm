@@ -1,8 +1,16 @@
+from collections.abc import Callable
 from datetime import datetime
-from typing import Literal, TypeAlias
+from typing import Annotated, Final, Literal, TypeAlias
 from uuid import UUID
 
-from pydantic import ConfigDict, Field, field_validator
+from pydantic import (
+    ConfigDict,
+    Field,
+    GetCoreSchemaHandler,
+    TypeAdapter,
+    field_validator,
+)
+from pydantic_core import core_schema
 
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -32,12 +40,52 @@ class EntraIdentityConfig(LiteLLMBaseModel):
         return f"https://login.microsoftonline.com/{self.tenant_id}/v2.0"
 
 
+OKTA_ISSUER_PATTERN: Final = r"^https://[^/?#]+/oauth2/[^/?#]+$"
+
+
+class OktaIdentityConfig(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    provider: Literal["okta"]
+    issuer: Annotated[str, Field(pattern=OKTA_ISSUER_PATTERN)]
+    client_id: Annotated[str, Field(pattern=r"^\S+$")]
+    required_scopes: tuple[Annotated[str, Field(pattern=r"^[\x21\x23-\x5B\x5D-\x7E]+$")], ...] = ()
+
+
+def identity_config_model(value: object) -> type[EntraIdentityConfig] | type[OktaIdentityConfig]:
+    match value:
+        case {"provider": "okta"} | OktaIdentityConfig():
+            return OktaIdentityConfig
+        case _:
+            return EntraIdentityConfig
+
+
+class _RouteByProvider:
+    def __get_pydantic_core_schema__(self, source: object, handler: GetCoreSchemaHandler) -> core_schema.CoreSchema:
+        okta: Final = TypeAdapter(OktaIdentityConfig)
+
+        def route(
+            value: object, entra: Callable[[object], EntraIdentityConfig]
+        ) -> EntraIdentityConfig | OktaIdentityConfig:
+            if identity_config_model(value) is OktaIdentityConfig:
+                return okta.validate_python(value)
+            return entra(value)
+
+        return core_schema.no_info_wrap_validator_function(
+            route, handler.generate_schema(EntraIdentityConfig), json_schema_input_schema=handler(source)
+        )
+
+
+AgentIdentityConfig: TypeAlias = Annotated[EntraIdentityConfig | OktaIdentityConfig, _RouteByProvider()]
+AGENT_IDENTITY_CONFIG: Final[TypeAdapter[EntraIdentityConfig | OktaIdentityConfig]] = TypeAdapter(AgentIdentityConfig)
+
+
 class AgentIdentityBinding(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     agent_id: str
     active: bool = True
-    provider: Literal["microsoft_entra"]
+    provider: Literal["microsoft_entra", "okta"]
     tenant_id: str
     client_id: str
     service_principal_id: str | None = None

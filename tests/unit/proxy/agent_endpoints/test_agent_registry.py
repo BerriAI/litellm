@@ -1590,6 +1590,43 @@ async def test_retired_application_cannot_transfer_to_another_agent(operation: s
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "identity,message",
+    [
+        (
+            {
+                "provider": "microsoft_entra",
+                "tenant_id": "11111111-1111-4111-8111-111111111111",
+                "client_id": "22222222-2222-4222-8222-222222222222",
+                "service_principal_id": "33333333-3333-4333-8333-333333333333",
+            },
+            "Entra application was already registered to another agent",
+        ),
+        (
+            {"provider": "okta", "issuer": "https://example.okta.com/oauth2/aus1agents", "client_id": "0oa1AgentClient"},
+            "Okta application was already registered to another agent",
+        ),
+    ],
+)
+async def test_retired_application_conflict_names_its_identity_provider(
+    identity: Mapping[str, object], message: str
+) -> None:
+    from fastapi import HTTPException
+
+    client: Final = MagicMock()
+    client.writer_db.litellm_retiredagentidentity.find_unique = AsyncMock(
+        return_value=SimpleNamespace(agent_id="previous-agent")
+    )
+    client.db.litellm_agentstable.create = AsyncMock()
+    with pytest.raises(HTTPException) as denied:
+        await AgentRegistry().add_agent_to_db(
+            {"agent_name": "Agent", "agent_card_params": {}, "identity": identity}, client, created_by="admin"
+        )
+    assert (denied.value.status_code, denied.value.detail) == (409, message)
+    client.db.litellm_agentstable.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["create", "patch", "put"])
 @pytest.mark.parametrize("prior_owner", [False, True])
 async def test_application_registration_preserves_its_existing_owner(operation: str, prior_owner: bool) -> None:
@@ -1631,3 +1668,50 @@ async def test_application_registration_preserves_its_existing_owner(operation: 
                 "issuer": "https://login.microsoftonline.com/11111111-1111-4111-8111-111111111111/v2.0",
             }
         }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["create", "patch", "put"])
+async def test_duplicate_okta_binding_conflict_names_okta(operation: str) -> None:
+    from fastapi import HTTPException
+    from prisma.errors import UniqueViolationError
+
+    from litellm.types.proxy.agent_identity import OktaIdentityConfig
+
+    registry: Final = AgentRegistry()
+    client: Final = MagicMock()
+    client.db.litellm_agentstable.find_unique = AsyncMock(return_value=_stored_agent_row({"agent_id": "agent-123"}))
+    client.writer_db.litellm_retiredagentidentity.find_unique = AsyncMock(return_value=None)
+    failure: Final = UniqueViolationError(
+        {
+            "user_facing_error": {
+                "message": "Unique constraint failed",
+                "meta": {"target": ["client_id"]},
+                "error_code": "P2002",
+            }
+        }
+    )
+    client.db.litellm_agentstable.create = AsyncMock(side_effect=failure)
+    client.db.litellm_agentstable.update = AsyncMock(side_effect=failure)
+    identity: Final = OktaIdentityConfig(
+        provider="okta", issuer="https://example.okta.com/oauth2/aus1agents", client_id="0oa1AgentClient"
+    )
+    incoming: Final = {"agent_name": "Agent", "agent_card_params": {}, "identity": identity}
+    write: Final = (
+        registry.add_agent_to_db(incoming, client, created_by="admin")
+        if operation == "create"
+        else (registry.patch_agent_in_db if operation == "patch" else registry.update_agent_in_db)(
+            "agent-123", incoming, client, updated_by="admin"
+        )
+    )
+    with pytest.raises(HTTPException) as denied:
+        await write
+    assert (denied.value.status_code, denied.value.detail) == (
+        409,
+        "Agent name or Okta application is already registered",
+    )
+    written: Final = (
+        client.db.litellm_agentstable.create if operation == "create" else client.db.litellm_agentstable.update
+    ).call_args.kwargs["data"]["identity"]
+    row: Final = written["create"] if operation == "create" else written["upsert"]["create"]
+    assert (row["provider"], row["tenant_id"], row["client_id"]) == ("okta", identity.issuer, "0oa1AgentClient")

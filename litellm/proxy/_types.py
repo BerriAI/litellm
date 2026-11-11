@@ -1,6 +1,7 @@
 import enum
 import json
 import os
+import re
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType as MappingProxyType  # noqa: PLC0414  # public re-export
@@ -72,7 +73,7 @@ from litellm.types.mcp import (
     validate_mcp_protocol_transport,
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo
-from litellm.types.proxy.agent_identity import ManagedAgentContext
+from litellm.types.proxy.agent_identity import OKTA_ISSUER_PATTERN, ManagedAgentContext
 from litellm.types.proxy.auth.special_headers import (
     SpecialHeaders as SpecialHeaders,  # noqa: PLC0414  # public re-export
 )
@@ -4940,8 +4941,21 @@ class JWTIssuerConfig(LiteLLMBaseModel):
         default=None,
         description="Issuer-specific policy when the virtual key claim has no mapping. Falls back to the global policy.",
     )
+    agent_identity_provider: Literal["okta"] | None = Field(
+        default=None,
+        description="Set to okta to let this issuer's client-credentials tokens authenticate as Okta-bound agents.",
+    )
 
     model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def validate_okta_agent_issuer(self) -> "JWTIssuerConfig":
+        if self.agent_identity_provider == "okta" and not re.fullmatch(OKTA_ISSUER_PATTERN, self.issuer):
+            raise ValueError(
+                f"agent_identity_provider: okta needs an Okta custom authorization server issuer "
+                f"(https://{{domain}}/oauth2/{{id}}), got {self.issuer}"
+            )
+        return self
 
     @model_validator(mode="after")
     def validate_audience_configured(self) -> "JWTIssuerConfig":
