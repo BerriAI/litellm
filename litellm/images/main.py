@@ -1,7 +1,7 @@
 import asyncio
 import contextvars
 import importlib
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Sequence
 from functools import partial
 from typing import TYPE_CHECKING, Final, Literal, Optional, cast, overload
 
@@ -728,6 +728,22 @@ def image_variation(
     return response
 
 
+_ADDITIONAL_DROP_PARAMS: Final = TypeAdapter[tuple[str, ...]](tuple[str, ...])
+
+
+def _listed_drop_params(additional_drop_params: object) -> tuple[str, ...]:
+    try:
+        return _ADDITIONAL_DROP_PARAMS.validate_python(additional_drop_params)
+    except ValidationError:
+        return ()
+
+
+def _single_mask(mask: FileTypes | Sequence[FileTypes] | str | None) -> FileTypes | Sequence[FileTypes] | str | None:
+    if isinstance(mask, list):
+        return mask[0] if mask else None
+    return mask
+
+
 @client
 def image_edit(
     image: FileTypes | list[FileTypes] | None = None,
@@ -799,6 +815,7 @@ def image_edit(
             custom_llm_provider=custom_llm_provider,
         )
 
+        additional_drop_params: Final = _listed_drop_params(kwargs.get("additional_drop_params"))
         # Check for custom provider
         if custom_llm_provider in litellm._custom_providers:
             custom_handler: Final = ProviderConfigManager.get_custom_llm_handler(custom_llm_provider)
@@ -813,14 +830,14 @@ def image_edit(
                     **{
                         key: value
                         for key, value in {
-                            "mask": mask,
+                            "mask": _single_mask(mask),
                             "n": n,
                             "quality": quality,
                             "response_format": response_format,
                             "size": size,
                             "user": user,
                         }.items()
-                        if value is not None
+                        if value is not None and key not in additional_drop_params
                     },
                 }
             )

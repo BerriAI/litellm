@@ -491,6 +491,35 @@ async def test_custom_images_map_handler_errors_after_forwarding_params(
     assert custom_image_params_handler.requests[0]["user"] == "reject"
 
 
+@pytest.mark.parametrize("operation", ["generation", "edit"])
+def test_custom_images_drop_additional_drop_params(
+    custom_image_params_handler: CustomImageParamsLLM, operation: str
+) -> None:
+    request: Final = dict(
+        model="image_params_test/test-model",
+        prompt="draw",
+        n=2,
+        size="1024x1024",
+        user="image-user",
+        additional_drop_params=["size", "user"],
+    )
+    if operation == "edit":
+        litellm.image_edit(**request, image=b"input-image")
+    else:
+        litellm.image_generation(**request)
+    received: Final = custom_image_params_handler.requests[0]
+    assert received["n"] == 2
+    assert "size" not in received
+    assert "user" not in received
+
+
+def test_custom_image_edit_receives_one_mask_from_a_mask_list(
+    custom_image_params_handler: CustomImageParamsLLM,
+) -> None:
+    litellm.image_edit(model="image_params_test/test-model", prompt="draw", image=b"input-image", mask=[b"mask-image"])
+    assert custom_image_params_handler.requests[0]["mask"] == b"mask-image"
+
+
 @pytest.mark.parametrize("is_async", [False, True])
 @pytest.mark.parametrize("with_params", [False, True])
 @pytest.mark.asyncio

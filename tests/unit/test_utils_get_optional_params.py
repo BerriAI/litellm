@@ -560,6 +560,12 @@ def test_image_params_keep_builtin_validation_when_custom_name_collides(monkeypa
         )
 
 
+def test_image_params_keep_builtin_mapping_for_excluded_custom_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "vertex_ai", "custom_handler": CustomLLM()}])
+    result: Final = get_optional_params_image_gen(model="imagegeneration", custom_llm_provider="vertex_ai", n=2)
+    assert result == {"sampleCount": 2}
+
+
 def test_bedrock_optional_params_embeddings_provider_specific_params():
     optional_params = get_optional_params_embeddings(
         model="my-custom-model",
