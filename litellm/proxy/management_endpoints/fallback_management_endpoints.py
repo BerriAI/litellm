@@ -43,7 +43,7 @@ from litellm.models.fallback import (
     StoredFallback,
 )
 from litellm.proxy.deps.repositories import RouterFallbackRepositoryDep
-from litellm.repositories.router_fallback_repository import ROUTER_SETTINGS_PARAM
+from litellm.repositories.config_repository import ROUTER_SETTINGS_PARAM
 from litellm.router_api import ChangeSet
 from litellm.types.management_endpoints.router_settings_endpoints import (
     FallbackCreateRequest,

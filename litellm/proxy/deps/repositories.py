@@ -9,10 +9,10 @@ from litellm.models.plugin_upload import PluginUploadStore
 from litellm.models.skill_submission import SkillSubmissionStore
 from litellm.models.user_banner import UserBannerStore
 from litellm.proxy.deps.database import DatabaseDep
+from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.deployment_warning_ignore_repository import DeploymentWarningIgnoreRepository
 from litellm.repositories.gateway_activity_repository import GatewayActivityRepository
 from litellm.repositories.plugin_upload_repository import PluginUploadRepository
-from litellm.repositories.router_fallback_repository import RouterFallbackRepository
 from litellm.repositories.skill_submission_repository import SkillSubmissionRepository
 from litellm.repositories.user_banner_repository import UserBannerRepository
 
@@ -59,7 +59,7 @@ SkillSubmissionRepositoryDep: TypeAlias = Annotated[
 
 
 async def get_router_fallback_repository(database: DatabaseDep) -> RouterFallbackStore | None:
-    return None if database is None else RouterFallbackRepository(database.prisma)
+    return None if database is None else ConfigRepository(database.prisma)
 
 
 RouterFallbackRepositoryDep: TypeAlias = Annotated[RouterFallbackStore | None, Depends(get_router_fallback_repository)]

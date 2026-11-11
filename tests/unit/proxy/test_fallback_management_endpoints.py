@@ -39,8 +39,8 @@ from litellm.proxy.management_endpoints.fallback_management_endpoints import (
 )
 from litellm.proxy.proxy_server import ProxyConfig, app
 from litellm.proxy.utils import evict_config_param, get_config_param, litellm_config_cache
+from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.database import Database
-from litellm.repositories.router_fallback_repository import RouterFallbackRepository
 from litellm.router_api import ChangeSet
 from litellm.router_api import RouterSettings as RouterSettingsSnapshot
 from litellm.types.router import DeploymentTypedDict, LiteLLMParamsTypedDict
@@ -206,7 +206,7 @@ class TestCreateFallbackForTeamScopedModels:
             patch("litellm.proxy.proxy_server.proxy_config", proxy_config),
             patch("litellm.proxy.proxy_server.store_model_in_db", True),
         ):
-            return await create_fallback(request, MagicMock(), fallbacks=RouterFallbackRepository(prisma_client))
+            return await create_fallback(request, MagicMock(), fallbacks=ConfigRepository(prisma_client))
 
     async def test_public_names_create_a_rule_keyed_on_the_public_name(
         self, router: Router, stored: "_StoredRouterSettings", prisma_client: MagicMock, proxy_config: MagicMock
@@ -348,7 +348,7 @@ class _StoredRouterSettings:
             side_effect=lambda **_: None if lagging_replica else copy.deepcopy(self.row)
         )
         self.proxy_config: Final = _ConfigFileProxyConfig(config_file)
-        self.fallbacks: Final = RouterFallbackRepository(self.prisma_client)
+        self.fallbacks: Final = ConfigRepository(self.prisma_client)
 
     @asynccontextmanager
     async def _transaction(self) -> AsyncIterator[_ConfigTransaction]:
@@ -1013,7 +1013,7 @@ class TestCreateFallback:
             ),
         ):
             response = await create_fallback(
-                request, mock_user_api_key_dict, fallbacks=RouterFallbackRepository(mock_prisma_client)
+                request, mock_user_api_key_dict, fallbacks=ConfigRepository(mock_prisma_client)
             )
 
             assert response.model == "gpt-3.5-turbo"
@@ -1040,7 +1040,7 @@ class TestCreateFallback:
             pytest.raises(HTTPException) as exc_info,
         ):
             await create_fallback(
-                request, mock_user_api_key_dict, fallbacks=RouterFallbackRepository(mock_prisma_client)
+                request, mock_user_api_key_dict, fallbacks=ConfigRepository(mock_prisma_client)
             )
 
         assert exc_info.value.status_code == 500
@@ -1071,7 +1071,7 @@ class TestCreateFallback:
             pytest.raises(HTTPException) as exc_info,
         ):
             await create_fallback(
-                request, mock_user_api_key_dict, fallbacks=RouterFallbackRepository(mock_prisma_client)
+                request, mock_user_api_key_dict, fallbacks=ConfigRepository(mock_prisma_client)
             )
 
         assert exc_info.value.status_code == 404
@@ -1102,7 +1102,7 @@ class TestCreateFallback:
             pytest.raises(HTTPException) as exc_info,
         ):
             await create_fallback(
-                request, mock_user_api_key_dict, fallbacks=RouterFallbackRepository(mock_prisma_client)
+                request, mock_user_api_key_dict, fallbacks=ConfigRepository(mock_prisma_client)
             )
 
         assert exc_info.value.status_code == 400
@@ -1133,7 +1133,7 @@ class TestCreateFallback:
             pytest.raises(HTTPException) as exc_info,
         ):
             await create_fallback(
-                request, mock_user_api_key_dict, fallbacks=RouterFallbackRepository(mock_prisma_client)
+                request, mock_user_api_key_dict, fallbacks=ConfigRepository(mock_prisma_client)
             )
 
         assert exc_info.value.status_code == 400
@@ -1191,7 +1191,7 @@ class TestCreateFallback:
             ),
         ):
             response = await create_fallback(
-                request, mock_user_api_key_dict, fallbacks=RouterFallbackRepository(mock_prisma_client)
+                request, mock_user_api_key_dict, fallbacks=ConfigRepository(mock_prisma_client)
             )
 
             assert response.fallback_type == "context_window"
@@ -1326,7 +1326,7 @@ class TestDeleteFallback:
                 "gpt-3.5-turbo",
                 "general",
                 mock_user_api_key_dict,
-                fallbacks=RouterFallbackRepository(mock_prisma_client),
+                fallbacks=ConfigRepository(mock_prisma_client),
             )
 
             assert response.model == "gpt-3.5-turbo"
@@ -1363,7 +1363,7 @@ class TestDeleteFallback:
             pytest.raises(HTTPException) as exc_info,
         ):
             await delete_fallback(
-                "gpt-4", "general", mock_user_api_key_dict, fallbacks=RouterFallbackRepository(mock_prisma_client)
+                "gpt-4", "general", mock_user_api_key_dict, fallbacks=ConfigRepository(mock_prisma_client)
             )
 
         assert exc_info.value.status_code == 404

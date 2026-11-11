@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from datetime import datetime
-from typing import TYPE_CHECKING, Final, Protocol, TypeVar, cast
+from typing import TYPE_CHECKING, Final, Protocol, cast
+
+from pydantic import JsonValue, TypeAdapter, ValidationError
+
+from litellm.models.fallback import STORED_FALLBACKS, FallbackRulesEdit, FallbackRulesEditor
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -52,7 +56,28 @@ class _ConfigWriter(_ConfigTransaction, Protocol):
 
 
 CONFIG_PARAM_LOCK_SQL: Final = "SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtext($1))"
-ResultT: Final = TypeVar("ResultT")
+ROUTER_SETTINGS_PARAM: Final = "router_settings"
+_JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+_JSON_RULES: Final = TypeAdapter(list[JsonValue])
+_ROUTER_SETTINGS: Final = TypeAdapter(dict[str, JsonValue])
+
+
+def _stored_router_settings(param_value: object) -> Mapping[str, JsonValue]:
+    try:
+        decoded: Final[object] = _JSON_VALUE.validate_json(param_value) if isinstance(param_value, str) else param_value
+    except ValidationError:
+        return {}
+    if not isinstance(decoded, Mapping):
+        return {}
+    return _ROUTER_SETTINGS.validate_python(decoded)
+
+
+def _edited_router_settings(
+    param_value: object, fallback_key: str, edit: FallbackRulesEditor
+) -> tuple[Mapping[str, JsonValue], FallbackRulesEdit]:
+    router_settings: Final = _stored_router_settings(param_value)
+    edited: Final = edit(STORED_FALLBACKS.validate_python(router_settings.get(fallback_key) or []))
+    return {**router_settings, fallback_key: _JSON_RULES.validate_python(edited.rules)}, edited
 
 
 class ConfigParam:
@@ -131,13 +156,12 @@ class ConfigRepository:
         )
         return bool(rows)
 
-    async def update_param_locked(
-        self, param_name: str, update: Callable[[object], tuple[Mapping[str, object], ResultT]]
-    ) -> ResultT:
+    async def edit_rules(self, fallback_key: str, edit: FallbackRulesEditor) -> FallbackRulesEdit:
+        param_name: Final = ROUTER_SETTINGS_PARAM
         async with self._writer.tx() as transaction:
             await transaction.query_raw(CONFIG_PARAM_LOCK_SQL, param_name)
             row: Final = await transaction.litellm_config.find_unique(where={"param_name": param_name})
-            value, result = update(None if row is None else row.param_value)
+            value, result = _edited_router_settings(None if row is None else row.param_value, fallback_key, edit)
             value_json: Final = json.dumps(dict(value))
             await transaction.litellm_config.upsert(
                 where={"param_name": param_name},
