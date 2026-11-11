@@ -1703,6 +1703,23 @@ class _WebSearch(WebSearchInterceptionLogger):
         )
 
 
+class _DeploymentHooks(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()  # pyright: ignore[reportUnknownMemberType]  # CustomLogger takes untyped kwargs
+        self.seen: list[Mapping[str, object]] = []
+
+    async def async_post_call_success_deployment_hook(  # pyright: ignore[reportIncompatibleMethodOverride]  # test double narrows the hook's types
+        self, request_data: dict[str, object], response: object, call_type: object
+    ) -> object:
+        self.seen.append({"hook": "success", "call_type": str(call_type)})
+        return None
+
+    async def async_post_call_failure_deployment_hook(  # pyright: ignore[reportIncompatibleMethodOverride]  # test double narrows the hook's types
+        self, request_data: Mapping[str, object], exception: Exception, call_type: object
+    ) -> None:
+        self.seen.append({"hook": "failure", "error": type(exception).__name__, "call_type": str(call_type)})
+
+
 def _loggers(*kinds: Callable[[], CustomLogger]) -> Callable[[], Sequence[CustomLogger]]:
     return lambda: tuple(kind() for kind in kinds)
 
@@ -1755,6 +1772,62 @@ AGENTIC_CASES: Final = (
         upstream=(_ok(TOOL_USE_RESPONSE), _ok()),
         loggers=_loggers(_FollowUpOnToolUse),
     ),
+    *(
+        Case(
+            f"agentic_loop_follow_up_keeps_{name}",
+            _kw(**{"tools": [dict(WEATHER_TOOL)], **params}),
+            upstream=(_ok(TOOL_USE_RESPONSE), _ok()),
+            model=model,
+            loggers=_loggers(_FollowUpOnToolUse),
+        )
+        for name, params, model in (
+            (
+                "output_format",
+                {
+                    "output_format": {
+                        "type": "json_schema",
+                        "schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+                    }
+                },
+                SONNET,
+            ),
+            ("reasoning_effort", {"reasoning_effort": "high", "max_tokens": 8192}, SONNET),
+            ("output_config_effort", {"output_config": {"effort": "medium"}}, OPUS_ADAPTIVE),
+            (
+                "injected_cache_points",
+                {"cache_control_injection_points": [{"location": "message", "role": "user"}]},
+                SONNET,
+            ),
+            ("context_management", {"context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]}}, SONNET),
+            ("speed", {"speed": "fast"}, OPUS_FAST),
+            ("service_tier", {"service_tier": "auto"}, SONNET),
+            ("inference_geo", {"inference_geo": "us"}, SONNET),
+            (
+                "container",
+                {"container": {"skills": [{"type": "anthropic", "skill_id": "pptx", "version": "latest"}]}},
+                SONNET,
+            ),
+            ("custom_tool", {"tools": [{**WEATHER_TOOL, "type": "custom"}]}, SONNET),
+            ("metadata_extras", {"metadata": {"user_id": "user-123", "session": "dropped"}}, SONNET),
+        )
+    ),
+    Case(
+        "agentic_loop_prices_the_final_round",
+        _kw(tools=[dict(WEATHER_TOOL)]),
+        upstream=(_ok(TOOL_USE_RESPONSE), _ok({**TEXT_RESPONSE, "usage": {"input_tokens": 900, "output_tokens": 300}})),
+        loggers=_loggers(_FollowUpOnToolUse),
+    ),
+    Case(
+        "agentic_loop_prices_the_final_round_stream",
+        _kw(stream=True, tools=[dict(WEATHER_TOOL)]),
+        upstream=(
+            _stream(TOOL_STREAM),
+            _stream(
+                _events(_message_start("msg_01ParityLate"), *_text_block(0, "Paris"), *_message_end("end_turn", 300))
+            ),
+        ),
+        loggers=_loggers(_FollowUpOnToolUse),
+    ),
     Case(
         "agentic_loop_follow_up_stream",
         _kw(stream=True, tools=[dict(WEATHER_TOOL)]),
@@ -1796,6 +1869,30 @@ AGENTIC_CASES: Final = (
         _WEATHER,
         upstream=(_ok(TOOL_USE_RESPONSE), _failure(529, "overloaded_error", "Overloaded")),
         loggers=_loggers(_FollowUpOnToolUse),
+    ),
+    Case(
+        "agentic_loop_plan_fails_runs_the_failure_deployment_hook_once",
+        _WEATHER,
+        upstream=(_ok(TOOL_USE_RESPONSE),),
+        loggers=_loggers(_Fails, _DeploymentHooks),
+    ),
+    Case(
+        "agentic_loop_follow_up_fails_runs_the_failure_deployment_hook_per_round",
+        _WEATHER,
+        upstream=(_ok(TOOL_USE_RESPONSE), _failure(529, "overloaded_error", "Overloaded")),
+        loggers=_loggers(_FollowUpOnToolUse, _DeploymentHooks),
+    ),
+    Case(
+        "agentic_loop_follow_up_runs_the_success_deployment_hook_per_round",
+        _WEATHER,
+        upstream=(_ok(TOOL_USE_RESPONSE), _ok()),
+        loggers=_loggers(_FollowUpOnToolUse, _DeploymentHooks),
+    ),
+    Case(
+        "pre_request_hook_raises_runs_the_failure_deployment_hook_once",
+        callbacks=(_RaisingHook,),
+        upstream=(),
+        loggers=_loggers(_DeploymentHooks),
     ),
     Case(
         "agentic_loop_refused_past_max_loops",
@@ -2088,6 +2185,23 @@ INTERCEPTOR_CASES: Final = (
         interceptor=_Delegating,
     ),
     Case("interceptor_raises", _intercepted(), upstream=(), interceptor=_Refusing),
+    Case("interceptor_is_not_consulted_on_a_sync_call", _intercepted(), upstream=(), sync=True, interceptor=_Answering),
+    Case(
+        "pre_request_hook_is_not_run_on_a_sync_call_an_interceptor_owns",
+        _intercepted(),
+        upstream=(),
+        sync=True,
+        callbacks=(_RaisingHook,),
+        interceptor=_Answering,
+    ),
+    Case("pre_request_hook_is_not_run_on_a_sync_call", upstream=(), sync=True, callbacks=(_RaisingHook,)),
+    Case(
+        "interceptor_raises_runs_the_failure_deployment_hook_once",
+        _intercepted(),
+        upstream=(),
+        interceptor=_Refusing,
+        loggers=_loggers(_DeploymentHooks),
+    ),
     Case("interceptor_answer_is_cached", _intercepted(), upstream=(), cache=Cache, interceptor=_Answering),
     Case(
         "interceptor_stream_answer_with_cache",
