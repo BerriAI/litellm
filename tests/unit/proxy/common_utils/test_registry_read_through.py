@@ -967,23 +967,37 @@ async def test_resync_model_deployments_reconciles_every_db_row_when_the_missed_
     reconciled.assert_called_once_with(prisma_client=prisma_client, proxy_logging_obj=proxy_server.proxy_logging_obj)
 
 
+class FakeClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
 class ReloadSpy:
-    def __init__(self, delay_seconds: float = 0.0, error: Exception | None = None) -> None:
-        self.delay_seconds = delay_seconds
+    def __init__(self, error: Exception | None = None, gate: asyncio.Event | None = None) -> None:
         self.error = error
+        self.gate = gate
         self.calls = 0
+        self.finished = asyncio.Event()
 
     async def __call__(self) -> None:
         self.calls += 1
-        await asyncio.sleep(self.delay_seconds)
+        if self.gate is not None:
+            await self.gate.wait()
+        self.finished.set()
         if self.error is not None:
             raise self.error
 
 
 @pytest.mark.asyncio
 async def test_table_reload_reads_once_for_concurrent_callers():
-    spy: Final = ReloadSpy(delay_seconds=0.05)
-    reload: Final = ThrottledTableReload(reload=spy, min_interval_seconds=60.0)
+    spy: Final = ReloadSpy()
+    reload: Final = ThrottledTableReload(reload=spy, min_interval_seconds=2.0, clock=FakeClock())
 
     results: Final = await asyncio.gather(*(reload.reload_if_stale() for _ in range(5)))
 
@@ -993,42 +1007,47 @@ async def test_table_reload_reads_once_for_concurrent_callers():
 
 @pytest.mark.asyncio
 async def test_table_reload_skips_the_db_inside_the_interval_and_reads_again_after_it():
+    clock: Final = FakeClock()
     spy: Final = ReloadSpy()
-    reload: Final = ThrottledTableReload(reload=spy, min_interval_seconds=0.05)
+    reload: Final = ThrottledTableReload(reload=spy, min_interval_seconds=2.0, clock=clock)
 
     assert await reload.reload_if_stale() is True
+    clock.advance(1.5)
     assert await reload.reload_if_stale() is True
     assert spy.calls == 1
-    await asyncio.sleep(0.1)
+    clock.advance(0.5)
     assert await reload.reload_if_stale() is True
     assert spy.calls == 2
 
 
 @pytest.mark.asyncio
 async def test_failed_table_reload_answers_false_once_for_every_caller_until_the_interval_passes():
-    spy: Final = ReloadSpy(delay_seconds=0.05, error=RuntimeError("db down"))
-    reload: Final = ThrottledTableReload(reload=spy, min_interval_seconds=60.0)
+    clock: Final = FakeClock()
+    spy: Final = ReloadSpy(error=RuntimeError("db down"))
+    reload: Final = ThrottledTableReload(reload=spy, min_interval_seconds=2.0, clock=clock)
 
     results: Final = await asyncio.gather(*(reload.reload_if_stale() for _ in range(5)))
 
     assert results == [False] * 5
+    clock.advance(1.5)
     assert await reload.reload_if_stale() is False
     assert spy.calls == 1
 
 
 @pytest.mark.asyncio
-async def test_slow_table_reload_stops_holding_callers_at_the_wait_cap_and_finishes_in_the_background():
-    spy: Final = ReloadSpy(delay_seconds=0.3)
-    reload: Final = ThrottledTableReload(reload=spy, min_interval_seconds=60.0, max_wait_seconds=0.05)
-    loop: Final = asyncio.get_running_loop()
+async def test_slow_table_reload_frees_callers_at_the_wait_cap_and_cools_down_from_when_it_finished():
+    clock: Final = FakeClock()
+    spy: Final = ReloadSpy(gate=asyncio.Event())
+    reload: Final = ThrottledTableReload(reload=spy, min_interval_seconds=2.0, max_wait_seconds=0.01, clock=clock)
 
-    first_started_at: Final = loop.time()
     assert await reload.reload_if_stale() is False
-    assert loop.time() - first_started_at < 0.2
-    late_started_at: Final = loop.time()
+    clock.advance(0.5)
     assert await reload.reload_if_stale() is False
-    assert loop.time() - late_started_at < 0.02
-    await asyncio.sleep(0.4)
+    assert spy.gate is not None
+    spy.gate.set()
+    await spy.finished.wait()
+    assert await reload.reload_if_stale() is True
+    clock.advance(1.75)
     assert await reload.reload_if_stale() is True
     assert spy.calls == 1
 
@@ -1102,10 +1121,13 @@ async def test_a_burst_of_unknown_index_names_costs_one_db_read_and_never_hides_
     from litellm.proxy.common_utils.registry_read_through import ThrottledTableReload, lookup_vector_store_index
     from tests.unit.proxy.conftest import FakeVectorStoreIndexRow
 
+    clock: Final = FakeClock()
     monkeypatch.setattr(
         registry_read_through,
         "vector_store_index_table_reload",
-        ThrottledTableReload(reload=registry_read_through._reload_vector_store_indexes, min_interval_seconds=0.05),
+        ThrottledTableReload(
+            reload=registry_read_through._reload_vector_store_indexes, min_interval_seconds=2.0, clock=clock
+        ),
     )
     find_many: Final = AsyncMock(side_effect=[[], [FakeVectorStoreIndexRow("index-made-on-a")]])
     _serve_index_table(monkeypatch, find_many)
@@ -1113,7 +1135,7 @@ async def test_a_burst_of_unknown_index_names_costs_one_db_read_and_never_hides_
     junk_lookups: Final = [await lookup_vector_store_index(f"junk-{n}") for n in range(25)]
     assert junk_lookups == ["unmanaged"] * 25
     assert find_many.await_count == 1
-    await asyncio.sleep(0.1)
+    clock.advance(2.0)
 
     assert await lookup_vector_store_index("index-made-on-a") == "managed"
     assert find_many.await_count == 2
@@ -1297,6 +1319,38 @@ async def test_vector_store_read_through_loads_a_store_renamed_on_another_instan
     assert first is not None and first.get("vector_store_id") == "store-1"
     assert second == first
     assert find_many.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fresh_vector_store_read_throughs")
+async def test_vector_store_read_through_picks_the_newest_store_when_a_loaded_store_is_renamed_onto_a_shared_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.common_utils.registry_read_through import get_vector_store_with_read_through
+    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+    from tests.unit.proxy.conftest import FakeVectorStoreRow
+
+    monkeypatch.setattr(
+        litellm,
+        "vector_store_registry",
+        VectorStoreRegistry(
+            vector_stores=[{"vector_store_id": "older", "custom_llm_provider": "azure_ai", "vector_store_name": "old"}]
+        ),
+    )
+    find_many: Final = AsyncMock(
+        return_value=[
+            FakeVectorStoreRow("shared", "azure_ai", {}, "newer"),
+            FakeVectorStoreRow("shared", "azure_ai", {}, "older"),
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", _store_prisma_client(find_many))
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+
+    store: Final = await get_vector_store_with_read_through("shared")
+
+    assert store is not None and store.get("vector_store_id") == "newer"
 
 
 @pytest.mark.asyncio

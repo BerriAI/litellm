@@ -125,6 +125,7 @@ class RegistryReadThrough:
 
 class ThrottledTableReload:
     __slots__ = (
+        "_clock",
         "_finished_at",
         "_max_wait_seconds",
         "_min_interval_seconds",
@@ -139,8 +140,10 @@ class ThrottledTableReload:
         reload: Callable[[], Awaitable[None]],
         min_interval_seconds: float = READ_THROUGH_MISS_TTL_SECONDS,
         max_wait_seconds: float = READ_THROUGH_MAX_WAIT_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._reload = reload
+        self._clock = clock
         self._min_interval_seconds = min_interval_seconds
         self._max_wait_seconds = max_wait_seconds
         self._task: asyncio.Task[bool] | None = None
@@ -149,13 +152,13 @@ class ThrottledTableReload:
         self._succeeded = False
 
     async def reload_if_stale(self) -> bool:
-        if self._task is None and time.monotonic() - self._finished_at >= self._min_interval_seconds:
-            self._started_at = time.monotonic()
+        if self._task is None and self._clock() - self._finished_at >= self._min_interval_seconds:
+            self._started_at = self._clock()
             self._task = asyncio.create_task(self._run())
         task: Final = self._task
         if task is None:
             return self._succeeded
-        wait_seconds: Final = max(self._started_at + self._max_wait_seconds - time.monotonic(), 0.0)
+        wait_seconds: Final = max(self._started_at + self._max_wait_seconds - self._clock(), 0.0)
         done, _ = await asyncio.wait((task,), timeout=wait_seconds)
         return task in done and not task.cancelled() and task.result()
 
@@ -167,7 +170,7 @@ class ThrottledTableReload:
             verbose_proxy_logger.warning("registry table reload failed: %s", e)
             self._succeeded = False
         finally:
-            self._finished_at = time.monotonic()
+            self._finished_at = self._clock()
             self._task = None
         return self._succeeded
 
@@ -411,8 +414,12 @@ async def _resync_vector_stores(vector_store_name: str) -> bool:
         return True
     registry: Final = litellm.vector_store_registry
     for store in stores:
-        if (vector_store_id := store.get("vector_store_id")) is not None:
-            registry.update_vector_store_in_registry(vector_store_id=vector_store_id, updated_data=store)
+        if (vector_store_id := store.get("vector_store_id")) is None:
+            continue
+        if registry.is_config_vector_store(vector_store_id):
+            continue
+        registry.delete_vector_store_from_registry(vector_store_id)
+        registry.add_vector_store_to_registry(store)
     return _vector_store_is_loaded(vector_store_name)
 
 
