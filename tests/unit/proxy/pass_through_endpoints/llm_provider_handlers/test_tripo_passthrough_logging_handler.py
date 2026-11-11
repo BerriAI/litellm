@@ -8,7 +8,6 @@ import litellm
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.tripo_passthrough_logging_handler import (
     poll_tripo_task,
     submitted_tripo_task,
-    tripo_cost_per_credit,
     tripo_task_cost,
 )
 from litellm.types.passthrough_endpoints.tripo import TripoTaskData, tripo_region_from_url
@@ -18,16 +17,10 @@ def test_tripo_model_info_uses_3d_generation_mode() -> None:
     assert litellm.get_model_info("tripo/task", custom_llm_provider="tripo")["mode"] == "3d_generation"
 
 
-def test_tripo_region_and_cost_are_derived_from_upstream_data(monkeypatch: pytest.MonkeyPatch) -> None:
-    price: Final = 0.025
-    monkeypatch.setitem(litellm.model_cost, "tripo/task", {
-        **litellm.model_cost["tripo/task"], "cost_per_credit": price,
-    })
+def test_tripo_cost_is_fixed_per_consumed_credit() -> None:
     assert tripo_region_from_url("https://openapi.tripo3d.ai/v3") == "global"
     assert tripo_region_from_url("https://openapi.tripo3d.com/v3") == "cn"
-    assert tripo_cost_per_credit("tripo/task") == price
-    assert tripo_cost_per_credit("tripo/unlisted-test-model") == price
-    assert tripo_task_cost(TripoTaskData(task_id="task-1", credits_consumed=Decimal("100")), price) == 2.5
+    assert tripo_task_cost(TripoTaskData(task_id="task-1", credits_consumed=Decimal("100"))) == 1.0
 
 
 def test_submitted_tripo_task_requires_a_task_id() -> None:
@@ -66,16 +59,8 @@ def test_poll_tripo_task_uses_the_submission_domain_and_stops_on_terminal_status
     assert requests[0].headers["authorization"] == "Bearer cn-key"
 
 
-@pytest.mark.parametrize("price", [0.0, 0.037])
-def test_tripo_model_specific_credit_price_overrides_fallback(monkeypatch: pytest.MonkeyPatch, price: float) -> None:
-    monkeypatch.setitem(litellm.model_cost, "tripo/test-priced-model", {
-        "litellm_provider": "tripo", "mode": "3d_generation", "cost_per_credit": price,
-    })
-    assert tripo_cost_per_credit("tripo/test-priced-model") == price
-
-
 @pytest.mark.asyncio
-async def test_completed_task_credit_cost_reaches_success_callbacks(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_completed_task_credit_cost_reaches_success_callbacks() -> None:
     import asyncio
     from datetime import datetime
 
@@ -89,10 +74,6 @@ async def test_completed_task_credit_cost_reaches_success_callbacks(monkeypatch:
     from litellm.proxy.pass_through_endpoints.success_handler import PassThroughEndpointLogging
     from litellm.types.utils import StandardLoggingPayload
 
-    price: Final = 0.025
-    monkeypatch.setitem(litellm.model_cost, "tripo/task", {
-        **litellm.model_cost["tripo/task"], "cost_per_credit": price,
-    })
     observed: Final[asyncio.Future[StandardLoggingPayload]] = asyncio.get_running_loop().create_future()
 
     class Observer(CustomLogger):
@@ -131,9 +112,9 @@ async def test_completed_task_credit_cost_reaches_success_callbacks(monkeypatch:
     await asyncio.gather(*tuple(handler.pending))
     assert observed.done()
     payload: Final = observed.result()
-    assert payload["response_cost"] == 0.5
+    assert payload["response_cost"] == 0.2
     assert payload["custom_llm_provider"] == "tripo"
-    assert logging.model_call_details["response_cost"] == 0.5
+    assert logging.model_call_details["response_cost"] == 0.2
     status_response: Final = httpx.Response(200, request=httpx.Request(
         "GET", "https://openapi.tripo3d.com/v3/tasks/completed-task",
     ))
@@ -157,4 +138,4 @@ def test_running_task_with_credits_does_not_produce_a_final_cost() -> None:
         sleep=lambda _: None, max_attempts=2,
     )
     assert task is None
-    assert tripo_task_cost(task, 0.025) is None
+    assert tripo_task_cost(task) is None

@@ -10,7 +10,6 @@ from urllib.parse import quote
 import httpx
 from pydantic import ValidationError
 
-import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
@@ -22,6 +21,7 @@ from litellm.types.passthrough_endpoints.tripo import (
     TRIPO_MAX_POLLING_ATTEMPTS,
     TRIPO_POLLING_INTERVAL,
     TRIPO_TERMINAL_STATUSES,
+    TRIPO_USD_PER_CREDIT,
     TripoResponse,
     TripoTaskData,
 )
@@ -49,22 +49,10 @@ def submitted_tripo_task(response_body: object) -> TripoTaskData | None:
     return parsed.data
 
 
-def tripo_task_cost(task: TripoTaskData | None, cost_per_credit: float | None) -> float | None:
-    if task is None or task.credits_consumed is None or cost_per_credit is None:
+def tripo_task_cost(task: TripoTaskData | None) -> float | None:
+    if task is None or task.credits_consumed is None:
         return None
-    return float(task.credits_consumed) * cost_per_credit
-
-
-def tripo_cost_per_credit(model: str) -> float | None:
-    for candidate in (model, 'tripo/task'):
-        try:
-            model_info: Final = litellm.get_model_info(model=candidate, custom_llm_provider='tripo')
-        except Exception:
-            continue
-        cost: Final = model_info.get('cost_per_credit')
-        if isinstance(cost, (int, float)):
-            return float(cost)
-    return None
+    return float(task.credits_consumed) * TRIPO_USD_PER_CREDIT
 
 
 def poll_tripo_task(
@@ -160,7 +148,7 @@ class TripoPassthroughLoggingHandler:
                 self.pool,
                 partial(poll_tripo_task, url, authorization, task_id, self.client_factory, self.sleep),
             )
-            cost: Final = tripo_task_cost(task, tripo_cost_per_credit(model))
+            cost: Final = tripo_task_cost(task)
             if cost is None:
                 verbose_proxy_logger.warning('Tripo task finished without known cost')
             end_time: Final = datetime.now()
