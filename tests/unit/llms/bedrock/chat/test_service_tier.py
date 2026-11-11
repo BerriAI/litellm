@@ -3,6 +3,7 @@ Tests for Bedrock Converse API serviceTier support.
 """
 
 import json
+from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
@@ -205,9 +206,9 @@ def test_map_openai_service_tier_flex():
 
 def test_map_openai_service_tier_auto_sends_no_tier():
     """`auto` picks no tier, so Bedrock gets no serviceTier and serves its own default."""
-    config = AmazonConverseConfig()
+    config: Final = AmazonConverseConfig()
 
-    result = config.map_openai_params(
+    result: Final = config.map_openai_params(
         non_default_params={"service_tier": "auto"},
         optional_params={},
         model="anthropic.claude-3-sonnet-20240229-v1:0",
@@ -218,9 +219,9 @@ def test_map_openai_service_tier_auto_sends_no_tier():
 
 
 def test_map_openai_service_tier_none_sends_no_tier():
-    config = AmazonConverseConfig()
+    config: Final = AmazonConverseConfig()
 
-    result = config.map_openai_params(
+    result: Final = config.map_openai_params(
         non_default_params={"service_tier": None},
         optional_params={},
         model="anthropic.claude-3-sonnet-20240229-v1:0",
@@ -231,16 +232,16 @@ def test_map_openai_service_tier_none_sends_no_tier():
 
 
 def test_map_openai_service_tier_reserved_reaches_the_request():
-    config = AmazonConverseConfig()
-    model = "anthropic.claude-3-sonnet-20240229-v1:0"
+    config: Final = AmazonConverseConfig()
+    model: Final = "anthropic.claude-3-sonnet-20240229-v1:0"
 
-    optional_params = config.map_openai_params(
+    optional_params: Final = config.map_openai_params(
         non_default_params={"service_tier": "reserved"},
         optional_params={},
         model=model,
         drop_params=False,
     )
-    request = config.transform_request(
+    request: Final = config.transform_request(
         model=model,
         messages=[{"role": "user", "content": "Hello!"}],
         optional_params=optional_params,
@@ -253,9 +254,9 @@ def test_map_openai_service_tier_reserved_reaches_the_request():
 
 def test_map_openai_service_tier_standard_only_maps_to_default():
     """`standard_only` is the Anthropic Messages value that means Bedrock's Standard tier."""
-    config = AmazonConverseConfig()
+    config: Final = AmazonConverseConfig()
 
-    result = config.map_openai_params(
+    result: Final = config.map_openai_params(
         non_default_params={"service_tier": "standard_only"},
         optional_params={},
         model="anthropic.claude-3-sonnet-20240229-v1:0",
@@ -266,9 +267,9 @@ def test_map_openai_service_tier_standard_only_maps_to_default():
 
 
 @pytest.mark.parametrize("value", ["ultrafast", "fast", "scale", "", {"type": "priority"}, ["fast"], 1])
-def test_map_openai_service_tier_unmapped_value_answers_400(value):
-    config = AmazonConverseConfig()
-    optional_params = {}
+def test_map_openai_service_tier_unmapped_value_answers_400(value: object):
+    config: Final = AmazonConverseConfig()
+    optional_params: Final = dict[str, object]()
 
     with pytest.raises(litellm.utils.UnsupportedParamsError) as error:
         config.map_openai_params(
@@ -285,10 +286,10 @@ def test_map_openai_service_tier_unmapped_value_answers_400(value):
 
 
 @pytest.mark.parametrize("value", ["ultrafast", {"type": "priority"}])
-def test_map_openai_service_tier_unmapped_value_drops_under_request_drop_params(value):
-    config = AmazonConverseConfig()
+def test_map_openai_service_tier_unmapped_value_drops_under_request_drop_params(value: object):
+    config: Final = AmazonConverseConfig()
 
-    result = config.map_openai_params(
+    result: Final = config.map_openai_params(
         non_default_params={"service_tier": value},
         optional_params={},
         model="anthropic.claude-3-sonnet-20240229-v1:0",
@@ -298,11 +299,11 @@ def test_map_openai_service_tier_unmapped_value_drops_under_request_drop_params(
     assert "serviceTier" not in result
 
 
-def test_map_openai_service_tier_unmapped_value_drops_under_global_drop_params(monkeypatch):
+def test_map_openai_service_tier_unmapped_value_drops_under_global_drop_params(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "drop_params", True)
-    config = AmazonConverseConfig()
+    config: Final = AmazonConverseConfig()
 
-    result = config.map_openai_params(
+    result: Final = config.map_openai_params(
         non_default_params={"service_tier": "ultrafast"},
         optional_params={},
         model="anthropic.claude-3-sonnet-20240229-v1:0",
@@ -313,9 +314,9 @@ def test_map_openai_service_tier_unmapped_value_drops_under_global_drop_params(m
 
 
 @pytest.mark.parametrize("model", ["bedrock/converse/us.openai.gpt-6-luna", "bedrock/converse/us.amazon.nova-2-lite-v1:0"])
-def test_completion_refuses_unmapped_service_tier_before_calling_bedrock(model, monkeypatch):
+def test_completion_refuses_unmapped_service_tier_before_calling_bedrock(model: str, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "drop_params", False)
-    client = MagicMock(spec=HTTPHandler)
+    client: Final = MagicMock(spec=HTTPHandler)
 
     with pytest.raises(litellm.BadRequestError) as error:
         litellm.completion(

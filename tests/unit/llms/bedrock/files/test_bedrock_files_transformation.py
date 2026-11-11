@@ -101,8 +101,10 @@ class TestBedrockFilesTransformation:
 
     @staticmethod
     def _nova_row(
-        url: str = "/v1/chat/completions", model: str = "us.amazon.nova-pro-v1:0", **body_params: object
-    ) -> dict[str, object]:
+        url: str = "/v1/chat/completions",
+        model: str = "us.amazon.nova-pro-v1:0",
+        body_params: Mapping[str, object] = MappingProxyType({}),
+    ) -> Mapping[str, object]:
         prompt: Final = {"input": "hi"} if url == "/v1/responses" else {"messages": [{"role": "user", "content": "hi"}]}
         return {
             "custom_id": "nova-tier-1",
@@ -113,7 +115,7 @@ class TestBedrockFilesTransformation:
 
     def test_nova_row_with_null_service_tier_sends_no_tier(self):
         result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
-            [self._nova_row(service_tier=None)]
+            [self._nova_row(body_params={"service_tier": None})]
         )
 
         assert "serviceTier" not in result[0]["modelInput"]
@@ -122,13 +124,13 @@ class TestBedrockFilesTransformation:
     def test_nova_row_with_unmapped_service_tier_fails_the_row_like_real_time(self, url: str):
         with pytest.raises(litellm.UnsupportedParamsError, match="ultrafast"):
             BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
-                [self._nova_row(url, service_tier="ultrafast")]
+                [self._nova_row(url, body_params={"service_tier": "ultrafast"})]
             )
 
     @pytest.mark.parametrize("url", ["/v1/chat/completions", "/v1/responses"])
     def test_nova_row_level_drop_params_drops_the_unmapped_service_tier(self, url: str):
         result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
-            [self._nova_row(url, service_tier="ultrafast", drop_params=True)]
+            [self._nova_row(url, body_params={"service_tier": "ultrafast", "drop_params": True})]
         )
 
         assert "serviceTier" not in result[0]["modelInput"]
@@ -137,7 +139,7 @@ class TestBedrockFilesTransformation:
     @pytest.mark.parametrize("url", ["/v1/chat/completions", "/v1/responses"])
     def test_passthrough_row_keeps_row_level_drop_params_out_of_the_model_input(self, url: str):
         result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
-            [self._nova_row(url, "openai.gpt-oss-120b-1:0", drop_params=True)]
+            [self._nova_row(url, "openai.gpt-oss-120b-1:0", {"drop_params": True})]
         )
 
         assert "drop_params" not in result[0]["modelInput"]
