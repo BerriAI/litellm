@@ -2,27 +2,29 @@
 ## Unit tests for user_api_key_auth helper functions
 
 
-import litellm.proxy
-import litellm.proxy.proxy_server
-
+import json
+import logging
 from typing import Dict, Final, List, Mapping, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException, WebSocket, status
 from starlette.datastructures import URL
+from starlette.requests import Request as StarletteRequest
 from starlette.types import Message
-from litellm._logging import verbose_proxy_logger
-import json
-import logging
-import litellm
-from litellm.proxy.auth.user_api_key_auth import (
-    user_api_key_auth,
-    UserAPIKeyAuth,
-    get_api_key_from_custom_header,
-)
-from fastapi import WebSocket, HTTPException, status
 
-from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
+import litellm
+import litellm.proxy
+import litellm.proxy.proxy_server
+from litellm._logging import verbose_proxy_logger
+from litellm.proxy._types import LiteLLM_AccessGroupTable, LiteLLM_UserTable, LitellmUserRoles, ProxyException
+from litellm.proxy.auth.user_api_key_auth import (
+    UserAPIKeyAuth,
+    _authorize_authenticated_request,
+    get_api_key_from_custom_header,
+    user_api_key_auth,
+)
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from tests._master_key import MASTER_KEY
 
 
@@ -31,6 +33,146 @@ class Request:
         self.client = MagicMock()
         self.client.host = client_ip
         self.headers: Dict[str, str] = {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model,fallbacks,allowed", (("model-a", [], True), ("model-b", [], False), ("model-a", ["model-b"], False))
+)
+async def test_virtual_key_model_policy_on_first_lookup_and_cache_hit(
+    monkeypatch: pytest.MonkeyPatch, model: str, fallbacks: list[str], allowed: bool
+) -> None:
+    server: Final = litellm.proxy.proxy_server
+    cache: Final = UserApiKeyCache()
+    key: Final = "sk-central-model-check"
+    stored: Final = UserAPIKeyAuth(token=server.hash_token(key), models=["model-a"])
+    database: Final = MagicMock(get_data=AsyncMock(side_effect=(stored, AssertionError("unexpected cache miss"))))
+    monkeypatch.setattr(server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(server, "general_settings", {})
+    monkeypatch.setattr(server, "user_api_key_cache", cache)
+    monkeypatch.setattr(server, "prisma_client", database)
+    monkeypatch.setattr(server, "llm_router", None)
+    monkeypatch.setattr(server, "user_custom_auth", None)
+    for _ in range(2):
+        request: Final = StarletteRequest(
+            {"type": "http", "method": "POST", "path": "/chat/completions", "headers": []},
+            receive=AsyncMock(
+                return_value={
+                    "type": "http.request",
+                    "body": json.dumps({"model": model, "fallbacks": fallbacks}).encode(),
+                    "more_body": False,
+                }
+            ),
+        )
+        if allowed:
+            identity: Final = await user_api_key_auth(request=request, api_key=f"Bearer {key}")
+            assert identity.models == ["model-a"]
+        else:
+            with pytest.raises(ProxyException) as denied:
+                await user_api_key_auth(request=request, api_key=f"Bearer {key}")
+            assert denied.value.code == "403"
+            assert "model-b" in denied.value.message
+
+
+@pytest.mark.asyncio
+async def test_scim_deactivation_precedes_central_key_model_denial(monkeypatch: pytest.MonkeyPatch) -> None:
+    server: Final = litellm.proxy.proxy_server
+    key: Final = "sk-deactivated-owner"
+    cache: Final = UserApiKeyCache()
+    stored: Final = UserAPIKeyAuth(token=server.hash_token(key), models=["model-a"], user_id="inactive-owner")
+    cache.set_cache(
+        "inactive-owner",
+        LiteLLM_UserTable(user_id="inactive-owner", metadata={"scim_active": False}),
+        model_type=LiteLLM_UserTable,
+    )
+    monkeypatch.setattr(server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(server, "general_settings", {})
+    monkeypatch.setattr(server, "user_api_key_cache", cache)
+    monkeypatch.setattr(server, "prisma_client", MagicMock(get_data=AsyncMock(return_value=stored)))
+    monkeypatch.setattr(server, "llm_router", None)
+    monkeypatch.setattr(server, "user_custom_auth", None)
+    request: Final = StarletteRequest(
+        {"type": "http", "method": "POST", "path": "/chat/completions", "headers": []},
+        receive=AsyncMock(return_value={"type": "http.request", "body": b'{"model":"model-b"}'}),
+    )
+    with pytest.raises(ProxyException) as denied:
+        await user_api_key_auth(request=request, api_key=f"Bearer {key}")
+    assert denied.value.code == "401"
+    assert "deactivated via SCIM" in denied.value.message
+
+
+@pytest.mark.asyncio
+async def test_restricted_key_model_list_denial_names_the_denied_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server: Final = litellm.proxy.proxy_server
+    cache: Final = UserApiKeyCache()
+    group: Final = LiteLLM_AccessGroupTable(
+        access_group_id="science-id", access_group_name="science", access_model_names=["model-a"]
+    )
+    cache.set_cache("access_group_rule_name:science", group, model_type=LiteLLM_AccessGroupTable)
+    cache.set_cache("access_group_id:science-id", group, model_type=LiteLLM_AccessGroupTable)
+    monkeypatch.setattr(server, "user_api_key_cache", cache)
+    monkeypatch.setattr(server, "prisma_client", MagicMock())
+    monkeypatch.setattr(
+        server,
+        "general_settings",
+        {"access_group_rules": [{"attribute": "user_id", "equals": "science", "access_group": "science"}]},
+    )
+    monkeypatch.setattr(server, "llm_router", None)
+    identity: Final = UserAPIKeyAuth(user_id="science", models=["model-a"])
+    request: Final = StarletteRequest({"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
+    with pytest.raises(ProxyException) as denied:
+        await _authorize_authenticated_request(
+            identity, request, {"model": ["model-a", "model-b"]}, "/chat/completions", "synthetic",
+            force_virtual_key_checks=True,
+        )
+    assert denied.value.code == "403"
+    assert "model-b" in denied.value.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model,enabled,allowed",
+    (("group-model", True, True), ("outside", True, False), ("group-model", False, False), ("explicit", False, True)),
+)
+async def test_user_access_group_rules_are_enforced_at_central_authorization(
+    monkeypatch: pytest.MonkeyPatch, model: str, enabled: bool, allowed: bool
+) -> None:
+    server: Final = litellm.proxy.proxy_server
+    cache: Final = UserApiKeyCache()
+    group: Final = LiteLLM_AccessGroupTable(
+        access_group_id="science-id", access_group_name="science", access_model_names=["group-model"]
+    )
+    cache.set_cache("access_group_rule_name:science", group, model_type=LiteLLM_AccessGroupTable)
+    cache.set_cache("access_group_id:science-id", group, model_type=LiteLLM_AccessGroupTable)
+    cache.set_cache("science", LiteLLM_UserTable(user_id="science"), model_type=LiteLLM_UserTable)
+    monkeypatch.setattr(
+        server,
+        "general_settings",
+        {"access_group_rules": [{"attribute": "user_id", "equals": "science", "access_group": "science"}]}
+        if enabled
+        else {},
+    )
+    monkeypatch.setattr(server, "user_api_key_cache", cache)
+    monkeypatch.setattr(server, "prisma_client", MagicMock())
+    monkeypatch.setattr(server, "llm_router", None)
+    monkeypatch.setattr(server, "user_custom_auth", None)
+    principal: Final = UserAPIKeyAuth(models=["explicit"], user_id="science")
+    request: Final = StarletteRequest({"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
+    if allowed:
+        assert (
+            await _authorize_authenticated_request(
+                principal, request, {"model": model}, "/chat/completions", "synthetic", force_virtual_key_checks=True
+            )
+            is None
+        )
+        assert principal.access_group_ids == (["science-id"] if enabled else None)
+    else:
+        with pytest.raises(ProxyException, match="model"):
+            await _authorize_authenticated_request(
+                principal, request, {"model": model}, "/chat/completions", "synthetic", force_virtual_key_checks=True
+            )
 
 
 @pytest.mark.parametrize(

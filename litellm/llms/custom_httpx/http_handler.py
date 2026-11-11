@@ -316,6 +316,48 @@ def _prepare_request_data_and_content(
 
 # Cache for SSL contexts to avoid creating duplicate contexts with the same configuration
 _ssl_context_cache: Final[dict[tuple[str | None, str | None, str | None, bool], ssl.SSLContext]] = {}
+_rsa_key_exchange_and_chacha20_excluded: Final = threading.Event()
+
+
+def _set_ciphers(
+    context: ssl.SSLContext, ssl_security_level: str | None, rsa_key_exchange_and_chacha20_excluded: bool
+) -> None:
+    """
+    Offer TLS 1.2 and up with SSL_SECURITY_LEVEL's cipher string if set, else DEFAULT_SSL_CIPHERS.
+    With RSA key exchange and ChaCha20 excluded, drop their TLS 1.2 suites, or offer only TLS 1.3 and log a warning
+    when the string has no other TLS 1.2 suite. TLS 1.3 suites come from OpenSSL's config, which set_ciphers can't
+    change.
+    """
+    ciphers: Final = (
+        ssl_security_level if ssl_security_level and isinstance(ssl_security_level, str) else DEFAULT_SSL_CIPHERS
+    )
+    context.minimum_version = ssl.TLSVersion.TLSv1_2  # rebind-ok: sets up the caller's context in place
+    context.set_ciphers(ciphers)
+    if rsa_key_exchange_and_chacha20_excluded:
+        try:
+            context.set_ciphers(f"{ciphers}:!kRSA:!CHACHA20")
+        except ssl.SSLError:
+            context.minimum_version = ssl.TLSVersion.TLSv1_3  # rebind-ok: sets up the caller's context in place
+            verbose_logger.warning(
+                "fips_mode: cipher list '%s' has no TLS 1.2 suite without RSA key exchange or ChaCha20, "
+                "so outbound TLS offers only TLS 1.3 and TLS 1.2-only servers will fail.",
+                ciphers,
+            )
+
+
+def exclude_rsa_key_exchange_and_chacha20(excluded: bool) -> None:
+    """
+    Turn RSA key exchange and TLS 1.2 ChaCha20 off or back on for new SSL contexts and every cached one, which clients
+    already hold.
+    """
+    if excluded == _rsa_key_exchange_and_chacha20_excluded.is_set():
+        return
+    if excluded:
+        _rsa_key_exchange_and_chacha20_excluded.set()
+    else:
+        _rsa_key_exchange_and_chacha20_excluded.clear()
+    for (_, ssl_security_level, _, _), context in list(_ssl_context_cache.items()):
+        _set_ciphers(context, ssl_security_level, excluded)
 
 
 def _create_ssl_context(
@@ -329,18 +371,7 @@ def _create_ssl_context(
     """
     custom_ssl_context: Final = ssl.create_default_context(cafile=cafile)
 
-    # Optimize SSL handshake performance
-    # Set minimum TLS version to 1.2 for better performance
-    custom_ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
-
-    # Configure cipher suites for optimal performance
-    if ssl_security_level and isinstance(ssl_security_level, str):
-        # User provided custom cipher configuration (e.g., via SSL_SECURITY_LEVEL env var)
-        custom_ssl_context.set_ciphers(ssl_security_level)
-    else:
-        # Use optimized cipher list that strongly prefers fast ciphers
-        # but falls back to widely compatible ones
-        custom_ssl_context.set_ciphers(DEFAULT_SSL_CIPHERS)
+    _set_ciphers(custom_ssl_context, ssl_security_level, _rsa_key_exchange_and_chacha20_excluded.is_set())
 
     # Configure ECDH curve for key exchange (e.g., to disable PQC and improve performance)
     # Set SSL_ECDH_CURVE env var or litellm.ssl_ecdh_curve to 'X25519' to disable PQC
@@ -663,7 +694,9 @@ class HTTPResponseLimitError(ValueError):
 
 
 class MaskedHTTPStatusError(httpx.HTTPStatusError):
-    def __init__(self, original_error: httpx.HTTPStatusError, message: str | None = None, text: str | None = None):
+    def __init__(
+        self, original_error: httpx.HTTPStatusError, message: str | None = None, text: str | None = None
+    ) -> None:
         # Create a new error with the masked URL
         masked_url: Final = mask_sensitive_info(str(original_error.request.url))
         # Mask the original exception message too (it contains the full URL)

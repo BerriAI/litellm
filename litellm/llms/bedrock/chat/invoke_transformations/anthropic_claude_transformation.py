@@ -23,6 +23,7 @@ from litellm.llms.anthropic.common_utils import (
     OBJECT_MAPPING_ADAPTER,
     AnthropicModelInfo,
     carried_thinking_keys,
+    replays_tool_search,
 )
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
@@ -265,6 +266,9 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             optional_params=optional_params,
             headers=headers,
             thinking=_anthropic_request.get("thinking"),
+            history_holds_tool_search=replays_tool_search(
+                OBJECT_MAPPING_ADAPTER.validate_python(_anthropic_request).get("messages")
+            ),
         )
         if beta_list:
             _anthropic_request["anthropic_beta"] = beta_list
@@ -397,9 +401,10 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         optional_params: dict,
         headers: dict,
         thinking: AnthropicThinkingParam | None,
+        history_holds_tool_search: bool,
     ) -> list[str]:
         tools: Final = optional_params.get("tools")
-        tool_search_used: Final = self.is_tool_search_used(tools)
+        tool_search_used: Final = self.is_tool_search_used(tools) or history_holds_tool_search
         programmatic_tool_calling_used: Final = self.is_programmatic_tool_calling_used(tools)
         input_examples_used: Final = self.is_input_examples_used(tools)
         is_mid_conversation_output_config_used: Final = self.is_mid_conversation_output_config_used(messages)
