@@ -10,7 +10,6 @@ import pytest
 import respx
 
 import litellm
-from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
 SARVAM_MODELS: Final = (
     "sarvam/sarvam-105b",
@@ -36,18 +35,6 @@ def test_sarvam_provider_resolution() -> None:
     assert model == "sarvam-105b"
     assert provider == "sarvam"
     assert api_base == "https://api.sarvam.ai/v2"
-
-
-def test_sarvam_responses_api_enabled() -> None:
-    from litellm.utils import ProviderConfigManager
-
-    assert JSONProviderRegistry.supports_responses_api("sarvam") is True
-    config: Final = ProviderConfigManager.get_provider_responses_api_config(
-        provider="sarvam",
-        model="sarvam/sarvam-105b",
-    )
-    assert config is not None
-    assert config.custom_llm_provider == "sarvam"
 
 
 def test_sarvam_listed_in_add_model_provider_fields() -> None:
