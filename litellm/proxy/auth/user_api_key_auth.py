@@ -4252,6 +4252,9 @@ async def _reserve_budget_after_common_checks(
             reserve_budget_for_request,
         )
 
+        reservation_path_params: Final[Mapping[str, object] | None] = (
+            request.path_params if request is not None else None
+        )
         user_api_key_auth_obj.budget_reservation = await reserve_budget_for_request(
             request_body=request_data,
             route=route,
@@ -4270,7 +4273,7 @@ async def _reserve_budget_after_common_checks(
                 or user_api_key_auth_obj.billing_agent_policy is not None
             ),
             raw_body=await read_raw_json_body(request=request),
-            path_params=request.path_params if request is not None else None,
+            path_params=reservation_path_params,
         )
     if request is not None:
         reservation: Final = user_api_key_auth_obj.budget_reservation

@@ -1409,7 +1409,7 @@ def no_inference_model_override(monkeypatch: pytest.MonkeyPatch) -> None:
 )
 def test_get_model_from_request_checks_the_url_model_on_routes_served_from_the_url(
     route: str, url_model: str, request_data: dict[str, object]
-):
+) -> None:
     assert get_model_from_request(request_data=request_data, route=route) == url_model
 
 
@@ -1425,7 +1425,7 @@ def test_get_model_from_request_checks_the_url_model_on_routes_served_from_the_u
 )
 def test_get_model_from_request_follows_the_handlers_path_param_over_route_and_body(
     route: str, path_params: dict[str, str]
-):
+) -> None:
     request: Final = Request(scope={"type": "http", "path": route, "path_params": path_params, "headers": []})
     body: Final = {"model": "body-model"}
 
@@ -1459,7 +1459,7 @@ def test_get_model_from_request_applies_the_handlers_server_model_precedence(
     settings: dict[str, str],
     cli_model: str | None,
     expected: str,
-):
+) -> None:
     from litellm.proxy import proxy_server
 
     monkeypatch.setattr(proxy_server, "general_settings", settings)
@@ -1470,12 +1470,12 @@ def test_get_model_from_request_applies_the_handlers_server_model_precedence(
 
 @pytest.mark.usefixtures("no_inference_model_override")
 @pytest.mark.parametrize("route", ["/v1/images/generations", "/images/edits", "/v1/chat/completions"])
-def test_get_model_from_request_keeps_the_body_model_where_the_url_names_none(route: str):
+def test_get_model_from_request_keeps_the_body_model_where_the_url_names_none(route: str) -> None:
     assert get_model_from_request(request_data={"model": "cheap-model"}, route=route) == "cheap-model"
 
 
 @pytest.mark.parametrize("route, url_model", _URL_SELECTED_MODEL_ROUTES)
-def test_get_model_from_request_skips_url_model_on_configured_pass_through(route: str, url_model: str):
+def test_get_model_from_request_skips_url_model_on_configured_pass_through(route: str, url_model: str) -> None:
     request: Final = _request_dispatched_to(_pass_through_endpoint())
     assert get_model_from_request(request_data={"model": url_model}, route=route, request=request) is None
 

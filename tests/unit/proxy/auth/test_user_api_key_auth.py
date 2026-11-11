@@ -1305,8 +1305,8 @@ def test_get_model_from_request(route, request_data, expected_model):
 )
 @pytest.mark.parametrize("body", [{"model": "cheap-model"}, {"target_model_names": ["cheap-model"]}])
 async def test_key_model_allowlist_applies_to_the_model_selected_by_the_url(
-    monkeypatch, route_template: str, body: dict[str, object]
-):
+    monkeypatch: pytest.MonkeyPatch, route_template: str, body: dict[str, object]
+) -> None:
     from litellm.proxy._types import ProxyErrorTypes
     from litellm.proxy.auth.user_api_key_auth import enforce_key_and_fallback_model_access
 
@@ -1331,7 +1331,7 @@ async def test_key_model_allowlist_applies_to_the_model_selected_by_the_url(
             request_data=dict(body),
             route=route,
             request=request,
-            llm_model_list=router.model_list,
+            llm_model_list=list(router.model_list),
             llm_router=router,
         )
 

@@ -2691,9 +2691,11 @@ def get_model_from_request(
     if request_dispatched_to_pass_through_endpoint(request):
         return None
 
-    handler_model: Final = _handler_selected_model(
-        route, request_data, request.path_params if request is not None else path_params
+    handler_request_data: Final[Mapping[str, object]] = request_data
+    handler_path_params: Final[Mapping[str, object] | None] = (
+        request.path_params if request is not None else path_params
     )
+    handler_model: Final = _handler_selected_model(route, handler_request_data, handler_path_params)
     if handler_model is not None:
         return handler_model
 
@@ -2726,9 +2728,8 @@ def get_model_from_request(
     return model
 
 
-_HANDLER_MODEL_ROUTES: Final[
-    tuple[tuple[re.Pattern[str], str, Literal["completion", "image_generation", "image_edit"]], ...]
-] = (
+_HandlerModelKind: TypeAlias = Literal["completion", "image_generation", "image_edit"]
+_HANDLER_MODEL_ROUTES: Final[tuple[tuple[re.Pattern[str], str, _HandlerModelKind], ...]] = (
     (re.compile(r"^(?:/v1beta)?/models/(.+):(?:generateContent|streamGenerateContent)$"), "model_name", "completion"),
     (re.compile(r"^/openai/deployments/(.+)/images/generations$"), "model", "image_generation"),
     (re.compile(r"^/openai/deployments/(.+)/images/edits$"), "model", "image_edit"),
@@ -2738,13 +2739,13 @@ _HANDLER_MODEL_ROUTES: Final[
 def _handler_selected_model(
     route: str, request_data: Mapping[str, object], path_params: Mapping[str, object] | None
 ) -> str | None:
-    selection: Final = next(
+    selection: Final[tuple[re.Match[str], str, _HandlerModelKind] | None] = next(
         ((match, name, kind) for pattern, name, kind in _HANDLER_MODEL_ROUTES if (match := pattern.match(route))),
         None,
     )
     if selection is None:
         return None
-    from litellm.proxy.proxy_server import general_settings_view, user_model
+    from litellm.proxy.proxy_server import general_settings_view, user_model_view
 
     route_match, path_param_name, kind = selection
     route_model: Final = route_match.group(1)
@@ -2752,7 +2753,7 @@ def _handler_selected_model(
     model: Final = resolve_inference_model(
         request_data.get("model"),
         general_settings_view(),
-        user_model,
+        user_model_view(),
         path_model if isinstance(path_model, str) and path_model else route_model,
         kind=kind,
     )

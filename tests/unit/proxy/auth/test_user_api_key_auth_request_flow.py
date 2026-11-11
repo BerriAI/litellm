@@ -10956,7 +10956,7 @@ class TestCheckTeamMemberModelBudgetWithFallback:
     @pytest.mark.parametrize("operation", ["generations", "edits"])
     async def test_image_deployment_key_fallback_is_the_model_later_checks_and_reservation_see(
         self, monkeypatch: pytest.MonkeyPatch, operation: str
-    ):
+    ) -> None:
         from litellm.proxy import proxy_server
         from litellm.proxy.auth.auth_utils import get_model_from_request
 
@@ -10973,7 +10973,7 @@ class TestCheckTeamMemberModelBudgetWithFallback:
             },
         )
         limiter, _ = await _real_model_budget_limiter(key_spend={"gpt-4o": 10.0})
-        request_data: Final = {"model": "gpt-4o"}
+        request_data: Final[dict[str, object]] = {"model": "gpt-4o"}
         request: Final = self._request("gpt-4o")
         assert get_model_from_request(request_data, route, request=request) == "gpt-4o"
 
