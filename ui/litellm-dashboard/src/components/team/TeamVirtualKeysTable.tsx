@@ -550,6 +550,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
     <div className="w-full">
       {selectedKey ? (
         <KeyInfoView
+          tabParam="key_tab"
           keyId={selectedKey.token}
           onClose={() => setSelectedKey(null)}
           keyData={selectedKey}
