@@ -5,7 +5,9 @@ Unit tests for the SparrowCodes OpenAI-like provider.
 import json
 from pathlib import Path
 
+import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.llms.openai_like.dynamic_config import create_config_class
@@ -107,3 +109,20 @@ def test_sparrowcodes_is_available_in_add_model_form():
         "api_base": False,
         "api_key": True,
     }
+
+
+@respx.mock
+def test_sparrowcodes_missing_key_never_sends_openai_key(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("SPARROWCODES_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-openai-key")
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+    upstream = respx.route().mock(return_value=httpx.Response(200, json={}))
+
+    with pytest.raises(litellm.AuthenticationError, match="SPARROWCODES_API_KEY"):
+        litellm.completion(
+            model="sparrowcodes/sparrow/auto",
+            messages=[{"role": "user", "content": "Hello"}],
+        )
+
+    assert upstream.call_count == 0

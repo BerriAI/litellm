@@ -2805,6 +2805,11 @@ def _complete_custom_openai(
         raise litellm.AuthenticationError(
             message="Set BIGMODEL_API_KEY or pass api_key", llm_provider="bigmodel", model=model
         )
+    if custom_llm_provider == "sparrowcodes" and not api_key:
+        # Fail closed: never fall back to OPENAI_API_KEY and send it to a third-party endpoint
+        raise litellm.AuthenticationError(
+            message="Set SPARROWCODES_API_KEY or pass api_key", llm_provider="sparrowcodes", model=model
+        )
     organization = (
         organization
         or (None if custom_llm_provider == "bigmodel" else litellm.organization or get_secret("OPENAI_ORGANIZATION"))
