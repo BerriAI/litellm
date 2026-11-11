@@ -2,7 +2,7 @@ import uuid
 from collections.abc import AsyncGenerator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta
 from itertools import chain
 from typing import TYPE_CHECKING, Final, Protocol, cast  # noqa: TID251  # Prisma generates transaction types
 
@@ -19,7 +19,6 @@ from litellm.models.performance_alert import (
     SweepState,
     advance,
     detect,
-    rotation_start,
 )
 from litellm.repositories.alert_repository import record_alerts
 
@@ -51,6 +50,8 @@ class _StateRow(BaseModel):
     checked: int
     skipped: int
     completed: bool
+    start_scope: PerformanceScope | None
+    start_after: str
 
 
 class _IdRow(BaseModel):
@@ -153,13 +154,14 @@ VALUES (1, $1, now() + $2::interval, now() AT TIME ZONE 'UTC')
 ON CONFLICT (id) DO UPDATE SET owner = EXCLUDED.owner, next_run_at = EXCLUDED.next_run_at,
     updated_at = now() AT TIME ZONE 'UTC'
 WHERE "LiteLLM_PerformanceAlertState".next_run_at <= now() + interval '30 seconds'
-RETURNING day, scope, resume_after AS cursor, wrapped, checked, skipped, completed_at IS NOT NULL AS completed"""
+RETURNING day, scope, resume_after AS cursor, wrapped, checked, skipped, completed_at IS NOT NULL AS completed,
+    start_scope, start_after"""
 _SAVE: Final = """UPDATE "LiteLLM_PerformanceAlertState"
 SET day = $2, scope = $3, resume_after = $4, wrapped = $5, checked = $6, skipped = $7,
-    completed_at = CASE WHEN $8 THEN now() AT TIME ZONE 'UTC' END, updated_at = now() AT TIME ZONE 'UTC'
+    start_scope = $9, start_after = $10, completed_at = CASE WHEN $8 THEN now() AT TIME ZONE 'UTC' END, updated_at = now() AT TIME ZONE 'UTC'
 WHERE id = 1 AND owner = $1"""
 _ACCOUNTING_PENDING: Final = """SELECT 1 AS resource_id FROM "LiteLLM_SpendLogDelivery"
-WHERE state = 'pending' AND created_at < $1::timestamp LIMIT 1"""
+WHERE state = 'pending' AND created_at >= $1::timestamp AND created_at < $2::timestamp LIMIT 1"""
 _INDEX_READY: Final = """SELECT 1 AS resource_id FROM pg_index WHERE indexrelid = to_regclass($1) AND indisvalid"""
 
 
@@ -196,17 +198,18 @@ class PerformanceAlertRepository:
         return Claim(owner, SweepState.model_validate(row.model_dump()))
 
     async def accounting_pending(self, day: date) -> bool:
-        day_end: Final = datetime.combine(day + timedelta(days=1), time.min, timezone.utc)
+        """Whether usage recorded during `day` is still waiting to reach the daily tables."""
+        start: Final = datetime.combine(day, time.min)
         async with self._transaction() as transaction:
-            return bool(await transaction.query_raw(_ACCOUNTING_PENDING, day_end.replace(tzinfo=None).isoformat()))
+            return bool(
+                await transaction.query_raw(
+                    _ACCOUNTING_PENDING, start.isoformat(), (start + timedelta(days=1)).isoformat()
+                )
+            )
 
     async def key_index_ready(self) -> bool:
         async with self._transaction() as transaction:
             return bool(await transaction.query_raw(_INDEX_READY, f'"{KEY_DATE_INDEX}"'))
-
-    async def save(self, owner: str, state: SweepState) -> None:
-        async with self._transaction() as transaction:
-            await self._save(transaction, owner, state)
 
     async def evaluate_page(self, owner: str, state: SweepState, limit: int) -> SweepState:
         """Evaluate the next `limit` resources and save their alerts together with the new position."""
@@ -254,7 +257,7 @@ class PerformanceAlertRepository:
         if state.scope == "gateway":
             return window
         if state.wrapped:
-            return (*window, state.cursor, rotation_start(state.day))
+            return (*window, state.cursor, state.start)
         return (*window, state.cursor)
 
     @staticmethod
@@ -269,6 +272,8 @@ class PerformanceAlertRepository:
             state.checked,
             state.skipped,
             state.completed,
+            state.start_scope,
+            state.start_after,
         )
         if updated != 1:
             raise SweepOwnershipLostError()

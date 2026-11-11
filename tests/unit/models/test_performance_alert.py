@@ -11,7 +11,6 @@ from litellm.models.performance_alert import (
     detect,
     new_sweep,
     next_scope,
-    rotation_start,
     target_day,
 )
 
@@ -120,22 +119,41 @@ def test_the_evaluated_day_changes_at_one_am_utc(now: datetime, expected: date) 
     assert target_day(now) == expected
 
 
-def test_gateway_moves_to_models_starting_from_the_days_rotation_point() -> None:
-    assert advance(new_sweep(DAY), ("gateway",), 25) == SweepState(
-        day=DAY, scope="model", cursor=rotation_start(DAY), checked=1
-    )
+def test_gateway_moves_to_models_starting_from_the_beginning() -> None:
+    assert advance(new_sweep(DAY), ("gateway",), 25) == SweepState(day=DAY, scope="model", checked=1)
 
 
 def test_a_full_page_continues_from_its_last_resource() -> None:
-    state: Final = SweepState(day=DAY, scope="team", cursor=rotation_start(DAY))
+    state: Final = SweepState(day=DAY, scope="team")
     assert advance(state, ("t1", "t2"), 2) == state.model_copy(update={"cursor": "t2", "checked": 2})
 
 
-def test_a_short_page_wraps_to_the_ids_before_the_rotation_point_then_moves_on() -> None:
-    first_half: Final = advance(SweepState(day=DAY, scope="team", cursor="t9"), ("t10",), 25)
-    assert (first_half.scope, first_half.cursor, first_half.wrapped) == ("team", "", True)
-    second_half: Final = advance(first_half, ("a1",), 25)
-    assert (second_half.scope, second_half.cursor, second_half.wrapped) == ("user", rotation_start(DAY), False)
+def test_a_scope_without_a_carried_start_moves_on_after_one_pass() -> None:
+    finished: Final = advance(SweepState(day=DAY, scope="team", cursor="t9"), ("t10",), 25)
+    assert (finished.scope, finished.cursor, finished.wrapped) == ("user", "", False)
+
+
+def test_an_unfinished_day_restarts_its_scope_where_it_stopped_then_wraps() -> None:
+    previous: Final = SweepState(day=DAY - timedelta(days=1), scope="team", cursor="t5", checked=40)
+    today: Final = new_sweep(DAY, previous)
+    assert (today.scope, today.start_scope, today.start_after, today.checked) == ("gateway", "team", "t5", 0)
+    at_team: Final = next_scope(next_scope(today))
+    assert (at_team.scope, at_team.cursor, at_team.wrapped) == ("team", "t5", False)
+    after_tail: Final = advance(at_team, ("t6", "t7"), 25)
+    assert (after_tail.scope, after_tail.cursor, after_tail.wrapped) == ("team", "", True)
+    after_head: Final = advance(after_tail, ("t1", "t5"), 25)
+    assert (after_head.scope, after_head.cursor, after_head.wrapped) == ("user", "", False)
+
+
+@pytest.mark.parametrize(
+    "previous",
+    (
+        SweepState(day=DAY - timedelta(days=1), scope="team", cursor="t5", completed=True),
+        SweepState(day=DAY - timedelta(days=1), scope="gateway"),
+    ),
+)
+def test_a_finished_or_barely_started_day_carries_nothing(previous: SweepState) -> None:
+    assert new_sweep(DAY, previous) == SweepState(day=DAY)
 
 
 def test_the_sweep_completes_after_keys() -> None:
@@ -146,7 +164,3 @@ def test_the_sweep_completes_after_keys() -> None:
 def test_a_skipped_resource_counts_as_skipped_not_checked() -> None:
     state: Final = SweepState(day=DAY, scope="user", cursor="u1", checked=4)
     assert advance(state, ("u2",), 1, skipped=1) == state.model_copy(update={"cursor": "u2", "skipped": 1})
-
-
-def test_rotation_point_differs_between_days() -> None:
-    assert rotation_start(DAY) != rotation_start(DAY + timedelta(days=1))

@@ -2199,6 +2199,8 @@ model LiteLLM_PerformanceAlertState {
   wrapped      Boolean   @default(false)
   checked      Int       @default(0)
   skipped      Int       @default(0)
+  start_scope  String?   @client.VarChar(16)
+  start_after  String    @default("") @client.VarChar(1024)
   completed_at DateTime?
   updated_at   DateTime  @default(now()) @updatedAt
 }

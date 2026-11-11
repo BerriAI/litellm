@@ -10,6 +10,8 @@ CREATE TABLE IF NOT EXISTS "LiteLLM_PerformanceAlertState" (
     "wrapped" BOOLEAN NOT NULL DEFAULT false,
     "checked" INTEGER NOT NULL DEFAULT 0,
     "skipped" INTEGER NOT NULL DEFAULT 0,
+    "start_scope" VARCHAR(16),
+    "start_after" VARCHAR(1024) NOT NULL DEFAULT '',
     "completed_at" TIMESTAMP(3),
     "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

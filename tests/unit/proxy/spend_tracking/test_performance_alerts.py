@@ -40,7 +40,7 @@ class Store:
     async def key_index_ready(self) -> bool:
         return self.index_ready
 
-    async def save(self, owner: str, state: SweepState) -> None:
+    def _keep(self, state: SweepState) -> None:
         self.saved.append(state)
         self.state = state
 
@@ -48,8 +48,8 @@ class Store:
         if state.scope == "gateway":
             return ("gateway",)
         names: Final = tuple(f"{state.scope}-{index}" for index in range(self.per_scope))
-        remaining: Final = names[names.index(state.cursor) + 1 :] if state.cursor in names else names
-        return () if state.wrapped else remaining[:limit]
+        after: Final = tuple(name for name in names if name > state.cursor)
+        return tuple(name for name in after if not state.wrapped or name <= state.start)[:limit]
 
     async def evaluate_page(self, owner: str, state: SweepState, limit: int) -> SweepState:
         self.pages.append((state.scope, limit))
@@ -57,13 +57,13 @@ class Store:
         if self.unreadable.intersection(ids):
             raise ResourceUnreadableError()
         advanced: Final = advance(state, ids, limit)
-        await self.save(owner, advanced)
+        self._keep(advanced)
         return advanced
 
     async def skip_next(self, owner: str, state: SweepState) -> SweepState:
         ids: Final = self._next(state, 1)
         advanced: Final = advance(state, ids, 1, skipped=len(ids))
-        await self.save(owner, advanced)
+        self._keep(advanced)
         return advanced
 
 
@@ -106,10 +106,14 @@ async def test_a_completed_day_does_no_more_work() -> None:
 
 
 @pytest.mark.asyncio
-async def test_an_unfinished_previous_day_is_replaced_by_the_new_day() -> None:
+async def test_an_unfinished_previous_day_resumes_its_scope_where_it_stopped_and_still_checks_everything() -> None:
     store: Final = Store(state=SweepState(day=DAY - timedelta(days=1), scope="user", cursor="user-1"))
     await _run(store)
     assert store.saved[0].day == DAY and store.pages[0] == ("gateway", PAGE_SIZE)
+    users: Final = tuple(state for state in store.saved if state.scope == "user")
+    assert (users[0].cursor, users[0].wrapped) == ("user-1", False)
+    assert any(state.wrapped for state in users)
+    assert store.state is not None and store.state.completed and store.state.checked == 1 + 3 * 4
 
 
 @pytest.mark.asyncio
@@ -130,11 +134,14 @@ async def test_an_unreadable_resource_is_retried_alone_then_skipped() -> None:
 
 
 @pytest.mark.asyncio
-async def test_keys_wait_for_their_index_while_other_scopes_run() -> None:
+async def test_keys_wait_for_their_index_without_finishing_the_day_then_run_once_it_exists() -> None:
     store: Final = Store(index_ready=False)
     await _run(store)
     assert all(scope != "key" for scope, _ in store.pages)
-    assert store.state is not None and store.state.completed and store.state.checked == 1 + 3 * 3
+    assert store.state is not None and not store.state.completed and store.state.scope == "key"
+    store.index_ready = True
+    await _run(store)
+    assert store.state is not None and store.state.completed and store.state.checked == 1 + 3 * 4
 
 
 @pytest.mark.asyncio

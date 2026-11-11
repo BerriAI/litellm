@@ -1,4 +1,3 @@
-import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
@@ -49,8 +48,8 @@ class ResourceWindow(BaseModel):
 
 
 class SweepState(BaseModel):
-    """Where the daily sweep stands. Each scope is walked from a day-derived start to the end of its IDs,
-    then wraps to cover the IDs before that start, so an unfinished sweep leaves different resources out each day."""
+    """Where the daily sweep stands. Scopes are walked in ID order. When the previous day stopped partway, that scope
+    starts where it stopped and wraps around, so an unfinished sweep does not leave out the same resources every day."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -61,6 +60,12 @@ class SweepState(BaseModel):
     checked: int = Field(default=0, ge=0)
     skipped: int = Field(default=0, ge=0)
     completed: bool = False
+    start_scope: PerformanceScope | None = None
+    start_after: str = Field(default="", max_length=1024)
+
+    @property
+    def start(self) -> str:
+        return self.start_after if self.scope == self.start_scope else ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,7 +87,6 @@ class PerformanceAlertStore(Protocol):
     async def claim(self, interval: timedelta) -> Claim | None: ...
     async def accounting_pending(self, day: date) -> bool: ...
     async def key_index_ready(self) -> bool: ...
-    async def save(self, owner: str, state: SweepState) -> None: ...
     async def evaluate_page(self, owner: str, state: SweepState, limit: int) -> SweepState: ...
     async def skip_next(self, owner: str, state: SweepState) -> SweepState: ...
 
@@ -92,20 +96,18 @@ def target_day(now: datetime) -> date:
     return (now.astimezone(timezone.utc) - timedelta(hours=1)).date() - timedelta(days=1)
 
 
-def rotation_start(day: date) -> str:
-    return hashlib.sha256(day.isoformat().encode()).hexdigest()
-
-
-def new_sweep(day: date) -> SweepState:
-    return SweepState(day=day)
+def new_sweep(day: date, previous: SweepState | None = None) -> SweepState:
+    if previous is None or previous.completed or previous.scope == "gateway":
+        return SweepState(day=day)
+    return SweepState(day=day, start_scope=previous.scope, start_after=previous.cursor)
 
 
 def next_scope(state: SweepState) -> SweepState:
     position: Final = SCOPES.index(state.scope)
     if position + 1 == len(SCOPES):
         return state.model_copy(update={"cursor": "", "wrapped": False, "completed": True})
-    following: Final = SCOPES[position + 1]
-    return state.model_copy(update={"scope": following, "cursor": rotation_start(state.day), "wrapped": False})
+    moved: Final = state.model_copy(update={"scope": SCOPES[position + 1], "wrapped": False})
+    return moved.model_copy(update={"cursor": moved.start})
 
 
 def advance(state: SweepState, resource_ids: Sequence[str], limit: int, skipped: int = 0) -> SweepState:
@@ -116,7 +118,7 @@ def advance(state: SweepState, resource_ids: Sequence[str], limit: int, skipped:
         return next_scope(counted)
     if len(resource_ids) == limit:
         return counted.model_copy(update={"cursor": resource_ids[-1]})
-    if state.wrapped:
+    if state.wrapped or not state.start:
         return next_scope(counted)
     return counted.model_copy(update={"cursor": "", "wrapped": True})
 
