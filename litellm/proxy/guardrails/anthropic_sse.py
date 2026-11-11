@@ -9,13 +9,22 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, replace
+from functools import reduce
 from types import MappingProxyType
-from typing import Final
+from typing import (
+    Final,
+    cast,  # noqa: TID251  # the Messages body is a total=False TypedDict; validating through it drops provider fields
+)
+
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.anthropic.messages.native.utils import filtered_safeguard_results, redacted_stop_details
 from litellm.llms.anthropic.messages.stream_assembly import (
+    _joined_sse_stream,  # pyright: ignore[reportPrivateUsage]  # moved with the assembler; a copy splits trailing utf-8
+    _parsed_sse_events,  # pyright: ignore[reportPrivateUsage]  # same parser assemble_anthropic_sse_stream uses
     anthropic_message_delta_fields,
     anthropic_sse_error_events,
     anthropic_sse_event_type,
@@ -38,6 +47,17 @@ from litellm.llms.anthropic.messages.stream_assembly import (
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.utils import Choices, ModelResponse
+
+_EMPTY_MAP: Final[Mapping[str, object]] = MappingProxyType({})
+
+_TOOL_BLOCK_TYPES: Final = frozenset({"tool_use", "server_tool_use", "mcp_tool_use"})
+
+_JSON_OBJECT_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+
+def sse_stream_text(all_chunks: Sequence[object]) -> str | None:
+    """The raw SSE frames joined as text, for a caller that forwards the stream instead of folding it."""
+    return _joined_sse_stream(all_chunks)
 
 
 def model_response_text(response: ModelResponse) -> str:
@@ -207,6 +227,12 @@ def _rebuilt_sse_chunks(
         response=_without_empty_text(anthropic_response) if error_events else anthropic_response,
         message_delta_fields=_rewritten_message_delta_fields(source_chunks, unchanged_tool_use_ids, keep_explanations),
     ).chunks
+    return _ended_as_the_upstream_ended(rewritten_chunks, source_chunks, error_events)
+
+
+def _ended_as_the_upstream_ended(
+    rewritten_chunks: Sequence[bytes], source_chunks: Sequence[object], error_events: Sequence[str]
+) -> tuple[bytes, ...]:
     if not error_events:
         return tuple(rewritten_chunks)
     block_left_open: Final = _text_block_left_open(rewritten_chunks, source_chunks)
@@ -215,3 +241,172 @@ def _rebuilt_sse_chunks(
         *(chunk for chunk in rewritten_chunks if _sent_by_the_failed_upstream(chunk, block_left_open, end_events_sent)),
         *_sse_chunks_of_events(error_events),
     )
+
+
+def _str_field(source: Mapping[str, object], key: str) -> str:
+    return value if isinstance(value := source.get(key), str) else ""
+
+
+def _object_field(source: Mapping[str, object], key: str) -> Mapping[str, object] | None:
+    value: Final = source.get(key)
+    return _JSON_OBJECT_ADAPTER.validate_python(value) if isinstance(value, Mapping) else None
+
+
+def _accumulated_tool_input(joined: str) -> object:
+    """Assemble a tool block's streamed arguments.
+
+    A stream cut mid-block leaves unparseable JSON. Returning an empty input there would
+    drop whatever the model had already emitted, and a caller can force exactly that by
+    prompting for restricted content inside a tool argument and letting max_tokens truncate
+    it: the text would reach the client in the replayed frames having never been scanned.
+    So the raw fragment is carried under ``_raw`` instead, keeping the block a well-formed
+    object while leaving the text visible to whatever inspects the assembled body.
+    """
+    try:
+        return json.loads(joined)
+    except json.JSONDecodeError:
+        return {"_raw": joined}
+
+
+@dataclass(frozen=True, slots=True)
+class _ContentBlock:
+    """A ``content_block_start`` and every delta that has landed on it since."""
+
+    start: Mapping[str, object]
+    text: tuple[str, ...] = ()
+    thinking: tuple[str, ...] = ()
+    signature: tuple[str, ...] = ()
+    partial_json: tuple[str, ...] = ()
+    citations: tuple[object, ...] = ()
+
+    def with_delta(self, delta: Mapping[str, object]) -> _ContentBlock:
+        match delta.get("type"):
+            case "text_delta":
+                return replace(self, text=(*self.text, _str_field(delta, "text")))
+            case "thinking_delta":
+                return replace(self, thinking=(*self.thinking, _str_field(delta, "thinking")))
+            case "signature_delta":
+                return replace(self, signature=(*self.signature, _str_field(delta, "signature")))
+            case "input_json_delta":
+                return replace(self, partial_json=(*self.partial_json, _str_field(delta, "partial_json")))
+            case "citations_delta":
+                citation: Final = delta.get("citation")
+                return self if citation is None else replace(self, citations=(*self.citations, citation))
+            case _:
+                return self
+
+    def _accumulated_fields(self) -> Mapping[str, object]:
+        block_type: Final = self.start.get("type")
+        if block_type == "text":
+            return {"text": "".join(self.text)}
+        if block_type == "thinking":
+            return {"thinking": "".join(self.thinking), "signature": "".join(self.signature)}
+        if block_type in _TOOL_BLOCK_TYPES:
+            joined: Final = "".join(self.partial_json)
+            return {"input": _accumulated_tool_input(joined)} if joined else _EMPTY_MAP
+        return _EMPTY_MAP
+
+    def rendered(self) -> Mapping[str, object]:
+        cited: Final[Mapping[str, object]] = (
+            MappingProxyType({"citations": tuple(self.citations)}) if self.citations else _EMPTY_MAP
+        )
+        return {**self.start, **self._accumulated_fields(), **cited}
+
+
+_EMPTY_BLOCKS: Final[Mapping[int, _ContentBlock]] = MappingProxyType({})
+
+
+@dataclass(frozen=True, slots=True)
+class _AnthropicMessage:
+    envelope: Mapping[str, object] | None = None
+    blocks: Mapping[int, _ContentBlock] = _EMPTY_BLOCKS
+    stop_reason: object = None
+    stop_sequence: object = None
+    delta_usage: Mapping[str, object] = _EMPTY_MAP
+
+
+def _with_block(state: _AnthropicMessage, index: int, block: _ContentBlock) -> _AnthropicMessage:
+    return replace(state, blocks=MappingProxyType({**state.blocks, index: block}))
+
+
+def _with_message_delta(state: _AnthropicMessage, event: Mapping[str, object]) -> _AnthropicMessage:
+    stops: Final = _object_field(event, "delta") or _EMPTY_MAP
+    usage: Final = _object_field(event, "usage")
+    return replace(
+        state,
+        stop_reason=stops.get("stop_reason", state.stop_reason),
+        stop_sequence=stops.get("stop_sequence", state.stop_sequence),
+        delta_usage=MappingProxyType({**state.delta_usage, **usage}) if usage is not None else state.delta_usage,
+    )
+
+
+def _with_event(state: _AnthropicMessage, event: Mapping[str, object]) -> _AnthropicMessage:
+    match event.get("type"):
+        case "message_start":
+            message: Final = _object_field(event, "message")
+            return state if message is None else replace(state, envelope=message)
+        case "content_block_start":
+            index: Final = event.get("index")
+            block: Final = _object_field(event, "content_block")
+            if not isinstance(index, int) or block is None:
+                return state
+            return _with_block(state, index, _ContentBlock(start=block))
+        case "content_block_delta":
+            delta_index: Final = event.get("index")
+            delta: Final = _object_field(event, "delta")
+            if not isinstance(delta_index, int) or delta is None:
+                return state
+            started: Final = state.blocks.get(delta_index)
+            return state if started is None else _with_block(state, delta_index, started.with_delta(delta))
+        case "message_delta":
+            return _with_message_delta(state, event)
+        case _:
+            return state
+
+
+def assemble_anthropic_sse_body(all_chunks: Sequence[object]) -> Mapping[str, object] | None:
+    """Fold raw Anthropic SSE frames back into the non-streaming Messages body.
+
+    ``assemble_anthropic_sse_stream`` folds them into a ``ModelResponse``, which is all a guardrail
+    scanning text needs. A guardrail that posts the provider body itself needs the shape the
+    non-streaming route already sends, because the chat-completions one has no field for thinking
+    blocks, citations, ``stop_sequence`` or the cache token split and drops them silently.
+    """
+    sse_stream: Final = _joined_sse_stream(all_chunks)
+    if sse_stream is None:
+        return None
+    state: Final = reduce(_with_event, _parsed_sse_events(sse_stream), _AnthropicMessage())
+    envelope: Final = state.envelope
+    if envelope is None:
+        return None
+    started_usage: Final = envelope.get("usage")
+    return {
+        **envelope,
+        "content": tuple(block.rendered() for _, block in sorted(state.blocks.items())),
+        "stop_reason": state.stop_reason if state.stop_reason is not None else envelope.get("stop_reason"),
+        "stop_sequence": state.stop_sequence if state.stop_sequence is not None else envelope.get("stop_sequence"),
+        "usage": {
+            **(started_usage if isinstance(started_usage, Mapping) else _EMPTY_MAP),
+            **state.delta_usage,
+        },
+    }
+
+
+def anthropic_sse_chunks_from_body(
+    body: Mapping[str, object], source_chunks: Sequence[object] = ()
+) -> tuple[bytes, ...]:
+    """Re-emit a native Anthropic Messages body as the SSE frames of the ``source_chunks`` stream it replaces.
+
+    A source stream that ended in an upstream ``error`` event ends with that event again, the same
+    way ``anthropic_sse_chunks_from_response`` re-emits one.
+    """
+    from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
+        FakeAnthropicMessagesStreamIterator,
+    )
+
+    error_events: Final = anthropic_sse_error_events(source_chunks)
+    typed: Final = cast(AnthropicMessagesResponse, dict(body))  # cast-ok: validating drops provider-only fields
+    rewritten_chunks: Final = FakeAnthropicMessagesStreamIterator(
+        response=_without_empty_text(typed) if error_events else typed
+    ).chunks
+    return _ended_as_the_upstream_ended(rewritten_chunks, source_chunks, error_events)

@@ -8,6 +8,7 @@ from typing import Final
 
 import pytest
 
+from litellm.anthropic_interface.exceptions import anthropic_error_sse_frame
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.anthropic_endpoints.streaming_model_restamp import (
@@ -38,9 +39,7 @@ def _model_from_frame(frame: bytes | str) -> str:
 
 
 def test_restamps_sse_bytes_frame():
-    restamped = restamp_anthropic_stream_chunk_model(
-        _message_start_frame("claude-haiku-4-5-20251001"), "claude-auto-1"
-    )
+    restamped = restamp_anthropic_stream_chunk_model(_message_start_frame("claude-haiku-4-5-20251001"), "claude-auto-1")
 
     assert isinstance(restamped, bytes)
     assert _model_from_frame(restamped) == "claude-auto-1"
@@ -169,6 +168,14 @@ def test_first_non_ping_event_disarms_the_restamper():
 
     assert restamper.process(delta) == delta
     assert restamper.process(late_message_start) == late_message_start
+
+
+def test_an_error_frame_passes_through_with_its_status():
+    """A stream that fails before its first byte is answered with the frame's status, which only
+    the frame object carries; re-encoding it to bytes answered a ThirdLaw 403 block as a 200."""
+    frame = anthropic_error_sse_frame(status_code=403, raw_message="blocked")
+
+    assert AnthropicStreamModelRestamper("claude-auto-1").process(frame) is frame
 
 
 def test_oversized_unterminated_chunk_flushes_unmodified():
