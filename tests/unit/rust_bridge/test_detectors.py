@@ -476,19 +476,6 @@ def test_response_cache_is_skipped_only_by_no_cache(
 
 
 @pytest.mark.parametrize(
-    ("kwargs", "expected"),
-    (
-        pytest.param({"mock_response": "hi", "stream": True}, True, id="streamed"),
-        pytest.param({"mock_response": "hi"}, False, id="unary"),
-        pytest.param({"mock_response": "hi", "stream": False}, False, id="stream-false"),
-        pytest.param({"stream": True}, False, id="no-mock"),
-    ),
-)
-def test_streamed_mock_response_needs_a_mock_and_stream_true(kwargs: Mapping[str, object], expected: bool) -> None:
-    assert messages_detectors.streamed_mock_response(call(**kwargs)) is expected
-
-
-@pytest.mark.parametrize(
     ("environment", "setting", "expected"),
     (
         (None, None, False),

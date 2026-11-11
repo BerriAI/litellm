@@ -87,6 +87,31 @@ pub(super) async fn cached(
     Ok(Some(output))
 }
 
+pub(super) async fn mocked(
+    route: &MessagesRoute,
+    provider: MessagesProvider,
+    model: String,
+    context: &CallContext<'_, impl Interceptors<Error>>,
+    mock: Map<String, Value>,
+    stream: bool,
+) -> MessagesCallResponse {
+    let output = MessagesCallResponse::Complete(MessagesBody::Unchecked(mock));
+    let Some(cache) = caller_keyed(route).filter(|_| !stream) else {
+        return output;
+    };
+    let identity = ProviderIdentity {
+        model,
+        provider: provider.as_str().to_string(),
+    };
+    CallCache::<Messages>::new(
+        Some(cache),
+        context.cache,
+        CacheRequest::from_wire(identity, None),
+    )
+    .finish(output, &ResultSource::Provider)
+    .await
+}
+
 fn caller_keyed(route: &MessagesRoute) -> Option<&litellm_cache_response::ScopedCache> {
     route
         .cache

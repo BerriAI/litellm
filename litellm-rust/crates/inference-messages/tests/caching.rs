@@ -387,3 +387,49 @@ async fn a_caller_keyed_hit_is_served_before_the_request_is_built_or_intercepted
     assert!(matches!(cached.source, ResultSource::Cache { .. }));
     assert_eq!(cached.cost, Cost::CacheHit);
 }
+
+#[rstest]
+#[case::unary(false, true)]
+#[case::streamed(true, false)]
+#[tokio::test]
+async fn a_mock_is_stored_under_the_caller_key_only_when_unstreamed(
+    #[case] stream: bool,
+    #[case] stored: bool,
+) {
+    use litellm_inference_messages::{
+        MessagesBody, MessagesCall, MessagesCallResponse, MessagesSettings, MessagesShaping,
+    };
+
+    let mock = json!({"id": "msg_mock", "type": "message", "role": "assistant", "model": "native-test",
+        "content": [{"type": "text", "text": "mocked"}], "stop_reason": "end_turn", "stop_sequence": null,
+        "usage": {"input_tokens": 3, "output_tokens": 2}});
+    let upstream = support::upstream([]).await;
+    let hooks = ChangingHooks::default();
+    let service = Arc::new(CallerKeyed::default());
+    let route = support::messages_route(litellm_inference_testing::no_secrets())
+        .with_cache(ScopedCache::new(service.clone(), CacheScope::Shared));
+    let call = MessagesCall {
+        body: serde_json::from_value(json!({"model": "native-test", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16, "stream": stream})).unwrap(),
+        api_key: Some("key".into()), api_base: Some(upstream.uri()), custom_llm_provider: Some("anthropic".into()),
+        litellm_params: Default::default(), extra_headers: None, provider_specific_header: None,
+        timeout: None,
+        shaping: MessagesShaping {
+            settings: MessagesSettings {
+                mock_response: serde_json::from_value(mock.clone()).unwrap(),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    };
+
+    let output = route.execute(call, &hooks, None).await.unwrap();
+
+    let MessagesCallResponse::Complete(MessagesBody::Unchecked(body)) = output else {
+        panic!("expected the mock as a whole response");
+    };
+    assert_eq!(Value::Object(body), mock);
+    assert!(support::received(&upstream).await.is_empty());
+    assert_eq!(hooks.calls.load(Ordering::SeqCst), 0);
+    assert!(hooks.facts.lock().unwrap().is_empty());
+    assert_eq!(service.entry.lock().unwrap().is_some(), stored);
+}
