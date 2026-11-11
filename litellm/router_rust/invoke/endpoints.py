@@ -24,12 +24,16 @@ from pydantic import TypeAdapter, ValidationError
 
 from litellm._internal_context import service_target
 from litellm._logging import verbose_router_logger
+from litellm.constants import SILENT_MODEL_MIRROR_ALLOWED_CALL_TYPES
 from litellm.litellm_core_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
     add_retry_headers_to_response,
 )
 from litellm.litellm_core_utils.batch_utils import get_router_metadata_variable_name
-from litellm.litellm_core_utils.core_helpers import without
+from litellm.litellm_core_utils.core_helpers import (
+    independent_snapshot,  # pyright: ignore[reportUnknownVariableType]  # the shared helper uses untyped dicts
+    without,
+)
 from litellm.litellm_core_utils.routing_common_utils import without_router_only_kwargs
 from litellm.responses.retrieve_stream_query import without_retrieve_stream_defaults
 from litellm.router_api import RoutingContext
@@ -195,6 +199,7 @@ def _user_message(content: object) -> list[dict[str, object]]:  # mutable-ok: a 
 
 
 PINNED_DEPLOYMENT_KEY: Final = "_pinned_deployment_id"
+_GENERIC_MIRROR_STATE_KEY: Final = "_silent_experiment_state"
 
 # Request keys the router reads to route the call; the deployment call never receives them.
 ROUTING_KEYS: Final = frozenset(
@@ -209,6 +214,7 @@ ROUTING_KEYS: Final = frozenset(
         "_excluded_deployment_ids",
         "_target_order",
         "original_function",
+        _GENERIC_MIRROR_STATE_KEY,
         # The walk's own settings, which `async_function_with_fallbacks` pops before the attempt.
         "model_group_retry_policy",
         "fallbacks",
@@ -292,6 +298,20 @@ class Plan:
     def metadata_field(self) -> str:
         """Where `_update_kwargs_with_deployment` writes the deployment it routed to."""
         return get_router_metadata_variable_name(function_name=self.function_name)
+
+
+@dataclasses.dataclass(slots=True)
+class _GenericMirrorState:
+    scheduled: bool = False
+
+    def mark_scheduled(self) -> None:
+        self.scheduled = True
+
+
+def with_generic_mirror_state(plan: Plan, request: Mapping[str, object]) -> Mapping[str, object]:
+    if plan.kind != "generic" or plan.host_op not in SILENT_MODEL_MIRROR_ALLOWED_CALL_TYPES:
+        return request
+    return {**request, _GENERIC_MIRROR_STATE_KEY: _GenericMirrorState()}
 
 
 def _generic(endpoint: str, host_op: str | None = None, *, sync: bool = False, single_attempt: bool = True) -> Plan:
@@ -940,7 +960,9 @@ def attempt_call(
             }
             return AttemptCall(plan.host_op, final, kwargs, str(data.get("model")), group)
         case "generic":
-            return _generic_attempt(core, plan, kwargs, deployment, data, requested, group)
+            return _generic_attempt(
+                core, plan, kwargs, deployment, data, requested, group, request.get(_GENERIC_MIRROR_STATE_KEY)
+            )
         case "generic_sync":
             update_kwargs_with_deployment(
                 shaping,
@@ -982,12 +1004,18 @@ def _generic_attempt(
     data: dict[str, object],  # mutable-ok: the attempt's copy of the deployment params
     requested: str,
     group: str,
+    mirror_state: object,
 ) -> AttemptCall:
     """`_ageneric_api_call_with_fallbacks_helper` for one deployment."""
     from litellm.llms.base_llm.passthrough.transformation import replace_path_segment
     from litellm.router_rust.invoke.websocket import turn_admission, turn_usage_recorder
 
     handler: Final = invoked_handler_name(core, plan)
+    from litellm._internal_context import in_mirrored_call
+
+    if plan.host_op in SILENT_MODEL_MIRROR_ALLOWED_CALL_TYPES and in_mirrored_call() and _has_mcp_config(data):
+        raise ValueError("silent model deployment cannot run MCP tools")
+    _start_generic_silent_experiments(core, plan, data, kwargs, mirror_state)
     socket: Final = handler == "_aresponses_websocket"
     update_kwargs_with_deployment(
         core.shaping,
@@ -1031,7 +1059,7 @@ def _generic_attempt(
     }
     if provider is not None:
         final["custom_llm_provider"] = provider
-    return AttemptCall(plan.host_op, final, kwargs, model_name, group)
+    return AttemptCall(plan.host_op, without(final, "silent_model"), kwargs, model_name, group)
 
 
 _SEARCH_PROTECTED_PARAMS: Final = frozenset({"search_provider", "api_key", "api_base"})
@@ -1234,6 +1262,79 @@ def stamp_error(
 
 
 # --- silent experiments ---------------------------------------------------------------------
+
+
+_SILENT_TOOL_LIST_ADAPTER: Final = TypeAdapter(tuple[object, ...])
+
+
+def _has_mcp_config(params: Mapping[str, object]) -> bool:
+    if params.get("mcp_servers"):
+        return True
+    tools: Final = params.get("tools")
+    if not isinstance(tools, Sequence) or isinstance(tools, str | bytes):
+        return False
+    validated: Final = _SILENT_TOOL_LIST_ADAPTER.validate_python(tools)
+    return any(as_dict(tool).get("type") == "mcp" for tool in validated)
+
+
+def _generic_silent_snapshot(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    copied: Final = as_dict(independent_snapshot(dict(kwargs)))  # pyright: ignore[reportUnknownArgumentType]  # as_dict validates the helper's untyped return
+    metadata: Final = as_dict(copied.get("litellm_metadata"))
+    metadata.pop("litellm_parent_otel_span", None)
+    metadata["is_silent_experiment"] = True
+    return {
+        **without(
+            copied,
+            "litellm_call_id",
+            "litellm_logging_obj",
+            "standard_logging_object",
+            "attempt_function",
+            "silent_model",
+        ),
+        "litellm_metadata": metadata,
+        "stream": False,
+    }
+
+
+async def _run_generic_silent(core: EndpointCore, plan: Plan, target: str, kwargs: Mapping[str, object]) -> None:
+    from litellm._internal_context import mirrored_call
+
+    try:
+        with mirrored_call():
+            await core.drive(plan, {**kwargs, "model": target})
+    except Exception as error:  # noqa: BLE001  # a background mirror must not fail the primary request
+        verbose_router_logger.error("Silent experiment failed for model %s: %s", target, error)
+
+
+def _start_generic_silent_experiments(
+    core: EndpointCore,
+    plan: Plan,
+    deployment_params: Mapping[str, object],
+    kwargs: Mapping[str, object],
+    state: object,
+) -> None:
+    if not isinstance(state, _GenericMirrorState) or state.scheduled:
+        return
+    if plan.host_op not in SILENT_MODEL_MIRROR_ALLOWED_CALL_TYPES:
+        return
+    if _has_mcp_config(kwargs) or _has_mcp_config(deployment_params):
+        return
+    if as_dict(kwargs.get("metadata")).get("is_silent_experiment") or as_dict(kwargs.get("litellm_metadata")).get(
+        "is_silent_experiment"
+    ):
+        return
+    targets: Final = _silent_targets(deployment_params.get("silent_model"))
+    if not targets:
+        return
+    try:
+        loop: Final = asyncio.get_running_loop()
+        snapshots: Final = tuple((target, _generic_silent_snapshot(kwargs)) for target in targets)
+    except Exception as error:  # noqa: BLE001  # a background mirror must not fail the primary request
+        verbose_router_logger.error("Could not prepare silent experiment: %s", error)
+        return
+    state.mark_scheduled()
+    for target, snapshot in snapshots:
+        _ = loop.create_task(_run_generic_silent(core, plan, target, snapshot))
 
 
 _SilentModel: TypeAlias = str | list[str]

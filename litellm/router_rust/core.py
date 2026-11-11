@@ -113,6 +113,7 @@ from litellm.router_rust.invoke.endpoints import (
     selection_endpoint,
     stamp_error,
     unrouted_fields,
+    with_generic_mirror_state,
 )
 from litellm.router_rust.invoke.shaping import Shaping, non_stream_timeout
 from litellm.router_rust.invoke.slots import enter_deployment_slot, max_parallel_requests_limit
@@ -2892,12 +2893,13 @@ class RustCore(
         # `owning_picks`: least-busy frees every pick this request made but never started.
         with owning_picks(self._selectors.reservations, call_id_of(CALL_IDENTITY.validate_python(request))):
             call, prepared = self._start(plan, request, routed, prepared_already=prepared_already)
-            arm_compaction_state(self._port, plan, prepared)  # pyright: ignore[reportArgumentType]  # the call's own dict
+            prepared_for_run: Final = with_generic_mirror_state(plan, prepared)
+            arm_compaction_state(self._port, plan, prepared_for_run)  # pyright: ignore[reportArgumentType]  # the call's own dict
             with (
                 picks_reserve(plan.endpoint not in _UNRESERVED_OPS),
-                self._usage_read_scope(str(prepared.get("model")), prepared),
+                self._usage_read_scope(str(prepared_for_run.get("model")), prepared_for_run),
             ):
-                driver, step = await self._run(plan, call, prepared, fresh=True, passthrough=passthrough)
+                driver, step = await self._run(plan, call, prepared_for_run, fresh=True, passthrough=passthrough)
             if step["kind"] == "failed":
                 raise driver.failed(step)
             return await driver.finish_async(step)

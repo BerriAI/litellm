@@ -787,3 +787,317 @@ async def test_calls_a_failure_function_callback_starts_for_a_mirrored_call_are_
     await _wait_for_judges(sync_and_async_recording_logger, {"shadow-a"})
 
     assert sync_and_async_recording_logger.judge_flags() == {"shadow-a": None}
+
+
+def _generic_shadow_reply(surface: str, text: str) -> dict[str, object]:
+    if surface == "responses":
+        return {
+            "id": f"resp_{text}",
+            "object": "response",
+            "created_at": 1,
+            "status": "completed",
+            "model": "gpt-4o-mini",
+            "output": [
+                {
+                    "id": "message-1",
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": text, "annotations": []}],
+                }
+            ],
+            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        }
+    return {
+        "id": f"msg_{text}",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-3-5-haiku-latest",
+        "content": [{"type": "text", "text": text}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ["responses", "messages"])
+@pytest.mark.parametrize("retry", [False, True])
+async def test_generic_silent_model_mirrors_once_across_retries(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, surface: str, retry: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    shadow_seen: Final = asyncio.Event()
+
+    def shadow_response(request: httpx.Request) -> httpx.Response:
+        shadow_seen.set()
+        return httpx.Response(200, json=_generic_shadow_reply(surface, "shadow"))
+
+    path: Final = "/v1/responses" if surface == "responses" else "/v1/messages"
+    provider_model: Final = "openai/gpt-4o-mini" if surface == "responses" else "anthropic/claude-3-5-haiku-latest"
+    primary_response: Final = httpx.Response(200, json=_generic_shadow_reply(surface, "primary"))
+    failures: Final = (httpx.Response(500, json={"error": {"message": "retry", "type": "server_error"}}),)
+    primary: Final = respx_mock.post(f"https://primary.example.test{path}").mock(
+        side_effect=(*failures, primary_response) if retry else (primary_response,)
+    )
+    shadow: Final = respx_mock.post(f"https://shadow.example.test{path}").mock(side_effect=shadow_response)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    "model": provider_model,
+                    "api_base": "https://primary.example.test/v1"
+                    if surface == "responses"
+                    else "https://primary.example.test",
+                    "api_key": "fake-key",
+                    "silent_model": "shadow",
+                },
+            },
+            {
+                "model_name": "shadow",
+                "litellm_params": {
+                    "model": provider_model,
+                    "api_base": "https://shadow.example.test/v1"
+                    if surface == "responses"
+                    else "https://shadow.example.test",
+                    "api_key": "fake-key",
+                },
+            },
+        ],
+        num_retries=1 if retry else 0,
+        retry_after=0,
+        disable_cooldowns=True,
+    )
+    if surface == "responses":
+        response: Final = await router.aresponses(model="primary", input="hello", metadata={"user_id": "test-user"})
+    else:
+        response: Final = await router.aanthropic_messages(
+            model="primary", messages=[{"role": "user", "content": "hello"}], max_tokens=8
+        )
+    await asyncio.wait_for(shadow_seen.wait(), timeout=15)
+
+    assert "primary" in str(response)
+    assert primary.call_count == (2 if retry else 1)
+    assert shadow.call_count == 1
+    assert "silent_model" not in json.loads(primary.calls.last.request.content)
+    assert "silent_model" not in json.loads(shadow.calls.last.request.content)
+    if surface == "responses":
+        assert json.loads(shadow.calls.last.request.content)["metadata"] == {"user_id": "test-user"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ["responses", "messages"])
+async def test_generic_silent_model_mirrors_once_across_fallbacks(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, surface: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    shadow_seen: Final = asyncio.Event()
+
+    def shadow_response(request: httpx.Request) -> httpx.Response:
+        shadow_seen.set()
+        return httpx.Response(200, json=_generic_shadow_reply(surface, "shadow"))
+
+    path: Final = "/v1/responses" if surface == "responses" else "/v1/messages"
+    model: Final = "openai/gpt-4o-mini" if surface == "responses" else "anthropic/claude-3-5-haiku-latest"
+    primary: Final = respx_mock.post(f"https://primary.example.test{path}").mock(
+        return_value=httpx.Response(500, json={"error": {"message": "try fallback", "type": "server_error"}})
+    )
+    fallback: Final = respx_mock.post(f"https://fallback.example.test{path}").mock(
+        return_value=httpx.Response(200, json=_generic_shadow_reply(surface, "fallback"))
+    )
+    shadow: Final = respx_mock.post(f"https://shadow.example.test{path}").mock(side_effect=shadow_response)
+    suffix: Final = "/v1" if surface == "responses" else ""
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {
+                    "model": model,
+                    "api_base": f"https://{name}.example.test{suffix}",
+                    "api_key": "fake-key",
+                    "silent_model": "shadow",
+                },
+            }
+            for name in ("primary", "fallback")
+        ]
+        + [
+            {
+                "model_name": "shadow",
+                "litellm_params": {
+                    "model": model,
+                    "api_base": f"https://shadow.example.test{suffix}",
+                    "api_key": "fake-key",
+                },
+            }
+        ],
+        num_retries=0,
+        disable_cooldowns=True,
+        fallbacks=[{"primary": ["fallback"]}],
+    )
+    if surface == "responses":
+        response: Final = await router.aresponses(model="primary", input="hello")
+    else:
+        response: Final = await router.aanthropic_messages(
+            model="primary", messages=[{"role": "user", "content": "hello"}], max_tokens=8
+        )
+    await asyncio.wait_for(shadow_seen.wait(), timeout=15)
+
+    assert "fallback" in str(response)
+    assert primary.call_count >= 1
+    assert fallback.call_count == 1
+    assert shadow.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("location", ["request", "primary", "shadow"])
+@pytest.mark.parametrize(
+    "mcp_config",
+    [
+        {"tools": [{"type": "mcp", "server_label": "sample", "server_url": "https://mcp.example.test"}]},
+        {"mcp_servers": [{"type": "url", "name": "sample", "url": "https://mcp.example.test"}]},
+    ],
+    ids=["tools", "servers"],
+)
+async def test_generic_silent_model_does_not_run_mcp(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    location: str,
+    mcp_config: dict[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    primary: Final = respx_mock.post("https://primary.example.test/v1/responses").mock(
+        return_value=httpx.Response(200, json=_generic_shadow_reply("responses", "primary"))
+    )
+    shadow: Final = respx_mock.post("https://shadow.example.test/v1/responses").mock(
+        return_value=httpx.Response(200, json=_generic_shadow_reply("responses", "shadow"))
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_base": f"https://{name}.example.test/v1",
+                    "api_key": "fake-key",
+                    **({"silent_model": "shadow"} if name == "primary" else {}),
+                    **(mcp_config if location == name else {}),
+                },
+            }
+            for name in ("primary", "shadow")
+        ],
+        num_retries=0,
+        disable_cooldowns=True,
+    )
+    response: Final = await router.aresponses(
+        model="primary", input="hello", **(mcp_config if location == "request" else {})
+    )
+    pending: Final = tuple(
+        task for task in asyncio.all_tasks() if task.get_coro().__qualname__.endswith("_run_generic_silent")
+    )
+    await asyncio.gather(*pending)
+
+    assert "primary" in str(response)
+    assert primary.call_count == 1
+    assert shadow.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_generic_silent_fanout_preserves_request_and_logging_metadata(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, recording_logger: _RecordingLogger
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    endpoints: Final = ("primary", "shadow-a", "shadow-b")
+    routes: Final = {
+        name: respx_mock.post(f"https://{name}.example.test/v1/responses").mock(
+            return_value=httpx.Response(200, json=_generic_shadow_reply("responses", name))
+        )
+        for name in endpoints
+    }
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_base": f"https://{name}.example.test/v1",
+                    "api_key": "fake-key",
+                    "silent_model": ["shadow-a", "shadow-b"] if name == "primary" else "primary",
+                },
+            }
+            for name in endpoints
+        ],
+        num_retries=0,
+        disable_cooldowns=True,
+    )
+    request_metadata: Final = {"user_id": "test-user"}
+    router_metadata: Final = {"user_api_key": "test-key"}
+    response: Final = await router.aresponses(
+        model="primary", input="hello", metadata=request_metadata, litellm_metadata=router_metadata
+    )
+    await _wait_for_all_successes(recording_logger, expected=3)
+
+    assert "primary" in str(response)
+    assert all(route.call_count == 1 for route in routes.values())
+    assert all(
+        json.loads(route.calls.last.request.content)["metadata"] == {"user_id": "test-user"}
+        for route in routes.values()
+    )
+    assert request_metadata == {"user_id": "test-user"}
+    assert router_metadata["user_api_key"] == "test-key"
+    assert "is_silent_experiment" not in router_metadata
+    assert _silent_flag_by_group(recording_logger) == {"primary": None, "shadow-a": True, "shadow-b": True}
+
+
+@pytest.mark.asyncio
+async def test_streaming_responses_are_mirrored_as_non_streaming_requests(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    completed: Final = _generic_shadow_reply("responses", "primary")
+    events: Final = (
+        {"type": "response.created", "sequence_number": 0, "response": {**completed, "status": "in_progress"}},
+        {
+            "type": "response.output_text.delta",
+            "sequence_number": 1,
+            "item_id": "message-1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "primary",
+        },
+        {"type": "response.completed", "sequence_number": 2, "response": completed},
+    )
+    stream: Final = "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
+    primary: Final = respx_mock.post("https://primary.example.test/v1/responses").mock(
+        return_value=httpx.Response(200, text=stream, headers={"content-type": "text/event-stream"})
+    )
+    shadow: Final = respx_mock.post("https://shadow.example.test/v1/responses").mock(
+        return_value=httpx.Response(200, json=_generic_shadow_reply("responses", "shadow"))
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_base": f"https://{name}.example.test/v1",
+                    "api_key": "fake-key",
+                    **({"silent_model": "shadow"} if name == "primary" else {}),
+                },
+            }
+            for name in ("primary", "shadow")
+        ],
+        num_retries=0,
+        disable_cooldowns=True,
+    )
+    response: Final = await router.aresponses(model="primary", input="hello", stream=True)
+    observed: Final = [item async for item in response]
+    pending: Final = tuple(
+        task for task in asyncio.all_tasks() if task.get_coro().__qualname__.endswith("_run_generic_silent")
+    )
+    await asyncio.gather(*pending)
+
+    assert any(getattr(item, "type", "") == "response.completed" for item in observed)
+    assert primary.call_count == 1
+    assert shadow.call_count == 1
+    assert json.loads(primary.calls.last.request.content)["stream"] is True
+    assert not json.loads(shadow.calls.last.request.content).get("stream", False)
