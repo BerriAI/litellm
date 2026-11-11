@@ -902,7 +902,7 @@ def image_edit(
             image_edit_provider_config=image_edit_provider_config,
             image_edit_optional_params=image_edit_optional_params,
             drop_params=kwargs.get("drop_params"),
-            additional_drop_params=kwargs.get("additional_drop_params"),
+            additional_drop_params=list(additional_drop_params) or None,
         )
 
         if image_edit_provider_config.use_multipart_form_data() and (
