@@ -9,7 +9,7 @@ from types import MappingProxyType
 from typing import Final, Literal, Protocol, SupportsFloat, SupportsIndex, TypedDict, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import TypeAdapter
+from pydantic import NonNegativeInt, TypeAdapter, ValidationError
 from typing_extensions import Buffer, ReadOnly
 
 import litellm
@@ -53,6 +53,7 @@ _VALID_DATA_RESIDENCIES: Final = frozenset(r.value for r in DataResidency)
 
 _DEPLOYMENT_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields)
 _IMAGE_REQUEST_PARAMS: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+_BILLED_INPUT_TOKEN_MINIMUM: Final[TypeAdapter[NonNegativeInt]] = TypeAdapter(NonNegativeInt)
 
 _BASE_CACHE_WRITE_RATE_KEY: Final = "cache_creation_input_token_cost"
 
@@ -672,10 +673,20 @@ def _open_off_peak_block(model_info: ModelInfo, current_time: datetime | None) -
     return off_peak
 
 
+def billed_input_token_minimum(info: Mapping[str, object]) -> int:
+    minimum: Final = info.get("min_billed_input_tokens")
+    if minimum is None:
+        return 0
+    try:
+        return _BILLED_INPUT_TOKEN_MINIMUM.validate_python(minimum)
+    except ValidationError:
+        return 0
+
+
 def unbilled_minimum_input_tokens(model_info: ModelInfo, prompt_tokens: int) -> int:
     if prompt_tokens <= 0:
         return 0
-    return max((model_info.get("min_billed_input_tokens") or 0) - prompt_tokens, 0)
+    return max(billed_input_token_minimum(model_info) - prompt_tokens, 0)
 
 
 def apply_off_peak_pricing(model_info: ModelInfo, current_time: datetime | None, rates: TokenRates) -> TokenRates:

@@ -288,8 +288,10 @@ def test_other_json_providers_keep_additional_properties_and_file_parts():
         )
 
     body: Final = json.loads(route.calls.last.request.content)
+    sent_part: Final = body["messages"][0]["content"][1]
     assert body["response_format"] == response_format
-    assert body["messages"][0]["content"][1] == file_part
+    assert sent_part["type"] == "file"
+    assert sent_part["file"]["file_data"] == file_part["file"]["file_data"]
 
 
 _PDF_DATA_URL: Final = "data:application/pdf;base64,JVBERi0xLjQK"

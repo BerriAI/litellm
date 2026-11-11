@@ -48,6 +48,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     _SERVICE_TIER_TO_COST_KEY_SUFFIX,
     BilledTokenRates,
     CostCalculatorUtils,
+    billed_input_token_minimum,
     calculate_cache_writing_cost,
     generic_cost_per_character,
     generic_cost_per_token,
@@ -2772,8 +2773,7 @@ def _raw_cost_map_entry(key: str) -> Mapping[str, object] | None:
 
 def _min_billed_input_tokens(model: str, custom_llm_provider: str | None) -> int:
     cost_entry: Final = _raw_cost_map_entry(model) or _raw_cost_map_entry(f"{custom_llm_provider}/{model}") or {}
-    minimum: Final = cost_entry.get("min_billed_input_tokens")
-    return minimum if isinstance(minimum, int) else 0
+    return billed_input_token_minimum(cost_entry)
 
 
 def pricing_entry_for_cost_calc(

@@ -36,7 +36,7 @@ from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.openai import HttpxBinaryResponseContent, OpenAIRealtimeStreamList, ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.llms.xai import RealtimeMeteredUsage
 from litellm.types.rerank import RerankResponse
-from litellm.types.utils import CacheCreationTokenDetails, CallTypes, Choices, CompletionTokensDetailsWrapper, EmbeddingResponse, ImageObject, ImageResponse, ImageUsage, ImageUsageInputTokensDetails, LiteLLMRealtimeStreamLoggingObject, Message, ModelInfo, ModelResponse, PromptTokensDetails, PromptTokensDetailsWrapper, Usage
+from litellm.types.utils import CacheCreationTokenDetails, CallTypes, Choices, CompletionTokensDetailsWrapper, CostPerToken, EmbeddingResponse, ImageObject, ImageResponse, ImageUsage, ImageUsageInputTokensDetails, LiteLLMRealtimeStreamLoggingObject, Message, ModelInfo, ModelResponse, PromptTokensDetails, PromptTokensDetailsWrapper, Usage
 from litellm.types.videos.main import VideoObject
 from litellm.utils import cached_get_model_info_helper, supports_prompt_caching
 from litellm.litellm_core_utils.model_cost_table import publish
@@ -11678,6 +11678,42 @@ def test_a_deployment_that_only_sets_a_billing_minimum_bills_the_provider_stated
         )
 
     assert response._hidden_params["response_cost"] == pytest.approx(stated_cost)
+
+
+@pytest.mark.parametrize("minimum", ["600", 600.0, " 600 "], ids=["numeric_string", "whole_float", "padded_string"])
+@pytest.mark.parametrize(
+    "custom_cost_per_token",
+    [None, CostPerToken(input_cost_per_token=2e-6, output_cost_per_token=5e-6)],
+    ids=["cost_map_rates", "custom_rates"],
+)
+def test_a_billing_minimum_written_the_way_the_cost_map_guard_accepts_bills_the_minimum(
+    _local_model_cost_map,
+    monkeypatch: pytest.MonkeyPatch,
+    minimum: object,
+    custom_cost_per_token: CostPerToken | None,
+) -> None:
+    model: Final = "minimum-spelling-fixture"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "input_cost_per_token": 2e-6,
+            "output_cost_per_token": 5e-6,
+            "min_billed_input_tokens": minimum,
+        },
+    )
+
+    prompt_cost, _ = litellm.cost_per_token(
+        model=model,
+        custom_llm_provider="openai",
+        prompt_tokens=10,
+        completion_tokens=1,
+        custom_cost_per_token=custom_cost_per_token,
+    )
+
+    assert prompt_cost == pytest.approx(600 * 2e-6)
 
 
 _REPORTED_TOTAL: Final = 0.037
