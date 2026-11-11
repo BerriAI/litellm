@@ -1093,6 +1093,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://inference.coralbricks.ai/v1",
     "https://api.cortecs.ai/v1",
     "https://api.scx.ai/v1",
+    "https://api.pzero.studio/v1",
     "https://api.prisminference.com/v1",
     "https://api.reka.ai/v1",
     "https://inference.runanywhere.ai/v1",
@@ -1178,6 +1179,7 @@ openai_compatible_providers: Final[list[str]] = [
     "coralbricks",
     "cortecs",
     "scx-ai",
+    "pzero",  # PZERO - JSON-configured provider
     "prism",
     "hostinger_router",
     "sail",
