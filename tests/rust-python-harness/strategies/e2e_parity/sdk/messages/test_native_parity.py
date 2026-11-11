@@ -28,7 +28,17 @@ import math
 import os
 import re
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Iterable, Iterator, Mapping, Sequence
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Generator,
+    Iterable,
+    Iterator,
+    Mapping,
+    Sequence,
+)
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from types import MappingProxyType
@@ -326,6 +336,37 @@ def _stream(events: tuple[tuple[str, object], ...], chunk_delay: float = 0) -> R
     return ResponseSpec(body={}, events=events, chunk_delay=chunk_delay)
 
 
+def _burst(events: tuple[tuple[str, object], ...], chunked: bool = True) -> ResponseSpec:
+    return ResponseSpec(body={}, events=events, burst=True, chunked=chunked)
+
+
+def _chunked(events: tuple[tuple[str, object], ...], chunk_delay: float) -> ResponseSpec:
+    return ResponseSpec(body={}, events=events, chunk_delay=chunk_delay, chunked=True)
+
+
+_PING: Final[tuple[str, JsonValue]] = ("ping", {"type": "ping"})
+
+PINGED_STREAM: Final = _events(
+    _message_start("msg_01ParityPinged"),
+    *((_PING,) * 50),
+    *_text_block(0, "Pa", "ris"),
+    *_message_end("end_turn", 4),
+)
+
+HEAVILY_PINGED_STREAM: Final = _events(
+    _message_start("msg_01ParityHeavilyPinged"),
+    *((_PING,) * 1000),
+    *_text_block(0, "Pa", "ris"),
+    *_message_end("end_turn", 4),
+)
+
+LARGE_STREAM: Final = _events(
+    _message_start("msg_01ParityLarge"),
+    *_text_block(0, "a" * 15000, "b" * 15000, "c" * 15000),
+    *_message_end("end_turn", 4),
+)
+
+
 def _raw_stream(*frames: str) -> ResponseSpec:
     return ResponseSpec(body="".join(f"{frame}\n\n" for frame in frames).encode())
 
@@ -370,6 +411,7 @@ class Case:
     loggers: Callable[[], Sequence[CustomLogger]] | None = None
     gateway: bool = False
     racy: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
+    partitioned: bool = False
     nones: tuple[str, ...] = ()
 
     def aspects(self) -> tuple[str, ...]:
@@ -405,6 +447,7 @@ def _tls(**settings: object) -> Mapping[str, object]:
     return MappingProxyType({**settings, "in_memory_llm_clients_cache": LLMClientCache()})
 
 
+E04_HTTPX_CHUNK_READS: Final = "E04: httpx yields each HTTP chunk whole from a 64 KiB socket read; hyper hands a large chunk over in pieces of its smaller read buffer"
 A10_NO_MAX_TOKENS: Final = "A10: native admission hands a call without an int max_tokens to Python, whose signature raises the TypeError; only dispatch differs"
 C_UNSENT_CALL_FLAG: Final = (
     "C: a call that fails natively before its provider request logs no aanthropic_messages flag, "
@@ -885,6 +928,39 @@ FAILURE_CASES: Final = (
     Case("missing_max_tokens", _kw(max_tokens=None), upstream=()),
     Case("missing_api_key", _kw(api_key=None), upstream=()),
     Case(
+        "api_key_with_a_trailing_newline",
+        _kw(api_key=None),
+        env=MappingProxyType({"ANTHROPIC_API_KEY": f"{API_KEY}\n"}),
+    ),
+    Case(
+        "api_key_with_a_trailing_crlf_streamed",
+        _kw(api_key=None, stream=True),
+        upstream=(_stream(TEXT_STREAM),),
+        env=MappingProxyType({"ANTHROPIC_API_KEY": f"{API_KEY}\r\n"}),
+    ),
+    Case(
+        "api_key_padded_with_whitespace",
+        _kw(api_key=None),
+        env=MappingProxyType({"ANTHROPIC_API_KEY": f"  {API_KEY}\t\n"}),
+    ),
+    Case(
+        "api_key_padded_with_separators",
+        _kw(api_key=None),
+        env=MappingProxyType({"ANTHROPIC_API_KEY": f"\x1f{API_KEY}\x1f"}),
+    ),
+    Case(
+        "api_key_of_separators_falls_to_the_auth_token",
+        _kw(api_key=None),
+        env=MappingProxyType({"ANTHROPIC_API_KEY": "\x1c\x1f\n", "ANTHROPIC_AUTH_TOKEN": "oauth-token"}),
+    ),
+    Case(
+        "auth_token_with_a_trailing_newline",
+        _kw(api_key=None),
+        env=MappingProxyType({"ANTHROPIC_AUTH_TOKEN": "oauth-token\n"}),
+    ),
+    Case("caller_api_key_padded_with_separators", _kw(api_key=f"\x1f{API_KEY}\x1f")),
+    Case("caller_api_key_with_a_trailing_newline", _kw(api_key=f"{API_KEY}\n")),
+    Case(
         "auth_token_padded_with_whitespace",
         _kw(api_key=None),
         env=MappingProxyType({"ANTHROPIC_AUTH_TOKEN": "  fz-env-auth-token  "}),
@@ -918,6 +994,75 @@ STREAM_CASES: Final = (
         upstream=(_stream(THINKING_STREAM),),
     ),
     Case("stream_error_event_mid_stream", _kw(stream=True), upstream=(_stream(ERROR_MID_STREAM),)),
+    Case("stream_events_in_one_write", _kw(stream=True), upstream=(_burst(TEXT_STREAM),), partitioned=True),
+    Case(
+        "stream_body_in_one_write",
+        _kw(stream=True),
+        upstream=(_burst(TEXT_STREAM, chunked=False),),
+        partitioned=True,
+    ),
+    Case(
+        "stream_events_in_chunks_written_apart",
+        _kw(stream=True),
+        upstream=(_chunked(TEXT_STREAM, chunk_delay=0.05),),
+        partitioned=True,
+    ),
+    Case(
+        "stream_events_written_apart",
+        _kw(stream=True),
+        upstream=(_stream(TEXT_STREAM, chunk_delay=0.05),),
+        partitioned=True,
+    ),
+    Case(
+        "stream_pings_after_message_start_in_one_write",
+        _kw(stream=True),
+        upstream=(_burst(PINGED_STREAM),),
+        partitioned=True,
+    ),
+    Case(
+        "stream_pings_after_message_start_written_apart",
+        _kw(stream=True),
+        upstream=(_stream(PINGED_STREAM, chunk_delay=0.01),),
+        partitioned=True,
+    ),
+    Case("stream_burst_past_one_read", _kw(stream=True), upstream=(_burst(LARGE_STREAM),), partitioned=True),
+    Case(
+        "stream_thousand_pings_in_one_write",
+        _kw(stream=True),
+        upstream=(_burst(HEAVILY_PINGED_STREAM),),
+        partitioned=True,
+    ),
+    Case(
+        "stream_error_event_in_one_write",
+        _kw(stream=True),
+        upstream=(_burst(ERROR_MID_STREAM),),
+        partitioned=True,
+    ),
+    Case(
+        "stream_events_in_one_write_httpx_transport",
+        _kw(stream=True),
+        upstream=(_burst(TEXT_STREAM),),
+        env=MappingProxyType({"DISABLE_AIOHTTP_TRANSPORT": "true"}),
+        settings=_tls(),
+        partitioned=True,
+    ),
+    Case(
+        "stream_burst_past_one_read_httpx_transport",
+        _kw(stream=True),
+        upstream=(_burst(LARGE_STREAM),),
+        env=MappingProxyType({"DISABLE_AIOHTTP_TRANSPORT": "true"}),
+        settings=_tls(),
+        partitioned=True,
+        gaps=_gaps(outcome=E04_HTTPX_CHUNK_READS),
+    ),
+    Case(
+        "stream_events_written_apart_httpx_transport",
+        _kw(stream=True),
+        upstream=(_stream(TEXT_STREAM, chunk_delay=0.05),),
+        env=MappingProxyType({"DISABLE_AIOHTTP_TRANSPORT": "true"}),
+        settings=_tls(),
+        partitioned=True,
+    ),
     Case(
         "stream_longer_than_timeout",
         _kw(stream=True, timeout=1),
@@ -2096,6 +2241,20 @@ AGENTIC_CASES: Final = (
         loggers=_loggers(_FollowUpOnToolUse),
     ),
     Case(
+        "agentic_loop_follow_up_stream_in_one_write",
+        _kw(stream=True, tools=[dict(WEATHER_TOOL)]),
+        upstream=(_burst(TOOL_STREAM), _burst(TEXT_STREAM)),
+        loggers=_loggers(_FollowUpOnToolUse),
+        partitioned=True,
+    ),
+    Case(
+        "agentic_loop_stream_without_tool_use_in_one_write",
+        _kw(stream=True, tools=[dict(WEATHER_TOOL)]),
+        upstream=(_burst(TEXT_STREAM),),
+        loggers=_loggers(_FollowUpOnToolUse),
+        partitioned=True,
+    ),
+    Case(
         "agentic_loop_stream_without_tool_use",
         _kw(stream=True, tools=[dict(WEATHER_TOOL)]),
         upstream=(_stream(TEXT_STREAM),),
@@ -2985,6 +3144,10 @@ def _sent_body(sent: httpx.Request) -> object:
         return None
 
 
+def _partition(chunks: Iterable[object]) -> tuple[int, ...]:
+    return tuple(len(chunk if isinstance(chunk, bytes) else str(chunk).encode()) for chunk in chunks)
+
+
 def _stream_text(chunks: Iterable[object]) -> str:
     return b"".join(chunk if isinstance(chunk, bytes) else str(chunk).encode() for chunk in chunks).decode()
 
@@ -3063,12 +3226,14 @@ async def _invoke(
             return _response(body, case.private_keys), _hidden_params(body)
         chunks, failure = await _consume_async(cast(AsyncIterator[object], result))
     hidden: Final = _hidden_params(result)
+    partition: Final = {"partition": _partition(chunks)} if case.partitioned else {}
     if failure is not None:
-        return _error(failure, "stream", chunks), hidden
+        return {**_error(failure, "stream", chunks), **partition}, hidden
     return {
         "kind": "stream",
         "chunk_types": sorted({type(chunk).__name__ for chunk in chunks}),
         "text": _SERVER_TOOL_ID.sub("srvtoolu_<id>", _stream_text(chunks)),
+        **partition,
     }, hidden
 
 
@@ -3709,3 +3874,107 @@ async def test_both_lanes_log_a_stream_superseded_by_a_router_fallback_as_its_fr
     assert native_messages.calls == 0
     assert native == python
     assert sorted(str(event["event"]) for event in python[0]) == ["failure", "success"]
+
+
+async def _router_stream(
+    server: RecordingServer, native: bool, upstream: tuple[ResponseSpec, ...]
+) -> tuple[tuple[str, ...], tuple[Mapping[str, object], ...]]:
+    for response in upstream:
+        server.enqueue(response)
+    recorder: Final = _AttemptRecorder()
+    deployment: Final[Mapping[str, object]] = {"model": SONNET, "api_base": server.base_url, "api_key": API_KEY}
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(isolated_callback_registries())
+        stack.enter_context(_environment({}))
+        if not native:
+            stack.enter_context(rebound(litellm, "anthropic_messages", _PYTHON_AMESSAGES))
+        litellm.callbacks.append(recorder)
+        router: Final = litellm.Router(
+            model_list=[
+                {"model_name": "primary", "litellm_params": dict(deployment), "model_info": {"id": "dep-primary"}},
+                {"model_name": "fallback", "litellm_params": dict(deployment), "model_info": {"id": "dep-fallback"}},
+            ],
+            fallbacks=[{"primary": ["fallback"]}],
+            num_retries=0,
+        )
+        result: Final = await router.aanthropic_messages(
+            model="primary", max_tokens=64, messages=[dict(USER)], stream=True
+        )
+        chunks, failure = await _consume_async(cast(AsyncIterator[object], result))
+        assert failure is None
+        for _ in range(100):
+            await drain_logging()
+            if recorder.seen:
+                break
+            await asyncio.sleep(0.05)
+    server.responses.clear()
+    return tuple(_stream_text((chunk,)) for chunk in chunks), tuple(recorder.seen)
+
+
+OVERLOADED_AFTER_PINGS: Final = _events(
+    _message_start("msg_01ParityPingedOverloaded"),
+    *((_PING,) * 50),
+    ("error", dict(_upstream_error("overloaded_error", "Overloaded"))),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "upstream",
+    [
+        pytest.param((_burst(PINGED_STREAM),), id="pings_after_message_start"),
+        pytest.param((_burst(HEAVILY_PINGED_STREAM),), id="a_thousand_pings_after_message_start"),
+        pytest.param((_burst(OVERLOADED_AFTER_PINGS), _burst(TEXT_STREAM)), id="pings_then_overloaded_then_fallback"),
+    ],
+)
+async def test_both_lanes_stream_a_router_burst_in_the_same_chunks(
+    parity_server: RecordingServer, native_messages: FallbackProbe, upstream: tuple[ResponseSpec, ...]
+) -> None:
+    python: Final = await _router_stream(parity_server, native=False, upstream=upstream)
+    native: Final = await _router_stream(parity_server, native=True, upstream=upstream)
+
+    assert native_messages.calls == 0
+    assert native == python
+
+
+async def _abandoned_stream(
+    server: RecordingServer, native: bool, upstream: ResponseSpec
+) -> tuple[tuple[str, ...], tuple[Mapping[str, object], ...]]:
+    server.enqueue(upstream)
+    recorder: Final = _AttemptRecorder()
+    acall: Final = _PUBLIC_AMESSAGES if native else _PYTHON_AMESSAGES
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(isolated_callback_registries())
+        stack.enter_context(_environment({}))
+        litellm.callbacks.append(recorder)
+        stream: Final = cast(
+            AsyncGenerator[object],
+            await acall(
+                model=SONNET,
+                max_tokens=64,
+                messages=[dict(USER)],
+                api_key=API_KEY,
+                api_base=server.base_url,
+                stream=True,
+            ),
+        )
+        first: Final = await anext(stream)
+        await stream.aclose()
+        for _ in range(100):
+            await drain_logging()
+            if recorder.seen:
+                break
+            await asyncio.sleep(0.05)
+    server.responses.clear()
+    return (_stream_text((first,)),), tuple(recorder.seen)
+
+
+@pytest.mark.asyncio
+async def test_both_lanes_bill_a_stream_abandoned_after_its_first_chunk_alike(
+    parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    python: Final = await _abandoned_stream(parity_server, native=False, upstream=_burst(TEXT_STREAM))
+    native: Final = await _abandoned_stream(parity_server, native=True, upstream=_burst(TEXT_STREAM))
+
+    assert native_messages.calls == 0
+    assert native == python

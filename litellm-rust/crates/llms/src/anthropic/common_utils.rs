@@ -106,17 +106,23 @@ pub fn get_api_key(
     api_key: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Option<String> {
-    resolve_non_empty(api_key, env_lookup, &[ANTHROPIC_API_KEY_ENV])
+    nonempty_secret(api_key.map(str::to_owned))
+        .or_else(|| nonempty_secret(env_lookup(ANTHROPIC_API_KEY_ENV)))
 }
 
 pub fn get_auth_token(env_lookup: &dyn Fn(&str) -> Option<String>) -> Option<String> {
-    env_lookup(ANTHROPIC_AUTH_TOKEN_ENV)
-        .map(|token| {
-            token
+    nonempty_secret(env_lookup(ANTHROPIC_AUTH_TOKEN_ENV))
+}
+
+/// Python's `normalize_nonempty_secret_str`: `str.strip()` also strips the ASCII separators.
+fn nonempty_secret(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| {
+            value
                 .trim_matches(|c: char| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c))
                 .to_owned()
         })
-        .filter(|token| !token.is_empty())
+        .filter(|value| !value.is_empty())
 }
 
 /// Python's `AnthropicModelInfo.get_auth_header`, naming the credential instead of building
@@ -1799,6 +1805,17 @@ mod tests {
         None,
         &[("ANTHROPIC_API_KEY", OAUTH_BEARER)],
         Some(("Authorization", OAUTH_TOKEN)),
+    )]
+    #[case::env_key_stripped_of_whitespace(
+        None,
+        &[("ANTHROPIC_API_KEY", "  sk-env \t\n\u{1f}")],
+        Some(("x-api-key", "sk-env")),
+    )]
+    #[case::api_key_param_stripped_of_separators(Some("\u{1c}sk-param "), &[], Some(("x-api-key", "sk-param")))]
+    #[case::separator_only_env_key_falls_to_the_auth_token(
+        None,
+        &[("ANTHROPIC_API_KEY", "\u{1c}\u{1f}"), ("ANTHROPIC_AUTH_TOKEN", "env-token")],
+        Some(("Authorization", "env-token")),
     )]
     #[case::no_credentials(None, &[], None)]
     #[case::separator_only_auth_token(None, &[("ANTHROPIC_AUTH_TOKEN", "\u{1c}\u{1f}")], None)]

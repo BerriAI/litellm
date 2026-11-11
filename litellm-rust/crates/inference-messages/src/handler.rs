@@ -53,6 +53,7 @@ struct ProviderCall {
     timeout: Option<Duration>,
     stream: bool,
     whole_sse_frames: bool,
+    joined_reads: bool,
     transform_context: MessagesTransformContext,
     ascii_response_headers: bool,
     unencodable_request_header: Option<Vec<u8>>,
@@ -379,6 +380,7 @@ async fn provider_call(
         timeout: timeout.or_else(|| shaping.settings.request_timeout()),
         stream,
         whole_sse_frames: shaping.settings.whole_sse_frames,
+        joined_reads: shaping.settings.joined_reads,
         transform_context,
         ascii_response_headers: shaping.settings.ascii_response_headers,
         unencodable_request_header: shaping.settings.unencodable_request_header,
@@ -491,6 +493,7 @@ async fn call_provider(
         provider,
         stream,
         whole_sse_frames,
+        joined_reads,
         ..
     } = request;
     let provider_name = provider.as_str();
@@ -503,8 +506,13 @@ async fn call_provider(
         context
             .raw_response_received(RawResponse::new(String::new()).with_head(head))
             .await?;
-        let streamed =
-            streaming_response(response, config.stream_decoder(), provider_name, timeout);
+        let streamed = streaming_response(
+            response,
+            config.stream_decoder(),
+            provider_name,
+            timeout,
+            joined_reads,
+        );
         return Ok(if whole_sse_frames {
             framed(streamed)
         } else {
@@ -864,10 +872,15 @@ fn streaming_response(
     decoder: Option<StreamDecoder>,
     provider: &'static str,
     timeout: Duration,
+    joined: bool,
 ) -> MessagesCallResponse {
     let headers = super::encoding::header_pairs(response.headers());
-    let chunks = timed_chunks(response, timeout)
-        .inspect_ok(move |chunk| log_chunk(provider, "provider_response", chunk));
+    let chunks = timed_chunks(response, timeout);
+    let chunks = match (joined, &decoder) {
+        (true, None) => super::reads::joined_reads(chunks),
+        _ => chunks.boxed(),
+    }
+    .inspect_ok(move |chunk| log_chunk(provider, "provider_response", chunk));
     let chunks = match decoder {
         None => chunks.map_err(Error::from).boxed(),
         Some(decode) => decoded_chunks(
@@ -1742,6 +1755,7 @@ mod tests {
             Some(streaming::event_stream),
             "test",
             Duration::from_secs(5),
+            false,
         ) else {
             panic!("a streaming response returns chunks");
         };

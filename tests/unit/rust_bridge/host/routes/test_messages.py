@@ -48,6 +48,19 @@ def test_response_is_a_detached_public_messages_dict() -> None:
     assert "_hidden_params" not in native
 
 
+@pytest.mark.parametrize(
+    ("disabled", "joined"),
+    [pytest.param("true", False, id="httpx_transport"), pytest.param("false", True, id="aiohttp_transport")],
+)
+def test_settings_join_buffered_stream_reads_only_on_the_aiohttp_transport(
+    monkeypatch: pytest.MonkeyPatch, disabled: str, joined: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", False)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", disabled)
+
+    assert messages_host.settings({})["joined_reads"] is joined
+
+
 def test_settings_project_caller_configuration_without_resolving_a_model(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     monkeypatch.setattr(litellm, "reasoning_auto_summary", True)
@@ -70,6 +83,7 @@ def test_settings_project_caller_configuration_without_resolving_a_model(monkeyp
         "extra_headers": None,
         "mcp_gateway": False,
         "ascii_response_headers": True,
+        "joined_reads": True,
     }
 
 

@@ -148,6 +148,7 @@ class MessagesSettings:
     extra_headers: Mapping[str, object] | None = None
     mcp_gateway: bool = False
     ascii_response_headers: bool = False
+    joined_reads: bool = False
 
 
 def response(value: Mapping[str, object]) -> AnthropicMessagesResponse:
@@ -795,13 +796,15 @@ def _raise_as_python_does(request: Mapping[str, object]) -> None:
 def settings(kwargs: Mapping[str, object], request: Mapping[str, object] | None = None) -> dict[str, object]:
     if request is not None:
         _raise_as_python_does(request)
+    aiohttp: Final = http_transport.uses_aiohttp_transport()
     configured: Final = MessagesSettings(
         drop_params=_drop_params(kwargs),
         reasoning_auto_summary=is_reasoning_auto_summary_enabled(),
         additional_drop_params=handler.additional_drop_paths(kwargs),
         request_timeout=get_configured_request_timeout(),
         drops_unsupported_params=drops_unsupported_params(kwargs.get("drop_params")),
-        ascii_response_headers=http_transport.uses_aiohttp_transport(),
+        ascii_response_headers=aiohttp,
+        joined_reads=aiohttp,
     )
     return asdict(
         configured if request is None else _with_call_settings(configured, request, kwargs.get("litellm_logging_obj"))

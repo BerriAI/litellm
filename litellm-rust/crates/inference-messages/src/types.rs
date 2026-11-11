@@ -79,6 +79,8 @@ pub struct MessagesSettings {
     #[serde(default)]
     pub whole_sse_frames: bool,
     #[serde(default)]
+    pub joined_reads: bool,
+    #[serde(default)]
     pub presanitized: bool,
     #[serde(default)]
     pub drops_unsupported_params: bool,

@@ -4,6 +4,7 @@ mod encoding;
 mod handler;
 mod host_answer;
 mod pre_request;
+mod reads;
 pub mod route;
 mod safeguards;
 mod transport;
