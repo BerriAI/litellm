@@ -26,6 +26,7 @@ from litellm.types.integrations.rag.bedrock_knowledgebase import (
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
+    RETRIEVAL_QUERY_PARAMS,
     VECTOR_STORE_OPENAI_PARAMS,
     BaseVectorStoreAuthCredentials,
     VectorStoreIndexEndpoints,
@@ -75,7 +76,6 @@ _BEDROCK_IMAGE_FORMATS: Final[Mapping[VectorStoreSearchImageMediaType, BedrockKB
 _BASE64_DATA_URI: Final = re.compile(r"data:(?P<media_type>[^;,]*)[^,]*;base64,(?P<data>.*)", re.DOTALL)
 _SOURCE_FILE_MIME_TYPE_KEY: Final = "x-amz-bedrock-kb-source-file-mime-type"
 _UNKNOWN_MEDIA_TYPE: Final = "application/octet-stream"
-_RETRIEVAL_QUERY_KEYS: Final = ("retrievalQuery", "retrieval_query")
 _RETRIEVAL_QUERY_UNSUPPORTED: Final = (
     "bedrock vector stores do not take retrievalQuery. Send query, or query_image to search by image. To drop it, "
     "set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
@@ -106,7 +106,7 @@ def _image_content(byte_content: str, metadata: Mapping[str, object]) -> VectorS
             "type": "base64",
             "media_type": (
                 source_file_media_type
-                if isinstance(source_file_media_type, str) and source_file_media_type
+                if isinstance(source_file_media_type, str) and source_file_media_type.startswith("image/")
                 else declared_media_type or _UNKNOWN_MEDIA_TYPE
             ),
             "data": data_uri.group("data") if data_uri is not None else byte_content,
@@ -310,7 +310,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
 
         caller_params: Final = decoded_json_object(litellm_params)
         caller_sources: Final = self._caller_sources(extra_body=extra_body, litellm_params=caller_params)
-        if self._caller_value(caller_sources, _RETRIEVAL_QUERY_KEYS) is not None and not drops_unsupported_params(
+        if self._caller_value(caller_sources, RETRIEVAL_QUERY_PARAMS) is not None and not drops_unsupported_params(
             caller_params.get("drop_params")
         ):
             raise BadRequestError(message=_RETRIEVAL_QUERY_UNSUPPORTED, model="", llm_provider="bedrock")

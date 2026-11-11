@@ -1,5 +1,7 @@
-from collections.abc import Sequence
+import base64
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final, Generic, Literal, TypeAlias, TypeVar
 
 from pydantic import TypeAdapter, ValidationError
@@ -7,8 +9,8 @@ from pydantic_core import ErrorDetails
 from typing_extensions import assert_never
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import as_object_list
-from litellm.types.vector_stores import VectorStoreSearchQueryImage
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
+from litellm.types.vector_stores import RETRIEVAL_QUERY_PARAMS, VectorStoreSearchQueryImage
 
 _QUERY_IMAGE: Final = TypeAdapter(VectorStoreSearchQueryImage)
 _Query: Final = TypeVar("_Query", bound=str | Sequence[str])
@@ -46,8 +48,15 @@ class QueryImageUnsupported:
     custom_llm_provider: str
 
 
+@dataclass(frozen=True, slots=True)
+class QueryImageDroppedWithoutQuery:
+    custom_llm_provider: str
+
+
 SearchQuery: TypeAlias = TextSearchQuery[_Query] | ImageSearchQuery
-SearchQueryError: TypeAlias = QueryAndImageBothSent | NoQuerySent | InvalidQueryImage | QueryImageUnsupported
+SearchQueryError: TypeAlias = (
+    QueryAndImageBothSent | NoQuerySent | InvalidQueryImage | QueryImageUnsupported | QueryImageDroppedWithoutQuery
+)
 
 
 def _has_text(query: object) -> bool:
@@ -64,13 +73,35 @@ def _problem(detail: ErrorDetails) -> str:
     return f"{location}: {detail['msg']}"
 
 
+def _is_base64(data: str) -> bool:
+    try:
+        base64.b64decode(data, validate=True)
+    except ValueError:
+        return False
+    return True
+
+
 def _validated_query_image(query_image: object) -> ImageSearchQuery | InvalidQueryImage:
     try:
-        return ImageSearchQuery(image=_QUERY_IMAGE.validate_python(query_image))
+        image: Final = _QUERY_IMAGE.validate_python(query_image)
     except ValidationError as error:
         return InvalidQueryImage(
             problems=tuple(_problem(detail) for detail in error.errors(include_url=False, include_input=False))
         )
+    if not _is_base64(image["data"]):
+        return InvalidQueryImage(problems=("query_image.data: not valid base64",))
+    return ImageSearchQuery(image=image)
+
+
+def sent_query_image(query_image: object, extra_body: object) -> object:
+    if query_image is not None:
+        return query_image
+    body: Final = as_str_mapping(extra_body)
+    return None if body is None else body.get("query_image")
+
+
+def store_search_params(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType({key: value for key, value in litellm_params.items() if key not in RETRIEVAL_QUERY_PARAMS})
 
 
 def resolve_search_query(
@@ -86,7 +117,11 @@ def resolve_search_query(
     if not supports_query_image and not drop_params:
         return QueryImageUnsupported(custom_llm_provider=custom_llm_provider)
     if not supports_query_image:
-        return NoQuerySent() if text_query is None else TextSearchQuery(query=text_query)
+        return (
+            QueryImageDroppedWithoutQuery(custom_llm_provider=custom_llm_provider)
+            if text_query is None
+            else TextSearchQuery(query=text_query)
+        )
     if text_query is not None:
         return QueryAndImageBothSent()
     return _validated_query_image(query_image)
@@ -109,6 +144,11 @@ def _error_message(error: SearchQueryError) -> str:
                 f"{provider} vector stores do not support query_image. To drop it, set `litellm.drop_params=True` "
                 "or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
             )
+        case QueryImageDroppedWithoutQuery(custom_llm_provider=provider):
+            return (
+                f"{provider} vector stores do not support query_image and drop_params dropped it, "
+                "which leaves no query to search with. Send query."
+            )
         case _:
             assert_never(error)
 
@@ -130,7 +170,13 @@ def searched_query(
     match resolved:
         case TextSearchQuery() | ImageSearchQuery():
             return resolved
-        case QueryAndImageBothSent() | NoQuerySent() | InvalidQueryImage() | QueryImageUnsupported():
+        case (
+            QueryAndImageBothSent()
+            | NoQuerySent()
+            | InvalidQueryImage()
+            | QueryImageUnsupported()
+            | QueryImageDroppedWithoutQuery()
+        ):
             raise litellm.BadRequestError(
                 message=_error_message(resolved), model=None, llm_provider=custom_llm_provider
             )

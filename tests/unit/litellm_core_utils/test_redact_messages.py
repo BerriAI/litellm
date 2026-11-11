@@ -2011,6 +2011,33 @@ def test_request_body_redaction_replaces_instructions_only_when_sent() -> None:
     assert "instructions" not in chat_body
 
 
+def _vector_store_search_details(query_image: Mapping[str, str]) -> dict[str, object]:
+    return {
+        "query_image": query_image,
+        "optional_params": {"query_image": query_image},
+        "litellm_params": {"proxy_server_request": {"body": {"query_image": query_image}}},
+        "standard_logging_object": {"model_parameters": {"query_image": query_image}, "messages": [], "response": {}},
+    }
+
+
+def test_redaction_removes_a_vector_store_query_image_from_every_logged_copy() -> None:
+    details: Final = _vector_store_search_details({"type": "base64", "media_type": "image/jpeg", "data": SECRET})
+
+    perform_redaction(details, result=None)
+
+    assert details["query_image"] == REDACTED_BY_LITELLM
+    assert SECRET not in json.dumps(details, default=str)
+
+
+def test_one_callback_opting_out_redacts_a_query_image_only_for_itself() -> None:
+    details: Final = _vector_store_search_details({"type": "base64", "media_type": "image/jpeg", "data": SECRET})
+
+    redacted: Final = redacted_model_call_details_for_custom_logger(details, TestCustomLogger(message_logging=False))
+
+    assert SECRET not in json.dumps(redacted, default=str)
+    assert SECRET in json.dumps(details, default=str)
+
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_redaction_responses_api_stream():

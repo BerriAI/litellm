@@ -2,11 +2,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, Literal, TypeAlias
+from typing import Any, Final, Literal, TypeAlias
 
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.llms.base import LiteLLMBaseModel
+
+RETRIEVAL_QUERY_PARAMS: Final = ("retrievalQuery", "retrieval_query")
 
 
 class SupportedVectorStoreIntegrations(str, Enum):

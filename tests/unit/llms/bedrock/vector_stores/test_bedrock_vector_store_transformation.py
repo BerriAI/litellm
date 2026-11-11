@@ -511,6 +511,12 @@ def test_transform_search_response_to_a_text_search_returns_only_text_hits() -> 
     [
         ("data:image/webp;base64,UklGRg==", {}, "image/webp", "UklGRg=="),
         ("data:image/png;base64,iVBORw0K", {"x-amz-bedrock-kb-source-file-mime-type": ""}, "image/png", "iVBORw0K"),
+        (
+            "data:image/png;base64,iVBORw0K",
+            {"x-amz-bedrock-kb-source-file-mime-type": "application/pdf"},
+            "image/png",
+            "iVBORw0K",
+        ),
         ("/9j/4AAQ", {"x-amz-bedrock-kb-source-file-mime-type": "image/jpeg"}, "image/jpeg", "/9j/4AAQ"),
         ("/9j/4AAQ", {}, "application/octet-stream", "/9j/4AAQ"),
     ],

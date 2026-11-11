@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -17,6 +18,7 @@ from litellm.llms.base_llm.vector_store.transformation import (
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.vector_store_endpoints.endpoints import (
     _update_request_data_with_litellm_managed_vector_store_registry,
+    build_request_data_from_managed_vector_store,
     index_create,
     index_list,
 )
@@ -3110,19 +3112,19 @@ def test_vector_store_search_accepts_a_query_image_without_a_query():
     from litellm.proxy.proxy_server import app
     from litellm.types.vector_stores import VectorStoreSearchResponse
 
-    query_image = {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}
-    store = {
+    query_image: Final = {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}
+    store: Final = {
         "vector_store_id": "kb",
         "custom_llm_provider": "bedrock",
         "litellm_params": {"vector_store_id": "kb", "custom_llm_provider": "bedrock"},
     }
-    registry = MagicMock()
+    registry: Final = MagicMock()
     registry.get_litellm_managed_vector_store_from_registry.return_value = store
-    fake_search = AsyncMock(
+    fake_search: Final = AsyncMock(
         return_value=VectorStoreSearchResponse(object="vector_store.search_results.page", search_query="", data=[])
     )
-    mock_auth = UserAPIKeyAuth(user_id="test_internal_user", user_role=LitellmUserRoles.INTERNAL_USER.value)
-    original_overrides = app.dependency_overrides.copy()
+    mock_auth: Final = UserAPIKeyAuth(user_id="test_internal_user", user_role=LitellmUserRoles.INTERNAL_USER.value)
+    original_overrides: Final = app.dependency_overrides.copy()
     app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
     try:
         with (
@@ -3133,14 +3135,27 @@ def test_vector_store_search_accepts_a_query_image_without_a_query():
                 new=AsyncMock(return_value=True),
             ),
         ):
-            router = litellm.Router(model_list=[])
+            router: Final = litellm.Router(model_list=[])
             with patch("litellm.proxy.proxy_server.llm_router", router):  # test-quality-ok: router built over the fake search
-                response = TestClient(app).post("/v1/vector_stores/kb/search", json={"query_image": query_image})
+                response: Final = TestClient(app).post("/v1/vector_stores/kb/search", json={"query_image": query_image})
     finally:
         app.dependency_overrides = original_overrides
 
     assert response.status_code == 200, response.json()
     assert fake_search.await_args.kwargs["query_image"] == query_image
+
+
+@pytest.mark.parametrize("retrieval_query_param", ["retrievalQuery", "retrieval_query"])
+def test_a_stored_raw_retrieval_query_never_reaches_the_search_request(retrieval_query_param: str):
+    request_data: Final = build_request_data_from_managed_vector_store(
+        {
+            "vector_store_id": "kb",
+            "custom_llm_provider": "bedrock",
+            "litellm_params": {"aws_region_name": "us-west-2", retrieval_query_param: {"text": "from the store"}},
+        }
+    )
+
+    assert request_data == {"custom_llm_provider": "bedrock", "aws_region_name": "us-west-2"}
 
 
 class TestConfigOwnedVectorStores:

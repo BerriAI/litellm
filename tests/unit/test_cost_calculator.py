@@ -11686,3 +11686,12 @@ def test_per_call_custom_prices_keep_the_regional_and_speed_multipliers(
     )
 
     assert response._hidden_params["response_cost"] == pytest.approx((1000 * 2e-06 + 1000 * 4e-06) * multiplier)
+
+
+def test_cost_failure_for_an_unpriced_response_does_not_echo_the_response() -> None:
+    image_data: Final = "c2VjcmV0LWltYWdlLWJ5dGVz"
+
+    with pytest.raises(ValueError, match="Model is None") as exc_info:
+        completion_cost(completion_response={"data": [{"content": [{"source": {"data": image_data}}]}]})
+
+    assert image_data not in str(exc_info.value)

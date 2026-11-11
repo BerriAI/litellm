@@ -36,6 +36,7 @@ from litellm.proxy.vector_store_endpoints.utils import (
 from litellm.repositories.table_repositories import ManagedVectorStoreIndexRepository
 from litellm.types.utils import LlmProviders
 from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse
+from litellm.vector_stores.search_query import store_search_params
 from litellm.vector_stores.utils import VectorStoreWriteBody, callers_metadata_snapshot
 from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
 
@@ -113,8 +114,8 @@ def build_request_data_from_managed_vector_store(
             if key in vector_store
         }
     )
-    litellm_params: Final = vector_store.get("litellm_params") or MappingProxyType({})
-    return MappingProxyType({**top_level, **litellm_params})
+    litellm_params: Final[Mapping[str, object]] = vector_store.get("litellm_params") or MappingProxyType({})
+    return MappingProxyType({**top_level, **store_search_params(litellm_params)})
 
 
 async def _update_request_data_with_litellm_managed_vector_store_registry(

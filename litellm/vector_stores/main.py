@@ -34,7 +34,7 @@ from litellm.types.vector_stores import (
     VectorStoreSearchResult,
 )
 from litellm.utils import ProviderConfigManager, client, load_credentials_from_list
-from litellm.vector_stores.search_query import searched_query
+from litellm.vector_stores.search_query import searched_query, sent_query_image
 from litellm.vector_stores.utils import VectorStoreRequestUtils
 
 if TYPE_CHECKING:
@@ -455,7 +455,7 @@ def search(
 
         search_query: Final = searched_query(
             query=query,
-            query_image=query_image,
+            query_image=sent_query_image(query_image, extra_body),
             custom_llm_provider=custom_llm_provider,
             supports_query_image="query_image" in vector_store_provider_config.get_supported_openai_params(model=""),
             drop_params=drops_unsupported_params(local_vars.get("drop_params")),
