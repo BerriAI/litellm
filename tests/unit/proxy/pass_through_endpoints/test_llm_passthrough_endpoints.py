@@ -1,5 +1,3 @@
-import asyncio
-import importlib
 import json
 from collections.abc import Iterator
 from typing import Final
@@ -16,6 +14,9 @@ import litellm
 from litellm import Router
 from litellm.router import Deployment, LiteLLM_Params
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+
+
+pytestmark: Final = pytest.mark.usefixtures("drained_logging_worker")
 
 
 @pytest.fixture
@@ -79,10 +80,7 @@ def test_initialize_deployment_for_pass_through_success(reusable_credentials):
     )
 
     # Test the initialization
-    router._initialize_deployment_for_pass_through(
-        deployment=deployment,
-        custom_llm_provider="vertex_ai",
-    )
+    router.add_deployment(deployment)
 
     # Verify the credentials were properly set
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
@@ -114,10 +112,7 @@ def test_initialize_deployment_for_pass_through_missing_params():
         ValueError,
         match="vertex_project, and vertex_location must be set in litellm_params for pass-through endpoints",
     ):
-        router._initialize_deployment_for_pass_through(
-            deployment=deployment,
-            custom_llm_provider="vertex_ai",
-        )
+        router.add_deployment(deployment)
 
 
 def test_initialize_deployment_when_pass_through_disabled():
@@ -133,10 +128,7 @@ def test_initialize_deployment_when_pass_through_disabled():
     )
 
     # This should exit without error, even with missing vertex parameters
-    router._initialize_deployment_for_pass_through(
-        deployment=deployment,
-        custom_llm_provider="vertex_ai",
-    )
+    router.add_deployment(deployment)
 
     # If we reach this point, the test passes as the method exited without raising any errors
     assert True
@@ -184,28 +176,6 @@ def _vcr_outcome_gate(request, vcr):
     install_live_call_probe(request, vcr)
     yield
     record_vcr_outcome(request, vcr)
-
-
-@pytest.fixture(scope="function", autouse=True)
-def setup_and_teardown():
-    """
-    This fixture reloads litellm before every function. To speed up testing by removing callbacks being chained.
-    """
-    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-
-    asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
-    importlib.reload(litellm)
-    try:
-        if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
-            importlib.reload(litellm.proxy.proxy_server)
-    except Exception as e:
-        print(f"Error reloading litellm.proxy.proxy_server: {e}")
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    asyncio.set_event_loop(loop)
-    print(litellm)
-    yield
-    loop.close()
-    asyncio.set_event_loop(None)
 
 
 @pytest.mark.asyncio

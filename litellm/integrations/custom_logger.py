@@ -898,6 +898,11 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     def redacts_messages_itself(self) -> bool:
         return False
 
+    def exempt_from_message_redaction(self) -> bool:
+        """Router pre-call checks that key routing off the request and never log it return True, so
+        `turn_off_message_logging` leaves the success event they receive unredacted."""
+        return False
+
     def redact_standard_logging_payload_from_model_call_details(self, model_call_details: dict) -> dict:
         """
         Redacts or excludes fields from StandardLoggingPayload before callbacks receive it.

@@ -9,7 +9,7 @@ const { getSettings } = vi.hoisted(() => ({
   getSettings: vi.fn().mockResolvedValue({ values: { enable_projects_ui: true } }),
 }));
 
-vi.mock("@/components/networking", () => ({ getUiSettings: getSettings, getUISettings: getSettings }));
+vi.mock("@/components/networking", () => ({ getUiSettings: getSettings }));
 vi.mock("@/components/leftnav", () => ({
   default: ({ enableProjectsUI }: ComponentProps<typeof Sidebar>) => (
     <nav>{enableProjectsUI && <a href="/projects">Projects</a>}</nav>

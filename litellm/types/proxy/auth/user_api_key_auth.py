@@ -16,6 +16,7 @@ from litellm.types.agents import AgentCaller, AgentResponse
 from litellm.types.proxy.agent_identity import ManagedAgentContext
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
 from litellm.types.proxy.carried_budget_state import (
+    CommittedBudgetSpend,
     OrgBudgetSnapshot,
     TeamBudgetSnapshot,
     UserBudgetSnapshot,
@@ -86,6 +87,8 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     end_user_tpd_limit: int | None = None
     end_user_max_budget: float | None = None
     end_user_model_max_budget: _UntypedDict | None = None
+    end_user_model_tpm_limit: Mapping[str, int] | None = None
+    end_user_model_rpm_limit: Mapping[str, int] | None = None
 
     # Organization Params
     organization_alias: str | None = None
@@ -132,6 +135,17 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     """
 
     api_key: str | None = None
+    _access_group_rule_grants: frozenset[str] = PrivateAttr(default=frozenset())
+
+    @property
+    def access_group_rule_grants(self) -> frozenset[str]:
+        return self._access_group_rule_grants
+
+    def apply_access_group_rule_grants(self, grants: tuple[str, ...]) -> None:
+        if grants:
+            self._access_group_rule_grants = frozenset(grants)
+            self.access_group_ids = list(dict.fromkeys((*(self.access_group_ids or ()), *grants)))
+
     user_role: LitellmUserRoles | None = None
     allowed_model_region: AllowedModelRegion | None = None
     parent_otel_span: Span | None = None
@@ -169,6 +183,10 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     # above; a forged value could at most narrow, but the stripping keeps the field's provenance
     # single-owner so its meaning stays trustworthy.
     mcp_session_resource_server_ids: tuple[str, ...] | None = Field(default=None, exclude=True)
+    # Set only by MCP admission when a legacy delegate_auth_to_upstream caller's Authorization is the
+    # upstream token rather than a LiteLLM credential, so egress forwards it. Stripped from validated
+    # input like the markers above: a forged value would forward a LiteLLM credential upstream.
+    mcp_forwards_caller_authorization: bool = Field(default=False, exclude=True)
     mcp_toolset_id: str | None = Field(default=None, exclude=True)
     authenticated_by_custom_auth: bool = Field(default=False, exclude=True)
     via_virtual_key: bool = Field(
@@ -202,6 +220,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     team_budget_snapshot: TeamBudgetSnapshot | None = Field(default=None, exclude=True)
     user_budget_snapshot: UserBudgetSnapshot | None = Field(default=None, exclude=True)
     org_budget_snapshot: OrgBudgetSnapshot | None = Field(default=None, exclude=True)
+    committed_budget_spend: CommittedBudgetSpend | None = Field(default=None, exclude=True, repr=False)
     matched_model_access_groups: list[str] | None = Field(default=None, exclude=True)
     budget_throttle_pct: float | None = Field(default=None, exclude=True)
     user: object | None = None  # Expanded user object when expand=user is used
@@ -230,6 +249,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         values.pop("mcp_explicit_grants_only", None)
         values.pop("mcp_source_team_rpm_limits", None)
         values.pop("mcp_session_resource_server_ids", None)
+        values.pop("mcp_forwards_caller_authorization", None)
         values.pop("mcp_toolset_id", None)
         values.pop("via_virtual_key", None)
         values.pop("authenticated_by_custom_auth", None)
@@ -322,6 +342,21 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
             and bool(self.metadata)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped base field
             and self.metadata.get("service_account_id") is not None  # pyright: ignore[reportUnknownMemberType]  # untyped base field
         )
+
+
+COMMITTED_BUDGET_SPEND_PARAM: Final = "committed_budget_spend"
+
+
+def committed_budget_spend_of_row(
+    metadata: Mapping[str, object], litellm_params: Mapping[str, object]
+) -> CommittedBudgetSpend | None:
+    auth: Final = metadata.get("user_api_key_auth")
+    if isinstance(auth, UserAPIKeyAuth) and auth.committed_budget_spend is not None:
+        return auth.committed_budget_spend
+    if "user_api_key_auth" in metadata:
+        return CommittedBudgetSpend()
+    carried: Final = litellm_params.get(COMMITTED_BUDGET_SPEND_PARAM)
+    return carried if isinstance(carried, CommittedBudgetSpend) else None
 
 
 def user_api_key_has_admin_view(user_api_key_dict: UserAPIKeyAuth) -> bool:
