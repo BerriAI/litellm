@@ -11,13 +11,15 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import _ENABLE_SECRET_REDACTION, redact_string, verbose_logger
+from litellm.litellm_core_utils.agentic_followup_failure import carry_agentic_followup_mark
 from litellm.litellm_core_utils.bug_report import (
     bug_report_notice,
     build_bug_report,
     should_report_bug,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, json_contains, subscript
 from litellm.litellm_core_utils.secret_redaction import redact_string as redact_secret_string
+from litellm.llms.bedrock.common_utils import bedrock_model_reaches_converse_by_default
 from litellm.llms.bigmodel.common_utils import raise_bigmodel_business_error
 from litellm.types.utils import LlmProviders
 
@@ -97,6 +99,7 @@ class ExceptionCheckers:
         known_exception_substrings: Final = [
             "exceed context limit",
             "this model's maximum context length is",
+            "requested token count exceeds the model's maximum context length",
             "string too long. expected a string with maximum length",
             "model's maximum context limit",
             "is longer than the model's context length",
@@ -105,6 +108,7 @@ class ExceptionCheckers:
             "exceeds the available context size",  # llama.cpp/Lemonade
             "exceeds the maximum number of tokens allowed",  # Gemini
             '"code": "context_length_exceeded"',
+            "prompt is too long",
         ]
         for substring in known_exception_substrings:
             if substring in _error_str_lowercase:
@@ -602,6 +606,11 @@ def _map_openai_exception(
         )
 
 
+def _anthropic_overload_status(original_exception: _ProviderHTTPException) -> int | None:
+    upstream_status: Final = getattr(original_exception, "status_code", None)
+    return 529 if isinstance(upstream_status, int) and upstream_status >= 500 else None
+
+
 def _map_anthropic_exception(
     *,
     model: str,
@@ -627,6 +636,7 @@ def _map_anthropic_exception(
             message=f"AnthropicError - {error_str}",
             model=model,
             llm_provider="anthropic",
+            provider_status_code=_anthropic_overload_status(original_exception),
         )
     if "Invalid API Key" in error_str:
         raise AuthenticationError(
@@ -691,6 +701,7 @@ def _map_anthropic_exception(
                 llm_provider="anthropic",
                 model=model,
                 response=getattr(original_exception, "response", None),
+                provider_status_code=original_exception.status_code,
             )
         elif original_exception.status_code == 502:
             raise BadGatewayError(
@@ -938,13 +949,22 @@ _BEDROCK_MANTLE_CONTEXT_WINDOW_GENERIC_MESSAGE: Final = (
 )
 
 
-def _bedrock_mantle_context_window_response(original_exception: _ProviderHTTPException) -> httpx.Response:
+def _bedrock_response_with_status(original_exception: _ProviderHTTPException, status_code: int) -> httpx.Response:
     original_response: Final = getattr(original_exception, "response", None)
     if not isinstance(original_response, httpx.Response) or getattr(original_response, "_request", None) is None:
-        return httpx.Response(status_code=400, request=httpx.Request(method="POST", url="https://api.openai.com/v1/"))
-    if original_response.status_code == 400:
+        return httpx.Response(
+            status_code=status_code, request=httpx.Request(method="POST", url="https://api.openai.com/v1/")
+        )
+    if original_response.status_code == status_code:
         return original_response
-    return httpx.Response(status_code=400, headers=original_response.headers, request=original_response.request)
+    return httpx.Response(status_code=status_code, headers=original_response.headers, request=original_response.request)
+
+
+def _came_from_bedrock_converse(original_exception: _ProviderHTTPException) -> bool:
+    original_response: Final = getattr(original_exception, "response", None)
+    if not isinstance(original_response, httpx.Response) or getattr(original_response, "_request", None) is None:
+        return False
+    return original_response.request.url.path.endswith(("/converse", "/converse-stream"))
 
 
 def _get_bedrock_mantle_context_window_message(error_str: str) -> str | None:
@@ -980,7 +1000,7 @@ def _map_bedrock_exception(
                 message=mantle_context_window_message,
                 model=model,
                 llm_provider=custom_llm_provider,
-                response=_bedrock_mantle_context_window_response(original_exception),
+                response=_bedrock_response_with_status(original_exception, 400),
             )
     if (
         "too many tokens" in error_str
@@ -1002,6 +1022,18 @@ def _map_bedrock_exception(
             model=model,
             llm_provider="bedrock",
             response=getattr(original_exception, "response", None),
+        )
+    elif (
+        "The provided model identifier is invalid" in error_str
+        and bool(model)
+        and _came_from_bedrock_converse(original_exception)
+        and bedrock_model_reaches_converse_by_default(model)
+    ):
+        raise NotFoundError(
+            message=f"BedrockException - {error_str}",
+            model=model,
+            llm_provider="bedrock",
+            response=_bedrock_response_with_status(original_exception, 404),
         )
     elif "Malformed input request" in error_str:
         raise BadRequestError(
@@ -1827,26 +1859,32 @@ def _map_together_ai_exception(
     extra_information: str,
 ) -> None:
     try:
-        error_response = json.loads(error_str)
+        error_response = _DECODED_ERROR_BODY.validate_python(json.loads(error_str))
     except Exception:
         error_response = {"error": error_str}
-    if "error" in error_response and "`inputs` tokens + `max_new_tokens` must be <=" in error_response["error"]:
+    if json_contains(error_response, "error") and json_contains(
+        subscript(error_response, "error"), "`inputs` tokens + `max_new_tokens` must be <="
+    ):
         raise ContextWindowExceededError(
-            message=f"TogetherAIException - {error_response['error']}",
+            message=f"TogetherAIException - {subscript(error_response, 'error')}",
             model=model,
             llm_provider="together_ai",
             response=getattr(original_exception, "response", None),
         )
-    elif "error" in error_response and "invalid private key" in error_response["error"]:
+    elif json_contains(error_response, "error") and json_contains(
+        subscript(error_response, "error"), "invalid private key"
+    ):
         raise AuthenticationError(
-            message=f"TogetherAIException - {error_response['error']}",
+            message=f"TogetherAIException - {subscript(error_response, 'error')}",
             llm_provider="together_ai",
             model=model,
             response=getattr(original_exception, "response", None),
         )
-    elif "error" in error_response and "INVALID_ARGUMENT" in error_response["error"]:
+    elif json_contains(error_response, "error") and json_contains(
+        subscript(error_response, "error"), "INVALID_ARGUMENT"
+    ):
         raise BadRequestError(
-            message=f"TogetherAIException - {error_response['error']}",
+            message=f"TogetherAIException - {subscript(error_response, 'error')}",
             model=model,
             llm_provider="together_ai",
             response=getattr(original_exception, "response", None),
@@ -1858,13 +1896,13 @@ def _map_together_ai_exception(
             llm_provider="together_ai",
         )
     elif (
-        "error" in error_response
-        and "API key doesn't match expected format." in error_response["error"]
-        or "error_type" in error_response
-        and error_response["error_type"] == "validation"
+        json_contains(error_response, "error")
+        and json_contains(subscript(error_response, "error"), "API key doesn't match expected format.")
+        or json_contains(error_response, "error_type")
+        and subscript(error_response, "error_type") == "validation"
     ):
         raise BadRequestError(
-            message=f"TogetherAIException - {error_response['error']}",
+            message=f"TogetherAIException - {subscript(error_response, 'error')}",
             model=model,
             llm_provider="together_ai",
             response=getattr(original_exception, "response", None),
@@ -1878,7 +1916,7 @@ def _map_together_ai_exception(
             )
         elif original_exception.status_code == 422:
             raise BadRequestError(
-                message=f"TogetherAIException - {error_response['error']}",
+                message=f"TogetherAIException - {subscript(error_response, 'error')}",
                 model=model,
                 llm_provider="together_ai",
                 response=getattr(original_exception, "response", None),
@@ -2871,6 +2909,7 @@ def exception_type(
                     request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),  # stub the request
                 )
     except Exception as e:
+        carry_agentic_followup_mark(source=original_exception, mapped=e)
         # LOGGING
         exception_logging(
             logger_fn=None,
@@ -2896,6 +2935,7 @@ def exception_type(
                 model="",
             )
             setattr(raised_exc, "litellm_response_headers", litellm_response_headers)
+            carry_agentic_followup_mark(source=original_exception, mapped=raised_exc)
             raise raised_exc
 
 

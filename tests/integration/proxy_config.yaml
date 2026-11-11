@@ -587,6 +587,11 @@ model_list:
       model: perplexity/pplx-decider-v1-27b
       api_base: http://127.0.0.1:8191
       api_key: synthetic-perplexity-key
+  - model_name: parallel_ai/decision
+    litellm_params:
+      model: parallel_ai/decision
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-parallel-key
   - model_name: typesafe/jev-1.13.0
     litellm_params:
       model: typesafe/jev-1.13.0

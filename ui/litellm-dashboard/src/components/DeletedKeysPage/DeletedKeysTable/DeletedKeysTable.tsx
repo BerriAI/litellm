@@ -3,6 +3,7 @@
 import { OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
 import { Inbox } from "lucide-react";
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { DataTable } from "@/components/shared/DataTable";
 import { DeletedKeyResponse } from "@/app/(dashboard)/hooks/keys/useKeys";
@@ -20,13 +21,14 @@ interface DeletedKeysTableProps {
 const DEFAULT_SORTING: SortingState = [{ id: "deleted_at", desc: true }];
 
 function EmptyState() {
+  const { t } = useTranslation();
   return (
     <div className="flex flex-col items-center gap-1 py-6">
       <div className="mb-1 flex size-10 items-center justify-center rounded-lg bg-muted">
         <Inbox className="size-5 text-muted-foreground" />
       </div>
-      <div className="text-sm font-medium text-foreground">No deleted keys found</div>
-      <div className="text-sm text-muted-foreground">Keys deleted from this proxy will show up here.</div>
+      <div className="text-sm font-medium text-foreground">{t("logs.deletedKeys.table.emptyTitle")}</div>
+      <div className="text-sm text-muted-foreground">{t("logs.deletedKeys.table.emptyDescription")}</div>
     </div>
   );
 }
@@ -38,9 +40,10 @@ export function DeletedKeysTable({
   pagination,
   onPaginationChange,
 }: DeletedKeysTableProps) {
+  const { t } = useTranslation();
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
 
-  const columns = useMemo(() => getDeletedKeysTableColumns(), []);
+  const columns = useMemo(() => getDeletedKeysTableColumns(t), [t]);
 
   return (
     <DataTable
@@ -56,7 +59,7 @@ export function DeletedKeysTable({
       onPaginationChange={onPaginationChange}
       rowCount={totalCount}
       isLoading={isLoading}
-      loadingMessage="Loading deleted keys…"
+      loadingMessage={t("logs.deletedKeys.table.loading")}
       noDataMessage={<EmptyState />}
       size="compact"
     />

@@ -6,6 +6,11 @@ from typing import Final, TypeAlias, cast
 from typing_extensions import TypedDict, Unpack
 
 from litellm.constants import DEFAULT_TOOL_LOOP_MAX_ROUNDS
+from litellm.litellm_core_utils.allowed_tools_tool_choice import (
+    allowed_tools_tool_choice_in_effect,
+    refuse_tool_calls_the_choice_excludes,
+)
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
@@ -32,11 +37,14 @@ class ToolLoopMaxRoundsExceeded(RuntimeError):
         super().__init__(f"model still requested tool calls on round {max_rounds} of {max_rounds}")
 
 
-def _validate_tool_loop_args(max_rounds: int, completion_kwargs: _ToolLoopCompletionKwargs) -> None:
+def _tool_choice_in_effect(max_rounds: int, model: str, completion_kwargs: _ToolLoopCompletionKwargs) -> object:
     if max_rounds < 1:
         raise ValueError(f"max_rounds must be >= 1, got {max_rounds}")
     if completion_kwargs.get("stream"):
         raise ValueError("run_tool_loop requires whole responses; stream=True is not supported")
+    return allowed_tools_tool_choice_in_effect(
+        completion_kwargs.get("tool_choice"), model, drops_unsupported_params(completion_kwargs.get("drop_params"))
+    )
 
 
 def _expect_model_response(response: object) -> ModelResponse:
@@ -114,15 +122,26 @@ def _client_tool_calls(
     )
 
 
+def _refuse_tool_calls_the_choice_excludes(
+    tool_calls: tuple[ChatCompletionMessageToolCall, ...], model: str, tool_choice: object
+) -> None:
+    refuse_tool_calls_the_choice_excludes(
+        tool_choice, tuple(tool_call.function.name or "" for tool_call in tool_calls), model
+    )
+
+
 def _replays_provider_specific_fields(
     message: Message,
     tool_calls: tuple[ChatCompletionMessageToolCall, ...],
     client_tool_calls: tuple[ChatCompletionMessageToolCall, ...],
 ) -> bool:
     from litellm.completion_extras.litellm_responses_transformation.transformation import carries_tool_search_items
+    from litellm.llms.anthropic.common_utils import anthropic_server_tool_call_params
 
-    return client_tool_calls != tool_calls or carries_tool_search_items(
-        getattr(message, "provider_specific_fields", None)
+    return (
+        client_tool_calls != tool_calls
+        or bool(anthropic_server_tool_call_params(message))
+        or carries_tool_search_items(getattr(message, "provider_specific_fields", None))
     )
 
 
@@ -148,7 +167,7 @@ def run_tool_loop(
     """
     import litellm
 
-    _validate_tool_loop_args(max_rounds, completion_kwargs)
+    tool_choice: Final = _tool_choice_in_effect(max_rounds, model, completion_kwargs)
     history: tuple[AllMessageValues, ...] = tuple(messages)  # rebind-ok: rounds append new turns
     for round_number in range(1, max_rounds + 1):
         message = (
@@ -166,6 +185,7 @@ def run_tool_loop(
             return message.content
         if round_number == max_rounds:
             break
+        _refuse_tool_calls_the_choice_excludes(client_tool_calls, model, tool_choice)
         tool_results = tuple(execute_tool(tool_call) for tool_call in client_tool_calls)
         history = (
             *history,
@@ -199,7 +219,7 @@ async def arun_tool_loop(
     """
     import litellm
 
-    _validate_tool_loop_args(max_rounds, completion_kwargs)
+    tool_choice: Final = _tool_choice_in_effect(max_rounds, model, completion_kwargs)
     history: tuple[AllMessageValues, ...] = tuple(messages)  # rebind-ok: rounds append new turns
     for round_number in range(1, max_rounds + 1):
         message = (
@@ -217,6 +237,7 @@ async def arun_tool_loop(
             return message.content
         if round_number == max_rounds:
             break
+        _refuse_tool_calls_the_choice_excludes(client_tool_calls, model, tool_choice)
         tool_results = tuple([await execute_tool(tool_call) for tool_call in client_tool_calls])
         history = (
             *history,

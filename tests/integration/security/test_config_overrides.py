@@ -715,8 +715,11 @@ def test_cyberark_incremental_update_encrypts_reloads_on_restart_and_delete_clea
             }, saved.text
             stored_full: Final = _stored_override(database_url, "cyberark")
             assert set(stored_full) == set(full_config), stored_full
+            assert all(stored_full[key] != value for key, value in full_config.items()), stored_full
             serialized_full: Final = json.dumps(stored_full)
-            assert all(value not in serialized_full for value in full_config.values()), serialized_full
+            assert all(value not in serialized_full for value in (cyberark_wire.url, account, username, api_key)), (
+                serialized_full
+            )
 
             model_one: Final = "integration-cyberark-" + uuid.uuid4().hex
             _new_model(first, model_one, provider_wire.url, secret_names[0])

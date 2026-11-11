@@ -1,6 +1,6 @@
 # litellm/proxy/vector_stores/vector_store_registry.py
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timezone
 from itertools import chain
 from typing import (
@@ -12,6 +12,7 @@ from typing import (
 )
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError
+from typing_extensions import TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import remove_items_at_indices
@@ -37,6 +38,14 @@ _DB_ROW: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True
 _ITEMS: Final = TypeAdapter(Sequence[object], config=ConfigDict(strict=True))
 _TOOL: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True))
 _STORE_ID_ITEMS: Final = TypeAdapter(list[object] | tuple[object, ...], config=ConfigDict(strict=True))
+
+
+class _ManagedVectorStoreRowFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
+def _row_fields(row: Iterable[tuple[str, object]]) -> Mapping[str, object]:
+    return dict(row)
 
 
 def _named_store_ids(store_ids: object) -> tuple[str, ...]:
@@ -437,7 +446,7 @@ class VectorStoreRegistry:
             # cast to VectorStoreConfig
             litellm_vector_store_config = LiteLLM_VectorStoreConfig(**vector_store_config)
             vector_store_name = litellm_vector_store_config.get("vector_store_name")
-            vector_store_litellm_params: dict[str, Any] = litellm_vector_store_config.get("litellm_params") or {}
+            vector_store_litellm_params = litellm_vector_store_config.get("litellm_params") or {}
 
             vector_store_id = vector_store_litellm_params.get("vector_store_id")
             if vector_store_id is None:
@@ -538,8 +547,10 @@ class VectorStoreRegistry:
                 order={"created_at": "desc"},
             )
             for vector_store in _vector_stores_from_db:
-                _dict_vector_store = dict(vector_store)
-                _litellm_managed_vector_store = LiteLLM_ManagedVectorStore(**_dict_vector_store)
+                _dict_vector_store = _row_fields(vector_store)
+                _litellm_managed_vector_store = LiteLLM_ManagedVectorStore(
+                    **_ManagedVectorStoreRowFields(**_dict_vector_store)
+                )
                 vector_stores_from_db.append(_litellm_managed_vector_store)
         return vector_stores_from_db
 
