@@ -16,7 +16,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_azure_openai_messages,
 )
-from litellm.litellm_core_utils.prompt_templates.image_handling import inline_remote_files, inline_remote_media
+from litellm.litellm_core_utils.prompt_templates.image_handling import inline_remote_media, inline_remote_pdf_files
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.chat.gpt_5_transformation import GPT_REASONING_SERIES_MARKERS
 from litellm.types.llms.azure import (
@@ -274,7 +274,7 @@ class AzureOpenAIConfig(BaseConfig):
     ) -> dict:
         ordered_messages: Final = system_messages_first(messages) if litellm.openai_system_messages_first else messages
         stripped_messages: Final = drop_tool_reference_parts_from_tool_messages(ordered_messages)
-        inlined_messages: Final = inline_remote_media(stripped_messages, should_inline=inline_remote_files)
+        inlined_messages: Final = inline_remote_media(stripped_messages, should_inline=inline_remote_pdf_files)
         azure_messages: Final = convert_to_azure_openai_messages(hoist_images_from_tool_messages(inlined_messages))
         request_params: Final = MappingProxyType(
             {
