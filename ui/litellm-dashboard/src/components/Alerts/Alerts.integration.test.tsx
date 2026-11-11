@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
-import { renderWithProviders, screen, testQueryClient, within } from "../../../tests/test-utils";
+import { act, renderWithProviders, screen, testQueryClient, waitFor, within } from "../../../tests/test-utils";
 import Alerts from "./Alerts";
 import type { SavedAlert } from "./alertPresentation";
 
@@ -191,6 +191,32 @@ describe("Alerts", () => {
     );
     expect(screen.getByRole("button", { name: "Mark resolved" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Set up email reminders" })).toBeInTheDocument();
+  });
+
+  it("keeps the saved toggle value when an older refresh finishes later", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<Alerts />);
+    const toggle = await screen.findByRole("switch", { name: "Performance monitoring" });
+    const originalFetch = vi.mocked(globalThis.fetch).getMockImplementation()!;
+    const staleResponse = response(monitoring);
+    const pendingRefresh = Promise.withResolvers<Response>();
+    vi.mocked(globalThis.fetch).mockImplementation((input, init) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      if (new URL(request.url).pathname === "/alerts/monitoring" && request.method === "GET") {
+        return pendingRefresh.promise;
+      }
+      return originalFetch(input, init);
+    });
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await user.click(toggle);
+    expect(await screen.findByText("Off. Saved alerts remain available.")).toBeInTheDocument();
+    await act(async () => {
+      pendingRefresh.resolve(staleResponse);
+      await pendingRefresh.promise;
+    });
+    await waitFor(() => expect(testQueryClient.isFetching({ queryKey: ["alert-monitoring"] })).toBe(0));
+    expect(toggle).not.toBeChecked();
+    expect(screen.getByText("Off. Saved alerts remain available.")).toBeInTheDocument();
   });
 
   it("shows Enterprise monitoring without a free limit", async () => {

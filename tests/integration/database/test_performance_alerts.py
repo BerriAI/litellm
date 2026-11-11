@@ -293,6 +293,37 @@ async def test_opt_out_is_shared_and_config_false_cannot_be_overridden(fixture: 
 
 
 @pytest.mark.asyncio
+async def test_admin_can_opt_out_while_a_detection_batch_holds_the_state_lock(
+    fixture: Fixture,
+    gateway: Gateway,
+) -> None:
+    await fixture.repository.monitoring()
+    with psycopg.connect(os.environ["DATABASE_URL"]) as detector:
+        detector.execute('SELECT id FROM "LiteLLM_PerformanceAlertState" WHERE id = 1 FOR UPDATE')
+        request: Final = asyncio.create_task(
+            asyncio.to_thread(gateway.request, "PATCH", "/alerts/monitoring", {"enabled": False})
+        )
+        try:
+            async with asyncio.timeout(3):
+                while not request.done():
+                    waiting: Final = read_rows(
+                        "SELECT pid FROM pg_stat_activity WHERE %s::int = ANY(pg_blocking_pids(pid)) "
+                        "AND clock_timestamp() - query_start > interval '200 milliseconds'",
+                        (str(detector.info.backend_pid),),
+                    )
+                    if waiting:
+                        break
+                    await asyncio.sleep(0.01)
+        finally:
+            detector.rollback()
+        response: Final = await asyncio.wait_for(request, timeout=5)
+    assert response.status_code == 200, response.text
+    assert response.json()["enabled"] is False
+    assert not (await fixture.repository.monitoring()).enabled
+    assert await fixture.repository.claim(timedelta(0)) is None
+
+
+@pytest.mark.asyncio
 async def test_existing_performance_alerts_consume_allowance_but_deprecations_do_not(fixture: Fixture) -> None:
     start: Final = datetime(2026, 1, 8, tzinfo=timezone.utc)
     await fixture.alerts.record(

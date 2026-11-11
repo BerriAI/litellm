@@ -215,7 +215,10 @@ class PerformanceAlertRepository:
             return await self._monitoring(transaction)
 
     async def set_enabled(self, enabled: bool) -> AlertMonitoring:
-        async with self._transaction() as transaction:
+        async with self._database.tx(timeout=timedelta(seconds=10)) as transaction:
+            await transaction.query_raw(
+                "SELECT set_config('statement_timeout', '6s', true), set_config('lock_timeout', '5s', true)"
+            )
             await self._monitoring(transaction, lock=True)
             await transaction.execute_raw(
                 """UPDATE "LiteLLM_PerformanceAlertState" SET enabled = $1,

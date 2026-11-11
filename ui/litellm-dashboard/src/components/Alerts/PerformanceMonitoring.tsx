@@ -35,7 +35,10 @@ export default function PerformanceMonitoring({ scope, readOnly }: { scope: stri
       if (!data) throw new Error("Could not save monitoring settings");
       return data;
     },
-    onSuccess: (data) => client.setQueryData(queryKey, data),
+    onSuccess: async (data) => {
+      await client.cancelQueries({ queryKey });
+      client.setQueryData(queryKey, data);
+    },
   });
   if (query.isError)
     return (
