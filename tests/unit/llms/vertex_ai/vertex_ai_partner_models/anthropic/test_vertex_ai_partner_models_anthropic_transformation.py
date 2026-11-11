@@ -1555,34 +1555,3 @@ def test_vertex_ai_anthropic_default_max_tokens_reads_vertex_row(
     assert result["max_tokens"] == (
         DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS if expected_max_tokens is None else expected_max_tokens
     )
-
-
-@pytest.mark.parametrize(
-    ("cost_map_rows", "expected_max_tokens"),
-    (
-        pytest.param(
-            {"claude-unit-test": 64000, "vertex_ai/claude-unit-test@20990101": 64000},
-            4096,
-            id="env-default-before-unversioned-and-vertex-rows",
-        ),
-        pytest.param({"claude-unit-test@20990101": 64000}, 64000, id="own-row-before-env-default"),
-    ),
-)
-def test_vertex_ai_anthropic_explicit_env_default_max_tokens_keeps_its_precedence(
-    monkeypatch: pytest.MonkeyPatch, cost_map_rows: Mapping[str, int], expected_max_tokens: int
-) -> None:
-    import litellm.llms.anthropic.chat.transformation as anthropic_chat_transformation
-
-    for key, max_output_tokens in cost_map_rows.items():
-        monkeypatch.setitem(litellm.model_cost, key, {"max_output_tokens": max_output_tokens})
-    monkeypatch.setattr(anthropic_chat_transformation, "ANTHROPIC_CHAT_MAX_TOKENS_OVERRIDE", 4096)
-
-    result: Final = VertexAIAnthropicConfig().transform_request(
-        model="claude-unit-test@20990101",
-        messages=[{"role": "user", "content": "hi"}],
-        optional_params={},
-        litellm_params={},
-        headers={},
-    )
-
-    assert result["max_tokens"] == expected_max_tokens

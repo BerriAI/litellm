@@ -17,7 +17,6 @@ import litellm
 from litellm.anthropic_beta_headers_manager import get_unsupported_headers
 from litellm.constants import (
     ANTHROPIC_BILLING_METADATA_PREFIX,
-    ANTHROPIC_CHAT_MAX_TOKENS_OVERRIDE,
     ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
     ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES,
     DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS,
@@ -690,19 +689,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     @staticmethod
     def get_max_tokens_for_model(model: str | None = None, custom_llm_provider: str | None = None) -> int:
         """
-        Get the max output tokens for a given model from its own cost-map row, then from an explicitly
-        set DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS env var, then from its unversioned id's row
-        (claude-sonnet-4-6@default reads claude-sonnet-4-6), else from the serving host's row
-        (e.g. vertex_ai/claude-3-5-haiku@20241022).
-        Falls back to DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS if no row exists.
+        Get the max output tokens for a given model from its own cost-map row, then from its
+        unversioned id's row (claude-sonnet-4-6@default reads claude-sonnet-4-6), else from the
+        serving host's row (e.g. vertex_ai/claude-3-5-haiku@20241022).
+        Falls back to DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS (configurable via env var) if no row exists.
         """
         if model is None:
             return DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
         own_max_tokens: Final = _own_max_output_tokens(model)
         if own_max_tokens is not None:
             return own_max_tokens
-        if ANTHROPIC_CHAT_MAX_TOKENS_OVERRIDE is not None:
-            return ANTHROPIC_CHAT_MAX_TOKENS_OVERRIDE
         unversioned_model, version_separator, _ = model.partition("@")
         unversioned_max_tokens: Final = _own_max_output_tokens(unversioned_model) if version_separator else None
         if unversioned_max_tokens is not None:
