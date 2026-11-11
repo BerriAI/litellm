@@ -29,6 +29,7 @@ vi.mock("../utils/roles", async (importOriginal) => {
 });
 
 const navState = vi.hoisted(() => ({ pathname: "/ui/api-keys" }));
+const health = vi.hoisted(() => ({ version: undefined as string | undefined }));
 
 vi.mock("next/navigation", () => ({
   usePathname: () => navState.pathname,
@@ -103,7 +104,7 @@ vi.mock("@/contexts/ThemeContext", () => ({
 
 // Version tag + logout target come from network hooks; keep them inert in unit tests.
 vi.mock("@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails", () => ({
-  useHealthReadinessDetails: () => ({ data: undefined }),
+  useHealthReadinessDetails: () => ({ data: health.version ? { litellm_version: health.version } : undefined }),
 }));
 vi.mock("@/app/(dashboard)/hooks/useLogout", () => ({
   useLogout: () => vi.fn(),
@@ -163,6 +164,7 @@ describe("Sidebar (leftnav)", () => {
     });
     mockUseThemeImpl = unbrandedTheme;
     navState.pathname = "/ui/api-keys";
+    health.version = undefined;
     uiConfig.data = { admin_ui_disabled: false, use_si_terminology: false };
   });
 
@@ -678,16 +680,17 @@ describe("Sidebar (leftnav)", () => {
     expect(screen.getByRole("link", { name: "Virtual Keys" })).not.toHaveAttribute("data-active");
   });
 
-  it("closes the mobile drawer after choosing a page, including the page already open", async () => {
+  it("closes the mobile drawer after following any link in it, including the page already open", async () => {
     vi.stubGlobal("innerWidth", 390);
     navState.pathname = "/ui/api-keys";
+    health.version = "1.2.3";
     renderWithProviders(
       <SidebarProvider>
         <MobileSidebarTrigger label="Open navigation" />
         <LeftNav />
       </SidebarProvider>,
     );
-    for (const page of ["Virtual Keys", "Playground"]) {
+    for (const page of ["Virtual Keys", "Playground", "v1.2.3"]) {
       fireEvent.click(await screen.findByRole("button", { name: "Open navigation" }));
       fireEvent.click(within(await screen.findByRole("dialog")).getByRole("link", { name: page }));
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());

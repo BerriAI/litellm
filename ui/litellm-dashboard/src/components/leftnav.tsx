@@ -73,7 +73,7 @@ import ViewSwitcher from "@/components/Navbar/ViewSwitcher";
 import { usePluginMode } from "@/contexts/PluginModeContext";
 import { AriaSidebarLink } from "@/components/liteadmin/LiteAdmin";
 import { usePathname } from "next/navigation";
-import { useMemo, useState } from "react";
+import { type MouseEvent, useMemo, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import type { ParseKeys } from "i18next";
 import i18n from "@/i18n/i18n";
@@ -622,7 +622,9 @@ const Sidebar_: React.FC<SidebarProps> = ({
   const logout = useLogout(accessToken);
   const { state, isMobile, setOpen, setOpenMobile } = useSidebar();
   const collapsed = state === "collapsed" && !isMobile;
-  const closeMobileSidebar = () => setOpenMobile(false);
+  const closeMobileSidebarOnLinkClick = (event: MouseEvent) => {
+    if (event.target instanceof Element && event.target.closest("a[href]")) setOpenMobile(false);
+  };
 
   const currentRoute = routeForPathname(usePathname());
   const selectedKey = currentRoute === "aria" ? null : findMenuItemKey(currentRoute);
@@ -690,9 +692,9 @@ const Sidebar_: React.FC<SidebarProps> = ({
 
   const leafLink = (item: MenuItem) =>
     item.external_url ? (
-      <a href={item.external_url} target="_blank" rel="noopener noreferrer" onClick={closeMobileSidebar} />
+      <a href={item.external_url} target="_blank" rel="noopener noreferrer" />
     ) : (
-      <Link href={uiHref(routeOf(item))} onClick={closeMobileSidebar} />
+      <Link href={uiHref(routeOf(item))} />
     );
 
   const leafContent = (item: MenuItem) => (
@@ -764,39 +766,41 @@ const Sidebar_: React.FC<SidebarProps> = ({
 
   return (
     <Sidebar collapsible="icon" role="complementary" className="border-sidebar-border">
-      <SidebarBrand accessToken={accessToken} homeLabel={t("shell.nav.homeLink")} />
+      <div className="contents" onClickCapture={closeMobileSidebarOnLinkClick}>
+        <SidebarBrand accessToken={accessToken} homeLabel={t("shell.nav.homeLink")} />
 
-      <SidebarGroup className="gap-1 px-3 pt-3 pb-1">
-        <ViewSwitcher
-          collapsed={collapsed}
-          className="h-9 w-full max-w-none justify-start shadow-none group-data-[collapsible=icon]:size-9 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0 [&_[data-slot=workspace-label]]:flex-1 [&_[data-slot=workspace-label]]:text-left group-data-[collapsible=icon]:[&_[data-slot=workspace-label]]:hidden"
-        />
-        <AriaSidebarLink active={currentRoute === "aria"} />
-      </SidebarGroup>
-      <SidebarContent>
-        <ScrollArea className="min-h-0 flex-1">
-          <nav className="flex flex-col gap-0.5 px-3 pb-3">
-            {visibleGroups.map((group, gi) => (
-              <SidebarGroup key={group.groupLabel} className="gap-0.5 px-0 py-1">
-                {gi > 0 && (
-                  <SidebarSeparator className="my-2 hidden data-horizontal:w-auto group-data-[collapsible=icon]:block" />
-                )}
-                <SidebarGroupLabel className="block h-auto pt-3 pb-1.5 text-[11px] font-semibold tracking-wider text-muted-foreground uppercase group-data-[collapsible=icon]:hidden">
-                  {term(groupText(group.groupLabel))}
-                </SidebarGroupLabel>
-                <SidebarMenu className={navMenuClassName}>{group.items.map((item) => renderItem(item))}</SidebarMenu>
-              </SidebarGroup>
-            ))}
-          </nav>
-        </ScrollArea>
-      </SidebarContent>
+        <SidebarGroup className="gap-1 px-3 pt-3 pb-1">
+          <ViewSwitcher
+            collapsed={collapsed}
+            className="h-9 w-full max-w-none justify-start shadow-none group-data-[collapsible=icon]:size-9 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0 [&_[data-slot=workspace-label]]:flex-1 [&_[data-slot=workspace-label]]:text-left group-data-[collapsible=icon]:[&_[data-slot=workspace-label]]:hidden"
+          />
+          <AriaSidebarLink active={currentRoute === "aria"} />
+        </SidebarGroup>
+        <SidebarContent>
+          <ScrollArea className="min-h-0 flex-1">
+            <nav className="flex flex-col gap-0.5 px-3 pb-3">
+              {visibleGroups.map((group, gi) => (
+                <SidebarGroup key={group.groupLabel} className="gap-0.5 px-0 py-1">
+                  {gi > 0 && (
+                    <SidebarSeparator className="my-2 hidden data-horizontal:w-auto group-data-[collapsible=icon]:block" />
+                  )}
+                  <SidebarGroupLabel className="block h-auto pt-3 pb-1.5 text-[11px] font-semibold tracking-wider text-muted-foreground uppercase group-data-[collapsible=icon]:hidden">
+                    {term(groupText(group.groupLabel))}
+                  </SidebarGroupLabel>
+                  <SidebarMenu className={navMenuClassName}>{group.items.map((item) => renderItem(item))}</SidebarMenu>
+                </SidebarGroup>
+              ))}
+            </nav>
+          </ScrollArea>
+        </SidebarContent>
 
-      <SidebarFooter className="flex-none gap-2.5 border-t border-sidebar-border p-3">
-        {isAdminRole(userRole) && (
-          <SidebarUsageCard accessToken={accessToken} collapsed={collapsed} onExpandRail={() => setOpen(true)} />
-        )}
-        <SidebarAccountMenu onLogout={logout} collapsed={collapsed} />
-      </SidebarFooter>
+        <SidebarFooter className="flex-none gap-2.5 border-t border-sidebar-border p-3">
+          {isAdminRole(userRole) && (
+            <SidebarUsageCard accessToken={accessToken} collapsed={collapsed} onExpandRail={() => setOpen(true)} />
+          )}
+          <SidebarAccountMenu onLogout={logout} collapsed={collapsed} />
+        </SidebarFooter>
+      </div>
     </Sidebar>
   );
 };

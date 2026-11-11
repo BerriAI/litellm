@@ -17,7 +17,7 @@ import { useTranslation } from "react-i18next";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { uiHref } from "@/utils/uiHref";
-import { SidebarMenu, SidebarMenuButton, SidebarMenuItem, useSidebar } from "@/components/ui/sidebar";
+import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "@/components/ui/sidebar";
 import { navMenuButtonClassName } from "@/components/shared/sidebarStyles";
 import { RotateCcw } from "lucide-react";
 import { z } from "zod";
@@ -131,7 +131,6 @@ export function LiteAdminFrame({ children }: { children: ReactNode }) {
 
 export function AriaSidebarLink({ active }: { active: boolean }) {
   const state = useContext(LiteAdminContext);
-  const { setOpenMobile } = useSidebar();
   if (!state) return null;
   return (
     <SidebarMenu>
@@ -141,12 +140,7 @@ export function AriaSidebarLink({ active }: { active: boolean }) {
           tooltip={ARIA_AGENT_LABEL}
           className={navMenuButtonClassName}
           render={
-            <Link
-              href={uiHref("aria")}
-              aria-current={active ? "page" : undefined}
-              aria-label={ARIA_AGENT_LABEL}
-              onClick={() => setOpenMobile(false)}
-            />
+            <Link href={uiHref("aria")} aria-current={active ? "page" : undefined} aria-label={ARIA_AGENT_LABEL} />
           }
         >
           <AriaAvatar size={18} />
