@@ -162,7 +162,14 @@ CHAT_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {
 
 MESSAGES_PYTHON_FEATURES: Final = (
     COMMON_PYTHON_FEATURES
-    - {Feature.TIMEOUT_VARIANTS, Feature.LATEST_ALIAS, Feature.MOCK_RESPONSE, Feature.CALLER_CLIENT, Feature.TLS_POLICY}
+    - {
+        Feature.TIMEOUT_VARIANTS,
+        Feature.LATEST_ALIAS,
+        Feature.MOCK_RESPONSE,
+        Feature.CALLER_CLIENT,
+        Feature.TLS_POLICY,
+        Feature.AGENTIC_LOOP_HOOK,
+    }
 ) | {
     Feature.SAFEGUARDS_CLASSIFIER,
     Feature.WEBSEARCH_INTERCEPTION,

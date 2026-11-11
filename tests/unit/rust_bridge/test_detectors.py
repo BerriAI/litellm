@@ -440,12 +440,18 @@ def test_callback_detectors_read_the_request_callbacks_the_handler_reads(
     assert detector(call(**kwargs)) is expected
 
 
-def test_websearch_interception_needs_the_interception_logger(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_websearch_interception_needs_a_replaced_short_circuit(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.integrations.websearch_interception.handler import WebSearchInterceptionLogger
+
+    class _ShortCircuit(WebSearchInterceptionLogger):
+        async def try_short_circuit_search(self, *args: object, **kwargs: object) -> dict[str, object] | None:  # pyright: ignore[reportIncompatibleMethodOverride]  # test double only needs the override
+            return None
 
     monkeypatch.setattr(litellm, "callbacks", [_Rewrite()])
     assert not messages_detectors.websearch_interception(call())
     monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger()])
+    assert not messages_detectors.websearch_interception(call())
+    monkeypatch.setattr(litellm, "callbacks", [_ShortCircuit()])
     assert messages_detectors.websearch_interception(call())
 
 

@@ -20,6 +20,7 @@ use pyo3::{
 };
 use serde_json::{Map, Value};
 
+use super::agentic::HookedRequest;
 use super::transport::{HostedTransport, TransportCall, python_failure};
 use crate::{
     errors::{RequestMarker, route_failure},
@@ -132,11 +133,16 @@ pub(super) struct MessagesPythonHost {
     asynchronous: bool,
     pre_request: Option<Reply<Result<MessagesCall, Error>>>,
     hooked: bool,
+    hooked_request: HookedRequest,
     requested_stream: bool,
 }
 
 impl MessagesPythonHost {
-    pub(super) fn new(view: RequestView, asynchronous: bool) -> Self {
+    pub(super) fn new(
+        view: RequestView,
+        asynchronous: bool,
+        hooked_request: HookedRequest,
+    ) -> Self {
         Self {
             view,
             cache: PythonCache::new(asynchronous),
@@ -145,6 +151,7 @@ impl MessagesPythonHost {
             asynchronous,
             pre_request: None,
             hooked: false,
+            hooked_request,
             requested_stream: false,
         }
     }
@@ -375,6 +382,10 @@ impl MessagesPythonHost {
             .resolve(py, arguments)
             .map_err(InvokeError::Python)?;
         self.hooked = true;
+        *self
+            .hooked_request
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(arguments.clone().unbind());
         match self.decode_call(py, arguments) {
             Ok(call) => reply.send(Ok(call)),
             Err(InvokeError::Native(error)) => reply.send(Err(error)),

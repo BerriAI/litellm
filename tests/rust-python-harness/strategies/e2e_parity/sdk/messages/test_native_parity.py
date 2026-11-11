@@ -26,11 +26,11 @@ import json
 import os
 import re
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Iterable, Iterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from types import MappingProxyType
-from typing import Final, cast
+from typing import ClassVar, Final, cast
 
 import httpx
 import pytest
@@ -45,8 +45,11 @@ from litellm.caching.caching_handler import (
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.websearch_interception.handler import WebSearchInterceptionLogger
 from litellm.litellm_core_utils import logging_utils
 from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.messages import dispatch
 from litellm.proxy._types import UserAPIKeyAuth
@@ -56,6 +59,7 @@ from litellm.proxy.utils import InternalUsageCache
 from litellm.router_utils.cooldown_handlers import is_message_thread_not_found
 from litellm.rust_bridge import catalog
 from litellm.rust_bridge.configuration import Rollout
+from litellm.types.integrations.custom_logger import AgenticLoopPlan, AgenticLoopRequestPatch
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
 from tests.test_litellm_rust.support.isolation import isolated_callback_registries, rebound
@@ -100,6 +104,7 @@ _VOLATILE: Final = (
     (re.compile(r"Timeout passed=[0-9.]+"), "Timeout passed=<t>"),
     (re.compile(r"127\.0\.0\.1:[0-9]+"), "127.0.0.1:<port>"),
 )
+_SERVER_TOOL_ID: Final = re.compile(r"srvtoolu_[0-9a-f]{32}")
 
 TEXT_RESPONSE: Final[Mapping[str, JsonValue]] = MappingProxyType(
     {
@@ -343,9 +348,11 @@ class Case:
     cache: Callable[[], Cache] | None = None
     callbacks: tuple[Callable[[], CustomLogger], ...] = ()
     gaps: Mapping[str, str | None] = field(default_factory=lambda: MappingProxyType({}))
+    loggers: Callable[[], Sequence[CustomLogger]] | None = None
 
     def params(self) -> Iterator[object]:
-        for aspect in (*ASPECTS, "cached") if self.cache is not None else ASPECTS:
+        extra: Final = (*(("cached",) if self.cache is not None else ()), *(("hook_inputs",) if self.loggers else ()))
+        for aspect in (*ASPECTS, *extra):
             gap = {**KNOWN_GAPS.get(self.name, {}), **self.gaps}.get(aspect)
             marks = () if not gap else (pytest.mark.xfail(reason=gap, strict=True),)
             yield pytest.param(self, aspect, id=f"{self.name}-{aspect}", marks=marks)
@@ -1512,8 +1519,318 @@ PRE_REQUEST_HOOK_CASES: Final = (
     ),
 )
 
+_OBJECTS: Final = TypeAdapter(list[dict[str, object]])
+_VOLATILE_HOOK_KWARGS: Final = frozenset({"litellm_call_id", "litellm_logging_obj"})
+
+
+def _content(response: object) -> list[dict[str, object]]:
+    if not isinstance(response, dict):
+        return []
+    return _OBJECTS.validate_python(_OBJECT.validate_python(response).get("content") or [])
+
+
+def _tool_calls(response: object) -> list[dict[str, object]]:
+    return [block for block in _content(response) if block.get("type") == "tool_use"]
+
+
+class _FollowUpOnToolUse(CustomLogger):
+    """Answers each tool call with a canned result in one follow-up turn, recording what the hooks were handed."""
+
+    def __init__(self) -> None:
+        super().__init__()  # pyright: ignore[reportUnknownMemberType]  # CustomLogger takes untyped kwargs
+        self.seen: list[Mapping[str, object]] = []
+
+    async def async_should_run_agentic_loop(  # pyright: ignore[reportIncompatibleMethodOverride]  # test double narrows the hook's types
+        self,
+        response: object,
+        model: str,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: dict[str, object],
+    ) -> tuple[bool, dict[str, object]]:
+        calls: Final = _tool_calls(response)
+        self.seen.append(
+            {
+                "hook": "should_run",
+                "response": _OBJECT.validate_python({**response, "id": "<id>"}) if isinstance(response, dict) else None,
+                "model": model,
+                "messages": _OBJECTS.validate_python(messages),
+                "tools": tools,
+                "stream": stream,
+                "custom_llm_provider": custom_llm_provider,
+                "kwargs": sorted(name for name in kwargs if name not in _VOLATILE_HOOK_KWARGS),
+                "api_key": kwargs.get("api_key"),
+            }
+        )
+        return bool(calls), {"tool_calls": calls}
+
+    async def async_build_agentic_loop_plan(  # pyright: ignore[reportIncompatibleMethodOverride]  # test double narrows the hook's types
+        self,
+        tools: dict[str, object],
+        model: str,
+        messages: list[dict[str, object]],
+        response: object,
+        anthropic_messages_provider_config: object,
+        anthropic_messages_optional_request_params: dict[str, object],
+        logging_obj: Logging,
+        stream: bool,
+        kwargs: dict[str, object],
+    ) -> AgenticLoopPlan:
+        self.seen.append(
+            {
+                "hook": "build_plan",
+                "optional_params": anthropic_messages_optional_request_params,
+                "config": type(anthropic_messages_provider_config).__name__,
+                "agentic_loop_params": logging_obj.model_call_details.get("agentic_loop_params"),
+                "kwargs": sorted(name for name in kwargs if name not in _VOLATILE_HOOK_KWARGS),
+            }
+        )
+        return self.plan(messages, response)
+
+    def plan(self, messages: list[dict[str, object]], response: object) -> AgenticLoopPlan:
+        answers: Final = [
+            {"type": "tool_result", "tool_use_id": call["id"], "content": "18C, sunny"}
+            for call in _tool_calls(response)
+        ]
+        return AgenticLoopPlan(
+            run_agentic_loop=True,
+            request_patch=AgenticLoopRequestPatch(
+                messages=[
+                    *messages,
+                    {"role": "assistant", "content": _content(response)},
+                    {"role": "user", "content": answers},
+                ]
+            ),
+        )
+
+
+class _HeldBack(_FollowUpOnToolUse):
+    server_fulfilled_tool_names: ClassVar[frozenset[str]] = frozenset({"get_weather"})
+
+
+class _Terminates(_FollowUpOnToolUse):
+    def plan(self, messages: list[dict[str, object]], response: object) -> AgenticLoopPlan:
+        return AgenticLoopPlan(terminate=True, stop_reason="answered")
+
+
+class _Overrides(_FollowUpOnToolUse):
+    def plan(self, messages: list[dict[str, object]], response: object) -> AgenticLoopPlan:
+        return AgenticLoopPlan(response_override={**TEXT_RESPONSE, "id": "msg_01Override"})
+
+
+class _Fails(_FollowUpOnToolUse):
+    async def async_build_agentic_loop_plan(  # pyright: ignore[reportIncompatibleMethodOverride]  # test double narrows the hook's types
+        self,
+        tools: dict[str, object],
+        model: str,
+        messages: list[dict[str, object]],
+        response: object,
+        anthropic_messages_provider_config: object,
+        anthropic_messages_optional_request_params: dict[str, object],
+        logging_obj: Logging,
+        stream: bool,
+        kwargs: dict[str, object],
+    ) -> AgenticLoopPlan:
+        raise ValueError("the agentic plan failed")
+
+
+class _WebSearch(WebSearchInterceptionLogger):
+    """The stock web search interception, recording what its pre-request hook leaves for its agentic hook."""
+
+    def __init__(self, enabled_providers: list[str] | None = None, max_agentic_loops: int | None = None) -> None:
+        super().__init__(  # pyright: ignore[reportUnknownMemberType]  # the logger annotates bare containers
+            enabled_providers=list(enabled_providers) if enabled_providers is not None else None,
+            max_agentic_loops=max_agentic_loops,
+        )
+        self.seen: list[Mapping[str, object]] = []
+
+    async def async_should_run_agentic_loop(  # pyright: ignore[reportIncompatibleMethodOverride]  # test double narrows the hook's types
+        self,
+        response: object,
+        model: str,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: dict[str, object],
+    ) -> tuple[bool, dict[str, object]]:
+        self.seen.append(
+            {
+                "model": model,
+                "messages": _OBJECTS.validate_python(messages),
+                "tools": tools,
+                "stream": stream,
+                "custom_llm_provider": custom_llm_provider,
+                "kwargs": {
+                    name: kwargs[name]
+                    for name in sorted(kwargs)
+                    if name == "max_agentic_loops" or name.startswith("_websearch_interception")
+                },
+                "kwarg_names": sorted(name for name in kwargs if name not in _VOLATILE_HOOK_KWARGS),
+            }
+        )
+        return await super().async_should_run_agentic_loop(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the logger annotates bare containers
+            response=response,
+            model=model,
+            messages=messages,
+            tools=tools,
+            stream=stream,
+            custom_llm_provider=custom_llm_provider,
+            kwargs=kwargs,
+        )
+
+
+def _loggers(*kinds: Callable[[], CustomLogger]) -> Callable[[], Sequence[CustomLogger]]:
+    return lambda: tuple(kind() for kind in kinds)
+
+
+def _web_search() -> CustomLogger:
+    return _WebSearch(enabled_providers=["anthropic"], max_agentic_loops=2)
+
+
+async def _search(*args: object, **kwargs: object) -> SearchResponse:  # kwargs-ok: litellm.asearch's call shape
+    return SearchResponse.model_validate(
+        {"results": [{"title": "Paris", "url": "https://example.com/paris", "snippet": "Paris is the capital."}]}
+    )
+
+
+WEB_SEARCH_TOOL: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"type": "web_search_20250305", "name": "web_search", "max_uses": 2}
+)
+WEB_SEARCH_CALL_RESPONSE: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        **TEXT_RESPONSE,
+        "id": "msg_01ParitySearch",
+        "content": [
+            {"type": "tool_use", "id": "toolu_01Search", "name": "litellm_web_search", "input": {"query": "capital"}}
+        ],
+        "stop_reason": "tool_use",
+    }
+)
+_WEB_SEARCH_SETTINGS: Final[Mapping[str, object]] = MappingProxyType({"asearch": _search})
+_WEATHER: Final = _kw(tools=[dict(WEATHER_TOOL)])
+
+AGENTIC_CASES: Final = (
+    Case("agentic_loop_without_tool_use", _WEATHER, loggers=_loggers(_FollowUpOnToolUse)),
+    Case(
+        "agentic_loop_follow_up",
+        _WEATHER,
+        upstream=(_ok(TOOL_USE_RESPONSE), _ok()),
+        loggers=_loggers(_FollowUpOnToolUse),
+    ),
+    Case(
+        "agentic_loop_follow_up_with_request_params",
+        _kw(
+            tools=[dict(WEATHER_TOOL)],
+            system="Answer in one word.",
+            temperature=0.3,
+            metadata={"user_id": "user-123"},
+            thinking={"type": "enabled", "budget_tokens": 2048},
+            max_tokens=4096,
+            messages=[{"role": "user", "content": "Weather?", "provider_specific_fields": {"x": 1}}],
+        ),
+        upstream=(_ok(TOOL_USE_RESPONSE), _ok()),
+        loggers=_loggers(_FollowUpOnToolUse),
+    ),
+    Case(
+        "agentic_loop_follow_up_stream",
+        _kw(stream=True, tools=[dict(WEATHER_TOOL)]),
+        upstream=(_stream(TOOL_STREAM), _stream(TEXT_STREAM)),
+        loggers=_loggers(_FollowUpOnToolUse),
+    ),
+    Case(
+        "agentic_loop_stream_without_tool_use",
+        _kw(stream=True, tools=[dict(WEATHER_TOOL)]),
+        upstream=(_stream(TEXT_STREAM),),
+        loggers=_loggers(_FollowUpOnToolUse),
+    ),
+    Case(
+        "agentic_loop_holds_back_a_server_fulfilled_tool",
+        _kw(stream=True, tools=[dict(WEATHER_TOOL)]),
+        upstream=(_stream(TOOL_STREAM), _stream(TEXT_STREAM)),
+        loggers=_loggers(_HeldBack),
+    ),
+    Case(
+        "agentic_loop_terminates",
+        _WEATHER,
+        upstream=(_ok(TOOL_USE_RESPONSE),),
+        loggers=_loggers(_Terminates),
+    ),
+    Case(
+        "agentic_loop_response_override",
+        _WEATHER,
+        upstream=(_ok(TOOL_USE_RESPONSE),),
+        loggers=_loggers(_Overrides),
+    ),
+    Case(
+        "agentic_loop_plan_fails",
+        _WEATHER,
+        upstream=(_ok(TOOL_USE_RESPONSE),),
+        loggers=_loggers(_Fails),
+    ),
+    Case(
+        "agentic_loop_follow_up_fails",
+        _WEATHER,
+        upstream=(_ok(TOOL_USE_RESPONSE), _failure(529, "overloaded_error", "Overloaded")),
+        loggers=_loggers(_FollowUpOnToolUse),
+    ),
+    Case(
+        "agentic_loop_refused_past_max_loops",
+        _kw(tools=[dict(WEATHER_TOOL)], max_agentic_loops=1),
+        upstream=(_ok(TOOL_USE_RESPONSE), _ok(TOOL_USE_RESPONSE)),
+        loggers=_loggers(_FollowUpOnToolUse),
+    ),
+    Case(
+        "agentic_loop_upstream_error_skips_the_hooks",
+        _WEATHER,
+        upstream=(_failure(400, "invalid_request_error", "bad"),),
+        loggers=_loggers(_FollowUpOnToolUse),
+    ),
+    Case(
+        "web_search_interception",
+        _kw(tools=[dict(WEB_SEARCH_TOOL)]),
+        upstream=(_ok(WEB_SEARCH_CALL_RESPONSE), _ok()),
+        settings=_WEB_SEARCH_SETTINGS,
+        loggers=_loggers(_web_search),
+    ),
+    Case(
+        "web_search_interception_converted_stream",
+        _kw(stream=True, tools=[dict(WEB_SEARCH_TOOL)]),
+        upstream=(_ok(WEB_SEARCH_CALL_RESPONSE), _ok()),
+        settings=_WEB_SEARCH_SETTINGS,
+        loggers=_loggers(_web_search),
+    ),
+    Case(
+        "web_search_interception_without_a_search_call",
+        _kw(stream=True, tools=[dict(WEB_SEARCH_TOOL)]),
+        settings=_WEB_SEARCH_SETTINGS,
+        loggers=_loggers(_web_search),
+    ),
+    Case(
+        "web_search_interception_for_a_provider_it_skips",
+        _kw(tools=[dict(WEB_SEARCH_TOOL)]),
+        loggers=_loggers(_WebSearch),
+    ),
+    Case(
+        "web_search_interception_rewrites_the_messages_it_hands_the_loop",
+        _kw(
+            stream=True,
+            tools=[dict(WEB_SEARCH_TOOL)],
+            messages=[
+                {"role": "user", "content": [{"type": "text", "text": ""}, {"type": "text", "text": "Capital?"}]}
+            ],
+        ),
+        upstream=(_ok(WEB_SEARCH_CALL_RESPONSE), _ok()),
+        settings=_WEB_SEARCH_SETTINGS,
+        loggers=_loggers(_web_search),
+    ),
+)
+
 CASES: Final = (
     *REQUEST_CASES,
+    *AGENTIC_CASES,
     *PROMPT_CACHING_CASES,
     *SYNC_PROMPT_CACHING_CASES,
     *RESPONSE_CASES,
@@ -1540,6 +1857,7 @@ class Leg:
     logged: Mapping[str, object]
     callback_kwargs: Mapping[str, object]
     cached: tuple[str, ...] = ()
+    hook_inputs: tuple[object, ...] = ()
 
 
 @dataclass(slots=True)
@@ -1691,7 +2009,10 @@ def _response(result: object, private_keys: bool) -> Mapping[str, object]:
         for name, value in cast(dict[str, object], result).items()
         if private_keys or not name.startswith("_")
     }
-    return {"kind": "response", "body": _OBJECT.validate_python(body)}
+    return {
+        "kind": "response",
+        "body": _OBJECT.validate_json(_SERVER_TOOL_ID.sub("srvtoolu_<id>", json.dumps(body, default=str))),
+    }
 
 
 def _hidden_params(result: object) -> Mapping[str, object]:
@@ -1750,7 +2071,7 @@ async def _invoke(
     return {
         "kind": "stream",
         "chunk_types": sorted({type(chunk).__name__ for chunk in chunks}),
-        "text": _stream_text(chunks),
+        "text": _SERVER_TOOL_ID.sub("srvtoolu_<id>", _stream_text(chunks)),
     }, hidden
 
 
@@ -1827,6 +2148,8 @@ async def _leg(case: Case, server: RecordingServer, probe: FallbackProbe | None)
             server.enqueue(replace(spec))
         request_count: Final = len(server.requests)
         recorder: Final = RecordingLogger()
+        loggers: Final = () if case.loggers is None else case.loggers()
+        litellm.callbacks.extend(loggers)
         litellm.callbacks.append(recorder)
         litellm.callbacks.extend(callback() for callback in case.callbacks)
         fallbacks_before: Final = 0 if probe is None else probe.calls
@@ -1853,6 +2176,7 @@ async def _leg(case: Case, server: RecordingServer, probe: FallbackProbe | None)
             logged=logged,
             callback_kwargs=callback_kwargs,
             cached=() if litellm.cache is None else tuple(sorted(litellm.cache.cache.cache_dict)),
+            hook_inputs=tuple(getattr(logger, "seen", ()) for logger in loggers),
         )
 
 
@@ -1901,13 +2225,18 @@ async def test_native_messages_match_python(
             assert native.logged == python.logged
         case "cached":
             assert native.cached == python.cached
+        case "hook_inputs":
+            assert native.hook_inputs == python.hook_inputs
         case _:
             assert native.callback_kwargs.get(aspect) == python.callback_kwargs.get(aspect)
 
 
-@pytest.mark.parametrize("case", [pytest.param(case, id=case.name) for case in SERVED_NATIVELY_CASES])
+@pytest.mark.parametrize(
+    "case", [pytest.param(case, id=case.name) for case in (*SERVED_NATIVELY_CASES, *AGENTIC_CASES)]
+)
 def test_catalog_serves_the_case_natively(case: Case, parity_server: RecordingServer) -> None:
     with isolated_callback_registries(), _environment(case.env), _settings(case.settings):
+        litellm.callbacks.extend(() if case.loggers is None else case.loggers())
         binding: Final = dispatch._MESSAGES if case.sync else dispatch._AMESSAGES  # pyright: ignore[reportPrivateUsage]  # the public binding the entry routes by
         features: Final = dispatch._FEATURES if case.sync else dispatch._ASYNC_FEATURES  # pyright: ignore[reportPrivateUsage]  # the entry's own detectors
         request: Final = dispatch._public_request(binding, (), _kwargs(case, parity_server))  # pyright: ignore[reportPrivateUsage]  # the public binding the entry routes by
@@ -2067,3 +2396,31 @@ async def test_both_lanes_resend_a_thread_s_create_betas_through_the_ownership_h
     assert native_messages.calls == 0
     assert native == python
     assert python == ("advisor-tool-2026-03-01,message-threads-2026-08-12",) * 2
+
+
+_WEB_SEARCH_PRE_HOOK_CASES: Final = tuple(
+    pytest.param(case, id=case.name)
+    for case in AGENTIC_CASES
+    if case.name in {"web_search_interception", "web_search_interception_converted_stream"}
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", _WEB_SEARCH_PRE_HOOK_CASES)
+async def test_both_lanes_hand_the_web_search_pre_hook_kwargs_to_the_agentic_loop(
+    case: Case, parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    python, native = await _legs(case, parity_server, native_messages)
+
+    assert native_messages.calls == 0
+    assert native.hook_inputs == python.hook_inputs
+    [seen] = python.hook_inputs
+    first: Final = cast(list[Mapping[str, object]], seen)[0]
+    converted: Final = case.name.endswith("_converted_stream")
+    assert first["kwargs"] == {
+        "max_agentic_loops": 2,
+        "_websearch_interception_emit_native_blocks": True,
+        **({"_websearch_interception_converted_stream": True} if converted else {}),
+    }
+    assert [tool.get("name") for tool in cast(list[Mapping[str, object]], first["tools"])] == ["litellm_web_search"]
+    assert first["stream"] is False

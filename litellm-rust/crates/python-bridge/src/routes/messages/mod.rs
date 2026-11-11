@@ -1,3 +1,4 @@
+mod agentic;
 mod host;
 mod modify_params;
 mod pre_request;
@@ -14,6 +15,13 @@ use super::NativeCall;
 fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyResult<Py<PyAny>> {
     let (arguments, hooks) =
         crate::routes::call_hooks(py, LoggingOperation::Messages, &call, asynchronous)?;
+    let hooked_request = agentic::HookedRequest::default();
+    let hooks = litellm_host_python::HookChain::new()
+        .with(agentic::AgenticLoop::new(
+            asynchronous,
+            std::sync::Arc::clone(&hooked_request),
+        ))
+        .with(hooks);
     let modify_params = ModifyParams::new(&call.args, &call.kwargs)?;
     crate::routes::run_public_call_after_policy(
         py,
@@ -69,7 +77,7 @@ fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyR
                 },
             ))
         },
-        MessagesPythonHost::new(call.view()?, asynchronous),
+        MessagesPythonHost::new(call.view()?, asynchronous, hooked_request),
         hooks,
         modify_params,
         asynchronous,

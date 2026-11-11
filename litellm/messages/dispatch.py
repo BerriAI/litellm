@@ -135,7 +135,14 @@ def messages_target(model: str, custom_llm_provider: str | None, model_info: obj
 
 
 _NATIVE_COMMON_FEATURES: Final = frozenset(
-    {Feature.TIMEOUT_VARIANTS, Feature.LATEST_ALIAS, Feature.MOCK_RESPONSE, Feature.CALLER_CLIENT, Feature.TLS_POLICY}
+    {
+        Feature.TIMEOUT_VARIANTS,
+        Feature.LATEST_ALIAS,
+        Feature.MOCK_RESPONSE,
+        Feature.CALLER_CLIENT,
+        Feature.TLS_POLICY,
+        Feature.AGENTIC_LOOP_HOOK,
+    }
 )
 
 _FEATURES: Final[detectors.Detectors] = MappingProxyType(
