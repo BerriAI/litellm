@@ -107,6 +107,8 @@ class GeminiDecisionsConfig(BaseDecisionsConfig):
     api_base_env = ("GEMINI_API_BASE",)
     supports_images = True
     inlines_remote_images = True
+    max_images = 16
+    max_total_image_bytes = 20 * 1024 * 1024
 
     def get_default_api_base(self) -> str | None:
         return "https://generativelanguage.googleapis.com"

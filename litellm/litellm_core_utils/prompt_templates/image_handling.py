@@ -43,11 +43,14 @@ def _header_value(response: Response, name: str) -> str | None:
         return None
 
 
-def _process_image_response(response: Response, url: str) -> str:
+def _process_image_response(response: Response, url: str, download_budget: int | None = None) -> str:
     if response.status_code != 200:
         raise litellm.ImageFetchError(
             f"Error: Unable to fetch image from URL. Status code: {response.status_code}, url={url}"
         )
+
+    if download_budget is not None and len(response.content) > download_budget:
+        raise litellm.ImageFetchError(f"Image download exceeds the remaining request budget of {download_budget} bytes")
 
     # Check size before downloading if Content-Length header is present
     content_length: Final = _header_value(response, "Content-Length")
@@ -105,7 +108,9 @@ def _rejected_image_fetch(url: str, verdict: SSRFError) -> "litellm.ImageFetchEr
     )
 
 
-async def async_convert_url_to_base64(url: str, timeout: float | httpx.Timeout | None = None) -> str:
+async def async_convert_url_to_base64(
+    url: str, timeout: float | httpx.Timeout | None = None, *, max_bytes: int | None = None
+) -> str:
     if url.startswith("data:") and ";base64," in url:
         return url
 
@@ -116,14 +121,23 @@ async def async_convert_url_to_base64(url: str, timeout: float | httpx.Timeout |
         )
 
     cached_result: Final = in_memory_cache.get_cache(url)
-    if cached_result:
+    if cached_result and max_bytes is None:
         return cached_result
 
     client: Final = litellm.module_level_aclient
     for attempt_timeout in _attempt_timeouts(timeout):
         try:
-            response = await async_safe_get(client, url, timeout=attempt_timeout)
-            return _process_image_response(response, url)
+            response = (
+                await async_safe_get(client, url, timeout=attempt_timeout)
+                if max_bytes is None
+                else await async_safe_get(
+                    _AsyncBodyPrefixReader(client.client),
+                    url,
+                    timeout=attempt_timeout,
+                    max_response_bytes=max_bytes + 1,
+                )
+            )
+            return _process_image_response(response, url, max_bytes)
         except litellm.ImageFetchError:
             raise
         except SSRFError as e:
@@ -133,7 +147,9 @@ async def async_convert_url_to_base64(url: str, timeout: float | httpx.Timeout |
     raise litellm.ImageFetchError(f"Error: Unable to fetch image from URL after 3 attempts. url={url}")
 
 
-def convert_url_to_base64(url: str, timeout: float | httpx.Timeout | None = None) -> str:
+def convert_url_to_base64(
+    url: str, timeout: float | httpx.Timeout | None = None, *, max_bytes: int | None = None
+) -> str:
     if url.startswith("data:") and ";base64," in url:
         return url
 
@@ -144,14 +160,18 @@ def convert_url_to_base64(url: str, timeout: float | httpx.Timeout | None = None
         )
 
     cached_result: Final = in_memory_cache.get_cache(url)
-    if cached_result:
+    if cached_result and max_bytes is None:
         return cached_result
 
     client: Final = litellm.module_level_client
     for attempt_timeout in _attempt_timeouts(timeout):
         try:
-            response = safe_get(client, url, timeout=attempt_timeout)
-            return _process_image_response(response, url)
+            response = safe_get(
+                client if max_bytes is None else _ImageBodyReader(client.client, max_bytes + 1),
+                url,
+                timeout=attempt_timeout,
+            )
+            return _process_image_response(response, url, max_bytes)
         except litellm.ImageFetchError:
             raise
         except SSRFError as e:
@@ -298,6 +318,29 @@ class _BodyPrefixReader:
         ) as response:
             prefix: Final = b"".join(_signature_window_chunks(response.iter_bytes(), self.deadline))
             return _with_body_prefix(response, prefix[:_PDF_SIGNATURE_WINDOW])
+
+
+@dataclass(frozen=True, slots=True)
+class _ImageBodyReader:
+    client: httpx.Client
+    max_bytes: int
+
+    def get(
+        self,
+        url: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        follow_redirects: bool = False,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> Response:
+        with self.client.stream(
+            "GET",
+            url,
+            headers=headers,
+            follow_redirects=follow_redirects,
+            timeout=USE_CLIENT_DEFAULT if timeout is None else timeout,
+        ) as response:
+            return _with_body_prefix(response, next(response.iter_bytes(self.max_bytes), b""))
 
 
 @dataclass(frozen=True, slots=True)

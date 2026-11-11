@@ -4,11 +4,15 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Final
 
+import httpx
 import pytest
+import respx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.decisions.main import _prepare_decisions_call
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.systemone.main import _prepare_systemone_call
 
 QUESTION_TEXT: Final = "Is this about a billing problem?"
@@ -132,3 +136,125 @@ def test_non_utf8_bytes_in_the_request_are_logged_and_rejected_with_a_400():
     logged: Final = _logged_request(logging_obj)
     assert base64.urlsafe_b64decode(logged["input"]) == raw_input
     assert logged["questions"][0]["instructions"] == QUESTION_TEXT
+
+
+@pytest.mark.usefixtures("gemini_httpx_transport")
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", (False, True))
+async def test_gemini_rejects_excess_images_before_fetching(sync: bool, respx_mock: respx.MockRouter) -> None:
+    limit: Final = 16
+    images: Final = [f"https://images.example/{index}.png" for index in range(limit + 1)]
+    image_route: Final = respx_mock.get(url__startswith="https://images.example/").mock(
+        return_value=httpx.Response(200, content=b"image")
+    )
+    with pytest.raises(litellm.BadRequestError, match="at most"):
+        if sync:
+            litellm.systemone(
+                model="gemini/gemini-decision-1",
+                state="Inspect",
+                questions={"ok": {"type": "noul", "instructions": "Is it damaged?"}},
+                images=images,
+                api_key="test",
+            )
+        else:
+            await litellm.asystemone(
+                model="gemini/gemini-decision-1",
+                state="Inspect",
+                questions={"ok": {"type": "noul", "instructions": "Is it damaged?"}},
+                images=images,
+                api_key="test",
+            )
+    assert image_route.call_count == 0
+
+
+@pytest.mark.usefixtures("gemini_httpx_transport")
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", (False, True))
+async def test_gemini_stops_image_downloads_at_the_request_budget(
+    sync: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    monkeypatch.setattr(litellm, "module_level_aclient", AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport()))
+    budget: Final = 20 * 1024 * 1024
+    image: Final = b"x" * (budget // 2 + 1)
+    first: Final = respx_mock.get("https://images.example/first.png").mock(
+        return_value=httpx.Response(200, content=image, headers={"content-type": "image/png"})
+    )
+    second: Final = respx_mock.get("https://images.example/second.png").mock(
+        return_value=httpx.Response(200, content=image, headers={"content-type": "image/png"})
+    )
+    last: Final = respx_mock.get("https://images.example/last.png").mock(
+        return_value=httpx.Response(200, content=b"unused")
+    )
+    provider: Final = respx_mock.post("https://generativelanguage.googleapis.com/v1beta/decisions").mock(
+        return_value=httpx.Response(200, json={"answers": {"ok": {"type": "noul", "noul": 0.5}}})
+    )
+    urls: Final = [
+        "https://images.example/first.png",
+        "https://images.example/second.png",
+        "https://images.example/last.png",
+    ]
+    with pytest.raises(litellm.ImageFetchError, match="remaining request budget"):
+        if sync:
+            litellm.systemone(
+                model="gemini/gemini-decision-1",
+                state="Inspect",
+                questions={"ok": {"type": "noul", "instructions": "Is it damaged?"}},
+                images=urls,
+                api_key="test",
+            )
+        else:
+            await litellm.asystemone(
+                model="gemini/gemini-decision-1",
+                state="Inspect",
+                questions={"ok": {"type": "noul", "instructions": "Is it damaged?"}},
+                images=urls,
+                api_key="test",
+            )
+    assert first.call_count == second.call_count == 1
+    assert last.call_count == provider.call_count == 0
+
+
+@pytest.mark.usefixtures("gemini_httpx_transport")
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", (False, True))
+async def test_gemini_accepts_remote_images_within_the_request_budget(
+    sync: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    monkeypatch.setattr(litellm, "module_level_aclient", AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport()))
+    image: Final = b"\x89PNG\r\n\x1a\n"
+    image_route: Final = respx_mock.get("https://images.example/small.png").mock(
+        return_value=httpx.Response(200, content=image, headers={"content-type": "image/png"})
+    )
+    provider: Final = respx_mock.post("https://generativelanguage.googleapis.com/v1beta/decisions").mock(
+        return_value=httpx.Response(200, json={"answers": {"ok": {"type": "noul", "noul": 0.5}}})
+    )
+    if sync:
+        litellm.systemone(
+            model="gemini/gemini-decision-1",
+            state="Inspect",
+            questions={"ok": {"type": "noul", "instructions": "Is it damaged?"}},
+            images=("https://images.example/small.png",),
+            api_key="test",
+        )
+    else:
+        await litellm.asystemone(
+            model="gemini/gemini-decision-1",
+            state="Inspect",
+            questions={"ok": {"type": "noul", "instructions": "Is it damaged?"}},
+            images=("https://images.example/small.png",),
+            api_key="test",
+        )
+    sent: Final = TypeAdapter(dict[str, object]).validate_json(provider.calls.last.request.content)
+    assert sent["input"] == [
+        {"type": "text", "text": "Inspect"},
+        {"type": "image", "data": base64.b64encode(image).decode(), "mime_type": "image/png"},
+    ]
+    assert image_route.call_count == 1
+
+
+@pytest.fixture
+def gemini_httpx_transport(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
