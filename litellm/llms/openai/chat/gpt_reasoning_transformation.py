@@ -38,12 +38,20 @@ def refused_reasoning_effort_warning(*, suggest_declared_levels: bool, suggest_b
     )
 
 
+def _effort_level(sent_effort: object) -> str | None:
+    match sent_effort:
+        case str(level) | {"effort": str(level)}:
+            return level
+        case _:
+            return None
+
+
 def _sent_effort_level(sent_params: Mapping[str, object]) -> str | None:
     match sent_params:
-        case {"extra_body": {"reasoning_effort": str(level) | {"effort": str(level)}}}:
-            return level
-        case {"reasoning_effort": str(level) | {"effort": str(level)}}:
-            return level
+        case {"extra_body": {"reasoning_effort": sent_effort}}:
+            return _effort_level(sent_effort)
+        case {"reasoning_effort": sent_effort}:
+            return _effort_level(sent_effort)
         case _:
             return None
 

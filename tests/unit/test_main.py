@@ -2397,6 +2397,15 @@ def azure_upstream_routes(
             id="effort-dict-in-extra-body-bridged",
         ),
         pytest.param(
+            {
+                "reasoning_effort": "none",
+                "reasoningSummary": "auto",
+                "extra_body": {"reasoning_effort": {"summary": "detailed"}},
+            },
+            None,
+            id="summary-only-dict-in-extra-body-bridged",
+        ),
+        pytest.param(
             {"reasoning_effort": "none", "extra_body": {"reasoning_effort": "low"}},
             "low",
             id="other-effort-in-extra-body",
