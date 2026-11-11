@@ -2,6 +2,7 @@ import threading
 from collections.abc import Mapping
 from typing import Final
 
+from litellm.proxy.common_utils.fips_jwt import compute_jwt_hmac_in_fips_provider
 from litellm.secret_managers.main import str_to_bool
 
 FIPS_MODE_SETTING: Final = "fips_mode"
@@ -93,6 +94,7 @@ def enforce_fips_mode(general_settings: Mapping[str, object]) -> None:
         _FIPS_MODE_ACTIVE.set()
     else:
         _FIPS_MODE_ACTIVE.clear()
+    compute_jwt_hmac_in_fips_provider(fips_mode_active())
 
 
 def fips_mode_active() -> bool:

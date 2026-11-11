@@ -92,8 +92,6 @@ from litellm.integrations.custom_guardrail import (
 )
 from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.common_utils.fips import fips_mode_active
-from litellm.proxy.common_utils.fips_jwt import fips_jwt
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypesLiteral
 
@@ -499,8 +497,7 @@ class MCPJWTSigner(CustomGuardrail):
         if self.verify_issuer:
             decode_kwargs["issuer"] = self.verify_issuer
 
-        decode: Final = fips_jwt().decode if fips_mode_active() else jwt.decode
-        payload: Final[dict[str, object]] = decode(raw_token, signing_jwk.key, **decode_kwargs)
+        payload: Final[dict[str, object]] = jwt.decode(raw_token, signing_jwk.key, **decode_kwargs)
         return payload
 
     async def _introspect_opaque_token(self, token: str) -> Mapping[str, object]:

@@ -1,8 +1,7 @@
 import hmac
-from functools import cache
 from typing import Final
 
-from jwt import PyJWT
+import jwt
 from jwt.algorithms import HMACAlgorithm
 from jwt.exceptions import InvalidKeyError
 
@@ -29,15 +28,10 @@ class _ProviderHMAC(HMACAlgorithm):
         return hmac.digest(key, msg, self._digest_name)
 
 
-class _FipsJWT(PyJWT):
-    def __init__(self) -> None:
-        super().__init__()
-        for bits in ("256", "384", "512"):
-            self._jws.unregister_algorithm(f"HS{bits}")
-            self._jws.register_algorithm(f"HS{bits}", _ProviderHMAC(f"sha{bits}"))
-
-
-@cache
-def fips_jwt() -> PyJWT:
-    """A PyJWT whose HS256, HS384 and HS512 are computed by the FIPS provider. Every other algorithm is PyJWT's own."""
-    return _FipsJWT()
+def compute_jwt_hmac_in_fips_provider(enabled: bool) -> None:
+    """Make every jwt.encode and jwt.decode in this process compute HS256, HS384 and HS512 with the FIPS provider's
+    HMAC service, or with PyJWT's own HMAC again when `enabled` is False."""
+    for digest_name, hash_alg in _HASHES.items():
+        name = f"HS{digest_name[3:]}"
+        jwt.unregister_algorithm(name)
+        jwt.register_algorithm(name, _ProviderHMAC(digest_name) if enabled else HMACAlgorithm(hash_alg))
