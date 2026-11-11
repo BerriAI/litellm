@@ -7265,11 +7265,12 @@ def _anthropic_deployment(
     backend: str = "anthropic/claude-haiku-5-5",
     model_info_pricing: Mapping[str, float] = _HAIKU_PRICING,
     params_pricing: Mapping[str, float] = MappingProxyType({}),
+    team_id: str | None = None,
 ) -> dict[str, object]:
     return {
         "model_name": model_name,
         "litellm_params": {"model": backend, "api_key": "sk-ant-test", **params_pricing},
-        "model_info": {"id": deployment_id, **model_info_pricing},
+        "model_info": {"id": deployment_id, **model_info_pricing, **({"team_id": team_id} if team_id else {})},
     }
 
 
@@ -7277,6 +7278,7 @@ def _passthrough_pricing(
     monkeypatch: pytest.MonkeyPatch,
     *deployments: dict[str, object],
     request_body: Mapping[str, object] = MappingProxyType({"model": "claude-haiku-5-5"}),
+    team_id: str | None = None,
 ) -> Mapping[str, object] | None:
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
         anthropic_deployment_pricing_model_info,
@@ -7284,7 +7286,7 @@ def _passthrough_pricing(
 
     monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
     router: Final = litellm.Router(model_list=[*deployments])
-    return anthropic_deployment_pricing_model_info(router, request_body, None)
+    return anthropic_deployment_pricing_model_info(router, request_body, team_id)
 
 
 def test_anthropic_passthrough_prices_with_the_one_deployment_serving_the_requested_model(monkeypatch):
@@ -7339,6 +7341,22 @@ def test_anthropic_passthrough_ignores_an_outer_model_the_custom_body_does_not_f
         )
         is None
     )
+
+
+@pytest.mark.parametrize(
+    ("caller_team_id", "priced"),
+    [
+        pytest.param("team-a", True, id="owning-team"),
+        pytest.param("team-b", False, id="other-team"),
+        pytest.param(None, False, id="teamless-key"),
+    ],
+)
+def test_anthropic_passthrough_prices_a_team_deployment_only_for_its_team(monkeypatch, caller_team_id, priced):
+    model_info: Final = _passthrough_pricing(
+        monkeypatch, _anthropic_deployment("team-a-haiku-dep", team_id="team-a"), team_id=caller_team_id
+    )
+
+    assert (model_info is not None) is priced
 
 
 @pytest.mark.parametrize(

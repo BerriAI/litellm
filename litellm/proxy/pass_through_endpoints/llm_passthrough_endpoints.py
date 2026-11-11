@@ -297,7 +297,8 @@ def anthropic_deployment_pricing_model_info(
     candidates: Final = tuple(
         model_info
         for deployment in llm_router.registry().deployments(model, team_id=team_id) or ()
-        if (model_info := _anthropic_deployment_model_info(deployment, model)) is not None
+        if llm_router.registry().includes(deployment, team_id=team_id)
+        and (model_info := _anthropic_deployment_model_info(deployment, model)) is not None
     )
     if len(candidates) != 1:
         return None
