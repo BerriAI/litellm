@@ -557,7 +557,7 @@ def _get_router_zero_cost_cache(llm_router: RegistryReader) -> dict[str, bool] |
     return cache if isinstance(cache, dict) else None
 
 
-def is_model_cost_zero(model: str | list[str] | None, llm_router: RegistryReader | None) -> bool:
+def is_model_cost_zero(model: str | Sequence[str] | None, llm_router: RegistryReader | None) -> bool:
     """
     Check if a model has zero cost (no configured pricing).
 
@@ -1122,7 +1122,7 @@ def route_skips_budget_checks(route: str) -> bool:
 
 def request_skips_budget_checks(
     route: str,
-    model: str | list[str] | None,
+    model: str | Sequence[str] | None,
     llm_router: Router | None,
     *,
     request_body: Mapping[str, object] | None = None,
@@ -1146,7 +1146,7 @@ async def common_checks(
     proxy_logging_obj: ProxyLogging,
     valid_token: UserAPIKeyAuth | None,
     request: Request,
-    skip_budget_checks: bool = False,
+    skip_budget_checks: bool | None = None,
     project_object: LiteLLM_ProjectTableCachedObj | None = None,
 ) -> bool:
     """
@@ -1181,11 +1181,15 @@ async def common_checks(
         team_id=valid_token.team_id if valid_token is not None else None,
     )
 
-    skip_all_budget_checks: Final = skip_budget_checks or request_skips_budget_checks(
-        route=route,
-        model=_model,
-        llm_router=llm_router,
-        request_body=_typed_request_body(request_body),
+    skip_all_budget_checks: Final = (
+        skip_budget_checks
+        if skip_budget_checks is not None
+        else request_skips_budget_checks(
+            route=route,
+            model=_model,
+            llm_router=llm_router,
+            request_body=_typed_request_body(request_body),
+        )
     )
 
     membership_user_id: Final = (

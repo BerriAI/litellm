@@ -38,7 +38,6 @@ _V = TypeVar("_V")
 
 MID_STREAM_CONTINUATION_KWARG: Final = "_mid_stream_continuation"
 ROUTER_ONLY_CALL_KWARGS: Final = frozenset({"silent_model", "include_fallback_errors", MID_STREAM_CONTINUATION_KWARG})
-_OBJECT_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
 _DEPLOYMENT_ROWS_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(
     tuple[Mapping[str, object], ...]
 )
@@ -215,30 +214,6 @@ def resolve_model_group_alias(model_group_alias: object, model: str) -> str | No
     return target
 
 
-def resolve_served_model(
-    model: str,
-    model_alias_map: object,
-    key_aliases: object,
-    model_group_alias: object,
-) -> str:
-    """Model the request preparation serves for `model`.
-
-    Apply the global alias map, then key aliases, then `router_settings.model_group_alias`.
-    """
-    global_aliases: Final = (
-        _OBJECT_MAPPING_ADAPTER.validate_python(model_alias_map) if isinstance(model_alias_map, Mapping) else None
-    )
-    global_target: Final = global_aliases.get(model) if global_aliases is not None else None
-    after_global: Final = global_target if isinstance(global_target, str) else model
-    key_alias_mapping: Final = (
-        _OBJECT_MAPPING_ADAPTER.validate_python(key_aliases) if isinstance(key_aliases, Mapping) else None
-    )
-    key_target: Final = key_alias_mapping.get(after_global) if key_alias_mapping is not None else None
-    after_key: Final = key_target if isinstance(key_target, str) else after_global
-    router_target: Final = resolve_model_group_alias(model_group_alias, after_key)
-    return router_target if router_target is not None else after_key
-
-
 def truncate_fallback_error_detail(detail: str) -> str:
     """
     Bound a fallback failure detail before it is logged or appended to an exception message.
@@ -299,9 +274,13 @@ def format_fallback_outcome_message(
     over_budget_targets: Final = tuple(
         dict.fromkeys(target.target for target in skipped if target.reason is FallbackSkipReason.OVER_BUDGET)
     )
+    rate_limited_targets: Final = tuple(
+        dict.fromkeys(target.target for target in skipped if target.reason is FallbackSkipReason.RATE_LIMITED)
+    )
     attempted_text: Final = ", ".join(str(mask_sensitive_structure(target)) for target in attempted_targets)
     not_authorized_text: Final = ", ".join(str(mask_sensitive_structure(target)) for target in not_authorized_targets)
     over_budget_text: Final = ", ".join(str(mask_sensitive_structure(target)) for target in over_budget_targets)
+    rate_limited_text: Final = ", ".join(str(mask_sensitive_structure(target)) for target in rate_limited_targets)
     attempted_failure: Final = (
         (f"Fallback to {attempted_text} also failed: {fallback_failure_detail}",)
         if fallback_failure_detail and attempted_targets
@@ -323,7 +302,15 @@ def format_fallback_outcome_message(
         if over_budget_targets
         else ()
     )
-    sentences: Final = attempted_failure + not_authorized_sentence + over_budget_sentence
+    rate_limited_sentence: Final = (
+        (
+            f"Fallback to {rate_limited_text} was skipped because the caller is over its per-model rate limit for "
+            f"{'it' if len(rate_limited_targets) == 1 else 'them'}.",
+        )
+        if rate_limited_targets
+        else ()
+    )
+    sentences: Final = attempted_failure + not_authorized_sentence + over_budget_sentence + rate_limited_sentence
     if sentences:
         return f"{lead} {' '.join(sentences)}"
 

@@ -49,7 +49,6 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     BilledTokenRates,
     CostCalculatorUtils,
     calculate_cache_writing_cost,
-    calculate_cost_component,
     generic_cost_per_character,
     generic_cost_per_token,
     get_batch_cost_rates,
@@ -1238,6 +1237,14 @@ def _normalize_service_tier(service_tier: object) -> str | None:
 _BASE_PRICING_SERVICE_TIERS: Final[frozenset[str]] = frozenset({"default", "standard"})
 
 
+def _served_image_service_tier(completion_response: object, usage_object: Usage | None) -> str | None:
+    """Image requests never send a tier upstream, so only the tier the provider reports can price them."""
+    return _resolve_billable_service_tier(
+        requested=None,
+        served=_served_service_tier(completion_response, usage_object),
+    )
+
+
 def _resolve_billable_service_tier(requested: object, served: object) -> str | None:
     """Served tier wins when it names a priced tier or explicitly says base pricing; otherwise the request decides."""
     served_lower: Final = served.lower() if isinstance(served, str) else None
@@ -2044,6 +2051,7 @@ def completion_cost(
                         call_type=call_type,
                         model_info=_deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id),
                         vertex_location=vertex_location,
+                        service_tier=_served_image_service_tier(completion_response, cost_per_token_usage_object),
                     )
                 elif call_type in _VIDEO_CALL_TYPES:
                     ### VIDEO GENERATION COST CALCULATION ###
@@ -3177,6 +3185,21 @@ def default_video_cost_calculator(
     return 0.0
 
 
+def _optional_batch_rate(
+    model_info: ModelInfo,
+    key: Literal[
+        "input_cost_per_audio_token_batches",
+        "cache_read_input_audio_token_cost_batches",
+        "input_cost_per_image_token_batches",
+        "input_cost_per_video_token_batches",
+    ],
+    prompt_tokens: int,
+) -> float | None:
+    context_key: Final = get_modality_token_cost_key(model_info, key, prompt_tokens)
+    context_rate: Final = get_cost_per_unit(model_info, context_key, None)
+    return model_info.get(key) if context_rate is None else context_rate
+
+
 def _batch_rate(
     model_info: ModelInfo,
     key: Literal[
@@ -3189,9 +3212,7 @@ def _batch_rate(
     *,
     prompt_tokens: int = 0,
 ) -> float:
-    context_key: Final = get_modality_token_cost_key(model_info, key, prompt_tokens)
-    context_rate: Final = get_cost_per_unit(model_info, context_key, None)
-    rate: Final = model_info.get(key) if context_rate is None else context_rate
+    rate: Final = _optional_batch_rate(model_info, key, prompt_tokens)
     return fallback if rate is None else rate
 
 
@@ -3275,38 +3296,14 @@ def batch_cost_calculator(
             model_info,
             batch_rates.input,
             batch_rates.cache_read,
+            batch_rates.cache_read_image,
             batch_rates.cache_creation,
             batch_rates.cache_creation_rates_by_ttl,
         )
     elif input_cost_per_token is not None:
-        details: Final = parse_prompt_tokens_details(usage)
-        cache_read_tokens: Final = details["cache_hit_tokens"]
-        cache_creation_tokens: Final = details["cache_creation_tokens"]
-
-        # Subtract cached tokens from prompt_tokens before calculating cost
-        # Fixes issue where cached tokens are being charged again
-        base_input_tokens: Final = get_billable_input_tokens(usage) - cache_creation_tokens
-        total_prompt_cost = (
-            base_input_tokens * (input_cost_per_token) / 2
-        )  # batch cost is usually half of the regular token cost
-
-        # Add cache read cost if applicable
-        cache_read_cost_key: Final = get_service_tier_cost_key(
-            "cache_read_input_token_cost", None
+        total_prompt_cost = _half_price_prompt_cost(
+            usage, model_info, input_cost_per_token, batch_rates.cache_read_image
         )
-        configured_cache_read_cost: Final = model_info.get(cache_read_cost_key)
-        cache_read_cost: Final = (
-            input_cost_per_token
-            if configured_cache_read_cost is None
-            else configured_cache_read_cost
-        )
-        total_prompt_cost += cache_read_tokens * cache_read_cost / 2
-
-        configured_cache_creation_cost: Final = model_info.get("cache_creation_input_token_cost")
-        cache_creation_cost: Final = (
-            input_cost_per_token if configured_cache_creation_cost is None else configured_cache_creation_cost
-        )
-        total_prompt_cost += cache_creation_tokens * cache_creation_cost / 2
     text_rate: Final = _batch_or_half(batch_rates.output, output_cost_per_token)
     image_rate: Final = _batch_or_half(
         model_info.get("output_cost_per_image_token_batches"),
@@ -3332,15 +3329,60 @@ def _standard_rate(model_info: ModelInfo, key: str, prompt_tokens: int) -> float
     return get_cost_per_unit(model_info, get_modality_token_cost_key(model_info, key, prompt_tokens), None)
 
 
-def _cached_audio_batch_fallback(
-    model_info: ModelInfo, batch_cache_read_rate: float | None, cache_read_rate: float | None, prompt_tokens: int
-) -> float:
+def _cached_modality_rate(
+    model_info: ModelInfo,
+    standard_key: Literal["cache_read_input_audio_token_cost", "cache_read_input_image_token_cost"],
+    batch_modality_rate: float | None,
+    batch_cache_read_rate: float | None,
+    cache_read_rate: float | None,
+    prompt_tokens: int,
+) -> float | None:
+    if batch_modality_rate is not None:
+        return batch_modality_rate
     if batch_cache_read_rate is not None:
         return batch_cache_read_rate
-    standard_audio_rate: Final = _standard_rate(model_info, "cache_read_input_audio_token_cost", prompt_tokens)
-    if standard_audio_rate is not None:
-        return standard_audio_rate
-    return 0.0 if cache_read_rate is None else cache_read_rate
+    standard_modality_rate: Final = _standard_rate(model_info, standard_key, prompt_tokens)
+    return cache_read_rate if standard_modality_rate is None else standard_modality_rate
+
+
+def _half_price_prompt_cost(
+    usage: Usage, model_info: ModelInfo, input_cost_per_token: float, batch_cache_read_image_rate: float | None
+) -> float:
+    details: Final = parse_prompt_tokens_details(usage)
+    cache_creation_tokens: Final = details["cache_creation_tokens"]
+    base_input_tokens: Final = get_billable_input_tokens(usage) - cache_creation_tokens
+    cache_read_cost_key: Final = get_service_tier_cost_key("cache_read_input_token_cost", None)
+    configured_cache_read_cost: Final = model_info.get(cache_read_cost_key)
+    cache_read_cost: Final = (
+        input_cost_per_token
+        if configured_cache_read_cost is None
+        else (get_cost_per_unit(model_info, cache_read_cost_key, 0.0) or 0.0)
+    )
+    half_cache_read_rate: Final = cache_read_cost / 2
+    cached_audio_rate: Final = _batch_or_half(
+        _optional_batch_rate(model_info, "cache_read_input_audio_token_cost_batches", usage.prompt_tokens),
+        _standard_rate(model_info, "cache_read_input_audio_token_cost", usage.prompt_tokens),
+        default=half_cache_read_rate,
+    )
+    cached_image_rate: Final = _batch_or_half(
+        batch_cache_read_image_rate,
+        _standard_rate(model_info, "cache_read_input_image_token_cost", usage.prompt_tokens),
+        default=half_cache_read_rate,
+    )
+    cached_audio_tokens: Final = details["cache_hit_audio_tokens"]
+    cached_image_tokens: Final = details["cached_image_tokens"]
+    cached_text_tokens: Final = max(details["cache_hit_tokens"] - cached_audio_tokens - cached_image_tokens, 0)
+    configured_cache_creation_cost: Final = model_info.get("cache_creation_input_token_cost")
+    cache_creation_cost: Final = (
+        input_cost_per_token if configured_cache_creation_cost is None else configured_cache_creation_cost
+    )
+    return (
+        base_input_tokens * input_cost_per_token / 2
+        + cached_text_tokens * half_cache_read_rate
+        + cached_audio_tokens * cached_audio_rate
+        + cached_image_tokens * cached_image_rate
+        + cache_creation_tokens * cache_creation_cost / 2
+    )
 
 
 def _batch_prompt_cost(
@@ -3348,6 +3390,7 @@ def _batch_prompt_cost(
     model_info: ModelInfo,
     input_rate: float,
     batch_cache_read_rate: float | None,
+    batch_cache_read_image_rate: float | None,
     cache_creation_rate: float | None,
     cache_creation_rates_by_ttl: Mapping[str, float],
 ) -> float:
@@ -3357,8 +3400,30 @@ def _batch_prompt_cost(
         if batch_cache_read_rate is None
         else batch_cache_read_rate
     )
-    cached_tokens: Final = details["cache_hit_tokens"] if cache_read_rate is not None else 0
-    cached_audio_tokens: Final = details["cache_hit_audio_tokens"] if cache_read_rate is not None else 0
+    cached_audio_rate: Final = _cached_modality_rate(
+        model_info,
+        "cache_read_input_audio_token_cost",
+        _optional_batch_rate(model_info, "cache_read_input_audio_token_cost_batches", usage.prompt_tokens),
+        batch_cache_read_rate,
+        cache_read_rate,
+        usage.prompt_tokens,
+    )
+    cached_image_rate: Final = _cached_modality_rate(
+        model_info,
+        "cache_read_input_image_token_cost",
+        batch_cache_read_image_rate,
+        batch_cache_read_rate,
+        cache_read_rate,
+        usage.prompt_tokens,
+    )
+    cached_audio_tokens: Final = details["cache_hit_audio_tokens"] if cached_audio_rate is not None else 0
+    cached_image_tokens: Final = details["cached_image_tokens"] if cached_image_rate is not None else 0
+    cached_text_tokens: Final = (
+        max(details["cache_hit_tokens"] - details["cache_hit_audio_tokens"] - details["cached_image_tokens"], 0)
+        if cache_read_rate is not None
+        else 0
+    )
+    cached_tokens: Final = cached_text_tokens + cached_audio_tokens + cached_image_tokens
     bills_cache_writes: Final = cache_creation_rate is not None or bool(cache_creation_rates_by_ttl)
     written_tokens: Final = details["cache_creation_tokens"] if bills_cache_writes else 0
     audio_tokens, image_tokens, video_tokens = (
@@ -3375,13 +3440,9 @@ def _batch_prompt_cost(
         * _batch_rate(model_info, "input_cost_per_audio_token_batches", input_rate, prompt_tokens=usage.prompt_tokens)
         + image_tokens * _batch_rate(model_info, "input_cost_per_image_token_batches", input_rate)
         + video_tokens * _batch_rate(model_info, "input_cost_per_video_token_batches", input_rate)
-        + (cached_tokens - cached_audio_tokens) * (cache_read_rate or 0.0)
-        + cached_audio_tokens
-        * _batch_rate(
-            model_info,
-            "cache_read_input_audio_token_cost_batches",
-            _cached_audio_batch_fallback(model_info, batch_cache_read_rate, cache_read_rate, usage.prompt_tokens),
-        )
+        + cached_text_tokens * (cache_read_rate or 0.0)
+        + cached_audio_tokens * (cached_audio_rate or 0.0)
+        + cached_image_tokens * (cached_image_rate or 0.0)
         + (
             calculate_cache_writing_cost(
                 written_tokens,

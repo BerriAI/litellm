@@ -515,10 +515,15 @@ async def test_cache_plan_count_conserves_total_and_rejects_unknown(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("section", ["system", "tools"])
-@pytest.mark.parametrize("rejects_prefix", (False, True))
+@pytest.mark.parametrize(
+    ("rejected", "reason"),
+    [(None, None), (1, "uncountable_system_or_tools_prefix"), (2, "token_count_unavailable")],
+    ids=["counted", "system-or-tools-prefix-rejected", "message-prefix-rejected"],
+)
 async def test_native_count_preserves_settings_and_requires_every_prefix(
     section: str,
-    rejects_prefix: bool,
+    rejected: int | None,
+    reason: str | None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -572,9 +577,9 @@ async def test_native_count_preserves_settings_and_requires_every_prefix(
         endpoint: Final = "https://gateway.example/v1/messages/count_tokens"
         routes: Final = tuple(
             upstream.post(endpoint, json={**body, "model": _MODEL}).respond(
-                400 if rejects_prefix and index == 1 else 200,
+                400 if index == rejected else 200,
                 json={"detail": {"error": "messages parameter is required"}}
-                if rejects_prefix and index == 1
+                if index == rejected
                 else {"input_tokens": tokens},
             )
             for index, (body, tokens) in enumerate(
@@ -588,8 +593,9 @@ async def test_native_count_preserves_settings_and_requires_every_prefix(
         unexpected: Final = upstream.post(endpoint).respond(200, json={"input_tokens": 1})
         result: Final = await count_cache_plan(target.model, target.api_key, plan, count)
 
-    if rejects_prefix:
-        assert result == UnsupportedCachePlan("token_count_unavailable")
+    if reason is not None:
+        assert isinstance(result, UnsupportedCachePlan)
+        assert result.reason == reason
     else:
         assert isinstance(result, CountedPromptCachePlan)
         assert result.total_tokens == 6000
