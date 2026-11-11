@@ -1,11 +1,35 @@
+import type { ColumnDef, ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
+import type { TFunction } from "i18next";
+import { Crown, Info, User, UserPlus } from "lucide-react";
+import React, { useState } from "react";
+import { useTranslation } from "react-i18next";
+
 import { Member } from "@/components/networking";
-import { CrownOutlined, InfoCircleOutlined, UserAddOutlined, UserOutlined } from "@ant-design/icons";
-import { Button, Space, Table, Tag, Tooltip, Typography } from "antd";
-import type { ColumnsType } from "antd/es/table";
-import React from "react";
+import {
+  DataTable,
+  DataTableFilterDrawer,
+  DataTableFilterField,
+  type FilterDraft,
+  DataTableSortHeader,
+  DataTableToolbar,
+  DEFAULT_PAGE_SIZE_OPTIONS,
+} from "@/components/shared/DataTable";
+import { StatusBadge } from "@/components/shared/table_cells";
+import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SimpleTooltip } from "@/components/ui/tooltip";
+
 import TableIconActionButton from "./IconActionButton/TableIconActionButtons/TableIconActionButton";
 
-const { Text } = Typography;
+export type MemberTableSortValue = string | number | null | undefined;
+
+export interface MemberTableColumn {
+  title: React.ReactNode;
+  key: string;
+  render: (member: Member) => React.ReactNode;
+  sortValue?: (member: Member) => MemberTableSortValue;
+  numeric?: boolean;
+}
 
 export interface MemberTableProps {
   members: Member[];
@@ -15,10 +39,189 @@ export interface MemberTableProps {
   onAddMember?: () => void;
   roleColumnTitle?: string;
   roleTooltip?: string;
-  extraColumns?: ColumnsType<Member>;
+  extraColumns?: MemberTableColumn[];
   showDeleteForMember?: (member: Member) => boolean;
+  onResetSpend?: (member: Member) => void;
+  resetSpendDisabledReason?: (member: Member) => string | null;
   emptyText?: string;
 }
+
+const ALL_ROLES = "all";
+
+const DEFAULT_SORTING: SortingState = [{ id: "user_alias", desc: false }];
+
+export const memberRowId = (member: Member): string => member.user_id ?? member.user_email ?? JSON.stringify(member);
+
+export const memberRoleOptions = (members: readonly Member[]): string[] =>
+  Array.from(new Set(members.map((member) => member.role).filter((role) => role !== ""))).sort();
+
+const isAdminRole = (role: string): boolean => {
+  const normalized = role.toLowerCase();
+  return normalized === "admin" || normalized === "org_admin";
+};
+
+function RoleHeaderTitle({ title, tooltip }: { title: string; tooltip?: string }) {
+  if (tooltip === undefined) return <>{title}</>;
+  return (
+    <span className="inline-flex items-center gap-2">
+      {title}
+      <SimpleTooltip content={tooltip}>
+        <Info className="size-3.5" />
+      </SimpleTooltip>
+    </span>
+  );
+}
+
+function ResetSpendAction({ disabledReason, onClick }: { disabledReason: string | null; onClick: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <TableIconActionButton
+      variant="Reset"
+      tooltipText={t("memberTable.actions.resetSpend")}
+      disabled={disabledReason !== null}
+      disabledTooltipText={disabledReason ?? undefined}
+      dataTestId="reset-member-spend"
+      onClick={onClick}
+    />
+  );
+}
+
+const ACTIONS_COLUMN_WIDTH = 120;
+
+interface MemberColumnDeps {
+  t: TFunction;
+  canEdit: boolean;
+  onEdit: (member: Member) => void;
+  onDelete: (member: Member) => void;
+  roleColumnTitle: string;
+  roleTooltip?: string;
+  extraColumns: MemberTableColumn[];
+  showDeleteForMember?: (member: Member) => boolean;
+  onResetSpend?: (member: Member) => void;
+  resetSpendDisabledReason?: (member: Member) => string | null;
+}
+
+const extraColumnDef = (column: MemberTableColumn): ColumnDef<Member> => {
+  const { sortValue } = column;
+  if (sortValue === undefined) {
+    return {
+      id: column.key,
+      header: () => <span className="font-medium">{column.title}</span>,
+      enableSorting: false,
+      enableGlobalFilter: false,
+      meta: { numeric: column.numeric },
+      cell: ({ row }) => column.render(row.original),
+    };
+  }
+  return {
+    id: column.key,
+    accessorFn: (member) => sortValue(member) ?? undefined,
+    header: ({ column: tableColumn }) => <DataTableSortHeader column={tableColumn} title={column.title} />,
+    sortDescFirst: false,
+    sortUndefined: "last",
+    enableGlobalFilter: false,
+    meta: { numeric: column.numeric },
+    cell: ({ row }) => column.render(row.original),
+  };
+};
+
+const buildColumns = ({
+  t,
+  canEdit,
+  onEdit,
+  onDelete,
+  roleColumnTitle,
+  roleTooltip,
+  extraColumns,
+  showDeleteForMember,
+  onResetSpend,
+  resetSpendDisabledReason,
+}: MemberColumnDeps): ColumnDef<Member>[] => [
+  {
+    id: "user_alias",
+    accessorFn: (member) => member.user_alias || undefined,
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("memberTable.columns.name")} />,
+    sortingFn: "text",
+    sortUndefined: "last",
+    enableGlobalFilter: true,
+    meta: { title: t("memberTable.columns.name") },
+    cell: ({ row }) => row.original.user_alias || <span className="text-muted-foreground">-</span>,
+  },
+  {
+    id: "user_email",
+    accessorFn: (member) => member.user_email || undefined,
+    header: ({ column }) => <DataTableSortHeader column={column} title={t("memberTable.columns.userEmail")} />,
+    sortingFn: "text",
+    sortUndefined: "last",
+    enableGlobalFilter: true,
+    meta: { title: t("memberTable.columns.userEmail") },
+    cell: ({ row }) => row.original.user_email || "-",
+  },
+  {
+    id: "user_id",
+    accessorFn: (member) => member.user_id ?? undefined,
+    header: t("memberTable.columns.userId"),
+    enableSorting: false,
+    enableGlobalFilter: true,
+    cell: ({ row }) =>
+      row.original.user_id === "default_user_id" ? (
+        <StatusBadge tone="info" label={t("memberTable.defaultProxyAdmin")} />
+      ) : (
+        row.original.user_id || "-"
+      ),
+  },
+  {
+    id: "role",
+    accessorFn: (member) => member.role,
+    header: ({ column }) => (
+      <DataTableSortHeader column={column} title={<RoleHeaderTitle title={roleColumnTitle} tooltip={roleTooltip} />} />
+    ),
+    sortingFn: "text",
+    filterFn: "equalsString",
+    enableGlobalFilter: false,
+    meta: { title: roleColumnTitle },
+    cell: ({ row }) => (
+      <span className="inline-flex items-center gap-2">
+        {isAdminRole(row.original.role) ? <Crown className="size-3.5" /> : <User className="size-3.5" />}
+        <span className="capitalize">{row.original.role || "-"}</span>
+      </span>
+    ),
+  },
+  ...extraColumns.map(extraColumnDef),
+  {
+    id: "actions",
+    header: t("memberTable.columns.actions"),
+    size: ACTIONS_COLUMN_WIDTH,
+    enableSorting: false,
+    enableGlobalFilter: false,
+    meta: { pinned: "right" },
+    cell: ({ row }) =>
+      canEdit ? (
+        <span className="inline-flex items-center gap-2">
+          <TableIconActionButton
+            variant="Edit"
+            tooltipText={t("memberTable.actions.edit")}
+            dataTestId="edit-member"
+            onClick={() => onEdit(row.original)}
+          />
+          {onResetSpend && (
+            <ResetSpendAction
+              disabledReason={resetSpendDisabledReason?.(row.original) ?? null}
+              onClick={() => onResetSpend(row.original)}
+            />
+          )}
+          {(!showDeleteForMember || showDeleteForMember(row.original)) && (
+            <TableIconActionButton
+              variant="Delete"
+              tooltipText={t("memberTable.actions.delete")}
+              dataTestId="delete-member"
+              onClick={() => onDelete(row.original)}
+            />
+          )}
+        </span>
+      ) : null,
+  },
+];
 
 export default function MemberTable({
   members,
@@ -26,97 +229,125 @@ export default function MemberTable({
   onEdit,
   onDelete,
   onAddMember,
-  roleColumnTitle = "Role",
+  roleColumnTitle,
   roleTooltip,
   extraColumns = [],
   showDeleteForMember,
+  onResetSpend,
+  resetSpendDisabledReason,
   emptyText,
 }: MemberTableProps) {
-  const baseColumns: ColumnsType<Member> = [
-    {
-      title: "User Email",
-      dataIndex: "user_email",
-      key: "user_email",
-      render: (email: string | null) => <Text>{email || "-"}</Text>,
-    },
-    {
-      title: "User ID",
-      dataIndex: "user_id",
-      key: "user_id",
-      render: (userId: string | null) =>
-        userId === "default_user_id" ? <Tag color="blue">Default Proxy Admin</Tag> : <Text>{userId || "-"}</Text>,
-    },
-    {
-      title: roleTooltip ? (
-        <Space direction="horizontal">
-          {roleColumnTitle}
-          <Tooltip title={roleTooltip}>
-            <InfoCircleOutlined />
-          </Tooltip>
-        </Space>
-      ) : (
-        roleColumnTitle
-      ),
-      dataIndex: "role",
-      key: "role",
-      render: (role: string) => (
-        <Space>
-          {role?.toLowerCase() === "admin" || role?.toLowerCase() === "org_admin" ? (
-            <CrownOutlined />
-          ) : (
-            <UserOutlined />
-          )}
-          <Text style={{ textTransform: "capitalize" }}>{role || "-"}</Text>
-        </Space>
-      ),
-    },
-    ...extraColumns,
-    {
-      title: "Actions",
-      key: "actions",
-      fixed: "right" as const,
-      width: 120,
-      render: (_: unknown, record: Member) =>
-        canEdit ? (
-          <Space>
-            <TableIconActionButton
-              variant="Edit"
-              tooltipText="Edit member"
-              dataTestId="edit-member"
-              onClick={() => onEdit(record)}
-            />
-            {(!showDeleteForMember || showDeleteForMember(record)) && (
-              <TableIconActionButton
-                variant="Delete"
-                tooltipText="Delete member"
-                dataTestId="delete-member"
-                onClick={() => onDelete(record)}
-              />
-            )}
-          </Space>
-        ) : null,
-    },
+  const { t } = useTranslation();
+  const roleTitle = roleColumnTitle ?? t("memberTable.columns.role");
+  const [globalFilter, setGlobalFilter] = useState("");
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+  const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
+  const [pagination, setPagination] = useState<PaginationState>({
+    pageIndex: 0,
+    pageSize: DEFAULT_PAGE_SIZE_OPTIONS[0],
+  });
+  const [filtersOpen, setFiltersOpen] = useState(false);
+
+  const backToFirstPage =
+    <T,>(onChange: OnChangeFn<T>): OnChangeFn<T> =>
+    (updaterOrValue) => {
+      onChange(updaterOrValue);
+      setPagination((current) => ({ ...current, pageIndex: 0 }));
+    };
+  const changeSearch = backToFirstPage(setGlobalFilter);
+
+  const columnDeps: MemberColumnDeps = {
+    t,
+    canEdit,
+    onEdit,
+    onDelete,
+    roleColumnTitle: roleTitle,
+    roleTooltip,
+    extraColumns,
+    showDeleteForMember,
+    onResetSpend,
+    resetSpendDisabledReason,
+  };
+  const columns = buildColumns(columnDeps);
+  const roleFilterItems = [
+    { value: ALL_ROLES, label: t("memberTable.filters.allRoles") },
+    ...memberRoleOptions(members).map((role) => ({ value: role, label: role })),
   ];
 
+  const isNarrowed = globalFilter !== "" || columnFilters.length > 0;
+
   return (
-    <Space direction="vertical" style={{ width: "100%" }}>
-      <span className="inline-flex text-sm text-gray-700">
-        {members.length} Member{members.length !== 1 ? "s" : ""}
+    <div className="flex w-full flex-col gap-2">
+      <span className="inline-flex text-sm text-foreground">
+        {t("memberTable.memberCount", { count: members.length })}
       </span>
-      <Table
-        columns={baseColumns}
-        dataSource={members}
-        rowKey={(record) => record.user_id ?? record.user_email ?? JSON.stringify(record)}
-        pagination={false}
-        size="small"
-        scroll={{ x: "max-content" }}
-        locale={emptyText ? { emptyText } : undefined}
+      <DataTable
+        data={members}
+        columns={columns}
+        getRowId={memberRowId}
+        paginationMode="client"
+        pagination={pagination}
+        onPaginationChange={setPagination}
+        sortingMode="client"
+        sorting={sorting}
+        onSortingChange={backToFirstPage(setSorting)}
+        filterMode="client"
+        columnFilters={columnFilters}
+        onColumnFiltersChange={backToFirstPage(setColumnFilters)}
+        globalFilter={globalFilter}
+        onGlobalFilterChange={changeSearch}
+        noDataMessage={
+          <span className="text-muted-foreground">
+            {isNarrowed ? t("memberTable.noMatches") : emptyText ?? t("memberTable.noData")}
+          </span>
+        }
+        toolbar={(table) => (
+          <>
+            <DataTableToolbar
+              table={table}
+              searchValue={globalFilter}
+              onSearchChange={changeSearch}
+              searchPlaceholder={t("memberTable.searchPlaceholder")}
+              onOpenFilters={() => setFiltersOpen(true)}
+              showViewOptions={false}
+            />
+            <DataTableFilterDrawer
+              table={table}
+              open={filtersOpen}
+              onOpenChange={setFiltersOpen}
+              title={t("memberTable.filters.title")}
+              description={t("memberTable.filters.description")}
+            >
+              {({ get, set }: FilterDraft<"role">) => (
+                <DataTableFilterField label={roleTitle}>
+                  <Select
+                    items={roleFilterItems}
+                    value={(get("role") as string | undefined) ?? ALL_ROLES}
+                    onValueChange={(value) => set("role", value === ALL_ROLES ? undefined : value)}
+                  >
+                    <SelectTrigger className="w-full" data-testid="filter-role">
+                      <SelectValue placeholder={t("memberTable.filters.allRoles")} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {roleFilterItems.map((item) => (
+                        <SelectItem key={item.value} value={item.value}>
+                          {item.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </DataTableFilterField>
+              )}
+            </DataTableFilterDrawer>
+          </>
+        )}
       />
       {onAddMember && canEdit && (
-        <Button icon={<UserAddOutlined />} type="primary" onClick={onAddMember}>
-          Add Member
+        <Button onClick={onAddMember} className="self-start">
+          <UserPlus className="size-4" />
+          {t("memberTable.addMember")}
         </Button>
       )}
-    </Space>
+    </div>
   );
 }

@@ -1,12 +1,14 @@
 "use client";
 
-import { AudioMutedOutlined, AudioOutlined, CloseCircleOutlined, SendOutlined, SoundOutlined } from "@ant-design/icons";
-import { Button, Input, Select, Typography } from "antd";
+import { useTerminology } from "@/contexts/TerminologyContext";
+import { CircleX, Mic, MicOff, Send, Volume2 } from "lucide-react";
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { getProxyBaseUrl } from "@/components/networking";
+import { Trans, useTranslation } from "react-i18next";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { getGatewayBaseUrl } from "@/components/networking";
 import { OPEN_AI_VOICE_SELECT_OPTIONS } from "./chatConstants";
-
-const { Text } = Typography;
 
 interface RealtimeMessage {
   role: "user" | "assistant" | "system" | "status";
@@ -21,12 +23,28 @@ interface RealtimePlaygroundProps {
   selectedGuardrails?: string[];
 }
 
+const sessionUpdate = (voice: string) =>
+  JSON.stringify({
+    type: "session.update",
+    session: {
+      type: "realtime",
+      modalities: ["text", "audio"],
+      voice,
+      input_audio_format: "pcm16",
+      output_audio_format: "pcm16",
+      input_audio_transcription: { model: "gpt-4o-mini-transcribe" },
+      turn_detection: { type: "server_vad" },
+    },
+  });
+
 const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
   accessToken,
   selectedModel,
   customProxyBaseUrl,
   selectedGuardrails,
 }) => {
+  const term = useTerminology();
+  const { t } = useTranslation();
   const [messages, setMessages] = useState<RealtimeMessage[]>([]);
   const [inputText, setInputText] = useState("");
   const [isConnected, setIsConnected] = useState(false);
@@ -88,7 +106,7 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
   const connect = useCallback(async () => {
     if (wsRef.current) return;
     if (!selectedModel) {
-      addMessage("status", "Please select a model first");
+      addMessage("status", t("playground.chatUi.realtimePlayground.selectModelFirst"));
       return;
     }
     setIsConnecting(true);
@@ -96,7 +114,7 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
     try {
       audioContextRef.current = new AudioContext({ sampleRate: 24000 });
 
-      const baseUrl = customProxyBaseUrl || getProxyBaseUrl();
+      const baseUrl = customProxyBaseUrl || getGatewayBaseUrl();
       const wsBase = baseUrl.replace(/^http/, "ws");
       let url = `${wsBase}/v1/realtime?model=${encodeURIComponent(selectedModel)}`;
       if (selectedGuardrails && selectedGuardrails.length > 0) {
@@ -108,7 +126,7 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
       ws.onopen = () => {
         setIsConnected(true);
         setIsConnecting(false);
-        addMessage("status", "Connected to realtime API");
+        addMessage("status", t("playground.chatUi.realtimePlayground.connectedStatus"));
       };
 
       ws.onmessage = async (event) => {
@@ -123,21 +141,7 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
           const type = data.type;
 
           if (type === "session.created") {
-            // GA: session.type is required ("realtime" | "transcription")
-            ws.send(
-              JSON.stringify({
-                type: "session.update",
-                session: {
-                  type: "realtime",
-                  modalities: ["text", "audio"],
-                  voice: selectedVoice,
-                  input_audio_format: "pcm16",
-                  output_audio_format: "pcm16",
-                  input_audio_transcription: { model: "gpt-4o-mini-transcribe" },
-                  turn_detection: null,
-                },
-              }),
-            );
+            ws.send(sessionUpdate(selectedVoice));
           } else if (type === "session.updated") {
             // session configured
           } else if (
@@ -179,7 +183,12 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
               return prev;
             });
           } else if (type === "error") {
-            addMessage("status", `Error: ${data.error?.message || JSON.stringify(data.error)}`);
+            addMessage(
+              "status",
+              t("playground.chatUi.realtimePlayground.errorStatus", {
+                message: String(data.error?.message || JSON.stringify(data.error)),
+              }),
+            );
           }
         } catch {
           // ignore parse errors
@@ -187,13 +196,13 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
       };
 
       ws.onerror = () => {
-        addMessage("status", "WebSocket error");
+        addMessage("status", t("playground.chatUi.realtimePlayground.websocketError"));
         setIsConnected(false);
         setIsConnecting(false);
       };
 
       ws.onclose = () => {
-        addMessage("status", "Disconnected");
+        addMessage("status", t("playground.chatUi.realtimePlayground.disconnectedStatus"));
         setIsConnected(false);
         setIsConnecting(false);
         wsRef.current = null;
@@ -201,7 +210,10 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
 
       wsRef.current = ws;
     } catch (err: any) {
-      addMessage("status", `Connection failed: ${err.message}`);
+      addMessage(
+        "status",
+        t("playground.chatUi.realtimePlayground.connectionFailed", { message: String(err.message) }),
+      );
       setIsConnecting(false);
     }
   }, [
@@ -213,6 +225,7 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
     addMessage,
     appendAssistantText,
     playAudioChunk,
+    t,
   ]);
 
   const disconnect = useCallback(() => {
@@ -229,22 +242,7 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
   const startRecording = useCallback(async () => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
 
-    // Switch to server VAD mode for voice input
-    // GA: session.type is required
-    wsRef.current.send(
-      JSON.stringify({
-        type: "session.update",
-        session: {
-          type: "realtime",
-          modalities: ["text", "audio"],
-          voice: selectedVoice,
-          input_audio_format: "pcm16",
-          output_audio_format: "pcm16",
-          input_audio_transcription: { model: "gpt-4o-mini-transcribe" },
-          turn_detection: { type: "server_vad" },
-        },
-      }),
-    );
+    wsRef.current.send(sessionUpdate(selectedVoice));
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -295,11 +293,11 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
       source.connect(processor);
       processor.connect(ctx.destination);
       setIsRecording(true);
-      addMessage("status", "🎙️ Listening...");
+      addMessage("status", t("playground.chatUi.realtimePlayground.listeningStatus"));
     } catch (err: any) {
-      addMessage("status", `Microphone error: ${err.message}`);
+      addMessage("status", t("playground.chatUi.realtimePlayground.microphoneError", { message: String(err.message) }));
     }
-  }, [addMessage]);
+  }, [addMessage, selectedVoice, t]);
 
   const stopRecording = useCallback(() => {
     processorRef.current?.disconnect();
@@ -315,21 +313,7 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     if (configureSessionRef.current) return;
     configureSessionRef.current = true;
-    // GA: session.type is required
-    wsRef.current.send(
-      JSON.stringify({
-        type: "session.update",
-        session: {
-          type: "realtime",
-          modalities: ["text", "audio"],
-          voice: selectedVoice,
-          input_audio_format: "pcm16",
-          output_audio_format: "pcm16",
-          input_audio_transcription: { model: "gpt-4o-mini-transcribe" },
-          turn_detection: null,
-        },
-      }),
-    );
+    wsRef.current.send(sessionUpdate(selectedVoice));
   }, [selectedVoice]);
 
   const sendTextMessage = useCallback(() => {
@@ -362,31 +346,46 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-gray-50">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-muted">
         <div className="flex items-center gap-3">
-          <SoundOutlined className="text-lg text-blue-500" />
-          <Text className="font-semibold text-gray-800">Realtime Voice Chat</Text>
-          <span className={`inline-block w-2 h-2 rounded-full ${isConnected ? "bg-green-500" : "bg-gray-300"}`} />
-          <Text className="text-xs text-gray-500">
-            {isConnected ? "Connected" : isConnecting ? "Connecting..." : "Disconnected"}
-          </Text>
+          <Volume2 className="size-5 text-info" />
+          <span className="font-semibold text-foreground">{t("playground.chatUi.realtimePlayground.title")}</span>
+          <span className={`inline-block w-2 h-2 rounded-full ${isConnected ? "bg-success" : "bg-border"}`} />
+          <span className="text-xs text-muted-foreground">
+            {isConnected
+              ? t("playground.chatUi.realtimePlayground.connected")
+              : isConnecting
+                ? t("playground.chatUi.realtimePlayground.connecting")
+                : t("playground.chatUi.realtimePlayground.disconnected")}
+          </span>
         </div>
         <div className="flex items-center gap-2">
           <Select
-            size="small"
             value={selectedVoice}
-            onChange={setSelectedVoice}
-            options={OPEN_AI_VOICE_SELECT_OPTIONS}
-            style={{ width: 220 }}
+            onValueChange={(voice) => setSelectedVoice(voice ?? selectedVoice)}
             disabled={isConnected}
-          />
+          >
+            <SelectTrigger size="sm" className="w-[220px]" aria-label={t("playground.chatUi.realtimePlayground.voice")}>
+              <SelectValue>
+                {OPEN_AI_VOICE_SELECT_OPTIONS.filter((v) => v.value === selectedVoice).map((v) => t(v.label))}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {OPEN_AI_VOICE_SELECT_OPTIONS.map((voice) => (
+                <SelectItem key={voice.value} value={voice.value}>
+                  {t(voice.label)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           {!isConnected ? (
-            <Button type="primary" onClick={connect} loading={isConnecting} size="small">
-              Connect
+            <Button onClick={connect} disabled={isConnecting} size="sm">
+              {t("playground.chatUi.realtimePlayground.connect")}
             </Button>
           ) : (
-            <Button danger onClick={disconnect} size="small" icon={<CloseCircleOutlined />}>
-              Disconnect
+            <Button variant="destructive" onClick={disconnect} size="sm">
+              <CircleX />
+              {t("playground.chatUi.realtimePlayground.disconnect")}
             </Button>
           )}
         </div>
@@ -395,13 +394,15 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {messages.length === 0 && !isConnected && (
-          <div className="flex flex-col items-center justify-center h-full text-gray-400 gap-3">
-            <SoundOutlined style={{ fontSize: 48 }} />
-            <Text className="text-lg text-gray-500">Realtime Voice Playground</Text>
-            <Text className="text-sm text-gray-400 text-center max-w-md">
-              Click <b>Connect</b> to start a realtime session. You can speak using your microphone or type messages.
-              The AI will respond with voice and text.
-            </Text>
+          <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-3">
+            <Volume2 className="size-12" />
+            <span className="text-lg text-muted-foreground">
+              {t("playground.chatUi.realtimePlayground.emptyTitle")}
+            </span>
+            <p className="text-sm text-muted-foreground text-center max-w-md">
+              <Trans i18nKey="playground.chatUi.realtimePlayground.emptyIntro" components={{ action: <b /> }} />{" "}
+              {term(t("playground.chatUi.realtimePlayground.emptyResponds"))}
+            </p>
           </div>
         )}
         {messages.map((msg, i) => (
@@ -410,16 +411,20 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
             className={`flex ${msg.role === "user" ? "justify-end" : msg.role === "status" ? "justify-center" : "justify-start"}`}
           >
             {msg.role === "status" ? (
-              <div className="text-xs text-gray-400 italic px-3 py-1">{msg.content}</div>
+              <div className="text-xs text-muted-foreground italic px-3 py-1">{msg.content}</div>
             ) : (
               <div
                 className={`max-w-[75%] rounded-2xl px-4 py-2.5 ${
                   msg.role === "user"
-                    ? "bg-blue-500 text-white rounded-br-md"
-                    : "bg-gray-100 text-gray-800 rounded-bl-md"
+                    ? "bg-info text-info-foreground rounded-br-md"
+                    : "bg-muted text-foreground rounded-bl-md"
                 }`}
               >
-                <div className="text-xs font-medium mb-0.5 opacity-70">{msg.role === "user" ? "You" : "AI"}</div>
+                <div className="text-xs font-medium mb-0.5 opacity-70">
+                  {msg.role === "user"
+                    ? t("playground.chatUi.realtimePlayground.you")
+                    : term(t("playground.chatUi.realtimePlayground.ai"))}
+                </div>
                 <div className="text-sm whitespace-pre-wrap">{msg.content}</div>
               </div>
             )}
@@ -430,38 +435,43 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
 
       {/* Input area */}
       {isConnected && (
-        <div className="border-t border-gray-200 p-3 bg-white">
+        <div className="border-t border-border p-3 bg-card">
           <div className="flex items-center gap-2">
             <Button
-              shape="circle"
-              size="large"
-              type={isRecording ? "primary" : "default"}
-              danger={isRecording}
-              icon={isRecording ? <AudioMutedOutlined /> : <AudioOutlined />}
+              size="icon-lg"
+              variant={isRecording ? "destructive" : "outline"}
               onClick={isRecording ? stopRecording : startRecording}
-              title={isRecording ? "Stop recording" : "Start recording"}
-              className={isRecording ? "animate-pulse" : ""}
-            />
+              title={
+                isRecording
+                  ? t("playground.chatUi.realtimePlayground.stopRecording")
+                  : t("playground.chatUi.realtimePlayground.startRecording")
+              }
+              className={`rounded-full ${isRecording ? "animate-pulse" : ""}`}
+            >
+              {isRecording ? <MicOff /> : <Mic />}
+            </Button>
             <Input
-              placeholder="Type a message or use the mic..."
+              placeholder={t("playground.chatUi.realtimePlayground.inputPlaceholder")}
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
-              onPressEnter={sendTextMessage}
-              className="flex-1"
-              size="large"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") sendTextMessage();
+              }}
+              className="h-10 flex-1"
             />
             <Button
-              type="primary"
-              icon={<SendOutlined />}
+              size="icon-lg"
               onClick={sendTextMessage}
               disabled={!inputText.trim()}
-              size="large"
-            />
+              aria-label={t("playground.chatUi.realtimePlayground.send")}
+            >
+              <Send />
+            </Button>
           </div>
           {isRecording && (
-            <div className="mt-2 flex items-center gap-2 text-red-500 text-xs">
-              <span className="inline-block w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-              Listening — speak into your microphone. Server VAD will detect when you stop.
+            <div className="mt-2 flex items-center gap-2 text-destructive text-xs">
+              <span className="inline-block w-2 h-2 rounded-full bg-destructive animate-pulse" />
+              {t("playground.chatUi.realtimePlayground.listeningHint")}
             </div>
           )}
         </div>

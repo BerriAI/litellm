@@ -2,10 +2,12 @@
 Type definitions for Anthropic Skills API
 """
 
+from collections.abc import Sequence
 from typing import Any
 
-from pydantic import BaseModel
 from typing_extensions import TypedDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
 # Skills API Request Types
@@ -15,7 +17,7 @@ class CreateSkillRequest(TypedDict, total=False):
     display_title: str | None
     """Display title for the skill (optional)"""
 
-    files: list[Any] | None
+    files: Sequence[object] | None
     """Files to upload for the skill. All files must be in the same top-level directory and must include a SKILL.md file at the root."""
 
 
@@ -33,7 +35,7 @@ class ListSkillsParams(TypedDict, total=False):
 
 
 # Skills API Response Types
-class Skill(BaseModel):
+class Skill(LiteLLMBaseModel):
     """Represents a skill from the Anthropic Skills API"""
 
     id: str
@@ -57,8 +59,17 @@ class Skill(BaseModel):
     updated_at: str
     """ISO 8601 timestamp of when the skill was last updated"""
 
+    description: str | None = None
+    """Description of the skill. Populated for the LiteLLM-hosted registry
+    (custom_llm_provider="litellm_proxy"); Anthropic's list endpoint does not
+    return a description, so this is None there."""
 
-class ListSkillsResponse(BaseModel):
+    search_score: float | None = None
+    """Semantic similarity to the ``query`` passed to ``GET /v1/skills``. None
+    unless a query was given."""
+
+
+class ListSkillsResponse(LiteLLMBaseModel):
     """Response from listing skills"""
 
     data: list[Skill]
@@ -71,7 +82,7 @@ class ListSkillsResponse(BaseModel):
     """Whether there are more skills available"""
 
 
-class DeleteSkillResponse(BaseModel):
+class DeleteSkillResponse(LiteLLMBaseModel):
     """Response from deleting a skill"""
 
     id: str
@@ -98,7 +109,7 @@ class CreateSkillVersionRequest(TypedDict, total=False):
     """Additional metadata"""
 
 
-class SkillVersion(BaseModel):
+class SkillVersion(LiteLLMBaseModel):
     """Represents a skill version"""
 
     id: str
@@ -126,7 +137,7 @@ class SkillVersion(BaseModel):
     """Object type"""
 
 
-class ListSkillVersionsResponse(BaseModel):
+class ListSkillVersionsResponse(LiteLLMBaseModel):
     """Response from listing skill versions"""
 
     object: str = "list"
@@ -145,7 +156,7 @@ class ListSkillVersionsResponse(BaseModel):
     """Whether there are more versions available"""
 
 
-class DeleteSkillVersionResponse(BaseModel):
+class DeleteSkillVersionResponse(LiteLLMBaseModel):
     """Response from deleting a skill version"""
 
     id: str

@@ -9,25 +9,58 @@ get_deployment_failures_for_current_minute
 get_deployment_successes_for_current_minute
 """
 
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Awaitable, Callable, Mapping
+from typing import TYPE_CHECKING, Final
+
+from litellm.constants import ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY
+from litellm.router_deprecated import renamed_router_param
 
 if TYPE_CHECKING:
-    from litellm.router import Router as _Router
+    from litellm.router_api import RoutingContext
 
-    LitellmRouter = _Router
-else:
-    LitellmRouter = Any
+_METADATA_CHANNELS: Final = ("litellm_metadata", "metadata")
 
 
+def find_deployment_metadata(kwargs: Mapping[str, object]) -> dict[str, object] | None:
+    buckets: Final = (kwargs.get(channel) for channel in _METADATA_CHANNELS)
+    return next((bucket for bucket in buckets if isinstance(bucket, dict) and "model_info" in bucket), None)
+
+
+def get_counted_usage_tokens(
+    litellm_params: Mapping[str, object], marker: str = ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY
+) -> int | None:
+    buckets: Final = (litellm_params.get(channel) for channel in _METADATA_CHANNELS)
+    counted: Final = next(
+        (bucket[marker] for bucket in buckets if isinstance(bucket, dict) and marker in bucket),
+        None,
+    )
+    return counted if isinstance(counted, int) and not isinstance(counted, bool) else None
+
+
+async def count_before_callbacks(
+    deployment_metadata: dict[str, object],  # mutable-ok: the success callbacks read the marker off it
+    marker: str,
+    tokens: int,
+    count: Callable[[], Awaitable[object]],
+) -> None:
+    deployment_metadata[marker] = tokens  # rebind-ok: the success callbacks read the marker off this call's metadata
+    try:
+        await count()
+    except Exception:
+        _ = deployment_metadata.pop(marker, None)
+        raise
+
+
+@renamed_router_param("litellm_router_instance")
 def increment_deployment_successes_for_current_minute(
-    litellm_router_instance: LitellmRouter,
+    ctx: "RoutingContext",
     deployment_id: str,
 ) -> str:
     """
     In-Memory: Increments the number of successes for the current minute for a deployment_id
     """
     key: Final = f"{deployment_id}:successes"
-    litellm_router_instance.cache.increment_cache(
+    ctx.health().store.increment_cache(
         local_only=True,
         key=key,
         value=1,
@@ -36,15 +69,16 @@ def increment_deployment_successes_for_current_minute(
     return key
 
 
+@renamed_router_param("litellm_router_instance")
 def increment_deployment_failures_for_current_minute(
-    litellm_router_instance: LitellmRouter,
+    ctx: "RoutingContext",
     deployment_id: str,
 ):
     """
     In-Memory: Increments the number of failures for the current minute for a deployment_id
     """
     key: Final = f"{deployment_id}:fails"
-    litellm_router_instance.cache.increment_cache(
+    ctx.health().store.increment_cache(
         local_only=True,
         key=key,
         value=1,
@@ -52,8 +86,9 @@ def increment_deployment_failures_for_current_minute(
     )
 
 
+@renamed_router_param("litellm_router_instance")
 def get_deployment_successes_for_current_minute(
-    litellm_router_instance: LitellmRouter,
+    ctx: "RoutingContext",
     deployment_id: str,
 ) -> int:
     """
@@ -63,7 +98,7 @@ def get_deployment_successes_for_current_minute(
     """
     key: Final = f"{deployment_id}:successes"
     return (
-        litellm_router_instance.cache.get_cache(
+        ctx.health().store.get_cache(
             local_only=True,
             key=key,
         )
@@ -71,8 +106,9 @@ def get_deployment_successes_for_current_minute(
     )
 
 
+@renamed_router_param("litellm_router_instance")
 def get_deployment_failures_for_current_minute(
-    litellm_router_instance: LitellmRouter,
+    ctx: "RoutingContext",
     deployment_id: str,
 ) -> int:
     """
@@ -82,7 +118,7 @@ def get_deployment_failures_for_current_minute(
     """
     key: Final = f"{deployment_id}:fails"
     return (
-        litellm_router_instance.cache.get_cache(
+        ctx.health().store.get_cache(
             local_only=True,
             key=key,
         )

@@ -4,23 +4,28 @@ import builtins
 from typing import Any, Final
 
 import requests
+from pydantic import TypeAdapter
 
 from .exceptions import UnauthorizedError
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class TeamsManagementClient:
     """Client for managing teams in LiteLLM proxy."""
 
-    def __init__(self, base_url: str, api_key: str | None = None):
+    def __init__(self, base_url: str, api_key: str | None = None, timeout: int = 30):
         """
         Initialize the TeamsManagementClient.
 
         Args:
             base_url (str): The base URL of the LiteLLM proxy server (e.g., "http://localhost:4000")
             api_key (Optional[str]): API key for authentication. If provided, it will be sent as a Bearer token.
+            timeout (int): Request timeout in seconds (default: 30)
         """
         self._base_url = base_url.rstrip("/")  # Remove trailing slash if present
         self._api_key = api_key
+        self._timeout = timeout
 
     def _get_headers(self) -> dict[str, str]:
         """
@@ -38,7 +43,7 @@ class TeamsManagementClient:
         self,
         user_id: str | None = None,
         organization_id: str | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> builtins.list[dict[str, Any]]:
         """
         List teams that the user belongs to.
 
@@ -60,7 +65,7 @@ class TeamsManagementClient:
         if organization_id:
             params["organization_id"] = organization_id
 
-        response: Final = requests.get(url, headers=self._get_headers(), params=params)
+        response: Final = requests.get(url, headers=self._get_headers(), params=params, timeout=self._timeout)
 
         if response.status_code == 401:
             raise UnauthorizedError("Authentication failed. Check your API key.")
@@ -78,7 +83,7 @@ class TeamsManagementClient:
         page_size: int = 10,
         sort_by: str | None = None,
         sort_order: str = "asc",
-    ) -> dict[str, Any]:
+    ) -> object:
         """
         Get a paginated list of teams with filtering and sorting options.
 
@@ -117,13 +122,13 @@ class TeamsManagementClient:
         if sort_by:
             params["sort_by"] = sort_by
 
-        response: Final = requests.get(url, headers=self._get_headers(), params=params)
+        response: Final = requests.get(url, headers=self._get_headers(), params=params, timeout=self._timeout)
 
         if response.status_code == 401:
             raise UnauthorizedError("Authentication failed. Check your API key.")
 
         response.raise_for_status()
-        return response.json()
+        return _DECODED_JSON.validate_python(response.json())
 
     def get_available(self) -> builtins.list[dict[str, Any]]:
         """
@@ -138,7 +143,7 @@ class TeamsManagementClient:
         """
         url: Final = f"{self._base_url}/team/available"
 
-        response: Final = requests.get(url, headers=self._get_headers())
+        response: Final = requests.get(url, headers=self._get_headers(), timeout=self._timeout)
 
         if response.status_code == 401:
             raise UnauthorizedError("Authentication failed. Check your API key.")

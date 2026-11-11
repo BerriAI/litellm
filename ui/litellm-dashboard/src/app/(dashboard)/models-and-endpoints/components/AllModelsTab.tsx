@@ -2,19 +2,27 @@
 
 import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
+import { credentialLabelsByName } from "@/components/shared/credentialOptions";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
+import i18n from "@/i18n/i18n";
 import ModelSettingsModal from "@/components/model_dashboard/ModelSettingsModal/ModelSettingsModal";
 import { ModelData } from "@/components/model_dashboard/types";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
+import { isProxyAdminRole } from "@/utils/roles";
+import { uiHref } from "@/utils/uiHref";
 import { modelDeleteCall, modelPatchUpdateCall } from "@/components/networking";
 import { useQueryClient } from "@tanstack/react-query";
-import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
-import { ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
+import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
+import { ColumnFiltersState, functionalUpdate, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
 import { Info } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { createParser, parseAsInteger, parseAsString, parseAsStringLiteral, useQueryStates } from "nuqs";
+import { useCallback, useMemo, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 
 import { useModelsInfo } from "../../hooks/models/useModels";
+import { ROUTING_STATUS_FILTER_ID, routingStatusToBlocked } from "../utils/routingStatus";
 import { transformModelData } from "../utils/modelDataTransformer";
 import {
   ALL_MODEL_GROUPS_VALUE,
@@ -23,11 +31,41 @@ import {
   PERSONAL_TEAM_VALUE,
   WILDCARD_MODEL_GROUP_VALUE,
 } from "./AllModelsTable";
-import { ACCESS_GROUPS_COLUMN_ID, MODEL_NAME_COLUMN_ID, toServerSortField } from "./ModelsTableColumns";
+import {
+  ACCESS_GROUPS_COLUMN_ID,
+  isModelTableSortColumnId,
+  MODEL_NAME_COLUMN_ID,
+  MODEL_TABLE_SORT_COLUMN_IDS,
+  toServerSortField,
+} from "./ModelsTableColumns";
 
 const SEARCH_DEBOUNCE_WAIT_MS = 200;
 const DEFAULT_PAGE_SIZE = 50;
-const DEFAULT_PAGINATION: PaginationState = { pageIndex: 0, pageSize: DEFAULT_PAGE_SIZE };
+const MAX_PAGE_SIZE = 100;
+const MAX_PAGE = 100_000;
+
+const MODEL_VIEW_MODES = ["current_team", "all"] as const satisfies readonly ModelViewMode[];
+
+const boundedInteger = (min: number, max: number, fallback: number) =>
+  createParser({
+    parse: (value: string) => {
+      const parsed = parseAsInteger.parse(value);
+      return parsed === null ? null : Math.min(Math.max(parsed, min), max);
+    },
+    serialize: String,
+  }).withDefault(fallback);
+
+const TABLE_STATE = {
+  model_search: parseAsString.withDefault(""),
+  view_mode: parseAsStringLiteral(MODEL_VIEW_MODES).withDefault("current_team"),
+  filter_team: parseAsString.withDefault(PERSONAL_TEAM_VALUE),
+  access_group: parseAsString.withDefault(""),
+  status: parseAsString.withDefault(""),
+  sort_by: parseAsStringLiteral(MODEL_TABLE_SORT_COLUMN_IDS),
+  sort_order: parseAsStringLiteral(["asc", "desc"] as const).withDefault("asc"),
+  page: boundedInteger(1, MAX_PAGE, 1),
+  page_size: boundedInteger(1, MAX_PAGE_SIZE, DEFAULT_PAGE_SIZE),
+};
 
 interface AllModelsTabProps {
   selectedModelGroup: string | null;
@@ -46,40 +84,50 @@ const AllModelsTab = ({
   setSelectedModelId,
   setSelectedTeamId,
 }: AllModelsTabProps) => {
+  const { t } = useTranslation();
   const { data: modelCostMapData, isLoading: isLoadingModelCostMap } = useModelCostMap();
-  const { accessToken, userId, userRole } = useAuthorized();
+  const { accessToken, userId, userRole, isViewOnly } = useAuthorized();
   const { data: teams, isLoading: isLoadingTeams } = useTeams();
+  const { data: credentialsResponse } = useCredentials({ enabled: isProxyAdminRole(userRole ?? "") });
+  const credentialLabels = useMemo(
+    () => credentialLabelsByName(credentialsResponse?.credentials ?? []),
+    [credentialsResponse],
+  );
   const queryClient = useQueryClient();
 
-  const [modelNameSearch, setModelNameSearch] = useState<string>("");
-  const [debouncedSearch, setDebouncedSearch] = useState<string>("");
-  const [modelViewMode, setModelViewMode] = useState<ModelViewMode>("current_team");
-  const [selectedTeamValue, setSelectedTeamValue] = useState<string>(PERSONAL_TEAM_VALUE);
-  const [selectedModelAccessGroupFilter, setSelectedModelAccessGroupFilter] = useState<string | null>(null);
-  const [pagination, setPagination] = useState<PaginationState>(DEFAULT_PAGINATION);
-  const [sorting, setSorting] = useState<SortingState>([]);
+  const [tableState, setTableState] = useQueryStates(TABLE_STATE);
+  const modelNameSearch = tableState.model_search;
+  const [debouncedSearch] = useDebouncedValue(modelNameSearch, { wait: SEARCH_DEBOUNCE_WAIT_MS });
+  const modelViewMode = tableState.view_mode;
+  const selectedTeamValue = tableState.filter_team;
+  const selectedModelAccessGroupFilter = tableState.access_group || null;
+  const routingStatusFilter =
+    tableState.status === "active" || tableState.status === "paused" ? tableState.status : null;
+  const blockedForQuery: boolean | undefined = routingStatusToBlocked(routingStatusFilter);
+  const pagination = useMemo<PaginationState>(
+    () => ({ pageIndex: tableState.page - 1, pageSize: tableState.page_size }),
+    [tableState.page, tableState.page_size],
+  );
+  const sorting = useMemo<SortingState>(
+    () => (tableState.sort_by ? [{ id: tableState.sort_by, desc: tableState.sort_order === "desc" }] : []),
+    [tableState.sort_by, tableState.sort_order],
+  );
   const [isModelSettingsModalVisible, setIsModelSettingsModalVisible] = useState(false);
   const [deleteModalModelId, setDeleteModalModelId] = useState<string | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [pausingModelId, setPausingModelId] = useState<string | null>(null);
 
-  const resetToFirstPage = useCallback(() => {
-    setPagination((previous) => (previous.pageIndex === 0 ? previous : { ...previous, pageIndex: 0 }));
-  }, []);
-
-  const debouncedUpdateSearch = useDebouncedCallback(
-    (value: string) => {
-      setDebouncedSearch(value);
-      resetToFirstPage();
-    },
-    { wait: SEARCH_DEBOUNCE_WAIT_MS },
-  );
-
-  useEffect(() => {
-    debouncedUpdateSearch(modelNameSearch);
-  }, [modelNameSearch, debouncedUpdateSearch]);
-
   const teamIdForQuery = selectedTeamValue === PERSONAL_TEAM_VALUE ? undefined : selectedTeamValue;
+  const isConcreteModelGroup =
+    Boolean(selectedModelGroup) &&
+    selectedModelGroup !== ALL_MODEL_GROUPS_VALUE &&
+    selectedModelGroup !== WILDCARD_MODEL_GROUP_VALUE;
+  const modelNameForQuery = isConcreteModelGroup ? selectedModelGroup ?? undefined : undefined;
+  const accessGroupForQuery =
+    selectedModelAccessGroupFilter && selectedModelAccessGroupFilter !== ALL_MODEL_GROUPS_VALUE
+      ? selectedModelAccessGroupFilter
+      : undefined;
+  const wildcardOnlyForQuery = selectedModelGroup === WILDCARD_MODEL_GROUP_VALUE;
 
   const sortBy = useMemo(() => {
     if (sorting.length === 0) return undefined;
@@ -107,6 +155,10 @@ const AllModelsTab = ({
     // Auto-routers are routing constructs, not deployments; the sibling Auto-Routers tab
     // lists and manages them. Excluded server-side so total_count stays honest.
     true,
+    modelNameForQuery,
+    accessGroupForQuery,
+    wildcardOnlyForQuery,
+    blockedForQuery,
   );
   const isLoading = isLoadingModelsInfo || isLoadingModelCostMap;
 
@@ -122,31 +174,10 @@ const AllModelsTab = ({
     [modelCostMapData],
   );
 
-  const modelData = useMemo(() => {
+  const modelData = useMemo<{ data: ModelData[] }>(() => {
     if (!rawModelData) return { data: [] };
     return transformModelData(rawModelData, getProviderFromModel);
   }, [rawModelData, getProviderFromModel]);
-
-  const filteredData = useMemo<ModelData[]>(() => {
-    if (!modelData || !modelData.data || modelData.data.length === 0) {
-      return [];
-    }
-
-    return modelData.data.filter((model: ModelData) => {
-      const modelNameMatch =
-        selectedModelGroup === ALL_MODEL_GROUPS_VALUE ||
-        model.model_name === selectedModelGroup ||
-        !selectedModelGroup ||
-        (selectedModelGroup === WILDCARD_MODEL_GROUP_VALUE && model.model_name?.includes("*"));
-
-      const accessGroupMatch =
-        selectedModelAccessGroupFilter === ALL_MODEL_GROUPS_VALUE ||
-        model.model_info["access_groups"]?.includes(selectedModelAccessGroupFilter ?? "") ||
-        !selectedModelAccessGroupFilter;
-
-      return modelNameMatch && accessGroupMatch;
-    });
-  }, [modelData, selectedModelGroup, selectedModelAccessGroupFilter]);
 
   const columnFilters = useMemo<ColumnFiltersState>(
     () =>
@@ -155,42 +186,64 @@ const AllModelsTab = ({
           ? { id: MODEL_NAME_COLUMN_ID, value: selectedModelGroup }
           : null,
         selectedModelAccessGroupFilter ? { id: ACCESS_GROUPS_COLUMN_ID, value: selectedModelAccessGroupFilter } : null,
+        routingStatusFilter ? { id: ROUTING_STATUS_FILTER_ID, value: routingStatusFilter } : null,
       ].filter((entry) => entry !== null),
-    [selectedModelGroup, selectedModelAccessGroupFilter],
+    [selectedModelGroup, selectedModelAccessGroupFilter, routingStatusFilter],
+  );
+
+  const handleSearchChange = useCallback(
+    (value: string) => {
+      void setTableState({ model_search: value || null, page: null });
+    },
+    [setTableState],
   );
 
   const handleColumnFiltersChange: OnChangeFn<ColumnFiltersState> = (updater) => {
-    const next = typeof updater === "function" ? updater(columnFilters) : updater;
+    const next = functionalUpdate(updater, columnFilters);
     const modelGroup = next.find((entry) => entry.id === MODEL_NAME_COLUMN_ID)?.value;
     const accessGroup = next.find((entry) => entry.id === ACCESS_GROUPS_COLUMN_ID)?.value;
+    const status = next.find((entry) => entry.id === ROUTING_STATUS_FILTER_ID)?.value;
     setSelectedModelGroup(typeof modelGroup === "string" ? modelGroup : ALL_MODEL_GROUPS_VALUE);
-    setSelectedModelAccessGroupFilter(typeof accessGroup === "string" ? accessGroup : null);
-    resetToFirstPage();
+    void setTableState({
+      access_group: typeof accessGroup === "string" ? accessGroup : null,
+      status: typeof status === "string" ? status : null,
+      page: null,
+    });
   };
 
   const handleSortingChange: OnChangeFn<SortingState> = (updater) => {
-    setSorting(typeof updater === "function" ? updater(sorting) : updater);
-    resetToFirstPage();
+    const active = functionalUpdate(updater, sorting)[0];
+    void setTableState({
+      sort_by: active && isModelTableSortColumnId(active.id) ? active.id : null,
+      sort_order: active?.desc ? "desc" : null,
+      page: null,
+    });
   };
 
+  const handlePaginationChange = useCallback<OnChangeFn<PaginationState>>(
+    (updater) => {
+      const next = functionalUpdate(updater, pagination);
+      void setTableState({ page: next.pageIndex + 1, page_size: next.pageSize });
+    },
+    [pagination, setTableState],
+  );
+
   const handleTeamChange = (value: string) => {
-    setSelectedTeamValue(value);
-    resetToFirstPage();
+    void setTableState({ filter_team: value, page: null });
+  };
+
+  const handleViewModeChange = (value: ModelViewMode) => {
+    void setTableState({ view_mode: value });
   };
 
   const resetFilters = () => {
-    setModelNameSearch("");
     setSelectedModelGroup(ALL_MODEL_GROUPS_VALUE);
-    setSelectedModelAccessGroupFilter(null);
-    setSelectedTeamValue(PERSONAL_TEAM_VALUE);
-    setModelViewMode("current_team");
-    setPagination(DEFAULT_PAGINATION);
-    setSorting([]);
+    void setTableState(null);
   };
 
   const teamOptions = useMemo(
     () => [
-      { value: PERSONAL_TEAM_VALUE, label: "Personal" },
+      { value: PERSONAL_TEAM_VALUE, label: i18n.t("modelsAndEndpoints.allModelsTab.personalTeam") },
       ...(teams ?? [])
         .filter((team) => team.team_id)
         .map((team) => ({ value: team.team_id, label: team.team_alias ? team.team_alias : team.team_id })),
@@ -213,12 +266,12 @@ const AllModelsTab = ({
     try {
       setDeleteLoading(true);
       await modelDeleteCall(accessToken, deleteModalModelId);
-      NotificationsManager.success("Model deleted successfully");
+      toast.success(t("modelsAndEndpoints.allModelsTab.toasts.deleted"));
       queryClient.invalidateQueries({ queryKey: ["models", "list"] });
       refetchModels();
     } catch (error) {
       console.error("Error deleting model:", error);
-      NotificationsManager.fromBackend(error);
+      toast.fromError(error);
     } finally {
       setDeleteLoading(false);
       setDeleteModalModelId(null);
@@ -231,13 +284,17 @@ const AllModelsTab = ({
       try {
         setPausingModelId(modelId);
         await modelPatchUpdateCall(accessToken, { blocked }, modelId);
-        NotificationsManager.success(blocked ? "Model paused" : "Model resumed");
+        toast.success(
+          blocked
+            ? i18n.t("modelsAndEndpoints.allModelsTab.toasts.paused")
+            : i18n.t("modelsAndEndpoints.allModelsTab.toasts.resumed"),
+        );
         // invalidateQueries already schedules a refetch for active observers
         // on this key — no need to also call refetchModels() (would double-fetch).
         queryClient.invalidateQueries({ queryKey: ["models", "list"] });
       } catch (error) {
         console.error("Error toggling model pause state:", error);
-        NotificationsManager.fromBackend(error);
+        toast.fromError(error);
       } finally {
         setPausingModelId(null);
       }
@@ -263,7 +320,7 @@ const AllModelsTab = ({
     <div className="w-full">
       <div className="flex flex-col gap-3">
         <AllModelsTable
-          data={filteredData}
+          data={modelData.data}
           rowCount={rawModelData?.total_count ?? 0}
           isLoading={isLoading}
           isRefreshing={isFetchingModelsInfo}
@@ -271,28 +328,30 @@ const AllModelsTab = ({
           sorting={sorting}
           onSortingChange={handleSortingChange}
           pagination={pagination}
-          onPaginationChange={setPagination}
+          onPaginationChange={handlePaginationChange}
           columnFilters={columnFilters}
           onColumnFiltersChange={handleColumnFiltersChange}
           onResetFilters={resetFilters}
           searchValue={modelNameSearch}
-          onSearchChange={setModelNameSearch}
+          onSearchChange={handleSearchChange}
           teamOptions={teamOptions}
           selectedTeamValue={selectedTeamValue}
           onTeamChange={handleTeamChange}
           isLoadingTeams={isLoadingTeams}
           viewMode={modelViewMode}
-          onViewModeChange={setModelViewMode}
+          onViewModeChange={handleViewModeChange}
           onOpenModelSettings={handleOpenModelSettings}
           availableModelGroups={availableModelGroups}
           availableModelAccessGroups={availableModelAccessGroups}
           userRole={userRole}
-          userID={userId}
+          userID={userId ?? ""}
+          isViewOnly={isViewOnly}
           onModelIdClick={setSelectedModelId}
           onTeamIdClick={setSelectedTeamId}
           onDeleteClick={handleDeleteClick}
           onTogglePauseClick={handleTogglePause}
           pausingModelId={pausingModelId}
+          credentialLabels={credentialLabels}
         />
 
         {modelViewMode === "current_team" && (
@@ -300,19 +359,22 @@ const AllModelsTab = ({
             <Info className="mt-0.5 size-3.5 shrink-0" />
             {selectedTeamValue === PERSONAL_TEAM_VALUE ? (
               <span>
-                To access these models, create a Virtual Key without selecting a team on the{" "}
-                <a href="/public?login=success&page=api-keys" className="font-medium text-blue-600 hover:underline">
-                  Virtual Keys page
-                </a>
-                .
+                <Trans
+                  i18nKey="modelsAndEndpoints.allModelsTab.personalHint"
+                  components={{
+                    keys: <a href={uiHref("api-keys")} className="font-medium text-info hover:underline" />,
+                  }}
+                />
               </span>
             ) : (
               <span>
-                To access these models, create a Virtual Key and select Team as &quot;{teamAccessLabel}&quot; on the{" "}
-                <a href="/public?login=success&page=api-keys" className="font-medium text-blue-600 hover:underline">
-                  Virtual Keys page
-                </a>
-                .
+                <Trans
+                  i18nKey="modelsAndEndpoints.allModelsTab.teamHint"
+                  components={{
+                    team: <>{teamAccessLabel}</>,
+                    keys: <a href={uiHref("api-keys")} className="font-medium text-info hover:underline" />,
+                  }}
+                />
               </span>
             )}
           </div>
@@ -321,28 +383,29 @@ const AllModelsTab = ({
 
       <DeleteResourceModal
         isOpen={!!deleteModalModelId}
-        title="Delete Model"
-        alertMessage="This action cannot be undone."
-        message="Are you sure you want to delete this model?"
-        resourceInformationTitle="Model Information"
+        title={t("modelsAndEndpoints.allModelsTab.deleteModal.title")}
+        alertMessage={t("modelsAndEndpoints.allModelsTab.deleteModal.alert")}
+        message={t("modelsAndEndpoints.allModelsTab.deleteModal.message")}
+        resourceInformationTitle={t("modelsAndEndpoints.allModelsTab.deleteModal.informationTitle")}
         resourceInformation={
           modelToDelete
             ? [
                 {
-                  label: "Model Name",
-                  value: modelToDelete.model_name || "Not Set",
+                  label: t("modelsAndEndpoints.allModelsTab.deleteModal.modelName"),
+                  value: modelToDelete.model_name || t("modelsAndEndpoints.allModelsTab.deleteModal.notSet"),
                 },
                 {
-                  label: "LiteLLM Model Name",
-                  value: modelToDelete.litellm_model_name || "Not Set",
+                  label: t("modelsAndEndpoints.allModelsTab.deleteModal.litellmModelName"),
+                  value: modelToDelete.litellm_model_name || t("modelsAndEndpoints.allModelsTab.deleteModal.notSet"),
                 },
                 {
-                  label: "Provider",
-                  value: modelToDelete.provider || "Not Set",
+                  label: t("modelsAndEndpoints.allModelsTab.deleteModal.provider"),
+                  value: modelToDelete.provider || t("modelsAndEndpoints.allModelsTab.deleteModal.notSet"),
                 },
                 {
-                  label: "Created By",
-                  value: modelToDelete.model_info?.created_by || "Not Set",
+                  label: t("modelsAndEndpoints.allModelsTab.deleteModal.createdBy"),
+                  value:
+                    modelToDelete.model_info?.created_by || t("modelsAndEndpoints.allModelsTab.deleteModal.notSet"),
                 },
               ]
             : []

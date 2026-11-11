@@ -4,8 +4,8 @@ Sambanova Chat Completions API
 this is OpenAI compatible - no translation needed / occurs
 """
 
-from collections.abc import Coroutine
-from typing import Any, Final, Literal, overload
+from collections.abc import Coroutine, Mapping
+from typing import Final, Literal, overload
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
@@ -32,6 +32,9 @@ class SambanovaConfig(OpenAIGPTConfig):
     response_format: dict | None = None
     tools: list | None = None
 
+    def _flattens_content_lists(self) -> bool:
+        return True
+
     def __init__(
         self,
         max_tokens: int | None = None,
@@ -45,7 +48,7 @@ class SambanovaConfig(OpenAIGPTConfig):
         tool_choice: str | None = None,
         tools: list | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -101,7 +104,7 @@ class SambanovaConfig(OpenAIGPTConfig):
     @overload
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
+    ) -> Coroutine[object, object, list[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
@@ -113,7 +116,7 @@ class SambanovaConfig(OpenAIGPTConfig):
 
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: bool = False
-    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
+    ) -> list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]:
         """
         Transform messages to handle content list conversion.
 

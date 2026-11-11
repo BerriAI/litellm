@@ -5,7 +5,7 @@ from fastapi.responses import StreamingResponse
 
 import litellm
 from litellm.files.types import FileContentProvider, FileContentStreamingResult
-from litellm.types.utils import OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS
+from litellm.types.utils import FILE_CONTENT_STREAMING_PROVIDERS
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
@@ -18,11 +18,11 @@ class FileContentStreamingHandler:
         *,
         custom_llm_provider: str,
         file_id: str,
-        data: dict[str, Any],
+        data: dict[str, object],
         should_route: bool,
         original_file_id: str | None,
-        credentials: dict[str, Any] | None,
-    ) -> tuple[str, str, dict[str, Any]]:
+        credentials: dict[str, object] | None,
+    ) -> tuple[str, str, dict[str, object]]:
         """
         Resolve the provider, file ID, and request payload to use for streaming.
 
@@ -64,7 +64,7 @@ class FileContentStreamingHandler:
         *,
         custom_llm_provider: str,
     ) -> bool:
-        return custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS
+        return custom_llm_provider in FILE_CONTENT_STREAMING_PROVIDERS
 
     @staticmethod
     async def stream_file_content_with_logging(
@@ -95,7 +95,7 @@ class FileContentStreamingHandler:
         *,
         custom_llm_provider: str,
         file_id: str,
-        data: dict[str, Any],
+        data: dict[str, object],
         proxy_logging_obj: "ProxyLogging",
         user_api_key_dict: "UserAPIKeyAuth",
         version: str,

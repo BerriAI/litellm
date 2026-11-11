@@ -9,17 +9,18 @@ effects.
 Instead we reuse ``ProxyConfig.get_config`` — the actual config reader — so the
 gateway inherits the same heavy lifting the proxy does: ``include:`` merging,
 ``os.environ/`` + secret-manager resolution, and DB-stored models (when a DB is
-configured). It has no proxy-setup side effects. Returns the resolved
+configured). Its only proxy-setup side effect is bringing up the configured
+secret manager, which is what makes that resolution work. Returns the resolved
 ``model_list``; the Rust side deserializes each entry into its ``Deployment``.
 """
 
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Final
+from typing import Final
 
 
-def read_model_list(config_path: str) -> list[dict[str, Any]]:
+def read_model_list(config_path: str) -> list[dict[str, object]]:
     """Load ``config_path`` via the proxy's own reader and return its
     resolved ``model_list``."""
     from litellm.proxy.proxy_server import ProxyConfig

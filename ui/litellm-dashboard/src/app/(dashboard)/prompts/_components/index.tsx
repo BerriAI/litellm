@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from "react";
+import type { ParseKeys } from "i18next";
+import { useTranslation } from "react-i18next";
 
 import { Plus, Upload } from "lucide-react";
 import { getPromptsList, PromptSpec, ListPromptsResponse, deletePromptCall } from "@/components/networking";
@@ -6,7 +8,7 @@ import PromptTable from "./PromptTable";
 import PromptInfoView from "./prompt_info";
 import AddPromptForm from "./add_prompt_form";
 import PromptEditorView from "./prompt_editor_view";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { isProxyAdminRole } from "@/utils/roles";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,16 +22,16 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-const ALL_ENVIRONMENTS_LABEL = "All Environments";
+const ALL_ENVIRONMENTS_LABEL_KEY: ParseKeys = "prompts.panel.environments.all";
 
-const ENVIRONMENT_OPTIONS = [
-  { label: "Development", value: "development" },
-  { label: "Staging", value: "staging" },
-  { label: "Production", value: "production" },
+const ENVIRONMENT_OPTIONS: { labelKey: ParseKeys; value: string }[] = [
+  { labelKey: "prompts.panel.environments.development", value: "development" },
+  { labelKey: "prompts.panel.environments.staging", value: "staging" },
+  { labelKey: "prompts.panel.environments.production", value: "production" },
 ];
 
 // SelectValue falls back to the raw value unless the root can map it to a label.
-const ENVIRONMENT_ITEMS = [{ label: ALL_ENVIRONMENTS_LABEL, value: null }, ...ENVIRONMENT_OPTIONS];
+const ENVIRONMENT_ITEMS = [{ labelKey: ALL_ENVIRONMENTS_LABEL_KEY, value: null }, ...ENVIRONMENT_OPTIONS];
 
 interface PromptsProps {
   accessToken: string | null;
@@ -37,15 +39,17 @@ interface PromptsProps {
 }
 
 const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
+  const { t } = useTranslation();
   const [promptsList, setPromptsList] = useState<PromptSpec[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [selectedEnvironment, setSelectedEnvironment] = useState<string | undefined>(undefined);
   const [selectedPromptId, setSelectedPromptId] = useState<string | null>(null);
+  const [selectedPromptEnvironment, setSelectedPromptEnvironment] = useState<string | undefined>(undefined);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
   const [showEditorView, setShowEditorView] = useState(false);
   const [editPromptData, setEditPromptData] = useState<any>(null);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [promptToDelete, setPromptToDelete] = useState<{ id: string; name: string } | null>(null);
+  const [promptToDelete, setPromptToDelete] = useState<{ id: string; name: string; environment: string } | null>(null);
 
   // Admin Viewer follows the read-parity rule: see prompts, no writes.
   const canModify = userRole ? isProxyAdminRole(userRole) : false;
@@ -71,8 +75,9 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
     fetchPrompts();
   }, [accessToken, selectedEnvironment]);
 
-  const handlePromptClick = (promptId: string) => {
+  const handlePromptClick = (promptId: string, environment: string) => {
     setSelectedPromptId(promptId);
+    setSelectedPromptEnvironment(environment);
   };
 
   const handleAddPrompt = () => {
@@ -111,8 +116,8 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
     setSelectedPromptId(null);
   };
 
-  const handleDeleteClick = (promptId: string, promptName: string) => {
-    setPromptToDelete({ id: promptId, name: promptName });
+  const handleDeleteClick = (promptId: string, promptName: string, environment: string) => {
+    setPromptToDelete({ id: promptId, name: promptName, environment });
   };
 
   const handleDeleteConfirm = async () => {
@@ -120,12 +125,14 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
 
     setIsDeleting(true);
     try {
-      await deletePromptCall(accessToken, promptToDelete.id);
-      NotificationsManager.success(`Prompt "${promptToDelete.name}" deleted successfully`);
+      await deletePromptCall(accessToken, promptToDelete.id, promptToDelete.environment);
+      toast.success(
+        t("prompts.panel.toasts.deleted", { name: promptToDelete.name, environment: promptToDelete.environment }),
+      );
       fetchPrompts(); // Refresh the list
     } catch (error) {
       console.error("Error deleting prompt:", error);
-      NotificationsManager.fromBackend("Failed to delete prompt");
+      toast.fromError(t("prompts.panel.toasts.deleteFailed"));
     } finally {
       setIsDeleting(false);
       setPromptToDelete(null);
@@ -148,6 +155,7 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
       ) : selectedPromptId ? (
         <PromptInfoView
           promptId={selectedPromptId}
+          initialEnvironment={selectedPromptEnvironment}
           onClose={() => setSelectedPromptId(null)}
           accessToken={accessToken}
           isAdmin={canModify}
@@ -162,28 +170,28 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
                 <>
                   <Button onClick={handleAddPrompt} disabled={!accessToken}>
                     <Plus />
-                    Add New Prompt
+                    {t("prompts.panel.addNew")}
                   </Button>
                   <Button onClick={handleAddPromptFromFile} disabled={!accessToken} variant="secondary">
                     <Upload />
-                    Upload .prompt File
+                    {t("prompts.panel.uploadFile")}
                   </Button>
                 </>
               )}
             </div>
             <Select
-              items={ENVIRONMENT_ITEMS}
+              items={ENVIRONMENT_ITEMS.map((item) => ({ label: t(item.labelKey), value: item.value }))}
               value={selectedEnvironment ?? null}
               onValueChange={(value) => setSelectedEnvironment((value as string | null) ?? undefined)}
             >
               <SelectTrigger className="w-[180px]">
-                <SelectValue placeholder={ALL_ENVIRONMENTS_LABEL} />
+                <SelectValue placeholder={t(ALL_ENVIRONMENTS_LABEL_KEY)} />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value={null}>{ALL_ENVIRONMENTS_LABEL}</SelectItem>
+                <SelectItem value={null}>{t(ALL_ENVIRONMENTS_LABEL_KEY)}</SelectItem>
                 {ENVIRONMENT_OPTIONS.map((option) => (
                   <SelectItem key={option.value} value={option.value}>
-                    {option.label}
+                    {t(option.labelKey)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -217,15 +225,18 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
         >
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Delete Prompt</AlertDialogTitle>
+              <AlertDialogTitle>{t("prompts.panel.deleteDialog.title")}</AlertDialogTitle>
               <AlertDialogDescription>
-                Are you sure you want to delete prompt: {promptToDelete.name} ? This action cannot be undone.
+                {t("prompts.panel.deleteDialog.description", {
+                  environment: promptToDelete.environment,
+                  name: promptToDelete.name,
+                })}
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
-              <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
+              <AlertDialogCancel disabled={isDeleting}>{t("prompts.panel.deleteDialog.cancel")}</AlertDialogCancel>
               <Button variant="destructive" onClick={handleDeleteConfirm} disabled={isDeleting}>
-                Delete
+                {t("prompts.panel.deleteDialog.confirm")}
               </Button>
             </AlertDialogFooter>
           </AlertDialogContent>

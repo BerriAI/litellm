@@ -1,4 +1,7 @@
+import type { ParseKeys } from "i18next";
+
 import { Member, Organization, Team } from "@/components/networking";
+import i18n from "@/i18n/i18n";
 
 const ORG_ADMIN_MEMBERSHIP_ROLE = "org_admin";
 
@@ -13,24 +16,28 @@ export const v2_admin_role_names = ["proxy_admin", "proxy_admin_viewer", "org_ad
 export const all_admin_roles = [...old_admin_roles, ...v2_admin_role_names];
 
 export const internalUserRoles = ["Internal User", "Internal Viewer", "internal_user", "internal_user_viewer"];
-export const rolesAllowedToSeeUsage = ["Admin", "Admin Viewer", "Internal User", "Internal Viewer"];
 export const rolesWithWriteAccess = ["Internal User", "Admin", "proxy_admin"];
 // Admin-tier read parity: Admin Viewer sees Models + Endpoints, Agents, and
 // other pages whose primary purpose is configuration/management read-only.
 // Per the Admin Viewer principle: read parity with Proxy Admin, no writes,
 // no cost-incurring actions (Playground stays gated by `rolesWithWriteAccess`).
 export const rolesAllowedToViewWriteScopedPages = [...rolesWithWriteAccess, "Admin Viewer", "proxy_admin_viewer"];
-export const viewOnlyRoles = ["Admin Viewer", "Internal Viewer"];
-export const isViewOnlyRole = (role: string): boolean => viewOnlyRoles.includes(role);
 
 // Helper function to check if a role is in all_admin_roles
 export const isAdminRole = (role: string): boolean => {
   return all_admin_roles.includes(role);
 };
 
+const rolesAllowedToListUsers: string[] = [...all_admin_roles, "Org Admin"];
+
+export const canListUsers = (role: string | null): boolean => rolesAllowedToListUsers.includes(role ?? "");
+
 export const isProxyAdminRole = (role: string): boolean => {
   return role === "proxy_admin" || role === "Admin";
 };
+
+export const proxyAdminTierRoles = ["Admin", "Admin Viewer", "proxy_admin", "proxy_admin_viewer"];
+export const isProxyAdminTierRole = (role: string): boolean => proxyAdminTierRoles.includes(role);
 
 export const isUserTeamAdminForAnyTeam = (teams: Team[] | null, userID: string): boolean => {
   if (teams == null) {
@@ -39,11 +46,25 @@ export const isUserTeamAdminForAnyTeam = (teams: Team[] | null, userID: string):
   return teams.some((team) => isUserTeamAdminForSingleTeam(team.members_with_roles, userID));
 };
 
-export const isUserTeamAdminForSingleTeam = (teamMemberWithRoles: Member[] | null, userID: string): boolean => {
+export const isUserTeamAdminForSingleTeam = (
+  teamMemberWithRoles: readonly Member[] | null,
+  userID: string,
+): boolean => {
   if (teamMemberWithRoles == null) {
     return false;
   }
   return teamMemberWithRoles.some((member) => member.user_id === userID && member.role === "admin");
+};
+
+export const teamsUserCanAssign = (
+  teams: Team[] | null,
+  userRole: string | null,
+  userID: string | null,
+): Team[] | null => {
+  if (teams == null || isProxyAdminRole(userRole ?? "")) {
+    return teams;
+  }
+  return teams.filter((team) => isUserTeamAdminForSingleTeam(team.members_with_roles, userID ?? ""));
 };
 
 export const isOrgAdminForAnyOrg = (
@@ -86,6 +107,21 @@ export const formatUserRole = (userRole: string): string => {
   }
 };
 
+const USER_ROLE_LABELS: Record<string, ParseKeys> = {
+  "Undefined Role": "utils.roles.undefinedRole",
+  "App Owner": "utils.roles.appOwner",
+  Admin: "utils.roles.admin",
+  "Admin Viewer": "utils.roles.adminViewer",
+  "Org Admin": "utils.roles.orgAdmin",
+  "Internal User": "utils.roles.internalUser",
+  "Internal Viewer": "utils.roles.internalViewer",
+  "App User": "utils.roles.appUser",
+  "Unknown Role": "utils.roles.unknownRole",
+};
+
+export const userRoleDisplayLabel = (formattedRole: string): string =>
+  Object.hasOwn(USER_ROLE_LABELS, formattedRole) ? i18n.t(USER_ROLE_LABELS[formattedRole]) : formattedRole;
+
 export const isOrgAdminSessionRole = (userRole?: string | null): boolean =>
   userRole === ORG_ADMIN_MEMBERSHIP_ROLE || userRole === formatUserRole(ORG_ADMIN_MEMBERSHIP_ROLE);
 
@@ -109,3 +145,15 @@ const sessionRolesWithBroadTeamList: string[] = ["Admin", "Admin Viewer", "Org A
 
 export const teamListScopeUserId = (userRole: string | null, userId: string | null): string | null =>
   sessionRolesWithBroadTeamList.includes(userRole ?? "") ? null : userId;
+
+// Mirrors the backend's `user_api_key_has_admin_view`, which the daily-activity endpoints gate on:
+// proxy admins read every user's spend, and everyone else is forced to their own user_id. Org admin
+// is deliberately absent, so this is `all_admin_roles` minus org admin rather than a reuse of it.
+// Both spellings are listed because that constant carries both and either may reach a call site.
+const rolesWithProxyWideSpendView: string[] = ["Admin", "Admin Viewer", "proxy_admin", "proxy_admin_viewer"];
+
+export const hasProxyWideSpendView = (userRole: string | null): boolean =>
+  rolesWithProxyWideSpendView.includes(userRole ?? "");
+
+export const spendScopeUserId = (userRole: string | null, userId: string | null): string | null =>
+  hasProxyWideSpendView(userRole) ? null : userId;

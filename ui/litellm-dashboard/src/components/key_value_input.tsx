@@ -1,46 +1,46 @@
-import React, { useState } from "react";
+import React from "react";
 import { Minus, Plus } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
+export type KeyValuePair = readonly [string, string];
+
 interface KeyValueInputProps {
-  value?: Record<string, string>;
-  onChange?: (value: Record<string, string>) => void;
+  value?: readonly KeyValuePair[];
+  onChange?: (value: readonly KeyValuePair[]) => void;
 }
 
-const KeyValueInput: React.FC<KeyValueInputProps> = ({ value = {}, onChange }) => {
-  const [pairs, setPairs] = useState<[string, string][]>(Object.entries(value));
+const KeyValueInput: React.FC<KeyValueInputProps> = ({ value = [], onChange }) => {
+  const { t } = useTranslation();
+  const handleAdd = () => onChange?.([...value, ["", ""]]);
 
-  const handleAdd = () => {
-    setPairs([...pairs, ["", ""]]);
-  };
+  const handleRemove = (index: number) => onChange?.(value.filter((_, i) => i !== index));
 
-  const handleRemove = (index: number) => {
-    const newPairs = pairs.filter((_, i) => i !== index);
-    setPairs(newPairs);
-    onChange?.(Object.fromEntries(newPairs));
-  };
-
-  const handleChange = (index: number, key: string, val: string) => {
-    const newPairs = [...pairs];
-    newPairs[index] = [key, val];
-    setPairs(newPairs);
-    onChange?.(Object.fromEntries(newPairs));
-  };
+  const handleChange = (index: number, pair: KeyValuePair) =>
+    onChange?.(value.map((existing, i) => (i === index ? pair : existing)));
 
   return (
     <div className="space-y-2">
-      {pairs.map(([key, val], index) => (
+      {value.map(([key, val], index) => (
         <div key={index} className="flex items-center gap-2">
-          <Input placeholder="Header Name" value={key} onChange={(e) => handleChange(index, e.target.value, val)} />
-          <Input placeholder="Header Value" value={val} onChange={(e) => handleChange(index, key, e.target.value)} />
+          <Input
+            placeholder={t("keyValueInput.headerName")}
+            value={key}
+            onChange={(e) => handleChange(index, [e.target.value, val])}
+          />
+          <Input
+            placeholder={t("keyValueInput.headerValue")}
+            value={val}
+            onChange={(e) => handleChange(index, [key, e.target.value])}
+          />
           <Button
             type="button"
             variant="ghost"
             size="icon-sm"
             onClick={() => handleRemove(index)}
-            aria-label={`Remove header ${index + 1}`}
+            aria-label={t("keyValueInput.removeHeader", { position: index + 1 })}
           >
             <Minus />
           </Button>
@@ -48,7 +48,7 @@ const KeyValueInput: React.FC<KeyValueInputProps> = ({ value = {}, onChange }) =
       ))}
       <Button type="button" variant="outline" onClick={handleAdd}>
         <Plus />
-        Add Header
+        {t("keyValueInput.addHeader")}
       </Button>
     </div>
   );

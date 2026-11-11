@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Combobox,
   ComboboxChip,
@@ -10,8 +11,10 @@ import {
   ComboboxItem,
   ComboboxList,
   ComboboxValue,
+  useComboboxAnchor,
 } from "@/components/ui/combobox";
 import { cn } from "@/lib/cva.config";
+import i18n from "@/i18n/i18n";
 import { fetchSearchTools } from "../networking";
 
 export interface SearchToolSelectorProps {
@@ -28,9 +31,11 @@ const SearchToolSelector: React.FC<SearchToolSelectorProps> = ({
   value,
   className,
   accessToken,
-  placeholder = "Select search tools (optional)",
+  placeholder = i18n.t("searchToolSelector.placeholder"),
   disabled = false,
 }) => {
+  const { t } = useTranslation();
+  const anchor = useComboboxAnchor();
   const [options, setOptions] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -67,7 +72,7 @@ const SearchToolSelector: React.FC<SearchToolSelectorProps> = ({
       onValueChange={(selected: string[]) => onChange(selected)}
       disabled={disabled}
     >
-      <ComboboxChips className={cn("w-full", className)} aria-busy={loading}>
+      <ComboboxChips render={<div ref={anchor} />} className={cn("w-full", className)} aria-busy={loading}>
         <ComboboxValue>
           {(selected: string[]) =>
             selected.map((tool) => (
@@ -77,16 +82,13 @@ const SearchToolSelector: React.FC<SearchToolSelectorProps> = ({
             ))
           }
         </ComboboxValue>
-        <ComboboxChipsInput
-          className="border-0 bg-transparent"
-          placeholder={placeholder}
-          aria-label={placeholder}
-          disabled={disabled}
-        />
-        {value && value.length > 0 && <ComboboxClear aria-label="Clear all search tools" disabled={disabled} />}
+        <ComboboxChipsInput placeholder={placeholder} aria-label={placeholder} disabled={disabled} />
+        {value && value.length > 0 && (
+          <ComboboxClear aria-label={t("searchToolSelector.clearAll")} disabled={disabled} />
+        )}
       </ComboboxChips>
-      <ComboboxContent>
-        <ComboboxEmpty>{loading ? "Loading search tools…" : "No search tools found"}</ComboboxEmpty>
+      <ComboboxContent anchor={anchor}>
+        <ComboboxEmpty>{loading ? t("searchToolSelector.loading") : t("searchToolSelector.empty")}</ComboboxEmpty>
         <ComboboxList>
           {(tool: string) => (
             <ComboboxItem key={tool} value={tool}>

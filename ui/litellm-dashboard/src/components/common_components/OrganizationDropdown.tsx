@@ -1,17 +1,18 @@
 import React from "react";
-import { Select, Typography } from "antd";
+import { useTranslation } from "react-i18next";
+import { SearchSelect } from "@/components/shared/SearchSelect";
 import { Organization } from "../networking";
-
-const { Text } = Typography;
+import i18n from "@/i18n/i18n";
 
 interface OrganizationDropdownProps {
   organizations?: Organization[] | null;
-  value?: string;
-  onChange?: (value: string) => void;
+  value?: string | null;
+  onChange?: (value: string | null) => void;
   disabled?: boolean;
   loading?: boolean;
   style?: React.CSSProperties;
   placeholder?: string;
+  id?: string;
 }
 
 const OrganizationDropdown: React.FC<OrganizationDropdownProps> = ({
@@ -21,37 +22,26 @@ const OrganizationDropdown: React.FC<OrganizationDropdownProps> = ({
   disabled,
   loading,
   style,
-  placeholder = "All Organizations",
+  placeholder = i18n.t("organizationDropdown.placeholder"),
+  id,
 }) => {
+  const { t } = useTranslation();
   return (
-    <Select
-      showSearch
-      placeholder={placeholder}
-      value={value}
-      onChange={onChange}
-      disabled={disabled}
-      loading={loading}
-      allowClear
-      style={{ minWidth: 280, ...style }}
-      filterOption={(input, option) => {
-        if (!option) return false;
-        const org = organizations?.find((o) => o.organization_id === option.key);
-        if (!org) return false;
-
-        const searchTerm = input.toLowerCase().trim();
-        const orgAlias = (org.organization_alias || "").toLowerCase();
-        const orgId = (org.organization_id || "").toLowerCase();
-
-        return orgAlias.includes(searchTerm) || orgId.includes(searchTerm);
-      }}
-    >
-      {organizations?.map((org) => (
-        <Select.Option key={org.organization_id} value={org.organization_id}>
-          <span className="font-medium">{org.organization_alias}</span>{" "}
-          <Text type="secondary">({org.organization_id})</Text>
-        </Select.Option>
-      ))}
-    </Select>
+    <div style={{ minWidth: 280, ...style }}>
+      <SearchSelect
+        options={(organizations ?? []).map((org) => ({
+          label: org.organization_alias || org.organization_id,
+          value: org.organization_id,
+          sublabel: org.organization_id,
+        }))}
+        value={value}
+        onValueChange={(organizationId) => onChange?.(organizationId)}
+        placeholder={placeholder}
+        emptyText={loading ? t("organizationDropdown.loading") : t("organizationDropdown.empty")}
+        disabled={disabled}
+        inputId={id}
+      />
+    </div>
   );
 };
 

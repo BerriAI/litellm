@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from "react";
-import { Select } from "antd";
+import { useTranslation } from "react-i18next";
 import { Guardrail } from "./types";
 import { getGuardrailsList } from "../networking";
+import { MultiSelect } from "@/components/shared/MultiSelect";
 
 interface GuardrailSelectorProps {
   onChange: (selectedGuardrails: string[]) => void;
@@ -12,6 +13,7 @@ interface GuardrailSelectorProps {
 }
 
 const GuardrailSelector: React.FC<GuardrailSelectorProps> = ({ onChange, value, className, accessToken, disabled }) => {
+  const { t } = useTranslation();
   const [guardrails, setGuardrails] = useState<Guardrail[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -40,25 +42,21 @@ const GuardrailSelector: React.FC<GuardrailSelectorProps> = ({ onChange, value, 
   };
 
   return (
-    <div>
-      <Select
-        mode="multiple"
+    <div className="min-w-0">
+      <MultiSelect
         disabled={disabled}
-        placeholder={disabled ? "Setting guardrails is a premium feature." : "Select guardrails"}
-        onChange={handleGuardrailChange}
+        placeholder={disabled ? t("guardrailSelector.premiumOnly") : t("guardrailSelector.placeholder")}
+        onValueChange={handleGuardrailChange}
         value={value}
         loading={loading}
         className={className}
-        allowClear
-        options={guardrails.map((guardrail) => {
-          return {
-            label: `${guardrail.guardrail_name}`,
-            value: guardrail.guardrail_name,
-          };
+        options={guardrails.flatMap((guardrail) => {
+          const name = guardrail.guardrail_name;
+          if (name == null || name === "") {
+            return [];
+          }
+          return [{ label: name, value: name }];
         })}
-        optionFilterProp="label"
-        showSearch
-        style={{ width: "100%" }}
       />
     </div>
   );

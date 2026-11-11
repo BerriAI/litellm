@@ -2,11 +2,17 @@ package litellm
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/hashicorp/go-cty/cty"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
 
 func isModelNotFoundError(errResp ErrorResponse) bool {
@@ -40,7 +46,7 @@ func handleAPIResponse(resp *http.Response, reqBody interface{}, client *Client)
 		return nil, fmt.Errorf("failed to read response body: %v", err)
 	}
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var errResp ErrorResponse
 		if err := json.Unmarshal(bodyBytes, &errResp); err == nil {
 			if isModelNotFoundError(errResp) {
@@ -52,12 +58,35 @@ func handleAPIResponse(resp *http.Response, reqBody interface{}, client *Client)
 			resp.Status, client.redactSensitiveData(string(bodyBytes)), client.redactSensitiveData(string(reqBodyBytes)))
 	}
 
+	var envelope struct {
+		Data []json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(bodyBytes, &envelope); err == nil && len(envelope.Data) > 0 {
+		bodyBytes = envelope.Data[0]
+	}
+
+	if len(bodyBytes) == 0 || string(bodyBytes) == "null" {
+		return nil, nil
+	}
+
 	var modelResp ModelResponse
 	if err := json.Unmarshal(bodyBytes, &modelResp); err != nil {
 		return nil, fmt.Errorf("failed to parse response: %v", err)
 	}
 
 	return &modelResp, nil
+}
+
+// hashedKeyToken normalizes a raw sk- API key to its SHA-256 token hash, the
+// identifier the proxy stores and accepts, so the plaintext key never lands
+// in request URLs, resource IDs, or proxy access logs. Values that are
+// already hashed pass through unchanged.
+func hashedKeyToken(key string) string {
+	if !strings.HasPrefix(key, "sk-") {
+		return key
+	}
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:])
 }
 
 // MakeRequest is a helper function to make HTTP requests
@@ -118,7 +147,7 @@ func handleMCPAPIResponse(resp *http.Response, result interface{}, client *Clien
 		return fmt.Errorf("failed to read response body: %v", err)
 	}
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var errResp ErrorResponse
 		if err := json.Unmarshal(bodyBytes, &errResp); err == nil {
 			if isMCPServerNotFoundError(errResp) {
@@ -188,6 +217,23 @@ func isCredentialNotFoundError(errResp ErrorResponse) bool {
 	return false
 }
 
+var errCredentialConflict = errors.New("credential_conflict")
+
+func isLegacyCredentialConflictError(errResp ErrorResponse) bool {
+	isConflict := func(msg string) bool {
+		return strings.Contains(msg, "Unique constraint failed") && strings.Contains(msg, "credential_name")
+	}
+	if msg, ok := errResp.Error.Message.(string); ok && isConflict(msg) {
+		return true
+	}
+	if msgMap, ok := errResp.Error.Message.(map[string]interface{}); ok {
+		if errStr, ok := msgMap["error"].(string); ok && isConflict(errStr) {
+			return true
+		}
+	}
+	return isConflict(errResp.Detail.Error)
+}
+
 // handleCredentialAPIResponse handles API responses specifically for credential operations
 func handleCredentialAPIResponse(resp *http.Response, result interface{}, client *Client) error {
 	bodyBytes, err := io.ReadAll(resp.Body)
@@ -199,11 +245,18 @@ func handleCredentialAPIResponse(resp *http.Response, result interface{}, client
 		return fmt.Errorf("credential_not_found")
 	}
 
+	if resp.StatusCode == http.StatusConflict {
+		return errCredentialConflict
+	}
+
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		var errResp ErrorResponse
 		if err := json.Unmarshal(bodyBytes, &errResp); err == nil {
 			if isCredentialNotFoundError(errResp) {
 				return fmt.Errorf("credential_not_found")
+			}
+			if isLegacyCredentialConflictError(errResp) {
+				return errCredentialConflict
 			}
 		}
 		return fmt.Errorf("API request failed: Status: %s, Response: %s",
@@ -276,4 +329,16 @@ func handleVectorStoreAPIResponse(resp *http.Response, result interface{}, clien
 	}
 
 	return nil
+}
+
+// writeOnlyString returns the config value of a write-only string attribute.
+// Terraform never stores write-only values in plan or state, so d.Get sees
+// null in a real run; the raw config is the only place the value lives.
+func writeOnlyString(d *schema.ResourceData, attr string) string {
+	raw, diags := d.GetRawConfigAt(cty.GetAttrPath(attr))
+	if !diags.HasError() && raw.IsKnown() && !raw.IsNull() && raw.Type() == cty.String {
+		return raw.AsString()
+	}
+	v, _ := d.Get(attr).(string)
+	return v
 }

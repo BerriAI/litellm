@@ -476,7 +476,7 @@
               "uid": "${DS_PROMETHEUS}"
             },
             "editorMode": "code",
-            "expr": "topk(5, sort(litellm_remaining_requests))",
+            "expr": "topk(5, sort(litellm_remaining_requests_metric))",
             "legendFormat": "__auto",
             "range": true,
             "refId": "A"
@@ -573,7 +573,7 @@
               "uid": "${DS_PROMETHEUS}"
             },
             "editorMode": "code",
-            "expr": "topk(5, sort(litellm_remaining_tokens))",
+            "expr": "topk(5, sort(litellm_remaining_tokens_metric))",
             "legendFormat": "__auto",
             "range": true,
             "refId": "A"

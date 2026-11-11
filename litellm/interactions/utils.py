@@ -20,6 +20,7 @@ INTERACTIONS_API_OPTIONAL_PARAMS: Final = {
     "response_format",
     "response_mime_type",
     "previous_interaction_id",
+    "continuation_token",
     "agent_config",
 }
 
@@ -46,6 +47,13 @@ def get_provider_interactions_api_config(
         )
 
         return GoogleAIStudioInteractionsConfig()
+
+    if provider in (LlmProviders.VERTEX_AI.value, LlmProviders.VERTEX_AI_BETA.value):
+        from litellm.llms.vertex_ai.interactions.transformation import (
+            VertexAIInteractionsConfig,
+        )
+
+        return VertexAIInteractionsConfig()
 
     return None
 

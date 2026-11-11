@@ -21,7 +21,7 @@ on the shared lifecycle (every entity it creates is deleted on teardown).
 
 | Entity | Unit | Pre-existing live | This suite (live) | Status |
 |--------|------|-------------------|-------------------|--------|
-| API key | `test_budget_reservation.py`, `test_max_budget_limiter.py` | `otel_tests` | `test_budget_enforcement_e2e::test_key_budget_blocks` | **covered** |
+| API key | `test_budget_reservation.py` | `otel_tests` | `test_budget_enforcement_e2e::test_key_budget_blocks` | **covered** |
 | Team | `test_team_budget_limits.py` | `otel_tests` | (org test builds a team) | **covered** |
 | Internal user | auth unit tests | - | `test_internal_user_budget_blocks` | **covered (new)** |
 | Team member | `test_team_member_budget.py` | - | `test_team_member_budget_blocks` | **covered (new)** |
@@ -39,7 +39,7 @@ on the shared lifecycle (every entity it creates is deleted on teardown).
 | Pre-call reservation | `test_budget_reservation.py` | exercised by every enforcement test | **partial** |
 | Soft budget / alerts | `SlackAlerting/test_budget_alert_types.py` | `test_soft_budget_e2e::test_soft_budget_does_not_block` | **covered (new)** (block-vs-alert; the alert side-effect itself stays unit) |
 | Budget CRUD | `test_budget_endpoints.py` | `test_budget_crud_e2e` (roundtrip + delete) | **covered (new)** |
-| Reset scheduling | `test_proxy_budget_reset.py` | `test_budget_crud_e2e::test_budget_duration_schedules_reset_on_key` | **covered (new)** (scheduling; actual zeroing is time-dependent -> unit) |
+| Reset scheduling | `unit/proxy/common_utils/test_reset_budget_job.py` | `test_budget_crud_e2e::test_budget_duration_schedules_reset_on_key` | **covered (new)** (scheduling; actual zeroing is time-dependent -> unit) |
 | Multi-window budgets | `test_multi_budget_windows.py` | - | **gap** (window setup is fiddly; left to unit for now) |
 | Read budget+spend | `test_spend_management_endpoints.py` | `/key/info` asserted in CRUD + enforcement | **partial** |
 

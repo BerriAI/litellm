@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Protocol
 
 from litellm.types.guardrails import PresidioPerRequestConfig
@@ -39,3 +41,14 @@ class PresidioGuardrailCallback(Protocol):
         presidio_config: PresidioPerRequestConfig | None,
         request_data: dict[str, object],
     ) -> str: ...
+
+
+@dataclass(frozen=True, slots=True)
+class ResponsesWebSocketRequestDefaults:
+    """Deployment-level request parameters merged into every ``response.create`` frame relayed over a native websocket."""
+
+    fill_missing: Mapping[str, object]
+    overrides: Mapping[str, object]
+
+    def merged_into(self, request: Mapping[str, object]) -> dict[str, object]:
+        return {**self.fill_missing, **request, **self.overrides}

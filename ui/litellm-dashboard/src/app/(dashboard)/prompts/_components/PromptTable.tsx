@@ -3,6 +3,7 @@
 import { SortingState } from "@tanstack/react-table";
 import { Inbox } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { DataTable } from "@/components/shared/DataTable";
 import { modelHubCall, PromptSpec } from "@/components/networking";
@@ -13,8 +14,8 @@ import { ModelGroupInfo } from "./prompt_utils";
 interface PromptTableProps {
   promptsList: PromptSpec[];
   isLoading: boolean;
-  onPromptClick?: (id: string) => void;
-  onDeleteClick?: (id: string, name: string) => void;
+  onPromptClick?: (id: string, environment: string) => void;
+  onDeleteClick?: (id: string, name: string, environment: string) => void;
   accessToken: string | null;
   isAdmin: boolean;
 }
@@ -22,13 +23,14 @@ interface PromptTableProps {
 const DEFAULT_SORTING: SortingState = [{ id: "created_at", desc: true }];
 
 function EmptyState() {
+  const { t } = useTranslation();
   return (
     <div className="flex flex-col items-center gap-1 py-6">
       <div className="mb-1 flex size-10 items-center justify-center rounded-lg bg-muted">
         <Inbox className="size-5 text-muted-foreground" />
       </div>
-      <div className="text-sm font-medium text-foreground">No prompts yet</div>
-      <div className="text-sm text-muted-foreground">Add a prompt to start managing reusable templates.</div>
+      <div className="text-sm font-medium text-foreground">{t("prompts.table.empty.title")}</div>
+      <div className="text-sm text-muted-foreground">{t("prompts.table.empty.description")}</div>
     </div>
   );
 }
@@ -41,6 +43,7 @@ const PromptTable: React.FC<PromptTableProps> = ({
   accessToken,
   isAdmin,
 }) => {
+  const { t } = useTranslation();
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
   const [modelHubData, setModelHubData] = useState<Map<string, ModelGroupInfo>>(new Map());
 
@@ -66,20 +69,23 @@ const PromptTable: React.FC<PromptTableProps> = ({
   }, [accessToken]);
 
   const columns = useMemo(
-    () => getPromptTableColumns({ modelHubData, isAdmin, onPromptClick, onDeleteClick }),
-    [modelHubData, isAdmin, onPromptClick, onDeleteClick],
+    () => getPromptTableColumns({ modelHubData, isAdmin, onPromptClick, onDeleteClick, t }),
+    [modelHubData, isAdmin, onPromptClick, onDeleteClick, t],
   );
 
   return (
     <DataTable
       data={promptsList}
+      paginationMode="client"
       columns={columns}
-      getRowId={(prompt, index) => prompt.prompt_id || String(index)}
+      getRowId={(prompt, index) =>
+        prompt.prompt_id ? `${prompt.prompt_id}::${prompt.environment || "development"}` : String(index)
+      }
       sortingMode="client"
       sorting={sorting}
       onSortingChange={setSorting}
       isLoading={isLoading}
-      loadingMessage="Loading prompts…"
+      loadingMessage={t("prompts.table.loading")}
       noDataMessage={<EmptyState />}
       size="compact"
     />

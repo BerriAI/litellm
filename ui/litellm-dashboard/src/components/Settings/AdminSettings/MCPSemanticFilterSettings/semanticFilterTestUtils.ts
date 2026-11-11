@@ -1,4 +1,6 @@
-import NotificationManager from "@/components/molecules/notifications_manager";
+import type { TFunction } from "i18next";
+import i18n from "@/i18n/i18n";
+import { toast } from "@/lib/toast";
 import { testMCPSemanticFilter } from "@/components/networking";
 
 export interface TestResult {
@@ -23,23 +25,26 @@ const parseFilterHeaders = (headers: FilterHeaders): TestResult | null => {
   return { totalTools: total, selectedTools: selected, tools };
 };
 
-export const runSemanticFilterTest = async ({
-  accessToken,
-  testModel,
-  testQuery,
-  setIsTesting,
-  setTestResult,
-  setTestError,
-}: {
-  accessToken: string;
-  testModel: string;
-  testQuery: string;
-  setIsTesting: (value: boolean) => void;
-  setTestResult: (result: TestResult | null) => void;
-  setTestError: (error: string | null) => void;
-}) => {
+export const runSemanticFilterTest = async (
+  {
+    accessToken,
+    testModel,
+    testQuery,
+    setIsTesting,
+    setTestResult,
+    setTestError,
+  }: {
+    accessToken: string;
+    testModel: string | null;
+    testQuery: string;
+    setIsTesting: (value: boolean) => void;
+    setTestResult: (result: TestResult | null) => void;
+    setTestError: (error: string | null) => void;
+  },
+  t: TFunction = i18n.t.bind(i18n),
+) => {
   if (!testQuery || !testModel || !accessToken) {
-    NotificationManager.error("Please enter a query and select a model");
+    toast.error(t("mcpServers.semanticFilterTestUtils.missingInput"));
     return;
   }
 
@@ -52,28 +57,29 @@ export const runSemanticFilterTest = async ({
     const parsedResult = parseFilterHeaders(headers);
 
     if (!parsedResult) {
-      NotificationManager.warning("Semantic filter is not enabled or no tools were filtered");
+      toast.warning(t("mcpServers.semanticFilterTestUtils.notFiltered"));
       return;
     }
 
     setTestResult(parsedResult);
-    NotificationManager.success("Semantic filter test completed successfully");
+    toast.success(t("mcpServers.semanticFilterTestUtils.completed"));
   } catch (error) {
     console.error("Test failed:", error);
-    const message = error instanceof Error && error.message ? error.message : "Failed to test semantic filter";
+    const message =
+      error instanceof Error && error.message ? error.message : t("mcpServers.semanticFilterTestUtils.failed");
     setTestError(message);
-    NotificationManager.error("Failed to test semantic filter");
+    toast.error(t("mcpServers.semanticFilterTestUtils.failed"));
   } finally {
     setIsTesting(false);
   }
 };
 
-export const getCurlCommand = (testModel: string, testQuery: string) =>
+export const getCurlCommand = (testModel: string | null, testQuery: string) =>
   `curl --location 'http://localhost:4000/v1/responses' \\
 --header 'Content-Type: application/json' \\
---header 'Authorization: Bearer sk-1234' \\
+--header 'Authorization: Bearer <your-master-key>' \\
 --data '{
-    "model": "${testModel}",
+    "model": "${testModel ?? "YOUR_MODEL"}",
     "input": [
     {
       "role": "user",

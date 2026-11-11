@@ -1,4 +1,5 @@
 import types
+from collections.abc import Mapping
 from typing import Any, Final
 
 from openai.types.image import Image
@@ -26,9 +27,10 @@ class AmazonNovaCanvasConfig:
 
     @classmethod
     def get_config(cls):
+        class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_attributes.items()
             if not k.startswith("__")
             and not isinstance(
                 v,
@@ -58,6 +60,13 @@ class AmazonNovaCanvasConfig:
         if model and "amazon.nova-canvas" in model:
             return True
         return False
+
+    @classmethod
+    def is_nova_model(
+        cls,
+        model: str | None = None,
+    ) -> bool:
+        return cls._is_nova_model(model)
 
     @classmethod
     def transform_request_body(cls, text: str, optional_params: dict) -> AmazonNovaCanvasRequestBase:

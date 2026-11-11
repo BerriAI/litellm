@@ -12,6 +12,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.llms.anthropic.common_utils import tool_calls_with_server_tool_calls
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]
     httpxSpecialProvider,
@@ -80,13 +81,11 @@ class RepelloAIGuardrail(CustomGuardrail):
     def _extract_tool_call_args_from_message(cls, message: object) -> list[str]:
         args: Final[list[str]] = []
 
-        tool_calls: Final = cls._get_field(message, "tool_calls")
-        if _is_object_list(tool_calls):
-            for tool_call in tool_calls:
-                function = cls._get_field(tool_call, "function")
-                arguments = cls._get_field(function, "arguments")
-                if isinstance(arguments, str) and arguments.strip():
-                    args.append(arguments)
+        for tool_call in tool_calls_with_server_tool_calls(message):
+            function = cls._get_field(tool_call, "function")
+            arguments = cls._get_field(function, "arguments")
+            if isinstance(arguments, str) and arguments.strip():
+                args.append(arguments)
 
         function_call: Final = cls._get_field(message, "function_call")
         arguments = cls._get_field(function_call, "arguments")
@@ -148,6 +147,7 @@ class RepelloAIGuardrail(CustomGuardrail):
         guardrail_name: str | None = None,
         event_hook: (GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None) = None,
         default_on: bool = False,
+        timeout: float | None = None,
     ):
         self.repelloai_api_key = api_key or get_secret_str("ARGUS_API_KEY") or get_secret_str("REPELLOAI_API_KEY") or ""
         if not self.repelloai_api_key:
@@ -176,6 +176,7 @@ class RepelloAIGuardrail(CustomGuardrail):
             event_hook=event_hook,
             default_on=default_on,
             supported_event_hooks=list(self.get_supported_event_hooks()),
+            timeout=timeout,
         )
 
     async def _call_analyze(
@@ -197,14 +198,12 @@ class RepelloAIGuardrail(CustomGuardrail):
         repelloai_response: RepelloAIAnalyzeResponse | None = None
         try:
             verbose_proxy_logger.debug("RepelloAI Argus request: %s", request)
-            raw_response: HttpxResponse | None = await self.async_handler.post(  # pyright: ignore[reportUnknownMemberType]
+            response: Final[HttpxResponse] = await self.async_handler.post(  # pyright: ignore[reportUnknownMemberType]  # AsyncHTTPHandler.post is untyped
                 url=endpoint,
                 headers={"X-API-Key": self.repelloai_api_key},
                 json=request,
+                timeout=self.timeout,
             )
-            if raw_response is None:
-                raise ValueError("RepelloAI Argus returned no response")
-            response: Final[HttpxResponse] = raw_response
             self._raise_for_config_error(response)
             response.raise_for_status()
             try:

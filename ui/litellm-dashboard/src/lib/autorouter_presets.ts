@@ -1,20 +1,37 @@
+import type { TFunction } from "i18next";
+import i18n from "@/i18n/i18n";
+import { hydrateOssClassifier } from "@/components/add_model/jev_classifier_config";
 import {
   ComplexityRouterConfigPayload,
   hydrateTierLabels,
 } from "@/components/add_model/build_complexity_router_config";
 import {
   ComplexityRouterConfigValue,
-  ComplexityTiers,
   ClassifierType,
   ClassifierLLMConfig,
+  DEFAULT_CLASSIFICATION_MODE,
   DEFAULT_SESSION_AFFINITY,
   DEFAULT_DEPLOYMENT_AFFINITY,
+  usesLlmClassifier,
 } from "@/components/add_model/ComplexityRouterConfig";
 import { KeywordTierRule } from "@/components/add_model/KeywordTierRules";
 import { hydrateKeywordTierRules } from "@/components/add_model/complexity_router_keywords";
+import { hydrateCustomDimensions } from "@/components/add_model/custom_dimensions";
+import {
+  hydrateDimensionWeights,
+  hydrateTierBoundaries,
+  hydrateTokenThresholds,
+  hydrateReasoningOverrideMinScore,
+} from "@/components/add_model/heuristic_scoring_knobs";
+import {
+  TierModelParams,
+  TierModelParamsByTier,
+  hydrateTierModelParams,
+  normalizeTierModels,
+} from "@/components/add_model/complexity_router_tiers";
 import { DEFAULT_ESCALATION_KEYWORDS } from "@/components/add_model/EscalationKeywords";
 import { DEFAULT_MATCH_THRESHOLD } from "@/components/add_model/SemanticKeywordMatching";
-import presetsRaw from "@/autorouter_presets.json";
+import { wildcardRoutes } from "@/lib/wildcard_routes";
 
 // `key` is the stable JSON object key (e.g. "anthropic_family"); `label` is display text and
 // never an identity.
@@ -25,25 +42,19 @@ export interface AutoRouterPreset {
   complexity_router_config: ComplexityRouterConfigPayload;
 }
 
-// The bundled JSON is a developer-authored, build-time asset, so it is trusted at the import
-// boundary rather than re-validated at runtime (resolveJsonModule widens its string literals,
-// hence this one cast). autorouter_presets.test.ts pins the parsed shape, so a JSON typo fails CI.
-const RAW = presetsRaw as Record<string, Omit<AutoRouterPreset, "key">>;
+export type AutoRouterPresetsResponse = Record<string, Omit<AutoRouterPreset, "key">>;
 
-const PRESETS: AutoRouterPreset[] = Object.entries(RAW).map(([key, preset]) => ({ key, ...preset }));
-
-export const getAllPresets = (): AutoRouterPreset[] => PRESETS;
-
-export const getPresetByKey = (key: string): AutoRouterPreset | undefined => PRESETS.find((p) => p.key === key);
+export const hydratePresets = (raw: AutoRouterPresetsResponse): AutoRouterPreset[] =>
+  Object.entries(raw).map(([key, preset]) => ({ key, ...preset }));
 
 // Generalized over ComplexityRouterConfigPayload so the same accessors check either a preset's own
 // bundled config or a caller's actually-built config - the two need to agree, since a preset only
 // prefills once and the config is edited freely after (see AddAutoRouterTab.submitBlockedReason).
 export const getRequiredModels = (
-  config: Pick<ComplexityRouterConfigPayload, "tiers" | "classifier_llm_config" | "embedding_model">,
+  config: Pick<ComplexityRouterConfigPayload, "tiers" | "classifier_llm_config" | "embedding_model" | "default_model">,
 ): Set<string> => {
-  const { tiers, classifier_llm_config: classifier, embedding_model: embedding } = config;
-  const models = [...tiers.SIMPLE, ...tiers.MEDIUM, ...tiers.COMPLEX, ...tiers.REASONING, classifier?.model, embedding];
+  const { tiers, classifier_llm_config: classifier, embedding_model: embedding, default_model: pinned } = config;
+  const models = [...Object.values(tiers).flat(), classifier?.model, embedding, pinned];
   // Boolean(), not != null: an empty-string placeholder (e.g. classifier_llm_config seeded before a
   // model is chosen) is never a real model reference either.
   return new Set(models.filter((model): model is string => Boolean(model)));
@@ -54,17 +65,42 @@ export const getRequiredModels = (
 // differing only in that separator. Canonicalizing on "-" (the presets' own convention) lets both
 // spellings match without doing anything looser - two DIFFERENT model names never collide here,
 // only the punctuation within one version number does.
-const normalizeModelName = (model: string): string => model.replace(/(\d)\.(\d)/g, "$1-$2");
+export const normalizeModelName = (model: string): string => model.replace(/(\d)\.(\d)/g, "$1-$2");
 
 export interface DeploymentModelRef {
   modelGroup: string;
   underlyingModels: readonly string[];
+  provider?: string;
+  blocked?: boolean;
 }
 
 export interface ModelAvailability {
   modelGroups: Set<string>;
   underlyingIndex: Map<string, readonly string[]>;
+  nativeUnderlyingIndex: Map<string, readonly string[]>;
 }
+
+const NATIVE_MODEL_PROVIDERS: readonly (readonly [RegExp, string])[] = [
+  [/^(gpt-|o\d|text-embedding-)/, "openai"],
+  [/^claude-/, "anthropic"],
+  [/^gemini-/, "gemini"],
+  [/^deepseek-/, "deepseek"],
+  [/^muse-/, "meta"],
+  [/^kimi-/, "moonshot"],
+  [/^grok-/, "xai"],
+];
+
+const nativeModelProvider = (model: string): string | undefined =>
+  NATIVE_MODEL_PROVIDERS.find(([pattern]) => pattern.test(model))?.[1];
+
+const routingProvider = (model: string): string => {
+  if (model.includes("/")) return model.split("/")[0];
+  const native = nativeModelProvider(model);
+  return native === "openai" || native === "anthropic" ? native : "";
+};
+
+const deploymentProvider = (deployment: DeploymentModelRef): string =>
+  deployment.provider ?? routingProvider(deployment.underlyingModels[0] ?? "");
 
 const normalizeUnderlyingModel = (model: string): string | null => {
   if (model.includes("*")) return null;
@@ -78,55 +114,56 @@ const normalizeUnderlyingModel = (model: string): string | null => {
   return stripped.toLowerCase() || null;
 };
 
-// A linear glob scan rather than a RegExp: patterns are admin-controlled model_name values, and a
-// backtracking regex built from one ("a*a*a*...") can freeze another admin's dashboard.
-const matchesWildcard = (pattern: string, name: string): boolean => {
-  const parts = pattern.split("*");
-  if (parts.length === 1) return pattern === name;
-  const head = parts[0];
-  const tail = parts[parts.length - 1];
-  if (!name.startsWith(head) || !name.endsWith(tail)) return false;
-  if (name.length < head.length + tail.length) return false;
-  const scanEnd = name.length - tail.length;
-  const scanResult = parts.slice(1, -1).reduce((searchFrom: number, part: string) => {
-    if (searchFrom < 0) return -1;
-    const found = name.indexOf(part, searchFrom);
-    return found === -1 || found + part.length > scanEnd ? -1 : found + part.length;
-  }, head.length);
-  return scanResult >= 0;
-};
-
 export const buildModelAvailability = (
   modelGroups: Iterable<string>,
   deployments: readonly DeploymentModelRef[],
+  groupProviders: ReadonlyMap<string, readonly string[]> = new Map(),
+  aliasTargets: ReadonlyMap<string, string> = new Map(),
 ): ModelAvailability => {
   const groups = new Set(modelGroups);
-  const literalEntries = deployments
-    .filter((deployment) => groups.has(deployment.modelGroup))
-    .flatMap((deployment) =>
+  const routedGroup = (group: string): string => aliasTargets.get(group) ?? group;
+  const deploymentGroups = new Set(deployments.map((deployment) => deployment.modelGroup));
+  const deploymentProviders = new Map<string, Set<string>>();
+  for (const deployment of deployments) {
+    const providers = deploymentProviders.get(deployment.modelGroup) ?? new Set<string>();
+    providers.add(deploymentProvider(deployment));
+    deploymentProviders.set(deployment.modelGroup, providers);
+  }
+  const routableDeployments = deployments.filter((deployment) => !deployment.blocked);
+  const routableByGroup = new Map<string, DeploymentModelRef[]>();
+  for (const deployment of routableDeployments) {
+    routableByGroup.set(deployment.modelGroup, [...(routableByGroup.get(deployment.modelGroup) ?? []), deployment]);
+  }
+  const literalEntries = Array.from(groups).flatMap((group) =>
+    (routableByGroup.get(routedGroup(group)) ?? []).flatMap((deployment) =>
       deployment.underlyingModels
         .map(normalizeUnderlyingModel)
-        .filter((key): key is string => key !== null)
-        .map((key) => ({ key, modelGroup: deployment.modelGroup })),
-    );
-  // Mirrors get_known_models_from_wildcard: a bare "*" model_name expands via its underlying
-  // wildcard (or not at all), and a wildcard without a "/" expands to nothing.
-  const wildcardPatterns = Array.from(
-    new Set(
-      deployments
-        .flatMap((deployment) =>
-          deployment.modelGroup === "*" ? deployment.underlyingModels : [deployment.modelGroup],
-        )
-        .filter((pattern) => pattern !== "*" && pattern.includes("*") && pattern.includes("/")),
+        .map((key) => ({ key, modelGroup: group, sourceGroup: deployment.modelGroup })),
     ),
   );
-  const wildcardEntries = Array.from(groups)
-    .filter((group) => !group.includes("*") && wildcardPatterns.some((pattern) => matchesWildcard(pattern, group)))
-    .map((group) => ({ key: normalizeUnderlyingModel(group), modelGroup: group }))
-    .filter((entry): entry is { key: string; modelGroup: string } => entry.key !== null);
+  const pausedGroups = new Set(Array.from(deploymentGroups).filter((group) => !routableByGroup.has(group)));
+  const servedGroups = new Set(Array.from(groups).filter((group) => !pausedGroups.has(routedGroup(group))));
+  const unlistedGroups = Array.from(groups).filter(
+    (group) => !group.includes("*") && !deploymentGroups.has(routedGroup(group)),
+  );
+  const patternDeployments = deployments.filter(({ modelGroup }) => modelGroup.includes("*"));
+  const wildcardEntries = unlistedGroups.flatMap((group) =>
+    wildcardRoutes(routedGroup(group), patternDeployments, groupProviders.get(group) ?? [])
+      .filter(({ paused }) => !paused)
+      .map(({ model, sourceGroup }) => ({
+        key: normalizeUnderlyingModel(model),
+        modelGroup: group,
+        sourceGroup,
+      })),
+  );
   const entries = [...literalEntries, ...wildcardEntries];
   const grouped = new Map<string, Set<string>>();
+  const providersByGroup = new Map<string, Set<string>>();
   for (const entry of entries) {
+    const providers = providersByGroup.get(entry.modelGroup) ?? new Set<string>();
+    for (const provider of deploymentProviders.get(entry.sourceGroup) ?? []) providers.add(provider);
+    providersByGroup.set(entry.modelGroup, providers);
+    if (entry.key === null) continue;
     const groupsForKey = grouped.get(entry.key) ?? new Set<string>();
     groupsForKey.add(entry.modelGroup);
     grouped.set(entry.key, groupsForKey);
@@ -134,14 +171,24 @@ export const buildModelAvailability = (
   const underlyingIndex = new Map(
     Array.from(grouped, ([key, groupsForKey]) => [key, Array.from(groupsForKey).sort()] as const),
   );
-  return { modelGroups: groups, underlyingIndex };
+  const nativeUnderlyingIndex = new Map(
+    Array.from(underlyingIndex, ([key, matches]) => [
+      key,
+      matches.filter((group) => {
+        const native = nativeModelProvider(key);
+        const providers = providersByGroup.get(group);
+        return native !== undefined && providers?.size === 1 && providers.has(native);
+      }),
+    ]),
+  );
+  return { modelGroups: servedGroups, underlyingIndex, nativeUnderlyingIndex };
 };
 
 export const deploymentRefsFromModelInfo = (
   rows: readonly {
     model_name?: string | null;
-    litellm_params?: { model?: string | null; base_model?: string | null } | null;
-    model_info?: { base_model?: string | null } | null;
+    litellm_params?: { model?: string | null; base_model?: string | null; custom_llm_provider?: string | null } | null;
+    model_info?: { base_model?: string | null; blocked?: boolean | null } | null;
   }[],
 ): DeploymentModelRef[] =>
   rows.flatMap((row) => {
@@ -150,21 +197,39 @@ export const deploymentRefsFromModelInfo = (
       row.litellm_params?.base_model,
       row.model_info?.base_model,
     ].filter((model): model is string => Boolean(model));
-    return row.model_name && underlyingModels.length > 0 ? [{ modelGroup: row.model_name, underlyingModels }] : [];
+    const provider = row.litellm_params?.custom_llm_provider || routingProvider(row.litellm_params?.model ?? "");
+    return row.model_name && underlyingModels.length > 0
+      ? [{ modelGroup: row.model_name, underlyingModels, provider, blocked: row.model_info?.blocked || undefined }]
+      : [];
   });
 
-const resolveAvailableModel = (requiredModel: string, availability: ModelAvailability): string | undefined => {
+export const modelGroupAliasTargets = (aliases: unknown): ReadonlyMap<string, string> =>
+  new Map(
+    Object.entries(typeof aliases === "object" && aliases !== null ? aliases : {}).flatMap(([alias, entry]) => {
+      const target: unknown = typeof entry === "object" && entry !== null && "model" in entry ? entry.model : entry;
+      return typeof target === "string" && target ? [[alias, target] as const] : [];
+    }),
+  );
+
+export const resolveAvailableModels = (requiredModel: string, availability: ModelAvailability): readonly string[] => {
   const { modelGroups, underlyingIndex } = availability;
-  if (modelGroups.has(requiredModel)) return requiredModel;
+  if (modelGroups.has(requiredModel)) return [requiredModel];
   const normalized = normalizeModelName(requiredModel);
-  const groupMatch = Array.from(modelGroups).find((available) => normalizeModelName(available) === normalized);
-  if (groupMatch !== undefined) return groupMatch;
+  const groupMatches = Array.from(modelGroups).filter((available) => normalizeModelName(available) === normalized);
+  if (groupMatches.length > 0) return groupMatches;
   const key = normalizeUnderlyingModel(requiredModel);
-  return key === null ? undefined : underlyingIndex.get(key)?.[0];
+  return key === null ? [] : underlyingIndex.get(key) ?? [];
+};
+
+export const resolveAvailableModel = (requiredModel: string, availability: ModelAvailability): string | undefined => {
+  const key = normalizeUnderlyingModel(requiredModel);
+  const nativeMatches = key === null ? [] : availability.nativeUnderlyingIndex.get(key) ?? [];
+  const matches = resolveAvailableModels(requiredModel, availability);
+  return matches.find((model) => nativeMatches.includes(model)) ?? nativeMatches[0] ?? matches[0];
 };
 
 export const getMissingModels = (
-  config: Pick<ComplexityRouterConfigPayload, "tiers" | "classifier_llm_config" | "embedding_model">,
+  config: Parameters<typeof getRequiredModels>[0],
   availability: ModelAvailability,
 ): string[] =>
   [...getRequiredModels(config)].filter((model) => resolveAvailableModel(model, availability) === undefined).sort();
@@ -178,28 +243,37 @@ export const getMissingModelsInPreset = (preset: AutoRouterPreset, availability:
 // Checks the config actually being built (whether it arrived via a preset prefill or was typed by
 // hand - the two are indistinguishable once the caller has started editing), not a preset's
 // original bundled model list. Only counts classifier_llm_config/embedding_model as referenced
-// when buildComplexityRouterConfig would actually emit them (classifierType === "llm",
+// when buildComplexityRouterConfig would actually emit them (usesLlmClassifier(classifierType),
 // semanticMatchingEnabled) - otherwise a dormant selection left over from a toggle no longer in
 // effect would block submit for a model that was never going to be submitted.
 export const getReferencedModelsError = (
   params: {
-    tiers: ComplexityTiers;
+    tiers: ComplexityRouterConfigPayload["tiers"];
     classifierType: ClassifierType;
     classifierLlmConfig: ClassifierLLMConfig | undefined;
+    decisionDeploymentName?: string;
     semanticMatchingEnabled: boolean;
     embeddingModel: string | undefined;
+    defaultModel?: string;
   },
   availability: ModelAvailability,
+  t: TFunction = i18n.t.bind(i18n),
 ): string | null => {
-  const missing = getMissingModels(
-    {
-      tiers: params.tiers,
-      classifier_llm_config: params.classifierType === "llm" ? params.classifierLlmConfig : undefined,
-      embedding_model: params.semanticMatchingEnabled ? params.embeddingModel : undefined,
-    },
-    availability,
-  );
-  return missing.length > 0 ? `Model(s) no longer available: ${missing.join(", ")}` : null;
+  if (
+    params.classifierType === "jev" &&
+    params.decisionDeploymentName &&
+    !resolveAvailableModel(params.decisionDeploymentName, availability)
+  ) {
+    return t("autorouterPresets.errors.modelsUnavailable", { models: params.decisionDeploymentName });
+  }
+  const references = {
+    tiers: params.tiers,
+    default_model: params.defaultModel,
+    classifier_llm_config: usesLlmClassifier(params.classifierType) ? params.classifierLlmConfig : undefined,
+    embedding_model: params.semanticMatchingEnabled ? params.embeddingModel : undefined,
+  };
+  const missing = getMissingModels(references, availability);
+  return missing.length > 0 ? t("autorouterPresets.errors.modelsUnavailable", { models: missing.join(", ") }) : null;
 };
 
 // Every piece of AddAutoRouterTab's config state that a preset (or a reset to Custom) prefills in
@@ -240,8 +314,28 @@ export const buildPresetPrefill = (
   config: ComplexityRouterConfigPayload,
   availability: ModelAvailability,
 ): PresetPrefill => {
+  const classifier = hydrateOssClassifier(config);
   const resolve = (model: string): string => resolveAvailableModel(model, availability) ?? model;
-  const resolveTier = (models: string[]): string[] => models.map(resolve);
+  const resolveTier = (models: string | string[]): string[] => normalizeTierModels(models).map(resolve);
+  // Params key on the model name the preset spells while every tier entry is rewritten to the
+  // caller's registered spelling, so the keys have to be rewritten the same way. Otherwise
+  // serializeTierModelConfigs drops them for naming a model the tier no longer holds.
+  //
+  // Two spellings in one tier can resolve to the same registered model, and one model holds one
+  // param set here and in the payload, so a collision has to collapse. Merge rather than replace:
+  // params only one spelling set still survive, and a key both set resolves last-wins, matching
+  // how hydrateTierModelParams already collapses two entries spelled identically.
+  const resolveParamKeys = (params: TierModelParamsByTier | undefined): TierModelParamsByTier | undefined =>
+    params &&
+    Object.fromEntries(
+      Object.entries(params).map(([tier, byModel]) => [
+        tier,
+        Object.entries(byModel).reduce<Record<string, TierModelParams>>((byResolved, [model, litellmParams]) => {
+          const resolved = resolve(model);
+          return { ...byResolved, [resolved]: { ...byResolved[resolved], ...litellmParams } };
+        }, {}),
+      ]),
+    );
 
   return {
     complexityRouterConfig: {
@@ -251,22 +345,40 @@ export const buildPresetPrefill = (
         COMPLEX: resolveTier(config.tiers.COMPLEX),
         REASONING: resolveTier(config.tiers.REASONING),
       },
+      tier_model_params: resolveParamKeys(hydrateTierModelParams(config.tiers, config.tier_model_configs)),
       tier_labels: hydrateTierLabels(config.tier_labels),
-      classifier_type: config.classifier_type,
-      classifier_llm_config: config.classifier_llm_config && {
-        ...config.classifier_llm_config,
-        model: resolve(config.classifier_llm_config.model),
-      },
+      ...classifier,
+      heuristic_v2_success_threshold: config.heuristic_v2_success_threshold,
+      classifier_llm_config:
+        classifier.classifier_type !== "jev" && config.classifier_llm_config
+          ? { ...config.classifier_llm_config, model: resolve(config.classifier_llm_config.model) }
+          : undefined,
       classifier_context_window_size: config.classifier_context_window_size,
+      classifier_context_budget_chars: config.classifier_context_budget_chars,
       classifier_context_per_turn_chars: config.classifier_context_per_turn_chars,
       classifier_context_include_assistant_turns: config.classifier_context_include_assistant_turns,
+      classification_mode: config.classification_mode ?? DEFAULT_CLASSIFICATION_MODE,
       session_affinity: config.session_affinity ?? DEFAULT_SESSION_AFFINITY,
+      session_affinity_ttl_seconds: config.session_affinity_ttl_seconds,
       deployment_affinity: config.deployment_affinity ?? DEFAULT_DEPLOYMENT_AFFINITY,
+      modality_routing: config.modality_routing ?? false,
+      modality_pin_override: config.modality_pin_override ?? false,
       adaptive: config.adaptive,
       adaptive_weights: config.adaptive_weights,
       tier_distance_penalty: config.tier_distance_penalty,
       adaptive_eligible: config.adaptive_eligible,
       return_raw_model_name: config.return_raw_model_name,
+      max_tokens_from_tier_model: config.max_tokens_from_tier_model,
+      dimension_weights: hydrateDimensionWeights(config.dimension_weights),
+      custom_dimensions: hydrateCustomDimensions(config.custom_dimensions),
+      tier_boundaries: hydrateTierBoundaries(config.tier_boundaries),
+      token_thresholds: hydrateTokenThresholds(config.token_thresholds),
+      reasoning_override_min_score: hydrateReasoningOverrideMinScore(config.reasoning_override_min_score),
+      enable_context_window_escalation: config.enable_context_window_escalation,
+      context_window_escalation_buffer: config.context_window_escalation_buffer,
+      cache_aware_routing: config.cache_aware_routing,
+      cache_aware_routing_output_tokens: config.cache_aware_routing_output_tokens,
+      cache_aware_routing_timeout_ms: config.cache_aware_routing_timeout_ms,
     },
     customTechnicalKeywords: config.custom_technical_keywords ?? [],
     keywordTierRules: hydrateKeywordTierRules(config.keyword_tier_rules ?? []),

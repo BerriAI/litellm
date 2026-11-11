@@ -1,4 +1,4 @@
-{{- if and .Values.backend.enabled .Values.backend.hpa.enabled }}
+{{- if and (include "litellm.backend.render" .) .Values.backend.hpa.enabled }}
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
@@ -30,4 +30,8 @@ spec:
           type: Utilization
           averageUtilization: {{ .Values.backend.hpa.targetMemoryUtilizationPercentage }}
     {{- end }}
+  {{- with .Values.backend.hpa.behavior }}
+  behavior:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 {{- end }}

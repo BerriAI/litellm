@@ -3,6 +3,7 @@
 import * as React from "react";
 import { Combobox as ComboboxPrimitive } from "@base-ui/react";
 
+import i18n from "@/i18n/i18n";
 import { cn } from "@/lib/cva.config";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
@@ -32,12 +33,17 @@ const ComboboxTrigger = React.forwardRef<
 });
 ComboboxTrigger.displayName = "ComboboxTrigger";
 
-function ComboboxClear({ className, ...props }: ComboboxPrimitive.Clear.Props) {
+function ComboboxClear({
+  className,
+  "aria-label": ariaLabel = i18n.t("ui.combobox.clear"),
+  ...props
+}: ComboboxPrimitive.Clear.Props) {
   return (
     <ComboboxPrimitive.Clear
       data-slot="combobox-clear"
       render={<InputGroupButton variant="ghost" size="icon-xs" />}
       className={cn(className)}
+      aria-label={ariaLabel}
       {...props}
     >
       <XIcon className="pointer-events-none" />
@@ -58,7 +64,7 @@ function ComboboxInput({
 }) {
   return (
     <InputGroup className={cn("w-auto", className)}>
-      <ComboboxPrimitive.Input render={<InputGroupInput disabled={disabled} />} {...props} />
+      <ComboboxPrimitive.Input disabled={disabled} render={<InputGroupInput />} {...props} />
       <InputGroupAddon align="inline-end">
         {showTrigger && (
           <InputGroupButton
@@ -83,10 +89,14 @@ function ComboboxContent({
   sideOffset = 6,
   align = "start",
   alignOffset = 0,
+  collisionAvoidance,
   anchor,
   ...props
 }: ComboboxPrimitive.Popup.Props &
-  Pick<ComboboxPrimitive.Positioner.Props, "side" | "align" | "sideOffset" | "alignOffset" | "anchor">) {
+  Pick<
+    ComboboxPrimitive.Positioner.Props,
+    "side" | "align" | "sideOffset" | "alignOffset" | "collisionAvoidance" | "anchor"
+  >) {
   return (
     <ComboboxPrimitive.Portal>
       <ComboboxPrimitive.Positioner
@@ -94,8 +104,9 @@ function ComboboxContent({
         sideOffset={sideOffset}
         align={align}
         alignOffset={alignOffset}
+        collisionAvoidance={collisionAvoidance}
         anchor={anchor}
-        className="isolate z-50"
+        className="isolate z-popup"
       >
         <ComboboxPrimitive.Popup
           data-slot="combobox-content"
@@ -246,6 +257,8 @@ function useComboboxAnchor() {
   return React.useRef<HTMLDivElement | null>(null);
 }
 
+const useComboboxFilter = ComboboxPrimitive.useFilter;
+
 export {
   Combobox,
   ComboboxInput,
@@ -264,4 +277,5 @@ export {
   ComboboxTrigger,
   ComboboxValue,
   useComboboxAnchor,
+  useComboboxFilter,
 };

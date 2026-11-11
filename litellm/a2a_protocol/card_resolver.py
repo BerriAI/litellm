@@ -4,10 +4,14 @@ Custom A2A Card Resolver for LiteLLM.
 Extends the A2A SDK's card resolver to support multiple well-known paths.
 """
 
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
 
 from litellm._logging import verbose_logger
+from litellm.a2a_protocol.exceptions import A2AAgentCardDiscoveryError
 from litellm.constants import LOCALHOST_URL_PATTERNS
+from litellm.litellm_core_utils.core_helpers import has_attributes
 
 if TYPE_CHECKING:
     from a2a.types import AgentCard
@@ -16,6 +20,9 @@ if TYPE_CHECKING:
 _A2ACardResolver: Any = None
 AGENT_CARD_WELL_KNOWN_PATH: str = "/.well-known/agent-card.json"
 PREV_AGENT_CARD_WELL_KNOWN_PATH: str = "/.well-known/agent.json"
+FOUNDRY_AGENT_CARD_PATH: Final = "/agentCard/v1.0"
+AGENT_CARD_PATH_PARAM: Final = "agent_card_path"
+A2A_PROTOCOL_VERSION_PARAM: Final = "a2a_protocol_version"
 
 try:
     from a2a.client import A2ACardResolver as _A2ACardResolver
@@ -25,6 +32,20 @@ try:
     )
 except ImportError:
     pass
+
+
+@runtime_checkable
+class _HasStatusCode(Protocol):
+    status_code: int | None
+
+
+def _discovery_status_code(failures: tuple[tuple[str, Exception], ...]) -> int:
+    statuses: Final = tuple(
+        error.status_code
+        for _, error in failures
+        if isinstance(error, _HasStatusCode) and error.status_code is not None and error.status_code != 404
+    )
+    return statuses[0] if statuses else 404
 
 
 def is_localhost_or_internal_url(url: str | None) -> bool:
@@ -48,15 +69,96 @@ def is_localhost_or_internal_url(url: str | None) -> bool:
     return any(pattern in url_lower for pattern in LOCALHOST_URL_PATTERNS)
 
 
+_CANONICAL_PROTOCOL_BINDINGS: Final = MappingProxyType(
+    {
+        "jsonrpc": "JSONRPC",
+        "http+json": "HTTP+JSON",
+        "grpc": "GRPC",
+    }
+)
+
+_LEGACY_PROTOCOL_VERSION: Final = "0.3"
+_A2A_PROTOCOL_VERSION_ALIASES: Final = MappingProxyType(
+    {
+        "0.3": "0.3",
+        "0.3.0": "0.3",
+        "1.0": "1.0",
+        "1.0.0": "1.0",
+    }
+)
+
+
+def resolve_a2a_protocol_version(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        verbose_logger.warning("Ignoring invalid %s value: %r", A2A_PROTOCOL_VERSION_PARAM, value)
+        return None
+    if not isinstance(value, (str, int, float)):
+        verbose_logger.warning("Ignoring invalid %s value: %r", A2A_PROTOCOL_VERSION_PARAM, value)
+        return None
+
+    protocol_version: Final = _A2A_PROTOCOL_VERSION_ALIASES.get(str(value).strip())
+    if protocol_version is None:
+        verbose_logger.warning("Ignoring invalid %s value: %r", A2A_PROTOCOL_VERSION_PARAM, value)
+    return protocol_version
+
+
+def normalize_agent_card_interfaces(agent_card: "AgentCard", protocol_version: str | None = None) -> "AgentCard":
+    """
+    Canonicalize the supported interfaces of spec-adjacent agent cards.
+
+    Some A2A servers (e.g. LangGraph Platform) serve agent cards with lowercase
+    bindings like "jsonrpc", but a2a-sdk's ClientFactory matches bindings
+    case-sensitively against its uppercase TransportProtocol constants and fails
+    with "no compatible transports found." for spec-adjacent casings. The casing
+    fingerprint stopped working with langgraph-api 0.15, so operators can pin
+    the version per agent via ``litellm_params.a2a_protocol_version``. An explicit
+    "1.0" opts out of the mis-cased downgrade.
+    """
+    normalized: Final = type(agent_card)()
+    normalized.CopyFrom(agent_card)
+    for interface in normalized.supported_interfaces:
+        canonical: str | None = _CANONICAL_PROTOCOL_BINDINGS.get(interface.protocol_binding.lower())
+        if canonical is None or canonical == interface.protocol_binding:
+            continue
+        interface.protocol_binding = canonical
+        interface.protocol_version = _LEGACY_PROTOCOL_VERSION
+    if protocol_version is not None:
+        for interface in normalized.supported_interfaces:
+            if interface.protocol_binding in _CANONICAL_PROTOCOL_BINDINGS.values():
+                interface.protocol_version = protocol_version
+    return normalized
+
+
+class _UrlCarrier(Protocol):
+    url: str
+
+
+class _InterfacesCarrier(Protocol):
+    @property
+    def supported_interfaces(self) -> Sequence[_UrlCarrier]: ...
+
+
+def _url_of(value: object) -> str | None:
+    return value.url if has_attributes(value, _UrlCarrier, "url") else None
+
+
+def _supported_interfaces(agent_card: object) -> Sequence[_UrlCarrier] | None:
+    if has_attributes(agent_card, _InterfacesCarrier, "supported_interfaces"):
+        return agent_card.supported_interfaces
+    return None
+
+
 def get_agent_card_url(agent_card: "AgentCard") -> str | None:
     """Return the agent endpoint URL from the resolved SDK card."""
-    url: Final = getattr(agent_card, "url", None)
+    url: Final = _url_of(agent_card)
     if url:
         return url
 
-    interfaces: Final = getattr(agent_card, "supported_interfaces", None)
+    interfaces: Final = _supported_interfaces(agent_card)
     if interfaces:
-        return getattr(interfaces[0], "url", None)
+        return _url_of(interfaces[0])
     return None
 
 
@@ -86,16 +188,16 @@ def fix_agent_card_url(agent_card: "AgentCard", base_url: str) -> "AgentCard":
     Returns:
         The agent card with the URL fixed if necessary
     """
-    card_url: Final = getattr(agent_card, "url", None)
+    card_url: Final = _url_of(agent_card)
 
     if card_url and is_localhost_or_internal_url(card_url):
         # Normalize base_url to ensure it ends with /
         fixed_url: Final = base_url.rstrip("/") + "/"
         agent_card.url = fixed_url
 
-    interfaces: Final = getattr(agent_card, "supported_interfaces", None)
+    interfaces: Final = _supported_interfaces(agent_card)
     if interfaces:
-        interface_url: Final = getattr(interfaces[0], "url", None)
+        interface_url: Final = _url_of(interfaces[0])
         if interface_url and is_localhost_or_internal_url(interface_url):
             interfaces[0].url = base_url.rstrip("/") + "/"
 
@@ -106,61 +208,51 @@ class LiteLLMA2ACardResolver(_A2ACardResolver):
     """
     Custom A2A card resolver that supports multiple well-known paths.
 
-    Extends the base A2ACardResolver to try both:
+    Extends the base A2ACardResolver to try, in order:
     - /.well-known/agent-card.json (standard)
     - /.well-known/agent.json (previous/alternative)
+    - /agentCard/v1.0
     """
+
+    if TYPE_CHECKING:
+        base_url: str
 
     async def get_agent_card(
         self,
         relative_card_path: str | None = None,
-        http_kwargs: dict[str, Any] | None = None,
+        http_kwargs: Mapping[str, object] | None = None,
     ) -> "AgentCard":
-        """
-        Fetch the agent card, trying multiple well-known paths.
-
-        First tries the standard path, then falls back to the previous path.
-
-        Args:
-            relative_card_path: Optional path to the agent card endpoint.
-                If None, tries both well-known paths.
-            http_kwargs: Optional dictionary of keyword arguments to pass to httpx.get
-
-        Returns:
-            AgentCard from the A2A agent
-
-        Raises:
-            A2AClientHTTPError or A2AClientJSONError if both paths fail
-        """
-        # If a specific path is provided, use the parent implementation
+        """Fetch the agent card, probing every known path when none is given."""
         if relative_card_path is not None:
             return await super().get_agent_card(
                 relative_card_path=relative_card_path,
                 http_kwargs=http_kwargs,
             )
 
-        # Try both well-known paths
-        paths: Final = [
-            AGENT_CARD_WELL_KNOWN_PATH,
-            PREV_AGENT_CARD_WELL_KNOWN_PATH,
-        ]
+        return await self._get_agent_card_from_first_reachable_path(
+            paths=(AGENT_CARD_WELL_KNOWN_PATH, PREV_AGENT_CARD_WELL_KNOWN_PATH, FOUNDRY_AGENT_CARD_PATH),
+            http_kwargs=http_kwargs,
+            failures=(),
+        )
 
-        last_error = None
-        for path in paths:
-            try:
-                verbose_logger.debug("Attempting to fetch agent card from %s%s", self.base_url, path)
-                return await super().get_agent_card(
-                    relative_card_path=path,
-                    http_kwargs=http_kwargs,
-                )
-            except Exception as e:
-                verbose_logger.debug("Failed to fetch agent card from %s%s: %s", self.base_url, path, e)
-                last_error = e
-                continue
-
-        # If we get here, all paths failed - re-raise the last error
-        if last_error is not None:
-            raise last_error
-
-        # This shouldn't happen, but just in case
-        raise Exception(f"Failed to fetch agent card from {self.base_url}. Tried paths: {', '.join(paths)}")
+    async def _get_agent_card_from_first_reachable_path(
+        self,
+        paths: tuple[str, ...],
+        http_kwargs: Mapping[str, object] | None,
+        failures: tuple[tuple[str, Exception], ...],
+    ) -> "AgentCard":
+        if not paths:
+            raise A2AAgentCardDiscoveryError(
+                base_url=self.base_url,
+                failures=failures,
+                status_code=_discovery_status_code(failures),
+            )
+        path: Final = paths[0]
+        try:
+            verbose_logger.debug("Attempting to fetch agent card from %s%s", self.base_url, path)
+            return await super().get_agent_card(relative_card_path=path, http_kwargs=http_kwargs)
+        except Exception as e:
+            verbose_logger.debug("Failed to fetch agent card from %s%s: %s", self.base_url, path, e)
+            return await self._get_agent_card_from_first_reachable_path(
+                paths=paths[1:], http_kwargs=http_kwargs, failures=(*failures, (path, e))
+            )

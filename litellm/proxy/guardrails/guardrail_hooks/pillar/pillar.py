@@ -8,11 +8,15 @@
 # Standard library imports
 import json
 import os
-from typing import TYPE_CHECKING, Any, Final, Literal
+from collections.abc import Sized
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 from urllib.parse import quote
+
+import httpx
 
 # Third-party imports
 from fastapi import HTTPException
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 # LiteLLM imports
 from litellm import DualCache
@@ -23,6 +27,7 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.llms.anthropic.common_utils import message_dict_with_server_tool_calls
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -42,7 +47,40 @@ if TYPE_CHECKING:
 MAX_PILLAR_HEADER_VALUE_BYTES: Final = 8 * 1024
 
 
-def _encode_json_for_header(data: Any) -> str:
+class _PillarProtectResponse(TypedDict):
+    """Body returned by Pillar's `/api/v1/protect` endpoint."""
+
+    flagged: ReadOnly[NotRequired[bool]]
+    session_id: ReadOnly[NotRequired[str]]
+    scanners: ReadOnly[NotRequired[dict[str, object]]]
+    evidence: ReadOnly[NotRequired[list[object]]]
+    masked_session_messages: ReadOnly[NotRequired[list[object]]]
+
+
+class _PillarProtectHTTPResponse(Protocol):
+    def raise_for_status(self) -> object: ...
+
+    def json(self) -> _PillarProtectResponse: ...
+
+
+class _PillarProtectHTTPClient(Protocol):
+    async def post(
+        self,
+        *,
+        url: str,
+        headers: dict[str, str],
+        json: dict[str, object],
+        timeout: float | httpx.Timeout | None,
+    ) -> _PillarProtectHTTPResponse: ...
+
+
+def _json_len(value: object) -> int:
+    if isinstance(value, Sized):
+        return len(value)
+    raise TypeError(f"object of type '{type(value).__name__}' has no len()")
+
+
+def _encode_json_for_header(data: object) -> str:
     """
     JSON-serialize and URL-encode data for safe header transmission.
     """
@@ -50,7 +88,9 @@ def _encode_json_for_header(data: Any) -> str:
     return quote(json_payload, safe="")
 
 
-def _truncate_evidence_payload(evidence: Any, max_bytes: int = MAX_PILLAR_HEADER_VALUE_BYTES) -> tuple[Any, str, bool]:
+def _truncate_evidence_payload(
+    evidence: object, max_bytes: int = MAX_PILLAR_HEADER_VALUE_BYTES
+) -> tuple[object, str, bool]:
     """
     Truncate evidence payload so the encoded header value stays within max_bytes.
 
@@ -66,12 +106,12 @@ def _truncate_evidence_payload(evidence: Any, max_bytes: int = MAX_PILLAR_HEADER
         truncated_value: Final = "[truncated]"
         return truncated_value, _encode_json_for_header(truncated_value), True
 
-    truncated: Final[list[Any]] = []
+    truncated: Final[list[object]] = []
     encoded = _encode_json_for_header(truncated)
     truncated_flag = False
 
     for entry in evidence:
-        working_entry: Any
+        working_entry: object
         if isinstance(entry, dict):
             working_entry = dict(entry)
         else:
@@ -105,7 +145,7 @@ def _truncate_evidence_payload(evidence: Any, max_bytes: int = MAX_PILLAR_HEADER
     return truncated, encoded, truncated_flag
 
 
-def build_pillar_response_headers(metadata_store: dict[str, Any]) -> dict[str, str]:
+def build_pillar_response_headers(metadata_store: dict[str, object]) -> dict[str, str]:
     """
     Create URL-safe Pillar response headers and apply truncation metadata.
     """
@@ -173,6 +213,7 @@ class PillarGuardrail(CustomGuardrail):
         include_evidence: bool | None = None,
         fallback_on_error: str | None = None,
         timeout: float | None = None,
+        async_handler: _PillarProtectHTTPClient | None = None,
         **kwargs,
     ) -> None:
         """
@@ -191,7 +232,11 @@ class PillarGuardrail(CustomGuardrail):
             LiteLLM virtual key context (user_id, team_id, key_alias, etc.) is always
             automatically passed as X-LiteLLM-* headers to enable application/user tracking.
         """
-        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+        self.async_handler: _PillarProtectHTTPClient = (
+            async_handler
+            if async_handler is not None
+            else get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+        )
         self.api_key = api_key or os.environ.get("PILLAR_API_KEY")
 
         if self.api_key is None:
@@ -252,7 +297,12 @@ class PillarGuardrail(CustomGuardrail):
 
         verbose_proxy_logger.debug("Pillar Guardrail: Initialized with fallback_on_error: %s", self.fallback_on_error)
 
-        # Set timeout with graceful fallback on invalid configuration
+        super().__init__(
+            guardrail_name=guardrail_name,
+            supported_event_hooks=list(self.get_supported_event_hooks()),
+            **kwargs,
+        )
+
         if timeout is not None:
             self.timeout = timeout
         else:
@@ -265,12 +315,6 @@ class PillarGuardrail(CustomGuardrail):
                     self.DEFAULT_TIMEOUT,
                 )
                 self.timeout = self.DEFAULT_TIMEOUT
-
-        super().__init__(
-            guardrail_name=guardrail_name,
-            supported_event_hooks=list(self.get_supported_event_hooks()),
-            **kwargs,
-        )
 
     # =========================================================================
     # PUBLIC HOOK METHODS (Main Interface)
@@ -397,7 +441,9 @@ class PillarGuardrail(CustomGuardrail):
         # Extract response messages in the format Pillar expects
         response_dict = response.model_dump() if hasattr(response, "model_dump") else {}
         response_messages: Final = [
-            choice.get("message") for choice in response_dict.get("choices", []) if choice.get("message")
+            message_dict_with_server_tool_calls(choice["message"])
+            for choice in response_dict.get("choices", [])
+            if choice.get("message")
         ]
 
         if not response_messages:
@@ -686,7 +732,7 @@ class PillarGuardrail(CustomGuardrail):
         )
         return payload
 
-    async def _call_pillar_api(self, headers: dict[str, str], payload: dict[str, Any]) -> dict[str, Any]:
+    async def _call_pillar_api(self, headers: dict[str, str], payload: dict[str, object]) -> _PillarProtectResponse:
         """
         Call the Pillar API and return the response.
 
@@ -698,7 +744,7 @@ class PillarGuardrail(CustomGuardrail):
             Pillar API response as dictionary
         """
         verbose_proxy_logger.debug(
-            "Pillar Guardrail: Scanning %s messages for security threats", len(payload.get("messages", []))
+            "Pillar Guardrail: Scanning %s messages for security threats", _json_len(payload.get("messages", []))
         )
         response: Final = await self.async_handler.post(
             url=f"{self.api_base}/api/v1/protect",
@@ -714,7 +760,7 @@ class PillarGuardrail(CustomGuardrail):
         verbose_proxy_logger.debug("Pillar Guardrail: Analysis complete - flagged=%s, session=%s", flagged, session_id)
         return res
 
-    def _process_pillar_response(self, pillar_response: dict[str, Any], original_data: dict) -> None:
+    def _process_pillar_response(self, pillar_response: _PillarProtectResponse, original_data: dict) -> None:
         """
         Process the Pillar API response and handle detections based on configuration.
 
@@ -774,7 +820,7 @@ class PillarGuardrail(CustomGuardrail):
 
         build_pillar_response_headers(metadata_store)
 
-    def _raise_pillar_detection_exception(self, pillar_response: dict[str, Any]) -> None:
+    def _raise_pillar_detection_exception(self, pillar_response: _PillarProtectResponse) -> None:
         """
         Raise an HTTPException for Pillar security detections.
 
@@ -784,7 +830,7 @@ class PillarGuardrail(CustomGuardrail):
         Raises:
             HTTPException: Always raises with security detection details
         """
-        pillar_response_dict: Final = {
+        pillar_response_dict: Final[dict[str, object]] = {
             "session_id": pillar_response.get("session_id"),
         }
 

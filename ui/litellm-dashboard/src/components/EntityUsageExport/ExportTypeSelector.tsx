@@ -1,44 +1,57 @@
 import React from "react";
-import { Radio } from "antd";
-import type { ExportScope, EntityType } from "./types";
+import { useTranslation } from "react-i18next";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import type { ExportType, EntityType } from "./types";
 
 interface ExportTypeSelectorProps {
-  value: ExportScope;
-  onChange: (value: ExportScope) => void;
+  value: ExportType;
+  onChange: (value: ExportType) => void;
   entityType: EntityType;
 }
 
 const ExportTypeSelector: React.FC<ExportTypeSelectorProps> = ({ value, onChange, entityType }) => {
+  const { t } = useTranslation();
+  const allScopes: { value: ExportType; title: string; description: string }[] = [
+    {
+      value: "daily",
+      title: t("usage.export.type.daily.title", { entityType }),
+      description: t("usage.export.type.daily.description", { entityType }),
+    },
+    {
+      value: "daily_with_keys",
+      title: t("usage.export.type.dailyWithKeys.title", { entityType }),
+      description: t("usage.export.type.dailyWithKeys.description", { entityType }),
+    },
+    {
+      value: "daily_with_models",
+      title: t("usage.export.type.dailyWithModels.title", { entityType }),
+      description: t("usage.export.type.dailyWithModels.description"),
+    },
+    {
+      value: "daily_with_users",
+      title: t("usage.export.type.dailyWithUsers.title", { entityType }),
+      description: t("usage.export.type.dailyWithUsers.description", { entityType }),
+    },
+  ];
+  const scopes = allScopes.filter((scope) => scope.value !== "daily_with_users" || entityType !== "user");
+
   return (
     <div>
-      <label className="text-sm font-medium text-gray-700 block mb-2">Export type</label>
-      <Radio.Group value={value} onChange={(e) => onChange(e.target.value)} className="w-full">
-        <div className="space-y-2">
-          <label className="flex items-start p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer transition-colors">
-            <Radio value="daily" className="mt-0.5" />
+      <label className="text-sm font-medium text-foreground block mb-2">{t("usage.export.type.label")}</label>
+      <RadioGroup value={value} onValueChange={(next) => onChange(next as ExportType)} className="gap-2">
+        {scopes.map((scope) => (
+          <label
+            key={scope.value}
+            className="flex items-start p-3 border border-border rounded-lg hover:bg-accent cursor-pointer transition-colors"
+          >
+            <RadioGroupItem value={scope.value} className="mt-0.5" />
             <div className="ml-3 flex-1">
-              <div className="font-medium text-sm">Day-by-day breakdown by {entityType}</div>
-              <div className="text-xs text-gray-500 mt-0.5">Daily metrics for each {entityType}</div>
+              <div className="font-medium text-sm">{scope.title}</div>
+              <div className="text-xs text-muted-foreground mt-0.5">{scope.description}</div>
             </div>
           </label>
-
-          <label className="flex items-start p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer transition-colors">
-            <Radio value="daily_with_keys" className="mt-0.5" />
-            <div className="ml-3 flex-1">
-              <div className="font-medium text-sm">Day-by-day breakdown by {entityType} and key</div>
-              <div className="text-xs text-gray-500 mt-0.5">Daily metrics for each {entityType}, split by API key</div>
-            </div>
-          </label>
-
-          <label className="flex items-start p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer transition-colors">
-            <Radio value="daily_with_models" className="mt-0.5" />
-            <div className="ml-3 flex-1">
-              <div className="font-medium text-sm">Day-by-day by {entityType} and model</div>
-              <div className="text-xs text-gray-500 mt-0.5">Daily metrics split by model</div>
-            </div>
-          </label>
-        </div>
-      </Radio.Group>
+        ))}
+      </RadioGroup>
     </div>
   );
 };

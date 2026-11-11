@@ -1,9 +1,33 @@
-import { InfoCircleOutlined } from "@ant-design/icons";
-import { Accordion, AccordionBody, AccordionHeader, Button, TextInput, Title } from "@tremor/react";
-import { Form, Input, Modal, Select as Select2, Tooltip } from "antd";
+"use client";
+
+import { ChevronRight, CircleHelp } from "lucide-react";
 import React from "react";
+import { useTranslation } from "react-i18next";
+import type { FieldErrors } from "react-hook-form";
+import { z } from "zod";
 import BudgetDurationDropdown from "@/components/common_components/budget_duration_dropdown";
+import { FieldGroup } from "@/components/ui/field";
+import { FormField } from "@/components/shared/form/FormField";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { MultiSelect } from "@/components/shared/MultiSelect";
 import NumericalInput from "@/components/shared/numerical_input";
+import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import i18n from "@/i18n/i18n";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+
+const labelWithHint = (label: React.ReactNode, hint: string): React.ReactNode => (
+  <>
+    {label}
+    <Tooltip>
+      <TooltipTrigger render={<CircleHelp className="size-3.5 shrink-0 cursor-help text-muted-foreground" />} />
+      <TooltipContent>{hint}</TooltipContent>
+    </Tooltip>
+  </>
+);
 
 interface ModelInfo {
   model_name: string;
@@ -15,116 +39,186 @@ interface ModelInfo {
   };
 }
 
+const optionalLimit = z
+  .string()
+  .refine((value) => value === "" || (Number.isInteger(Number(value)) && Number(value) >= 0), {
+    error: () => i18n.t("tagManagement.createModal.validation.limitNonnegativeInteger"),
+  })
+  .optional();
+
+const createTagShape = {
+  tag_name: z.string().min(1, { error: () => i18n.t("tagManagement.createModal.validation.nameRequired") }),
+  description: z.string().optional(),
+  allowed_llms: z.array(z.string()).optional(),
+  max_budget: z.string().optional(),
+  budget_duration: z.string().optional(),
+  tpm_limit: optionalLimit,
+  rpm_limit: optionalLimit,
+};
+
+const createTagSchema = z.object(createTagShape);
+
+const budgetFieldNames = ["max_budget", "budget_duration", "tpm_limit", "rpm_limit"] as const;
+
+const withoutBudgetFields = (values: CreateTagFormValues): CreateTagFormValues => ({
+  ...values,
+  max_budget: undefined,
+  budget_duration: undefined,
+  tpm_limit: undefined,
+  rpm_limit: undefined,
+});
+
+const onlyBudgetFieldErrors = (errors: FieldErrors<CreateTagFormValues>): boolean =>
+  Object.keys(errors).every((name) => (budgetFieldNames as readonly string[]).includes(name));
+
+export type CreateTagFormValues = z.output<typeof createTagSchema>;
+
 interface CreateTagModalProps {
   visible: boolean;
   onCancel: () => void;
-  onSubmit: (values: any) => void;
+  onSubmit: (values: CreateTagFormValues) => void;
   availableModels: ModelInfo[];
 }
 
 const CreateTagModal: React.FC<CreateTagModalProps> = ({ visible, onCancel, onSubmit, availableModels }) => {
-  const [form] = Form.useForm();
+  const { t } = useTranslation();
+  const [budgetSectionOpen, setBudgetSectionOpen] = React.useState(false);
+  const form = useZodForm(createTagSchema, { defaultValues: { tag_name: "" } });
 
-  const handleFinish = (values: any) => {
-    onSubmit(values);
-    form.resetFields();
+  const modelOptions = availableModels.map((model) => ({
+    label: model.model_name,
+    value: model.model_info.id,
+    description: model.model_info.id,
+  }));
+
+  const handleFinish = (values: CreateTagFormValues) => {
+    onSubmit(budgetSectionOpen ? values : withoutBudgetFields(values));
+    form.reset();
+    setBudgetSectionOpen(false);
+  };
+
+  const handleInvalid = (errors: FieldErrors<CreateTagFormValues>) => {
+    if (budgetSectionOpen || !onlyBudgetFieldErrors(errors)) return;
+    form.clearErrors([...budgetFieldNames]);
+    handleFinish(form.getValues());
   };
 
   const handleCancel = () => {
-    form.resetFields();
+    form.reset();
     onCancel();
   };
 
   return (
-    <Modal title="Create New Tag" open={visible} width={800} footer={null} onCancel={handleCancel}>
-      <Form form={form} onFinish={handleFinish} labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} labelAlign="left">
-        <Form.Item label="Tag Name" name="tag_name" rules={[{ required: true, message: "Please input a tag name" }]}>
-          <TextInput />
-        </Form.Item>
+    <Dialog open={visible} onOpenChange={(open) => !open && handleCancel()}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[800px]">
+        <DialogHeader>
+          <DialogTitle>{t("tagManagement.createModal.title")}</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={form.handleSubmit(handleFinish, handleInvalid)} noValidate>
+          <TooltipProvider>
+            <FieldGroup>
+              <FormField control={form.control} name="tag_name" label={t("tagManagement.createModal.fields.name")}>
+                {({ ref, ...field }) => <Input {...field} ref={ref} />}
+              </FormField>
 
-        <Form.Item label="Description" name="description">
-          <Input.TextArea rows={4} />
-        </Form.Item>
+              <FormField
+                control={form.control}
+                name="description"
+                label={t("tagManagement.createModal.fields.description")}
+              >
+                {({ ref, value, ...field }) => <Textarea {...field} ref={ref} value={value ?? ""} rows={4} />}
+              </FormField>
 
-        <Form.Item
-          label={
-            <span>
-              Allowed Models
-              <Tooltip title="Select which models are allowed to process requests from this tag">
-                <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-              </Tooltip>
-            </span>
-          }
-          name="allowed_llms"
-        >
-          <Select2 mode="multiple" placeholder="Select Models">
-            {availableModels.map((model) => (
-              <Select2.Option key={model.model_info.id} value={model.model_info.id}>
-                <div>
-                  <span>{model.model_name}</span>
-                  <span className="text-gray-400 ml-2">({model.model_info.id})</span>
-                </div>
-              </Select2.Option>
-            ))}
-          </Select2>
-        </Form.Item>
+              <FormField
+                control={form.control}
+                name="allowed_llms"
+                label={labelWithHint(
+                  t("tagManagement.createModal.fields.models"),
+                  t("tagManagement.createModal.fields.modelsHint"),
+                )}
+              >
+                {({ value, onChange }) => (
+                  <MultiSelect
+                    options={modelOptions}
+                    value={value}
+                    onValueChange={onChange}
+                    placeholder={t("tagManagement.createModal.fields.modelsPlaceholder")}
+                  />
+                )}
+              </FormField>
+            </FieldGroup>
 
-        <Accordion className="mt-4 mb-4">
-          <AccordionHeader>
-            <Title className="m-0">Budget & Rate Limits (Optional)</Title>
-          </AccordionHeader>
-          <AccordionBody>
-            <Form.Item
-              className="mt-4"
-              label={
-                <span>
-                  Max Budget (USD){" "}
-                  <Tooltip title="Maximum amount in USD this tag can spend. When reached, requests with this tag will be blocked">
-                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                  </Tooltip>
-                </span>
-              }
-              name="max_budget"
+            <Collapsible
+              open={budgetSectionOpen}
+              onOpenChange={setBudgetSectionOpen}
+              className="mt-4 mb-4 rounded-md border border-border"
             >
-              <NumericalInput step={0.01} precision={2} width={200} />
-            </Form.Item>
-            <Form.Item
-              className="mt-4"
-              label={
-                <span>
-                  Reset Budget{" "}
-                  <Tooltip title="How often the budget should reset. For example, setting 'daily' will reset the budget every 24 hours">
-                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                  </Tooltip>
-                </span>
-              }
-              name="budget_duration"
-            >
-              <BudgetDurationDropdown onChange={(value) => form.setFieldValue("budget_duration", value)} />
-            </Form.Item>
+              <CollapsibleTrigger className="group flex w-full items-center justify-between px-4 py-3 text-base font-medium text-foreground">
+                {t("tagManagement.createModal.budgetSection")}
+                <ChevronRight className="size-4 text-muted-foreground transition-transform group-data-panel-open:rotate-90" />
+              </CollapsibleTrigger>
+              <CollapsibleContent className="px-4 pb-4">
+                <FieldGroup className="mt-4">
+                  <FormField
+                    control={form.control}
+                    name="max_budget"
+                    label={labelWithHint(
+                      t("tagManagement.createModal.fields.maxBudget"),
+                      t("tagManagement.createModal.fields.maxBudgetHint"),
+                    )}
+                  >
+                    {({ ref, value, ...field }) => <NumericalInput {...field} value={value ?? ""} step={0.01} />}
+                  </FormField>
 
-            <div className="mt-4 p-3 bg-gray-50 rounded-md border border-gray-200">
-              <p className="text-sm text-gray-600">
-                TPM/RPM limits for tags are not currently supported. If you need this feature, please{" "}
-                <a
-                  href="https://github.com/BerriAI/litellm/issues/new"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-blue-600 hover:text-blue-800 underline"
-                >
-                  create a GitHub issue
-                </a>
-                .
-              </p>
+                  <FormField
+                    control={form.control}
+                    name="budget_duration"
+                    label={labelWithHint(
+                      t("tagManagement.createModal.fields.resetBudget"),
+                      t("tagManagement.createModal.fields.resetBudgetHint"),
+                    )}
+                  >
+                    {({ id, value, onChange }) => (
+                      <BudgetDurationDropdown
+                        id={id}
+                        value={value ?? null}
+                        onChange={(next) => onChange(next ?? undefined)}
+                      />
+                    )}
+                  </FormField>
+
+                  <FormField
+                    control={form.control}
+                    name="tpm_limit"
+                    label={labelWithHint(
+                      t("tagManagement.createModal.fields.tpmLimit"),
+                      t("tagManagement.createModal.fields.tpmLimitHint"),
+                    )}
+                  >
+                    {({ ref, value, ...field }) => <NumericalInput {...field} value={value ?? ""} step={1} min={0} />}
+                  </FormField>
+
+                  <FormField
+                    control={form.control}
+                    name="rpm_limit"
+                    label={labelWithHint(
+                      t("tagManagement.createModal.fields.rpmLimit"),
+                      t("tagManagement.createModal.fields.rpmLimitHint"),
+                    )}
+                  >
+                    {({ ref, value, ...field }) => <NumericalInput {...field} value={value ?? ""} step={1} min={0} />}
+                  </FormField>
+                </FieldGroup>
+              </CollapsibleContent>
+            </Collapsible>
+
+            <div className="mt-2.5 text-right">
+              <Button type="submit">{t("tagManagement.createModal.submit")}</Button>
             </div>
-          </AccordionBody>
-        </Accordion>
-
-        <div style={{ textAlign: "right", marginTop: "10px" }}>
-          <Button type="submit">Create Tag</Button>
-        </div>
-      </Form>
-    </Modal>
+          </TooltipProvider>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 };
 

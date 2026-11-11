@@ -1,8 +1,10 @@
 import base64
+import os
+
 from openai import OpenAI
 import time
 
-client = OpenAI(base_url="http://0.0.0.0:4001", api_key="sk-1234")
+client = OpenAI(base_url="http://0.0.0.0:4001", api_key=os.environ["LITELLM_MASTER_KEY"])
 
 
 # Function to encode the image
@@ -12,7 +14,7 @@ def encode_image(image_path):
 
 
 # Path to your image
-image_path = "litellm/proxy/logo.jpg"
+image_path = "litellm/proxy/logo.png"
 
 # Getting the Base64 string
 base64_image = encode_image(image_path)
@@ -27,7 +29,7 @@ response = client.responses.create(
                 {"type": "input_text", "text": "what color is the image"},
                 {
                     "type": "input_image",
-                    "image_url": f"data:image/jpeg;base64,{base64_image}",
+                    "image_url": f"data:image/png;base64,{base64_image}",
                 },
             ],
         }

@@ -1,6 +1,6 @@
 # Curated surface for the one-command deploy path. The module (../../)
 # exposes far more knobs (per-component CPU/memory/instances, Cloud SQL
-# tier/edition, Memorystore tier, per-component image overrides, …). To
+# tier/edition, Memorystore tier, a full `image` override, …). To
 # tune those, set them directly on the `module "litellm"` block in
 # main.tf, or call the module from your own root config. Full per-variable
 # docs live in ../../variables.tf — the module is the source of truth.
@@ -24,6 +24,30 @@ variable "tenant" {
 variable "env" {
   description = "Environment suffix (stage, prod, dev)."
   type        = string
+}
+
+variable "create_runtime" {
+  description = "Create Cloud Run and load balancer resources."
+  type        = bool
+  default     = true
+}
+
+variable "network_id" {
+  description = "Existing VPC network resource ID. Empty creates a VPC."
+  type        = string
+  default     = ""
+}
+
+variable "create_psa_connection" {
+  description = "Create Private Services Access resources."
+  type        = bool
+  default     = true
+}
+
+variable "redis_transit_encryption" {
+  description = "Enable Memorystore transit encryption."
+  type        = bool
+  default     = true
 }
 
 # Sensitive — prefer TF_VAR_litellm_master_key / TF_VAR_litellm_license /
@@ -51,17 +75,17 @@ variable "ui_password" {
 
 # Image source. Cloud Run rejects ghcr.io, so a real deploy must point
 # image_registry at an Artifact Registry remote repo (see README "Image
-# pulls"). Per-component overrides live in ../../variables.tf.
+# pulls"). The full `image` override lives in ../../variables.tf.
 variable "image_registry" {
-  description = "Registry path prefix; images composed as <image_registry>/litellm-<component>:<image_tag>."
+  description = "Registry path prefix; the image is composed as <image_registry>/litellm:<image_tag>."
   type        = string
   default     = "ghcr.io/berriai"
 }
 
 variable "image_tag" {
-  description = "Tag applied to all four litellm-* images. Bump in lockstep."
+  description = "Tag of the litellm image every workload runs."
   type        = string
-  default     = "v1.86.0-dev"
+  default     = ""
 }
 
 # TLS — provide DNS names for a managed cert, or opt into HTTP-only for dev.
@@ -117,4 +141,10 @@ variable "backend_extra_secrets" {
   description = "Backend env vars sourced from Secret Manager (name → secret resource ID)."
   type        = map(string)
   default     = {}
+}
+
+variable "gateway_metrics_port" {
+  description = "Port for the Prometheus metrics sidecar in the gateway service. Null keeps /metrics on the gateway port only."
+  type        = number
+  default     = null
 }

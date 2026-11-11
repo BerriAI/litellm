@@ -1,11 +1,15 @@
 import React from "react";
-import { Switch, Tooltip } from "antd";
-import { InfoCircleOutlined, CopyOutlined } from "@ant-design/icons";
+import { Copy, Info } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { EndpointType } from "@/components/chat_ui/mode_endpoint_mapping";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
+import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 interface SessionManagementProps {
-  endpointType: string;
+  endpointType: string | null;
   responsesSessionId: string | null;
   useApiSessionManagement: boolean;
   onToggleSessionManagement: (useApi: boolean) => void;
@@ -17,23 +21,32 @@ const SessionManagement: React.FC<SessionManagementProps> = ({
   useApiSessionManagement,
   onToggleSessionManagement,
 }) => {
+  const { t } = useTranslation();
   if (endpointType !== EndpointType.RESPONSES) {
     return null;
   }
 
-  const handleCopySessionId = () => {
+  const handleCopySessionId = async () => {
     if (responsesSessionId) {
-      navigator.clipboard.writeText(responsesSessionId);
-      NotificationsManager.success("Response ID copied to clipboard!");
+      try {
+        await navigator.clipboard.writeText(responsesSessionId);
+        toast.success(t("playground.chatUi.sessionManagement.copied"));
+      } catch {
+        toast.error(t("playground.chatUi.sessionManagement.copyFailed"));
+      }
     }
   };
 
   const getSessionDisplay = () => {
     if (!responsesSessionId) {
-      return useApiSessionManagement ? "API Session: Ready" : "UI Session: Ready";
+      return useApiSessionManagement
+        ? t("playground.chatUi.sessionManagement.apiReady")
+        : t("playground.chatUi.sessionManagement.uiReady");
     }
 
-    const sessionPrefix = useApiSessionManagement ? "Response ID" : "UI Session";
+    const sessionPrefix = useApiSessionManagement
+      ? t("playground.chatUi.sessionManagement.responseIdPrefix")
+      : t("playground.chatUi.sessionManagement.uiSessionPrefix");
     const truncatedId = responsesSessionId.slice(0, 10);
     return `${sessionPrefix}: ${truncatedId}...`;
   };
@@ -41,13 +54,13 @@ const SessionManagement: React.FC<SessionManagementProps> = ({
   const getSessionDescription = () => {
     if (!responsesSessionId) {
       return useApiSessionManagement
-        ? "LiteLLM will manage session using previous_response_id"
-        : "UI will manage session using chat history";
+        ? t("playground.chatUi.sessionManagement.apiPending")
+        : t("playground.chatUi.sessionManagement.uiPending");
     }
 
     return useApiSessionManagement
-      ? "LiteLLM API session active - context maintained server-side"
-      : "UI session active - context maintained client-side";
+      ? t("playground.chatUi.sessionManagement.apiActive")
+      : t("playground.chatUi.sessionManagement.uiActive");
   };
 
   return (
@@ -55,59 +68,63 @@ const SessionManagement: React.FC<SessionManagementProps> = ({
       {/* Session Management Toggle */}
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-gray-700">Session Management</span>
-          <Tooltip title="Choose between LiteLLM API session management (using previous_response_id) or UI-based session management (using chat history)">
-            <InfoCircleOutlined className="text-gray-400" style={{ fontSize: "12px" }} />
+          <span className="text-sm font-medium text-foreground">{t("playground.chatUi.sessionManagement.title")}</span>
+          <Tooltip>
+            <TooltipTrigger aria-label={t("playground.chatUi.sessionManagement.about")}>
+              <Info className="size-3 text-muted-foreground" />
+            </TooltipTrigger>
+            <TooltipContent>{t("playground.chatUi.sessionManagement.description")}</TooltipContent>
           </Tooltip>
         </div>
-        <Switch
-          checked={useApiSessionManagement}
-          onChange={onToggleSessionManagement}
-          checkedChildren="API"
-          unCheckedChildren="UI"
-          size="small"
-        />
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span aria-hidden="true">{t("playground.chatUi.sessionManagement.uiLabel")}</span>
+          <Switch
+            checked={useApiSessionManagement}
+            onCheckedChange={onToggleSessionManagement}
+            aria-label={t("playground.chatUi.sessionManagement.toggle")}
+            size="sm"
+          />
+          <span aria-hidden="true">{t("playground.chatUi.sessionManagement.apiLabel")}</span>
+        </div>
       </div>
 
       {/* Session Status Indicator */}
       <div
         className={`text-xs p-2 rounded-md ${
           responsesSessionId
-            ? "bg-green-50 text-green-700 border border-green-200"
-            : "bg-blue-50 text-blue-700 border border-blue-200"
+            ? "bg-success/10 text-success border border-success/20"
+            : "bg-info/10 text-info border border-info/20"
         }`}
       >
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1">
-            <InfoCircleOutlined style={{ fontSize: "12px" }} />
+            <Info className="size-3" />
             {getSessionDisplay()}
           </div>
           {responsesSessionId && (
-            <Tooltip
-              title={
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    onClick={handleCopySessionId}
+                    aria-label={t("playground.chatUi.sessionManagement.copyResponseId")}
+                    className="ml-2 hover:bg-success/15"
+                  />
+                }
+              >
+                <Copy className="size-3" />
+              </TooltipTrigger>
+              <TooltipContent className="max-w-lg">
                 <div className="text-xs">
-                  <div className="mb-1">Copy response ID to continue session:</div>
+                  <div className="mb-1">{t("playground.chatUi.sessionManagement.copyToContinue")}</div>
                   <div className="bg-gray-800 text-gray-100 p-2 rounded-sm font-mono text-xs whitespace-pre-wrap">
-                    {`curl -X POST "your-proxy-url/v1/responses" \\
-  -H "Authorization: Bearer your-api-key" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "model": "your-model",
-    "input": [{"role": "user", "content": "your message", "type": "message"}],
-    "previous_response_id": "${responsesSessionId}",
-    "stream": true
-  }'`}
+                    {codeSamples.playground.responsesSessionCurl(responsesSessionId)}
                   </div>
                 </div>
-              }
-              overlayStyle={{ maxWidth: "500px" }}
-            >
-              <button
-                onClick={handleCopySessionId}
-                className="ml-2 p-1 hover:bg-green-100 rounded-sm transition-colors"
-              >
-                <CopyOutlined style={{ fontSize: "12px" }} />
-              </button>
+              </TooltipContent>
             </Tooltip>
           )}
         </div>

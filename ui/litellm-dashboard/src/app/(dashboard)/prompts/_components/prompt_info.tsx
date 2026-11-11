@@ -1,25 +1,10 @@
 import React, { useState, useEffect, useRef } from "react";
-import {
-  Card,
-  Title,
-  Text,
-  Grid,
-  Badge,
-  Button as TremorButton,
-  Tab,
-  TabGroup,
-  TabList,
-  TabPanel,
-  TabPanels,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeaderCell,
-  TableRow,
-} from "@tremor/react";
-import { Button, Modal } from "antd";
-import { ArrowLeftIcon, TrashIcon, PencilIcon } from "@heroicons/react/outline";
+import { Trans, useTranslation } from "react-i18next";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   getPromptInfo,
   getPromptVersions,
@@ -28,13 +13,16 @@ import {
   deletePromptCall,
 } from "@/components/networking";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
-import { CheckIcon, CopyIcon } from "lucide-react";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { ArrowLeft, CheckIcon, CopyIcon, Pencil, Trash2 } from "lucide-react";
+import { toast } from "@/lib/toast";
+import { UserReference } from "@/components/shared/UserReference";
 import PromptCodeSnippets from "./prompt_editor_view/PromptCodeSnippets";
 import { extractModel, extractTemplateVariables, getBasePromptId, getCurrentVersion } from "./prompt_utils";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 export interface PromptInfoProps {
   promptId: string;
+  initialEnvironment?: string;
   onClose: () => void;
   accessToken: string | null;
   isAdmin: boolean;
@@ -42,7 +30,16 @@ export interface PromptInfoProps {
   onEdit?: (promptData: any) => void;
 }
 
-const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessToken, isAdmin, onDelete, onEdit }) => {
+const PromptInfoView: React.FC<PromptInfoProps> = ({
+  promptId,
+  initialEnvironment,
+  onClose,
+  accessToken,
+  isAdmin,
+  onDelete,
+  onEdit,
+}) => {
+  const { t } = useTranslation();
   const [promptData, setPromptData] = useState<PromptSpec | null>(null);
   const [promptTemplate, setPromptTemplate] = useState<PromptTemplateBase | null>(null);
   const [rawApiResponse, setRawApiResponse] = useState<any>(null);
@@ -58,7 +55,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
   const [loadingVersions, setLoadingVersions] = useState(false);
 
-  // Initial fetch — no environment filter, gets default + all environments list
+  // Fetches the requested environment (or the serve-time default when omitted) plus the environments list
   const fetchPromptInfo = async (environment?: string) => {
     try {
       setLoading(true);
@@ -77,7 +74,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
       }
       setSelectedVersion(response.prompt_spec.version || null);
     } catch (error) {
-      NotificationsManager.fromBackend("Failed to load prompt information");
+      toast.fromError(t("prompts.info.toasts.loadFailed"));
       console.error("Error fetching prompt info:", error);
     } finally {
       setLoading(false);
@@ -104,7 +101,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
     setSelectedEnv(null);
     setEnvironments([]);
     setVersionHistory([]);
-    fetchPromptInfo();
+    fetchPromptInfo(initialEnvironment);
   }, [promptId, accessToken]);
 
   // When environment changes (user clicks tab), re-fetch — skip initial mount
@@ -124,11 +121,11 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
   }, [selectedEnv]);
 
   if (loading && !promptData) {
-    return <div className="p-4">Loading...</div>;
+    return <div className="p-4">{t("prompts.info.loading")}</div>;
   }
 
   if (!promptData) {
-    return <div className="p-4">Prompt not found</div>;
+    return <div className="p-4">{t("prompts.info.notFound")}</div>;
   }
 
   const formatDate = (dateString?: string) => {
@@ -156,12 +153,12 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
     setIsDeleting(true);
     try {
       await deletePromptCall(accessToken, basePromptId);
-      NotificationsManager.success(`Prompt "${basePromptId}" deleted successfully`);
+      toast.success(t("prompts.info.toasts.deleted", { name: basePromptId }));
       onDelete?.();
       onClose();
     } catch (error) {
       console.error("Error deleting prompt:", error);
-      NotificationsManager.fromBackend("Failed to delete prompt");
+      toast.fromError(t("prompts.info.toasts.deleteFailed"));
     } finally {
       setIsDeleting(false);
       setShowDeleteConfirm(false);
@@ -184,7 +181,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
       setPromptTemplate(response.raw_prompt_template);
       setRawApiResponse(response);
     } catch {
-      NotificationsManager.fromBackend(`Failed to load version v${versionNum}`);
+      toast.fromError(t("prompts.info.toasts.loadVersionFailed", { version: versionNum }));
     }
   };
 
@@ -197,25 +194,27 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
   return (
     <div className="p-4">
       <div>
-        <TremorButton icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
-          Back to Prompts
-        </TremorButton>
+        <Button variant="ghost" onClick={onClose} className="mb-4">
+          <ArrowLeft className="size-4" />
+          {t("prompts.info.back")}
+        </Button>
         <div className="flex justify-between items-start mb-4">
           <div>
-            <Title>Prompt Details</Title>
+            <h1 className="text-2xl font-semibold">{t("prompts.info.title")}</h1>
             <div className="flex items-center cursor-pointer">
-              <Text className="text-gray-500 font-mono">{basePromptId}</Text>
+              <p className="text-sm text-muted-foreground font-mono">{basePromptId}</p>
               <Button
-                type="text"
-                size="small"
-                icon={copiedStates["prompt-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+                variant="ghost"
+                size="icon-xs"
                 onClick={() => copyToClipboard(basePromptId, "prompt-id")}
-                className={`left-2 z-10 transition-all duration-200 ${
+                className={`left-2 z-raised transition-all duration-200 ${
                   copiedStates["prompt-id"]
-                    ? "text-green-600 bg-green-50 border-green-200"
-                    : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                    ? "text-success bg-success/10 border-success/20"
+                    : "text-muted-foreground hover:text-foreground hover:bg-accent"
                 }`}
-              />
+              >
+                {copiedStates["prompt-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+              </Button>
             </div>
           </div>
           <div className="flex gap-2">
@@ -225,24 +224,17 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
               promptVariables={extractTemplateVariables(promptTemplate?.content)}
               accessToken={accessToken}
               version={currentVersion}
+              environment={selectedEnv ?? promptData.environment}
             />
-            <TremorButton
-              icon={PencilIcon}
-              variant="primary"
-              onClick={() => onEdit?.(rawApiResponse)}
-              className="flex items-center"
-            >
-              Prompt Studio
-            </TremorButton>
+            <Button onClick={() => onEdit?.(rawApiResponse)} className="flex items-center">
+              <Pencil />
+              {t("prompts.info.openStudio")}
+            </Button>
             {isAdmin && (
-              <TremorButton
-                icon={TrashIcon}
-                variant="secondary"
-                onClick={handleDeleteClick}
-                className="flex items-center"
-              >
-                Delete Prompt
-              </TremorButton>
+              <Button variant="secondary" onClick={handleDeleteClick} className="flex items-center">
+                <Trash2 />
+                {t("prompts.info.deletePrompt")}
+              </Button>
             )}
           </div>
         </div>
@@ -266,16 +258,18 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
                   selectedEnv === env
                     ? env === "production"
-                      ? "bg-red-100 text-red-800 border-2 border-red-300"
+                      ? "bg-destructive/15 text-destructive border-2 border-destructive/30"
                       : env === "staging"
-                        ? "bg-yellow-100 text-yellow-800 border-2 border-yellow-300"
-                        : "bg-green-100 text-green-800 border-2 border-green-300"
-                    : "bg-gray-100 text-gray-600 border-2 border-transparent hover:bg-gray-200"
+                        ? "bg-warning/15 text-warning border-2 border-warning/30"
+                        : "bg-success/15 text-success border-2 border-success/30"
+                    : "bg-muted text-muted-foreground border-2 border-transparent hover:bg-accent"
                 }`}
               >
                 {env}
                 {versionHistory.length > 0 && selectedEnv === env && (
-                  <span className="ml-1 text-xs opacity-75">(v{latestVersion})</span>
+                  <span className="ml-1 text-xs opacity-75">
+                    {t("prompts.info.environmentVersion", { version: latestVersion })}
+                  </span>
                 )}
               </button>
             ))}
@@ -284,82 +278,96 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
 
       {/* Old version banner */}
       {isViewingOldVersion && (
-        <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg flex items-center justify-between">
-          <Text className="text-amber-800">
-            Viewing v{selectedVersion} — not the latest version (v{latestVersion})
-          </Text>
-          <TremorButton
-            variant="light"
-            size="xs"
+        <div className="mb-4 p-3 bg-warning/10 border border-warning/20 rounded-lg flex items-center justify-between">
+          <p className="text-sm text-warning">
+            {t("prompts.info.oldVersionBanner", { selected: selectedVersion, latest: latestVersion })}
+          </p>
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={() => {
               const latest = versionHistory.find((v) => v.version === latestVersion);
               if (latest) handleVersionClick(latest);
             }}
           >
-            Go to latest
-          </TremorButton>
+            {t("prompts.info.goToLatest")}
+          </Button>
         </div>
       )}
 
-      <TabGroup>
-        <TabList className="mb-4">
-          <Tab key="overview">Overview</Tab>
-          {promptTemplate ? <Tab key="prompt-template">Prompt Template</Tab> : <></>}
-          <Tab key="raw-json">Raw JSON</Tab>
-        </TabList>
+      <Tabs defaultValue="overview">
+        <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
+          <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
+            {t("prompts.info.tabs.overview")}
+          </TabsTrigger>
+          {promptTemplate && (
+            <TabsTrigger value="prompt-template" className="flex-none rounded-none px-4 py-2">
+              {t("prompts.info.tabs.template")}
+            </TabsTrigger>
+          )}
+          <TabsTrigger value="raw-json" className="flex-none rounded-none px-4 py-2">
+            {t("prompts.info.tabs.rawJson")}
+          </TabsTrigger>
+        </TabsList>
 
-        <TabPanels>
+        <div>
           {/* Overview Panel */}
-          <TabPanel>
-            <Grid numItems={1} numItemsSm={2} numItemsLg={4} className="gap-4">
-              <Card>
-                <Text>Version</Text>
+          <TabsContent value="overview" keepMounted>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <Card className="block p-6">
+                <p>{t("prompts.info.overview.version")}</p>
                 <div className="mt-2">
-                  <Title>{currentVersion}</Title>
-                  <Badge color="blue" className="mt-1">
-                    v{currentVersion}
+                  <h3 className="text-lg font-medium">{currentVersion}</h3>
+                  <Badge variant="secondary" className="mt-1">
+                    {t("prompts.info.versionLabel", { version: currentVersion })}
                   </Badge>
                 </div>
               </Card>
 
-              <Card>
-                <Text>Prompt Type</Text>
+              <Card className="block p-6">
+                <p>{t("prompts.info.overview.promptType")}</p>
                 <div className="mt-2">
-                  <Title>{promptData.prompt_info?.prompt_type || "-"}</Title>
+                  <h3 className="text-lg font-medium">{promptData.prompt_info?.prompt_type || "-"}</h3>
                 </div>
               </Card>
 
-              <Card>
-                <Text>Created By</Text>
+              <Card className="block p-6">
+                <p>{t("prompts.info.overview.createdBy")}</p>
                 <div className="mt-2">
-                  <Title className="text-sm">{promptData.created_by || "-"}</Title>
+                  <h3 className="text-sm font-medium">
+                    {promptData.created_by ? <UserReference userId={promptData.created_by} /> : "-"}
+                  </h3>
                 </div>
               </Card>
 
-              <Card>
-                <Text>Created At</Text>
+              <Card className="block p-6">
+                <p>{t("prompts.info.overview.createdAt")}</p>
                 <div className="mt-2">
-                  <Title className="text-sm">{formatDate(promptData.created_at)}</Title>
-                  <Text className="text-xs">Updated: {formatDate(promptData.updated_at)}</Text>
+                  <h3 className="text-sm font-medium">{formatDate(promptData.created_at)}</h3>
+                  <p className="text-xs">
+                    {t("prompts.info.overview.updated", { date: formatDate(promptData.updated_at) })}
+                  </p>
                 </div>
               </Card>
-            </Grid>
+            </div>
 
             {/* Version History Table */}
-            <Card className="mt-6">
-              <Title className="mb-3">Version History — {selectedEnv}</Title>
+            <Card className="block mt-6 p-6">
+              <h3 className="text-lg font-medium mb-3">
+                {t("prompts.info.history.title", { environment: selectedEnv })}
+              </h3>
               {loadingVersions ? (
-                <Text>Loading versions...</Text>
+                <p>{t("prompts.info.history.loading")}</p>
               ) : versionHistory.length > 0 ? (
                 <Table>
-                  <TableHead>
+                  <TableHeader>
                     <TableRow>
-                      <TableHeaderCell>Version</TableHeaderCell>
-                      <TableHeaderCell>Created By</TableHeaderCell>
-                      <TableHeaderCell>Date</TableHeaderCell>
-                      <TableHeaderCell>Actions</TableHeaderCell>
+                      <TableHead>{t("prompts.info.history.columns.version")}</TableHead>
+                      <TableHead>{t("prompts.info.history.columns.createdBy")}</TableHead>
+                      <TableHead>{t("prompts.info.history.columns.date")}</TableHead>
+                      <TableHead>{t("prompts.info.history.columns.actions")}</TableHead>
                     </TableRow>
-                  </TableHead>
+                  </TableHeader>
                   <TableBody>
                     {versionHistory.map((v) => {
                       const vNum = v.version || 1;
@@ -368,16 +376,18 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
                       return (
                         <TableRow
                           key={vNum}
-                          className={`cursor-pointer hover:bg-blue-50 transition-colors ${
-                            isSelected ? "bg-blue-50" : ""
+                          className={`cursor-pointer hover:bg-info/10 transition-colors ${
+                            isSelected ? "bg-info/10" : ""
                           }`}
                           onClick={() => handleVersionClick(v)}
                         >
                           <TableCell>
-                            <span className={isSelected ? "font-bold" : ""}>v{vNum}</span>
+                            <span className={isSelected ? "font-bold" : ""}>
+                              {t("prompts.info.versionLabel", { version: vNum })}
+                            </span>
                             {isLatest && (
-                              <Badge color="blue" className="ml-2" size="xs">
-                                latest
+                              <Badge variant="secondary" className="ml-2">
+                                {t("prompts.info.history.latest")}
                               </Badge>
                             )}
                           </TableCell>
@@ -388,10 +398,9 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
                             <span className="text-sm">{formatDate(v.created_at)}</span>
                           </TableCell>
                           <TableCell>
-                            <TremorButton
-                              icon={PencilIcon}
-                              variant="light"
-                              size="xs"
+                            <Button
+                              variant="ghost"
+                              size="sm"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 // Build a response-like object for the editor
@@ -406,8 +415,9 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
                                 onEdit?.(editData);
                               }}
                             >
-                              Edit
-                            </TremorButton>
+                              <Pencil />
+                              {t("prompts.info.history.edit")}
+                            </Button>
                           </TableCell>
                         </TableRow>
                       );
@@ -415,52 +425,50 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
                   </TableBody>
                 </Table>
               ) : (
-                <Text className="text-gray-400">No versions found in {selectedEnv}</Text>
+                <p className="text-muted-foreground">{t("prompts.info.history.empty", { environment: selectedEnv })}</p>
               )}
             </Card>
-          </TabPanel>
+          </TabsContent>
 
           {/* Prompt Template Panel */}
           {promptTemplate && (
-            <TabPanel>
-              <Card>
+            <TabsContent value="prompt-template" keepMounted>
+              <Card className="block p-6">
                 <div className="flex justify-between items-center mb-4">
-                  <Title>Prompt Template</Title>
+                  <h3 className="text-lg font-medium">{t("prompts.info.template.title")}</h3>
                   <Button
-                    type="text"
-                    size="small"
-                    icon={copiedStates["prompt-content"] ? <CheckIcon size={16} /> : <CopyIcon size={16} />}
+                    variant="ghost"
+                    size="sm"
                     onClick={() => copyToClipboard(promptTemplate.content, "prompt-content")}
                     className={`transition-all duration-200 ${
                       copiedStates["prompt-content"]
-                        ? "text-green-600 bg-green-50 border-green-200"
-                        : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                        ? "text-success bg-success/10 border-success/20"
+                        : "text-muted-foreground hover:text-foreground hover:bg-accent"
                     }`}
                   >
-                    {copiedStates["prompt-content"] ? "Copied!" : "Copy Content"}
+                    {copiedStates["prompt-content"] ? <CheckIcon size={16} /> : <CopyIcon size={16} />}
+                    {copiedStates["prompt-content"] ? t("prompts.info.copied") : t("prompts.info.template.copy")}
                   </Button>
                 </div>
 
                 <div className="space-y-4">
                   <div>
-                    <Text className="font-medium">Template ID</Text>
-                    <div className="font-mono text-sm bg-gray-50 p-2 rounded-sm">
-                      {promptTemplate.litellm_prompt_id}
-                    </div>
+                    <p className="font-medium">{t("prompts.info.template.id")}</p>
+                    <div className="font-mono text-sm bg-muted p-2 rounded-sm">{promptTemplate.litellm_prompt_id}</div>
                   </div>
 
                   <div>
-                    <Text className="font-medium">Content</Text>
-                    <div className="mt-2 p-4 bg-gray-50 rounded-md border overflow-auto max-h-96">
-                      <pre className="text-sm text-gray-800 whitespace-pre-wrap">{promptTemplate.content}</pre>
+                    <p className="font-medium">{t("prompts.info.template.content")}</p>
+                    <div className="mt-2 p-4 bg-muted rounded-md border overflow-auto max-h-96">
+                      <pre className="text-sm text-foreground whitespace-pre-wrap">{promptTemplate.content}</pre>
                     </div>
                   </div>
 
                   {promptTemplate.metadata && Object.keys(promptTemplate.metadata).length > 0 && (
                     <div>
-                      <Text className="font-medium">Template Metadata</Text>
-                      <div className="mt-2 p-3 bg-gray-50 rounded-md border">
-                        <pre className="text-xs text-gray-800 whitespace-pre-wrap overflow-auto max-h-64">
+                      <p className="font-medium">{t("prompts.info.template.metadata")}</p>
+                      <div className="mt-2 p-3 bg-muted rounded-md border">
+                        <pre className="text-xs text-foreground whitespace-pre-wrap overflow-auto max-h-64">
                           {JSON.stringify(promptTemplate.metadata, null, 2)}
                         </pre>
                       </div>
@@ -468,54 +476,62 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
                   )}
                 </div>
               </Card>
-            </TabPanel>
+            </TabsContent>
           )}
 
           {/* Raw JSON Panel */}
-          <TabPanel>
-            <Card>
+          <TabsContent value="raw-json" keepMounted>
+            <Card className="block p-6">
               <div className="flex justify-between items-center mb-4">
-                <Title>Raw API Response</Title>
+                <h3 className="text-lg font-medium">{t("prompts.info.rawJson.title")}</h3>
                 <Button
-                  type="text"
-                  size="small"
-                  icon={copiedStates["raw-json"] ? <CheckIcon size={16} /> : <CopyIcon size={16} />}
+                  variant="ghost"
+                  size="sm"
                   onClick={() => copyToClipboard(JSON.stringify(rawApiResponse, null, 2), "raw-json")}
                   className={`transition-all duration-200 ${
                     copiedStates["raw-json"]
-                      ? "text-green-600 bg-green-50 border-green-200"
-                      : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                      ? "text-success bg-success/10 border-success/20"
+                      : "text-muted-foreground hover:text-foreground hover:bg-accent"
                   }`}
                 >
-                  {copiedStates["raw-json"] ? "Copied!" : "Copy JSON"}
+                  {copiedStates["raw-json"] ? <CheckIcon size={16} /> : <CopyIcon size={16} />}
+                  {copiedStates["raw-json"] ? t("prompts.info.copied") : t("prompts.info.rawJson.copy")}
                 </Button>
               </div>
 
-              <div className="p-4 bg-gray-50 rounded-md border overflow-auto">
-                <pre className="text-xs text-gray-800 whitespace-pre-wrap">
+              <div className="p-4 bg-muted rounded-md border overflow-auto">
+                <pre className="text-xs text-foreground whitespace-pre-wrap">
                   {JSON.stringify(rawApiResponse, null, 2)}
                 </pre>
               </div>
             </Card>
-          </TabPanel>
-        </TabPanels>
-      </TabGroup>
+          </TabsContent>
+        </div>
+      </Tabs>
 
       {/* Delete Confirmation Modal */}
-      <Modal
-        title="Delete Prompt"
-        open={showDeleteConfirm}
-        onOk={handleDeleteConfirm}
-        onCancel={handleDeleteCancel}
-        confirmLoading={isDeleting}
-        okText="Delete"
-        okButtonProps={{ danger: true }}
-      >
-        <p>
-          Are you sure you want to delete prompt: <strong>{basePromptId}</strong>?
-        </p>
-        <p>This action cannot be undone.</p>
-      </Modal>
+      <Dialog open={showDeleteConfirm} onOpenChange={(open) => !open && handleDeleteCancel()}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{t("prompts.info.deleteDialog.title")}</DialogTitle>
+          </DialogHeader>
+          <p>
+            <Trans
+              i18nKey="prompts.info.deleteDialog.description"
+              components={{ strong: <strong />, name: <>{basePromptId}</> }}
+            />
+          </p>
+          <p>{t("prompts.info.deleteDialog.warning")}</p>
+          <DialogFooter>
+            <Button variant="outline" onClick={handleDeleteCancel}>
+              {t("prompts.info.deleteDialog.cancel")}
+            </Button>
+            <Button onClick={handleDeleteConfirm} variant="destructive" disabled={isDeleting} aria-busy={isDeleting}>
+              {t("prompts.info.deleteDialog.confirm")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

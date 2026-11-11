@@ -1,6 +1,6 @@
 import { CACHE_FIELDS, CacheField, CacheSection, REDACTED_VALUE, RedisType } from "./cacheSettingsFields";
 
-export type CacheFormValue = string | number | boolean | undefined;
+export type CacheFormValue = string | number | boolean | null | undefined;
 export type CacheFormValues = Record<string, CacheFormValue>;
 export type CacheSavePayloadValue = string | number | boolean | unknown[];
 export type CacheSavePayload = Record<string, CacheSavePayloadValue>;
@@ -38,6 +38,9 @@ const initialValueForField = (field: CacheField, raw: unknown): CacheFormValue =
     return typeof source === "string" ? source : JSON.stringify(source, null, 2);
   }
 
+  if ((field.type === "select" || field.type === "model-select") && !hasValue(source)) {
+    return null;
+  }
   if (source === undefined || source === null) {
     return "";
   }
@@ -77,7 +80,7 @@ const saveValueForField = (field: CacheField, raw: CacheFormValue): CacheSavePay
   }
 
   if (typeof raw !== "string") {
-    return raw === undefined ? undefined : String(raw);
+    return raw == null ? undefined : String(raw);
   }
   const trimmed = raw.trim();
   return trimmed === "" ? undefined : trimmed;

@@ -16,20 +16,17 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, Final, List, Mapping, Optional, Sequence, Tuple, Union
 
-from claude_code.rate_limiter import (
-    RateLimiter,
-    get_default_limiter,
-    infer_provider,
-)
+from cli_harness.lockdown import isolated_home, locked_down_env
+from cli_harness.rate_limiter import RateBucket, RateLimiter, get_default_limiter
+from e2e_metadata import step
 
 CLAUDE_CLI_DEFAULT = "claude"
 # 120s is fine for a single isolated CLI call against an unloaded
@@ -52,6 +49,17 @@ the CLI retries 429s internally until the harness timeout kills it,
 so a saturated upstream usually surfaces as a timeout rather than a
 clean 429."""
 
+TRANSIENT_UPSTREAM_SHAPED_RE = re.compile(
+    r"(?:\b503\b|\b529\b|service[\s_-]?unavailable|overloaded|"
+    r"unable\s+to\s+process\s+your\s+request)",
+    re.IGNORECASE,
+)
+"""Upstream saturation, retried on the same terms as a 429 but deliberately a
+separate pattern: it must not reach the rate-limit summary, whose only remedy is
+lowering our own request rate, which does nothing for a provider that is simply
+out of capacity."""
+
+
 DEFAULT_RATE_LIMIT_RETRIES = int(
     os.environ.get("LITELLM_COMPAT_RATE_LIMIT_RETRIES") or 2
 )
@@ -64,61 +72,92 @@ Anthropic / Bedrock / Vertex) to reset. Both knobs are env-tunable so
 a matrix run can trade wall time for resilience without code edits;
 retries=0 disables the behavior entirely."""
 
-# Env vars the `claude` Node CLI legitimately needs to function:
-# locating its own binary + node, basic locale/terminal plumbing.
-# Deliberately excludes every credential-bearing var that the
-# surrounding CI job sets for the proxy (ANTHROPIC_API_KEY, AWS_*,
-# AZURE_*, VERTEXAI_CREDENTIALS, GITHUB_TOKEN, OPENAI_API_KEY,
-# DATABASE_URL, ...). The CLI talks to the proxy via the explicit
-# ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN we set below — it has no
-# business reading the proxy's upstream credentials, and a
-# compromised CLI release shouldn't be able to exfiltrate them out
-# of the CI environment.
-#
-# `HOME` is intentionally NOT in this list: see `_make_isolated_home`
-# below. We give the CLI a fresh empty per-invocation HOME so a
-# compromised claude package or a model-directed `Read` tool call
-# can't reach files like `~/.config/gh/hosts.yml`, `~/.ssh/id_rsa`,
-# or `~/.bash_history` on the cron VM (and on the CircleCI executor
-# the same isolation prevents accidentally exposing checkout-adjacent
-# files even though the runner home is ephemeral there).
-_CLI_ENV_ALLOWLIST: tuple = (
-    "PATH",
-    "USER",
-    "LOGNAME",
-    "SHELL",
-    "TERM",
-    "TMPDIR",
-    "LANG",
-    "LC_ALL",
-    "LC_CTYPE",
-    "NODE_PATH",
-    "NVM_DIR",
-    "NVM_BIN",
-)
 
+def infer_provider(model: str) -> RateBucket:
+    """Map a model alias to its compat-matrix rate bucket.
 
-def _make_isolated_home() -> str:
-    """Create a fresh empty HOME directory for a single `claude` subprocess.
-
-    The CLI needs *a* writable HOME (it caches per-session state under
-    `$HOME/.claude/projects/<sha>/`), but it has no legitimate need
-    for the *user's* HOME. Handing it the real one means a compromised
-    `@anthropic-ai/claude-code` release, or a model-directed `Read`
-    tool call during a PDF/vision cell, can read host files like
-    `~/.config/gh/hosts.yml` (GitHub CLI host token), `~/.ssh/`,
-    `~/.bash_history`, or any other dotfile under the runtime user's
-    home. On the cron VM the runtime user is a real interactive
-    account (`mateo`) with a populated home directory, so this is a
-    real exfiltration surface.
-
-    The directory is created under `tempfile.gettempdir()` (which is
-    `/tmp` on Linux; under systemd's `PrivateTmp=true` that's a
-    per-service tmpfs that the service user can't otherwise reach).
-    Caller is responsible for `shutil.rmtree`-ing it after the
-    subprocess exits.
+    The matrix column layout is fixed; aliases registered in the proxy
+    encode the provider via a suffix (`-bedrock-converse`,
+    `-bedrock-invoke`, `-azure`, `-vertex`, `-openai`, `-azure-openai`,
+    `-bedrock-mantle`) or its absence (Anthropic). Order matters:
+    `-azure-openai` also ends with `-openai`, and the bedrock suffixes
+    all contain `bedrock`, so the more-specific suffixes are tested
+    first.
     """
-    return tempfile.mkdtemp(prefix="claude-cli-home-")
+    if not model:
+        raise ValueError("model must be a non-empty string")
+    lower: Final = model.lower()
+    if lower.endswith("-azure-openai"):
+        return RateBucket.AZURE_OPENAI
+    if lower.endswith("-openai"):
+        return RateBucket.OPENAI
+    if lower.endswith("-bedrock-mantle"):
+        return RateBucket.BEDROCK_MANTLE
+    if lower.endswith("-bedrock-converse"):
+        return RateBucket.BEDROCK_CONVERSE
+    if lower.endswith("-bedrock-invoke"):
+        return RateBucket.BEDROCK_INVOKE
+    if lower.endswith("-azure"):
+        return RateBucket.AZURE
+    if lower.endswith("-vertex"):
+        return RateBucket.VERTEX_AI
+    return RateBucket.ANTHROPIC
+
+
+_FIXED_CLI_USER_ID = "0" * 64
+_FIXED_CLI_SESSION_ID = "00000000-0000-4000-8000-000000000000"
+
+
+def _seed_cli_identity(config_dir: str) -> None:
+    """Pin the device id the CLI would otherwise mint per config directory.
+
+    It mints 32 random bytes on first run, writes them to `.claude.json` as
+    `userID`, and sends them in `metadata.user_id` forever after, so the value
+    is stable for exactly as long as that file lives. Pinning it, and the
+    session id passed beside it, costs nothing: both feed abuse detection
+    rather than quota, caching or continuity.
+
+    The staged name has to be unique per *thread*, not per process:
+    `run_claude_models_parallel` drives several models from one process, so a
+    pid-suffixed name lets one thread rename the file another is still
+    writing, and the loser dies on a missing path."""
+    path = os.path.join(config_dir, ".claude.json")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            if json.load(handle).get("userID") == _FIXED_CLI_USER_ID:
+                return
+    except (OSError, ValueError):
+        pass
+    handle_fd, staged = tempfile.mkstemp(dir=config_dir, prefix=".claude.json.")
+    with os.fdopen(handle_fd, "w", encoding="utf-8") as handle:
+        json.dump({"userID": _FIXED_CLI_USER_ID}, handle)
+    os.replace(staged, path)
+
+
+def _stable_cli_state() -> Tuple[str, str]:
+    """Config directory and working directory for the CLI, at fixed paths.
+
+    Both reach the request body. The memory directory the system prompt
+    names is `$CLAUDE_CONFIG_DIR/projects/<cwd slug>/memory`, and a working
+    directory inside a git repository also contributes its branch and recent
+    commits. So a per-invocation config directory rewrites every body, and
+    inheriting the checkout rewrites every body once per candidate, which is
+    why the shared provider cache could never serve a Claude Code cell.
+    Pinning both makes the bodies repeatable across builds.
+
+    This narrows what survives rather than widening it: HOME stays fresh and
+    empty per invocation, so the isolation `cli_harness.lockdown` describes is
+    unchanged, and the CLI's own state no longer outlives the pod either. The
+    working directory is deliberately not the checkout, so a model-directed
+    `Read` sees an empty directory instead of the repository.
+    """
+    root = os.path.join(tempfile.gettempdir(), f"litellm-e2e-claude-{os.getuid()}")
+    config_dir = os.path.join(root, "config")
+    workspace = os.path.join(root, "workspace")
+    for path in (root, config_dir, workspace):
+        os.makedirs(path, mode=0o700, exist_ok=True)
+    _seed_cli_identity(config_dir)
+    return config_dir, workspace
 
 
 class ClaudeCLIError(RuntimeError):
@@ -144,6 +183,7 @@ class DriverResult:
     duration_ms: Optional[int] = None
 
 
+@step("Run Claude Code headless against {model} through the proxy")
 def run_claude(
     *,
     prompt: Optional[str],
@@ -211,6 +251,9 @@ def run_claude(
         "--verbose",
         "--model",
         model,
+        "--session-id",
+        _FIXED_CLI_SESSION_ID,
+        "--no-session-persistence",
     ]
     if extra_args:
         cmd.extend(extra_args)
@@ -218,39 +261,31 @@ def run_claude(
         cmd.append("--")
         cmd.append(prompt)
 
-    # Build a minimal env for the CLI subprocess: only the allowlisted
-    # process-runtime vars from os.environ, plus the explicit proxy
-    # creds, plus any caller-supplied overrides. See _CLI_ENV_ALLOWLIST
-    # above for the security rationale.
-    env: Dict[str, str] = {
-        key: os.environ[key] for key in _CLI_ENV_ALLOWLIST if key in os.environ
-    }
-    env["ANTHROPIC_BASE_URL"] = base_url
-    env["ANTHROPIC_AUTH_TOKEN"] = api_key
-    # Hand the CLI a fresh empty HOME so a compromised claude package
-    # or a model-directed Read tool call can't see the runtime user's
-    # real dotfiles. Created here, removed in the `finally` below
-    # regardless of how the subprocess exits.
-    isolated_home = _make_isolated_home()
-    env["HOME"] = isolated_home
-    if extra_env:
-        env.update(extra_env)
-
     # Throttle by provider *before* launching the CLI. Doing this here
     # (rather than per-test) means every code path that lands on
     # `run_claude` is rate-limited automatically — including
     # `run_claude_models_parallel`, which is the hot path during the
     # full matrix run.
     limiter = rate_limiter if rate_limiter is not None else get_default_limiter()
-    provider = infer_provider(model)
-    limiter.acquire(provider)
-
     run_fn = runner or subprocess.run
-    try:
+    with isolated_home("claude-cli-home-") as home:
+        config_dir, workspace = _stable_cli_state()
+        env = locked_down_env(
+            home=home,
+            overrides={
+                "ANTHROPIC_BASE_URL": base_url,
+                "ANTHROPIC_AUTH_TOKEN": api_key,
+                "DISABLE_AUTOUPDATER": "1",
+                "CLAUDE_CONFIG_DIR": config_dir,
+                **(extra_env or {}),
+            },
+        )
+        limiter.acquire(infer_provider(model))
         try:
             completed = run_fn(
                 cmd,
                 env=env,
+                cwd=workspace,
                 input=stdin_input,
                 capture_output=True,
                 text=True,
@@ -263,15 +298,6 @@ def run_claude(
             ) from exc
         except subprocess.TimeoutExpired as exc:
             raise ClaudeCLIError(f"claude CLI timed out after {timeout}s") from exc
-    finally:
-        # Best-effort cleanup. If the subprocess wrote a `.claude/`
-        # session dir under the isolated HOME, we remove it here so
-        # parallel matrix runs don't accumulate per-call tmpdirs.
-        # `ignore_errors=True` because rmtree races with any
-        # not-yet-reaped child (SIGTERM'd `claude` on a host-side
-        # timeout) are benign — the next matrix run starts from a
-        # fresh tmpdir anyway.
-        shutil.rmtree(isolated_home, ignore_errors=True)
 
     events = _parse_stream_json(completed.stdout or "")
     text = _extract_assistant_text(events)
@@ -298,13 +324,30 @@ def is_rate_limit_shaped(outcome: ModelResult) -> bool:
     CLI's stdout text or `api_error_status` are both caught. Passing
     results are never rate-limit-shaped.
     """
+    return _matches_failure_shape(outcome, RATE_LIMIT_SHAPED_RE)
+
+
+def is_transient_upstream_shaped(outcome: ModelResult) -> bool:
+    """Classify an outcome as a retryable upstream-saturation failure: a 503 or
+    529, an "overloaded" marker, or Bedrock's "unable to process your request"."""
+    return _matches_failure_shape(outcome, TRANSIENT_UPSTREAM_SHAPED_RE)
+
+
+def is_retryable_shaped(outcome: ModelResult) -> bool:
+    """Either retryable shape. This, not `is_rate_limit_shaped`, is what the
+    retry loop asks: both shapes clear on their own given time."""
+    return is_rate_limit_shaped(outcome) or is_transient_upstream_shaped(outcome)
+
+
+def _matches_failure_shape(outcome: ModelResult, pattern: "re.Pattern[str]") -> bool:
     if isinstance(outcome, ClaudeCLIError):
-        return bool(RATE_LIMIT_SHAPED_RE.search(str(outcome)))
+        return bool(pattern.search(str(outcome)))
     if outcome.exit_code == 0:
         return False
-    return bool(RATE_LIMIT_SHAPED_RE.search(failure_diagnostic(outcome)))
+    return bool(pattern.search(failure_diagnostic(outcome)))
 
 
+@step("Run Claude Code headless against {models} in parallel through the proxy")
 def run_claude_models_parallel(
     *,
     models: Sequence[str],
@@ -333,7 +376,7 @@ def run_claude_models_parallel(
     keep the synchronous CLI driver unchanged so unit tests can keep
     injecting a fake `runner`.
 
-    Rate-limit-shaped failures (see `is_rate_limit_shaped`) are retried
+    Retryable failures (see `is_retryable_shaped`) are retried
     per model up to `rate_limit_retries` times, sleeping
     `rate_limit_backoff_seconds` before each retry so per-minute quota
     windows can reset; both default to the `LITELLM_COMPAT_RATE_LIMIT_*`
@@ -401,10 +444,11 @@ def run_claude_models_parallel(
         started = time.monotonic()
         outcome = _run_once(model)
         for attempt in range(retries):
-            if not is_rate_limit_shaped(outcome):
+            if not is_retryable_shaped(outcome):
                 break
+            shape = "rate-limit" if is_rate_limit_shaped(outcome) else "transient-upstream"
             print(
-                f"[retry] {model}: rate-limit-shaped failure; sleeping "
+                f"[retry] {model}: {shape}-shaped failure; sleeping "
                 f"{backoff:.0f}s before attempt {attempt + 2}/{retries + 1}",
                 file=sys.stderr,
                 flush=True,

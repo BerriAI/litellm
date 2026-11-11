@@ -2,6 +2,7 @@ import { screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { renderWithProviders } from "@/../tests/test-utils";
 import { DailyData, MetricWithMetadata, SpendMetrics } from "@/components/UsagePage/types";
+import { STACKED_USAGE_PALETTE } from "@/components/shared/charts";
 import EndpointUsageLineChart from "./EndpointUsageLineChart";
 
 const spendMetrics = (apiRequests: number): SpendMetrics => ({
@@ -53,13 +54,13 @@ describe("EndpointUsageLineChart", () => {
     expect(screen.getByText("Endpoint Usage Trends")).toBeInTheDocument();
   });
 
-  it("renders one line per endpoint with the tremor palette strokes", () => {
+  it("renders one line per endpoint with the stacked usage palette strokes", () => {
     const { container } = renderWithProviders(<EndpointUsageLineChart dailyData={dailyData} />);
 
     const curves = Array.from(container.querySelectorAll("path.recharts-line-curve"));
     expect(curves).toHaveLength(2);
     expect(new Set(curves.map((curve) => curve.getAttribute("stroke")))).toEqual(
-      new Set(["var(--color-blue-500, #3b82f6)", "var(--color-cyan-500, #06b6d4)"]),
+      new Set([STACKED_USAGE_PALETTE[0], STACKED_USAGE_PALETTE[1]]),
     );
   });
 
@@ -68,8 +69,8 @@ describe("EndpointUsageLineChart", () => {
 
     const legend = container.querySelector(".recharts-legend-wrapper");
     expect(legend).not.toBeNull();
-    expect(legend!.textContent).toContain("/chat/completions");
-    expect(legend!.textContent).toContain("/embeddings");
+    expect(legend!).toHaveTextContent(/\/chat\/completions/);
+    expect(legend!).toHaveTextContent(/\/embeddings/);
   });
 
   it("orders formatted dates oldest to newest on the x axis", () => {
@@ -87,7 +88,7 @@ describe("EndpointUsageLineChart", () => {
     expect(screen.getAllByText(/^\d,\d{3}$/).length).toBeGreaterThan(0);
   });
 
-  it("draws smooth natural curves", () => {
+  it("draws smooth curves that never overshoot below zero (monotone)", () => {
     const { container } = renderWithProviders(<EndpointUsageLineChart dailyData={dailyData} />);
 
     const path = container.querySelector("path.recharts-line-curve")?.getAttribute("d") ?? "";

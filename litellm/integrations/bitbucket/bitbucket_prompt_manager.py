@@ -3,12 +3,14 @@ BitBucket prompt manager that integrates with LiteLLM's prompt management system
 Fetches .prompt files from BitBucket repositories and provides team-based access control.
 """
 
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from jinja2 import DictLoader, select_autoescape
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
+from litellm.litellm_core_utils.core_helpers import require_attributes
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -25,6 +27,10 @@ from litellm.types.utils import StandardCallbackDynamicParams
 from .bitbucket_client import BitBucketClient
 
 
+class _SupportsGetWithDefault(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
+
+
 class BitBucketPromptTemplate:
     """
     Represents a prompt template loaded from BitBucket.
@@ -34,7 +40,7 @@ class BitBucketPromptTemplate:
         self,
         template_id: str,
         content: str,
-        metadata: dict[str, Any],
+        metadata: Mapping[str, object],
         model: str | None = None,
     ):
         self.template_id = template_id
@@ -43,7 +49,9 @@ class BitBucketPromptTemplate:
         self.model = model or metadata.get("model")
         self.temperature = metadata.get("temperature")
         self.max_tokens = metadata.get("max_tokens")
-        self.input_schema = metadata.get("input", {}).get("schema", {})
+        self.input_schema = require_attributes(metadata.get("input", {}), _SupportsGetWithDefault, "get").get(
+            "schema", {}
+        )
         self.optional_params = {k: v for k, v in metadata.items() if k not in ["model", "input", "content"]}
 
     def __repr__(self):
@@ -65,7 +73,7 @@ class BitBucketTemplateManager:
 
     def __init__(
         self,
-        bitbucket_config: dict[str, Any],
+        bitbucket_config: Mapping[str, object],
         prompt_id: str | None = None,
     ):
         self.bitbucket_config = bitbucket_config
@@ -93,9 +101,9 @@ class BitBucketTemplateManager:
 
         # Load prompts from BitBucket if prompt_id is provided
         if self.prompt_id:
-            self._load_prompt_from_bitbucket(self.prompt_id)
+            self.load_prompt_from_bitbucket(self.prompt_id)
 
-    def _load_prompt_from_bitbucket(self, prompt_id: str) -> None:
+    def load_prompt_from_bitbucket(self, prompt_id: str) -> None:
         """Load a specific .prompt file from BitBucket."""
         try:
             # Fetch the .prompt file from BitBucket
@@ -106,6 +114,8 @@ class BitBucketTemplateManager:
                 self.prompts[prompt_id] = template
         except Exception as e:
             raise Exception(f"Failed to load prompt '{prompt_id}' from BitBucket: {e}")
+
+    _load_prompt_from_bitbucket = load_prompt_from_bitbucket
 
     def _parse_prompt_file(self, content: str, prompt_id: str) -> BitBucketPromptTemplate:
         """Parse a .prompt file content and extract metadata and template."""
@@ -123,7 +133,7 @@ class BitBucketTemplateManager:
             template_content = content
 
         # Parse YAML frontmatter
-        metadata: dict[str, Any] = {}
+        metadata: dict[str, object] = {}
         if frontmatter_str:
             try:
                 import yaml
@@ -141,9 +151,9 @@ class BitBucketTemplateManager:
             metadata=metadata,
         )
 
-    def _parse_yaml_basic(self, yaml_str: str) -> dict[str, Any]:
+    def _parse_yaml_basic(self, yaml_str: str) -> dict[str, object]:
         """Basic YAML parser for simple cases when PyYAML is not available."""
-        result: Final[dict[str, Any]] = {}
+        result: Final[dict[str, object]] = {}
         for line in yaml_str.split("\n"):
             line = line.strip()
             if ":" in line and not line.startswith("#"):
@@ -162,7 +172,7 @@ class BitBucketTemplateManager:
                     result[key] = value.strip("\"'")
         return result
 
-    def render_template(self, template_id: str, variables: dict[str, Any] | None = None) -> str:
+    def render_template(self, template_id: str, variables: Mapping[str, object] | None = None) -> str:
         """Render a template with the given variables."""
         if template_id not in self.prompts:
             raise ValueError(f"Template '{template_id}' not found")
@@ -209,7 +219,7 @@ class BitBucketPromptManager(CustomPromptManagement):
 
     def __init__(
         self,
-        bitbucket_config: dict[str, Any],
+        bitbucket_config: Mapping[str, object],
         prompt_id: str | None = None,
     ):
         self.bitbucket_config = bitbucket_config
@@ -234,7 +244,7 @@ class BitBucketPromptManager(CustomPromptManagement):
     def get_prompt_template(
         self,
         prompt_id: str,
-        prompt_variables: dict[str, Any] | None = None,
+        prompt_variables: Mapping[str, object] | None = None,
     ) -> tuple[str, dict[str, Any]]:
         """
         Get a prompt template and render it with variables.
@@ -267,12 +277,12 @@ class BitBucketPromptManager(CustomPromptManagement):
         self,
         user_id: str | None,
         messages: list[AllMessageValues],
-        function_call: dict[str, Any] | str | None = None,
-        litellm_params: dict[str, Any] | None = None,
+        function_call: Mapping[str, object] | str | None = None,
+        litellm_params: dict[str, object] | None = None,
         prompt_id: str | None = None,
-        prompt_variables: dict[str, Any] | None = None,
+        prompt_variables: Mapping[str, object] | None = None,
         **kwargs,
-    ) -> tuple[list[AllMessageValues], dict[str, Any] | None]:
+    ) -> tuple[list[AllMessageValues], dict[str, object] | None]:
         """
         Pre-call hook that processes the prompt template before making the LLM call.
         """
@@ -316,9 +326,9 @@ class BitBucketPromptManager(CustomPromptManagement):
 
         except Exception as e:
             # Log error but don't fail the call
-            import litellm
+            from litellm._logging import verbose_proxy_logger
 
-            litellm._logging.verbose_proxy_logger.error("Error in BitBucket prompt pre_call_hook: %s", e)
+            verbose_proxy_logger.error("Error in BitBucket prompt pre_call_hook: %s", e)
             return messages, litellm_params
 
     def _parse_prompt_to_messages(self, prompt_content: str) -> list[AllMessageValues]:
@@ -384,14 +394,14 @@ class BitBucketPromptManager(CustomPromptManagement):
     def post_call_hook(
         self,
         user_id: str | None,
-        response: Any,
+        response: object,
         input_messages: list[AllMessageValues],
-        function_call: dict[str, Any] | str | None = None,
-        litellm_params: dict[str, Any] | None = None,
+        function_call: Mapping[str, object] | str | None = None,
+        litellm_params: Mapping[str, object] | None = None,
         prompt_id: str | None = None,
-        prompt_variables: dict[str, Any] | None = None,
+        prompt_variables: Mapping[str, object] | None = None,
         **kwargs,
-    ) -> Any:
+    ) -> object:
         """
         Post-call hook for any post-processing after the LLM call.
         """
@@ -405,7 +415,7 @@ class BitBucketPromptManager(CustomPromptManagement):
         """Reload prompts from BitBucket."""
         if self.prompt_id:
             self._prompt_manager = None  # Reset to force reload
-            self.prompt_manager  # This will trigger reload
+            _ = self.prompt_manager  # access triggers lazy reload
 
     def should_run_prompt_management(
         self,
@@ -445,7 +455,7 @@ class BitBucketPromptManager(CustomPromptManagement):
         try:
             # Load the prompt from BitBucket if not already loaded
             if prompt_id not in self.prompt_manager.prompts:
-                self.prompt_manager._load_prompt_from_bitbucket(prompt_id)
+                self.prompt_manager.load_prompt_from_bitbucket(prompt_id)
 
             # Get the rendered prompt and metadata
             rendered_prompt, prompt_metadata = self.get_prompt_template(prompt_id, prompt_variables)

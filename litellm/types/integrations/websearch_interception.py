@@ -2,18 +2,24 @@
 Type definitions for WebSearch Interception integration.
 """
 
-from typing import Literal, TypedDict
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal, TypeAlias, TypedDict
 
-from pydantic import BaseModel
+from typing_extensions import ReadOnly
+
+from litellm.types.llms.base import LiteLLMBaseModel
+
+if TYPE_CHECKING:
+    from litellm.llms.base_llm.search.transformation import SearchResponse
 
 
-class AnthropicSearchQuery(BaseModel):
+class AnthropicSearchQuery(LiteLLMBaseModel):
     """``input`` of an Anthropic ``server_tool_use`` block for a web search."""
 
     query: str
 
 
-class AnthropicServerToolUseBlock(BaseModel):
+class AnthropicServerToolUseBlock(LiteLLMBaseModel):
     """
     The ``server_tool_use`` block that must accompany a ``web_search_tool_result``.
 
@@ -26,6 +32,47 @@ class AnthropicServerToolUseBlock(BaseModel):
     input: AnthropicSearchQuery
 
 
+class RichWebSearchInput(TypedDict, total=False):
+    """
+    Optional richer search shape a model may emit alongside ``query``.
+
+    Collected from the intercepted tool call and forwarded only to search
+    providers whose config reports ``supports_rich_search_input()``; every
+    other provider keeps receiving the single ``query`` string.
+    """
+
+    objective: ReadOnly[str]
+    """Natural-language description of the goal behind the search."""
+
+    search_queries: ReadOnly[list[str]]  # mutable-ok: forwarded verbatim as litellm.asearch's list[str] query argument
+    """Two to five short keyword queries covering different angles."""
+
+
+WebSearchToolResultErrorCode: TypeAlias = Literal[
+    "invalid_tool_input",
+    "unavailable",
+    "max_uses_exceeded",
+    "too_many_requests",
+    "query_too_long",
+    "request_too_large",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class SearchSucceeded:
+    text: str
+    response: "SearchResponse | None"
+
+
+@dataclass(frozen=True, slots=True)
+class SearchFailed:
+    error_code: WebSearchToolResultErrorCode
+    message: str
+
+
+SearchOutcome: TypeAlias = SearchSucceeded | SearchFailed
+
+
 class WebSearchInterceptionConfig(TypedDict, total=False):
     """
     Configuration parameters for WebSearchInterceptionLogger.
@@ -35,6 +82,7 @@ class WebSearchInterceptionConfig(TypedDict, total=False):
           websearch_interception_params:
             enabled_providers: ["bedrock"]
             search_tool_name: "my-perplexity-search"
+            max_agentic_loops: 5
     """
 
     enabled_providers: list[str]
@@ -42,3 +90,6 @@ class WebSearchInterceptionConfig(TypedDict, total=False):
 
     search_tool_name: str | None
     """Name of search tool configured in router's search_tools. If None, uses first available."""
+
+    max_agentic_loops: ReadOnly[int | None]
+    """How many follow-up model calls one intercepted request may chain. If None, LiteLLM's default of 3 applies."""

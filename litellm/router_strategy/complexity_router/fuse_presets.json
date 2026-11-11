@@ -1,0 +1,121 @@
+{
+  "version": "2026-09-22-v1",
+  "models": [
+    {
+      "id": "gpt-6-astra-v1",
+      "label": "GPT-6 Astra",
+      "model": "gpt-6-astra",
+      "text": "OpenAI model for demanding end-to-end work, including reasoning, coding, research, and document tasks",
+      "sources": ["https://developers.openai.com/api/docs/models/gpt-6-astra"]
+    },
+    {
+      "id": "gpt-6-sol-v1",
+      "label": "GPT-6 Sol",
+      "model": "gpt-6-sol",
+      "text": "OpenAI model for complex coding and agentic workflows, supporting reasoning and tool calling through the Responses API",
+      "sources": ["https://developers.openai.com/api/docs/models/gpt-6-sol"]
+    },
+    {
+      "id": "gpt-6-luna-v1",
+      "label": "GPT-6 Luna",
+      "model": "gpt-6-luna",
+      "text": "OpenAI model for efficient, high-volume workloads, supporting reasoning and tool calling through the Responses API",
+      "sources": ["https://developers.openai.com/api/docs/models/gpt-6-luna"]
+    },
+    {
+      "id": "gpt-5.6-sol-v1",
+      "label": "GPT-5.6 Sol",
+      "model": "gpt-5.6-sol",
+      "text": "OpenAI model for complex professional work, supporting reasoning and tool calling",
+      "sources": ["https://developers.openai.com/api/docs/models/gpt-5.6-sol"]
+    },
+    {
+      "id": "gpt-5.6-luna-v1",
+      "label": "GPT-5.6 Luna",
+      "model": "gpt-5.6-luna",
+      "text": "OpenAI model for high-volume workloads, supporting reasoning and tool calling",
+      "sources": ["https://developers.openai.com/api/docs/models/gpt-5.6-luna"]
+    },
+    {
+      "id": "gpt-5.6-terra-v1",
+      "label": "GPT-5.6 Terra",
+      "model": "gpt-5.6-terra",
+      "text": "OpenAI general-purpose model supporting reasoning, text and image input, and tool calling",
+      "sources": ["https://developers.openai.com/api/docs/models/gpt-5.6-terra"]
+    },
+    {
+      "id": "claude-haiku-4-5-v1",
+      "label": "Claude Haiku 4.5",
+      "model": "claude-haiku-4-5",
+      "text": "Anthropic latency-focused model supporting text and image input, tool use, and extended thinking",
+      "sources": ["https://platform.claude.com/docs/en/models/haiku-4-5/overview"]
+    },
+    {
+      "id": "claude-sonnet-5-v1",
+      "label": "Claude Sonnet 5",
+      "model": "claude-sonnet-5",
+      "text": "Anthropic model balancing speed and capability, with adaptive thinking and tool use",
+      "sources": ["https://platform.claude.com/docs/en/models/sonnet-5/overview"]
+    },
+    {
+      "id": "claude-opus-5-v1",
+      "label": "Claude Opus 5",
+      "model": "claude-opus-5",
+      "text": "Anthropic model for complex agentic coding and enterprise work, with adaptive thinking",
+      "sources": ["https://platform.claude.com/docs/en/models/opus-5/overview"]
+    },
+    {
+      "id": "claude-fable-5-v1",
+      "label": "Claude Fable 5",
+      "model": "claude-fable-5",
+      "text": "Anthropic model for demanding reasoning and long-running agent tasks, with always-on adaptive thinking",
+      "sources": ["https://platform.claude.com/docs/en/models/fable-5/introducing-claude-fable-5-and-claude-mythos-5"]
+    },
+    {
+      "id": "claude-fable-5-1-v1",
+      "label": "Claude Fable 5.1",
+      "model": "claude-fable-5-1",
+      "text": "Anthropic model for demanding reasoning, long-running agentic coding, and multistep research, with always-on adaptive thinking",
+      "sources": ["https://platform.claude.com/docs/en/models/fable-5-1/overview"]
+    },
+    {
+      "id": "claude-opus-5-5-v1",
+      "label": "Claude Opus 5.5",
+      "model": "claude-opus-5-5",
+      "text": "Anthropic model for complex reasoning and agentic work, supporting adaptive thinking and tool use",
+      "sources": ["https://platform.claude.com/docs/en/models/opus-5-5/overview"]
+    }
+  ],
+  "harnesses": [
+    {
+      "id": "unspecified-v1",
+      "label": "Unspecified runtime",
+      "text": "Agent runtime is unspecified. Assess the task using the supplied context without assuming repository access, runnable tests, network access, additional tools, or a step, time, or spending budget",
+      "sources": ["https://code.claude.com/docs/en/how-claude-code-works", "https://mini-swe-agent.com/latest/faq/"]
+    },
+    {
+      "id": "claude-code-v1",
+      "label": "Claude Code",
+      "text": "Claude Code supplies an agent loop with context management and configured tools. Available actions depend on the session's tools, permissions, and execution environment. The runtime name alone does not establish repository access, runnable tests, network access, additional tools, or a step, time, or spending budget",
+      "sources": ["https://code.claude.com/docs/en/how-claude-code-works"]
+    },
+    {
+      "id": "codex-cli-v1",
+      "label": "Codex CLI",
+      "text": "Codex CLI supplies a terminal-based coding agent. File operations, command execution, and integrations depend on the session's tools, permissions, and sandbox. The runtime name alone does not establish repository access, runnable tests, network access, additional tools, or a step, time, or spending budget",
+      "sources": ["https://learn.chatgpt.com/docs/codex/cli", "https://learn.chatgpt.com/codex/permissions"]
+    },
+    {
+      "id": "opencode-v1",
+      "label": "OpenCode",
+      "text": "OpenCode supplies a configurable agent runtime. Available actions depend on the selected agent, tools, permissions, and execution environment. The runtime name alone does not establish repository access, runnable tests, network access, additional tools, or a step, time, or spending budget",
+      "sources": ["https://opencode.ai/docs/agents/"]
+    },
+    {
+      "id": "mini-swe-agent-v1",
+      "label": "mini-SWE-agent",
+      "text": "The standard mini-SWE-agent setup uses a bash-only action interface and separate command executions. Available commands and resources depend on its configured environment. The runtime name alone does not establish repository access, runnable tests, network access, additional tools, or a step, time, or spending budget",
+      "sources": ["https://mini-swe-agent.com/latest/faq/"]
+    }
+  ]
+}

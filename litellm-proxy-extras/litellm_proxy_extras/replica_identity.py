@@ -16,7 +16,7 @@ import tempfile
 from pathlib import Path
 
 from litellm_proxy_extras._logging import logger
-from litellm_proxy_extras.prisma_toolchain import prisma_command_timeout
+from litellm_proxy_extras.prisma_toolchain import prisma_command_timeout, run_prisma
 
 REPLICA_IDENTITY_FULL_ENV_VAR = "LITELLM_SET_REPLICA_IDENTITY_FULL"
 
@@ -66,7 +66,7 @@ def apply_replica_identity_full(
         with tempfile.TemporaryDirectory(prefix="litellm_replica_identity_") as tmp_dir:
             sql_path = Path(tmp_dir) / "replica_identity_full.sql"
             sql_path.write_text(REPLICA_IDENTITY_FULL_SQL)
-            subprocess.run(
+            run_prisma(
                 [
                     prisma_command,
                     "db",
@@ -77,9 +77,6 @@ def apply_replica_identity_full(
                     schema_path,
                 ],
                 timeout=prisma_command_timeout(),
-                check=True,
-                capture_output=True,
-                text=True,
                 env=prisma_env,
             )
     except subprocess.CalledProcessError as e:

@@ -1,10 +1,41 @@
 "use client";
 
+import { CircleHelp } from "lucide-react";
 import React, { useEffect, useState } from "react";
-import { Form, Input, Modal, Typography } from "antd";
-import type { MemoryRow } from "@/components/networking";
+import { Trans, useTranslation } from "react-i18next";
+import i18n from "@/i18n/i18n";
+import { z } from "zod";
 
-const { Text } = Typography;
+import type { MemoryRow } from "@/components/networking";
+import { FieldGroup } from "@/components/ui/field";
+import { FormField } from "@/components/shared/form/FormField";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
+
+const memorySchema = z.object({
+  key: z.string().min(1, { error: () => i18n.t("memory.editModal.errors.keyRequired") }),
+  value: z.string().min(1, { error: () => i18n.t("memory.editModal.errors.valueRequired") }),
+  metadata: z.string(),
+});
+
+type MemoryFormValues = z.output<typeof memorySchema>;
+
+const labelWithHint = (label: React.ReactNode, hint: string): React.ReactNode => (
+  <>
+    {label}
+    <Tooltip>
+      <TooltipTrigger render={<CircleHelp className="size-3.5 shrink-0 cursor-help text-muted-foreground" />} />
+      <TooltipContent>{hint}</TooltipContent>
+    </Tooltip>
+  </>
+);
+
+const EMPTY_MEMORY: MemoryFormValues = { key: "", value: "", metadata: "" };
 
 interface MemoryEditModalProps {
   open: boolean;
@@ -15,81 +46,120 @@ interface MemoryEditModalProps {
 }
 
 export const MemoryEditModal: React.FC<MemoryEditModalProps> = ({ open, mode, initialRow, onClose, onSave }) => {
-  const [form] = Form.useForm();
+  const { t } = useTranslation();
+  const form = useZodForm(memorySchema, { defaultValues: EMPTY_MEMORY, mode: "onChange" });
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     if (mode === "edit" && initialRow) {
-      form.setFieldsValue({
+      form.reset({
         key: initialRow.key,
         value: initialRow.value,
         metadata: initialRow.metadata != null ? JSON.stringify(initialRow.metadata, null, 2) : "",
       });
-    } else {
-      form.resetFields();
+      return;
     }
+    form.reset(EMPTY_MEMORY);
   }, [open, mode, initialRow, form]);
 
-  const handleOk = async () => {
-    const values = await form.validateFields();
+  const handleOk = form.handleSubmit(async (values) => {
     setSubmitting(true);
-    const ok = await onSave(values.key.trim(), values.value ?? "", values.metadata ?? "", mode === "create");
+    const ok = await onSave(values.key.trim(), values.value, values.metadata, mode === "create");
     setSubmitting(false);
-    if (ok) {
-      form.resetFields();
-      onClose();
-    }
-  };
+    if (!ok) return;
+    form.reset(EMPTY_MEMORY);
+    onClose();
+  });
 
   return (
-    <Modal
+    <Dialog
       open={open}
-      title={mode === "create" ? "Create memory" : `Edit ${initialRow?.key ?? ""}`}
-      onCancel={() => {
-        form.resetFields();
-        onClose();
+      onOpenChange={(open) => {
+        if (!open) {
+          form.reset(EMPTY_MEMORY);
+          onClose();
+        }
       }}
-      onOk={handleOk}
-      okText={mode === "create" ? "Create" : "Save"}
-      confirmLoading={submitting}
-      width={640}
-      destroyOnClose
     >
-      <Form form={form} layout="vertical">
-        <Form.Item
-          label="Key"
-          name="key"
-          rules={[{ required: true, message: "Key is required" }]}
-          tooltip="Globally unique — two memories cannot share a key. Namespace your own keys if you need per-user isolation (e.g. user:123:notes)."
-        >
-          <Input placeholder="e.g. user_role" disabled={mode === "edit"} />
-        </Form.Item>
-        <Form.Item
-          label="Value"
-          name="value"
-          rules={[{ required: true, message: "Value is required" }]}
-          tooltip="Markdown/text injected into LLM context. Plain strings are fine."
-        >
-          <Input.TextArea rows={8} placeholder="What the agent should remember…" />
-        </Form.Item>
-        <Form.Item
-          label={
-            <span>
-              Metadata <Text type="secondary">(optional JSON)</Text>
-            </span>
-          }
-          name="metadata"
-          tooltip="Optional structured metadata — must be valid JSON if provided."
-        >
-          <Input.TextArea
-            rows={4}
-            placeholder='{"tags": ["example"]}'
-            style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}
-          />
-        </Form.Item>
-      </Form>
-    </Modal>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[640px]">
+        <DialogHeader>
+          <DialogTitle>
+            {mode === "create"
+              ? t("memory.editModal.createTitle")
+              : t("memory.editModal.editTitle", { name: initialRow?.key ?? "" })}
+          </DialogTitle>
+        </DialogHeader>
+        <form onSubmit={(event) => event.preventDefault()} noValidate>
+          <TooltipProvider>
+            <FieldGroup>
+              <FormField
+                control={form.control}
+                name="key"
+                label={labelWithHint(t("memory.editModal.labels.key"), t("memory.editModal.hints.key"))}
+              >
+                {({ ref, ...field }) => (
+                  <Input
+                    {...field}
+                    ref={ref}
+                    placeholder={t("memory.editModal.placeholders.key")}
+                    disabled={mode === "edit"}
+                  />
+                )}
+              </FormField>
+
+              <FormField
+                control={form.control}
+                name="value"
+                label={labelWithHint(t("memory.editModal.labels.value"), t("memory.editModal.hints.value"))}
+              >
+                {({ ref, ...field }) => (
+                  <Textarea {...field} ref={ref} rows={8} placeholder={t("memory.editModal.placeholders.value")} />
+                )}
+              </FormField>
+
+              <FormField
+                control={form.control}
+                name="metadata"
+                label={labelWithHint(
+                  <span>
+                    <Trans
+                      i18nKey="memory.editModal.labels.metadata"
+                      components={{ muted: <span className="text-muted-foreground" /> }}
+                    />
+                  </span>,
+                  t("memory.editModal.hints.metadata"),
+                )}
+              >
+                {({ ref, ...field }) => (
+                  <Textarea
+                    {...field}
+                    ref={ref}
+                    rows={4}
+                    placeholder={codeSamples.memory.metadataJson}
+                    className="font-mono"
+                  />
+                )}
+              </FormField>
+            </FieldGroup>
+          </TooltipProvider>
+        </form>
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={() => {
+              form.reset(EMPTY_MEMORY);
+              onClose();
+            }}
+          >
+            {t("memory.editModal.cancel")}
+          </Button>
+          <Button onClick={handleOk} disabled={submitting} aria-busy={submitting}>
+            {mode === "create" ? t("memory.editModal.create") : t("memory.editModal.save")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 };
 

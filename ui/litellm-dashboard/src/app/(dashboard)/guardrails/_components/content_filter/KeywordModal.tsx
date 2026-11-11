@@ -1,8 +1,11 @@
 import React from "react";
-import { Typography, Select, Modal, Space, Button, Input } from "antd";
-
-const { Text } = Typography;
-const { Option } = Select;
+import { useTranslation } from "react-i18next";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { ACTION_ITEMS, translateOptions } from "./action_options";
 
 interface KeywordModalProps {
   visible: boolean;
@@ -27,49 +30,69 @@ const KeywordModal: React.FC<KeywordModalProps> = ({
   onAdd,
   onCancel,
 }) => {
+  const { t } = useTranslation();
+  const actionItems = translateOptions(ACTION_ITEMS, t);
   return (
-    <Modal title="Add blocked keyword" open={visible} onCancel={onCancel} footer={null} width={800}>
-      <Space direction="vertical" style={{ width: "100%" }} size="large">
-        <div>
-          <Text strong>Keyword</Text>
-          <Input
-            placeholder="Enter sensitive keyword or phrase"
-            value={keyword}
-            onChange={(e) => onKeywordChange(e.target.value)}
-            style={{ marginTop: 8 }}
-          />
+    <Dialog open={visible} onOpenChange={(open) => !open && onCancel()}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[800px]">
+        <DialogHeader>
+          <DialogTitle>{t("guardrails.contentFilter.keywordModal.title")}</DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-6">
+          <div>
+            <p className="font-semibold">{t("guardrails.contentFilter.keywordModal.keywordLabel")}</p>
+            <Input
+              className="mt-2"
+              placeholder={t("guardrails.contentFilter.keywordModal.keywordPlaceholder")}
+              value={keyword}
+              onChange={(e) => onKeywordChange(e.target.value)}
+            />
+          </div>
+
+          <div>
+            <p className="font-semibold">{t("guardrails.contentFilter.keywordModal.actionLabel")}</p>
+            <p className="mt-1 mb-2 text-muted-foreground">
+              {t("guardrails.contentFilter.keywordModal.actionDescription")}
+            </p>
+            <Select
+              items={actionItems}
+              value={action}
+              onValueChange={(value: string | null) => value && onActionChange(value as "BLOCK" | "MASK")}
+            >
+              <SelectTrigger className="w-full" aria-label={t("guardrails.contentFilter.keywordModal.actionLabel")}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {actionItems.map((item) => (
+                  <SelectItem key={item.value} value={item.value}>
+                    {item.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div>
+            <p className="font-semibold">{t("guardrails.contentFilter.keywordModal.descriptionLabel")}</p>
+            <Textarea
+              className="mt-2 field-sizing-fixed"
+              placeholder={t("guardrails.contentFilter.keywordModal.descriptionPlaceholder")}
+              value={description}
+              onChange={(e) => onDescriptionChange(e.target.value)}
+              rows={3}
+            />
+          </div>
         </div>
 
-        <div>
-          <Text strong>Action</Text>
-          <Text type="secondary" style={{ display: "block", marginTop: 4, marginBottom: 8 }}>
-            Choose what action the guardrail should take when this keyword is detected
-          </Text>
-          <Select value={action} onChange={onActionChange} style={{ width: "100%" }}>
-            <Option value="BLOCK">Block</Option>
-            <Option value="MASK">Mask</Option>
-          </Select>
-        </div>
-
-        <div>
-          <Text strong>Description (optional)</Text>
-          <Input.TextArea
-            placeholder="Explain why this keyword is sensitive"
-            value={description}
-            onChange={(e) => onDescriptionChange(e.target.value)}
-            rows={3}
-            style={{ marginTop: 8 }}
-          />
-        </div>
-      </Space>
-
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "24px" }}>
-        <Button onClick={onCancel}>Cancel</Button>
-        <Button type="primary" onClick={onAdd}>
-          Add
-        </Button>
-      </div>
-    </Modal>
+        <DialogFooter>
+          <Button variant="outline" onClick={onCancel}>
+            {t("guardrails.contentFilter.keywordModal.cancel")}
+          </Button>
+          <Button onClick={onAdd}>{t("guardrails.contentFilter.keywordModal.add")}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 };
 

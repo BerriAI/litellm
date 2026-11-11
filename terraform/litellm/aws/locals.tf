@@ -11,6 +11,8 @@ locals {
   # the stack can reference local.name.
   name = "${var.tenant}-litellm-${var.env}"
 
+  image = var.image != "" ? var.image : "${var.image_registry}/litellm:${var.image_tag}"
+
   # This is a reusable module — it declares no `provider` block, so the AWS
   # provider's `default_tags` is the caller's concern, not ours. To keep the
   # same per-resource tagging the stack had when it owned the provider, the
@@ -74,7 +76,7 @@ locals {
     "/v1/models*", "/models*",
     "/openai/*", "/engines/*",
     "/v1/messages*", "/messages*",
-    "/v1/skills/*", "/v1/a2a/*",
+    "/v1/skills/*", "/v1/a2a/*", "/api/event_logging*",
     "/v1/rerank*", "/v2/rerank*", "/rerank*",
     "/v1/ocr*", "/ocr*",
     "/v1/rag/*", "/rag/*",
@@ -86,7 +88,7 @@ locals {
     "/queue/chat/*",
     "/v1beta/*",
     "/interactions/*",
-    "/anthropic/*", "/azure/*", "/azure_ai/*", "/aws/*", "/bedrock/*",
+    "/anthropic/*", "/azure/*", "/azure_ai/*", "/azure_speech/*", "/aws/*", "/bedrock/*", "/comprehendmedical*", "/transcribe*",
     "/cohere/*", "/gemini/*", "/google/*",
     "/vertex_ai/*", "/vertex-ai/*",
     "/assemblyai/*", "/eu.assemblyai/*",

@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import NotificationsManager from "../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { getEmailEventSettings, updateEmailEventSettings, resetEmailEventSettings } from "../networking";
 import { EmailEvent } from "../../types";
 import { EmailEventSetting } from "./types";
@@ -14,6 +15,7 @@ interface EmailEventSettingsProps {
 }
 
 const EmailEventSettings: React.FC<EmailEventSettingsProps> = ({ accessToken }) => {
+  const { t } = useTranslation();
   const [loading, setLoading] = useState(true);
   const [eventSettings, setEventSettings] = useState<EmailEventSetting[]>([]);
 
@@ -31,13 +33,13 @@ const EmailEventSettings: React.FC<EmailEventSettingsProps> = ({ accessToken }) 
       setEventSettings(response.settings);
     } catch (error) {
       console.error("Failed to fetch email event settings:", error);
-      NotificationsManager.fromBackend(error);
+      toast.fromError(error);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleCheckboxChange = (event: EmailEvent, checked: boolean) => {
+  const handleEnabledChange = (event: EmailEvent, checked: boolean) => {
     const updatedSettings = eventSettings.map((setting) =>
       setting.event === event ? { ...setting, enabled: checked } : setting,
     );
@@ -49,10 +51,10 @@ const EmailEventSettings: React.FC<EmailEventSettingsProps> = ({ accessToken }) 
 
     try {
       await updateEmailEventSettings(accessToken, { settings: eventSettings });
-      NotificationsManager.success("Email event settings updated successfully");
+      toast.success(t("loggingAndAlerts.emailEvents.toasts.saved"));
     } catch (error) {
       console.error("Failed to update email event settings:", error);
-      NotificationsManager.fromBackend(error);
+      toast.fromError(error);
     }
   };
 
@@ -61,37 +63,40 @@ const EmailEventSettings: React.FC<EmailEventSettingsProps> = ({ accessToken }) 
 
     try {
       await resetEmailEventSettings(accessToken);
-      NotificationsManager.success("Email event settings reset to defaults");
+      toast.success(t("loggingAndAlerts.emailEvents.toasts.reset"));
       // Refresh settings after reset
       fetchEventSettings();
     } catch (error) {
       console.error("Failed to reset email event settings:", error);
-      NotificationsManager.fromBackend(error);
+      toast.fromError(error);
     }
   };
 
   // Helper function to get a description for each event type
   const getEventDescription = (event: EmailEvent): string => {
+    if (event === "Model Deprecations") {
+      return t("loggingAndAlerts.emailEvents.descriptions.modelDeprecations");
+    }
     // Convert event name to a sentence with more context
     if (event.includes("Virtual Key Created")) {
-      return "An email will be sent to the user when a new virtual key is created with their user ID";
+      return t("loggingAndAlerts.emailEvents.descriptions.virtualKeyCreated");
     } else if (event.includes("New User Invitation")) {
-      return "An email will be sent to the email address of the user when a new user is created";
+      return t("loggingAndAlerts.emailEvents.descriptions.newUserInvitation");
     } else {
       // Handle any other event type from the API
       const words = event
         .split(/(?=[A-Z])/)
         .join(" ")
         .toLowerCase();
-      return `Receive an email notification when ${words}`;
+      return t("loggingAndAlerts.emailEvents.descriptions.generic", { event: words });
     }
   };
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Email Notifications</CardTitle>
-        <p className="text-sm text-muted-foreground">Select which events should trigger email notifications.</p>
+        <CardTitle className="text-base">{t("loggingAndAlerts.emailEvents.title")}</CardTitle>
+        <p className="text-sm text-muted-foreground">{t("loggingAndAlerts.emailEvents.description")}</p>
       </CardHeader>
 
       <CardContent>
@@ -106,9 +111,10 @@ const EmailEventSettings: React.FC<EmailEventSettingsProps> = ({ accessToken }) 
           <div className="space-y-4">
             {eventSettings.map((setting) => (
               <div key={setting.event} className="flex items-start">
-                <Checkbox
+                <Switch
                   checked={setting.enabled}
-                  onCheckedChange={(checked) => handleCheckboxChange(setting.event, checked === true)}
+                  onCheckedChange={(checked) => handleEnabledChange(setting.event, checked)}
+                  aria-label={setting.event}
                   className="mt-1"
                 />
                 <div className="ml-3">
@@ -122,10 +128,10 @@ const EmailEventSettings: React.FC<EmailEventSettingsProps> = ({ accessToken }) 
 
         <div className="mt-6 flex gap-4">
           <Button onClick={handleSaveSettings} disabled={loading}>
-            Save Changes
+            {t("loggingAndAlerts.emailEvents.saveChanges")}
           </Button>
           <Button variant="secondary" onClick={handleResetSettings} disabled={loading}>
-            Reset to Defaults
+            {t("loggingAndAlerts.emailEvents.resetToDefaults")}
           </Button>
         </div>
       </CardContent>

@@ -4,8 +4,8 @@ HTTP Handler for Interactions API requests.
 This module handles the HTTP communication for the Google Interactions API.
 """
 
-from collections.abc import AsyncIterator, Coroutine, Iterator
-from typing import Any, Final
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterator, Mapping
+from typing import Final, Protocol
 
 import httpx
 
@@ -20,8 +20,8 @@ from litellm.llms.base_llm.interactions.transformation import BaseInteractionsAP
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.types.interactions import (
     CancelInteractionResult,
@@ -34,6 +34,11 @@ from litellm.types.interactions import (
 from litellm.types.router import GenericLiteLLMParams
 
 
+class _ErrorClassSource(Protocol):
+    @property
+    def get_error_class(self) -> Callable[..., Exception]: ...
+
+
 class _BaseHTTPHandler:
     """
     Shared HTTP infrastructure for LiteLLM handler classes.
@@ -43,7 +48,7 @@ class _BaseHTTPHandler:
     not duplicate this boilerplate.
     """
 
-    def _handle_error(self, e: Exception, provider_config: Any) -> Exception:
+    def _handle_error(self, e: Exception, provider_config: _ErrorClassSource) -> Exception:
         if isinstance(e, httpx.HTTPStatusError):
             return provider_config.get_error_class(
                 error_message=e.response.text,
@@ -57,7 +62,7 @@ class _BaseHTTPHandler:
         litellm_params: GenericLiteLLMParams,
         client: HTTPHandler | None,
     ) -> HTTPHandler:
-        return client or _get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
+        return client or get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
 
     def _async_client(
         self,
@@ -77,7 +82,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
     HTTP handler for Interactions API requests.
     """
 
-    # _handle_error is inherited from _BaseHTTPHandler (accepts Any provider_config).
+    # _handle_error is inherited from _BaseHTTPHandler (accepts any config exposing get_error_class).
     # AgentsHTTPHandler also extends this class and passes BaseAgentsAPIConfig, which
     # is structurally compatible but a different type — keeping the override here with
     # BaseInteractionsAPIConfig would cause type errors in the subclass.
@@ -96,8 +101,8 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
         model: str | None = None,
         agent: str | None = None,
         input: InteractionInput | None = None,
-        extra_headers: dict[str, Any] | None = None,
-        extra_body: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: Mapping[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | None = None,
         _is_async: bool = False,
@@ -105,7 +110,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
     ) -> (
         InteractionsAPIResponse
         | Iterator[InteractionsAPIStreamingResponse]
-        | Coroutine[Any, Any, InteractionsAPIResponse | AsyncIterator[InteractionsAPIStreamingResponse]]
+        | Coroutine[object, object, InteractionsAPIResponse | AsyncIterator[InteractionsAPIStreamingResponse]]
     ):
         """
         Create a new interaction (synchronous or async based on _is_async flag).
@@ -129,7 +134,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
             )
 
         if client is None:
-            sync_httpx_client = _get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
+            sync_httpx_client = get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
         else:
             sync_httpx_client = client
 
@@ -211,8 +216,8 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
         model: str | None = None,
         agent: str | None = None,
         input: InteractionInput | None = None,
-        extra_headers: dict[str, Any] | None = None,
-        extra_body: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: Mapping[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: AsyncHTTPHandler | None = None,
         stream: bool | None = None,
@@ -345,11 +350,11 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | None = None,
         _is_async: bool = False,
-    ) -> InteractionsAPIResponse | Coroutine[Any, Any, InteractionsAPIResponse]:
+    ) -> InteractionsAPIResponse | Coroutine[object, object, InteractionsAPIResponse]:
         """Get an interaction by ID."""
         if _is_async:
             return self.async_get_interaction(
@@ -363,7 +368,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
             )
 
         if client is None:
-            sync_httpx_client = _get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
+            sync_httpx_client = get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
         else:
             sync_httpx_client = client
 
@@ -407,7 +412,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: AsyncHTTPHandler | None = None,
     ) -> InteractionsAPIResponse:
@@ -464,11 +469,11 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | None = None,
         _is_async: bool = False,
-    ) -> DeleteInteractionResult | Coroutine[Any, Any, DeleteInteractionResult]:
+    ) -> DeleteInteractionResult | Coroutine[object, object, DeleteInteractionResult]:
         """Delete an interaction by ID."""
         if _is_async:
             return self.async_delete_interaction(
@@ -482,7 +487,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
             )
 
         if client is None:
-            sync_httpx_client = _get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
+            sync_httpx_client = get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
         else:
             sync_httpx_client = client
 
@@ -527,7 +532,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: AsyncHTTPHandler | None = None,
     ) -> DeleteInteractionResult:
@@ -585,11 +590,11 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | None = None,
         _is_async: bool = False,
-    ) -> CancelInteractionResult | Coroutine[Any, Any, CancelInteractionResult]:
+    ) -> CancelInteractionResult | Coroutine[object, object, CancelInteractionResult]:
         """Cancel an interaction by ID."""
         if _is_async:
             return self.async_cancel_interaction(
@@ -603,7 +608,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
             )
 
         if client is None:
-            sync_httpx_client = _get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
+            sync_httpx_client = get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
         else:
             sync_httpx_client = client
 
@@ -648,7 +653,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: AsyncHTTPHandler | None = None,
     ) -> CancelInteractionResult:

@@ -65,7 +65,7 @@ func buildKeyData(d *schema.ResourceData) map[string]interface{} {
 		keyData["permissions"] = v.(map[string]interface{})
 	}
 	if v, ok := d.GetOkExists("model_max_budget"); ok {
-		keyData["model_max_budget"] = v.(map[string]interface{})
+		keyData["model_max_budget"] = parseKeyModelMaxBudget(v.(string))
 	}
 	if v, ok := d.GetOkExists("model_rpm_limit"); ok {
 		keyData["model_rpm_limit"] = v.(map[string]interface{})
@@ -107,7 +107,7 @@ func setKeyResourceData(d *schema.ResourceData, key *Key) error {
 		"aliases":                key.Aliases,
 		"config":                 key.Config,
 		"permissions":            key.Permissions,
-		"model_max_budget":       key.ModelMaxBudget,
+		"model_max_budget":       keyModelMaxBudgetJSON(key.ModelMaxBudget),
 		"model_rpm_limit":        key.ModelRPMLimit,
 		"model_tpm_limit":        key.ModelTPMLimit,
 		"guardrails":             key.Guardrails,

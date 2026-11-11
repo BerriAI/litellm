@@ -1,12 +1,32 @@
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 from httpx._models import Headers, Response
 
 import litellm
+from litellm.integrations.anthropic_cache_control_hook import deployment_prompt_cache_breakpoint_support
+from litellm.litellm_core_utils.allowed_tools_tool_choice import azure_api_version_takes_tool_choice
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    drop_tool_reference_parts_from_tool_messages,
+    hoist_images_from_tool_messages,
+    system_messages_first,
+)
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_azure_openai_messages,
 )
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
+    flatten_combinators_and_drop_non_python_regex_patterns,
+    tool_with_sanitized_parameters,
+)
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
+    chat_completion_prompt_cache_breakpoints_for_wire,
+    without_prompt_cache_breakpoints,
+)
+from litellm.llms.base_llm.base_utils import map_developer_role_to_system_role
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.openai.chat.gpt_reasoning_transformation import GPT_REASONING_SERIES_MARKERS
 from litellm.types.llms.azure import (
     API_VERSION_MONTH_SUPPORTED_RESPONSE_FORMAT,
     API_VERSION_YEAR_SUPPORTED_RESPONSE_FORMAT,
@@ -20,10 +40,27 @@ from ..common_utils import AzureOpenAIError
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LoggingClass = LiteLLMLoggingObj
 else:
     LoggingClass = Any
+
+
+_NO_TOOLS_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def sanitized_tools_update(optional_params: Mapping[str, object]) -> Mapping[str, object]:
+    tools: Final = optional_params.get("tools")
+    if not isinstance(tools, list):
+        return _NO_TOOLS_UPDATE
+    sanitized: Final = [
+        tool_with_sanitized_parameters(tool, flatten_combinators_and_drop_non_python_regex_patterns)
+        if isinstance(tool, dict)
+        else tool
+        for tool in tools
+    ]
+    return MappingProxyType({"tools": sanitized})
 
 
 class AzureOpenAIConfig(BaseConfig):
@@ -66,10 +103,26 @@ class AzureOpenAIConfig(BaseConfig):
         temperature: int | None = None,
         top_p: int | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
+
+    def translate_developer_role_to_system_role(
+        self,
+        messages: Sequence[AllMessageValues],
+        *,
+        model: str,
+        custom_llm_provider: str | None,
+        api_base: str | None,
+        model_info: object,
+    ) -> Sequence[AllMessageValues]:
+        """
+        Azure OpenAI accepts `system` messages at any position, so a developer message
+        only changes role. Declared here so `AzureOpenAIGPT5Config` resolves to it
+        ahead of the OpenAI-compatible hoist it also inherits.
+        """
+        return map_developer_role_to_system_role(messages=messages)
 
     @classmethod
     def get_config(cls):
@@ -108,6 +161,16 @@ class AzureOpenAIConfig(BaseConfig):
             "prompt_cache_key",
             "store",
         ]
+
+    @classmethod
+    def requires_max_completion_tokens(cls, model: str) -> bool:
+        """Whether Azure rejects the legacy ``max_tokens`` key for this deployment.
+
+        Deliberately wider than ``AzureOpenAIGPT5Config.is_model_gpt_5_model``: the whole gpt-5
+        name family needs the rename, including the ``gpt-5-chat*`` models that are excluded from
+        the reasoning path by https://github.com/BerriAI/litellm/issues/13781.
+        """
+        return any(marker in model for marker in GPT_REASONING_SERIES_MARKERS) or "gpt5_series" in model
 
     def _is_response_format_supported_model(self, model: str) -> bool:
         """
@@ -157,6 +220,7 @@ class AzureOpenAIConfig(BaseConfig):
         api_version: str = "",
     ) -> dict:
         supported_openai_params: Final = self.get_supported_openai_params(model)
+        renames_max_tokens: Final = self.requires_max_completion_tokens(model)
         api_version_times: Final = api_version.split("-")
 
         if len(api_version_times) >= 3:
@@ -169,7 +233,9 @@ class AzureOpenAIConfig(BaseConfig):
             api_version_day = None
 
         for param, value in non_default_params.items():
-            if param == "tool_choice":
+            if param == "max_tokens" and renames_max_tokens:
+                optional_params.setdefault("max_completion_tokens", value)
+            elif param == "tool_choice":
                 """
                 This parameter requires API version 2023-12-01-preview or later
 
@@ -179,14 +245,8 @@ class AzureOpenAIConfig(BaseConfig):
                 if api_version_year is None or api_version_month is None or api_version_day is None:
                     optional_params["tool_choice"] = value
                 else:
-                    if (
-                        api_version_year < "2023"
-                        or (api_version_year == "2023" and api_version_month < "12")
-                        or (api_version_year == "2023" and api_version_month == "12" and api_version_day < "01")
-                    ):
-                        if litellm.drop_params is True or (drop_params is not None and drop_params is True):
-                            pass
-                        else:
+                    if not azure_api_version_takes_tool_choice(api_version):
+                        if not (litellm.drop_params is True or drop_params is True):
                             raise UnsupportedParamsError(
                                 status_code=400,
                                 message=f"""Azure does not support 'tool_choice', for api_version={api_version}. Bump your API version to '2023-12-01-preview' or later. This parameter requires 'api_version="2023-12-01-preview"' or later. Azure API Reference: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#chat-completions""",
@@ -233,15 +293,38 @@ class AzureOpenAIConfig(BaseConfig):
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
         headers: dict,
     ) -> dict:
-        messages = convert_to_azure_openai_messages(messages)
+        ordered_messages: Final = system_messages_first(messages) if litellm.openai_system_messages_first else messages
+        wire_messages: Final = (
+            self._with_wire_safe_prompt_cache_breakpoints(model, ordered_messages, litellm_params)
+            if drops_unsupported_params(litellm_params.get("drop_params"))
+            else ordered_messages
+        )
+        stripped_messages: Final = drop_tool_reference_parts_from_tool_messages(wire_messages)
+        azure_messages: Final = convert_to_azure_openai_messages(hoist_images_from_tool_messages(stripped_messages))
+        request_params: Final = MappingProxyType(
+            {
+                key: value
+                for key, value in optional_params.items()
+                if key != "tool_choice" or optional_params.get("tools") or optional_params.get("functions")
+            }
+        )
         return {
             "model": model,
-            "messages": messages,
-            **optional_params,
+            "messages": azure_messages,
+            **request_params,
+            **sanitized_tools_update(optional_params),
         }
+
+    @staticmethod
+    def _with_wire_safe_prompt_cache_breakpoints(
+        model: str, messages: list[AllMessageValues], litellm_params: Mapping[str, object]
+    ) -> list[AllMessageValues]:
+        if deployment_prompt_cache_breakpoint_support(model, "azure", litellm_params) is False:
+            return [without_prompt_cache_breakpoints(message) for message in messages]
+        return [chat_completion_prompt_cache_breakpoints_for_wire(message, drop_params=True) for message in messages]
 
     def transform_response(
         self,
@@ -253,7 +336,7 @@ class AzureOpenAIConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

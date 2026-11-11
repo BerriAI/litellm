@@ -13,9 +13,11 @@ bounded list of recent tool call signatures.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Final
+from typing import Final, Protocol
 
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, require_attributes
 from litellm.router_strategy.adaptive_router.config import (
     LOOP_REPEAT_THRESHOLD,
     MIN_TURNS_FOR_CLEAN_CREDIT,
@@ -91,8 +93,8 @@ class Turn:
 
     user_content: str | None = None
     assistant_content: str | None = None
-    tool_calls: list[dict[str, Any]] = field(default_factory=list)
-    tool_results: list[dict[str, Any]] = field(default_factory=list)
+    tool_calls: Sequence[Mapping[str, object]] = field(default_factory=list[Mapping[str, object]])
+    tool_results: Sequence[Mapping[str, object]] = field(default_factory=list)
     response_status: int | None = None
 
 
@@ -104,7 +106,7 @@ _TOKEN_RE: Final = re.compile(r"[A-Za-z0-9]+")
 def _tokens(text: str | None) -> set[str]:
     if not text:
         return set()
-    return {t.lower() for t in _TOKEN_RE.findall(text)}
+    return {match.group(0).lower() for match in _TOKEN_RE.finditer(text)}
 
 
 def _jaccard(a: set[str], b: set[str]) -> float:
@@ -160,7 +162,7 @@ def _detect_satisfaction(curr_user: str | None) -> bool:
     return any(p.search(curr_user) for p in _SATISFACTION_PATTERNS)
 
 
-def _detect_failure(tool_results: list[dict[str, Any]]) -> bool:
+def _detect_failure(tool_results: Sequence[Mapping[str, object]]) -> bool:
     """Any tool result explicitly flagged as an error.
 
     We do NOT treat empty content as failure — many tools legitimately return
@@ -173,18 +175,27 @@ def _detect_failure(tool_results: list[dict[str, Any]]) -> bool:
     return False
 
 
-def _signature(call: dict[str, Any]) -> str:
+class _SupportsGet(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
+
+
+def _function_field(call: Mapping[str, object], key: str) -> object:
+    return require_attributes(call.get("function", {}), _SupportsGet, "get").get(key, "")
+
+
+def _signature(call: Mapping[str, object]) -> str:
     """Stable signature for loop detection: name + sorted JSON-ish args."""
-    name: Final = call.get("name") or call.get("function", {}).get("name", "")
-    call_args = call.get("arguments")
-    if call_args is None:
-        call_args = call.get("function", {}).get("arguments", "")
-    if isinstance(call_args, dict):
-        call_args = ",".join(f"{k}={call_args[k]}" for k in sorted(call_args.keys()))
+    name: Final = call.get("name") or _function_field(call, "name")
+    raw_args: Final = call.get("arguments")
+    call_args: Final = _function_field(call, "arguments") if raw_args is None else raw_args
+    args_mapping: Final = as_str_mapping(call_args)
+    if args_mapping is not None and isinstance(call_args, dict):
+        joined: Final = ",".join(f"{k}={args_mapping[k]}" for k in sorted(args_mapping.keys()))
+        return f"{name}({joined})"
     return f"{name}({call_args})"
 
 
-def _detect_loop(history: list[str], new_calls: list[dict[str, Any]]) -> bool:
+def _detect_loop(history: list[str], new_calls: Sequence[Mapping[str, object]]) -> bool:
     """Fires if any new call's signature appears >= LOOP_REPEAT_THRESHOLD-1 times
     in recent history (so this call would be the Nth)."""
     if not new_calls:
@@ -197,7 +208,7 @@ def _detect_loop(history: list[str], new_calls: list[dict[str, Any]]) -> bool:
     return False
 
 
-_EXHAUSTION_STATUSES: Final = {408, 413, 429, 503, 504}
+_EXHAUSTION_STATUSES: Final = {408, 413, 429, 503, 504, 529}
 
 _EXHAUSTION_KEYWORDS: Final = (
     "context length",
@@ -209,7 +220,7 @@ _EXHAUSTION_KEYWORDS: Final = (
 )
 
 
-def _detect_exhaustion(status: int | None, tool_results: list[dict[str, Any]]) -> bool:
+def _detect_exhaustion(status: int | None, tool_results: Sequence[Mapping[str, object]]) -> bool:
     if status is not None and status in _EXHAUSTION_STATUSES:
         return True
     for r in tool_results:
@@ -222,7 +233,7 @@ def _detect_exhaustion(status: int | None, tool_results: list[dict[str, Any]]) -
 def detect_user_feedback(
     previous_user_content: str | None,
     current_user_content: str | None,
-    tool_results: list[dict[str, Any]],
+    tool_results: Sequence[Mapping[str, object]],
     allow_satisfaction: bool,
 ) -> SignalDelta:
     return SignalDelta(
@@ -237,8 +248,8 @@ def detect_response_signals(
     previous_assistant_content: str | None,
     current_assistant_content: str | None,
     tool_call_history: list[str],
-    tool_calls: list[dict[str, Any]],
-    tool_results: list[dict[str, Any]],
+    tool_calls: Sequence[Mapping[str, object]],
+    tool_results: Sequence[Mapping[str, object]],
     response_status: int | None,
 ) -> SignalDelta:
     return SignalDelta(

@@ -14,8 +14,9 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { buildMcpOAuthAuthorizeUrl, exchangeMcpOAuthToken, registerMcpOAuthClient } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { extractErrorMessage } from "@/utils/errorUtils";
 import { generateCodeChallenge, generateCodeVerifier } from "@/utils/pkce";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
@@ -71,6 +72,7 @@ export const useToolsOAuthFlow = ({
   gatewayMintsClient,
   onSuccess,
 }: UseToolsOAuthFlowOptions): UseToolsOAuthFlowResult => {
+  const { t } = useTranslation();
   const [status, setStatus] = useState<ToolsOAuthStatus>("idle");
   const [error, setError] = useState<string | null>(null);
   const processingRef = useRef(false);
@@ -139,7 +141,7 @@ export const useToolsOAuthFlow = ({
       const msg = extractErrorMessage(err);
       setError(msg);
       setStatus("error");
-      NotificationsManager.error(msg);
+      toast.error(msg);
     }
   }, [accessToken, serverId, serverAlias, scopes, preClientId, gatewayMintsClient]);
 
@@ -173,7 +175,7 @@ export const useToolsOAuthFlow = ({
       payload = JSON.parse(storedResult);
       flowState = peeked;
     } catch (_) {
-      setError("Failed to resume OAuth flow. Please retry.");
+      setError(t("mcpServers.useToolsOAuthFlow.errors.resumeFailed"));
       setStatus("error");
       processingRef.current = false;
       clearStorage(FLOW_STATE_KEY);
@@ -218,20 +220,20 @@ export const useToolsOAuthFlow = ({
 
       setStatus("success");
       setError(null);
-      NotificationsManager.success("Connected successfully");
+      toast.success(t("mcpServers.useToolsOAuthFlow.toasts.connected"));
       onSuccessRef.current(token.access_token);
     } catch (err) {
       const msg = extractErrorMessage(err);
       setError(msg);
       setStatus("error");
-      NotificationsManager.error(msg);
+      toast.error(msg);
     } finally {
       clearStorage(FLOW_STATE_KEY);
       setTimeout(() => {
         processingRef.current = false;
       }, 1000);
     }
-  }, [accessToken, serverId, userId]);
+  }, [accessToken, serverId, userId, t]);
 
   useEffect(() => {
     resumeOAuthFlow();

@@ -2,25 +2,74 @@
 ## handler file for TextCompletionCodestral Integration - https://codestral.com/
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from functools import partial
-from typing import Final
+from typing import Final, Protocol
 
 import httpx
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.prompt_templates.factory import (
-    custom_prompt,
     prompt_factory,
+    render_custom_prompt_template,
 )
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
 )
+from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines, iter_sse_lines
 from litellm.types.utils import TextChoices
 from litellm.utils import CustomStreamWrapper, TextCompletionResponse
+
+
+class _CodestralChoiceMessage(TypedDict):
+    """`choices[].message` of a Codestral FIM completion."""
+
+    role: ReadOnly[NotRequired[str]]
+    content: ReadOnly[NotRequired[str | None]]
+
+
+class _CodestralChoice(TypedDict):
+    """One entry of `choices` in a Codestral FIM completion."""
+
+    index: ReadOnly[int]
+    message: ReadOnly[NotRequired[_CodestralChoiceMessage]]
+    finish_reason: ReadOnly[NotRequired[str | None]]
+    logprobs: ReadOnly[NotRequired[dict[str, object] | None]]
+
+
+class _CodestralUsage(TypedDict):
+    """Token accounting returned alongside a Codestral FIM completion."""
+
+    prompt_tokens: ReadOnly[NotRequired[int]]
+    completion_tokens: ReadOnly[NotRequired[int]]
+    total_tokens: ReadOnly[NotRequired[int]]
+
+
+class _CodestralCompletionResponse(TypedDict):
+    """Body returned by the Codestral `/v1/fim/completions` endpoint."""
+
+    id: ReadOnly[NotRequired[str]]
+    created: ReadOnly[NotRequired[int]]
+    model: ReadOnly[NotRequired[str]]
+    object: ReadOnly[NotRequired[str]]
+    usage: ReadOnly[NotRequired[_CodestralUsage]]
+    choices: ReadOnly[NotRequired[list[_CodestralChoice]]]
+
+
+class _CodestralHTTPResponse(Protocol):
+    """The Codestral completion response as this handler reads it."""
+
+    @property
+    def status_code(self) -> int: ...
+
+    @property
+    def text(self) -> str: ...
+
+    def json(self) -> _CodestralCompletionResponse: ...
 
 
 class TextCompletionCodestralError(Exception):
@@ -61,7 +110,7 @@ async def make_call(
     if response.status_code != 200:
         raise TextCompletionCodestralError(status_code=response.status_code, message=response.text)
 
-    completion_stream: Final = response.aiter_lines()
+    completion_stream: Final = aiter_sse_lines(response.aiter_text())
     # LOGGING
     logging_obj.post_call(
         input=messages,
@@ -115,7 +164,7 @@ class CodestralTextCompletion:
     def process_text_completion_response(
         self,
         model: str,
-        response: httpx.Response,
+        response: _CodestralHTTPResponse,
         model_response: TextCompletionResponse,
         stream: bool,
         logging_obj: LiteLLMLogging,
@@ -213,17 +262,14 @@ class CodestralTextCompletion:
         if model in custom_prompt_dict:
             # check if the model has a registered custom prompt
             model_prompt_details: Final = custom_prompt_dict[model]
-            prompt = custom_prompt(
-                role_dict=model_prompt_details["roles"],
-                initial_prompt_value=model_prompt_details["initial_prompt_value"],
-                final_prompt_value=model_prompt_details["final_prompt_value"],
-                messages=messages,
+            prompt = render_custom_prompt_template(
+                template=model_prompt_details, messages=messages, model=model, llm_provider="codestral"
             )
         else:
             prompt = prompt_factory(model=model, messages=messages)
 
         ## Load Config
-        config: Final = litellm.CodestralTextCompletionConfig.get_config()
+        config: Final[Mapping[str, object]] = litellm.CodestralTextCompletionConfig.get_config()
         for k, v in config.items():
             if (
                 k not in optional_params
@@ -294,13 +340,13 @@ class CodestralTextCompletion:
             response = litellm.module_level_client.post(
                 completion_url,
                 headers=headers,
-                data=json.dumps(data),
+                data=json.dumps({**data, "stream": True}),
                 stream=stream,
             )
             _response: Final = CustomStreamWrapper(
-                response.iter_lines(),
+                iter_sse_lines(response.iter_text()),
                 model,
-                custom_llm_provider="codestral",
+                custom_llm_provider="text-completion-codestral",
                 logging_obj=logging_obj,
             )
             return _response

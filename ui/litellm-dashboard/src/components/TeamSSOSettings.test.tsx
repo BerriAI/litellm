@@ -4,9 +4,22 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, screen, testQueryClient, waitFor, within } from "../../tests/test-utils";
 import TeamSSOSettings from "./TeamSSOSettings";
 import * as networking from "./networking";
-import NotificationsManager from "./molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 vi.mock("./networking");
+
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: () => ({
+    token: "test-token",
+    accessToken: "test-token",
+    userId: "test-user",
+    userEmail: "test-user@example.com",
+    userRole: "Admin",
+    premiumUser: true,
+    disabledPersonalKeyCreation: null,
+    showSSOBanner: false,
+  }),
+}));
 
 vi.mock("./common_components/budget_duration_dropdown", () => {
   const BudgetDurationDropdown = ({ value, onChange }: { value: string | null; onChange: (value: string) => void }) => (
@@ -76,6 +89,32 @@ vi.mock("./common_components/OrganizationDropdown", () => ({
   ),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroups", () => ({
+  useAccessGroups: () => ({
+    data: [
+      { access_group_id: "ag-1", access_group_name: "Central Models" },
+      { access_group_id: "ag-2", access_group_name: "Research" },
+    ],
+    isLoading: false,
+    isError: false,
+  }),
+}));
+
+vi.mock("./common_components/AccessGroupSelector", () => ({
+  default: ({ value = [], onChange }: { value?: string[]; onChange?: (v: string[]) => void }) => (
+    <select
+      data-testid="access-group-selector"
+      multiple
+      value={value}
+      onChange={(e) => onChange?.(Array.from(e.target.selectedOptions, (option) => option.value))}
+      aria-label="Access Groups"
+    >
+      <option value="ag-1">Central Models</option>
+      <option value="ag-2">Research</option>
+    </select>
+  ),
+}));
+
 vi.mock("./ModelSelect/ModelSelect", () => {
   const ModelSelect = ({ value, onChange }: { value: string[]; onChange: (value: string[]) => void }) => (
     <select
@@ -99,7 +138,7 @@ vi.mock("./ModelSelect/ModelSelect", () => {
 const mockGetDefaultTeamSettings = vi.mocked(networking.getDefaultTeamSettings);
 const mockUpdateDefaultTeamSettings = vi.mocked(networking.updateDefaultTeamSettings);
 const mockOrganizationListCall = vi.mocked(networking.organizationListCall);
-const mockNotificationsManager = vi.mocked(NotificationsManager);
+const mockToast = vi.mocked(toast);
 
 const MOCK_ORGANIZATIONS = [
   { organization_id: "org-1", organization_alias: "Engineering" },
@@ -121,6 +160,7 @@ describe("TeamSSOSettings", () => {
       rpm_limit: 100,
       models: ["gpt-4"],
       team_member_permissions: ["/key/generate", "/key/update"],
+      access_group_ids: ["ag-1"],
     },
   };
 
@@ -151,7 +191,7 @@ describe("TeamSSOSettings", () => {
         screen.getByText("No team settings available or you do not have permission to view them."),
       ).toBeInTheDocument();
     });
-    expect(mockNotificationsManager.fromBackend).toHaveBeenCalledWith("Failed to fetch team settings");
+    expect(mockToast.fromError).toHaveBeenCalledWith("Failed to fetch team settings");
   });
 
   it("should not fetch settings when access token is null", async () => {
@@ -232,6 +272,47 @@ describe("TeamSSOSettings", () => {
     await waitFor(() => {
       expect(screen.getByText("gpt-4")).toBeInTheDocument();
     });
+  });
+
+  it("should display default access groups by name in view mode", async () => {
+    mockGetDefaultTeamSettings.mockResolvedValue({
+      values: { ...mockSettingsResponse.values, access_group_ids: ["ag-1", "ag-missing"] },
+    });
+
+    renderWithProviders(<TeamSSOSettings {...defaultProps} />);
+
+    expect(await screen.findByText("Central Models")).toBeInTheDocument();
+    expect(screen.getByText("ag-missing")).toBeInTheDocument();
+  });
+
+  it("should say the models default only applies to SSO auto-created teams", async () => {
+    mockGetDefaultTeamSettings.mockResolvedValue(mockSettingsResponse);
+
+    renderWithProviders(<TeamSSOSettings {...defaultProps} />);
+
+    expect(await screen.findByText(/auto-created from SSO groups/i)).toBeInTheDocument();
+  });
+
+  it("should send the newly selected access group alongside the existing one when saving", async () => {
+    mockGetDefaultTeamSettings.mockResolvedValue(mockSettingsResponse);
+    mockUpdateDefaultTeamSettings.mockResolvedValue({
+      settings: { ...mockSettingsResponse.values, access_group_ids: ["ag-1", "ag-2"] },
+    });
+
+    renderWithProviders(<TeamSSOSettings {...defaultProps} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /Edit Settings/i }));
+    await userEvent.selectOptions(screen.getByTestId("access-group-selector"), "ag-2");
+    await userEvent.click(screen.getByRole("button", { name: /Save Changes/i }));
+
+    await waitFor(() => {
+      expect(mockUpdateDefaultTeamSettings).toHaveBeenCalledWith(
+        "test-token",
+        expect.objectContaining({ access_group_ids: ["ag-1", "ag-2"] }),
+      );
+    });
+
+    expect(await screen.findByText("Research")).toBeInTheDocument();
   });
 
   it("should display permissions as tags in view mode", async () => {
@@ -368,7 +449,7 @@ describe("TeamSSOSettings", () => {
     await userEvent.click(screen.getByRole("button", { name: /Edit Settings/i }));
     const permissionComboboxes = screen.getAllByRole("combobox");
     const permissionCombobox = permissionComboboxes[permissionComboboxes.length - 1];
-    expect(permissionCombobox).toBeDefined();
+    expect(permissionCombobox).toBeInTheDocument();
     await userEvent.click(permissionCombobox!);
     const deletePermissionOptions = await screen.findAllByText("/key/delete");
     await userEvent.click(deletePermissionOptions[deletePermissionOptions.length - 1]);
@@ -407,7 +488,7 @@ describe("TeamSSOSettings", () => {
       expect(mockUpdateDefaultTeamSettings).toHaveBeenCalledWith("test-token", expect.any(Object));
     });
 
-    expect(mockNotificationsManager.success).toHaveBeenCalledWith("Default team settings updated successfully");
+    expect(mockToast.success).toHaveBeenCalledWith("Default team settings updated successfully");
 
     // Should exit edit mode after save
     await waitFor(() => {
@@ -547,7 +628,7 @@ describe("TeamSSOSettings", () => {
     await userEvent.click(screen.getByRole("button", { name: /Save Changes/i }));
 
     await waitFor(() => {
-      expect(mockNotificationsManager.fromBackend).toHaveBeenCalledWith("Failed to update team settings");
+      expect(mockToast.fromError).toHaveBeenCalledWith("Failed to update team settings");
     });
   });
 

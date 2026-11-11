@@ -19,7 +19,7 @@
 """Database connection and data extraction for LiteLLM."""
 
 from datetime import datetime
-from typing import Any, Final
+from typing import Final
 
 import polars as pl
 
@@ -80,7 +80,7 @@ class LiteLLMDatabase:
         ORDER BY dus.date DESC, dus.created_at DESC
         """
 
-        params: Final[list[Any]] = [
+        params: Final[list[object]] = [
             start_time_utc,
             end_time_utc,
         ]
@@ -94,8 +94,18 @@ class LiteLLMDatabase:
 
         try:
             db_response: Final = await client.db.query_raw(query, *params)
-            # Convert the response to polars DataFrame with full schema inference
-            # This prevents schema mismatch errors when data types vary across rows
-            return pl.DataFrame(db_response, infer_schema_length=None)
+            from litellm.proxy.spend_tracking.key_metadata_recovery import (
+                fill_missing_api_key_aliases,
+            )
+
+            usage_rows: Final = (
+                db_response.to_dicts()
+                if isinstance(db_response, pl.DataFrame)
+                else db_response
+                if isinstance(db_response, list)
+                else []
+            )
+            recovered_rows: Final = await fill_missing_api_key_aliases(client, usage_rows)
+            return pl.DataFrame([dict(row) for row in recovered_rows], infer_schema_length=None)
         except Exception as e:
             raise Exception(f"Error retrieving usage data: {e}")

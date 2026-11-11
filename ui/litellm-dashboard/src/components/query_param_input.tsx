@@ -1,54 +1,45 @@
-import React, { useState } from "react";
+import React from "react";
 import { Minus, Plus } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import type { KeyValuePair } from "./key_value_input";
 
 interface QueryParamInputProps {
-  value?: Record<string, string>;
-  onChange?: (value: Record<string, string>) => void;
+  value?: readonly KeyValuePair[];
+  onChange?: (value: readonly KeyValuePair[]) => void;
 }
 
-const QueryParamInput: React.FC<QueryParamInputProps> = ({ value = {}, onChange }) => {
-  const [pairs, setPairs] = useState<[string, string][]>(Object.entries(value));
+const QueryParamInput: React.FC<QueryParamInputProps> = ({ value = [], onChange }) => {
+  const { t } = useTranslation();
+  const handleAdd = () => onChange?.([...value, ["", ""]]);
 
-  const handleAdd = () => {
-    setPairs([...pairs, ["", ""]]);
-  };
+  const handleRemove = (index: number) => onChange?.(value.filter((_, i) => i !== index));
 
-  const handleRemove = (index: number) => {
-    const newPairs = pairs.filter((_, i) => i !== index);
-    setPairs(newPairs);
-    onChange?.(Object.fromEntries(newPairs));
-  };
-
-  const handleChange = (index: number, key: string, val: string) => {
-    const newPairs = [...pairs];
-    newPairs[index] = [key, val];
-    setPairs(newPairs);
-    onChange?.(Object.fromEntries(newPairs));
-  };
+  const handleChange = (index: number, pair: KeyValuePair) =>
+    onChange?.(value.map((existing, i) => (i === index ? pair : existing)));
 
   return (
     <div className="space-y-2">
-      {pairs.map(([key, val], index) => (
+      {value.map(([key, val], index) => (
         <div key={index} className="flex items-center gap-2">
           <Input
-            placeholder="Parameter Name (e.g., version)"
+            placeholder={t("queryParamInput.parameterName")}
             value={key}
-            onChange={(e) => handleChange(index, e.target.value, val)}
+            onChange={(e) => handleChange(index, [e.target.value, val])}
           />
           <Input
-            placeholder="Parameter Value (e.g., v1)"
+            placeholder={t("queryParamInput.parameterValue")}
             value={val}
-            onChange={(e) => handleChange(index, key, e.target.value)}
+            onChange={(e) => handleChange(index, [key, e.target.value])}
           />
           <Button
             type="button"
             variant="ghost"
             size="icon-sm"
             onClick={() => handleRemove(index)}
-            aria-label={`Remove query parameter ${index + 1}`}
+            aria-label={t("queryParamInput.removeParameter", { position: index + 1 })}
           >
             <Minus />
           </Button>
@@ -56,7 +47,7 @@ const QueryParamInput: React.FC<QueryParamInputProps> = ({ value = {}, onChange 
       ))}
       <Button type="button" variant="outline" onClick={handleAdd}>
         <Plus />
-        Add Query Parameter
+        {t("queryParamInput.addParameter")}
       </Button>
     </div>
   );

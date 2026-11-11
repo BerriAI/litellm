@@ -13,10 +13,10 @@ from __future__ import annotations
 
 import pytest
 
-from conftest import DdLogsReader
-from datadog_mcp import SEARCH_LOGS_TOOL, assert_dd_mcp_creds, register_datadog_mcp
+from datadog_mcp import SEARCH_LOGS_TOOL, DdLogsReader, assert_dd_mcp_creds, register_datadog_mcp
 from e2e_config import CHEAP_ANTHROPIC_MODEL, DD_SEARCH_FROM, unique_marker
 from e2e_http import NoBody, unwrap
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from mcp_client import McpClient
 from models import ChatBody, ChatMessage
@@ -49,17 +49,16 @@ def _seed_completion(proxy: ProxyClient, *, key: str, marker: str) -> None:
 
 
 class TestDatadogMcpRoundTrip:
-    @pytest.mark.skip(
-        reason=(
-            "LIT-5052: this test sends a `telemetry` argument that Datadog's "
-            "search_datadog_logs tool now rejects, so every tool call fails validation with "
-            "'unexpected additional properties [\"telemetry\"]' before the round-trip "
-            "assertion is reached. `telemetry` was never a documented Datadog parameter; the "
-            "test relied on the server ignoring unknown properties. Unskip once the argument "
-            "is dropped."
+    @pytest.mark.covers("mcp.list_tools.api_key.succeeds", "mcp.call_tool.api_key.succeeds")
+    @meta(
+        Subject(
+            domain=Domain.MCP,
+            route=Route.MCP,
+            providers=(Provider.ANTHROPIC,),
+            models=(CHEAP_ANTHROPIC_MODEL,),
+            mode=Mode.NONSTREAM,
         )
     )
-    @pytest.mark.covers("mcp.list_tools.api_key.succeeds", "mcp.call_tool.api_key.succeeds")
     def test_search_logs_finds_seeded_completion(
         self,
         client: McpClient,
@@ -98,9 +97,6 @@ class TestDatadogMcpRoundTrip:
                 "from": DD_SEARCH_FROM,
                 "to": "now",
                 "max_tokens": 5000,
-                "telemetry": {
-                    "intent": "e2e assert seeded litellm completion log is searchable via MCP"
-                },
             },
         )
         assert call.is_error is not True, f"search_datadog_logs errored: {call}"

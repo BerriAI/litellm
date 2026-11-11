@@ -1,7 +1,11 @@
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, RootModel, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
@@ -19,6 +23,25 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _RAGFlowDataset(TypedDict):
+    id: ReadOnly[NotRequired[str | None]]
+    name: ReadOnly[NotRequired[str | None]]
+    create_time: ReadOnly[NotRequired[int | float | None]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _RAGFlowCreateResponse(TypedDict):
+    data: ReadOnly[NotRequired[_RAGFlowDataset]]
+
+
+class _RAGFlowCreateResponseRoot(RootModel[_RAGFlowCreateResponse]):
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+
+
+_RAGFLOW_EMPTY_DATA: Final[_RAGFlowDataset] = {}
 
 
 class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
@@ -73,15 +96,16 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
         - api_base in litellm_params
         - Default: http://localhost:9380
         """
-        api_base = (
-            api_base or litellm_params.get("api_base") or get_secret_str("RAGFLOW_API_BASE") or "http://localhost:9380"
+        params_api_base: Final = litellm_params.get("api_base")
+        resolved_api_base: Final = (
+            api_base
+            or (f"{params_api_base}" if params_api_base else None)
+            or get_secret_str("RAGFLOW_API_BASE")
+            or "http://localhost:9380"
         )
 
-        # Remove trailing slashes
-        api_base = api_base.rstrip("/")
-
         # RAGFlow datasets API endpoint
-        return f"{api_base}/api/v1/datasets"
+        return join_api_base(resolved_api_base, "api/v1/datasets")
 
     def transform_search_vector_store_request(
         self,
@@ -91,7 +115,7 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
-        extra_body: dict[str, Any] | None = None,
+        extra_body: Mapping[str, object] | None = None,
     ) -> tuple[str, dict]:
         """RAGFlow vector stores are management-only, search is not supported."""
         raise NotImplementedError("RAGFlow vector stores support dataset management only, not search/retrieval")
@@ -121,7 +145,7 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
             raise ValueError("name is required for RAGFlow dataset creation")
 
         # Build request body
-        request_body: Final[dict[str, Any]] = {
+        request_body: Final[dict[str, object]] = {
             "name": name,
         }
 
@@ -184,7 +208,8 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
                     headers=response.headers,
                 )
 
-            data: Final = response_json.get("data", {})
+            create_response: Final = _RAGFlowCreateResponseRoot.model_validate(response_json).root
+            data: Final = create_response.get("data", _RAGFLOW_EMPTY_DATA)
 
             # Extract dataset ID
             dataset_id: Final = data.get("id")

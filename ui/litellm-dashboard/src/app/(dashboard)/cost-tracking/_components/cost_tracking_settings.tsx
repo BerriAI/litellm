@@ -1,39 +1,76 @@
 import React, { useState, useEffect } from "react";
+import type { ParseKeys } from "i18next";
+import { useTranslation } from "react-i18next";
+import { ChevronDown } from "lucide-react";
 import {
-  Title,
-  Text,
-  Button,
-  Accordion,
-  AccordionHeader,
-  AccordionBody,
-  TabGroup,
-  TabList,
-  Tab,
-  TabPanels,
-  TabPanel,
-} from "@tremor/react";
-import { Modal, Form } from "antd";
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CostTrackingSettingsProps } from "./types";
 import ProviderDiscountTable from "./provider_discount_table";
 import AddProviderForm from "./add_provider_form";
 import ProviderMarginTable from "./provider_margin_table";
 import AddMarginForm from "./add_margin_form";
 import PricingCalculator from "./pricing_calculator/index";
-import { ExclamationCircleOutlined } from "@ant-design/icons";
-import { DocsMenu } from "@/components/HelpLink";
+import { DocsMenu } from "@/components/DocsMenu";
 import HowItWorks from "./how_it_works";
 import { useDiscountConfig } from "./use_discount_config";
 import { useMarginConfig } from "./use_margin_config";
+import { useBlockUnpricedConfig } from "./use_block_unpriced_config";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
-const DOCS_LINKS = [
-  { label: "Custom pricing for models", href: "https://docs.litellm.ai/docs/proxy/custom_pricing" },
-  { label: "Spend tracking", href: "https://docs.litellm.ai/docs/proxy/cost_tracking" },
+const DOCS_LINKS: readonly { labelKey: ParseKeys; href: string }[] = [
+  {
+    labelKey: "costTracking.settings.docsLinks.customPricing",
+    href: "https://docs.litellm.ai/docs/proxy/custom_pricing",
+  },
+  {
+    labelKey: "costTracking.settings.docsLinks.spendTracking",
+    href: "https://docs.litellm.ai/docs/proxy/cost_tracking",
+  },
 ];
 
+const REMOVAL_COPY = {
+  discount: {
+    title: "costTracking.settings.removal.discount.title",
+    noun: "costTracking.settings.removal.discount.noun",
+  },
+  margin: { title: "costTracking.settings.removal.margin.title", noun: "costTracking.settings.removal.margin.noun" },
+} as const;
+
+interface PendingRemoval {
+  kind: keyof typeof REMOVAL_COPY;
+  provider: string;
+  displayName: string;
+}
+
+const SECTION_HEADER_CLASS = "group/section flex w-full items-center justify-between px-6 py-4 text-left";
+
+const SectionHeader: React.FC<{ title: string; description: string }> = ({ title, description }) => (
+  <CollapsibleTrigger className={SECTION_HEADER_CLASS}>
+    <div className="flex flex-col items-start w-full">
+      <span className="block text-lg font-semibold text-foreground">{title}</span>
+      <span className="block text-sm text-muted-foreground mt-1">{description}</span>
+    </div>
+    <ChevronDown className="size-5 shrink-0 text-muted-foreground transition-transform group-data-[panel-open]/section:rotate-180" />
+  </CollapsibleTrigger>
+);
+
 const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, userRole, accessToken }) => {
+  const { t } = useTranslation();
   const [selectedProvider, setSelectedProvider] = useState<string | undefined>(undefined);
   const [newDiscount, setNewDiscount] = useState<string>("");
+  const [modelPattern, setModelPattern] = useState<string>("");
   const [isFetching, setIsFetching] = useState(true);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [isMarginModalVisible, setIsMarginModalVisible] = useState(false);
@@ -42,9 +79,8 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
   const [percentageValue, setPercentageValue] = useState<string>("");
   const [fixedAmountValue, setFixedAmountValue] = useState<string>("");
   const [models, setModels] = useState<string[]>([]);
-  const [form] = Form.useForm();
-  const [marginForm] = Form.useForm();
-  const [modal, contextHolder] = Modal.useModal();
+  const [pendingRemoval, setPendingRemoval] = useState<PendingRemoval | null>(null);
+  const [isRemoving, setIsRemoving] = useState(false);
 
   const isProxyAdmin = userRole === "proxy_admin" || userRole === "Admin";
 
@@ -65,9 +101,16 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
     handleMarginChange,
   } = useMarginConfig({ accessToken });
 
+  const {
+    blockUnpriced,
+    isUpdating: isUpdatingBlockUnpriced,
+    fetchBlockUnpriced,
+    setBlockUnpriced,
+  } = useBlockUnpricedConfig({ accessToken });
+
   useEffect(() => {
     if (accessToken) {
-      Promise.all([fetchDiscountConfig(), fetchMarginConfig()]).finally(() => {
+      Promise.all([fetchDiscountConfig(), fetchMarginConfig(), fetchBlockUnpriced()]).finally(() => {
         setIsFetching(false);
       });
 
@@ -82,38 +125,42 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
       };
       loadModels();
     }
-  }, [accessToken, fetchDiscountConfig, fetchMarginConfig]);
+  }, [accessToken, fetchDiscountConfig, fetchMarginConfig, fetchBlockUnpriced]);
 
   const handleAddProvider = async () => {
-    const success = await addProvider(selectedProvider, newDiscount);
+    const success = await addProvider(selectedProvider, newDiscount, modelPattern);
     if (success) {
       setSelectedProvider(undefined);
       setNewDiscount("");
+      setModelPattern("");
       setIsModalVisible(false);
     }
   };
 
   const handleModalCancel = () => {
     setIsModalVisible(false);
-    form.resetFields();
     setSelectedProvider(undefined);
     setNewDiscount("");
+    setModelPattern("");
   };
 
-  const handleFormSubmit = () => {
-    handleAddProvider();
+  const handleRemoveProvider = (provider: string, providerDisplayName: string) => {
+    setPendingRemoval({ kind: "discount", provider, displayName: providerDisplayName });
   };
 
-  const handleRemoveProvider = async (provider: string, providerDisplayName: string) => {
-    modal.confirm({
-      title: "Remove Provider Discount",
-      icon: <ExclamationCircleOutlined />,
-      content: `Are you sure you want to remove the discount for ${providerDisplayName}?`,
-      okText: "Remove",
-      okType: "danger",
-      cancelText: "Cancel",
-      onOk: () => removeProvider(provider),
-    });
+  const handleConfirmRemoval = async () => {
+    if (!pendingRemoval) return;
+    setIsRemoving(true);
+    try {
+      if (pendingRemoval.kind === "discount") {
+        await removeProvider(pendingRemoval.provider);
+      } else {
+        await removeMargin(pendingRemoval.provider);
+      }
+    } finally {
+      setIsRemoving(false);
+      setPendingRemoval(null);
+    }
   };
 
   const handleAddMargin = async () => {
@@ -134,23 +181,14 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
 
   const handleMarginModalCancel = () => {
     setIsMarginModalVisible(false);
-    marginForm.resetFields();
     setSelectedMarginProvider(undefined);
     setPercentageValue("");
     setFixedAmountValue("");
     setMarginType("percentage");
   };
 
-  const handleRemoveMargin = async (provider: string, providerDisplayName: string) => {
-    modal.confirm({
-      title: "Remove Provider Margin",
-      icon: <ExclamationCircleOutlined />,
-      content: `Are you sure you want to remove the margin for ${providerDisplayName}?`,
-      okText: "Remove",
-      okType: "danger",
-      cancelText: "Cancel",
-      onOk: () => removeMargin(provider),
-    });
+  const handleRemoveMargin = (provider: string, providerDisplayName: string) => {
+    setPendingRemoval({ kind: "margin", provider, displayName: providerDisplayName });
   };
 
   if (!accessToken) {
@@ -159,109 +197,105 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
 
   return (
     <div className="w-full p-8">
-      {contextHolder}
-
       {/* Header Section - Outside the card */}
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between mb-6">
         <div>
           <div className="flex items-center gap-2">
-            <Title>Cost Tracking Settings</Title>
-            <DocsMenu items={DOCS_LINKS} />
+            <p className="text-xl font-medium text-foreground">{t("costTracking.settings.title")}</p>
+            <DocsMenu items={DOCS_LINKS.map(({ labelKey, href }) => ({ label: t(labelKey), href }))} />
           </div>
-          <Text className="text-gray-500 mt-1">
-            Configure cost discounts and margins for different LLM providers. Changes are saved automatically.
-          </Text>
+          <p className="text-muted-foreground mt-1">{t("costTracking.settings.description")}</p>
         </div>
       </div>
 
       {/* Main Content Card with Accordions */}
-      <div className="bg-white rounded-lg shadow-sm w-full max-w-full space-y-4">
+      <div className="bg-card rounded-lg shadow-sm w-full max-w-full space-y-4">
         {/* Accordion 1: Provider Discounts - Only for proxy admins */}
         {isProxyAdmin && (
-          <Accordion>
-            <AccordionHeader className="px-6 py-4">
-              <div className="flex flex-col items-start w-full">
-                <Text className="text-lg font-semibold text-gray-900">Provider Discounts</Text>
-                <Text className="text-sm text-gray-500 mt-1">
-                  Apply percentage-based discounts to reduce costs for specific providers
-                </Text>
-              </div>
-            </AccordionHeader>
-            <AccordionBody className="px-0">
-              <TabGroup>
-                <TabList className="px-6 pt-4">
-                  <Tab>Discounts</Tab>
-                  <Tab>Test It</Tab>
-                </TabList>
-                <TabPanels>
-                  <TabPanel>
-                    <div className="p-6">
-                      <div className="flex justify-end mb-4">
-                        <Button onClick={() => setIsModalVisible(true)}>+ Add Provider Discount</Button>
+          <Collapsible className="rounded-lg border">
+            <SectionHeader
+              title={t("costTracking.settings.discounts.title")}
+              description={t("costTracking.settings.discounts.description")}
+            />
+            <CollapsibleContent className="px-0">
+              <Tabs defaultValue="discounts">
+                <TabsList variant="line" className="mx-6 mt-4 h-auto justify-start rounded-none border-b p-0">
+                  <TabsTrigger value="discounts" className="flex-none rounded-none px-4 py-2">
+                    {t("costTracking.settings.discounts.tabs.discounts")}
+                  </TabsTrigger>
+                  <TabsTrigger value="test-it" className="flex-none rounded-none px-4 py-2">
+                    {t("costTracking.settings.discounts.tabs.testIt")}
+                  </TabsTrigger>
+                </TabsList>
+                <TabsContent value="discounts" keepMounted>
+                  <div className="p-6">
+                    <div className="flex justify-end mb-4">
+                      <Button onClick={() => setIsModalVisible(true)}>
+                        {t("costTracking.settings.discounts.addButton")}
+                      </Button>
+                    </div>
+                    {isFetching ? (
+                      <div className="py-12 text-center">
+                        <p className="text-muted-foreground">{t("costTracking.settings.loading")}</p>
                       </div>
-                      {isFetching ? (
-                        <div className="py-12 text-center">
-                          <Text className="text-gray-500">Loading configuration...</Text>
-                        </div>
-                      ) : Object.keys(discountConfig).length > 0 ? (
-                        <ProviderDiscountTable
-                          discountConfig={discountConfig}
-                          onDiscountChange={handleDiscountChange}
-                          onRemoveProvider={handleRemoveProvider}
-                        />
-                      ) : (
-                        <div className="py-16 px-6 text-center">
-                          <svg
-                            className="mx-auto h-12 w-12 text-gray-400 mb-4"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={1.5}
-                              d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                            />
-                          </svg>
-                          <Text className="text-gray-700 font-medium mb-2">No provider discounts configured</Text>
-                          <Text className="text-gray-500 text-sm">
-                            Click &quot;Add Provider Discount&quot; to get started
-                          </Text>
-                        </div>
-                      )}
-                    </div>
-                  </TabPanel>
-                  <TabPanel>
-                    <div className="px-6 pb-4">
-                      <HowItWorks />
-                    </div>
-                  </TabPanel>
-                </TabPanels>
-              </TabGroup>
-            </AccordionBody>
-          </Accordion>
+                    ) : Object.keys(discountConfig).length > 0 ? (
+                      <ProviderDiscountTable
+                        discountConfig={discountConfig}
+                        onDiscountChange={handleDiscountChange}
+                        onRemoveProvider={handleRemoveProvider}
+                      />
+                    ) : (
+                      <div className="py-16 px-6 text-center">
+                        <svg
+                          className="mx-auto h-12 w-12 text-muted-foreground mb-4"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={1.5}
+                            d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                          />
+                        </svg>
+                        <p className="text-foreground font-medium mb-2">
+                          {t("costTracking.settings.discounts.emptyTitle")}
+                        </p>
+                        <p className="text-muted-foreground text-sm">
+                          {t("costTracking.settings.discounts.emptyHint")}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </TabsContent>
+                <TabsContent value="test-it" keepMounted>
+                  <div className="px-6 pb-4">
+                    <HowItWorks />
+                  </div>
+                </TabsContent>
+              </Tabs>
+            </CollapsibleContent>
+          </Collapsible>
         )}
 
         {/* Accordion 2: Fee/Price Margin - Only for proxy admins */}
         {isProxyAdmin && (
-          <Accordion>
-            <AccordionHeader className="px-6 py-4">
-              <div className="flex flex-col items-start w-full">
-                <Text className="text-lg font-semibold text-gray-900">Fee/Price Margin</Text>
-                <Text className="text-sm text-gray-500 mt-1">
-                  Add fees or margins to LLM costs for internal billing and cost recovery
-                </Text>
-              </div>
-            </AccordionHeader>
-            <AccordionBody className="px-0">
+          <Collapsible className="rounded-lg border">
+            <SectionHeader
+              title={t("costTracking.settings.margins.title")}
+              description={t("costTracking.settings.margins.description")}
+            />
+            <CollapsibleContent className="px-0">
               <div className="p-6">
                 <div className="flex justify-end mb-4">
-                  <Button onClick={() => setIsMarginModalVisible(true)}>+ Add Provider Margin</Button>
+                  <Button onClick={() => setIsMarginModalVisible(true)}>
+                    {t("costTracking.settings.margins.addButton")}
+                  </Button>
                 </div>
                 {isFetching ? (
                   <div className="py-12 text-center">
-                    <Text className="text-gray-500">Loading configuration...</Text>
+                    <p className="text-muted-foreground">{t("costTracking.settings.loading")}</p>
                   </div>
                 ) : Object.keys(marginConfig).length > 0 ? (
                   <ProviderMarginTable
@@ -272,7 +306,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
                 ) : (
                   <div className="py-16 px-6 text-center">
                     <svg
-                      className="mx-auto h-12 w-12 text-gray-400 mb-4"
+                      className="mx-auto h-12 w-12 text-muted-foreground mb-4"
                       fill="none"
                       stroke="currentColor"
                       viewBox="0 0 24 24"
@@ -284,104 +318,136 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
                         d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
                       />
                     </svg>
-                    <Text className="text-gray-700 font-medium mb-2">No provider margins configured</Text>
-                    <Text className="text-gray-500 text-sm">Click &quot;Add Provider Margin&quot; to get started</Text>
+                    <p className="text-foreground font-medium mb-2">{t("costTracking.settings.margins.emptyTitle")}</p>
+                    <p className="text-muted-foreground text-sm">{t("costTracking.settings.margins.emptyHint")}</p>
                   </div>
                 )}
               </div>
-            </AccordionBody>
-          </Accordion>
+            </CollapsibleContent>
+          </Collapsible>
         )}
 
-        {/* Accordion 3: Pricing Calculator - Available to all roles */}
-        <Accordion defaultOpen={true}>
-          <AccordionHeader className="px-6 py-4">
-            <div className="flex flex-col items-start w-full">
-              <Text className="text-lg font-semibold text-gray-900">Pricing Calculator</Text>
-              <Text className="text-sm text-gray-500 mt-1">
-                Estimate LLM costs based on expected token usage and request volume
-              </Text>
-            </div>
-          </AccordionHeader>
-          <AccordionBody className="px-0">
+        {/* Accordion 3: Block Unpriced Models - Only for proxy admins */}
+        {isProxyAdmin && (
+          <Collapsible className="rounded-lg border">
+            <SectionHeader
+              title={t("costTracking.settings.blockUnpriced.title")}
+              description={t("costTracking.settings.blockUnpriced.description")}
+            />
+            <CollapsibleContent className="px-0">
+              <div className="p-6">
+                <div className="flex items-center justify-between">
+                  <div className="pr-6">
+                    <p className="text-foreground font-medium">
+                      {t("costTracking.settings.blockUnpriced.toggleTitle")}
+                    </p>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      {t("costTracking.settings.blockUnpriced.toggleDescription")}
+                    </p>
+                  </div>
+                  <Switch
+                    checked={blockUnpriced}
+                    disabled={isUpdatingBlockUnpriced || isFetching}
+                    onCheckedChange={(checked) => setBlockUnpriced(checked)}
+                  />
+                </div>
+              </div>
+            </CollapsibleContent>
+          </Collapsible>
+        )}
+
+        {/* Accordion 4: Pricing Calculator - Available to all roles */}
+        <Collapsible defaultOpen={true} className="rounded-lg border">
+          <SectionHeader
+            title={t("costTracking.settings.pricingCalculator.title")}
+            description={t("costTracking.settings.pricingCalculator.description")}
+          />
+          <CollapsibleContent className="px-0">
             <div className="p-6">
               <PricingCalculator accessToken={accessToken} models={models} />
             </div>
-          </AccordionBody>
-        </Accordion>
+          </CollapsibleContent>
+        </Collapsible>
       </div>
 
-      <Modal
-        title={
-          <div className="flex items-center space-x-3 pb-4 border-b border-gray-100">
-            <h2 className="text-xl font-semibold text-gray-900">Add Provider Discount</h2>
-          </div>
-        }
-        open={isModalVisible}
-        width={1000}
-        onCancel={handleModalCancel}
-        footer={null}
-        className="top-8"
-        styles={{
-          body: { padding: "24px" },
-          header: { padding: "24px 24px 0 24px", border: "none" },
-        }}
-      >
-        <div className="mt-6">
-          <Text className="text-sm text-gray-600 mb-6">
-            Select a provider and set its discount percentage. Enter a value between 0% and 100% (e.g., 5 for a 5%
-            discount).
-          </Text>
-          <Form form={form} onFinish={handleFormSubmit} layout="vertical" className="space-y-6">
-            <AddProviderForm
-              discountConfig={discountConfig}
-              selectedProvider={selectedProvider}
-              newDiscount={newDiscount}
-              onProviderChange={setSelectedProvider}
-              onDiscountChange={setNewDiscount}
-              onAddProvider={handleAddProvider}
-            />
-          </Form>
-        </div>
-      </Modal>
+      {pendingRemoval && (
+        <AlertDialog open onOpenChange={(open) => !open && !isRemoving && setPendingRemoval(null)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{t(REMOVAL_COPY[pendingRemoval.kind].title)}</AlertDialogTitle>
+              <AlertDialogDescription>
+                {t("costTracking.settings.removal.confirm", {
+                  noun: t(REMOVAL_COPY[pendingRemoval.kind].noun),
+                  name: pendingRemoval.displayName,
+                })}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={isRemoving}>{t("costTracking.settings.removal.cancel")}</AlertDialogCancel>
+              <Button variant="destructive" onClick={handleConfirmRemoval} disabled={isRemoving}>
+                {isRemoving ? t("costTracking.settings.removal.removing") : t("costTracking.settings.removal.remove")}
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
 
-      <Modal
-        title={
-          <div className="flex items-center space-x-3 pb-4 border-b border-gray-100">
-            <h2 className="text-xl font-semibold text-gray-900">Add Provider Margin</h2>
+      <Dialog open={isModalVisible} onOpenChange={(open) => !open && handleModalCancel()}>
+        <DialogContent className="top-8 max-h-[calc(100dvh-4rem)] translate-y-0 overflow-y-auto sm:max-w-[1000px]">
+          <DialogHeader>
+            <div className="flex items-center space-x-3 pb-4 border-b border-border">
+              <DialogTitle className="text-xl font-semibold text-foreground">
+                {t("costTracking.settings.discounts.dialogTitle")}
+              </DialogTitle>
+            </div>
+          </DialogHeader>
+          <div className="mt-6">
+            <p className="text-sm text-muted-foreground mb-6">
+              {t("costTracking.settings.discounts.dialogDescription")}
+            </p>
+            <form onSubmit={(event) => event.preventDefault()} className="space-y-6">
+              <AddProviderForm
+                selectedProvider={selectedProvider}
+                newDiscount={newDiscount}
+                modelPattern={modelPattern}
+                onProviderChange={setSelectedProvider}
+                onDiscountChange={setNewDiscount}
+                onModelPatternChange={setModelPattern}
+                onAddProvider={handleAddProvider}
+              />
+            </form>
           </div>
-        }
-        open={isMarginModalVisible}
-        width={1000}
-        onCancel={handleMarginModalCancel}
-        footer={null}
-        className="top-8"
-        styles={{
-          body: { padding: "24px" },
-          header: { padding: "24px 24px 0 24px", border: "none" },
-        }}
-      >
-        <div className="mt-6">
-          <Text className="text-sm text-gray-600 mb-6">
-            Select a provider (or &quot;Global&quot; for all providers) and configure the margin. You can use
-            percentage-based or fixed amount.
-          </Text>
-          <Form form={marginForm} layout="vertical" className="space-y-6">
-            <AddMarginForm
-              marginConfig={marginConfig}
-              selectedProvider={selectedMarginProvider}
-              marginType={marginType}
-              percentageValue={percentageValue}
-              fixedAmountValue={fixedAmountValue}
-              onProviderChange={setSelectedMarginProvider}
-              onMarginTypeChange={setMarginType}
-              onPercentageChange={setPercentageValue}
-              onFixedAmountChange={setFixedAmountValue}
-              onAddProvider={handleAddMargin}
-            />
-          </Form>
-        </div>
-      </Modal>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isMarginModalVisible} onOpenChange={(open) => !open && handleMarginModalCancel()}>
+        <DialogContent className="top-8 max-h-[calc(100dvh-4rem)] translate-y-0 overflow-y-auto sm:max-w-[1000px]">
+          <DialogHeader>
+            <div className="flex items-center space-x-3 pb-4 border-b border-border">
+              <DialogTitle className="text-xl font-semibold text-foreground">
+                {t("costTracking.settings.margins.dialogTitle")}
+              </DialogTitle>
+            </div>
+          </DialogHeader>
+          <div className="mt-6">
+            <p className="text-sm text-muted-foreground mb-6">{t("costTracking.settings.margins.dialogDescription")}</p>
+            <form onSubmit={(event) => event.preventDefault()} className="space-y-6">
+              <AddMarginForm
+                marginConfig={marginConfig}
+                selectedProvider={selectedMarginProvider}
+                marginType={marginType}
+                percentageValue={percentageValue}
+                fixedAmountValue={fixedAmountValue}
+                onProviderChange={setSelectedMarginProvider}
+                onMarginTypeChange={setMarginType}
+                onPercentageChange={setPercentageValue}
+                onFixedAmountChange={setFixedAmountValue}
+                onAddProvider={handleAddMargin}
+              />
+            </form>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

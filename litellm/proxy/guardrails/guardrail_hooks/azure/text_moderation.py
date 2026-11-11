@@ -3,7 +3,7 @@
 Azure Text Moderation Native Guardrail Integrationfor LiteLLM
 """
 
-from typing import TYPE_CHECKING, Any, Final, Literal, Union, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast
 
 from fastapi import HTTPException
 
@@ -14,17 +14,21 @@ from litellm.integrations.custom_guardrail import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import CallTypesLiteral
+from litellm.types.utils import CallTypesLiteral, GenericGuardrailAPIInputs, LLMResponseTypes
 
-from .base import AzureGuardrailBase
+from .base import (  # noqa: F401  # legacy module exports
+    _RESPONSES_API_CALL_TYPES,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    RESPONSES_API_CALL_TYPES,
+    AzureGuardrailBase,
+)
 
 if TYPE_CHECKING:
-    from litellm.types.llms.openai import AllMessageValues
+    from litellm.caching.caching import DualCache
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.proxy.guardrails.guardrail_hooks.azure.azure_text_moderation import (
         AzureTextModerationGuardrailResponse,
     )
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
-    from litellm.types.utils import EmbeddingResponse, ImageResponse, ModelResponse
 
 
 class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardrail):
@@ -40,6 +44,8 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
         api_base: Azure Text Moderation API endpoint
         default_on: Whether to enable by default
     """
+
+    use_native_lifecycle_hooks: ClassVar[bool] = True
 
     default_severity_threshold: int = 2
 
@@ -147,6 +153,19 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
         assert last_response is not None
         return last_response
 
+    @log_guardrail_information
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: "LiteLLMLoggingObj | None" = None,
+    ) -> GenericGuardrailAPIInputs:
+        for text in inputs.get("texts") or ():
+            if text:
+                await self.async_make_request(text=text)
+        return inputs
+
     def check_severity_threshold(self, response: "AzureTextModerationGuardrailResponse") -> Literal[True]:
         """
         - Check if threshold set by category
@@ -203,10 +222,10 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
     async def async_pre_call_hook(
         self,
         user_api_key_dict: "UserAPIKeyAuth",
-        cache: Any,
+        cache: "DualCache",
         data: dict[str, Any],
         call_type: CallTypesLiteral,
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, object] | None:
         """
         Pre-call hook to scan user prompts before sending to LLM.
 
@@ -216,14 +235,13 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
             "Azure Text Moderation: Running pre-call prompt scan, on call_type: %s",
             call_type,
         )
-        new_messages: Final[list[AllMessageValues] | None] = data.get("messages")
-        if new_messages is None:
+        if call_type not in RESPONSES_API_CALL_TYPES and data.get("messages") is None:
             verbose_proxy_logger.warning("Azure Text Moderation: not running guardrail. No messages in data")
             return data
-        user_prompt: Final = self.get_user_prompt(new_messages)
+        user_prompt: Final = self.get_user_prompt_from_request(data, call_type)
 
         if user_prompt:
-            verbose_proxy_logger.info("Azure Text Moderation: User prompt: %s", user_prompt)
+            verbose_proxy_logger.debug("Azure Text Moderation: User prompt: %s", user_prompt)
             await self.async_make_request(
                 text=user_prompt,
             )
@@ -235,8 +253,8 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
         self,
         data: dict,
         user_api_key_dict: "UserAPIKeyAuth",
-        response: Union[Any, "ModelResponse", "EmbeddingResponse", "ImageResponse"],
-    ) -> Any:
+        response: LLMResponseTypes,
+    ) -> LLMResponseTypes:
         from litellm.types.utils import Choices, ModelResponse
 
         if isinstance(response, ModelResponse) and response.choices:
@@ -251,7 +269,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
                 )
         return response
 
-    async def async_post_call_streaming_hook(self, user_api_key_dict: UserAPIKeyAuth, response: str) -> Any:
+    async def async_post_call_streaming_hook(self, user_api_key_dict: UserAPIKeyAuth, response: str) -> str:
         try:
             if response is not None and len(response) > 0:
                 await self.async_make_request(
@@ -265,7 +283,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
             return f"data: {error_returned}\n\n"
 
 
-def _message_content_to_text(content: Any) -> str:
+def _message_content_to_text(content: object) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):

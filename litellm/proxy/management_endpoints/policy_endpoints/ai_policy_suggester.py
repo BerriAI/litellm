@@ -6,9 +6,15 @@ based on user-provided attack examples and descriptions.
 import json
 from typing import Final
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_COMPETITOR_DISCOVERY_MODEL
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, iter_items
+from litellm.proxy._types import ProxyErrorTypes, ProxyException
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 SUGGEST_TOOL: Final = {
     "type": "function",
@@ -60,6 +66,18 @@ class AiPolicySuggester:
         system_prompt: Final = self._build_system_prompt(templates)
         user_prompt: Final = self._build_user_prompt(attack_examples, description)
         model = model or DEFAULT_COMPETITOR_DISCOVERY_MODEL
+        custom_llm_provider: Final = model.split("/", 1)[0] if "/" in model else None
+        supported_params: Final = litellm.get_supported_openai_params(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+        )
+        if supported_params is not None and "tools" not in supported_params:
+            raise ProxyException(
+                message=(f"AI policy suggestion requires tool calling; model '{model}' does not support it"),
+                type=ProxyErrorTypes.validation_error.value,
+                param="model",
+                code=400,
+            )
 
         try:
             response: Final = await litellm.acompletion(
@@ -74,6 +92,7 @@ class AiPolicySuggester:
                     "function": {"name": "select_policy_templates"},
                 },
                 temperature=0.2,
+                drop_params=True,
             )
 
             tool_calls: Final = response.choices[0].message.tool_calls
@@ -83,14 +102,19 @@ class AiPolicySuggester:
                     "explanation": "No templates could be matched to your requirements.",
                 }
 
-            result: Final = json.loads(tool_calls[0].function.arguments)
+            decoded: Final = _DECODED_JSON.validate_python(json.loads(tool_calls[0].function.arguments))
 
             valid_ids: Final = {t["id"] for t in templates}
-            result["selected_templates"] = [
-                s for s in result.get("selected_templates", []) if s.get("template_id") in valid_ids
-            ]
-
-            return result
+            result: Final = decoded_json_object(decoded)
+            suggestion: Final = {
+                **result,
+                "selected_templates": [
+                    s
+                    for s in iter_items(result.get("selected_templates", []))
+                    if decoded_json_object(s).get("template_id") in valid_ids
+                ],
+            }
+            return suggestion
         except Exception as e:
             verbose_proxy_logger.error("AI policy suggestion failed: %s", e)
             raise

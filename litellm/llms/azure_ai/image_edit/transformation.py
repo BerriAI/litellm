@@ -3,10 +3,13 @@ from typing import Final
 import httpx
 
 import litellm
-from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
+from litellm.llms.azure_ai.common_utils import (
+    AzureFoundryModelInfo,
+    get_azure_ai_auth_headers,
+)
 from litellm.llms.openai.image_edit.transformation import OpenAIImageEditConfig
 from litellm.secret_managers.main import get_secret_str
-from litellm.utils import _add_path_to_api_base
+from litellm.utils import add_path_to_api_base
 
 
 class AzureFoundryFluxImageEditConfig(OpenAIImageEditConfig):
@@ -30,19 +33,14 @@ class AzureFoundryFluxImageEditConfig(OpenAIImageEditConfig):
     ) -> dict:
         """
         Validate Azure AI Foundry environment and set up authentication
-        Uses Api-Key header format
+        Uses the Api-Key header format, or an Entra ID / OAuth bearer token when no key is set
         """
-        api_key = AzureFoundryModelInfo.get_api_key(api_key)
-
-        if not api_key:
-            raise ValueError(
-                f"Azure AI API key is required for model {model}. Set AZURE_AI_API_KEY environment variable or pass api_key parameter."
-            )
-
         headers.update(
-            {
-                "Api-Key": api_key,  # Azure AI Foundry uses Api-Key header format
-            }
+            get_azure_ai_auth_headers(
+                api_key=AzureFoundryModelInfo.get_api_key(api_key),
+                litellm_params=litellm_params,
+                api_key_header="Api-Key",
+            )
         )
         return headers
 
@@ -83,12 +81,12 @@ class AzureFoundryFluxImageEditConfig(OpenAIImageEditConfig):
         # Add the path to the base URL using the model as deployment name
         # Azure AI Foundry FLUX models use /images/edits for editing
         if "/openai/deployments/" in api_base:
-            new_url = _add_path_to_api_base(
+            new_url = add_path_to_api_base(
                 api_base=api_base,
                 ending_path="/images/edits",
             )
         else:
-            new_url = _add_path_to_api_base(
+            new_url = add_path_to_api_base(
                 api_base=api_base,
                 ending_path=f"/openai/deployments/{model}/images/edits",
             )

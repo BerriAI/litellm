@@ -1,7 +1,15 @@
+import type { ParseKeys } from "i18next";
 import React from "react";
-import { Card, Text } from "@tremor/react";
-import { Button, Divider, Empty, Input, Select, Space, Tooltip } from "antd";
-import { InfoCircleOutlined, PlusOutlined, DeleteOutlined } from "@ant-design/icons";
+import { useTranslation } from "react-i18next";
+import { Info, Plus, Trash2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
+import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 export type ToolPermissionDecision = "allow" | "deny";
 export type ToolPermissionDefaultAction = "allow" | "deny";
@@ -28,6 +36,18 @@ interface ToolPermissionRulesEditorProps {
   disabled?: boolean;
 }
 
+const DECISION_ITEMS: readonly { value: ToolPermissionDecision; labelKey: ParseKeys }[] = [
+  { value: "allow", labelKey: "guardrails.toolPermission.decisionOptions.allow" },
+  { value: "deny", labelKey: "guardrails.toolPermission.decisionOptions.deny" },
+];
+
+const ON_DISALLOWED_ITEMS: readonly { value: ToolPermissionOnDisallowedAction; labelKey: ParseKeys }[] = [
+  { value: "block", labelKey: "guardrails.toolPermission.onDisallowedOptions.block" },
+  { value: "rewrite", labelKey: "guardrails.toolPermission.onDisallowedOptions.rewrite" },
+];
+
+const TOOL_NAME_EXAMPLE = "^mcp__github_.*$";
+
 const DEFAULT_CONFIG: ToolPermissionConfig = {
   rules: [],
   default_action: "deny",
@@ -42,7 +62,10 @@ const ensureConfig = (config?: ToolPermissionConfig): ToolPermissionConfig => ({
 });
 
 const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({ value, onChange, disabled = false }) => {
+  const { t } = useTranslation();
   const config = ensureConfig(value);
+  const decisionItems = DECISION_ITEMS.map((item) => ({ value: item.value, label: t(item.labelKey) }));
+  const onDisallowedItems = ON_DISALLOWED_ITEMS.map((item) => ({ value: item.value, label: t(item.labelKey) }));
 
   const updateConfig = (partial: Partial<ToolPermissionConfig>) => {
     const nextConfig: ToolPermissionConfig = {
@@ -115,47 +138,52 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({ v
     if (entries.length === 0) {
       return (
         <Button
+          variant="outline"
           disabled={disabled}
-          size="small"
+          size="sm"
           onClick={() => updateRule(index, { allowed_param_patterns: { "": "" } })}
         >
-          + Restrict tool arguments (optional)
+          {t("guardrails.toolPermission.constraints.restrict")}
         </Button>
       );
     }
 
     return (
       <div className="space-y-2">
-        <Text className="text-sm text-gray-600">Argument constraints (dot or array paths)</Text>
+        <p className="text-sm text-muted-foreground">{t("guardrails.toolPermission.constraints.title")}</p>
         {entries.map(([path, pattern], patternIndex) => (
-          <Space key={`${rule.id || index}-${patternIndex}`} align="start">
+          <div key={`${rule.id || index}-${patternIndex}`} className="flex items-start gap-2">
             <Input
               disabled={disabled}
-              placeholder="messages[0].content"
+              placeholder={codeSamples.guardrails.toolParamPath}
               value={path}
               onChange={(e) => updateAllowedParamPath(index, patternIndex, e.target.value)}
             />
             <Input
               disabled={disabled}
-              placeholder="^email@.*$"
+              placeholder={codeSamples.guardrails.toolParamPattern}
               value={pattern}
               onChange={(e) => updateAllowedParamPattern(index, patternIndex, e.target.value)}
             />
             <Button
+              variant="outline"
+              size="icon"
+              aria-label={t("guardrails.toolPermission.constraints.remove")}
               disabled={disabled}
-              icon={<DeleteOutlined />}
-              danger
               onClick={() =>
                 updateAllowedParamEntries(index, (entries) => {
                   entries.splice(patternIndex, 1);
                 })
               }
-            />
-          </Space>
+            >
+              <Trash2 />
+            </Button>
+          </div>
         ))}
         <Button
+          variant="outline"
           disabled={disabled}
-          size="small"
+          size="sm"
           onClick={() =>
             updateRule(index, {
               allowed_param_patterns: {
@@ -165,7 +193,7 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({ v
             })
           }
         >
-          + Add another constraint
+          {t("guardrails.toolPermission.constraints.addAnother")}
         </Button>
       </div>
     );
@@ -173,148 +201,182 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({ v
 
   return (
     <Card>
-      <div className="flex items-center justify-between">
-        <div>
-          <Text className="text-lg font-semibold">LiteLLM Tool Permission Guardrail</Text>
-          <Text className="text-sm text-gray-500">
-            Provide regex patterns (e.g., ^mcp__github_.*$) for tool names or types and optionally constrain payload
-            fields.
-          </Text>
+      <CardContent>
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-lg font-semibold">{t("guardrails.toolPermission.title")}</p>
+            <p className="text-sm text-muted-foreground">
+              {t("guardrails.toolPermission.description", { example: TOOL_NAME_EXAMPLE })}
+            </p>
+          </div>
+          {!disabled && (
+            <Button onClick={addRule}>
+              <Plus />
+              {t("guardrails.toolPermission.addRule")}
+            </Button>
+          )}
         </div>
-        {!disabled && (
-          <Button
-            icon={<PlusOutlined />}
-            type="primary"
-            onClick={addRule}
-            className="bg-blue-600! text-white! hover:bg-blue-500!"
-          >
-            Add Rule
-          </Button>
+
+        <Separator className="my-4" />
+
+        {config.rules.length === 0 ? (
+          <div className="py-10 text-center text-muted-foreground">{t("guardrails.toolPermission.empty")}</div>
+        ) : (
+          <div className="space-y-4">
+            {config.rules.map((rule, index) => (
+              <Card key={rule.id || index} className="bg-muted/40">
+                <CardContent>
+                  <div className="mb-3 flex items-center justify-between">
+                    <p className="font-semibold">{t("guardrails.toolPermission.rule.title", { number: index + 1 })}</p>
+                    <Button variant="ghost" disabled={disabled} onClick={() => removeRule(index)}>
+                      <Trash2 />
+                      {t("guardrails.toolPermission.rule.remove")}
+                    </Button>
+                  </div>
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <div>
+                      <p className="text-sm font-medium">{t("guardrails.toolPermission.rule.id")}</p>
+                      <Input
+                        disabled={disabled}
+                        placeholder="unique_rule_id"
+                        value={rule.id}
+                        onChange={(e) => updateRule(index, { id: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium">{t("guardrails.toolPermission.rule.toolName")}</p>
+                      <Input
+                        disabled={disabled}
+                        placeholder={TOOL_NAME_EXAMPLE}
+                        value={rule.tool_name ?? ""}
+                        onChange={(e) =>
+                          updateRule(index, {
+                            tool_name: e.target.value.trim() === "" ? undefined : e.target.value,
+                          })
+                        }
+                      />
+                    </div>
+                  </div>
+
+                  <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <div>
+                      <p className="text-sm font-medium">{t("guardrails.toolPermission.rule.toolType")}</p>
+                      <Input
+                        disabled={disabled}
+                        placeholder={codeSamples.guardrails.toolTypePattern}
+                        value={rule.tool_type ?? ""}
+                        onChange={(e) =>
+                          updateRule(index, {
+                            tool_type: e.target.value.trim() === "" ? undefined : e.target.value,
+                          })
+                        }
+                      />
+                    </div>
+                  </div>
+
+                  <div className="mt-4 flex flex-col gap-2">
+                    <p className="text-sm font-medium">{t("guardrails.toolPermission.rule.decision")}</p>
+                    <Select
+                      items={decisionItems}
+                      disabled={disabled}
+                      value={rule.decision}
+                      onValueChange={(value: string | null) =>
+                        value && updateRule(index, { decision: value as ToolPermissionDecision })
+                      }
+                    >
+                      <SelectTrigger className="w-[200px]" aria-label={t("guardrails.toolPermission.rule.decision")}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {decisionItems.map((item) => (
+                          <SelectItem key={item.value} value={item.value}>
+                            {item.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="mt-4">{renderAllowedParamPatterns(rule, index)}</div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
         )}
-      </div>
 
-      <Divider />
+        <Separator className="my-4" />
 
-      {config.rules.length === 0 ? (
-        <Empty description="No tool rules added yet" />
-      ) : (
-        <div className="space-y-4">
-          {config.rules.map((rule, index) => (
-            <Card key={rule.id || index} className="bg-gray-50">
-              <div className="flex items-center justify-between mb-3">
-                <Text className="font-semibold">Rule {index + 1}</Text>
-                <Button
-                  icon={<DeleteOutlined />}
-                  danger
-                  type="text"
-                  disabled={disabled}
-                  onClick={() => removeRule(index)}
-                >
-                  Remove
-                </Button>
-              </div>
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                <div>
-                  <Text className="text-sm font-medium">Rule ID</Text>
-                  <Input
-                    disabled={disabled}
-                    placeholder="unique_rule_id"
-                    value={rule.id}
-                    onChange={(e) => updateRule(index, { id: e.target.value })}
-                  />
-                </div>
-                <div>
-                  <Text className="text-sm font-medium">Tool Name (optional)</Text>
-                  <Input
-                    disabled={disabled}
-                    placeholder="^mcp__github_.*$"
-                    value={rule.tool_name ?? ""}
-                    onChange={(e) =>
-                      updateRule(index, {
-                        tool_name: e.target.value.trim() === "" ? undefined : e.target.value,
-                      })
-                    }
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 mt-4">
-                <div>
-                  <Text className="text-sm font-medium">Tool Type (optional)</Text>
-                  <Input
-                    disabled={disabled}
-                    placeholder="^function$"
-                    value={rule.tool_type ?? ""}
-                    onChange={(e) =>
-                      updateRule(index, {
-                        tool_type: e.target.value.trim() === "" ? undefined : e.target.value,
-                      })
-                    }
-                  />
-                </div>
-              </div>
-
-              <div className="mt-4 flex flex-col gap-2">
-                <Text className="text-sm font-medium">Decision</Text>
-                <Select
-                  disabled={disabled}
-                  value={rule.decision}
-                  style={{ width: 200 }}
-                  onChange={(value) => updateRule(index, { decision: value as ToolPermissionDecision })}
-                >
-                  <Select.Option value="allow">Allow</Select.Option>
-                  <Select.Option value="deny">Deny</Select.Option>
-                </Select>
-              </div>
-
-              <div className="mt-4">{renderAllowedParamPatterns(rule, index)}</div>
-            </Card>
-          ))}
+        <div className="grid gap-4 md:grid-cols-2">
+          <div>
+            <p className="text-sm font-medium">{t("guardrails.toolPermission.defaultAction")}</p>
+            <Select
+              items={decisionItems}
+              disabled={disabled}
+              value={config.default_action}
+              onValueChange={(value: string | null) =>
+                value && updateConfig({ default_action: value as ToolPermissionDefaultAction })
+              }
+            >
+              <SelectTrigger className="w-full" aria-label={t("guardrails.toolPermission.defaultAction")}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {decisionItems.map((item) => (
+                  <SelectItem key={item.value} value={item.value}>
+                    {item.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <p className="flex items-center gap-1 text-sm font-medium">
+              {t("guardrails.toolPermission.onDisallowed.label")}
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <span className="cursor-help text-muted-foreground">
+                      <Info className="size-3.5" />
+                    </span>
+                  }
+                />
+                <TooltipContent>{t("guardrails.toolPermission.onDisallowed.hint")}</TooltipContent>
+              </Tooltip>
+            </p>
+            <Select
+              items={onDisallowedItems}
+              disabled={disabled}
+              value={config.on_disallowed_action}
+              onValueChange={(value: string | null) =>
+                value && updateConfig({ on_disallowed_action: value as ToolPermissionOnDisallowedAction })
+              }
+            >
+              <SelectTrigger className="w-full" aria-label={t("guardrails.toolPermission.onDisallowed.label")}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {onDisallowedItems.map((item) => (
+                  <SelectItem key={item.value} value={item.value}>
+                    {item.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
-      )}
 
-      <Divider />
-
-      <div className="grid gap-4 md:grid-cols-2">
-        <div>
-          <Text className="text-sm font-medium">Default action</Text>
-          <Select
+        <div className="mt-4">
+          <p className="text-sm font-medium">{t("guardrails.toolPermission.violationMessage.label")}</p>
+          <Textarea
+            className="field-sizing-fixed"
             disabled={disabled}
-            value={config.default_action}
-            onChange={(value) => updateConfig({ default_action: value as ToolPermissionDefaultAction })}
-          >
-            <Select.Option value="allow">Allow</Select.Option>
-            <Select.Option value="deny">Deny</Select.Option>
-          </Select>
+            rows={3}
+            placeholder={t("guardrails.toolPermission.violationMessage.placeholder")}
+            value={config.violation_message_template}
+            onChange={(e) => updateConfig({ violation_message_template: e.target.value })}
+          />
         </div>
-        <div>
-          <Text className="text-sm font-medium flex items-center gap-1">
-            On disallowed action
-            <Tooltip title="Block returns an error when a forbidden tool is invoked. Rewrite strips the tool call but lets the rest of the response continue.">
-              <InfoCircleOutlined />
-            </Tooltip>
-          </Text>
-          <Select
-            disabled={disabled}
-            value={config.on_disallowed_action}
-            onChange={(value) => updateConfig({ on_disallowed_action: value as ToolPermissionOnDisallowedAction })}
-          >
-            <Select.Option value="block">Block</Select.Option>
-            <Select.Option value="rewrite">Rewrite</Select.Option>
-          </Select>
-        </div>
-      </div>
-
-      <div className="mt-4">
-        <Text className="text-sm font-medium">Violation message (optional)</Text>
-        <Input.TextArea
-          disabled={disabled}
-          rows={3}
-          placeholder="This violates our org policy..."
-          value={config.violation_message_template}
-          onChange={(e) => updateConfig({ violation_message_template: e.target.value })}
-        />
-      </div>
+      </CardContent>
     </Card>
   );
 };

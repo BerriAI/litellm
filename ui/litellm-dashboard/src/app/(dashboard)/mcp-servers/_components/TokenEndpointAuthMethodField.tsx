@@ -1,38 +1,62 @@
+import type { ParseKeys } from "i18next";
+import { Info } from "lucide-react";
 import React from "react";
-import { Form, Select, Tooltip } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { useTranslation } from "react-i18next";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 
-const TOKEN_ENDPOINT_AUTH_METHOD_OPTIONS = [
-  { value: "client_secret_basic", label: "Client Secret Basic" },
-  { value: "client_secret_post", label: "Client Secret Post" },
+import { MountedFormField } from "@/components/common_components/MountedFormField";
+import { selectControl, selectTriggerControl } from "./mcpFieldRules";
+
+const TOKEN_ENDPOINT_AUTH_METHOD_OPTIONS: ReadonlyArray<{ value: string; labelKey: ParseKeys }> = [
+  { value: "client_secret_basic", labelKey: "mcpServers.tokenEndpointAuthMethodField.methods.clientSecretBasic" },
+  { value: "client_secret_post", labelKey: "mcpServers.tokenEndpointAuthMethodField.methods.clientSecretPost" },
 ];
 
 interface TokenEndpointAuthMethodFieldProps {
   isEditing?: boolean;
 }
 
-const TokenEndpointAuthMethodField: React.FC<TokenEndpointAuthMethodFieldProps> = ({ isEditing = false }) => (
-  <Form.Item
-    label={
-      <span className="text-sm font-medium text-gray-700 flex items-center">
-        Token Endpoint Auth Method (optional)
-        <Tooltip title="How the proxy authenticates to the upstream OAuth token endpoint. Client Secret Basic sends the client credentials in an HTTP Basic Authorization header; leave blank to use the default, Client Secret Post, which sends them in the request body.">
-          <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-        </Tooltip>
-      </span>
-    }
-    name={["credentials", "token_endpoint_auth_method"]}
-  >
-    <Select
-      allowClear
-      placeholder={
-        isEditing ? "Leave blank to keep existing (default Client Secret Post)" : "Default (Client Secret Post)"
+const TokenEndpointAuthMethodField: React.FC<TokenEndpointAuthMethodFieldProps> = ({ isEditing = false }) => {
+  const { t } = useTranslation();
+  const authMethodOptions = TOKEN_ENDPOINT_AUTH_METHOD_OPTIONS.map((option) => ({
+    value: option.value,
+    label: t(option.labelKey),
+  }));
+  return (
+    <MountedFormField
+      label={
+        <span className="text-sm font-medium text-foreground flex items-center">
+          {t("mcpServers.tokenEndpointAuthMethodField.label")}
+          <SimpleTooltip content={t("mcpServers.tokenEndpointAuthMethodField.tooltip")}>
+            <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
+          </SimpleTooltip>
+        </span>
       }
-      className="rounded-lg"
-      size="large"
-      options={TOKEN_ENDPOINT_AUTH_METHOD_OPTIONS}
-    />
-  </Form.Item>
-);
+      name={["credentials", "token_endpoint_auth_method"]}
+    >
+      {(control) => {
+        const placeholder = isEditing
+          ? t("mcpServers.tokenEndpointAuthMethodField.placeholderEditing")
+          : t("mcpServers.tokenEndpointAuthMethodField.placeholder");
+        return (
+          <Select {...selectControl<string>(control)} items={authMethodOptions}>
+            <SelectTrigger {...selectTriggerControl(control)} className="w-full rounded-lg">
+              <SelectValue placeholder={placeholder} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={null}>{placeholder}</SelectItem>
+              {authMethodOptions.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        );
+      }}
+    </MountedFormField>
+  );
+};
 
 export default TokenEndpointAuthMethodField;

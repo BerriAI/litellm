@@ -3,20 +3,22 @@ import { useDisableBouncingIcon } from "@/app/(dashboard)/hooks/useDisableBounci
 import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPrompts";
 import { useWorker } from "@/hooks/useWorker";
 import { getProxyBaseUrl } from "@/components/networking";
-import { migratedHref } from "@/utils/migratedPages";
+import { uiHref } from "@/utils/uiHref";
 import { useTheme } from "@/contexts/ThemeContext";
-import { clearTokenCookies } from "@/utils/cookieUtils";
-import { clearStoredReturnUrl, getLoginUrl } from "@/utils/returnUrlUtils";
-import useProxySettings from "@/app/(dashboard)/hooks/proxySettings/useProxySettings";
-import { DownOutlined, MenuFoldOutlined, MenuUnfoldOutlined } from "@ant-design/icons";
-import { Tag } from "antd";
+import { revokeSessionAndClearClientState, useLogout } from "@/app/(dashboard)/hooks/useLogout";
+import { getLoginUrl } from "@/utils/returnUrlUtils";
+import { Badge } from "@/components/ui/badge";
+import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import Link from "next/link";
 import React from "react";
+import { useTranslation } from "react-i18next";
 import { BlogDropdown } from "./Navbar/BlogDropdown/BlogDropdown";
+import { DocsLink } from "./Navbar/DocsLink/DocsLink";
 import { CommunityEngagementButtons } from "./Navbar/CommunityEngagementButtons/CommunityEngagementButtons";
-import { NAV_PRODUCT_LINK_CLASS } from "./Navbar/navProductLinkClass";
+import { cn } from "@/lib/cva.config";
 import { NotificationsBell } from "./Navbar/NotificationsBell/NotificationsBell";
 import UserDropdown from "./Navbar/UserDropdown/UserDropdown";
+import ThemeToggle from "./ThemeToggle/ThemeToggle";
 import ViewSwitcher from "./Navbar/ViewSwitcher";
 import WorkerDropdown from "./Navbar/WorkerDropdown/WorkerDropdown";
 
@@ -25,17 +27,25 @@ interface NavbarProps {
   isPublicPage: boolean;
   sidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
+  deploymentHealth?: React.ReactNode;
+  deploymentHealthLink?: React.ReactNode;
+  publicNavigation?: React.ReactNode;
 }
+
+const NAV_LOGO_CLASS_NAME = "h-auto max-h-full w-auto max-w-full object-contain";
 
 const Navbar: React.FC<NavbarProps> = ({
   accessToken,
   isPublicPage = false,
   sidebarCollapsed = false,
   onToggleSidebar,
+  deploymentHealth,
+  deploymentHealthLink,
+  publicNavigation,
 }) => {
+  const { t } = useTranslation();
   const baseUrl = getProxyBaseUrl();
-  const proxySettings = useProxySettings(accessToken);
-  const { logoUrl } = useTheme();
+  const { logoUrl, logoUrlDark } = useTheme();
   const { data: healthData } = useHealthReadinessDetails(accessToken);
   const version = healthData?.litellm_version;
   const disableBouncingIcon = useDisableBouncingIcon();
@@ -44,45 +54,56 @@ const Navbar: React.FC<NavbarProps> = ({
   const showWorkerSwitch = isControlPlane && selectedWorker !== null;
 
   const imageUrl = logoUrl || `${baseUrl}/get_image`;
+  const darkImageUrl = logoUrlDark || logoUrl || `${baseUrl}/get_image?theme=dark`;
 
-  const handleLogout = () => {
-    clearTokenCookies();
-    localStorage.removeItem("litellm_selected_worker_id");
-    localStorage.removeItem("litellm_worker_url");
-    window.location.href = proxySettings.PROXY_LOGOUT_URL || "";
-  };
+  const handleLogout = useLogout(accessToken);
 
   const handleWorkerSwitch = (workerId: string) => {
-    clearTokenCookies();
-    clearStoredReturnUrl();
-    localStorage.removeItem("litellm_selected_worker_id");
-    localStorage.removeItem("litellm_worker_url");
-    window.location.href = `${getLoginUrl()}?worker=${encodeURIComponent(workerId)}`;
+    void revokeSessionAndClearClientState(accessToken).finally(() => {
+      window.location.href = `${getLoginUrl()}?worker=${encodeURIComponent(workerId)}`;
+    });
   };
 
   return (
-    <nav className="sticky top-0 z-10 border-b border-gray-200 bg-white">
+    <nav className="sticky top-0 z-chrome border-b border-border bg-card">
       <div className="w-full">
-        <div className="flex h-14 items-center px-4">
+        <div className={cn("flex h-14 items-center px-4", isPublicPage && "gap-4 sm:px-6")}>
           <div className="flex shrink-0 items-center">
             {onToggleSidebar && (
               <button
                 onClick={onToggleSidebar}
-                className="mr-2 flex h-9 w-9 items-center justify-center rounded-md text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900"
-                title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                className="mr-2 flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                title={sidebarCollapsed ? t("shell.navbar.expandSidebar") : t("shell.navbar.collapseSidebar")}
               >
-                <span className="text-lg">{sidebarCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}</span>
+                <span className="text-lg">
+                  {sidebarCollapsed ? (
+                    <PanelLeftOpen className="size-[18px]" />
+                  ) : (
+                    <PanelLeftClose className="size-[18px]" />
+                  )}
+                </span>
               </button>
             )}
 
             <div className="flex items-center gap-2">
-              <Link href={migratedHref("")} className="flex items-center">
+              <Link href={uiHref("")} className="flex items-center">
                 <div className="relative">
-                  <div className="flex h-10 max-w-48 items-center justify-center overflow-hidden">
+                  <div
+                    className={cn(
+                      "flex h-10 max-w-48 items-center justify-center overflow-hidden",
+                      isPublicPage && "h-8 max-w-36 sm:h-10 sm:max-w-48",
+                    )}
+                  >
                     <img
                       src={imageUrl}
-                      alt="LiteLLM Brand"
-                      className="h-auto max-h-full w-auto max-w-full object-contain"
+                      alt={t("shell.navbar.logoAlt")}
+                      className={cn(NAV_LOGO_CLASS_NAME, "dark:hidden")}
+                    />
+                    <img
+                      src={darkImageUrl}
+                      alt=""
+                      aria-hidden
+                      className={cn(NAV_LOGO_CLASS_NAME, "hidden dark:block")}
                     />
                   </div>
                 </div>
@@ -93,12 +114,12 @@ const Navbar: React.FC<NavbarProps> = ({
                     <span
                       className="absolute -left-2 -top-1 animate-bounce text-lg"
                       style={{ animationDuration: "2s" }}
-                      title="Thanks for using LiteLLM!"
+                      title={t("shell.navbar.thanks")}
                     >
                       🌑
                     </span>
                   )}
-                  <Tag className="relative z-10 cursor-pointer text-xs font-medium">
+                  <Badge variant="outline" className="relative z-raised cursor-pointer text-xs font-medium">
                     <a
                       href="https://docs.litellm.ai/release_notes"
                       target="_blank"
@@ -107,14 +128,16 @@ const Navbar: React.FC<NavbarProps> = ({
                     >
                       v{version}
                     </a>
-                  </Tag>
+                  </Badge>
                 </div>
               )}
             </div>
           </div>
 
+          {publicNavigation}
+
           {!isPublicPage && (
-            <div className="ml-4 flex shrink-0 items-center border-l border-gray-200 pl-4">
+            <div className="ml-4 flex shrink-0 items-center border-l border-border pl-4">
               <ViewSwitcher />
             </div>
           )}
@@ -127,39 +150,32 @@ const Navbar: React.FC<NavbarProps> = ({
             )}
 
             <nav
-              aria-label="Product documentation"
-              className={`flex min-w-0 items-center gap-2 ${showWorkerSwitch ? "border-l border-gray-200 pl-4" : ""}`}
+              aria-label={t("shell.navbar.productDocs")}
+              className={`flex min-w-0 items-center gap-2 ${showWorkerSwitch ? "border-l border-border pl-4" : ""}`}
             >
-              <a
-                href="https://docs.litellm.ai/docs/"
-                target="_blank"
-                rel="noopener noreferrer"
-                className={NAV_PRODUCT_LINK_CLASS}
-              >
-                Docs
-                {/* Layout parity with Blog chevron — intentional single-level link */}
-                <DownOutlined className="pointer-events-none text-[10px] opacity-0" aria-hidden />
-              </a>
+              <DocsLink />
               <BlogDropdown />
             </nav>
 
             {!hideCommunityLinks && (
-              <div className="flex shrink-0 items-center border-l border-gray-200 pl-4">
+              <div className="hidden shrink-0 items-center border-l border-border pl-4 sm:flex">
                 <CommunityEngagementButtons />
               </div>
             )}
 
             {!isPublicPage && (
-              <div className="flex shrink-0 items-center border-l border-gray-200 pl-4">
-                <div className="flex items-center gap-0.5 rounded-lg bg-gray-50 px-1 py-0 transition-colors hover:bg-gray-100">
-                  <NotificationsBell />
-                  <span className="mx-0.5 h-6 w-px shrink-0 bg-gray-200" aria-hidden />
+              <div className="flex shrink-0 items-center border-l border-border pl-4">
+                <div className="flex items-center gap-0.5 rounded-lg bg-muted px-1 py-0 transition-colors hover:bg-accent">
+                  <ThemeToggle />
+                  <span className="mx-0.5 h-6 w-px shrink-0 bg-border" aria-hidden />
+                  {deploymentHealth}
+                  <NotificationsBell accessToken={accessToken} deploymentHealthLink={deploymentHealthLink} />
+                  <span className="mx-0.5 h-6 w-px shrink-0 bg-border" aria-hidden />
                   <UserDropdown onLogout={handleLogout} />
                 </div>
               </div>
             )}
           </div>
-          {/* Dark mode toggle: keep disabled until the dashboard supports dark styles end-to-end. */}
         </div>
       </div>
     </nav>

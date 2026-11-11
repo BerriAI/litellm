@@ -1,24 +1,39 @@
 # stdlib imports
 import re
 from collections import defaultdict
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 # third party imports
 import click
 import rich
 import yaml
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 # local imports
 from ... import Client
+from ._cli_context import cli_context_values
+
+if TYPE_CHECKING:
+    from rich.console import JustifyMethod
+
+
+class _ModelInfoColumnConfig(TypedDict):
+    """Rendering config for one column of the ``models info`` table."""
+
+    header: ReadOnly[str]
+    style: ReadOnly[str]
+    justify: NotRequired[ReadOnly["JustifyMethod"]]
+    get_value: ReadOnly[Callable[..., str]]
 
 
 @dataclass
 class ModelYamlInfo:
     model_name: str
-    model_params: dict[str, Any]
-    model_info: dict[str, Any]
+    model_params: dict[str, object]
+    model_info: dict[str, object]
     model_id: str
     access_groups: list[str]
     provider: str
@@ -44,6 +59,10 @@ def _get_model_info_obj_from_yaml(model: dict[str, Any]) -> ModelYamlInfo:
         access_groups=access_groups,
         provider=provider,
     )
+
+
+def _str_field(model: Mapping[str, object], key: str, default: str) -> str:
+    return str(model.get(key, default))
 
 
 def format_iso_datetime_str(iso_datetime_str: str | None) -> str:
@@ -84,7 +103,8 @@ def format_cost_per_1k_tokens(cost: float | None) -> str:
 
 def create_client(ctx: click.Context) -> Client:
     """Helper function to create a client from context."""
-    return Client(base_url=ctx.obj["base_url"], api_key=ctx.obj["api_key"])
+    context: Final = cli_context_values(ctx)
+    return Client(base_url=context["base_url"], api_key=context["api_key"])
 
 
 @click.group()
@@ -126,10 +146,10 @@ def list_models(ctx: click.Context, output_format: Literal["table", "json"]) -> 
                 created = int(created)
 
             table.add_row(
-                str(model.get("id", "")),
-                str(model.get("object", "model")),
+                _str_field(model, "id", ""),
+                _str_field(model, "object", "model"),
                 (format_timestamp(created) if isinstance(created, int) else format_iso_datetime_str(created)),
-                str(model.get("owned_by", "")),
+                _str_field(model, "owned_by", ""),
             )
 
         rich.print(table)
@@ -216,7 +236,7 @@ def get_models_info(ctx: click.Context, output_format: Literal["table", "json"],
         table: Final = rich.table.Table(title="Models Information")
 
         # Define all possible columns with their configurations
-        column_configs: Final[dict[str, dict[str, Any]]] = {
+        column_configs: Final[dict[str, _ModelInfoColumnConfig]] = {
             "public_model": {
                 "header": "Public Model",
                 "style": "cyan",
@@ -362,7 +382,7 @@ def _print_summary_table(provider_counts):
     rich.print(summary_table)
 
 
-def get_model_list_from_yaml_file(yaml_file: str) -> list[dict[str, Any]]:
+def get_model_list_from_yaml_file(yaml_file: str) -> list[dict[str, object]]:
     """Load and validate the model list from a YAML file."""
     with open(yaml_file, "r") as f:
         data: Final = yaml.safe_load(f)

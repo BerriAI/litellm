@@ -1,9 +1,12 @@
 import React from "react";
-import { Typography, Select, Table, Tag, Button } from "antd";
-import { DeleteOutlined } from "@ant-design/icons";
-
-const { Text } = Typography;
-const { Option } = Select;
+import { useTranslation } from "react-i18next";
+import { Trash2 } from "lucide-react";
+import type { ColumnDef } from "@tanstack/react-table";
+import { DataTable } from "@/components/shared/DataTable";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ACTION_ITEMS, translateOptions } from "./action_options";
 
 interface Pattern {
   id: string;
@@ -21,69 +24,83 @@ interface PatternTableProps {
 }
 
 const PatternTable: React.FC<PatternTableProps> = ({ patterns, onActionChange, onRemove }) => {
-  const columns = [
+  const { t } = useTranslation();
+  const actionItems = translateOptions(ACTION_ITEMS, t);
+  const columns: ColumnDef<Pattern>[] = [
     {
-      title: "Type",
-      dataIndex: "type",
-      key: "type",
-      width: 100,
-      render: (type: string) => (
-        <Tag color={type === "prebuilt" ? "blue" : "green"}>{type === "prebuilt" ? "Prebuilt" : "Custom"}</Tag>
+      header: t("guardrails.contentFilter.patternTable.columns.type"),
+      accessorKey: "type",
+      size: 100,
+      cell: ({ row }) => (
+        <Badge variant="secondary">
+          {row.original.type === "prebuilt"
+            ? t("guardrails.contentFilter.patternTable.types.prebuilt")
+            : t("guardrails.contentFilter.patternTable.types.custom")}
+        </Badge>
       ),
     },
     {
-      title: "Pattern name",
-      dataIndex: "name",
-      key: "name",
-      render: (_: string, record: Pattern) => record.display_name || record.name,
+      header: t("guardrails.contentFilter.patternTable.columns.name"),
+      accessorKey: "name",
+      cell: ({ row }) => row.original.display_name || row.original.name,
     },
     {
-      title: "Regex pattern",
-      dataIndex: "pattern",
-      key: "pattern",
-      render: (pattern: string) =>
-        pattern ? (
-          <Text code style={{ fontSize: 12 }}>
-            {pattern.substring(0, 40)}...
-          </Text>
+      header: t("guardrails.contentFilter.patternTable.columns.regex"),
+      accessorKey: "pattern",
+      cell: ({ row }) =>
+        row.original.pattern ? (
+          <code className="rounded-sm bg-muted px-1 py-0.5 text-xs">{row.original.pattern.substring(0, 40)}...</code>
         ) : (
           "-"
         ),
     },
     {
-      title: "Action",
-      dataIndex: "action",
-      key: "action",
-      width: 150,
-      render: (action: string, record: Pattern) => (
+      header: t("guardrails.contentFilter.patternTable.columns.action"),
+      accessorKey: "action",
+      size: 150,
+      cell: ({ row }) => (
         <Select
-          value={action}
-          onChange={(value) => onActionChange(record.id, value as "BLOCK" | "MASK")}
-          style={{ width: 120 }}
-          size="small"
+          items={actionItems}
+          value={row.original.action}
+          onValueChange={(value: string | null) => value && onActionChange(row.original.id, value as "BLOCK" | "MASK")}
         >
-          <Option value="BLOCK">Block</Option>
-          <Option value="MASK">Mask</Option>
+          <SelectTrigger
+            size="sm"
+            className="w-[120px]"
+            aria-label={t("guardrails.contentFilter.patternTable.columns.action")}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {actionItems.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
         </Select>
       ),
     },
     {
-      title: "",
-      key: "actions",
-      width: 100,
-      render: (_: any, record: Pattern) => (
-        <Button type="text" danger size="small" icon={<DeleteOutlined />} onClick={() => onRemove(record.id)}>
-          Delete
+      header: "",
+      id: "actions",
+      size: 100,
+      cell: ({ row }) => (
+        <Button variant="ghost" size="sm" onClick={() => onRemove(row.original.id)}>
+          <Trash2 />
+          {t("guardrails.contentFilter.patternTable.delete")}
         </Button>
       ),
     },
   ];
 
   if (patterns.length === 0) {
-    return <div style={{ textAlign: "center", padding: "40px 0", color: "#999" }}>No patterns added.</div>;
+    return (
+      <div className="py-10 text-center text-muted-foreground">{t("guardrails.contentFilter.patternTable.empty")}</div>
+    );
   }
 
-  return <Table dataSource={patterns} columns={columns} rowKey="id" pagination={false} size="small" />;
+  return <DataTable data={patterns} columns={columns} getRowId={(row) => row.id} size="compact" />;
 };
 
 export default PatternTable;

@@ -5,16 +5,18 @@ For handling OpenAI-like chat completions, like IBM WatsonX, etc.
 """
 
 import json
-from collections.abc import Callable
-from typing import Any, Final
+from collections.abc import Callable, Mapping, Sequence
+from typing import Final, TypedDict
 
 import httpx
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm import LlmProviders
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.bedrock.chat.invoke_handler import MockResponseIterator
+from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines, iter_sse_lines
 from litellm.llms.databricks.streaming_utils import ModelResponseIterator
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.openai.openai import OpenAIConfig
@@ -23,6 +25,23 @@ from litellm.utils import CustomStreamWrapper, ProviderConfigManager
 
 from ..common_utils import OpenAILikeBase, OpenAILikeError
 from .transformation import OpenAILikeChatConfig
+
+
+class _OpenAILikeChatCompletion(TypedDict, total=False):
+    """The chat-completion JSON body an OpenAI-like provider returns for a non-streamed call."""
+
+    id: ReadOnly[str]
+    choices: ReadOnly[Sequence[Mapping[str, object]]]
+    created: ReadOnly[int]
+    model: ReadOnly[str]
+    system_fingerprint: ReadOnly[str]
+    usage: ReadOnly[Mapping[str, object]]
+    object: ReadOnly[str]
+
+
+def _fake_streamed_model_response(payload: _OpenAILikeChatCompletion) -> ModelResponse:
+    """Build the single response a fake-streamed provider call replays as one chunk."""
+    return ModelResponse(**payload)
 
 
 async def make_call(
@@ -42,12 +61,14 @@ async def make_call(
     response: Final = await client.post(api_base, headers=headers, data=data, stream=not fake_stream)
 
     if streaming_decoder is not None:
-        completion_stream: Any = streaming_decoder.aiter_bytes(response.aiter_bytes(chunk_size=1024))
+        completion_stream = streaming_decoder.aiter_bytes(response.aiter_bytes(chunk_size=1024))
     elif fake_stream:
-        model_response: Final = ModelResponse(**response.json())
+        model_response: Final = _fake_streamed_model_response(response.json())
         completion_stream = MockResponseIterator(model_response=model_response)
     else:
-        completion_stream = ModelResponseIterator(streaming_response=response.aiter_lines(), sync_stream=False)
+        completion_stream = ModelResponseIterator(
+            streaming_response=aiter_sse_lines(response.aiter_text()), sync_stream=False
+        )
     # LOGGING
     logging_obj.post_call(
         input=messages,
@@ -82,10 +103,12 @@ def make_sync_call(
     if streaming_decoder is not None:
         completion_stream = streaming_decoder.iter_bytes(response.iter_bytes(chunk_size=1024))
     elif fake_stream:
-        model_response: Final = ModelResponse(**response.json())
+        model_response: Final = _fake_streamed_model_response(response.json())
         completion_stream = MockResponseIterator(model_response=model_response)
     else:
-        completion_stream = ModelResponseIterator(streaming_response=response.iter_lines(), sync_stream=True)
+        completion_stream = ModelResponseIterator(
+            streaming_response=iter_sse_lines(response.iter_text()), sync_stream=True
+        )
 
     # LOGGING
     logging_obj.post_call(
@@ -250,7 +273,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                 model=model, provider=LlmProviders(custom_llm_provider)
             )
             if isinstance(provider_config, OpenAIGPTConfig) or isinstance(provider_config, OpenAIConfig):
-                messages = provider_config._transform_messages(messages=messages, model=model)
+                messages = provider_config.transform_messages(messages=messages, model=model)
 
         data: Final = {
             "model": model,

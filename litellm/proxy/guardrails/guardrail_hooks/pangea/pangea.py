@@ -1,14 +1,22 @@
 # litellm/proxy/guardrails/guardrail_hooks/pangea.py
 import os
-from typing import TYPE_CHECKING, Any, Final, cast
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Final
 
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
+)
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.llms.anthropic.common_utils import (
+    message_dict_with_server_tool_calls,
+    message_dict_with_server_tool_calls_split_out,
+    validated_object_mapping,
 )
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -29,20 +37,29 @@ from litellm.types.utils import (
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+def _choice_with_message(choice: object, rewrite: Callable[[object], object]) -> object:
+    mapping: Final = validated_object_mapping(choice)
+    if mapping is None or "message" not in mapping:
+        return choice
+    return {**mapping, "message": rewrite(mapping["message"])}
+
 
 class PangeaGuardrailMissingSecrets(Exception):
     """Custom exception for missing Pangea secrets."""
 
 
 class _TextCompletionRequest:
-    def __init__(self, body):
+    def __init__(self, body: dict[str, object]) -> None:
         self.body = body
 
     def get_messages(self) -> list[dict]:
         return [{"role": "user", "content": self.body["prompt"]}]
 
     # This mutates the original dict, but we'll still return it anyways
-    def update_original_body(self, prompt_messages: list[dict]) -> Any:
+    def update_original_body(self, prompt_messages: list[dict]) -> dict[str, object]:
         assert len(prompt_messages) == 1
         self.body["prompt"] = prompt_messages[0]["content"]
         return self.body
@@ -131,13 +148,19 @@ class PangeaHandler(CustomGuardrail):
             "Pangea Guardrail (%s): Calling endpoint %s with payload: %s", hook_name, endpoint, payload
         )
 
-        response: Final = await self.async_handler.post(url=endpoint, json=payload, headers=headers)
+        response: Final = await self.async_handler.post(
+            url=endpoint, json=payload, headers=headers, timeout=self.timeout
+        )
         response.raise_for_status()
 
         result: Final = response.json()
+        decoded_result: Final = decoded_json_object(_DECODED_JSON.validate_python(result))
+        verdict: Final = decoded_json_object(decoded_result.get("result", {}))
 
-        if result.get("result", {}).get("blocked"):
-            verbose_proxy_logger.warning("Pangea Guardrail (%s): Request blocked. Response: %s", hook_name, result)
+        if verdict.get("blocked"):
+            verbose_proxy_logger.warning(
+                "Pangea Guardrail (%s): Request blocked. Response: %s", hook_name, decoded_result
+            )
             raise HTTPException(
                 status_code=400,  # Bad Request, indicating violation
                 detail={
@@ -146,7 +169,7 @@ class PangeaHandler(CustomGuardrail):
                 },
             )
         verbose_proxy_logger.debug(
-            "Pangea Guardrail (%s): Request passed. Response: %s", hook_name, result.get("result", {}).get("detectors")
+            "Pangea Guardrail (%s): Request passed. Response: %s", hook_name, verdict.get("detectors")
         )
 
         return result
@@ -159,7 +182,7 @@ class PangeaHandler(CustomGuardrail):
         call_type: str,
     ):
         transformer = None
-        messages: Any = None
+        messages: object = None
         if call_type == "text_completion" or call_type == "atext_completion":
             transformer = _TextCompletionRequest(data)
             messages = transformer.get_messages()
@@ -230,7 +253,7 @@ class PangeaHandler(CustomGuardrail):
             messages: Final = data.get("messages")
             if messages is None:
                 return  # No messages to check
-            input_messages = cast(list[dict[Any, Any]], messages)
+            input_messages = messages
         else:
             return
 
@@ -240,9 +263,13 @@ class PangeaHandler(CustomGuardrail):
                 for c in choices:
                     if isinstance(c, Choices):
                         try:
-                            serialized_choices.append(c.model_dump())
+                            serialized_choices.append(
+                                _choice_with_message(c.model_dump(), message_dict_with_server_tool_calls)
+                            )
                         except Exception:
-                            serialized_choices.append(c.dict())
+                            serialized_choices.append(
+                                _choice_with_message(c.dict(), message_dict_with_server_tool_calls)
+                            )
                     else:
                         serialized_choices.append(c)
                 choices = serialized_choices
@@ -267,7 +294,9 @@ class PangeaHandler(CustomGuardrail):
             return
 
         output: Final = ai_guard_response.get("result", {}).get("output", {})
-        response.choices = output["choices"]
+        response.choices = [  # pyright: ignore[reportAttributeAccessIssue]  # Pangea returns untyped choice dicts
+            _choice_with_message(choice, message_dict_with_server_tool_calls_split_out) for choice in output["choices"]
+        ]
         return response
 
     @log_guardrail_information

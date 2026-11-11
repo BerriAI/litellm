@@ -3,7 +3,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { renderWithProviders, screen, waitFor } from "../../../../../tests/test-utils";
 import BulkEditUserModal from "./BulkEditUsers";
 import { userBulkUpdateUserCall, teamBulkMemberAddCall } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 vi.mock("@/components/networking", () => ({
   userBulkUpdateUserCall: vi.fn(),
@@ -14,6 +14,7 @@ vi.mock("./user_edit_view", () => ({
   UserEditView: ({ onSubmit, onCancel }: { onSubmit: (values: any) => void; onCancel: () => void }) => (
     <div data-testid="user-edit-view">
       <button onClick={() => onSubmit({ user_role: "admin", max_budget: 100 })}>Submit</button>
+      <button onClick={() => onSubmit({ max_budget: 100, budget_duration: null })}>Submit with unset duration</button>
       <button onClick={onCancel}>Cancel</button>
     </div>
   ),
@@ -185,7 +186,7 @@ describe("BulkEditUserModal", () => {
     await user.click(submitButton);
 
     await waitFor(() => {
-      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith("Access token not found");
+      expect(toast.fromError).toHaveBeenCalledWith("Access token not found");
     });
   });
 
@@ -202,6 +203,18 @@ describe("BulkEditUserModal", () => {
         "user2",
       ]);
     });
+  });
+
+  it("omits an unset reset period from the bulk update payload", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<BulkEditUserModal {...defaultProps} />);
+
+    await user.click(screen.getByRole("button", { name: "Submit with unset duration" }));
+
+    await waitFor(() => {
+      expect(mockUserBulkUpdateUserCall).toHaveBeenCalledWith("test-token", { max_budget: 100 }, ["user1", "user2"]);
+    });
+    expect(mockUserBulkUpdateUserCall.mock.calls[0][1]).not.toHaveProperty("budget_duration");
   });
 
   it("should call userBulkUpdateUserCall with allUsers flag when update all users is enabled", async () => {
@@ -239,7 +252,7 @@ describe("BulkEditUserModal", () => {
     await user.click(submitButton);
 
     await waitFor(() => {
-      expect(NotificationsManager.success).toHaveBeenCalledWith("Updated 2 user(s)");
+      expect(toast.success).toHaveBeenCalledWith("Updated 2 user(s)");
     });
   });
 
@@ -261,7 +274,7 @@ describe("BulkEditUserModal", () => {
     await user.click(submitButton);
 
     await waitFor(() => {
-      expect(NotificationsManager.success).toHaveBeenCalledWith("Updated all users (100 total)");
+      expect(toast.success).toHaveBeenCalledWith("Updated all users (100 total)");
     });
   });
 
@@ -275,7 +288,7 @@ describe("BulkEditUserModal", () => {
     await user.click(submitButton);
 
     await waitFor(() => {
-      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith("Failed to perform bulk operations");
+      expect(toast.fromError).toHaveBeenCalledWith("Failed to perform bulk operations");
     });
   });
 

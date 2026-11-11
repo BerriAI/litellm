@@ -2,16 +2,19 @@ import { organizationKeys, useOrganizations } from "@/app/(dashboard)/hooks/orga
 import { useUserModels } from "@/app/(dashboard)/hooks/models/useModels";
 import OrganizationFilters, { FilterState } from "@/app/(dashboard)/organizations/OrganizationFilters";
 import { useQueryClient } from "@tanstack/react-query";
-import { parseAsString, useQueryState } from "nuqs";
+import { parseAsString, parseAsStringLiteral, useQueryStates } from "nuqs";
 import React, { useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { organizationDeleteCall } from "@/components/networking";
 import { OrgCreateDialog } from "@/components/organization/org-create/OrgCreateDialog";
 import OrganizationInfoView from "@/components/organization/organization_view";
+import { ORGANIZATION_TAB_URL_KEY, ORGANIZATION_TABS } from "@/components/organization/organizationTabs";
 import { Button } from "@/components/ui/button";
 
 import OrganizationsTable from "./OrganizationsTable";
+import { organizationIdFilter, useOrganizationsTableState } from "./useOrganizationsTableState";
 
 interface OrganizationsPanelProps {
   userRole: string;
@@ -19,15 +22,26 @@ interface OrganizationsPanelProps {
   premiumUser: boolean;
 }
 
+const ORGANIZATION_DETAIL_STATE = {
+  org: parseAsString,
+  tab: parseAsStringLiteral(ORGANIZATION_TABS),
+};
+const ORGANIZATION_DETAIL_URL_KEYS = { tab: ORGANIZATION_TAB_URL_KEY };
+
 const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, accessToken, premiumUser }) => {
-  const [selectedOrgId, setSelectedOrgId] = useQueryState("org", parseAsString.withOptions({ history: "push" }));
-  const [editOrg, setEditOrg] = useState(false);
+  const { t } = useTranslation();
+  const [{ org: selectedOrgId }, setOrganizationDetail] = useQueryStates(ORGANIZATION_DETAIL_STATE, {
+    history: "push",
+    urlKeys: ORGANIZATION_DETAIL_URL_KEYS,
+  });
+  const tableState = useOrganizationsTableState();
+  const { setSearch, onColumnFiltersChange } = tableState;
+  const filters: FilterState = { org_id: organizationIdFilter(tableState), org_alias: tableState.search };
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [orgToDelete, setOrgToDelete] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isOrgModalVisible, setIsOrgModalVisible] = useState(false);
-  const [showFilters, setShowFilters] = useState(false);
-  const [filters, setFilters] = useState<FilterState>({ org_id: "", org_alias: "" });
+  const [showFilters, setShowFilters] = useState(() => filters.org_id !== "");
 
   const queryClient = useQueryClient();
   const { data: organizations = [], isLoading } = useOrganizations({
@@ -41,11 +55,16 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
   const refetchOrganizations = () => queryClient.invalidateQueries({ queryKey: organizationKeys.lists() });
 
   const handleFilterChange = (key: keyof FilterState, value: string) => {
-    setFilters((previousFilters) => ({ ...previousFilters, [key]: value }));
+    if (key === "org_alias") {
+      setSearch(value);
+      return;
+    }
+    onColumnFiltersChange(value ? [{ id: "org_id", value }] : []);
   };
 
   const handleFilterReset = () => {
-    setFilters({ org_id: "", org_alias: "" });
+    setSearch("");
+    onColumnFiltersChange([]);
   };
 
   const handleDelete = (orgId: string | null) => {
@@ -61,7 +80,7 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
     try {
       setIsDeleting(true);
       await organizationDeleteCall(accessToken, orgToDelete);
-      NotificationsManager.success("Organization deleted successfully");
+      toast.success(t("organizations.panel.toasts.deleted"));
 
       setIsDeleteModalOpen(false);
       setOrgToDelete(null);
@@ -82,16 +101,19 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
     return (
       <div className="mx-4 mt-4">
         <p className="text-sm text-muted-foreground">
-          This is a LiteLLM Enterprise feature, and requires a valid key to use. Get a trial key{" "}
-          <a
-            href="https://www.litellm.ai/#pricing"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-primary underline-offset-4 hover:underline"
-          >
-            here
-          </a>
-          .
+          <Trans
+            i18nKey="organizations.panel.enterpriseNotice"
+            components={{
+              pricing: (
+                <a
+                  href="https://www.litellm.ai/#pricing"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-primary underline-offset-4 hover:underline"
+                />
+              ),
+            }}
+          />
         </p>
       </div>
     );
@@ -101,26 +123,22 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
     <div className="mx-4 mt-4 flex flex-col gap-4">
       {(userRole === "Admin" || userRole === "Org Admin") && (
         <Button className="w-fit" onClick={() => setIsOrgModalVisible(true)}>
-          + Create New Organization
+          {t("organizations.panel.createButton")}
         </Button>
       )}
 
       {selectedOrgId ? (
         <OrganizationInfoView
           organizationId={selectedOrgId}
-          onClose={() => {
-            void setSelectedOrgId(null);
-            setEditOrg(false);
-          }}
+          onClose={() => void setOrganizationDetail(null)}
           accessToken={accessToken}
           is_org_admin={true}
           is_proxy_admin={userRole === "Admin"}
           userModels={userModels}
-          editOrg={editOrg}
         />
       ) : (
         <>
-          <p className="text-sm text-muted-foreground">Click on an organization ID to view its details.</p>
+          <p className="text-sm text-muted-foreground">{t("organizations.panel.listHint")}</p>
           <OrganizationFilters
             filters={filters}
             showFilters={showFilters}
@@ -133,14 +151,8 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
             isLoading={isLoading}
             userRole={userRole}
             searchActive={searchActive}
-            onOrganizationClick={(organizationId) => {
-              setEditOrg(false);
-              void setSelectedOrgId(organizationId);
-            }}
-            onEditClick={(organizationId) => {
-              void setSelectedOrgId(organizationId);
-              setEditOrg(true);
-            }}
+            onOrganizationClick={(organizationId) => void setOrganizationDetail({ org: organizationId, tab: null })}
+            onEditClick={(organizationId) => void setOrganizationDetail({ org: organizationId, tab: "settings" })}
             onDeleteClick={handleDelete}
           />
         </>
@@ -150,10 +162,10 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
 
       <DeleteResourceModal
         isOpen={isDeleteModalOpen}
-        title="Delete Organization?"
-        message="Are you sure you want to delete this organization? This action cannot be undone."
-        resourceInformationTitle="Organization Information"
-        resourceInformation={[{ label: "Organization ID", value: orgToDelete, code: true }]}
+        title={t("organizations.panel.deleteModal.title")}
+        message={t("organizations.panel.deleteModal.message")}
+        resourceInformationTitle={t("organizations.panel.deleteModal.infoTitle")}
+        resourceInformation={[{ label: t("organizations.panel.deleteModal.idLabel"), value: orgToDelete, code: true }]}
         onCancel={cancelDelete}
         onOk={confirmDelete}
         confirmLoading={isDeleting}

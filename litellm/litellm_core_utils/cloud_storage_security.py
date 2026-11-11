@@ -1,8 +1,8 @@
 import posixpath
 import re
 from collections.abc import Mapping, Sequence
-from types import MappingProxyType
-from typing import Any, Final, cast
+from itertools import accumulate, repeat
+from typing import Final
 from urllib.parse import quote, unquote
 
 from litellm._uuid import uuid
@@ -17,18 +17,57 @@ BEDROCK_MANAGED_S3_PREFIXES: Final = (
     BEDROCK_MANAGED_S3_OUTPUT_PREFIX,
 )
 MANAGED_CLOUD_STORAGE_SCHEMES: Final = ("s3://", "gs://")
-_MAPPING_PROXY_TYPE: Final[type] = type(MappingProxyType({}))
+STORED_S3_BUCKET_PARAM: Final = "stored_s3_bucket_name"
+REQUEST_S3_BUCKET_PARAMS: Final = frozenset({"s3_bucket_name", "s3_output_bucket_name"})
+
+
+def stored_s3_bucket_kwargs(stored_file_id: str) -> Mapping[str, str]:
+    """The bucket (and any prefix before LiteLLM's own path) of an ``s3://`` file id LiteLLM recorded itself,
+    as the param that lets Bedrock read it back.
+
+    Only pass ids from LiteLLM's own records (managed file rows, provider batch responses), never one a caller sent.
+    """
+    if not stored_file_id.startswith("s3://"):
+        return {}
+    bucket, _, object_key = stored_file_id.removeprefix("s3://").partition("/")
+    if not bucket:
+        return {}
+    segments: Final = object_key.split("/")
+    prefix_depth: Final = next(
+        (depth for depth in range(len(segments)) if "/".join(segments[depth:]).startswith(BEDROCK_MANAGED_S3_PREFIXES)),
+        0,
+    )
+    prefix: Final = "/".join(segments[:prefix_depth])
+    return {STORED_S3_BUCKET_PARAM: f"{bucket}/{prefix}" if prefix else bucket}
+
+
+MAX_FILE_ID_DECODE_PASSES: Final = 8
+
+
+def _unquote_once(current: str, _: str) -> str:
+    return unquote(current)
+
+
+def _decodings(value: str) -> tuple[str, ...]:
+    return tuple(accumulate(repeat(value, MAX_FILE_ID_DECODE_PASSES + 2), _unquote_once))
 
 
 def is_managed_cloud_storage_uri(file_id: str) -> bool:
     """
-    True if file_id is a raw cloud-storage object URI (e.g. ``s3://bucket/key``).
+    True if file_id is a raw cloud-storage object URI (e.g. ``s3://bucket/key``),
+    up to ``MAX_FILE_ID_DECODE_PASSES`` layers of percent-encoding deep, or an id
+    encoded deeper than that, which no client produces and which is treated as raw
+    rather than decoded any further.
 
     These are internal provider artifacts. On the multi-tenant proxy they must be
     retrieved through their managed unified file id so owner/team access is enforced;
     a raw URI supplied by a caller bypasses that check.
     """
-    return isinstance(file_id, str) and file_id.startswith(MANAGED_CLOUD_STORAGE_SCHEMES)
+    if not isinstance(file_id, str):
+        return False
+    decodings: Final = _decodings(file_id)
+    settled: Final = decodings[-1] == decodings[-2]
+    return decodings[-1].startswith(MANAGED_CLOUD_STORAGE_SCHEMES) or not settled
 
 
 _SAFE_OBJECT_COMPONENT_PATTERN: Final = re.compile(r"[^A-Za-z0-9._-]+")
@@ -116,14 +155,9 @@ def encode_s3_object_key_for_url(object_key: str) -> str:
 
 
 def should_allow_legacy_cloud_file_ids(
-    litellm_params: Mapping[str, Any] | None = None,
+    litellm_params: Mapping[str, object] | None = None,
 ) -> bool:
-    value = None
-    if isinstance(litellm_params, Mapping):
-        trusted_model_credentials: Final = litellm_params.get("_litellm_internal_model_credentials")
-        if isinstance(trusted_model_credentials, _MAPPING_PROXY_TYPE):
-            value = cast(Mapping[str, Any], trusted_model_credentials).get("allow_legacy_cloud_file_ids")
-
+    value: Final = litellm_params.get("allow_legacy_cloud_file_ids") if litellm_params is not None else None
     if isinstance(value, bool):
         return value
     if isinstance(value, str):

@@ -3,7 +3,16 @@
  * based on the current endpoint configuration.
  */
 
-import { Select, Spin } from "antd";
+import {
+  Combobox,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxList,
+} from "@/components/ui/combobox";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { useTranslation } from "react-i18next";
 import { SelectorOption, EndpointConfig } from "../endpoint_config";
 
 interface UnifiedSelectorProps {
@@ -14,26 +23,45 @@ interface UnifiedSelectorProps {
   onChange: (value: string) => void;
 }
 
+const matchesQuery = (option: SelectorOption, query: string): boolean =>
+  option.label.toLowerCase().includes(query.trim().toLowerCase());
+
 export function UnifiedSelector({ value, options, loading, config, onChange }: UnifiedSelectorProps) {
+  const { t } = useTranslation();
+  const selected = options.find((option) => option.value === value) ?? null;
+  const noun = t(config.selectorLabel).toLowerCase();
+
   return (
-    <Select
-      value={value || undefined}
-      placeholder={loading ? `Loading ${config.selectorLabel.toLowerCase()}s...` : config.selectorPlaceholder}
-      onChange={onChange}
-      loading={loading}
-      showSearch
-      filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
-      options={options}
-      className="w-48 md:w-64 lg:w-72"
-      notFoundContent={
-        loading ? (
-          <div className="flex items-center justify-center py-2">
-            <Spin size="small" />
-          </div>
-        ) : (
-          `No ${config.selectorLabel.toLowerCase()}s available`
-        )
-      }
-    />
+    <Combobox
+      items={options}
+      value={selected}
+      onValueChange={(option: SelectorOption | null) => onChange(option?.value ?? "")}
+      isItemEqualToValue={(a: SelectorOption, b: SelectorOption) => a.value === b.value}
+      itemToStringLabel={(option: SelectorOption) => option.label}
+      filter={matchesQuery}
+    >
+      <ComboboxInput
+        placeholder={loading ? t("playground.compare.selector.loading", { noun }) : t(config.selectorPlaceholder)}
+        className="w-48 md:w-64 lg:w-72"
+      />
+      <ComboboxContent>
+        <ComboboxEmpty>
+          {loading ? (
+            <span aria-busy="true" className="flex items-center justify-center py-2">
+              <UiLoadingSpinner className="size-4" />
+            </span>
+          ) : (
+            t("playground.compare.selector.empty", { noun })
+          )}
+        </ComboboxEmpty>
+        <ComboboxList>
+          {(option: SelectorOption) => (
+            <ComboboxItem key={option.value} value={option}>
+              {option.label}
+            </ComboboxItem>
+          )}
+        </ComboboxList>
+      </ComboboxContent>
+    </Combobox>
   );
 }

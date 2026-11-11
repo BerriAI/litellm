@@ -1,12 +1,14 @@
 from datetime import datetime, time, timezone
+from typing import Final
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 
 import litellm
 from litellm.litellm_core_utils.duration_parser import get_next_standardized_reset_time
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class BudgetResetSettings(BaseModel):
+class BudgetResetSettings(LiteLLMBaseModel):
     """Immutable, validated settings that govern when budgets reset.
 
     Parsed once from `litellm_settings` and injected into consumers (the reset
@@ -78,3 +80,36 @@ def get_budget_reset_time(budget_duration: str) -> datetime:
     `BudgetResetSettings` by injection (creation/update endpoints, startup backfill).
     """
     return compute_budget_reset_at(budget_duration, get_budget_reset_settings())
+
+
+def keeps_due_budget_reset(
+    requested_duration: str, stored_duration: str | None, stored_reset_at: datetime | None
+) -> bool:
+    if stored_reset_at is None or requested_duration != stored_duration:
+        return False
+    stored_utc: Final = stored_reset_at if stored_reset_at.tzinfo else stored_reset_at.replace(tzinfo=timezone.utc)
+    return stored_utc <= datetime.now(timezone.utc)
+
+
+def _is_persistable_budget_duration(budget_duration: str) -> bool:
+    from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+
+    try:
+        if duration_in_seconds(budget_duration) <= 0:
+            return False
+        get_budget_reset_time(budget_duration=budget_duration)
+    except (ValueError, OverflowError):
+        return False
+    return True
+
+
+def budget_duration_error(budget_duration: str | None) -> str | None:
+    """Why `budget_duration` cannot be persisted, or None when it is usable.
+
+    A non-positive duration resolves to a reset time of "now", which leaves the row
+    permanently due: the reset job re-reads it every tick and, once enough of them
+    exist, they fill each batch and starve every other tenant's reset.
+    """
+    if budget_duration is None or _is_persistable_budget_duration(budget_duration):
+        return None
+    return f"Invalid budget_duration '{budget_duration}'. Use a format like '1h', '24h', '7d', or '30d'."

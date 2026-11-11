@@ -1,11 +1,17 @@
 import React, { useState, useEffect } from "react";
-import { Modal, Form, Steps, Button, Checkbox } from "antd";
-import { Text, Title, Badge } from "@tremor/react";
+import type { ParseKeys } from "i18next";
+import { Loader2 } from "lucide-react";
+import { Trans, useTranslation } from "react-i18next";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { cn } from "@/lib/cva.config";
 import { makeAgentsPublicCall } from "../../networking";
-import NotificationsManager from "../../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { AgentHubData } from "@/components/AIHub/AgentHubTableColumns";
 
-const { Step } = Steps;
+const STEP_TITLES: ParseKeys[] = ["aiHub.makeAgentPublic.steps.selectAgents", "aiHub.makeAgentPublic.steps.confirm"];
 
 interface MakeAgentPublicFormProps {
   visible: boolean;
@@ -22,22 +28,21 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
   agentHubData,
   onSuccess,
 }) => {
+  const { t } = useTranslation();
   const [currentStep, setCurrentStep] = useState(0);
   const [selectedAgents, setSelectedAgents] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
-  const [form] = Form.useForm();
 
   const handleClose = () => {
     setCurrentStep(0);
     setSelectedAgents(new Set());
-    form.resetFields();
     onClose();
   };
 
   const handleNext = () => {
     if (currentStep === 0) {
       if (selectedAgents.size === 0) {
-        NotificationsManager.fromBackend("Please select at least one agent to make public");
+        toast.fromError(t("aiHub.makeAgentPublic.selectAtLeastOne"));
         return;
       }
       setCurrentStep(1);
@@ -83,7 +88,7 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
 
   const handleSubmit = async () => {
     if (selectedAgents.size === 0) {
-      NotificationsManager.fromBackend("Please select at least one agent to make public");
+      toast.fromError(t("aiHub.makeAgentPublic.selectAtLeastOne"));
       return;
     }
 
@@ -94,12 +99,12 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
       // Make batch API call for all agents
       await makeAgentsPublicCall(accessToken, agentIdsToMakePublic);
 
-      NotificationsManager.success(`Successfully made ${agentIdsToMakePublic.length} agent(s) public!`);
+      toast.success(t("aiHub.makeAgentPublic.success", { total: agentIdsToMakePublic.length }));
       handleClose();
       onSuccess();
     } catch (error) {
       console.error("Error making agents public:", error);
-      NotificationsManager.fromBackend("Failed to make agents public. Please try again.");
+      toast.fromError(t("aiHub.makeAgentPublic.failed"));
     } finally {
       setLoading(false);
     }
@@ -113,56 +118,54 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
     return (
       <div className="space-y-4">
         <div className="flex items-center justify-between">
-          <Title>Select Agents to Make Public</Title>
+          <h3 className="text-lg font-semibold">{t("aiHub.makeAgentPublic.step1Title")}</h3>
           <div className="flex items-center space-x-2">
-            <Checkbox
-              checked={allAgentsSelected}
-              indeterminate={isIndeterminate}
-              onChange={(e) => handleSelectAll(e.target.checked)}
-              disabled={agentHubData.length === 0}
-            >
-              Select All {agentHubData.length > 0 && `(${agentHubData.length})`}
-            </Checkbox>
+            <label className="flex items-center gap-2 text-sm">
+              <Checkbox
+                checked={allAgentsSelected}
+                indeterminate={isIndeterminate}
+                onCheckedChange={(checked) => handleSelectAll(checked === true)}
+                disabled={agentHubData.length === 0}
+              />
+              {t("aiHub.makeAgentPublic.selectAll")} {agentHubData.length > 0 && `(${agentHubData.length})`}
+            </label>
           </div>
         </div>
 
-        <Text className="text-sm text-gray-600">
-          Select the agents you want to be visible on the public model hub. Users will still require a valid Virtual Key
-          to use these agents.
-        </Text>
+        <p className="text-sm text-muted-foreground">{t("aiHub.makeAgentPublic.description")}</p>
 
         <div className="max-h-96 overflow-y-auto border rounded-lg p-4">
           <div className="space-y-3">
             {agentHubData.length === 0 ? (
-              <div className="text-center py-8 text-gray-500">
-                <Text>No agents available.</Text>
+              <div className="text-center py-8 text-muted-foreground">
+                <p>{t("aiHub.makeAgentPublic.noAgents")}</p>
               </div>
             ) : (
               agentHubData.map((agent) => {
                 const agentId = agent.agent_id || agent.name;
                 return (
-                  <div key={agentId} className="flex items-center space-x-3 p-3 border rounded-lg hover:bg-gray-50">
+                  <div key={agentId} className="flex items-center space-x-3 p-3 border rounded-lg hover:bg-accent">
                     <Checkbox
                       checked={selectedAgents.has(agentId)}
-                      onChange={(e) => handleAgentSelection(agentId, e.target.checked)}
+                      onCheckedChange={(checked) => handleAgentSelection(agentId, checked === true)}
                     />
-                    <div className="flex-1">
+                    <div className="flex-1 min-w-0">
                       <div className="flex items-center space-x-2">
-                        <Text className="font-medium">{agent.name}</Text>
-                        <Badge color="blue" size="sm">
-                          v{agent.version}
-                        </Badge>
+                        <p className="font-medium break-words">{agent.name}</p>
+                        <Badge variant="secondary">v{agent.version}</Badge>
                       </div>
-                      <Text className="text-xs text-gray-600 mt-1">{agent.description}</Text>
+                      <p className="text-xs text-muted-foreground mt-1 break-words">{agent.description}</p>
                       {agent.skills && agent.skills.length > 0 && (
                         <div className="flex flex-wrap gap-1 mt-1">
                           {agent.skills.slice(0, 3).map((skill) => (
-                            <Badge key={skill.id} color="purple" size="xs">
+                            <Badge key={skill.id} variant="outline">
                               {skill.name}
                             </Badge>
                           ))}
                           {agent.skills.length > 3 && (
-                            <Text className="text-xs text-gray-500">+{agent.skills.length - 3} more</Text>
+                            <p className="text-xs text-muted-foreground">
+                              {t("aiHub.makeAgentPublic.moreSkills", { extra: agent.skills.length - 3 })}
+                            </p>
                           )}
                         </div>
                       )}
@@ -175,10 +178,14 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
         </div>
 
         {selectedAgents.size > 0 && (
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-            <Text className="text-sm text-blue-800">
-              <strong>{selectedAgents.size}</strong> agent{selectedAgents.size !== 1 ? "s" : ""} selected
-            </Text>
+          <div className="bg-info/10 border border-info/20 rounded-lg p-3">
+            <p className="text-sm text-info">
+              <Trans
+                i18nKey="aiHub.makeAgentPublic.selectedCount"
+                count={selectedAgents.size}
+                components={{ strong: <strong /> }}
+              />
+            </p>
           </div>
         )}
       </div>
@@ -188,33 +195,30 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
   const renderStep2Content = () => {
     return (
       <div className="space-y-4">
-        <Title>Confirm Making Agents Public</Title>
+        <h3 className="text-lg font-semibold">{t("aiHub.makeAgentPublic.step2Title")}</h3>
 
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-          <Text className="text-sm text-yellow-800">
-            <strong>Warning:</strong> Once you make these agents public, anyone who can go to the{" "}
-            <code>/ui/model_hub_table</code> will be able to know they exist on the proxy.
-          </Text>
+        <div className="bg-warning/10 border border-warning/20 rounded-lg p-4">
+          <p className="text-sm text-warning">
+            <Trans i18nKey="aiHub.makeAgentPublic.warning" components={{ strong: <strong />, code: <code /> }} />
+          </p>
         </div>
 
         <div className="space-y-3">
-          <Text className="font-medium">Agents to be made public:</Text>
+          <p className="font-medium">{t("aiHub.makeAgentPublic.toBeMadePublic")}</p>
           <div className="max-h-48 overflow-y-auto border rounded-lg p-3">
             <div className="space-y-2">
               {Array.from(selectedAgents).map((agentId) => {
                 const agent = agentHubData.find((a) => (a.agent_id || a.name) === agentId);
                 return (
-                  <div key={agentId} className="flex items-center justify-between p-2 bg-gray-50 rounded-sm">
-                    <div className="flex-1">
+                  <div key={agentId} className="flex items-center justify-between p-2 bg-muted rounded-sm">
+                    <div className="flex-1 min-w-0">
                       <div className="flex items-center space-x-2">
-                        <Text className="font-medium">{agent?.name || agentId}</Text>
-                        {agent && (
-                          <Badge color="blue" size="xs">
-                            v{agent.version}
-                          </Badge>
-                        )}
+                        <p className="font-medium break-words">{agent?.name || agentId}</p>
+                        {agent && <Badge variant="secondary">v{agent.version}</Badge>}
                       </div>
-                      {agent?.description && <Text className="text-xs text-gray-600 mt-1">{agent.description}</Text>}
+                      {agent?.description && (
+                        <p className="text-xs text-muted-foreground mt-1 break-words">{agent.description}</p>
+                      )}
                     </div>
                   </div>
                 );
@@ -223,11 +227,14 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
           </div>
         </div>
 
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-          <Text className="text-sm text-blue-800">
-            Total: <strong>{selectedAgents.size}</strong> agent{selectedAgents.size !== 1 ? "s" : ""} will be made
-            public
-          </Text>
+        <div className="bg-info/10 border border-info/20 rounded-lg p-3">
+          <p className="text-sm text-info">
+            <Trans
+              i18nKey="aiHub.makeAgentPublic.total"
+              count={selectedAgents.size}
+              components={{ strong: <strong /> }}
+            />
+          </p>
         </div>
       </div>
     );
@@ -247,20 +254,21 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
   const renderStepButtons = () => {
     return (
       <div className="flex justify-between mt-6">
-        <Button onClick={currentStep === 0 ? handleClose : handlePrevious}>
-          {currentStep === 0 ? "Cancel" : "Previous"}
+        <Button variant="outline" onClick={currentStep === 0 ? handleClose : handlePrevious}>
+          {currentStep === 0 ? t("aiHub.makeAgentPublic.cancel") : t("aiHub.makeAgentPublic.previous")}
         </Button>
 
         <div className="flex space-x-2">
           {currentStep === 0 && (
             <Button onClick={handleNext} disabled={selectedAgents.size === 0}>
-              Next
+              {t("aiHub.makeAgentPublic.next")}
             </Button>
           )}
 
           {currentStep === 1 && (
-            <Button onClick={handleSubmit} loading={loading}>
-              Make Public
+            <Button onClick={handleSubmit} disabled={loading}>
+              {loading && <Loader2 className="size-4 animate-spin" />}
+              {t("aiHub.makeAgentPublic.makePublic")}
             </Button>
           )}
         </div>
@@ -269,24 +277,42 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
   };
 
   return (
-    <Modal
-      title="Make Agents Public"
-      open={visible}
-      onCancel={handleClose}
-      footer={null}
-      width={1200}
-      maskClosable={false}
-    >
-      <Form form={form} layout="vertical">
-        <Steps current={currentStep} className="mb-6">
-          <Step title="Select Agents" />
-          <Step title="Confirm" />
-        </Steps>
+    <Dialog open={visible} onOpenChange={(open) => !open && handleClose()} disablePointerDismissal>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1200px]">
+        <DialogHeader>
+          <DialogTitle>{t("aiHub.makeAgentPublic.title")}</DialogTitle>
+        </DialogHeader>
 
-        {renderStepContent()}
-        {renderStepButtons()}
-      </Form>
-    </Modal>
+        <div>
+          <ol className="mb-6 flex items-center gap-6">
+            {STEP_TITLES.map((title, index) => (
+              <li
+                key={title}
+                className="flex items-center gap-2"
+                aria-current={currentStep === index ? "step" : undefined}
+              >
+                <span
+                  className={cn(
+                    "flex size-6 items-center justify-center rounded-full border text-xs",
+                    currentStep === index
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-border text-muted-foreground",
+                  )}
+                >
+                  {index + 1}
+                </span>
+                <span className={cn("text-sm", currentStep === index ? "font-medium" : "text-muted-foreground")}>
+                  {t(title)}
+                </span>
+              </li>
+            ))}
+          </ol>
+
+          {renderStepContent()}
+          {renderStepButtons()}
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 };
 

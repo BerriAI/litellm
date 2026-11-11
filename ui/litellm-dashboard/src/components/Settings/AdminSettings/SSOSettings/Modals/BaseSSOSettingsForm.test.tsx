@@ -1,8 +1,24 @@
-import { Form } from "antd";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../../../../../tests/test-utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import BaseSSOSettingsForm, { renderProviderFields, ssoProviderConfigs } from "./BaseSSOSettingsForm";
+import BaseSSOSettingsForm, {
+  buildSSOSettingsPatch,
+  emptySSOSettingsFormValues,
+  pickMountedSSOValues,
+  renderProviderFields,
+  ssoProviderConfigs,
+  submitMountedSSOValues,
+  useSSOSettingsForm,
+} from "./BaseSSOSettingsForm";
+import { expectControlBesideLabel } from "../../../../../../tests/fieldOrientation";
+import { processSSOSettingsPayload } from "../utils";
+
+const user = () => userEvent.setup({ pointerEventsCheck: 0 });
+
+const openProviderDropdown = async () => {
+  await user().click(screen.getByLabelText("SSO Provider"));
+};
 
 describe("BaseSSOSettingsForm", () => {
   afterEach(() => {
@@ -11,7 +27,7 @@ describe("BaseSSOSettingsForm", () => {
 
   it("should render", () => {
     const TestWrapper = () => {
-      const [form] = Form.useForm();
+      const form = useSSOSettingsForm("sso-settings");
       const handleSubmit = vi.fn();
 
       return <BaseSSOSettingsForm form={form} onFormSubmit={handleSubmit} />;
@@ -26,7 +42,7 @@ describe("BaseSSOSettingsForm", () => {
 
   it("should render provider fields when provider is selected", async () => {
     const TestWrapper = () => {
-      const [form] = Form.useForm();
+      const form = useSSOSettingsForm("sso-settings");
       const handleSubmit = vi.fn();
 
       return <BaseSSOSettingsForm form={form} onFormSubmit={handleSubmit} />;
@@ -34,15 +50,10 @@ describe("BaseSSOSettingsForm", () => {
 
     renderWithProviders(<TestWrapper />);
 
-    const providerSelect = screen.getByLabelText("SSO Provider");
-    await act(async () => {
-      fireEvent.mouseDown(providerSelect);
-    });
+    await openProviderDropdown();
 
-    await waitFor(() => {
-      const googleOption = screen.getByText(/google sso/i);
-      fireEvent.click(googleOption);
-    });
+    const googleOption = await screen.findByText(/google sso/i);
+    await user().click(googleOption);
 
     await waitFor(() => {
       expect(screen.getByText("Google Client ID")).toBeInTheDocument();
@@ -52,7 +63,7 @@ describe("BaseSSOSettingsForm", () => {
 
   it("should show role mappings fields for okta provider", async () => {
     const TestWrapper = () => {
-      const [form] = Form.useForm();
+      const form = useSSOSettingsForm("sso-settings");
       const handleSubmit = vi.fn();
 
       return <BaseSSOSettingsForm form={form} onFormSubmit={handleSubmit} />;
@@ -60,15 +71,10 @@ describe("BaseSSOSettingsForm", () => {
 
     renderWithProviders(<TestWrapper />);
 
-    const providerSelect = screen.getByLabelText("SSO Provider");
-    await act(async () => {
-      fireEvent.mouseDown(providerSelect);
-    });
+    await openProviderDropdown();
 
-    await waitFor(() => {
-      const oktaOption = screen.getByText(/okta/i);
-      fireEvent.click(oktaOption);
-    });
+    const oktaOption = await screen.findByText(/okta/i);
+    await user().click(oktaOption);
 
     await waitFor(() => {
       expect(screen.getByText("Use Role Mappings")).toBeInTheDocument();
@@ -77,7 +83,7 @@ describe("BaseSSOSettingsForm", () => {
 
   it("should validate proxy base url format", async () => {
     const TestWrapper = () => {
-      const [form] = Form.useForm();
+      const form = useSSOSettingsForm("sso-settings");
       const handleSubmit = vi.fn();
 
       return <BaseSSOSettingsForm form={form} onFormSubmit={handleSubmit} />;
@@ -98,7 +104,7 @@ describe("BaseSSOSettingsForm", () => {
 
   it("should validate proxy base url trailing slash", async () => {
     const TestWrapper = () => {
-      const [form] = Form.useForm();
+      const form = useSSOSettingsForm("sso-settings");
       const handleSubmit = vi.fn();
 
       return <BaseSSOSettingsForm form={form} onFormSubmit={handleSubmit} />;
@@ -119,7 +125,7 @@ describe("BaseSSOSettingsForm", () => {
 
   it("should show role mappings fields when use_role_mappings is checked for generic provider", async () => {
     const TestWrapper = () => {
-      const [form] = Form.useForm();
+      const form = useSSOSettingsForm("sso-settings");
       const handleSubmit = vi.fn();
 
       return <BaseSSOSettingsForm form={form} onFormSubmit={handleSubmit} />;
@@ -127,24 +133,16 @@ describe("BaseSSOSettingsForm", () => {
 
     renderWithProviders(<TestWrapper />);
 
-    const providerSelect = screen.getByLabelText("SSO Provider");
-    await act(async () => {
-      fireEvent.mouseDown(providerSelect);
-    });
+    await openProviderDropdown();
 
-    await waitFor(() => {
-      const genericOption = screen.getByText(/generic sso/i);
-      fireEvent.click(genericOption);
-    });
+    const genericOption = await screen.findByText(/generic sso/i);
+    await user().click(genericOption);
 
     await waitFor(() => {
       expect(screen.getByText("Use Role Mappings")).toBeInTheDocument();
     });
 
-    const checkbox = screen.getByLabelText("Use Role Mappings");
-    await act(async () => {
-      fireEvent.click(checkbox);
-    });
+    await user().click(screen.getAllByLabelText("Use Role Mappings")[0]);
 
     await waitFor(() => {
       expect(screen.getByText("Group Claim")).toBeInTheDocument();
@@ -154,7 +152,7 @@ describe("BaseSSOSettingsForm", () => {
 
   it("should show team mappings checkbox for okta provider", async () => {
     const TestWrapper = () => {
-      const [form] = Form.useForm();
+      const form = useSSOSettingsForm("sso-settings");
       const handleSubmit = vi.fn();
 
       return <BaseSSOSettingsForm form={form} onFormSubmit={handleSubmit} />;
@@ -162,15 +160,10 @@ describe("BaseSSOSettingsForm", () => {
 
     renderWithProviders(<TestWrapper />);
 
-    const providerSelect = screen.getByLabelText("SSO Provider");
-    await act(async () => {
-      fireEvent.mouseDown(providerSelect);
-    });
+    await openProviderDropdown();
 
-    await waitFor(() => {
-      const oktaOption = screen.getByText(/okta/i);
-      fireEvent.click(oktaOption);
-    });
+    const oktaOption = await screen.findByText(/okta/i);
+    await user().click(oktaOption);
 
     await waitFor(() => {
       expect(screen.getByText("Use Team Mappings")).toBeInTheDocument();
@@ -179,7 +172,7 @@ describe("BaseSSOSettingsForm", () => {
 
   it("should show team mappings checkbox for generic provider", async () => {
     const TestWrapper = () => {
-      const [form] = Form.useForm();
+      const form = useSSOSettingsForm("sso-settings");
       const handleSubmit = vi.fn();
 
       return <BaseSSOSettingsForm form={form} onFormSubmit={handleSubmit} />;
@@ -187,15 +180,10 @@ describe("BaseSSOSettingsForm", () => {
 
     renderWithProviders(<TestWrapper />);
 
-    const providerSelect = screen.getByLabelText("SSO Provider");
-    await act(async () => {
-      fireEvent.mouseDown(providerSelect);
-    });
+    await openProviderDropdown();
 
-    await waitFor(() => {
-      const genericOption = screen.getByText(/generic sso/i);
-      fireEvent.click(genericOption);
-    });
+    const genericOption = await screen.findByText(/generic sso/i);
+    await user().click(genericOption);
 
     await waitFor(() => {
       expect(screen.getByText("Use Team Mappings")).toBeInTheDocument();
@@ -204,7 +192,7 @@ describe("BaseSSOSettingsForm", () => {
 
   it("should show team IDs JWT field when use_team_mappings is checked for okta provider", async () => {
     const TestWrapper = () => {
-      const [form] = Form.useForm();
+      const form = useSSOSettingsForm("sso-settings");
       const handleSubmit = vi.fn();
 
       return <BaseSSOSettingsForm form={form} onFormSubmit={handleSubmit} />;
@@ -212,24 +200,16 @@ describe("BaseSSOSettingsForm", () => {
 
     renderWithProviders(<TestWrapper />);
 
-    const providerSelect = screen.getByLabelText("SSO Provider");
-    await act(async () => {
-      fireEvent.mouseDown(providerSelect);
-    });
+    await openProviderDropdown();
 
-    await waitFor(() => {
-      const oktaOption = screen.getByText(/okta/i);
-      fireEvent.click(oktaOption);
-    });
+    const oktaOption = await screen.findByText(/okta/i);
+    await user().click(oktaOption);
 
     await waitFor(() => {
       expect(screen.getByText("Use Team Mappings")).toBeInTheDocument();
     });
 
-    const checkbox = screen.getByLabelText("Use Team Mappings");
-    await act(async () => {
-      fireEvent.click(checkbox);
-    });
+    await user().click(screen.getAllByLabelText("Use Team Mappings")[0]);
 
     await waitFor(() => {
       expect(screen.getByText("Team IDs JWT Field")).toBeInTheDocument();
@@ -238,7 +218,7 @@ describe("BaseSSOSettingsForm", () => {
 
   it("should not show team mappings checkbox for google provider", async () => {
     const TestWrapper = () => {
-      const [form] = Form.useForm();
+      const form = useSSOSettingsForm("sso-settings");
       const handleSubmit = vi.fn();
 
       return <BaseSSOSettingsForm form={form} onFormSubmit={handleSubmit} />;
@@ -246,21 +226,48 @@ describe("BaseSSOSettingsForm", () => {
 
     renderWithProviders(<TestWrapper />);
 
-    const providerSelect = screen.getByLabelText("SSO Provider");
-    await act(async () => {
-      fireEvent.mouseDown(providerSelect);
-    });
+    await openProviderDropdown();
 
-    await waitFor(() => {
-      const googleOption = screen.getByText(/google sso/i);
-      fireEvent.click(googleOption);
-    });
+    const googleOption = await screen.findByText(/google sso/i);
+    await user().click(googleOption);
 
     await waitFor(() => {
       expect(screen.getByText("Google Client ID")).toBeInTheDocument();
     });
 
     expect(screen.queryByText("Use Team Mappings")).not.toBeInTheDocument();
+  });
+
+  it("lays a provider checkbox field out beside its label", async () => {
+    const TestWrapper = () => {
+      const form = useSSOSettingsForm("sso-settings");
+
+      return <BaseSSOSettingsForm form={form} onFormSubmit={vi.fn()} />;
+    };
+
+    renderWithProviders(<TestWrapper />);
+
+    await openProviderDropdown();
+    await user().click(await screen.findByText(/saml sso/i));
+
+    expectControlBesideLabel(
+      await screen.findByRole("checkbox", { name: "Allow IdP-initiated (unsolicited) responses" }),
+    );
+  });
+
+  it.each(["Use Role Mappings", "Use Team Mappings"])("lays the %s toggle out beside its label", async (label) => {
+    const TestWrapper = () => {
+      const form = useSSOSettingsForm("sso-settings");
+
+      return <BaseSSOSettingsForm form={form} onFormSubmit={vi.fn()} />;
+    };
+
+    renderWithProviders(<TestWrapper />);
+
+    await openProviderDropdown();
+    await user().click(await screen.findByText(/okta/i));
+
+    expectControlBesideLabel(await screen.findByRole("checkbox", { name: label }));
   });
 });
 
@@ -311,9 +318,9 @@ describe("renderProviderFields", () => {
     // to the provider default. Dropping the field from ssoProviderConfigs must
     // fail here rather than silently in production.
     const handleSubmit = vi.fn();
-    let form: any;
+    let form!: ReturnType<typeof useSSOSettingsForm>;
     const TestWrapper = () => {
-      const [formInstance] = Form.useForm();
+      const formInstance = useSSOSettingsForm("sso-settings");
       form = formInstance;
       return <BaseSSOSettingsForm form={formInstance} onFormSubmit={handleSubmit} />;
     };
@@ -322,7 +329,8 @@ describe("renderProviderFields", () => {
 
     // Mirror EditSSOSettingsModal hydrating the form from the GET response.
     await act(async () => {
-      form.setFieldsValue({
+      form.reset({
+        ...emptySSOSettingsFormValues,
         sso_provider: "generic",
         generic_client_id: "client-id",
         generic_client_secret: "client-secret",
@@ -337,8 +345,8 @@ describe("renderProviderFields", () => {
 
     // The admin edits something else entirely and saves.
     await act(async () => {
-      form.setFieldsValue({ generic_token_endpoint: "https://idp.example.com/token/v2" });
-      form.submit();
+      form.setValue("generic_token_endpoint", "https://idp.example.com/token/v2");
+      submitMountedSSOValues(form, "sso-settings", handleSubmit)();
     });
 
     await waitFor(() => {
@@ -353,15 +361,13 @@ describe("renderProviderFields", () => {
 
   it("renders provider logos in the dropdown and falls back to a letter avatar on load error", async () => {
     const TestWrapper = () => {
-      const [form] = Form.useForm();
+      const form = useSSOSettingsForm("sso-settings");
       return <BaseSSOSettingsForm form={form} onFormSubmit={vi.fn()} />;
     };
 
     renderWithProviders(<TestWrapper />);
 
-    await act(async () => {
-      fireEvent.mouseDown(screen.getByLabelText("SSO Provider"));
-    });
+    await openProviderDropdown();
 
     await waitFor(() => {
       expect(screen.getAllByAltText("Google SSO logo").length).toBeGreaterThan(0);
@@ -385,5 +391,141 @@ describe("renderProviderFields", () => {
       expect(screen.queryByAltText("Okta / Auth0 SSO logo")).not.toBeInTheDocument();
       expect(screen.getByText("O")).toBeInTheDocument();
     });
+  });
+
+  it("blocks the submit and names the missing provider credential", async () => {
+    const handleSubmit = vi.fn();
+    let form!: ReturnType<typeof useSSOSettingsForm>;
+    const TestWrapper = () => {
+      const formInstance = useSSOSettingsForm("sso-settings");
+      form = formInstance;
+      return <BaseSSOSettingsForm form={formInstance} onFormSubmit={handleSubmit} />;
+    };
+
+    renderWithProviders(<TestWrapper />);
+
+    await act(async () => {
+      form.reset({
+        ...emptySSOSettingsFormValues,
+        sso_provider: "google",
+        google_client_secret: "a-secret",
+        user_email: "admin@example.com",
+        proxy_base_url: "https://gateway.example.com",
+      });
+    });
+
+    await act(async () => {
+      submitMountedSSOValues(form, "sso-settings", handleSubmit)();
+    });
+
+    expect(await screen.findByText("Please enter the google client id")).toBeInTheDocument();
+    expect(handleSubmit).not.toHaveBeenCalled();
+  });
+
+  it("shows the effective default role on an untouched form", async () => {
+    let form!: ReturnType<typeof useSSOSettingsForm>;
+    const TestWrapper = () => {
+      const formInstance = useSSOSettingsForm("sso-settings");
+      form = formInstance;
+      return <BaseSSOSettingsForm form={formInstance} onFormSubmit={vi.fn()} />;
+    };
+
+    renderWithProviders(<TestWrapper />);
+
+    await act(async () => {
+      form.reset({ ...emptySSOSettingsFormValues, sso_provider: "okta", use_role_mappings: true });
+    });
+
+    expect(await screen.findByLabelText("Default Role")).toHaveTextContent("Internal User");
+  });
+});
+
+describe("buildSSOSettingsPatch", () => {
+  const seeded = {
+    ...emptySSOSettingsFormValues,
+    sso_provider: "generic",
+    generic_client_id: "client-id",
+    generic_client_secret: "kc-s****6e0d",
+    generic_authorization_endpoint: "https://idp.example.com/authorize",
+    generic_token_endpoint: "https://idp.example.com/token",
+    generic_userinfo_endpoint: "https://idp.example.com/userinfo",
+    generic_scope: "openid email profile groups",
+    saml_idp_metadata_url: "https://idp.example.com/saml/metadata",
+    saml_sp_entity_id: "litellm-sp",
+    microsoft_client_id: "ms-client-id",
+    microsoft_tenant: "ms-tenant",
+    user_email: "admin@example.com",
+    proxy_base_url: "https://gateway.example.com",
+    use_role_mappings: true,
+    group_claim: "groups",
+    default_role: "internal_user",
+    proxy_admin_teams: "admins",
+  };
+  const submit = (values: typeof seeded) => pickMountedSSOValues(values, "sso-settings");
+  const patch = (submitted: typeof seeded) =>
+    buildSSOSettingsPatch(seeded, submit(submitted), "sso-settings", processSSOSettingsPayload);
+
+  it("sends only the edited field, leaving SAML and another provider's settings the form never showed", () => {
+    expect(patch({ ...seeded, user_email: "new@example.com" })).toEqual({ user_email: "new@example.com" });
+  });
+
+  it("sends null for a shown field the admin emptied", () => {
+    expect(patch({ ...seeded, generic_scope: "" })).toEqual({ generic_scope: null });
+  });
+
+  it("clears role mappings when the admin unchecks them", () => {
+    expect(patch({ ...seeded, use_role_mappings: false })).toEqual({ role_mappings: null });
+  });
+
+  it("clears the previous provider's credentials when the admin switches provider", () => {
+    const google = { sso_provider: "google", google_client_id: "g-id", google_client_secret: "g-secret" };
+    const clearedGeneric = {
+      generic_client_id: null,
+      generic_client_secret: null,
+      generic_authorization_endpoint: null,
+      generic_token_endpoint: null,
+      generic_userinfo_endpoint: null,
+      generic_scope: null,
+    };
+    const clearedOthers = {
+      microsoft_client_id: null,
+      microsoft_tenant: null,
+      saml_idp_metadata_url: null,
+      saml_sp_entity_id: null,
+    };
+    expect(patch({ ...seeded, ...google })).toEqual({ ...google, ...clearedGeneric, ...clearedOthers });
+  });
+
+  it("clears a stored provider that would outrank the new one at sign-in, not only the one the form showed", () => {
+    const googleAndMicrosoft = {
+      ...emptySSOSettingsFormValues,
+      sso_provider: "google",
+      google_client_id: "g-id",
+      microsoft_client_id: "ms-id",
+      user_email: "admin@example.com",
+      proxy_base_url: "https://gateway.example.com",
+    };
+    const generic = {
+      ...googleAndMicrosoft,
+      sso_provider: "generic",
+      generic_client_id: "client-id",
+      generic_client_secret: "secret",
+      generic_authorization_endpoint: "https://idp.example.com/authorize",
+      generic_token_endpoint: "https://idp.example.com/token",
+      generic_userinfo_endpoint: "https://idp.example.com/userinfo",
+    };
+    const result = buildSSOSettingsPatch(
+      googleAndMicrosoft,
+      pickMountedSSOValues(generic, "sso-settings"),
+      "sso-settings",
+      processSSOSettingsPayload,
+    );
+    expect(result).toMatchObject({ google_client_id: null, microsoft_client_id: null, generic_client_id: "client-id" });
+  });
+
+  it("keeps the shared generic credentials when the admin switches between okta and generic", () => {
+    const result = patch({ ...seeded, sso_provider: "okta" });
+    expect(result.sso_provider).toBe("okta");
+    expect(Object.keys(result).filter((key) => key.startsWith("generic_"))).toEqual([]);
   });
 });

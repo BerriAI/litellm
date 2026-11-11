@@ -23,6 +23,7 @@ import pytest
 from datadog_mcp import SEARCH_LOGS_TOOL, assert_dd_mcp_creds, register_datadog_mcp
 from e2e_config import DD_SEARCH_FROM, unique_marker
 from e2e_http import Result, Success, UnknownApiError
+from e2e_metadata import Domain, Route, Subject, meta
 from lifecycle import ResourceManager
 from mcp_client import McpCallToolResponse, McpClient, McpToolArguments
 
@@ -78,19 +79,15 @@ def _search_on_synced_pod(
 
 
 class TestMcpToolCallGuardrail:
-    @pytest.mark.skip(
-        reason=(
-            "LIT-5052: the control call sends a `telemetry` argument that Datadog's "
-            "search_datadog_logs tool now rejects, so the clean-argument half of this test "
-            "errors with 'unexpected additional properties [\"telemetry\"]' and the guardrail "
-            "block it exists to prove is never exercised. `telemetry` was never a documented "
-            "Datadog parameter; the test relied on the server ignoring unknown properties. "
-            "Unskip once the argument is dropped."
-        )
-    )
     @pytest.mark.covers(
         "guardrail.litellm_content_filter.pre_mcp_call.blocks",
         exercised_on=["mcp_operations"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            route=Route.MCP,
+        )
     )
     def test_content_filter_blocks_banned_keyword_in_tool_args(
         self, client: McpClient, resources: ResourceManager
@@ -118,7 +115,6 @@ class TestMcpToolCallGuardrail:
                 "from": DD_SEARCH_FROM,
                 "to": "now",
                 "max_tokens": 500,
-                "telemetry": {"intent": "e2e mcp guardrail check"},
             }
             return client.call_tool(key, server_id=server_id, name=tool_name, arguments=arguments)
 

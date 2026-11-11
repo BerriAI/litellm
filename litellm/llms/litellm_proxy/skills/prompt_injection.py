@@ -7,11 +7,13 @@ and injection into the system prompt for non-Anthropic models.
 
 import posixpath
 import zipfile
+from collections.abc import Mapping
 from io import BytesIO
-from typing import Any, Final
+from typing import Final
 
 from litellm._logging import verbose_logger
-from litellm.proxy._types import LiteLLM_SkillsTable
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.models.skills import LiteLLM_SkillsTable
 
 
 class SkillPromptInjectionHandler:
@@ -183,7 +185,7 @@ class SkillPromptInjectionHandler:
         data["messages"] = messages
         return data
 
-    def create_execute_code_tool(self, skill_modules: list[str]) -> dict[str, Any]:
+    def create_execute_code_tool(self, skill_modules: list[str]) -> Mapping[str, object]:
         """
         Create the execute_code tool definition.
 
@@ -226,7 +228,7 @@ class SkillPromptInjectionHandler:
             },
         }
 
-    def convert_skill_to_tool(self, skill: LiteLLM_SkillsTable) -> dict[str, Any]:
+    def convert_skill_to_tool(self, skill: LiteLLM_SkillsTable) -> Mapping[str, object]:
         """
         Convert a LiteLLM skill to an OpenAI-style tool.
 
@@ -250,28 +252,31 @@ class SkillPromptInjectionHandler:
         if len(description) > max_desc_length:
             description = description[: max_desc_length - 3] + "..."
 
-        tool: Final[dict[str, Any]] = {
+        params: Final = (
+            as_str_mapping(skill.metadata.get("parameters"))
+            if skill.metadata and isinstance(skill.metadata, dict)
+            else None
+        )
+        parameters: Final[Mapping[str, object]] = (
+            params
+            if params and isinstance(params, dict)
+            else {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            }
+        )
+
+        return {
             "type": "function",
             "function": {
                 "name": func_name,
                 "description": description,
-                "parameters": {
-                    "type": "object",
-                    "properties": {},
-                    "required": [],
-                },
+                "parameters": parameters,
             },
         }
 
-        # If skill has metadata with parameter definitions, use them
-        if skill.metadata and isinstance(skill.metadata, dict):
-            params: Final = skill.metadata.get("parameters")
-            if params and isinstance(params, dict):
-                tool["function"]["parameters"] = params
-
-        return tool
-
-    def convert_skill_to_anthropic_tool(self, skill: LiteLLM_SkillsTable) -> dict[str, Any]:
+    def convert_skill_to_anthropic_tool(self, skill: LiteLLM_SkillsTable) -> Mapping[str, object]:
         """
         Convert a LiteLLM skill to an Anthropic-style tool (messages API format).
 
@@ -289,7 +294,7 @@ class SkillPromptInjectionHandler:
         if len(description) > max_desc_length:
             description = description[: max_desc_length - 3] + "..."
 
-        input_schema: dict[str, Any] = {
+        input_schema: dict[str, object] = {
             "type": "object",
             "properties": {},
             "required": [],
