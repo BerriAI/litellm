@@ -3,12 +3,18 @@ import uuid
 from collections.abc import Mapping, Sequence
 from itertools import filterfalse
 from types import MappingProxyType
-from typing import Any, Final, Protocol, cast
+from typing import Any, Final, Protocol, TypeVar, cast
 
 from pydantic import TypeAdapter
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_items, require_attributes
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    as_str_mapping,
+    attribute_items,
+    attribute_or_none,
+    require_attributes,
+)
 from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params, served_from_cache
 from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import parts_of
@@ -95,6 +101,19 @@ def _index_of_output_item_type(items: Sequence[object], item_type: str) -> int |
 
 class _CopiesWithUpdate(Protocol):
     def model_copy(self, *, update: Mapping[str, object]) -> object: ...
+
+
+_OutputItem = TypeVar("_OutputItem")  # rebind-ok: a TypeVar cannot be Final
+
+
+def _output_item_field(item: object, name: str) -> object:
+    mapping: Final = as_str_mapping(item)
+    return mapping.get(name) if mapping is not None else attribute_or_none(item, name)
+
+
+def _output_item_id(item: object) -> str | None:
+    item_id: Final = _output_item_field(item, "id")
+    return item_id if isinstance(item_id, str) else None
 
 
 def _output_items_with_id(items: tuple[object, ...], item_type: str, item_id: str | None) -> tuple[object, ...]:
@@ -228,6 +247,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._next_output_index: int = 0
         self._final_tool_events_queued: bool = False
         self._sequence_number: int = 0
+        # mutable-ok: filled as reasoning output_item.done events are emitted; response.completed repeats them
+        self._streamed_reasoning_summaries: dict[str, Sequence[object]] = {}
         self._cached_reasoning_item_id: str | None = None
         self._sent_reasoning_summary_text_done_event: bool = False
         self._sent_reasoning_summary_part_done_event: bool = False
@@ -1275,7 +1296,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                             "id": self._cached_reasoning_item_id,
                             "type": "reasoning",
                             "status": "in_progress",
-                            "summary": None,
+                            "summary": [],
                         }
                     ),
                 )
@@ -1331,7 +1352,34 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def _stamp_sequence_number(self, event: BaseLiteLLMOpenAIResponseObject) -> BaseLiteLLMOpenAIResponseObject:
         stamped: Final = event.model_copy(update={"sequence_number": self._sequence_number})
         self._sequence_number += 1
+        self._remember_streamed_reasoning_summary(stamped)
         return stamped
+
+    def _remember_streamed_reasoning_summary(self, event: object) -> None:
+        if getattr(event, "type", None) != ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
+            return
+        item: Final = attribute_or_none(event, "item")
+        item_id: Final = _output_item_id(item)
+        summary: Final = as_object_list(_output_item_field(item, "summary"))
+        if _output_item_field(item, "type") == "reasoning" and item_id is not None and summary is not None:
+            self._streamed_reasoning_summaries[item_id] = summary
+
+    def _output_with_streamed_reasoning_summaries(self, output: Sequence[_OutputItem]) -> list[_OutputItem]:
+        """
+        The ``response.completed`` snapshot is rebuilt by the non-streaming transformation, whose
+        reasoning items have no ``summary``. Carry over the summary the stream already sent in
+        ``response.output_item.done`` so the snapshot agrees with the streamed items.
+        """
+        return [self._with_streamed_reasoning_summary(item) for item in output]
+
+    def _with_streamed_reasoning_summary(self, item: _OutputItem) -> _OutputItem:
+        summary: Final = self._streamed_reasoning_summaries.get(_output_item_id(item) or "")
+        if summary is None or _output_item_field(item, "type") != "reasoning" or _output_item_field(item, "summary"):
+            return item
+        copied: Final = require_attributes(item, _CopiesWithUpdate, "model_copy").model_copy(
+            update={"summary": list(summary)}
+        )
+        return cast(_OutputItem, copied)
 
     async def __anext__(
         self,
@@ -1678,7 +1726,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             if self._cached_response_id:
                 responses_api_response.id = self._cached_response_id
 
-            responses_api_response.output = list(self._output_with_streamed_item_ids(responses_api_response))
+            responses_api_response.output = self._output_with_streamed_reasoning_summaries(
+                self._output_with_streamed_item_ids(responses_api_response)
+            )
 
             # Encode the response ID to match non-streaming behavior
             encoded_response: Final = self._with_encoded_response_id(responses_api_response)
