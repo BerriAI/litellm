@@ -4133,7 +4133,11 @@ class Router:
         kwargs.setdefault(metadata_variable_name, {}).update(metadata_defaults)
 
     def _handle_clientside_credential(
-        self, deployment: dict, kwargs: dict, function_name: str | None = None
+        self,
+        deployment: dict,
+        kwargs: dict,
+        function_name: str | None = None,
+        identity_excluded_params: frozenset[str] = frozenset(),
     ) -> Deployment:
         """
         Build a per-request Deployment carrying the caller-supplied api_key/api_base,
@@ -4155,7 +4159,10 @@ class Router:
             function_name=function_name,
         )
         model_group: Final = kwargs.get(metadata_variable_name, {}).get("model_group")
-        _model_id: Final = self.generate_model_id(model_group=model_group, litellm_params=dynamic_litellm_params)
+        _model_id: Final = self.generate_model_id(
+            model_group=model_group,
+            litellm_params={**dynamic_litellm_params, **dict.fromkeys(identity_excluded_params)},
+        )
         original_model_id: Final = model_info.get("id")
         model_info["id"] = _model_id
         model_info["original_model_id"] = original_model_id
@@ -4243,6 +4250,7 @@ class Router:
                     **({"api_key": forwarded_authorization} if forwarded_authorization is not None else {}),
                 },
                 function_name=function_name,
+                identity_excluded_params=frozenset({"api_key"}) if forwarded_authorization is not None else frozenset(),
             )
             model_info = deployment_pydantic_obj.model_info.model_dump()
             deployment_litellm_model_name = deployment_pydantic_obj.litellm_params.model
