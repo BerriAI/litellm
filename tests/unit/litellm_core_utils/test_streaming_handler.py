@@ -1482,10 +1482,12 @@ async def test_a_gemini_stream_that_fails_to_open_raises_the_mapped_error_from_f
     status_code: int,
     expected_error: type[litellm.BadRequestError | litellm.RateLimitError | litellm.ServiceUnavailableError],
 ) -> None:
-    stream: Final = _gemini_stream_opened_by(_gemini_stream_error(status_code, sync_mode), sync_mode, logging_obj)
+    provider_error: Final = _gemini_stream_error(status_code, sync_mode)
+    stream: Final = _gemini_stream_opened_by(provider_error, sync_mode, logging_obj)
     with pytest.raises(expected_error, match="upstream said no") as excinfo:
         await _fetch(stream, sync_mode)
     assert (excinfo.value.status_code, excinfo.value.llm_provider) == (status_code, "gemini")
+    assert excinfo.value.__cause__ is provider_error
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -1499,6 +1501,7 @@ async def test_a_stream_open_error_that_is_already_mapped_is_raised_as_is(
     with pytest.raises(litellm.BadRequestError) as excinfo:
         await _fetch(stream, sync_mode)
     assert excinfo.value is already_mapped
+    assert excinfo.value.__cause__ is None
 
 
 async def test_a_cancelled_stream_open_stays_cancelled(logging_obj: Logging) -> None:
@@ -2207,37 +2210,32 @@ async def test_in_body_stream_error_500_wraps_for_midstream_fallback(
     assert "internal engine crash" in str(excinfo.value)
 
 
-@pytest.mark.asyncio
-async def test_async_streaming_read_timeout_triggers_midstream_fallback(
-    logging_obj: Logging,
-):
-    """A mid-stream httpx.ReadTimeout must wrap into MidStreamFallbackError so
-    the Router's FallbackStreamWrapper can switch to a fallback model.
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_a_read_timeout_while_opening_the_stream_triggers_midstream_fallback(
+    logging_obj: Logging, sync_mode: bool
+) -> None:
+    read_timeout: Final = httpx.ReadTimeout("Timeout on reading data from socket")
 
-    Previously __anext__ caught httpx.TimeoutException and re-raised it raw,
-    which bypassed _handle_stream_fallback_error and prevented stream_timeout
-    from triggering fallbacks the way connection-phase timeout does.
-    """
-    import httpx
+    def make_sync_call(client: object) -> NoReturn:
+        raise read_timeout
 
-    from litellm.exceptions import MidStreamFallbackError
+    async def make_call(client: object) -> NoReturn:
+        raise read_timeout
 
-    async def _raise_read_timeout(**kwargs):
-        raise httpx.ReadTimeout("Timeout on reading data from socket")
-
-    response = CustomStreamWrapper(
+    response: Final = CustomStreamWrapper(
         completion_stream=None,
         model="gpt-4",
         logging_obj=logging_obj,
         custom_llm_provider="openai",
-        make_call=_raise_read_timeout,
+        make_call=make_sync_call if sync_mode else make_call,
     )
 
     with pytest.raises(MidStreamFallbackError) as excinfo:
-        await response.__anext__()
+        next(response) if sync_mode else await response.__anext__()
 
     assert excinfo.value.is_pre_first_chunk is True
     assert isinstance(excinfo.value.original_exception, litellm.Timeout)
+    assert excinfo.value.original_exception.__cause__ is read_timeout
 
 
 def _raw_read_timeout() -> NoReturn:

@@ -2532,7 +2532,7 @@ class CustomStreamWrapper:
             try:
                 self.completion_stream = self.make_call(client=litellm.module_level_client)
             except Exception as e:
-                raise self._map_stream_exception(e)
+                self._raise_open_error(e)
             self._stream_iter = self.completion_stream.__iter__()
 
         return self.completion_stream
@@ -2543,7 +2543,7 @@ class CustomStreamWrapper:
             try:
                 self.completion_stream = await self.make_call(client=litellm.module_level_aclient)
             except Exception as e:
-                raise self._map_stream_exception(e)
+                self._raise_open_error(e)
             self._stream_iter = self.completion_stream.__aiter__()
 
         return self.completion_stream
@@ -2864,6 +2864,13 @@ class CustomStreamWrapper:
         self.response_uptil_now += content if isinstance(content, str) else ""
         if not self._emitted_disqualifying_content and self._delta_disqualifies_continuation(delta):
             self._emitted_disqualifying_content = True
+
+    def _raise_open_error(self, error: Exception) -> NoReturn:
+        try:
+            already_mapped: Final = self._map_stream_exception(error)
+        except Exception as mapped:
+            raise mapped from error
+        raise already_mapped
 
     def _map_stream_exception(self, original_exception: Exception) -> Exception:
         return exception_type(
