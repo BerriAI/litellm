@@ -400,7 +400,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         return optional_params
 
     def map_extra_body_params(
-        self, optional_params: Mapping[str, object], model: str
+        self, optional_params: Mapping[str, object], model: str, drop_params: object = None
     ) -> dict:  # mutable-ok: http handler pops extra_body off the returned dict
         extra_body: Final = optional_params.get("extra_body")
         if not isinstance(extra_body, dict):
@@ -415,7 +415,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
             )
         promoted: Final = (
             *self._translate_truncate_prompt_tokens(extra_body, optional_params),
-            *self._translate_chat_template_kwargs(extra_body, optional_params, model),
+            *self._translate_chat_template_kwargs(extra_body, optional_params, model, drop_params),
             *self.translate_guided_params(extra_body, optional_params),
         )
         if "response_format" in extra_body and "response_format" in optional_params:
@@ -449,7 +449,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         return (("prompt_truncate_len", extra_body["truncate_prompt_tokens"]),)
 
     def _translate_chat_template_kwargs(
-        self, extra_body: Mapping[str, object], optional_params: Mapping[str, object], model: str
+        self, extra_body: Mapping[str, object], optional_params: Mapping[str, object], model: str, drop_params: object
     ) -> tuple[tuple[str, object], ...]:
         chat_template_kwargs: Final = extra_body.get("chat_template_kwargs")
         if chat_template_kwargs is None:
@@ -475,6 +475,15 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
             return ()
         effort: Final = effort_from_chat_template_kwargs(chat_template_kwargs)
         if effort is None:
+            return ()
+        if effort == "none" and drops_unsupported_params(drop_params) and self.always_reasons(model):
+            warn_dropped_reasoning(
+                "chat_template_kwargs",
+                OPAQUE_VALUE.validate_python(chat_template_kwargs),
+                model,
+                ALWAYS_REASONS_REASON,
+                drop_params_gated=True,
+            )
             return ()
         if not supports_reasoning(model=model, custom_llm_provider="fireworks_ai"):
             warn_dropped_effort_kwargs(OPAQUE_VALUE.validate_python(chat_template_kwargs), effort, model)

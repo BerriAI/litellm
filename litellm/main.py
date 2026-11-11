@@ -1998,7 +1998,9 @@ def _complete_fireworks_ai(
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
     optional_params: Final = (
-        provider_config.map_extra_body_params(optional_params=ctx.optional_params, model=model)
+        provider_config.map_extra_body_params(
+            optional_params=ctx.optional_params, model=model, drop_params=litellm_params.get("drop_params")
+        )
         if isinstance(provider_config, litellm.FireworksAIConfig)
         else ctx.optional_params
     )

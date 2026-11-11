@@ -1,6 +1,8 @@
 import copy
+import itertools
 import json
 import logging
+import re
 from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import Final
@@ -459,6 +461,64 @@ def test_global_drop_params_drops_reasoning_off_for_models_that_cannot_stop_reas
     monkeypatch.setattr(litellm, "drop_params", True)
     config: Final = FireworksAIConfig()
     assert config.map_openai_params({"reasoning_effort": "none"}, {}, _ALWAYS_REASONS, drop_params=False) == {}
+
+
+@pytest.mark.parametrize("thinking_off", ({"enable_thinking": False}, {"thinking": False}))
+def test_drop_params_drops_chat_template_kwargs_thinking_off_only_for_models_that_cannot_stop_reasoning(
+    thinking_off: Mapping[str, object],
+) -> None:
+    config: Final = FireworksAIConfig()
+
+    def mapped(model: str, drop_params: bool) -> dict:
+        return config.map_extra_body_params(
+            {"extra_body": {"chat_template_kwargs": dict(thinking_off)}}, model, drop_params=drop_params
+        )
+
+    assert mapped(_ALWAYS_REASONS, drop_params=True) == {}
+    assert mapped(_ALWAYS_REASONS, drop_params=False) == {"reasoning_effort": "none"}
+    assert mapped(_CAN_STOP_REASONING, drop_params=True) == {"reasoning_effort": "none"}
+
+
+def test_drop_params_keeps_chat_template_kwargs_reasoning_on_for_models_that_cannot_stop_reasoning() -> None:
+    config: Final = FireworksAIConfig()
+    assert config.map_extra_body_params(
+        {"extra_body": {"chat_template_kwargs": {"low_effort": True}}}, _ALWAYS_REASONS, drop_params=True
+    ) == {"reasoning_effort": "low"}
+
+
+_REGIONAL_OR_SPOT_SUFFIX: Final = re.compile(r"-(us|spot)$")
+
+
+def _fireworks_short_name(name: str) -> str:
+    return (
+        name.removeprefix("fireworks_ai/")
+        .removeprefix("accounts/fireworks/models/")
+        .removeprefix("accounts/fireworks/routers/")
+    )
+
+
+def _reasoning_flags(row: Mapping[str, object]) -> tuple[object, object]:
+    return (row.get("supports_reasoning"), row.get("supports_none_reasoning_effort"))
+
+
+def test_regional_and_spot_rows_reason_like_the_model_they_serve() -> None:
+    fireworks_rows: Final = MappingProxyType(
+        {name: row for name, row in litellm.model_cost.items() if row.get("litellm_provider") == "fireworks_ai"}
+    )
+    short_names: Final = MappingProxyType({name: _fireworks_short_name(name) for name in fireworks_rows})
+    variant_and_base: Final = tuple(
+        (variant, base)
+        for variant, base in itertools.product(fireworks_rows, repeat=2)
+        if _REGIONAL_OR_SPOT_SUFFIX.sub("", short_names[variant]) == short_names[base] != short_names[variant]
+    )
+    disagreeing: Final = tuple(
+        (variant, base)
+        for variant, base in variant_and_base
+        if _reasoning_flags(fireworks_rows[variant]) != _reasoning_flags(fireworks_rows[base])
+    )
+
+    assert variant_and_base
+    assert disagreeing == ()
 
 
 def test_get_provider_info_omits_false_supports_reasoning(monkeypatch):
