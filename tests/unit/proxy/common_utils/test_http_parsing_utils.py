@@ -423,6 +423,37 @@ async def test_form_data_with_invalid_json_metadata() -> None:
     assert exc_info.value.param == "metadata"
 
 
+def _form_request(fields: Mapping[str, str]) -> MagicMock:
+    request: Final = MagicMock()
+    request.form = AsyncMock(return_value=FormData(fields))
+    request.headers = {"content-type": "multipart/form-data"}
+    request.scope = {}
+    request.state._cached_headers = None
+    return request
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "raw", "expected"),
+    [
+        ("fallbacks", '["backup"]', ["backup"]),
+        ("context_window_fallbacks", '[{"primary": ["backup"]}]', [{"primary": ["backup"]}]),
+        ("content_policy_fallbacks", '[{"primary": ["backup"]}]', [{"primary": ["backup"]}]),
+    ],
+)
+async def test_form_data_fallback_fields_are_decoded_to_lists(field: str, raw: str, expected: list[object]) -> None:
+    result: Final = await read_request_body(_form_request({"model": "primary", field: raw}))
+    assert result == {"model": "primary", field: expected}, result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw", ['"backup"', "backup", '{"primary": ["backup"]}'])
+async def test_form_data_fallbacks_that_are_not_a_json_array_are_rejected(raw: str) -> None:
+    with pytest.raises(ProxyException) as exc_info:
+        await read_request_body(_form_request({"model": "primary", "fallbacks": raw}))
+    assert (exc_info.value.code, exc_info.value.param) == ("400", "fallbacks"), exc_info.value.message
+
+
 @pytest.mark.asyncio
 async def test_form_data_without_metadata():
     """

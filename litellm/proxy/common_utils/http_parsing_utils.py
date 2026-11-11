@@ -1,6 +1,6 @@
 import json
 import re
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Mapping, Sequence
 from types import MappingProxyType, UnionType
 from typing import Annotated, Any, Final, Literal, Protocol, Union, get_args, get_origin
 
@@ -33,10 +33,14 @@ _FORM_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-www-form-
 # Binary bodies (e.g. OTLP trace exports on POST /v1/traces) are not JSON: arbitrary bytes used to
 # hit the JSON surrogate-repair path and fail auth with a 400. JSON under these types still parses.
 _BINARY_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-protobuf", "application/protobuf"})
+_FORM_FALLBACK_FIELDS: Final[frozenset[str]] = frozenset(
+    {"fallbacks", "context_window_fallbacks", "content_policy_fallbacks"}
+)
 
 _ANNOTATION_QUALIFIERS: Final[frozenset[object]] = frozenset({Annotated, NotRequired, ReadOnly, Required})
 _DECODED_JSON: Final = TypeAdapter(object)
 _JSON_REQUEST_BODY: Final = TypeAdapter(Mapping[str, object])
+_FORM_FALLBACK_LIST: Final = TypeAdapter(list[object])
 
 
 class _ReadableUpload(Protocol):
@@ -234,6 +238,28 @@ def _parse_form_metadata(raw_metadata: str) -> object:
     return parsed
 
 
+def _parse_form_fallbacks(field: str, raw_fallbacks: str) -> Sequence[object]:
+    try:
+        return _FORM_FALLBACK_LIST.validate_json(raw_fallbacks)
+    except ValidationError as e:
+        raise ProxyException(
+            message=f"Invalid form payload: {field} must be a JSON array",
+            type="invalid_request_error",
+            param=field,
+            code=status.HTTP_400_BAD_REQUEST,
+        ) from e
+
+
+def _parse_form_field(field: str, value: object) -> object:
+    if not isinstance(value, str):
+        return value
+    if field == "metadata":
+        return _parse_form_metadata(value)
+    if field in _FORM_FALLBACK_FIELDS:
+        return _parse_form_fallbacks(field, value)
+    return value
+
+
 def _reraise_request_size_error(error: Exception) -> None:
     if isinstance(error, HTTPException) and error.status_code == status.HTTP_413_CONTENT_TOO_LARGE:
         raise error
@@ -293,12 +319,7 @@ async def read_request_body(request: Request | None) -> dict:
             parsed_body = _parse_binary_body(binary_body)
         elif _is_form_content_type(content_type):
             form_body: Final = dict(await _read_form_data(request))
-            raw_metadata: Final = form_body.get("metadata")
-            parsed_body = (
-                {**form_body, "metadata": _parse_form_metadata(raw_metadata)}
-                if isinstance(raw_metadata, str)
-                else form_body
-            )
+            parsed_body = {field: _parse_form_field(field, value) for field, value in form_body.items()}
         else:
             # Read the request body
             body: Final = await request.body()
