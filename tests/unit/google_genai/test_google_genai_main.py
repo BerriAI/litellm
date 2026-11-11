@@ -471,6 +471,8 @@ async def test_custom_native_content_preserves_images_and_config(
         tools=tools,
         safetySettings=[],
         systemInstruction={"parts": [{"text": "draw"}]},
+        secret_fields={"raw_headers": {"authorization": "Bearer sk-caller-key"}},
+        metadata={"user_api_key_alias": "caller"},
     )
     result: Final = await litellm.agenerate_content(**request) if is_async else litellm.generate_content(**request)
     assert result is native_content_handler.response
@@ -483,6 +485,8 @@ async def test_custom_native_content_preserves_images_and_config(
     assert isinstance(optional_params, dict)
     assert optional_params["safetySettings"] == []
     assert optional_params["systemInstruction"] == request["systemInstruction"]
+    assert "sk-caller-key" not in str(optional_params)
+    assert "metadata" not in optional_params
     params: Final = received["litellm_params"]
     assert isinstance(params, litellm.types.router.GenericLiteLLMParams)
     assert params.custom_llm_provider == "native_image_test"
@@ -707,15 +711,20 @@ class ContentSuccessRecorder(CustomLogger):
         super().__init__()
         self.sync_calls: tuple[str, ...] = ()
         self.async_calls: tuple[str, ...] = ()
+        self.call_ids: tuple[str, ...] = ()
         self.sync_logged = Event()
         self.async_logged = asyncio.Event()
 
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
-        self.sync_calls = (*self.sync_calls, kwargs["call_type"])
+    def log_success_event(self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object) -> None:
+        self.sync_calls = (*self.sync_calls, str(kwargs["call_type"]))
+        self.call_ids = (*self.call_ids, str(kwargs["litellm_call_id"]))
         self.sync_logged.set()
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        self.async_calls = (*self.async_calls, kwargs["call_type"])
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.async_calls = (*self.async_calls, str(kwargs["call_type"]))
+        self.call_ids = (*self.call_ids, str(kwargs["litellm_call_id"]))
         self.async_logged.set()
 
 
@@ -784,3 +793,66 @@ async def test_custom_content_adapter_delivers_per_request_success_callbacks_onc
         assert request_recorder.sync_calls == ("completion",)
         assert global_recorder.sync_calls == ("completion",)
     assert result["candidates"][0]["content"]["parts"] == [{"text": "adapter result"}]
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_custom_content_stream_delivers_per_request_success_callbacks_once(
+    native_content_handler: NativeContentLLM, monkeypatch: pytest.MonkeyPatch, is_async: bool
+) -> None:
+    monkeypatch.setattr(
+        litellm, "custom_provider_map", [{"provider": "native_image_test", "custom_handler": StreamingContentLLM()}]
+    )
+    request_recorder: Final = ContentSuccessRecorder()
+    callback: Final = request_recorder.async_log_success_event if is_async else request_recorder.log_success_event
+    request: Final = dict(model="native_image_test/chat-model", contents=[], success_callback=[callback])
+    stream: Final = await agenerate_content_stream(**request) if is_async else generate_content_stream(**request)
+    chunks: Final = [chunk async for chunk in stream]
+    assert any(b"stream adapter" in chunk for chunk in chunks)
+    if is_async:
+        await asyncio.wait_for(request_recorder.async_logged.wait(), timeout=5)
+        await GLOBAL_LOGGING_WORKER.flush()
+        assert request_recorder.async_calls == ("acompletion",)
+    else:
+        assert await asyncio.to_thread(request_recorder.sync_logged.wait, 5)
+        assert request_recorder.sync_calls == ("completion",)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_custom_content_adapter_logs_under_the_callers_call_id(
+    native_content_handler: NativeContentLLM, monkeypatch: pytest.MonkeyPatch, is_async: bool, stream: bool
+) -> None:
+    monkeypatch.setattr(
+        litellm, "custom_provider_map", [{"provider": "native_image_test", "custom_handler": StreamingContentLLM()}]
+    )
+    recorder: Final = ContentSuccessRecorder()
+    callback: Final = recorder.async_log_success_event if is_async else recorder.log_success_event
+    request: Final = dict(
+        model="native_image_test/chat-model", contents=[], success_callback=[callback], litellm_call_id="client-call"
+    )
+    if stream:
+        stream_response: Final = (
+            await agenerate_content_stream(**request) if is_async else generate_content_stream(**request)
+        )
+        _ = [chunk async for chunk in stream_response]
+    else:
+        _ = await litellm.agenerate_content(**request) if is_async else litellm.generate_content(**request)
+    if is_async:
+        await asyncio.wait_for(recorder.async_logged.wait(), timeout=5)
+        await GLOBAL_LOGGING_WORKER.flush()
+    else:
+        assert await asyncio.to_thread(recorder.sync_logged.wait, 5)
+    assert recorder.call_ids == ("client-call",)
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_custom_content_stream_without_stream_hook_fails_before_streaming(
+    native_content_handler: NativeContentLLM, is_async: bool
+) -> None:
+    request: Final = dict(model="native_image_test/image-model", contents=[])
+    with pytest.raises(litellm.InternalServerError, match="astreaming" if is_async else "streaming"):
+        _ = await agenerate_content_stream(**request) if is_async else generate_content_stream(**request)
+    assert native_content_handler.requests == ()
