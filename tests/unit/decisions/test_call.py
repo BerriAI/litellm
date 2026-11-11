@@ -209,6 +209,10 @@ async def test_gemini_accepts_remote_images_within_the_request_budget(
         {"type": "image", "data": base64.b64encode(image).decode(), "mime_type": "image/png"},
     ]
     assert image_route.call_count == 1
+    inline_image: Final = "data:image/png;base64," + base64.b64encode(b"x" * (20 * 1024 * 1024 - 4)).decode()
+    with pytest.raises(litellm.ImageFetchError, match="remaining request budget"):
+        await _call_gemini(sync, (inline_image, "https://images.example/small.png"))
+    assert image_route.call_count == 1
 
 
 @pytest.fixture

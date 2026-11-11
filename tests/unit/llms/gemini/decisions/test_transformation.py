@@ -320,7 +320,8 @@ def test_message_captions_keep_their_position_next_to_each_image() -> None:
                             {"type": "input_text", "text": "After"},
                             {"type": "input_image", "image_url": "data:image/png;base64,Yg=="},
                         ],
-                    }
+                    },
+                    {"role": "user", "content": "Done"},
                 ],
                 "questions": [{"type": "predicate", "instructions": "Did it change?"}],
             }
@@ -333,4 +334,5 @@ def test_message_captions_keep_their_position_next_to_each_image() -> None:
         {"type": "image", "data": "YQ==", "mime_type": "image/png"},
         {"type": "text", "text": "After"},
         {"type": "image", "data": "Yg==", "mime_type": "image/png"},
+        {"type": "text", "text": "Done"},
     )
