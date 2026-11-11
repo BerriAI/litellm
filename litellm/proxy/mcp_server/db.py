@@ -564,7 +564,16 @@ def encrypt_credentials(credentials: MCPCredentials, encryption_key: str | None)
             new_encryption_key=encryption_key,
         )
     # aws_region_name and aws_service_name are NOT secrets — stored as-is
-    return credentials
+    headers: Final = credentials.get("headers")
+    if headers is None:
+        return credentials
+    return {
+        **credentials,
+        "headers": {
+            name: encrypt_value_helper(value=value, new_encryption_key=encryption_key)
+            for name, value in headers.items()
+        },
+    }
 
 
 def _credentials_blob_to_mutable_dict(blob: str | Mapping[str, object]) -> dict[str, object]:
@@ -844,7 +853,22 @@ def decrypt_credentials(
                 exception_type="debug",
                 return_original_value=True,
             )
-    return credentials
+    headers: Final = credentials.get("headers")
+    if not isinstance(headers, dict):
+        return credentials
+    return {
+        **credentials,
+        "headers": {
+            name: decrypted
+            for name, value in headers.items()
+            if (
+                decrypted := decrypt_value_helper(
+                    value=value, key="headers", exception_type="debug", return_original_value=True
+                )
+            )
+            is not None
+        },
+    }
 
 
 def _readable_mcp_servers(

@@ -10,6 +10,7 @@ keeps a plain-base64 fallback on read so existing rows continue to work.
 
 import base64
 import json
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final
@@ -26,6 +27,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_secret_map,
     encrypt_value_helper,
 )
+from litellm.proxy.management_endpoints.mcp_management_endpoints import _redact_mcp_credentials
 from litellm.proxy.mcp_server.db import (
     _decode_user_credential,
     _prepare_mcp_server_data,
@@ -478,6 +480,51 @@ def test_client_private_key_encrypted_at_rest():
     assert decrypted["id_jag_resource_client_secret"] == resource_client_secret
 
 
+_DATADOG_HEADERS: Final = {"DD-API-KEY": "dd-api-secret", "DD-APPLICATION-KEY": "dd-app-secret"}
+
+
+def test_credential_header_values_are_encrypted_and_round_trip() -> None:
+    encrypted: Final = encrypt_credentials({"headers": dict(_DATADOG_HEADERS)}, encryption_key=None)
+    assert encrypted["headers"].keys() == _DATADOG_HEADERS.keys()
+    assert all(secret not in json.dumps(encrypted) for secret in _DATADOG_HEADERS.values())
+    assert decrypt_credentials(dict(encrypted))["headers"] == _DATADOG_HEADERS
+
+
+def test_admin_read_drops_credential_headers_and_keeps_scopes() -> None:
+    server: Final = LiteLLM_MCPServerTable(
+        server_id="srv",
+        transport=MCPTransport.http,
+        credentials={"headers": dict(_DATADOG_HEADERS), "scopes": ["read"]},
+    )
+    assert _redact_mcp_credentials(server).credentials == {"scopes": ["read"]}
+
+
+@pytest.mark.asyncio
+async def test_credential_headers_are_stored_encrypted_kept_on_unrelated_update_and_replaced_on_new_headers() -> None:
+    table: Final = _MapTable()
+    prisma: Final = SimpleNamespace(
+        db=SimpleNamespace(litellm_mcpservertable=table, litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=None)))
+    )
+    create: Final = NewMCPServerRequest.model_validate(
+        {"server_id": "srv-dd", "transport": "http", "url": "https://up.example.com/mcp", "credentials": {"headers": dict(_DATADOG_HEADERS)}}
+    )
+    await create_mcp_server(prisma, create, touched_by="test")
+    stored: Final = table.rows["srv-dd"]["credentials"]
+    assert all(secret not in stored for secret in _DATADOG_HEADERS.values())
+    assert decrypt_credentials(json.loads(stored))["headers"] == _DATADOG_HEADERS
+
+    await update_mcp_server(prisma, UpdateMCPServerRequest(server_id="srv-dd", description="renamed"), touched_by="test")
+    assert table.rows["srv-dd"]["credentials"] == stored
+
+    replacement: Final = {"DD-API-KEY": "rotated-secret"}
+    await update_mcp_server(
+        prisma,
+        UpdateMCPServerRequest.model_validate({"server_id": "srv-dd", "credentials": {"headers": replacement}}),
+        touched_by="test",
+    )
+    assert decrypt_credentials(json.loads(table.rows["srv-dd"]["credentials"]))["headers"] == replacement
+
+
 @pytest.fixture(params=["xsalsa20-poly1305", "aes-256-gcm"])
 def map_algorithm(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> str:
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"encryption_algorithm": request.param})
@@ -505,6 +552,10 @@ class _MapTable:
 
     async def update(self, *, where: dict[str, str], data: dict[str, object]) -> PrismaMCPServer:
         return await self.create(data={**self.rows[where["server_id"]], **data})
+
+    async def find_unique(self, *, where: Mapping[str, str]) -> PrismaMCPServer | None:
+        row: Final = self.rows.get(where["server_id"])
+        return None if row is None else _prisma_map_row(row, self.quoted)
 
     async def find_many(self, where: object = None) -> list[PrismaMCPServer]:
         return [_prisma_map_row(row, self.quoted) for row in self.rows.values()]
