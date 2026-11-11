@@ -647,6 +647,17 @@ def _iter_user_config_litellm_params(user_config: object) -> Iterator[Mapping[st
             yield params
 
 
+def _user_config_search_tool_params(user_config: object) -> tuple[Mapping[str, object], ...]:
+    config: Final = _coerce_metadata_to_dict(user_config)
+    if config is None:
+        return ()
+    return tuple(
+        params
+        for entry in _mappings_in(config.get("search_tools"))
+        if (params := _coerce_metadata_to_dict(entry.get("litellm_params"))) is not None
+    )
+
+
 def iter_request_fallback_targets(request_body: Mapping[str, object]) -> Iterator[str | Mapping[str, object]]:
     for value in _iter_fallback_field_values(request_body):
         yield from _iter_fallback_targets(value, 0)
@@ -806,7 +817,10 @@ def is_request_body_safe(
                 banned_params=_BANNED_METADATA_PARAMS,
                 rejects_secret_references=False,
             )
-    for user_config_params in _iter_user_config_litellm_params(request_body.get("user_config")):
+    for user_config_params in (
+        *_iter_user_config_litellm_params(request_body.get("user_config")),
+        *_user_config_search_tool_params(request_body.get("user_config")),
+    ):
         _reject_user_config_secret_references(user_config_params)
     return True
 

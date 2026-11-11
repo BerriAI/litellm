@@ -409,11 +409,13 @@ _USER_CONFIG_SECRET_REFERENCE_PARAMS: Final = (
 def _user_config(slot: str, litellm_params: Mapping[str, object]) -> Mapping[str, object]:
     if slot == "default_litellm_params":
         return {"default_litellm_params": dict(litellm_params)}
+    if slot == "search_tools":
+        return {"search_tools": [{"search_tool_name": "caller-search", "litellm_params": dict(litellm_params)}]}
     return {"model_list": [{"model_name": "caller-model", "litellm_params": dict(litellm_params)}]}
 
 
 @pytest.mark.parametrize("litellm_params", _USER_CONFIG_SECRET_REFERENCE_PARAMS)
-@pytest.mark.parametrize("slot", ("model_list", "default_litellm_params"))
+@pytest.mark.parametrize("slot", ("model_list", "default_litellm_params", "search_tools"))
 def test_user_config_secret_references_are_rejected_despite_client_side_opt_in(
     litellm_params: Mapping[str, object], slot: str
 ) -> None:
