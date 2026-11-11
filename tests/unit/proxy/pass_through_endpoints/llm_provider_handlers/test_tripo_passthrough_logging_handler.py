@@ -1,3 +1,4 @@
+import asyncio
 from decimal import Decimal
 from typing import Final
 
@@ -11,6 +12,10 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.tripo_passthroug
     tripo_task_cost,
 )
 from litellm.types.passthrough_endpoints.tripo import TripoTaskData, tripo_region_from_url
+
+
+async def _no_wait(_: float) -> None:
+    return None
 
 
 def test_tripo_model_info_uses_3d_generation_mode() -> None:
@@ -28,7 +33,8 @@ def test_submitted_tripo_task_requires_a_task_id() -> None:
     assert submitted_tripo_task({"code": 0, "data": {"task_id": "task-1", "status": "running"}}) is not None
 
 
-def test_poll_tripo_task_uses_the_submission_domain_and_stops_on_terminal_status() -> None:
+@pytest.mark.asyncio
+async def test_poll_tripo_task_uses_the_submission_domain_and_stops_on_terminal_status() -> None:
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -42,15 +48,15 @@ def test_poll_tripo_task_uses_the_submission_domain_and_stops_on_terminal_status
             request=request,
         )
 
-    def client_factory() -> httpx.Client:
-        return httpx.Client(transport=httpx.MockTransport(handler))
+    def client_factory() -> httpx.AsyncClient:
+        return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
-    task = poll_tripo_task(
+    task = await poll_tripo_task(
         httpx.URL("https://openapi.tripo3d.com/v3/generation/text-to-model"),
         "Bearer cn-key",
         "task/1",
         client_factory=client_factory,
-        sleep=lambda _: None,
+        sleep=_no_wait,
     )
 
     assert task is not None
@@ -61,7 +67,6 @@ def test_poll_tripo_task_uses_the_submission_domain_and_stops_on_terminal_status
 
 @pytest.mark.asyncio
 async def test_completed_task_credit_cost_reaches_success_callbacks() -> None:
-    import asyncio
     from datetime import datetime
 
     from pydantic import TypeAdapter
@@ -87,27 +92,46 @@ async def test_completed_task_credit_cost_reaches_success_callbacks() -> None:
     def upstream(request: httpx.Request) -> httpx.Response:
         assert not observed.done()
         status, credits = next(states)
-        return httpx.Response(200, json={
-            "code": 0, "data": {"task_id": "completed-task", "status": status, "credits_consumed": credits},
-        }, request=request)
+        return httpx.Response(
+            200,
+            json={
+                "code": 0,
+                "data": {"task_id": "completed-task", "status": status, "credits_consumed": credits},
+            },
+            request=request,
+        )
 
-    def client_factory() -> httpx.Client:
-        return httpx.Client(transport=httpx.MockTransport(upstream))
+    def client_factory() -> httpx.AsyncClient:
+        return httpx.AsyncClient(transport=httpx.MockTransport(upstream))
 
     start: Final = datetime(2026, 1, 1)
     logging: Final = Logging(
-        model="tripo/unlisted-test-model", messages=[], stream=False, call_type="pass_through_endpoint",
-        start_time=start, litellm_call_id="tripo-credit-test", function_id="tripo-credit-test",
+        model="tripo/unlisted-test-model",
+        messages=[],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=start,
+        litellm_call_id="tripo-credit-test",
+        function_id="tripo-credit-test",
         dynamic_async_success_callbacks=[Observer()],
     )
-    handler: Final = TripoPassthroughLoggingHandler(client_factory=client_factory, sleep=lambda _: None)
-    submission: Final = httpx.Response(200, request=httpx.Request(
-        "POST", "https://openapi.tripo3d.com/v3/generation/text-to-model",
-        headers={"Authorization": "Bearer upstream-key"},
-    ))
+    handler: Final = TripoPassthroughLoggingHandler(client_factory=client_factory, sleep=_no_wait)
+    submission: Final = httpx.Response(
+        200,
+        request=httpx.Request(
+            "POST",
+            "https://openapi.tripo3d.com/v3/generation/text-to-model",
+            headers={"Authorization": "Bearer upstream-key"},
+        ),
+    )
     assert handler.schedule(
-        submission, {"code": 0, "data": {"task_id": "completed-task"}}, logging, start,
-        {"model": "tripo/unlisted-test-model"}, PassThroughEndpointLogging().handle_logging, {},
+        submission,
+        {"code": 0, "data": {"task_id": "completed-task"}},
+        logging,
+        start,
+        {"model": "tripo/unlisted-test-model"},
+        PassThroughEndpointLogging().handle_logging,
+        {},
     )
     await asyncio.gather(*tuple(handler.pending))
     assert observed.done()
@@ -115,27 +139,120 @@ async def test_completed_task_credit_cost_reaches_success_callbacks() -> None:
     assert payload["response_cost"] == 0.2
     assert payload["custom_llm_provider"] == "tripo"
     assert logging.model_call_details["response_cost"] == 0.2
-    status_response: Final = httpx.Response(200, request=httpx.Request(
-        "GET", "https://openapi.tripo3d.com/v3/tasks/completed-task",
-    ))
+    status_response: Final = httpx.Response(
+        200,
+        request=httpx.Request(
+            "GET",
+            "https://openapi.tripo3d.com/v3/tasks/completed-task",
+        ),
+    )
     assert not handler.schedule(
         status_response,
         {"code": 0, "data": {"task_id": "completed-task", "status": "success", "credits_consumed": 20}},
-        logging, start, {}, PassThroughEndpointLogging().handle_logging, {},
+        logging,
+        start,
+        {},
+        PassThroughEndpointLogging().handle_logging,
+        {},
     )
     assert not handler.pending
 
 
-def test_running_task_with_credits_does_not_produce_a_final_cost() -> None:
+@pytest.mark.asyncio
+async def test_running_task_with_credits_does_not_produce_a_final_cost() -> None:
     def upstream(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={
-            "code": 0, "data": {"task_id": "running-task", "status": "running", "credits_consumed": 20},
-        }, request=request)
+        return httpx.Response(
+            200,
+            json={
+                "code": 0,
+                "data": {"task_id": "running-task", "status": "running", "credits_consumed": 20},
+            },
+            request=request,
+        )
 
-    task: Final = poll_tripo_task(
-        httpx.URL("https://openapi.tripo3d.com/v3/generation/text-to-model"), "Bearer test-key", "running-task",
-        client_factory=lambda: httpx.Client(transport=httpx.MockTransport(upstream)),
-        sleep=lambda _: None, max_attempts=2,
+    task: Final = await poll_tripo_task(
+        httpx.URL("https://openapi.tripo3d.com/v3/generation/text-to-model"),
+        "Bearer test-key",
+        "running-task",
+        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(upstream)),
+        sleep=_no_wait,
+        max_attempts=2,
     )
     assert task is None
     assert tripo_task_cost(task) is None
+
+
+@pytest.mark.asyncio
+async def test_in_flight_polls_wait_together_then_both_bill() -> None:
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.tripo_passthrough_logging_handler import (
+        TripoPassthroughLoggingHandler,
+    )
+
+    both_waiting: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+    waiting: list[str] = []
+    costs: list[object] = []
+    polls: dict[str, int] = {}
+
+    async def wait_for_peer(_: float) -> None:
+        waiting.append("asleep")
+        if len(waiting) == 2:
+            both_waiting.set()
+        await release.wait()
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        task_id: Final = request.url.path.removeprefix("/v3/tasks/")
+        polls[task_id] = polls.get(task_id, 0) + 1
+        status: Final = "queued" if polls[task_id] == 1 else "success"
+        return httpx.Response(
+            200,
+            json={"code": 0, "data": {"task_id": task_id, "status": status, "credits_consumed": 20}},
+            request=request,
+        )
+
+    async def record(**kwargs: object) -> None:
+        costs.append(kwargs["response_cost"])
+
+    def call_log(task_id: str) -> Logging:
+        return Logging(
+            model="tripo/task",
+            messages=[],
+            stream=False,
+            call_type="pass_through_endpoint",
+            start_time=datetime(2026, 1, 1),
+            litellm_call_id=task_id,
+            function_id=task_id,
+        )
+
+    handler: Final = TripoPassthroughLoggingHandler(
+        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(upstream)),
+        sleep=wait_for_peer,
+    )
+    submission: Final = httpx.Response(
+        200,
+        request=httpx.Request(
+            "POST",
+            "https://openapi.tripo3d.com/v3/generation/text-to-model",
+            headers={"Authorization": "Bearer upstream-key"},
+        ),
+    )
+    for task_id in ("task-a", "task-b"):
+        assert handler.schedule(
+            submission,
+            {"code": 0, "data": {"task_id": task_id}},
+            call_log(task_id),
+            datetime(2026, 1, 1),
+            {},
+            record,
+            {},
+        )
+    await asyncio.wait_for(both_waiting.wait(), timeout=5)
+    assert waiting == ["asleep", "asleep"]
+    release.set()
+    pending: Final = tuple(handler.pending)
+    await asyncio.gather(*pending)
+    assert [task.exception() for task in pending] == [None, None]
+    assert costs == [0.2, 0.2]
