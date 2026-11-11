@@ -35,7 +35,7 @@ from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup_metrics import (
     SpendLogCleanupMetrics,
 )
-from litellm.proxy.db.scheduled_job_runs import InvalidSchedule, JobFailed, JobSucceeded
+from litellm.proxy.db.scheduled_job_runs import InvalidSchedule, JobFailed, JobSucceeded, ScheduledJob
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
 
@@ -691,7 +691,7 @@ async def test_cleanup_uses_logger_exception_for_full_traceback(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_a_run_whose_batches_keep_failing_reports_aborted(monkeypatch):
+async def test_a_run_whose_batches_keep_failing_reports_aborted(monkeypatch: pytest.MonkeyPatch) -> None:
     """An aborted run is what the scheduled job records as FAILED, so the abort must reach the report."""
     import litellm.proxy.db.db_transaction_queue.spend_log_cleanup as cleanup_module
 
@@ -2176,21 +2176,21 @@ async def test_size_state_round_trips_through_its_litellm_config_row_and_a_lost_
 )
 def test_the_retention_job_follows_the_cleanup_cron_when_set_and_the_retention_interval_otherwise(
     settings: dict[str, str], expected_spec: str
-):
+) -> None:
     schedule: Final = retention_schedule(settings)
     assert not isinstance(schedule, InvalidSchedule)
     assert schedule.spec == expected_spec
 
 
 @pytest.mark.parametrize("cron", [5, ["0 4 * * *"], "not a cron"])
-def test_an_invalid_cleanup_cron_is_rejected_instead_of_falling_back_to_the_retention_interval(cron: object):
+def test_an_invalid_cleanup_cron_is_rejected_instead_of_falling_back_to_the_retention_interval(cron: object) -> None:
     schedule: Final = retention_schedule(
         {"maximum_spend_logs_cleanup_cron": cron, "maximum_spend_logs_retention_interval": "1h"}
     )
     assert isinstance(schedule, InvalidSchedule)
 
 
-async def test_the_retention_job_records_an_aborted_cleanup_as_failed(monkeypatch):
+async def test_the_retention_job_records_an_aborted_cleanup_as_failed(monkeypatch: pytest.MonkeyPatch) -> None:
     import litellm.proxy.db.db_transaction_queue.spend_log_cleanup as cleanup_module
 
     monkeypatch.setattr(cleanup_module, "SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES", 1)
@@ -2206,7 +2206,9 @@ async def test_the_retention_job_records_an_aborted_cleanup_as_failed(monkeypatc
 
 
 @pytest.mark.parametrize("job", [SPEND_LOG_RETENTION_JOB, SPEND_LOG_SIZE_CHECK_JOB], ids=["retention", "size"])
-async def test_a_cleanup_job_with_no_rule_configured_succeeds_without_touching_the_database(monkeypatch, job):
+async def test_a_cleanup_job_with_no_rule_configured_succeeds_without_touching_the_database(
+    monkeypatch: pytest.MonkeyPatch, job: ScheduledJob
+) -> None:
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
     mock_prisma_client: Final = MagicMock()
     mock_prisma_client.db.execute_raw = AsyncMock()
@@ -2217,13 +2219,13 @@ async def test_a_cleanup_job_with_no_rule_configured_succeeds_without_touching_t
     mock_prisma_client.db.execute_raw.assert_not_awaited()
 
 
-def test_a_cleanup_lease_outlasts_the_configured_run_budget(monkeypatch):
+def test_a_cleanup_lease_outlasts_the_configured_run_budget(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"maximum_spend_logs_cleanup_run_budget": "10m"})
     for job in (SPEND_LOG_RETENTION_JOB, SPEND_LOG_SIZE_CHECK_JOB):
         assert job.lease().total_seconds() > 600
 
 
-def test_the_size_check_job_follows_the_size_check_interval(monkeypatch):
+def test_the_size_check_job_follows_the_size_check_interval(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"maximum_spend_logs_size_check_interval": "6h"})
     schedule: Final = SPEND_LOG_SIZE_CHECK_JOB.schedule()
     assert not isinstance(schedule, InvalidSchedule)
