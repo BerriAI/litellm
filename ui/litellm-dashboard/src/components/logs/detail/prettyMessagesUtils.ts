@@ -10,6 +10,7 @@ import {
   ResponsePayload,
   ToolCall,
 } from "./prettyMessagesTypes";
+import i18n from "@/i18n/i18n";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -80,7 +81,7 @@ const parseResponseMessage = (payload: ResponsePayload): ParsedMessage | null =>
       return {
         role: toRole(message.role, "assistant"),
         content: parseMessageContent(message.content),
-        toolCalls: parseChatToolCalls(message.tool_calls),
+        toolCalls: parseChatMessageToolCalls(message),
       };
     }
     case "responses": {
@@ -103,7 +104,7 @@ const parseChatMessage = (message: unknown): ParsedMessage => {
   return {
     role: toRole(message.role, "user"),
     content: parseMessageContent(message.content),
-    toolCalls: parseChatToolCalls(message.tool_calls),
+    toolCalls: parseChatMessageToolCalls(message),
     toolCallId: typeof message.tool_call_id === "string" ? message.tool_call_id : undefined,
   };
 };
@@ -155,11 +156,11 @@ const parseContentPart = (part: unknown): string => {
       return asString(part.refusal);
     case "image_url":
     case "input_image":
-      return "[Image]";
+      return i18n.t("logs.detail.prettyMessages.imagePlaceholder");
     case "input_file":
-      return "[File]";
+      return i18n.t("logs.detail.prettyMessages.filePlaceholder");
     case "input_audio":
-      return "[Audio]";
+      return i18n.t("logs.detail.prettyMessages.audioPlaceholder");
     default:
       return JSON.stringify(part);
   }
@@ -168,6 +169,13 @@ const parseContentPart = (part: unknown): string => {
 /**
  * Parse tool calls from response message
  */
+const parseChatMessageToolCalls = (message: UnknownRecord): ToolCall[] | undefined => {
+  const fields = message.provider_specific_fields;
+  const serverToolCalls = isRecord(fields) ? parseChatToolCalls(fields.server_tool_calls) : undefined;
+  const toolCalls = parseChatToolCalls(message.tool_calls);
+  return serverToolCalls?.length ? [...serverToolCalls, ...(toolCalls ?? [])] : toolCalls;
+};
+
 const parseChatToolCalls = (toolCalls: unknown): ToolCall[] | undefined => {
   if (!Array.isArray(toolCalls)) return undefined;
   return toolCalls.map((toolCall) => {

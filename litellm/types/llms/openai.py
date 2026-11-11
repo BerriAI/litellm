@@ -95,6 +95,7 @@ from litellm.types.responses.main import (
     OutputFunctionToolCall,
     OutputImageGenerationCall,
     OutputToolSearchCall,
+    OutputToolSearchOutput,
 )
 
 from .base import CachedTokensDetails
@@ -705,6 +706,7 @@ class AzureResponsesPromptCacheBreakpoint(TypedDict):
 class PromptCacheOptions(TypedDict, total=False):
     mode: ReadOnly[Literal["implicit", "explicit"]]
     ttl: ReadOnly[Literal["30m", "12h"]]
+    comparison_response_id: ReadOnly[str]
 
 
 class ChatCompletionThinkingBlock(TypedDict, total=False):
@@ -956,6 +958,7 @@ class ChatCompletionToolMessage(TypedDict):
     role: Literal["tool"]
     content: str | Iterable[ToolMessageContentPart]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
     tool_call_id: str
+    is_error: NotRequired[bool]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
 
 
 class ChatCompletionFunctionMessage(TypedDict):
@@ -1246,9 +1249,12 @@ AllEmbeddingInputValues = str | list[str] | list[int] | list[list[int]]
 
 OpenAIAudioTranscriptionOptionalParams = Literal[
     "language",
+    "languages",
+    "keywords",
     "prompt",
     "temperature",
     "response_format",
+    "stream",
     "timestamp_granularities",
     "include",
 ]
@@ -1590,6 +1596,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
             | ResponseFunctionWebSearch
             | CustomToolCallOutputItem
             | OutputToolSearchCall
+            | OutputToolSearchOutput
             | ResponseCompactionItem
         ]
     )
@@ -2544,6 +2551,17 @@ class OpenAIRealtimeResponseUsage(TypedDict):
     output_token_details: NotRequired[ReadOnly[OpenAIRealtimeUsageTokenDetails]]
 
 
+class OpenAIRealtimeTranslationDurationUsage(TypedDict):
+    type: ReadOnly[Literal["duration"]]
+    output_seconds: NotRequired[ReadOnly[float]]
+    input_seconds: NotRequired[ReadOnly[float]]
+
+
+class OpenAIRealtimeTranslationClosedEvent(TypedDict):
+    type: ReadOnly[Literal["session.closed"]]
+    usage: ReadOnly[OpenAIRealtimeTranslationDurationUsage]
+
+
 class OpenAIRealtimeEventTypes(Enum):
     SESSION_CREATED = "session.created"
     # Beta delta event names
@@ -2587,6 +2605,7 @@ OpenAIRealtimeEvents = (
     | OpenAIRealtimeInputAudioTranscriptionCompleted
     | OpenAIRealtimeTranscriptionSessionCreated
     | OpenAIRealtimeErrorEvent
+    | OpenAIRealtimeTranslationClosedEvent
 )
 
 OpenAIRealtimeStreamList = list[OpenAIRealtimeEvents]

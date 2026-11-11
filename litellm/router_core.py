@@ -1,9 +1,8 @@
 """
-``RouterCore``: the interface ``litellm.Router`` delegates to, and ``make_core``, which picks one.
+``RouterCore``: the interface ``litellm.Router`` delegates to, and ``make_core``, which builds it.
 
-``PythonCore`` (``litellm/router_python_core.py``) is today's routing logic. The Rust core
-(litellm-rust/crates/router-core) implements the same operations. The core is picked once, when
-the router is built, from its ``RouterConfig``.
+The core is ``RustCore`` (``litellm/router_rust/core.py`` over litellm-rust/crates/router-core),
+which reaches outside itself only through its host.
 """
 
 from collections.abc import Mapping
@@ -20,7 +19,6 @@ if TYPE_CHECKING:
         RouterSettings,
         RoutingObservers,
     )
-    from litellm.router_python_core import PythonCore
     from litellm.router_python_host import PythonHost
     from litellm.types.router import CustomRoutingStrategyBase
 
@@ -50,7 +48,8 @@ class RouterCore(Protocol):
     def retire(self) -> None: ...
 
 
-def make_core(config: RouterConfig, host: "PythonHost", core_class: "type[PythonCore] | None" = None) -> RouterCore:
-    from litellm.router_python_core import PythonCore
+def make_core(config: RouterConfig, host: "PythonHost") -> RouterCore:
+    """The router's core: the Rust core, built once for the router's life from its config."""
+    from litellm.router_rust.core import RustCore
 
-    return (core_class or PythonCore)(**config.arguments, _host=host)  # pyright: ignore[reportArgumentType]  # the arguments were bound against PythonCore's own signature
+    return RustCore.build(config, host)  # pyright: ignore[reportReturnType]  # RustCore serves the RouterCore entry points; other members raise RustCoreUnsupported

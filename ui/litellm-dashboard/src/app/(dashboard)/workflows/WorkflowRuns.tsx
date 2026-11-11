@@ -8,6 +8,7 @@ import {
   DataTable,
   DataTableFilterDrawer,
   DataTableFilterField,
+  type FilterDraft,
   DataTableToolbar,
 } from "@/components/shared/DataTable";
 import { Button } from "@/components/ui/button";
@@ -560,7 +561,7 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
               title={t("workflows.filters.title")}
               description={t("workflows.filters.description")}
             >
-              {({ get, set }) => (
+              {({ get, set }: FilterDraft<"status" | "workflow_type">) => (
                 <>
                   <DataTableFilterField label={t("workflows.filters.status")}>
                     <Select

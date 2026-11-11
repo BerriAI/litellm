@@ -1,21 +1,16 @@
+import { SidebarBrand } from "@/components/shared/SidebarBrand";
 import { canViewProjectsPage, projectReaderRoles } from "@/app/(dashboard)/hooks/projects/projectAccess";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
-import { useHealthReadinessDetails } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails";
 import { useLogout } from "@/app/(dashboard)/hooks/useLogout";
-import { getProxyBaseUrl } from "@/components/networking";
 import { useTerminology } from "@/contexts/TerminologyContext";
-import { useTheme } from "@/contexts/ThemeContext";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Sidebar,
   SidebarFooter,
   SidebarGroup,
   SidebarGroupLabel,
-  SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -46,8 +41,6 @@ import {
   LayoutGrid,
   Network,
   Palette,
-  PanelLeftClose,
-  PanelLeftOpen,
   PiggyBank,
   PlayCircle,
   Route,
@@ -62,17 +55,25 @@ import {
   Trophy,
   User,
   Users,
+  Receipt,
   Wallet,
   Wrench,
   Workflow,
 } from "lucide-react";
 import Link from "next/link";
+import ViewSwitcher from "@/components/Navbar/ViewSwitcher";
+import { usePluginMode } from "@/contexts/PluginModeContext";
+import { AriaSidebarLink } from "@/components/liteadmin/LiteAdmin";
 import { usePathname } from "next/navigation";
 import { useMemo, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
+import type { ParseKeys } from "i18next";
+import i18n from "@/i18n/i18n";
 import { cn } from "@/lib/cva.config";
 import { rolesWithCapability } from "../utils/capabilities";
 import {
   all_admin_roles,
+  formatUserRole,
   internalUserRoles,
   isAdminRole,
   isUserTeamAdminForAnyTeam,
@@ -86,14 +87,6 @@ import SidebarUsageCard from "./SidebarUsageCard";
 import { routeSegmentForPathname, uiHref } from "@/utils/uiHref";
 
 const ICON = { strokeWidth: 1.75 } as const;
-
-const LOGO_CLASS_NAME =
-  "h-5 w-auto max-w-[150px] object-contain group-data-[collapsed=true]/sidebar:h-7 group-data-[collapsed=true]/sidebar:w-7";
-
-function bundledLogoSrc(baseUrl: string, { dark, monogram }: { dark: boolean; monogram: boolean }): string {
-  const query = [dark && "theme=dark", monogram && "variant=monogram"].filter(Boolean).join("&");
-  return `${baseUrl}/get_image${query ? `?${query}` : ""}`;
-}
 
 interface SidebarProps {
   collapsed?: boolean;
@@ -206,17 +199,39 @@ export const visibleMenuGroups = (groups: readonly MenuGroup[], context: MenuVis
 // Menu groups organized by category - defined outside component for export.
 // Shape (key/page/label/roles/children) is consumed by page_utils.ts; only the
 // icons changed to lucide as part of the sidebar redesign.
+const customerPortalGroups: MenuGroup[] = [
+  {
+    groupLabel: "CUSTOMER PORTAL",
+    items: [
+      {
+        key: "customers",
+        page: "customers",
+        label: "shell.nav.items.customers",
+        icon: <Users {...ICON} />,
+        roles: all_admin_roles,
+      },
+      {
+        key: "chargebacks",
+        page: "chargebacks",
+        label: "shell.nav.items.chargebacks",
+        icon: <Receipt {...ICON} />,
+        roles: all_admin_roles,
+      },
+    ],
+  },
+];
+
 const menuGroups: MenuGroup[] = [
   {
     groupLabel: "AI GATEWAY",
     items: [
-      { key: "home", page: "home", label: "Home", icon: <House {...ICON} /> },
-      { key: "api-keys", page: "api-keys", label: "Virtual Keys", icon: <KeyRound {...ICON} /> },
+      { key: "home", page: "home", label: "shell.nav.items.home", icon: <House {...ICON} /> },
+      { key: "api-keys", page: "api-keys", label: "shell.nav.items.virtualKeys", icon: <KeyRound {...ICON} /> },
       {
         key: "llm-playground",
         page: "llm-playground",
         route: "playground",
-        label: "Playground",
+        label: "shell.nav.items.playground",
         icon: <PlayCircle {...ICON} />,
         roles: rolesWithWriteAccess,
       },
@@ -224,61 +239,77 @@ const menuGroups: MenuGroup[] = [
         key: "models",
         page: "models",
         route: "models-and-endpoints",
-        label: "Models + Endpoints",
+        label: "shell.nav.items.modelsAndEndpoints",
         icon: <Network {...ICON} />,
         roles: rolesAllowedToViewWriteScopedPages,
       },
       {
         key: "agentic",
         page: "agentic",
-        label: "Agentic",
+        label: "shell.nav.items.agentic",
         icon: <Bot {...ICON} />,
         children: [
           {
             key: "agents",
             page: "agents",
-            label: "Agents",
+            label: "shell.nav.items.agents",
             icon: <Bot {...ICON} />,
             roles: rolesAllowedToViewWriteScopedPages,
           },
           {
             key: "workflows",
             page: "workflows",
-            label: "Workflow Runs",
+            label: "shell.nav.items.workflowRuns",
             icon: <Workflow {...ICON} />,
             roles: rolesWithCapability("viewWorkflowRuns"),
           },
           {
             key: "memory",
             page: "memory",
-            label: "Memory",
+            label: "shell.nav.items.memory",
             icon: <Database {...ICON} />,
             roles: rolesWithCapability("viewMemory"),
           },
         ],
       },
-      { key: "mcp-servers", page: "mcp-servers", label: "MCP Servers", icon: <Server {...ICON} /> },
-      { key: "skills", page: "skills", label: "Skills", icon: <Blocks {...ICON} />, roles: all_admin_roles },
-      { key: "guardrails", page: "guardrails", label: "Guardrails", icon: <Shield {...ICON} /> },
+      { key: "mcp-servers", page: "mcp-servers", label: "shell.nav.items.mcpServers", icon: <Server {...ICON} /> },
+      {
+        key: "skills",
+        page: "skills",
+        label: "shell.nav.items.skills",
+        icon: <Blocks {...ICON} />,
+        roles: [...all_admin_roles, ...internalUserRoles, formatUserRole("org_admin")],
+      },
+      { key: "guardrails", page: "guardrails", label: "shell.nav.items.guardrails", icon: <Shield {...ICON} /> },
       {
         key: "policies",
         page: "policies",
-        label: "Policies",
+        label: "shell.nav.items.policies",
         icon: <ScrollText {...ICON} />,
         roles: rolesWithCapability("viewPolicies"),
       },
       {
         key: "tools",
         page: "tools",
-        label: "Tools",
+        label: "shell.nav.items.tools",
         icon: <Wrench {...ICON} />,
         children: [
-          { key: "search-tools", page: "search-tools", label: "Search Tools", icon: <Search {...ICON} /> },
-          { key: "vector-stores", page: "vector-stores", label: "Vector Stores", icon: <Database {...ICON} /> },
+          {
+            key: "search-tools",
+            page: "search-tools",
+            label: "shell.nav.items.searchTools",
+            icon: <Search {...ICON} />,
+          },
+          {
+            key: "vector-stores",
+            page: "vector-stores",
+            label: "shell.nav.items.vectorStores",
+            icon: <Database {...ICON} />,
+          },
           {
             key: "tool-policies",
             page: "tool-policies",
-            label: "Tool Policies",
+            label: "shell.nav.items.toolPolicies",
             icon: <ShieldCheck {...ICON} />,
             roles: rolesWithCapability("viewToolPolicies"),
           },
@@ -295,7 +326,14 @@ const menuGroups: MenuGroup[] = [
         route: "usage",
         icon: <BarChart3 {...ICON} />,
         roles: [...all_admin_roles, ...internalUserRoles],
-        label: "Usage",
+        label: "shell.nav.items.usage",
+      },
+      {
+        key: "alerts",
+        page: "alerts",
+        label: "shell.nav.items.alerts",
+        icon: <Bell {...ICON} />,
+        roles: rolesWithCapability("viewGlobalSpend"),
       },
       {
         key: "model-insights",
@@ -304,7 +342,7 @@ const menuGroups: MenuGroup[] = [
         roles: all_admin_roles,
         label: (
           <span className="flex items-center gap-2">
-            Model Leaderboard <BetaBadge />
+            <Trans i18nKey="shell.nav.items.modelLeaderboard" /> <BetaBadge />
           </span>
         ),
       },
@@ -313,15 +351,15 @@ const menuGroups: MenuGroup[] = [
         page: "cost-optimization",
         icon: <PiggyBank {...ICON} />,
         roles: [...all_admin_roles, ...internalUserRoles],
-        label: "Cost Optimization",
+        label: "shell.nav.items.costOptimization",
       },
-      { key: "logs", page: "logs", label: "Logs", icon: <Activity {...ICON} /> },
+      { key: "logs", page: "logs", label: "shell.nav.items.logs", icon: <Activity {...ICON} /> },
       {
         key: "lens",
         page: "lens",
         label: (
           <span className="flex items-center gap-2">
-            Lens <BetaBadge />
+            <Trans i18nKey="shell.nav.items.lens" /> <BetaBadge />
           </span>
         ),
         icon: <Aperture {...ICON} />,
@@ -329,7 +367,7 @@ const menuGroups: MenuGroup[] = [
       {
         key: "guardrails-monitor",
         page: "guardrails-monitor",
-        label: "Guardrails Monitor",
+        label: "shell.nav.items.guardrailsMonitor",
         icon: <HeartPulse {...ICON} />,
         roles: rolesWithCapability("viewGuardrailUsage"),
       },
@@ -338,79 +376,102 @@ const menuGroups: MenuGroup[] = [
   {
     groupLabel: "ACCESS CONTROL",
     items: [
-      { key: "teams", page: "teams", label: "Teams", icon: <Users {...ICON} /> },
+      { key: "teams", page: "teams", label: "shell.nav.items.teams", icon: <Users {...ICON} /> },
       {
         key: "projects",
         page: "projects",
         label: (
           <span className="flex items-center gap-2">
-            Projects <BetaBadge />
+            <Trans i18nKey="shell.nav.items.projects" /> <BetaBadge />
           </span>
         ),
         icon: <Folder {...ICON} />,
         roles: [...projectReaderRoles],
       },
-      { key: "users", page: "users", label: "Internal Users", icon: <User {...ICON} />, roles: all_admin_roles },
+      {
+        key: "users",
+        page: "users",
+        label: "shell.nav.items.internalUsers",
+        icon: <User {...ICON} />,
+        roles: all_admin_roles,
+      },
       {
         key: "organizations",
         page: "organizations",
-        label: "Organizations",
+        label: "shell.nav.items.organizations",
         icon: <Building2 {...ICON} />,
         roles: all_admin_roles,
       },
       {
         key: "access-groups",
         page: "access-groups",
-        label: "Access Groups",
+        label: "shell.nav.items.accessGroups",
         icon: <Boxes {...ICON} />,
         roles: all_admin_roles,
       },
-      { key: "budgets", page: "budgets", label: "Budgets", icon: <Wallet {...ICON} />, roles: all_admin_roles },
+      {
+        key: "budgets",
+        page: "budgets",
+        label: "shell.nav.items.budgets",
+        icon: <Wallet {...ICON} />,
+        roles: all_admin_roles,
+      },
     ],
   },
   {
     groupLabel: "DEVELOPER TOOLS",
     items: [
-      { key: "api_ref", page: "api_ref", route: "api-reference", label: "API Reference", icon: <Code2 {...ICON} /> },
-      { key: "model-hub-table", page: "model-hub-table", label: "AI Hub", icon: <LayoutGrid {...ICON} /> },
+      {
+        key: "api_ref",
+        page: "api_ref",
+        route: "api-reference",
+        label: "shell.nav.items.apiReference",
+        icon: <Code2 {...ICON} />,
+      },
+      {
+        key: "model-hub-table",
+        page: "model-hub-table",
+        label: "shell.nav.items.aiHub",
+        icon: <LayoutGrid {...ICON} />,
+      },
       {
         key: "learning-resources",
         page: "learning-resources",
-        label: "Learning Resources",
+        label: "shell.nav.items.learningResources",
         icon: <BookOpen {...ICON} />,
         external_url: "https://models.litellm.ai/cookbook",
       },
       {
         key: "caching",
         page: "caching",
-        label: "Response Cache",
+        label: "shell.nav.items.responseCache",
         icon: <Database {...ICON} />,
         roles: all_admin_roles,
       },
       {
         key: "experimental",
         page: "experimental",
-        label: "Experimental",
+        label: "shell.nav.items.experimental",
         icon: <FlaskConical {...ICON} />,
         children: [
           {
             key: "prompts",
             page: "prompts",
-            label: "Prompts",
+            label: "shell.nav.items.prompts",
             icon: <FileText {...ICON} />,
             roles: rolesWithCapability("viewPrompts"),
           },
           {
             key: "transform-request",
             page: "transform-request",
-            label: "API Playground",
+            label: "shell.nav.items.apiPlayground",
             icon: <Terminal {...ICON} />,
             roles: [...all_admin_roles, ...internalUserRoles],
           },
           {
             key: "tag-management",
             page: "tag-management",
-            label: "Tag Management",
+            label: "shell.nav.items.tagManagement",
             icon: <Tags {...ICON} />,
             roles: all_admin_roles,
           },
@@ -425,43 +486,49 @@ const menuGroups: MenuGroup[] = [
       {
         key: "settings",
         page: "settings",
-        label: "Settings",
+        label: "shell.nav.items.settings",
         icon: <SettingsIcon {...ICON} />,
         roles: all_admin_roles,
         children: [
           {
             key: "router-settings",
             page: "router-settings",
-            label: "Router Settings",
+            label: "shell.nav.items.routerSettings",
             icon: <Route {...ICON} />,
             roles: all_admin_roles,
           },
           {
             key: "logging-and-alerts",
             page: "logging-and-alerts",
-            label: "Logging & Alerts",
+            label: "shell.nav.items.loggingAndAlerts",
             icon: <Bell {...ICON} />,
             roles: all_admin_roles,
           },
           {
             key: "admin-panel",
             page: "admin-panel",
-            label: "Admin Settings",
+            label: "shell.nav.items.adminSettings",
             icon: <SettingsIcon {...ICON} />,
             roles: all_admin_roles,
           },
           {
             key: "cost-tracking",
             page: "cost-tracking",
-            label: "Cost Tracking",
+            label: "shell.nav.items.costTracking",
             icon: <BarChart3 {...ICON} />,
             roles: all_admin_roles,
           },
-          { key: "ui-theme", page: "ui-theme", label: "UI Theme", icon: <Palette {...ICON} />, roles: all_admin_roles },
+          {
+            key: "ui-theme",
+            page: "ui-theme",
+            label: "shell.nav.items.uiTheme",
+            icon: <Palette {...ICON} />,
+            roles: all_admin_roles,
+          },
           {
             key: "telemetry",
             page: "telemetry",
-            label: "Telemetry",
+            label: "shell.nav.items.telemetry",
             icon: <Activity {...ICON} />,
             roles: proxyAdminTierRoles,
           },
@@ -497,15 +564,29 @@ const findMenuItemKey = (route: string): string => {
   return HOME_ROUTE;
 };
 
-const SECTION_DISPLAY: Record<string, string> = {
-  "AI GATEWAY": "AI Gateway",
-  OBSERVABILITY: "Observability",
-  "ACCESS CONTROL": "Access Control",
-  "DEVELOPER TOOLS": "Developer Tools",
-  SETTINGS: "Settings",
+const GROUP_LABELS: Record<string, ParseKeys> = {
+  "AI GATEWAY": "shell.nav.groups.aiGateway",
+  "CUSTOMER PORTAL": "shell.nav.groups.customerPortal",
+  OBSERVABILITY: "shell.nav.groups.observability",
+  "ACCESS CONTROL": "shell.nav.groups.accessControl",
+  "DEVELOPER TOOLS": "shell.nav.groups.developerTools",
+  SETTINGS: "shell.nav.groups.settings",
 };
 
-export const sectionText = (groupLabel: string): string => SECTION_DISPLAY[groupLabel] ?? groupLabel;
+export const groupText = (groupLabel: string): string =>
+  Object.hasOwn(GROUP_LABELS, groupLabel) ? i18n.t(GROUP_LABELS[groupLabel]) : groupLabel;
+
+const SECTION_DISPLAY: Record<string, ParseKeys> = {
+  "AI GATEWAY": "shell.nav.sections.aiGateway",
+  "CUSTOMER PORTAL": "shell.nav.sections.customerPortal",
+  OBSERVABILITY: "shell.nav.sections.observability",
+  "ACCESS CONTROL": "shell.nav.sections.accessControl",
+  "DEVELOPER TOOLS": "shell.nav.sections.developerTools",
+  SETTINGS: "shell.nav.sections.settings",
+};
+
+export const sectionText = (groupLabel: string): string =>
+  Object.hasOwn(SECTION_DISPLAY, groupLabel) ? i18n.t(SECTION_DISPLAY[groupLabel]) : groupLabel;
 
 const prettify = (key: string): string =>
   key
@@ -513,12 +594,14 @@ const prettify = (key: string): string =>
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ");
 
-export const labelText = (item: MenuItem): string => (typeof item.label === "string" ? item.label : prettify(item.key));
+export const labelText = (item: MenuItem): string =>
+  typeof item.label === "string" ? i18n.t(item.label as ParseKeys) : prettify(item.key);
 
 // Breadcrumb ("Section" / "Page") for the top bar, derived from the same nav config.
 export const getBreadcrumb = (pathname: string): { section: string | null; title: string } => {
   const route = routeForPathname(pathname);
-  for (const group of menuGroups) {
+  if (route === "aria") return { section: null, title: "Aria Agent" };
+  for (const group of [...menuGroups, ...customerPortalGroups]) {
     for (const item of group.items) {
       const section = sectionText(group.groupLabel);
       if (routeOf(item) === route) return { section, title: labelText(item) };
@@ -540,19 +623,16 @@ const Sidebar_: React.FC<SidebarProps> = ({
   allowVectorStoresForTeamAdmins,
 }) => {
   const { userId, accessToken, userRole, isViewOnly } = useAuthorized();
+  const { mode: pluginMode } = usePluginMode();
+  const { t } = useTranslation();
   const term = useTerminology();
-  const labelOf = (item: MenuItem) => (typeof item.label === "string" ? term(item.label) : item.label);
+  const labelOf = (item: MenuItem) => (typeof item.label === "string" ? term(labelText(item)) : item.label);
   const isOrgAdmin = useIsOrgAdmin();
   const { data: teams } = useTeams();
-  const { logoUrl, logoUrlDark } = useTheme();
-  const [erroredDarkLogo, setErroredDarkLogo] = useState<string | null>(null);
-  const { data: healthData } = useHealthReadinessDetails(accessToken);
   const logout = useLogout(accessToken);
 
-  const baseUrl = getProxyBaseUrl();
-  const version = healthData?.litellm_version;
   const currentRoute = routeForPathname(usePathname());
-  const selectedKey = findMenuItemKey(currentRoute);
+  const selectedKey = currentRoute === "aria" ? null : findMenuItemKey(currentRoute);
 
   const [openGroups, setOpenGroups] = useState<Set<string>>(() => {
     const parent = findParentKey(currentRoute);
@@ -586,8 +666,9 @@ const Sidebar_: React.FC<SidebarProps> = ({
       disableVectorStoresForInternalUsers,
       allowVectorStoresForTeamAdmins,
     };
-    return visibleMenuGroups(menuGroups, context);
+    return visibleMenuGroups(pluginMode === "customer-portal" ? customerPortalGroups : menuGroups, context);
   }, [
+    pluginMode,
     allowAgentsForTeamAdmins,
     allowVectorStoresForTeamAdmins,
     disableAgentsForInternalUsers,
@@ -687,55 +768,25 @@ const Sidebar_: React.FC<SidebarProps> = ({
     );
   };
 
-  const logoSrc = logoUrl || bundledLogoSrc(baseUrl, { dark: false, monogram: collapsed });
-  const reachableDarkLogo = logoUrlDark === erroredDarkLogo ? null : logoUrlDark;
-  const darkLogoSrc = reachableDarkLogo || logoUrl || bundledLogoSrc(baseUrl, { dark: true, monogram: collapsed });
-
   return (
     <Sidebar collapsed={collapsed}>
-      <SidebarHeader className="h-14 border-b border-border group-data-[collapsed=true]/sidebar:h-auto">
-        <div className="flex items-center justify-between gap-2 group-data-[collapsed=true]/sidebar:flex-col">
-          <div className="flex min-w-0 items-center gap-2">
-            <Link href={uiHref("")} className="flex min-w-0 items-center" aria-label="LiteLLM home">
-              <img src={logoSrc} alt="LiteLLM" className={cn(LOGO_CLASS_NAME, "dark:hidden")} />
-              <img
-                src={darkLogoSrc}
-                alt=""
-                aria-hidden
-                onError={() => setErroredDarkLogo(logoUrlDark)}
-                className={cn(LOGO_CLASS_NAME, "hidden dark:block")}
-              />
-            </Link>
-            {version && (
-              <Badge
-                variant="outline"
-                render={<a href="https://docs.litellm.ai/release_notes" target="_blank" rel="noopener noreferrer" />}
-                className="px-1.5 py-0 font-mono text-[10px] font-medium text-muted-foreground group-data-[collapsed=true]/sidebar:hidden"
-              >
-                v{version}
-              </Badge>
-            )}
-          </div>
-          {onToggleCollapsed && (
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              onClick={onToggleCollapsed}
-              aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-              className="flex-none text-muted-foreground"
-            >
-              {collapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
-            </Button>
-          )}
-        </div>
-      </SidebarHeader>
+      <SidebarBrand
+        accessToken={accessToken}
+        homeLabel={t("shell.nav.homeLink")}
+        collapsed={collapsed}
+        onToggleCollapsed={onToggleCollapsed}
+      />
 
+      <div className="space-y-1 px-3 pt-3 pb-1">
+        <ViewSwitcher className="h-9 w-full max-w-none justify-start shadow-none group-data-[collapsed=true]/sidebar:size-9 group-data-[collapsed=true]/sidebar:justify-center group-data-[collapsed=true]/sidebar:p-0 [&_[data-slot=workspace-label]]:flex-1 [&_[data-slot=workspace-label]]:text-left group-data-[collapsed=true]/sidebar:[&_[data-slot=workspace-label]]:hidden" />
+        <AriaSidebarLink active={currentRoute === "aria"} />
+      </div>
       <ScrollArea className="min-h-0 flex-1">
         <nav className="flex flex-col gap-0.5 px-3 pb-3">
           {visibleGroups.map((group, gi) => (
             <SidebarGroup key={group.groupLabel}>
               {gi > 0 && <SidebarSeparator className="hidden group-data-[collapsed=true]/sidebar:block" />}
-              <SidebarGroupLabel>{term(group.groupLabel)}</SidebarGroupLabel>
+              <SidebarGroupLabel>{term(groupText(group.groupLabel))}</SidebarGroupLabel>
               <SidebarMenu>{group.items.map((item) => renderItem(item))}</SidebarMenu>
             </SidebarGroup>
           ))}
