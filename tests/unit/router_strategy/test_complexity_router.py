@@ -10251,7 +10251,11 @@ _CODEX_ENVELOPES: Final = (
     "# AGENTS.md instructions for /repo with spaces/中文\n<INSTRUCTIONS>LITELLM ESCALATE instructions</INSTRUCTIONS>",
 )
 _OPENCODE_USER_AGENT: Final = "opencode/latest/2.0.29/cli"
-_OPENCODE_TASK_RESULT: Final = "<task_result>LITELLM ESCALATE subagent found the race in cache.py</task_result>"
+_OPENCODE_SUBAGENT_RESULTS: Final = (
+    "<task_result>\nLITELLM ESCALATE subagent found the race in cache.py</task_result>",
+    '<subagent sessionID="ses_7f3a9c1e" state="completed" description="Explore cache.py">\n'
+    "LITELLM ESCALATE subagent found the race in cache.py\n</subagent>",
+)
 
 
 class TestContextAwareClassifier:
@@ -10493,8 +10497,11 @@ class TestContextAwareClassifier:
         assert completion.call_args.kwargs["messages"][1]["content"].strip() == f"Classify this message:\n{envelope}"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("subagent_result", _OPENCODE_SUBAGENT_RESULTS)
     @pytest.mark.parametrize("user_agent", (_OPENCODE_USER_AGENT, "OpenCode/latest/2.0.29/cli"))
-    async def test_opencode_task_result_turn_keeps_held_tier_until_a_new_ask(self, user_agent: str) -> None:
+    async def test_opencode_subagent_result_turn_keeps_held_tier_until_a_new_ask(
+        self, user_agent: str, subagent_result: str
+    ) -> None:
         completion: Final = AsyncMock(
             side_effect=[_llm_response('{"tier":"SIMPLE"}'), _llm_response('{"tier":"COMPLEX"}')]
         )
@@ -10513,13 +10520,13 @@ class TestContextAwareClassifier:
         task_returned: Final = [
             *asked,
             {"role": "assistant", "content": "Delegating to a subagent"},
-            {"role": "user", "content": _OPENCODE_TASK_RESULT},
+            {"role": "user", "content": subagent_result},
         ]
         new_ask: Final = [
             *task_returned,
             {"role": "assistant", "content": "Found it"},
             {"role": "user", "content": "Now design cache invalidation"},
-            {"role": "user", "content": _OPENCODE_TASK_RESULT},
+            {"role": "user", "content": subagent_result},
         ]
         original: Final = deepcopy((asked, task_returned, new_ask))
 
@@ -10544,38 +10551,36 @@ class TestContextAwareClassifier:
         assert tuple(result.messages for result in results) == original
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("subagent_result", _OPENCODE_SUBAGENT_RESULTS)
     @pytest.mark.parametrize(
         "request_kwargs,content,custom_markers,expected_ask",
         (
+            ({"metadata": {"user_agent": _OPENCODE_USER_AGENT}}, "{result}\nAdd retries", False, "Add retries"),
+            ({"litellm_metadata": {"user_agent": _OPENCODE_USER_AGENT}}, "Add retries {result}", False, "Add retries"),
             (
                 {"metadata": {"user_agent": _OPENCODE_USER_AGENT}},
-                f"{_OPENCODE_TASK_RESULT}\nAdd retries",
+                "{unclosed}\nAdd retries",
                 False,
-                "Add retries",
+                "{unclosed}\nAdd retries",
             ),
-            (
-                {"litellm_metadata": {"user_agent": _OPENCODE_USER_AGENT}},
-                f"Add retries {_OPENCODE_TASK_RESULT}",
-                False,
-                "Add retries",
-            ),
-            (
-                {"metadata": {"user_agent": _OPENCODE_USER_AGENT}},
-                "<task_result>Add retries",
-                False,
-                "<task_result>Add retries",
-            ),
-            ({"metadata": {"user_agent": _OPENCODE_USER_AGENT}}, _OPENCODE_TASK_RESULT, True, _OPENCODE_TASK_RESULT),
-            ({}, _OPENCODE_TASK_RESULT, False, _OPENCODE_TASK_RESULT),
-            ({"metadata": {"user_agent": "curl/8.7.1"}}, _OPENCODE_TASK_RESULT, False, _OPENCODE_TASK_RESULT),
-            ({"metadata": {"user_agent": "codex-tui"}}, _OPENCODE_TASK_RESULT, False, _OPENCODE_TASK_RESULT),
-            ({"metadata": {"user_agent": "opencode_go/1.0"}}, _OPENCODE_TASK_RESULT, False, _OPENCODE_TASK_RESULT),
-            ({"metadata": {"user_agent": "opencodex/1.0"}}, _OPENCODE_TASK_RESULT, False, _OPENCODE_TASK_RESULT),
+            ({"metadata": {"user_agent": _OPENCODE_USER_AGENT}}, "{result}", True, "{result}"),
+            ({}, "{result}", False, "{result}"),
+            ({"metadata": {"user_agent": "curl/8.7.1"}}, "{result}", False, "{result}"),
+            ({"metadata": {"user_agent": "codex-tui"}}, "{result}", False, "{result}"),
+            ({"metadata": {"user_agent": "opencode_go/1.0"}}, "{result}", False, "{result}"),
+            ({"metadata": {"user_agent": "opencodex/1.0"}}, "{result}", False, "{result}"),
         ),
     )
-    async def test_classifier_strips_only_complete_opencode_task_results(
-        self, request_kwargs: dict[str, object], content: str, custom_markers: bool, expected_ask: str
+    async def test_classifier_strips_only_complete_opencode_subagent_results(
+        self,
+        request_kwargs: dict[str, object],
+        content: str,
+        custom_markers: bool,
+        expected_ask: str,
+        subagent_result: str,
     ) -> None:
+        unclosed: Final = subagent_result[: subagent_result.rindex("</")].rstrip()
+        message: Final = content.format(result=subagent_result, unclosed=unclosed)
         completion: Final = AsyncMock(return_value=_llm_response('{"tier":"COMPLEX"}'))
         router: Final = ComplexityRouter(
             model_name="router",
@@ -10589,17 +10594,18 @@ class TestContextAwareClassifier:
                 **({"reminder_markers": [{"open": "<custom>", "close": "</custom>"}]} if custom_markers else {}),
             },
         )
-        messages: Final = [{"role": "user", "content": content}]
+        messages: Final = [{"role": "user", "content": message}]
 
         response: Final = await router.async_pre_routing_hook(
             model="router", request_kwargs=request_kwargs, messages=messages
         )
 
         assert response is not None and response.model == "task-model"
-        assert response.messages == [{"role": "user", "content": content}]
+        assert response.messages == [{"role": "user", "content": message}]
         completion.assert_awaited_once()
         classified: Final = completion.call_args.kwargs["messages"][1]["content"]
-        assert classified.strip() == f"Classify this message:\n{expected_ask}"
+        expected: Final = expected_ask.format(result=subagent_result, unclosed=unclosed)
+        assert classified.strip() == f"Classify this message:\n{expected}"
 
     @pytest.mark.parametrize("envelope", _CODEX_ENVELOPES)
     def test_codex_envelopes_preserve_delegated_task_and_prior_context(self, envelope: str) -> None:

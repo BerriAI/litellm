@@ -520,7 +520,10 @@ _CODEX_REMINDER_MARKERS: Final = _DEFAULT_REMINDER_MARKERS + (
     ("<environments_instructions>", "</environments_instructions>"),
     ("# agents.md instructions for ", "</instructions>"),
 )
-_OPENCODE_REMINDER_MARKERS: Final = _DEFAULT_REMINDER_MARKERS + (("<task_result>", "</task_result>"),)
+_OPENCODE_REMINDER_MARKERS: Final = _DEFAULT_REMINDER_MARKERS + (
+    ("<task_result>", "</task_result>"),
+    ("<subagent ", "</subagent>"),
+)
 _OPENCODE_USER_AGENT_PREFIX: Final = "opencode/"
 
 _TRUNCATION_MARKER: Final = "..."
