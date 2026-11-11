@@ -7114,8 +7114,7 @@ def embedding(
             api_version = (
                 api_version
                 or litellm.api_version
-                or get_secret_str("AZURE_API_VERSION")
-                or litellm.AZURE_DEFAULT_API_VERSION
+                or default_azure_api_version(api_base, get_secret_str("AZURE_API_VERSION"))
             )
 
             azure_ad_token: Final = optional_params.pop("azure_ad_token", None) or get_secret_str("AZURE_AD_TOKEN")

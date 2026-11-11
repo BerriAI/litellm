@@ -1795,6 +1795,46 @@ def test_azure_v1_base_without_an_azure_credential_never_sends_the_openai_api_ke
     assert "authorization" not in route.calls.last.request.headers
 
 
+def _embed_on(api_base: str) -> object:
+    return litellm.embedding(model="azure/text-embedding-3-small", api_base=api_base, api_key="k", input=["hi"])
+
+
+def _draw_on(api_base: str) -> object:
+    return litellm.image_generation(model="azure/gpt-image-1", api_base=api_base, api_key="k", prompt="a dot")
+
+
+@pytest.mark.parametrize(
+    ("call", "route_path", "upstream_body"),
+    [
+        pytest.param(
+            _embed_on,
+            "/openai/v1/embeddings",
+            {
+                "object": "list",
+                "data": [{"object": "embedding", "embedding": [0.1], "index": 0}],
+                "model": "text-embedding-3-small",
+                "usage": {"prompt_tokens": 1, "total_tokens": 1},
+            },
+            id="embedding",
+        ),
+        pytest.param(
+            _draw_on, "/openai/v1/images/generations", {"created": 1, "data": [{"b64_json": "aGk="}]}, id="image"
+        ),
+    ],
+)
+def test_azure_openai_v1_base_with_no_api_version_uses_the_v1_api_beyond_chat(
+    respx_mock, monkeypatch, call: Callable[[str], object], route_path: str, upstream_body: dict[str, object]
+):
+    monkeypatch.setenv("AZURE_API_VERSION", litellm.AZURE_DEFAULT_API_VERSION)
+    route: Final = respx_mock.post(host="v1-default-resource.openai.azure.com", path=route_path).mock(
+        return_value=httpx.Response(200, json=upstream_body)
+    )
+
+    call("https://v1-default-resource.openai.azure.com/openai/v1")
+
+    assert route.calls.last.request.url.params.get("api-version") != litellm.AZURE_DEFAULT_API_VERSION
+
+
 @pytest.mark.parametrize("api_version", ["v1", "latest", "preview"])
 def test_azure_v1_api_with_azure_ad_token_provider(api_version):
     """

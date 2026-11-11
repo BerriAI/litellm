@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_request_utils import flatten_form_field_values
 from litellm.litellm_core_utils.mock_functions import mock_image_generation
+from litellm.llms.azure.common_utils import AZURE_V1_API_VERSION, is_azure_openai_v1_base
 from litellm.llms.base_llm import BaseImageEditConfig, BaseImageGenerationConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
@@ -389,7 +390,11 @@ def image_generation(
 
             api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
 
-            api_version = api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION")
+            api_version = (
+                api_version
+                or litellm.api_version
+                or (AZURE_V1_API_VERSION if is_azure_openai_v1_base(api_base) else get_secret_str("AZURE_API_VERSION"))
+            )
 
             api_key = (
                 api_key

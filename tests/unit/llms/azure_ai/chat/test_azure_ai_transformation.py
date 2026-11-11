@@ -66,6 +66,7 @@ async def test_get_openai_compatible_provider_info():
         ("azure_ai/gpt-4o", "https://apim.example.com/api/projects/p", "azure_ai"),
         ("azure_ai/gpt-4o", "https://apim.example.com/foundry/api/projects/p", "azure_ai"),
         ("azure_ai/gpt-4o", "https://apim.example.com/foundry/api/projects/p/openai/v1", "azure_ai"),
+        ("azure_ai/gpt-4o", "https://apim.example.com/foundry/api/projects/p/models", "azure_ai"),
         ("azure_ai/gpt-4o", "https://gw.example.com/api/projects/team-x/azure-openai", "azure"),
         ("azure_ai/gpt-4o", "https://gateway.example.com/v1", "azure"),
         ("azure_ai/gpt-4o", "https://my-resource.openai.azure.com/openai/v1/extra", "azure"),
@@ -205,6 +206,8 @@ CHAT_COMPLETION_PAYLOAD: Final = {
         pytest.param(
             f"{FOUNDRY_PROJECT_BASE}/openai/v1/", None, FOUNDRY_PROJECT_CHAT_PATH, b"", id="project-openai-v1"
         ),
+        pytest.param(f"{FOUNDRY_PROJECT_BASE}/models", None, FOUNDRY_PROJECT_CHAT_PATH, b"", id="project-models"),
+        pytest.param(f"{FOUNDRY_PROJECT_BASE}/v1", None, FOUNDRY_PROJECT_CHAT_PATH, b"", id="project-v1"),
         pytest.param(
             f"{FOUNDRY_RESOURCE_BASE}/openai/v1",
             "preview",

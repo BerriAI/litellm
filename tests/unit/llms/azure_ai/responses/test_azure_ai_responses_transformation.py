@@ -129,6 +129,8 @@ def test_will_bridge_to_chat_completions_follows_host(api_base, bridged):
         (FOUNDRY_PROJECT_BASE, FOUNDRY_RESPONSES_URL),
         (f"{FOUNDRY_PROJECT_BASE}/", FOUNDRY_RESPONSES_URL),
         (f"{FOUNDRY_PROJECT_BASE}/openai/v1", FOUNDRY_RESPONSES_URL),
+        (f"{FOUNDRY_PROJECT_BASE}/models", FOUNDRY_RESPONSES_URL),
+        (f"{FOUNDRY_PROJECT_BASE}/v1", FOUNDRY_RESPONSES_URL),
         (FOUNDRY_RESPONSES_URL, FOUNDRY_RESPONSES_URL),
         ("https://res.services.ai.azure.com", "https://res.services.ai.azure.com/openai/v1/responses"),
         ("https://res.services.ai.azure.com/models", "https://res.services.ai.azure.com/openai/v1/responses"),
@@ -236,6 +238,7 @@ NATIVE_RESPONSES_CASES = [
         "gpt-5.6-sol",
     ),
     ("azure_ai/gpt-5.6-sol", GATEWAY_PROJECT_BASE, GATEWAY_RESPONSES_URL, "gpt-5.6-sol"),
+    ("azure_ai/gpt-5.6-sol", f"{FOUNDRY_PROJECT_BASE}/models", FOUNDRY_RESPONSES_URL, "gpt-5.6-sol"),
 ]
 
 
