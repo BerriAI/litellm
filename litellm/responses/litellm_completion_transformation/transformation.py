@@ -946,6 +946,13 @@ def target_fills_empty_user_turns(model: str, custom_llm_provider: str | None, b
     )
 
 
+def target_refuses_blank_text(model: str, custom_llm_provider: str | None) -> bool:
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+    chat_config: Final = _resolved_chat_config(model, custom_llm_provider)
+    return isinstance(chat_config, AmazonConverseConfig) or chat_config_builds_anthropic_request(chat_config)
+
+
 def _replays_compaction_block(input: str | ResponseInputParam, context_management: object) -> bool:
     return requests_compaction(context_management) and holds_compaction_summary(input)
 
@@ -1683,7 +1690,7 @@ class LiteLLMCompletionResponsesConfig:
             stored_turns=stored_turns,
             empty_user_turn_text=(
                 None
-                if request_input is None or not route_fills_empty_user_turns()
+                if request_input is None or not target_refuses_blank_text(model, provider)
                 else empty_user_turn_replay_text(request_kwargs.get("user_continue_message"))
             ),
         )
