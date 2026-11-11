@@ -60,6 +60,18 @@ it("drops a recipient map typed into the metadata JSON box, since the rows are i
   expect(JSON.parse(String(result.payload.metadata))).toEqual({ cost_center: "ops" });
 });
 
+it("keeps the budget alert rows when the metadata JSON box holds null", () => {
+  const result = build({
+    metadata: "null",
+    max_budget_alert_emails: [{ threshold: 80, emails: "shared-mailbox@example.com" }],
+  });
+  expect(result.kind).toBe("ok");
+  if (result.kind !== "ok") throw new Error(result.kind);
+  expect(JSON.parse(String(result.payload.metadata))).toEqual({
+    max_budget_alert_emails: { "80": ["shared-mailbox@example.com"] },
+  });
+});
+
 const payloadOf = (result: KeyPayloadResult): Record<string, unknown> => {
   expect(result.kind).toBe("ok");
   if (result.kind !== "ok") throw new Error("unreachable");
