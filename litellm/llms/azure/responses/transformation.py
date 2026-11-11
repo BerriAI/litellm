@@ -1,15 +1,18 @@
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Final, Literal
+from urllib.parse import urlsplit
 
 import httpx
 from openai.types.responses import ResponseReasoningItem
 from pydantic import TypeAdapter
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import *
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
@@ -180,10 +183,15 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         from litellm.constants import AZURE_DEFAULT_RESPONSES_API_VERSION
 
+        resolved_api_base: Final = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
+        parsed_base: Final = urlsplit(resolved_api_base or "")
+        path: Final = parsed_base.path.rstrip("/")
+        explicit_v1_base: Final = path.endswith(("/openai/v1", "/openai/v1/responses"))
+        responses_path: Final = f"{path}/responses" if path.endswith("/openai/v1") else path
         return BaseAzureLLM.get_base_azure_url(
-            api_base=api_base,
+            api_base=parsed_base._replace(path=responses_path).geturl() if explicit_v1_base else resolved_api_base,
             litellm_params=litellm_params,
-            route="/openai/responses",
+            route="/openai/v1/responses" if explicit_v1_base else "/openai/responses",
             default_api_version=AZURE_DEFAULT_RESPONSES_API_VERSION,
         )
 
