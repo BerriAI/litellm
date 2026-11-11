@@ -13,7 +13,10 @@ class ToolChoiceTokens:
 
 
 OPENAI_TOOL_CHOICE_TOKENS: Final = ToolChoiceTokens(none=1, required=0, named=7)
-_GROK_TOOL_CHOICE_TOKENS: Final = ToolChoiceTokens(none=21, required=11, named=12)
+_XAI_GROK_TOOL_CHOICE_TOKENS: Final = ToolChoiceTokens(none=21, required=11, named=12)
+_XAI_SERVED_TEMPLATED_GROK: Final = re.compile(
+    r"^(?:xai/|(?:openrouter/)?x-ai/)?grok-4[-.][13](?![.\d])", re.IGNORECASE
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,7 +24,6 @@ class ChatTemplateToolSection:
     preamble_tokens: int
     implicit_system_turn_tokens: int
     render_tool_schemas: Callable[[Sequence[Mapping[str, object]]], str]
-    tool_choice_tokens: ToolChoiceTokens | None = None
     renders_strict_only_when_true: bool = False
 
 
@@ -57,7 +59,6 @@ _TOOL_SECTIONS: Final = (
             0,
             0,
             _compact_json_line_tool_schemas,
-            tool_choice_tokens=_GROK_TOOL_CHOICE_TOKENS,
             renders_strict_only_when_true=True,
         ),
     ),
@@ -67,7 +68,6 @@ _TOOL_SECTIONS: Final = (
             0,
             0,
             _json_line_tool_schemas,
-            tool_choice_tokens=_GROK_TOOL_CHOICE_TOKENS,
             renders_strict_only_when_true=True,
         ),
     ),
@@ -78,3 +78,7 @@ def chat_template_tool_section(model: str | None) -> ChatTemplateToolSection | N
     if not model:
         return None
     return next((section for pattern, section in _TOOL_SECTIONS if pattern.search(model)), None)
+
+
+def chat_template_tool_choice_tokens(model: str) -> ToolChoiceTokens | None:
+    return _XAI_GROK_TOOL_CHOICE_TOKENS if _XAI_SERVED_TEMPLATED_GROK.match(model) else None

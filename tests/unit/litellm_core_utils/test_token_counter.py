@@ -722,9 +722,9 @@ def test_token_counter_tool_choice_adds_nothing_for_deepseek_v3_and_v4(model: st
 
 
 # xAI grok-4.3 and grok-4-1-fast-reasoning each billed 275 prompt tokens for the weather tool with no tool_choice,
-# 296 with "none", 286 with "required" and 289 with the named tool on 2026-11-10, and Azure AI Foundry grok-4.7
-# billed the same 21, 11 and 15 more than its own 89
-@pytest.mark.parametrize("model", ["xai/grok-4.3", "grok-4-1-fast-reasoning"])
+# 296 with "none", 286 with "required" and 289 with the named tool on 2026-11-10, and OpenRouter, which served
+# x-ai/grok-4.3 from xAI, billed the same on 2026-11-11
+@pytest.mark.parametrize("model", ["xai/grok-4.3", "grok-4-1-fast-reasoning", "openrouter/x-ai/grok-4.3"])
 @pytest.mark.parametrize(
     ("tool_choice", "billed_over_unset"),
     [
@@ -747,6 +747,27 @@ def test_token_counter_counts_each_grok_tool_choice_the_way_xai_bills_it(
         token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools, tool_choice=tool_choice)
         - token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools)
         == billed_over_unset
+    )
+
+
+# Azure AI Foundry grok-4-1 billed 351 prompt tokens for the weather tool with no tool_choice, 163 with "none" and
+# 352 with "required" or the named tool on 2026-11-10, so xAI's costs would count it 10 to 21 over
+@pytest.mark.parametrize("model", ["azure_ai/grok-4-1-fast-reasoning", "azure_ai/grok-4.3"])
+@pytest.mark.parametrize("tool_choice", ["none", "required", {"type": "function", "function": {"name": "get_weather"}}])
+def test_token_counter_tool_choice_adds_nothing_for_grok_served_off_xai(model: str, tool_choice: object):
+    tools: Final = [_openai_tool(_WEATHER_FUNCTION)]
+
+    assert token_counter_new(
+        model=model, messages=list(_USER_MESSAGES), tools=tools, tool_choice=tool_choice
+    ) == token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools)
+
+
+# xAI and OpenAI both answered 400 to a tool_choice sent without tools on 2026-11-11
+@pytest.mark.parametrize("model", ["xai/grok-4.3", "gpt-4.1"])
+@pytest.mark.parametrize("tool_choice", ["none", {"type": "function", "function": {"name": "get_weather"}}])
+def test_token_counter_tool_choice_without_tools_adds_nothing(model: str, tool_choice: object):
+    assert token_counter_new(model=model, messages=list(_USER_MESSAGES), tool_choice=tool_choice) == token_counter_new(
+        model=model, messages=list(_USER_MESSAGES)
     )
 
 

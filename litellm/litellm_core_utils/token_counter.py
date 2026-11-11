@@ -52,6 +52,7 @@ from litellm.litellm_core_utils.prompt_templates.chat_template_tools import (
     OPENAI_TOOL_CHOICE_TOKENS,
     ChatTemplateToolSection,
     ToolChoiceTokens,
+    chat_template_tool_choice_tokens,
     chat_template_tool_section,
 )
 from litellm.litellm_core_utils.tokenizer import HuggingFaceTokenizer, OpenAIEncoding
@@ -712,7 +713,7 @@ class _MessageCountParams:
         self.count_function = _get_count_function(model, custom_tokenizer)
         self.tool_section = chat_template_tool_section(model)
         self.tool_choice_tokens = _tool_choice_tokens(
-            self.tool_section, deepseek_tokenizer=huggingface_tokenizer_kind(model or "") == "deepseek"
+            model or "", self.tool_section, deepseek_tokenizer=huggingface_tokenizer_kind(model or "") == "deepseek"
         )
         self._model = model
 
@@ -722,10 +723,10 @@ class _MessageCountParams:
 
 
 def _tool_choice_tokens(
-    tool_section: ChatTemplateToolSection | None, deepseek_tokenizer: bool
+    model: str, tool_section: ChatTemplateToolSection | None, deepseek_tokenizer: bool
 ) -> ToolChoiceTokens | None:
     if tool_section is not None:
-        return tool_section.tool_choice_tokens
+        return chat_template_tool_choice_tokens(model)
     if deepseek_tokenizer:
         return None
     return OPENAI_TOOL_CHOICE_TOKENS
@@ -1017,7 +1018,7 @@ def _count_extra(
     return (
         reply_primer_tokens
         + _count_tool_definitions(count_function, tools, includes_system_message, tool_section)
-        + _count_tool_choice(count_function, tool_choice, tool_choice_tokens)
+        + (_count_tool_choice(count_function, tool_choice, tool_choice_tokens) if tools else 0)
     )
 
 
