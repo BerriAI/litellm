@@ -127,7 +127,6 @@ class PangeaHandler(CustomGuardrail):
         Args:
             api (str): Which API to use (text/guard or v1beta/guard)
             payload (dict): The request payload.
-            request_data (dict): Original request data (used for logging/headers).
             hook_name (str): Name of the hook calling this function (for logging).
 
         Raises:
