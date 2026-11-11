@@ -174,6 +174,13 @@ def test_every_tier_bedrock_forwards_is_labelled(tier):
     assert get_service_tier_from_standard_logging_payload(payload) == tier
 
 
+@pytest.mark.parametrize("tier", ["Priority", "FLEX", "Reserved"])
+def test_a_requested_tier_in_any_case_is_labelled_in_lowercase(tier):
+    payload = _standard_logging_payload(model_parameters={"service_tier": tier})
+
+    assert get_service_tier_from_standard_logging_payload(payload) == tier.lower()
+
+
 @pytest.mark.parametrize(
     "response, usage_object, model_parameters",
     [

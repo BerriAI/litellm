@@ -474,7 +474,12 @@ def _uploaded_object_size(litellm_params: Mapping[str, object], response_headers
     return int(response_content_length) if response_content_length.isdigit() else 0
 
 
-def _check_batch_record_service_tier(value: object, model: str, drop_params: bool) -> None:
+_OPENAI_FORMAT_INVOKE_SERVICE_TIERS: Final = frozenset({"default", "flex", "priority"})
+
+
+def _check_batch_record_service_tier(
+    value: object, model: str, drop_params: bool, accepted_tiers: frozenset[str] = frozenset()
+) -> None:
     import litellm
 
     if value is None or (isinstance(value, str) and value.lower() == "auto"):
@@ -482,15 +487,27 @@ def _check_batch_record_service_tier(value: object, model: str, drop_params: boo
     if not (litellm.drop_params or drop_params):
         raise UnsupportedParamsError(
             message=(
-                f"{model} batch records do not support service_tier={value!r}, since a Bedrock batch record is an "
-                "InvokeModel body, which takes no serviceTier. "
-                "To drop unsupported params, set `litellm.drop_params = True`."
+                f"{model} batch records do not support service_tier={value!r}. "
+                + (
+                    f"Their InvokeModel body takes only {', '.join(sorted(accepted_tiers))}. "
+                    if accepted_tiers
+                    else "A Bedrock batch record for this model is an InvokeModel body, which takes no service tier. "
+                )
+                + "To drop unsupported params, set `litellm.drop_params = True`."
             ),
             status_code=400,
         )
-    verbose_logger.warning(
-        "Dropping service_tier=%r from a %s batch record, since it takes no serviceTier.", value, model
-    )
+    verbose_logger.warning("Dropping service_tier=%r from a %s batch record, since Bedrock rejects it.", value, model)
+
+
+def _openai_format_batch_record_service_tier(value: object, model: str, drop_params: bool) -> Mapping[str, str]:
+    from litellm.llms.bedrock.chat.converse_transformation import bedrock_service_tier_name
+
+    tier: Final = bedrock_service_tier_name(value) if isinstance(value, str) else None
+    if tier in _OPENAI_FORMAT_INVOKE_SERVICE_TIERS:
+        return MappingProxyType({"service_tier": tier})
+    _check_batch_record_service_tier(value, model, drop_params, _OPENAI_FORMAT_INVOKE_SERVICE_TIERS)
+    return MappingProxyType({})
 
 
 class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
@@ -1008,6 +1025,8 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
 
         messages: Final = map_developer_role_to_system_role(openai_request_body.get("messages", []))
         optional_params: Final = {k: v for k, v in openai_request_body.items() if k not in ["model", "messages"]}
+        drop_unsupported_params: Final = drop_params or optional_params.get("drop_params") is True
+        requested_service_tier: Final = REQUEST_PARAMS.validate_python(optional_params).get("service_tier")
 
         # --- Anthropic: use existing AmazonAnthropicClaudeConfig ---
         if provider == LlmProviders.ANTHROPIC:
@@ -1015,6 +1034,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 AmazonAnthropicClaudeConfig,
             )
 
+            _check_batch_record_service_tier(requested_service_tier, model, drop_unsupported_params)
             config: Final = AmazonAnthropicClaudeConfig()
             litellm_params: Final = without_bedrock_native_output_opt_in({})
             mapped_params = get_optional_params(
@@ -1022,13 +1042,14 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 custom_llm_provider="bedrock",
                 messages=messages,
                 model_info=deployment_model_info(litellm_params),
+                drop_params=True if drop_unsupported_params else None,
                 **MappingProxyType(
                     {
                         k: v
                         for k, v in optional_params.items()
-                        if not is_litellm_owned_kwarg(k) or k in _LITELLM_PARAMS_THE_MAPPER_TAKES
+                        if k not in ("service_tier", "drop_params")
+                        and (not is_litellm_owned_kwarg(k) or k in _LITELLM_PARAMS_THE_MAPPER_TAKES)
                     }
-                    | ({"drop_params": True} if drop_params else {})
                 ),
             )
             return config.transform_request(
@@ -1049,10 +1070,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 AmazonConverseConfig,
             )
 
-            drop_unsupported_params: Final = drop_params or optional_params.get("drop_params") is True
-            _check_batch_record_service_tier(
-                REQUEST_PARAMS.validate_python(optional_params).get("service_tier"), model, drop_unsupported_params
-            )
+            _check_batch_record_service_tier(requested_service_tier, model, drop_unsupported_params)
             converse_config: Final = AmazonConverseConfig()
             mapped_params = converse_config.map_openai_params(
                 non_default_params={k: v for k, v in optional_params.items() if k != "service_tier"},
@@ -1072,7 +1090,8 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         #     like openai.gpt-oss-*, qwen, deepseek, etc.) ---
         return {
             "messages": messages,
-            **{k: v for k, v in optional_params.items() if k != "drop_params"},
+            **{k: v for k, v in optional_params.items() if k not in ("drop_params", "service_tier")},
+            **_openai_format_batch_record_service_tier(requested_service_tier, model, drop_unsupported_params),
         }
 
     def _resolve_batch_record_model_and_provider(
