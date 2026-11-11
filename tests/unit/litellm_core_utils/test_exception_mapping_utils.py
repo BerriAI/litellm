@@ -193,6 +193,50 @@ def test_mapped_provider_error_carries_the_deployment_debug_info(
     assert "CONFIDENTIAL" not in debug_info
 
 
+_ROUTER_METADATA: Final = {
+    "api_base": "https://relay.example/v1",
+    "model_group": "claude-alias",
+    "deployment": "anthropic/claude-haiku-5-5",
+}
+
+
+@pytest.mark.parametrize(
+    ("provider_error", "custom_llm_provider", "extra_kwargs"),
+    [
+        (
+            AnthropicError(status_code=529, message="Overloaded"),
+            "anthropic",
+            {"litellm_metadata": _ROUTER_METADATA},
+        ),
+        (
+            OpenAIError(status_code=500, message="upstream failed"),
+            "hosted_vllm",
+            {
+                "api_base": "https://relay.example/v1",
+                "metadata": {"user_id": "set by the caller"},
+                "litellm_metadata": _ROUTER_METADATA,
+            },
+        ),
+    ],
+    ids=["native_messages_without_api_base", "bridged_responses_with_request_metadata"],
+)
+def test_router_metadata_under_litellm_metadata_names_the_deployment(
+    provider_error: Exception, custom_llm_provider: str, extra_kwargs: dict[str, object]
+) -> None:
+    with pytest.raises(litellm.InternalServerError) as caught:
+        exception_type(
+            model="claude-haiku-5-5",
+            original_exception=provider_error,
+            custom_llm_provider=custom_llm_provider,
+            extra_kwargs=extra_kwargs,
+        )
+    debug_info: Final = caught.value.litellm_debug_info
+    assert isinstance(debug_info, str)
+    assert "API Base: `https://relay.example/v1`" in debug_info
+    assert "model_group: `claude-alias`" in debug_info
+    assert "deployment: `anthropic/claude-haiku-5-5`" in debug_info
+
+
 def test_mapper_that_passes_its_debug_info_keeps_the_prompt_line() -> None:
     request: Final = httpx.Request("POST", "https://gateway.example/v1/chat/completions")
     original: Final = OpenAIError(

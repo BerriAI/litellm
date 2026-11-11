@@ -84,6 +84,7 @@ from litellm.constants import (
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
     bind_budget_reservation_to_callbacks,
     normalize_drop_params,
     unbind_budget_reservation_from_callbacks,
@@ -6350,8 +6351,9 @@ def get_model_region(litellm_params: LiteLLM_Params, mode: str | None) -> str | 
     return None
 
 
-def get_first_chars_messages(kwargs: Mapping[str, object]) -> str:
-    messages: Final = kwargs.get("messages")
+def get_first_chars_messages(kwargs: object) -> str:
+    request: Final = as_str_mapping(kwargs)
+    messages: Final = None if request is None else request.get("messages")
     return "" if messages is None else str(messages)[:100]
 
 

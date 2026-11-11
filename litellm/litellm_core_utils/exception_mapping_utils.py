@@ -2500,11 +2500,21 @@ _HOST_WITH_OPTIONAL_PORT: Final = re.compile(
 )
 
 
+def _router_metadata(params: Mapping[str, object]) -> Mapping[str, object]:
+    return (
+        as_str_mapping(params.get("litellm_metadata")) or as_str_mapping(params.get("metadata")) or _NO_LITELLM_PARAMS
+    )
+
+
+def _deployment_api_base(metadata: Mapping[str, object]) -> str | None:
+    api_base: Final = metadata.get("api_base")
+    return api_base if isinstance(api_base, str) and api_base else None
+
+
 def with_deployment_api_base(litellm_params: object) -> Mapping[str, object]:
     params: Final = as_str_mapping(litellm_params) or _NO_LITELLM_PARAMS
-    metadata: Final = as_str_mapping(params.get("metadata"))
-    deployment_api_base: Final = None if metadata is None else metadata.get("api_base")
-    if not isinstance(deployment_api_base, str) or not deployment_api_base:
+    deployment_api_base: Final = _deployment_api_base(_router_metadata(params))
+    if deployment_api_base is None:
         return params
     return MappingProxyType({**params, "api_base": deployment_api_base})
 
@@ -2524,11 +2534,11 @@ _NO_REQUEST_DEBUG_INFO: Final = _RequestDebugInfo(with_prompt="", without_prompt
 def _request_debug_info(model: object, extra_kwargs: object, completion_kwargs: object) -> _RequestDebugInfo:
     params: Final = as_str_mapping(extra_kwargs) or _NO_LITELLM_PARAMS
     try:
-        api_base: Final = litellm.get_api_base(model=model, optional_params=params)
+        metadata: Final = _router_metadata(params)
+        api_base: Final = litellm.get_api_base(model=model, optional_params=params) or _deployment_api_base(metadata)
         messages: Final = litellm.get_first_chars_messages(
             kwargs=as_str_mapping(completion_kwargs) or _NO_LITELLM_PARAMS
         )
-        metadata: Final = as_str_mapping(params.get("metadata")) or _NO_LITELLM_PARAMS
         shown_api_base: Final = _api_base_without_credentials(api_base) if api_base else ""
         head: Final = f"\nModel: {model}" + (f"\nAPI Base: `{shown_api_base}`" if shown_api_base else "")
         prompt: Final = (
