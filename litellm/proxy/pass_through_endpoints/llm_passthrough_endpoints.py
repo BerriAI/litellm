@@ -53,7 +53,6 @@ from litellm.integrations.custom_guardrail import guardrail_request_data_with_st
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, attribute_or_none
 from litellm.litellm_core_utils.fallback_generalizations import match_routing_generalization
-from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
 from litellm.llms.anthropic.common_utils import (
     AnthropicModelInfo,
     anthropic_pass_through_api_base,
@@ -189,7 +188,12 @@ from litellm.types.passthrough_endpoints.tinyfish import (
 )
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 from litellm.types.router import LiteLLMParamsTypedDict
-from litellm.types.utils import CallTypes, CustomPricingLiteLLMParams, LlmProviders
+from litellm.types.utils import (
+    DEPLOYMENT_SCOPED_PRICING_FIELDS,
+    SERVER_DERIVED_PRICING_FIELDS,
+    CallTypes,
+    LlmProviders,
+)
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore, LiteLLM_ManagedVectorStoreIndex
 from litellm.utils import ProviderConfigManager, with_named_credential
 
@@ -249,14 +253,33 @@ def _models_served_by_group(llm_router: litellm.Router, model_group: str) -> fro
     )
 
 
-def _serves_anthropic_model(litellm_params: LiteLLMParamsTypedDict, model: str) -> bool:
+_OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_DEPLOYMENT_PRICING_FIELDS: Final[frozenset[str]] = SERVER_DERIVED_PRICING_FIELDS | DEPLOYMENT_SCOPED_PRICING_FIELDS
+
+
+def _object_mapping(value: object) -> Mapping[str, object]:
+    return _OBJECT_MAPPING.validate_python(value if isinstance(value, Mapping) else {})
+
+
+def _anthropic_deployment_model_info(deployment: object, model: str) -> Mapping[str, object] | None:
+    fields: Final = _object_mapping(deployment)
+    params: Final = _object_mapping(fields.get("litellm_params"))
+    backend: Final = params.get("model")
+    provider_override: Final = params.get("custom_llm_provider")
+    if not isinstance(backend, str):
+        return None
     try:
         backend_model, provider, _, _ = get_llm_provider(
-            model=litellm_params.get("model", ""), custom_llm_provider=litellm_params.get("custom_llm_provider")
+            model=backend, custom_llm_provider=provider_override if isinstance(provider_override, str) else None
         )
     except litellm.BadRequestError:
-        return False
-    return provider == LlmProviders.ANTHROPIC.value and backend_model == model
+        return None
+    if provider != LlmProviders.ANTHROPIC.value or backend_model != model:
+        return None
+    return {
+        **_object_mapping(fields.get("model_info")),
+        **{field: value for field in _DEPLOYMENT_PRICING_FIELDS if (value := params.get(field)) is not None},
+    }
 
 
 def anthropic_deployment_pricing_model_info(
@@ -270,23 +293,15 @@ def anthropic_deployment_pricing_model_info(
     model: Final = request_body.get("model")
     if llm_router is None or not isinstance(model, str) or not model:
         return None
-    matches: Final = tuple(
-        deployment
+    candidates: Final = tuple(
+        model_info
         for deployment in llm_router.registry().deployments(model, team_id=team_id) or ()
-        if _serves_anthropic_model(deployment["litellm_params"], model)
+        if (model_info := _anthropic_deployment_model_info(deployment, model)) is not None
     )
-    if len(matches) != 1:
+    if len(candidates) != 1:
         return None
-    deployment_params: Final[Mapping[str, object]] = matches[0]["litellm_params"]
-    model_info: Final = {
-        **(as_str_mapping(matches[0].get("model_info")) or {}),
-        **{
-            field: value
-            for field in CustomPricingLiteLLMParams.model_fields
-            if (value := deployment_params.get(field)) is not None
-        },
-    }
-    return model_info if use_custom_pricing_for_model({"metadata": {"model_info": model_info}}) else None
+    (only_match,) = candidates
+    return only_match if any(only_match.get(field) is not None for field in _DEPLOYMENT_PRICING_FIELDS) else None
 
 
 def is_passthrough_request_streaming(request_body: object) -> bool:
@@ -1279,10 +1294,11 @@ async def anthropic_proxy_route(
 
     from litellm.proxy.proxy_server import llm_router
 
-    deployment_model_info: Final = (
-        anthropic_deployment_pricing_model_info(llm_router, await read_request_body(request), user_api_key_dict.team_id)
-        if request.method == "POST"
-        else None
+    request_body: Final = _OBJECT_MAPPING.validate_python(
+        await read_request_body(request) if request.method == "POST" else {}
+    )
+    deployment_model_info: Final = anthropic_deployment_pricing_model_info(
+        llm_router, request_body, user_api_key_dict.team_id
     )
     if deployment_model_info is not None:
         setattr(request.state, LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY, deployment_model_info)
