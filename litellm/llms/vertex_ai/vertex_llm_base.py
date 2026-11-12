@@ -104,6 +104,7 @@ class _VertexCredentialsObject(Protocol):
 
 
 _VertexCredentialCacheKey = tuple[str | None, str | None]
+_KEY_FILE_VERSION_SEPARATOR: Final = "\0"
 
 
 def _credential_cache_identity(credentials: VERTEX_CREDENTIALS_TYPES | None) -> str | None:
@@ -113,7 +114,22 @@ def _credential_cache_identity(credentials: VERTEX_CREDENTIALS_TYPES | None) -> 
     version: Final = None if key_file is None else vertex_credentials_file_version(key_file)
     if version is None:
         return credentials
-    return f"{credentials or ''}\0{version}"
+    return f"{credentials or ''}{_KEY_FILE_VERSION_SEPARATOR}{version}"
+
+
+def _is_other_version_of_key_file(
+    candidate: _VertexCredentialCacheKey, credential_cache_key: _VertexCredentialCacheKey
+) -> bool:
+    candidate_identity, candidate_project_id = candidate
+    identity, project_id = credential_cache_key
+    if candidate_identity is None or identity is None or candidate_identity == identity:
+        return False
+    key_file, separator, _ = candidate_identity.partition(_KEY_FILE_VERSION_SEPARATOR)
+    return (
+        bool(separator)
+        and candidate_project_id == project_id
+        and key_file == identity.partition(_KEY_FILE_VERSION_SEPARATOR)[0]
+    )
 
 
 class VertexBase:
@@ -562,6 +578,47 @@ class VertexBase:
             return cached_entry
         return cached_entry, cached_entry.quota_project_id or getattr(cached_entry, "project_id", None)
 
+    def _load_auth_or_earlier_key_file(
+        self,
+        credentials: VERTEX_CREDENTIALS_TYPES | None,
+        project_id: str | None,
+        credential_cache_key: _VertexCredentialCacheKey,
+    ) -> tuple[_VertexCredentialsObject | None, str | None]:
+        try:
+            return self.load_auth(credentials=credentials, project_id=project_id)
+        except Exception as e:
+            earlier: Final = self._credentials_from_an_earlier_key_file(credential_cache_key, e)
+            if earlier is None:
+                verbose_logger.exception(
+                    "Failed to load vertex credentials. Check to see if credentials containing partial/invalid information. Error: %s",
+                    e,
+                )
+                raise
+            return earlier
+
+    def _credentials_from_an_earlier_key_file(
+        self, credential_cache_key: _VertexCredentialCacheKey, error: Exception
+    ) -> tuple[_VertexCredentialsObject, str | None] | None:
+        with self._credentials_cache_lock:
+            earlier_key: Final = next(
+                (
+                    key
+                    for key in reversed(self._credentials_project_mapping)
+                    if _is_other_version_of_key_file(key, credential_cache_key)
+                ),
+                None,
+            )
+        if earlier_key is None:
+            return None
+        earlier_credentials, earlier_project_id = self._unpack_cached_credentials(earlier_key)
+        if earlier_credentials is None:
+            return None
+        verbose_logger.warning(
+            "Vertex: the replaced credentials file did not load, so the credentials loaded before it stay in use: %s",
+            error,
+        )
+        return earlier_credentials, earlier_project_id
+
     def _cache_credentials(
         self,
         credential_cache_key: _VertexCredentialCacheKey,
@@ -604,14 +661,9 @@ class VertexBase:
         credential_cache_key: _VertexCredentialCacheKey,
     ) -> tuple[_VertexCredentialsObject, str | None]:
         """Load credentials via load_auth (in thread) and cache the result."""
-        try:
-            _credentials, credential_project_id = await asyncify(self.load_auth)(
-                credentials=credentials,
-                project_id=project_id,
-            )
-        except Exception as e:
-            verbose_logger.exception("Failed to load vertex credentials: %s", str(e))
-            raise
+        _credentials, credential_project_id = await asyncify(self._load_auth_or_earlier_key_file)(
+            credentials, project_id, credential_cache_key
+        )
         if _credentials is None:
             raise ValueError("Could not resolve credentials")
         self._cache_credentials(credential_cache_key, _credentials, credential_project_id)
@@ -1055,14 +1107,9 @@ class VertexBase:
                 "Credential cache key not found for project_id: %s, loading new credentials", project_id
             )
 
-            try:
-                _credentials, credential_project_id = self.load_auth(credentials=credentials, project_id=project_id)
-            except Exception as e:
-                verbose_logger.exception(
-                    "Failed to load vertex credentials. Check to see if credentials containing partial/invalid information. Error: %s",
-                    e,
-                )
-                raise e
+            _credentials, credential_project_id = self._load_auth_or_earlier_key_file(
+                credentials, project_id, credential_cache_key
+            )
 
             if _credentials is None:
                 raise ValueError(
