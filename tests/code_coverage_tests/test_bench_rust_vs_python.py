@@ -199,3 +199,12 @@ def test_flame_buckets_charge_the_frame_closest_to_the_leaf() -> None:
 def test_native_share_ignores_unrecorded_agents_and_is_none_without_any() -> None:
     assert native_share(("python-httpx/0.28.1", "reqwest/0.12", None, "litellm/1.0")) == pytest.approx(2 / 3)
     assert native_share((None, None)) is None
+
+
+def test_run_log_keeps_the_upstream_user_agent_the_mock_recorded() -> None:
+    from scripts.bench_rust_vs_python.run_bench import MockLog
+
+    served: Final = '{"requests":[{"marker":"perfreq-000001-n","delay_s":0.8,"stream":true,"output_tokens":9,"user_agent":"python-httpx/0.28.1"}]}'
+    kept: Final = json.loads(MockLog.model_validate_json(served).model_dump_json())["requests"]
+
+    assert native_share(tuple(entry.get("user_agent") for entry in kept)) == 0.0

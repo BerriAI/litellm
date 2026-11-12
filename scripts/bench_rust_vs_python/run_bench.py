@@ -72,6 +72,7 @@ class MockEntry(BaseModel):
     generation_s: float = 0.0
     stream: bool
     output_tokens: int
+    user_agent: str | None = None
 
 
 class MockLog(BaseModel):
