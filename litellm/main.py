@@ -9210,9 +9210,13 @@ def speech(
 
             api_version = api_version or litellm.api_version or get_secret("AZURE_API_VERSION")
 
-            api_key = (
-                api_key
-                or litellm.api_key
+            from litellm.llms.azure_ai.common_utils import AzureAIEntraCredentials, has_azure_entra_params
+
+            api_key = api_key or (
+                None
+                if custom_llm_provider == "azure_ai"
+                and has_azure_entra_params(AzureAIEntraCredentials.model_validate(kwargs))
+                else litellm.api_key
                 or litellm.azure_key
                 or get_secret("AZURE_OPENAI_API_KEY")
                 or get_secret("AZURE_API_KEY")

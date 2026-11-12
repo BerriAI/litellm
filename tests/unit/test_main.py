@@ -6623,6 +6623,47 @@ def test_azure_ai_speech_on_a_foundry_host_uses_the_azure_openai_deployment_rout
     assert response.content == b"mp3-bytes"
 
 
+
+def _azure_ai_speech_request(respx_mock: respx.MockRouter, **credentials: str) -> httpx.Request:
+    route: Final = respx_mock.post(
+        url__regex=r"https://my-project\.services\.ai\.azure\.com/openai/deployments/tts-1/audio/speech\?api-version=.+"
+    ).mock(return_value=httpx.Response(200, content=b"mp3-bytes"))
+    litellm.speech(model="azure_ai/tts-1", input="hello", voice="alloy", api_base=FOUNDRY_HOST, **credentials)
+    return route.calls.last.request
+
+
+@pytest.mark.parametrize("process_wide_key_env", ["AZURE_API_KEY", "AZURE_OPENAI_API_KEY"])
+def test_azure_ai_speech_authenticates_with_the_entry_entra_token_over_a_process_wide_key(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, process_wide_key_env: str
+) -> None:
+    monkeypatch.delenv("AZURE_API_KEY", raising=False)
+    monkeypatch.delenv("AZURE_OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "azure_key", None)
+    monkeypatch.setenv(process_wide_key_env, "process-wide-key")
+
+    with patch(  # test-quality-ok: stubs the service principal token fetch so the test can assert which credential the request carries
+        "litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id", return_value=lambda: "entry-token"
+    ):
+        request: Final = _azure_ai_speech_request(
+            respx_mock, tenant_id="entry-tenant", client_id="entry-client", client_secret="entry-secret"
+        )
+
+    assert request.headers["authorization"] == "Bearer entry-token"
+    assert "api-key" not in request.headers
+
+
+def test_azure_ai_speech_without_entry_entra_still_uses_the_process_wide_azure_key(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("AZURE_OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "azure_key", None)
+    monkeypatch.setenv("AZURE_API_KEY", "process-wide-key")
+
+    assert _azure_ai_speech_request(respx_mock).headers["api-key"] == "process-wide-key"
+
+
 GROQ_INTERNAL_BASE: Final = "https://groq.gateway.internal/openai/v1"
 GROQ_WAV_FILE: Final = ("tone.wav", b"RIFF\x00\x00\x00\x00WAVE", "audio/wav")
 

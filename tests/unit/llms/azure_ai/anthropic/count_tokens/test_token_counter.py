@@ -294,10 +294,13 @@ async def test_count_uses_the_shared_api_base_chat_would_use(monkeypatch: pytest
 
 
 async def _count_request_headers(
-    monkeypatch: pytest.MonkeyPatch, process_wide_key_env: str, litellm_params: dict[str, str]
+    monkeypatch: pytest.MonkeyPatch,
+    process_wide_key_env: str,
+    litellm_params: dict[str, str],
+    sdk_wide_api_key: str | None = None,
 ) -> httpx.Headers:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "api_key", sdk_wide_api_key)
     monkeypatch.setattr(litellm, "azure_key", None)
     for env_var in ("AZURE_AI_API_KEY", "AZURE_API_KEY", "AZURE_OPENAI_API_KEY"):
         monkeypatch.delenv(env_var, raising=False)
@@ -331,6 +334,15 @@ async def test_count_authenticates_with_the_deployment_entra_token_over_a_proces
 @pytest.mark.asyncio
 async def test_count_without_deployment_entra_still_uses_the_process_wide_key(monkeypatch: pytest.MonkeyPatch) -> None:
     headers: Final = await _count_request_headers(monkeypatch, "AZURE_AI_API_KEY", {})
+
+    assert headers["x-api-key"] == "process-wide-key"
+
+
+@pytest.mark.asyncio
+async def test_count_prefers_azure_ai_api_key_over_the_sdk_wide_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    headers: Final = await _count_request_headers(
+        monkeypatch, "AZURE_AI_API_KEY", {}, sdk_wide_api_key="sdk-wide-openai-key"
+    )
 
     assert headers["x-api-key"] == "process-wide-key"
 
