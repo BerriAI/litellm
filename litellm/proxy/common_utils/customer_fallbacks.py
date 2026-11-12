@@ -1,44 +1,45 @@
 from collections.abc import Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final
 
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
-from litellm.proxy._types import ProxyException
 from litellm.types.proxy.customer_fallbacks import CustomerFallbacks
 
 
-def customer_fallback_settings(
-    fallbacks: CustomerFallbacks | None,
-) -> Mapping[str, CustomerFallbacks]:
-    if fallbacks is None:
-        return {}
-    return {
-        "fallbacks": fallbacks,
-        "context_window_fallbacks": fallbacks,
-        "content_policy_fallbacks": fallbacks,
-    }
+@dataclass(frozen=True, slots=True)
+class ResolvedRouterSettings:
+    values: Mapping[str, object]
+    authoritative_fields: frozenset[str] = frozenset()
 
-
-def prepare_customer_fallback_request(
-    data: Mapping[str, object], fallbacks: CustomerFallbacks | None
-) -> Mapping[str, object]:
-    if fallbacks is None:
-        return {}
-    if data.get("user_config") is not None:
-        raise ProxyException(
-            message="user_config cannot be used with customer-specific fallback rules",
-            type="invalid_request_error",
-            param="user_config",
-            code=400,
+    def client_settings(self, request_data: Mapping[str, object]) -> Mapping[str, object]:
+        if not self.authoritative_fields:
+            return request_data
+        override: Final = as_str_mapping(request_data.get("router_settings_override"))
+        return MappingProxyType(
+            {
+                **{key: value for key, value in request_data.items() if key not in self.authoritative_fields},
+                **(
+                    {
+                        "router_settings_override": {
+                            key: value for key, value in override.items() if key not in self.authoritative_fields
+                        }
+                    }
+                    if override is not None
+                    else {}
+                ),
+            }
         )
-    fields: Final = customer_fallback_settings(fallbacks)
-    override: Final = as_str_mapping(data.get("router_settings_override"))
-    overrides: Final = (
-        {"router_settings_override": {key: value for key, value in override.items() if key not in fields}}
-        if override is not None
-        else {}
+
+
+def resolve_router_settings(
+    inherited: Mapping[str, object] | None,
+    customer_fallbacks: CustomerFallbacks | None,
+) -> ResolvedRouterSettings:
+    inherited_settings: Final = inherited or MappingProxyType({})
+    if customer_fallbacks is None:
+        return ResolvedRouterSettings(inherited_settings)
+    return ResolvedRouterSettings(
+        MappingProxyType({**inherited_settings, "fallbacks": customer_fallbacks}),
+        frozenset({"fallbacks"}),
     )
-    return {**{field: None for field in fields if field in data}, **overrides}
-
-
-def apply_customer_fallbacks(data: Mapping[str, object], fallbacks: CustomerFallbacks | None) -> Mapping[str, object]:
-    return {**prepare_customer_fallback_request(data, fallbacks), **customer_fallback_settings(fallbacks)}

@@ -145,7 +145,6 @@ from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.team_grants import team_grants
 from litellm.proxy.auth.trusted_proxy_utils import get_trusted_proxy_cidrs
 from litellm.proxy.common_utils.cache_coordinator import EventDrivenCacheCoordinator
-from litellm.proxy.common_utils.customer_fallbacks import prepare_customer_fallback_request
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -2848,13 +2847,6 @@ async def user_api_key_auth_builder(
                     raise e
                 verbose_proxy_logger.debug("Unable to find user in db. Error - %s", e)
 
-        if _end_user_object is not None:
-            request_data.update(
-                prepare_customer_fallback_request(
-                    _OBJECT_MAPPING_ADAPTER.validate_python(request_data), _end_user_object.fallbacks
-                )
-            )
-
         ### CHECK IF ADMIN ###
         # note: never string compare api keys, this is vulenerable to a time attack. Use secrets.compare_digest instead
         ### CHECK IF ADMIN ###
@@ -4917,9 +4909,15 @@ async def enforce_key_and_fallback_model_access(
                 llm_router=llm_router,
             )
 
+        from litellm.proxy.proxy_server import prisma_client, proxy_config, proxy_logging_obj
+
+        routing_settings: Final = await proxy_config.resolve_request_router_settings(
+            valid_token, prisma_client, proxy_logging_obj
+        )
+        client_settings: Final = routing_settings.client_settings(_OBJECT_MAPPING_ADAPTER.validate_python(request_data))
         fallback_names: Final = tuple(
             name
-            for target in iter_request_fallback_targets(request_data)
+            for target in iter_request_fallback_targets(client_settings)
             if (name := fallback_target_model_name(target)) is not None
         )
 

@@ -19,7 +19,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.routing_common_utils import is_proxy_admin_request
 from litellm.litellm_core_utils.total_deadline import enforce_total_timeout_scope
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
-from litellm.proxy.common_utils.customer_fallbacks import apply_customer_fallbacks
+from litellm.proxy.common_utils.customer_fallbacks import ResolvedRouterSettings
 from litellm.proxy.openai_files_endpoints.common_utils import (
     TeamProviderDeployment,
     carries_explicit_credentials,
@@ -795,6 +795,7 @@ def _with_team_deployment_attribution(
 
 def _merge_router_settings_override(
     data: dict[str, object],  # mutable-ok: route_request mutates the shared request body in place
+    resolved_router_settings: ResolvedRouterSettings | None = None,
 ) -> frozenset[str]:
     data.pop("enable_tag_filtering", None)
     drop_params: Final = litellm.drop_params is True or normalize_drop_params(data.get("drop_params")) is True
@@ -815,16 +816,28 @@ def _merge_router_settings_override(
     if "user_config" in data and data["user_config"] is None:
         data.pop("user_config")
     user_config: Final = _JSON_OBJECT_OR_DROPPED_ADAPTER.validate_python(data.get("user_config"))
+    authoritative_fields: Final[frozenset[str]] = (
+        resolved_router_settings.authoritative_fields if resolved_router_settings is not None else frozenset()
+    )
+    if authoritative_fields and data.get("user_config") is not None:
+        raise ProxyException(
+            message="user_config cannot override saved customer routing rules",
+            type="invalid_request_error",
+            param="user_config",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+    effective_settings: Final = {
+        **(router_settings_override or {}),
+        **(resolved_router_settings.values if resolved_router_settings is not None else {}),
+    }
     router_settings_from_override: Final = MappingProxyType(
         {
-            key: router_settings_override[key]
+            key: effective_settings[key]
             for key in _PER_REQUEST_ROUTER_SETTINGS
-            if router_settings_override.get(key) is not None
-            and key not in data
+            if effective_settings.get(key) is not None
+            and (key not in data or key in authoritative_fields)
             and (user_config is None or key not in user_config)
         }
-        if router_settings_override is not None
-        else {}
     )
     data.update(router_settings_from_override)
     return _ROUTER_ONLY_SETTINGS.intersection(router_settings_from_override)
@@ -836,16 +849,22 @@ async def route_request(
     user_model: str | None,
     route_type: RouteType,
     user_api_key_dict: UserAPIKeyAuth | None = None,
+    resolved_router_settings: ResolvedRouterSettings | None = None,
 ):
     """
     Common helper to route the request
     """
     enforce_total_timeout_scope(data)  # pyright: ignore[reportUnknownArgumentType]  # route_request takes an untyped dict body
-    router_only_settings_from_override: Final = _merge_router_settings_override(data)  # pyright: ignore[reportUnknownArgumentType]  # route_request takes an untyped dict body
-    if user_api_key_dict is not None:
-        data.update(
-            apply_customer_fallbacks(JSON_OBJECT_ADAPTER.validate_python(data), user_api_key_dict.end_user_fallbacks)
+    from litellm.proxy import proxy_server
+
+    routing_settings: Final = (
+        await proxy_server.proxy_config.resolve_request_router_settings(
+            user_api_key_dict, proxy_server.prisma_client, proxy_server.proxy_logging_obj
         )
+        if resolved_router_settings is None and user_api_key_dict is not None
+        else resolved_router_settings
+    )
+    router_only_settings_from_override: Final = _merge_router_settings_override(data, routing_settings)  # pyright: ignore[reportUnknownArgumentType]  # route_request takes an untyped dict body
     try:
         return await _route_request_single_attempt(
             data=data,

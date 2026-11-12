@@ -118,7 +118,7 @@ from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
     get_remaining_tokens_and_requests_from_request_data,
 )
-from litellm.proxy.common_utils.customer_fallbacks import customer_fallback_settings
+from litellm.proxy.common_utils.customer_fallbacks import ResolvedRouterSettings
 from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_body_call_id, with_call_id
 from litellm.proxy.common_utils.http_parsing_utils import (
     get_client_requested_model,
@@ -975,6 +975,7 @@ async def hierarchical_router_settings_updates(
     proxy_config: ProxyConfig,
     proxy_logging_obj: ProxyLogging,
     apply_model_group_alias: bool,
+    resolved_router_settings: ResolvedRouterSettings | None = None,
 ) -> Mapping[str, object]:
     # Apply hierarchical router_settings (Key > Team)
     # Global router_settings are already on the Router object itself.
@@ -984,14 +985,17 @@ async def hierarchical_router_settings_updates(
     # the logging object -- sees the group that will actually serve.
     from litellm.proxy.proxy_server import prisma_client
 
-    router_settings: Final[Mapping[str, object] | None] = _ROUTER_SETTINGS_ADAPTER.validate_python(
-        await proxy_config._get_hierarchical_router_settings(
+    resolved: Final = (
+        await proxy_config.resolve_request_router_settings(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             proxy_logging_obj=proxy_logging_obj,
         )
+        if resolved_router_settings is None
+        else resolved_router_settings
     )
-    if router_settings is None:
+    router_settings: Final = resolved.values
+    if not router_settings:
         return MappingProxyType({})
 
     # If router_settings found (from key or team), apply them
@@ -2387,6 +2391,7 @@ class ProxyBaseLLMRequestProcessing:
         self.served_model = served_model
         self._tags_before_guardrails: frozenset[str] | None = None
         self.route_type: str | None = None
+        self._resolved_router_settings: ResolvedRouterSettings | None = None
 
     @property
     def litellm_call_id(self) -> str | None:
@@ -2684,6 +2689,7 @@ class ProxyBaseLLMRequestProcessing:
         rate_limited_model: str | None = None,
         skip_guardrails: bool = False,
         logging_auth: UserAPIKeyAuth | None = None,
+        resolved_router_settings: ResolvedRouterSettings | None = None,
     ) -> tuple[dict, LiteLLMLoggingObj]:
         start_time: Final = datetime.now()  # start before calling guardrail hooks
 
@@ -2769,6 +2775,13 @@ class ProxyBaseLLMRequestProcessing:
             self.data["model"] = global_then_key_alias_target(prepared_model, user_api_key_dict)
 
         if llm_router is not None and proxy_config is not None:
+            from litellm.proxy.proxy_server import prisma_client
+
+            self._resolved_router_settings = (
+                await proxy_config.resolve_request_router_settings(user_api_key_dict, prisma_client, proxy_logging_obj)
+                if resolved_router_settings is None
+                else resolved_router_settings
+            )
             self.data.update(
                 await hierarchical_router_settings_updates(
                     requested_model=self.data.get("model"),
@@ -2777,6 +2790,7 @@ class ProxyBaseLLMRequestProcessing:
                     proxy_config=proxy_config,
                     proxy_logging_obj=proxy_logging_obj,
                     apply_model_group_alias=True,
+                    resolved_router_settings=self._resolved_router_settings,
                 )
             )
 
@@ -2934,11 +2948,14 @@ class ProxyBaseLLMRequestProcessing:
                 and per_model_rate_limits_disable_fallbacks(general_settings_view)
             )
 
-        configured_fallbacks: Final = (
-            self._configured_fallbacks(llm_router=llm_router, user_api_key_dict=user_api_key_dict)
+        from litellm.proxy.proxy_server import prisma_client
+
+        resolved_router_settings: Final = (
+            await proxy_config.resolve_request_router_settings(user_api_key_dict, prisma_client, proxy_logging_obj)
             if llm_router is not None
             else None
         )
+        configured_fallbacks: Final = self._configured_fallbacks(llm_router, resolved_router_settings)
         pristine: Final = independent_snapshot(self.data) if configured_fallbacks else None
 
         try:
@@ -2957,6 +2974,7 @@ class ProxyBaseLLMRequestProcessing:
                 model=model,
                 route_type=route_type,
                 llm_router=llm_router,
+                resolved_router_settings=resolved_router_settings,
             )
         except ProxyRateLimitError as original_exc:
             rate_limited_data: Final = self.data
@@ -3039,6 +3057,7 @@ class ProxyBaseLLMRequestProcessing:
                             route_type=route_type,
                             llm_router=llm_router,
                             rate_limited_model=original_model,
+                            resolved_router_settings=resolved_router_settings,
                         )
                     except ProxyRateLimitError as fallback_exc:
                         if is_hard_per_model_limit(fallback_exc):
@@ -3067,14 +3086,16 @@ class ProxyBaseLLMRequestProcessing:
             raise original_exc
 
     @staticmethod
-    def _configured_fallbacks(llm_router: Router, user_api_key_dict: UserAPIKeyAuth) -> list | None:
-        customer_settings: Final = customer_fallback_settings(user_api_key_dict.end_user_fallbacks)
-        if customer_settings:
-            return customer_settings["fallbacks"] or None
-        key_router_settings: Final = user_api_key_dict.router_settings
-        key_fallbacks: Final = key_router_settings.get("fallbacks") if isinstance(key_router_settings, dict) else None
-        fallbacks: Final = key_fallbacks if key_fallbacks is not None else llm_router.settings().fallbacks
-        return fallbacks if isinstance(fallbacks, list) and fallbacks else None
+    def _configured_fallbacks(
+        llm_router: Router | None, router_settings: ResolvedRouterSettings | None
+    ) -> list[object] | None:
+        if llm_router is None or router_settings is None:
+            return None
+        configured: Final = router_settings.values.get("fallbacks")
+        fallbacks: Final = llm_router.settings().as_dict().get("fallbacks") if configured is None else configured
+        if not isinstance(fallbacks, list) or not fallbacks:
+            return None
+        return TypeAdapter(list[object]).validate_python(fallbacks)
 
     @staticmethod
     def _resolve_fallback_models(model: str, fallbacks: list) -> list[str] | None:
@@ -3408,6 +3429,7 @@ class ProxyBaseLLMRequestProcessing:
                 llm_router=llm_router,
                 user_model=user_model,
                 user_api_key_dict=user_api_key_dict,
+                resolved_router_settings=self._resolved_router_settings,
             )
             llm_call_task: Final = asyncio.create_task(with_proxy_compaction_executor(llm_call, request))
             tasks.append(llm_call_task)

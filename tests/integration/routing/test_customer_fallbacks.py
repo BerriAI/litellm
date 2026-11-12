@@ -59,7 +59,11 @@ def _reply(request: Request) -> Reply:
                     body=json.dumps(
                         {
                             "error": {
-                                "message": marker,
+                                "message": (
+                                    "This model's maximum context length is 16385 tokens"
+                                    if marker == "context-window"
+                                    else marker
+                                ),
                                 "type": ("invalid_request_error" if status == 400 else "server_error"),
                                 "code": code,
                             }
@@ -189,7 +193,55 @@ def test_customer_chain_overrides_client_and_key_fallbacks_without_leaking_betwe
             (None, rig.global_backup),
             (first, rig.first),
         ):
-            _assert_served(rig.chat(key, customer, failure, **overrides), expected)
+            _assert_served(
+                rig.chat(key, customer, failure, **overrides),
+                expected if failure == "provider-failure" else rig.global_backup,
+            )
+
+
+@pytest.mark.parametrize(
+    "failure,setting",
+    (
+        ("context-window", "context_window_fallbacks"),
+        ("content-policy", "content_policy_fallbacks"),
+    ),
+)
+@pytest.mark.parametrize("disable_regular_fallbacks", (False, True))
+def test_customer_regular_fallbacks_preserve_inherited_error_specific_chains(
+    customer_fallbacks: CustomerFallbackRig,
+    failure: str,
+    setting: str,
+    disable_regular_fallbacks: bool,
+) -> None:
+    rig: Final = customer_fallbacks
+    with rig.gateway.scenario() as scenario:
+        key: Final = scenario.key(models=rig.models, router_settings={setting: rig.chain(rig.second)})
+        customer: Final = rig.customer(
+            scenario,
+            fallbacks=[] if disable_regular_fallbacks else rig.chain(rig.first),
+        )
+        _assert_served(rig.chat(key, customer, failure), rig.second)
+
+
+@pytest.mark.parametrize(
+    "setting",
+    ("fallbacks", "router_settings_override", "context_window_fallbacks", "content_policy_fallbacks"),
+)
+def test_auth_checks_only_client_fallbacks_that_can_affect_the_request(
+    customer_fallbacks: CustomerFallbackRig, setting: str
+) -> None:
+    rig: Final = customer_fallbacks
+    with rig.gateway.scenario() as scenario:
+        key: Final = scenario.key(models=[rig.primary, rig.first])
+        customer: Final = rig.customer(scenario, fallbacks=rig.chain(rig.first))
+        override: Final = (
+            {"fallbacks": rig.chain(rig.second)} if setting == "router_settings_override" else rig.chain(rig.second)
+        )
+        response: Final = rig.chat(key, customer, "provider-failure", **{setting: override})
+        if setting in {"fallbacks", "router_settings_override"}:
+            _assert_served(response, rig.first)
+        else:
+            assert response.status_code == 403, response.text
 
 
 def test_customer_model_allowance_and_fallback_are_shared_across_three_service_keys(
@@ -298,7 +350,7 @@ def test_customer_fallback_update_preserves_disables_and_clears_the_policy(
         disabled: Final = rig.gateway.post("/customer/update", {"user_id": customer, "fallbacks": []})
         assert disabled["fallbacks"] == []
         assert rig.gateway.get("/customer/info", {"end_user_id": customer})["fallbacks"] == []
-        refused: Final = rig.chat(
+        response: Final = rig.chat(
             key,
             customer,
             failure,
@@ -307,7 +359,10 @@ def test_customer_fallback_update_preserves_disables_and_clears_the_policy(
             content_policy_fallbacks=rig.chain(rig.second),
             router_settings_override={"fallbacks": rig.chain(rig.second)},
         )
-        assert refused.status_code == (500 if failure == "provider-failure" else 400), refused.text
+        if failure == "provider-failure":
+            assert response.status_code == 500, response.text
+        else:
+            _assert_served(response, rig.second)
 
         cleared: Final = rig.gateway.post("/customer/update", {"user_id": customer, "fallbacks": None})
         assert cleared["fallbacks"] is None

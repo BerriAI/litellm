@@ -537,7 +537,7 @@ from litellm.proxy.common_utils.config_includes import resolve_include_file_path
 from litellm.proxy.common_utils.config_sync_pubsub import ConfigSyncSubscriber
 from litellm.proxy.common_utils.credential_hydration import decrypted_or_stored
 from litellm.proxy.common_utils.custom_openapi_spec import JsonObject
-from litellm.proxy.common_utils.customer_fallbacks import customer_fallback_settings
+from litellm.proxy.common_utils.customer_fallbacks import ResolvedRouterSettings, resolve_router_settings
 from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
 from litellm.proxy.common_utils.discoverable_model_filter import (
@@ -8413,13 +8413,23 @@ class ProxyConfig:
         prisma_client: PrismaClient | None,
         proxy_logging_obj: Optional["ProxyLogging"] = None,
     ) -> Mapping[str, object] | None:
+        resolved: Final = await self.resolve_request_router_settings(
+            user_api_key_dict, prisma_client, proxy_logging_obj
+        )
+        return resolved.values or None
+
+    async def resolve_request_router_settings(
+        self,
+        user_api_key_dict: UserAPIKeyAuth | None,
+        prisma_client: PrismaClient | None,
+        proxy_logging_obj: ProxyLogging | None = None,
+    ) -> ResolvedRouterSettings:
         inherited: Final = await self._get_key_and_team_router_settings(
             user_api_key_dict, prisma_client, proxy_logging_obj
         )
-        if user_api_key_dict is None:
-            return inherited
-        customer: Final = customer_fallback_settings(user_api_key_dict.end_user_fallbacks)
-        return {**(inherited or {}), **customer} or None
+        return resolve_router_settings(
+            inherited, user_api_key_dict.end_user_fallbacks if user_api_key_dict is not None else None
+        )
 
     async def _get_key_and_team_router_settings(
         self,

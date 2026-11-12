@@ -1480,6 +1480,145 @@ async def test_route_request_keeps_key_fallbacks_out_of_pass_through_provider_bo
     assert provider_bodies and all("gpt-4" not in body for body in provider_bodies), provider_bodies
 
 
+@pytest.mark.parametrize("direct_route", ("without-router", "pass-through"))
+@pytest.mark.parametrize("client_fallbacks", ({}, {"fallbacks": None}), ids=("absent", "null"))
+@pytest.mark.asyncio
+async def test_customer_router_fallbacks_do_not_change_a_direct_provider_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    direct_route: str,
+    client_fallbacks: dict[str, object],
+) -> None:
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-customer-direct-fixture")
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    auth: Final = UserAPIKeyAuth(end_user_fallbacks=[{"gpt-direct": ["customer-backup"]}])
+    settings: Final = await ProxyConfig().get_hierarchical_router_settings(auth, None)
+    router: Final = (
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "configured-model",
+                    "litellm_params": {"model": "openai/configured-model", "api_key": "sk-synthetic"},
+                }
+            ],
+            router_general_settings=RouterGeneralSettings(pass_through_all_models=True),
+        )
+        if direct_route == "pass-through"
+        else None
+    )
+    data: Final = {
+        "model": "openai/gpt-direct",
+        "messages": list(_HELLO_MESSAGES),
+        "num_retries": 0,
+        "max_retries": 0,
+        **({"router_settings_override": settings} if client_fallbacks else {}),
+        **client_fallbacks,
+    }
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+            return_value=httpx.Response(500, json={"error": {"message": "customer primary unavailable"}})
+        )
+        with pytest.raises(litellm.InternalServerError, match="customer primary unavailable"):
+            await (await route_request(data, router, "openai/gpt-direct", "acompletion", auth))
+
+    bodies: Final = tuple(JSON_OBJECT_ADAPTER.validate_json(call.request.content) for call in upstream.calls)
+    assert len(bodies) == 1
+    assert bodies[0]["model"] == "gpt-direct"
+    assert {"fallbacks", "context_window_fallbacks", "content_policy_fallbacks", "gpt-direct"}.isdisjoint(bodies[0])
+
+
+@pytest.mark.parametrize(
+    "fallback_field, error",
+    (
+        (
+            "context_window_fallbacks",
+            {"message": "This model's maximum context length is 16385 tokens", "code": "context_length_exceeded"},
+        ),
+        (
+            "content_policy_fallbacks",
+            {
+                "message": "Your request was rejected by the content filter",
+                "type": "invalid_request_error",
+                "code": "content_policy_violation",
+            },
+        ),
+    ),
+)
+@pytest.mark.asyncio
+async def test_customer_regular_fallback_preserves_the_inherited_error_specific_target(
+    monkeypatch: pytest.MonkeyPatch, fallback_field: str, error: dict[str, str]
+) -> None:
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    auth: Final = UserAPIKeyAuth(
+        end_user_fallbacks=[{"primary": ["customer-backup"]}],
+        router_settings={fallback_field: [{"primary": ["specialized-backup"]}]},
+    )
+    settings: Final = await ProxyConfig().get_hierarchical_router_settings(auth, None)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {
+                    "model": "openai/" + name,
+                    "api_key": "sk-synthetic",
+                    "api_base": "https://customer-fallbacks.example/v1",
+                },
+            }
+            for name in ("primary", "customer-backup", "specialized-backup")
+        ],
+        num_retries=0,
+    )
+    data: Final = {
+        "model": "primary",
+        "messages": list(_HELLO_MESSAGES),
+        "router_settings_override": settings,
+    }
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        respx_mock.post("https://customer-fallbacks.example/v1/chat/completions", json__model="primary").mock(
+            return_value=httpx.Response(400, json={"error": error})
+        )
+        specialized: Final = respx_mock.post(
+            "https://customer-fallbacks.example/v1/chat/completions", json__model="specialized-backup"
+        ).mock(return_value=_chat_completion_response("specialized-backup"))
+        regular: Final = respx_mock.post(
+            "https://customer-fallbacks.example/v1/chat/completions", json__model="customer-backup"
+        ).mock(return_value=_chat_completion_response("customer-backup"))
+        response: Final = await (await route_request(data, router, None, "acompletion", auth))
+
+    assert response.model == "specialized-backup"
+    assert specialized.call_count == 1
+    assert regular.call_count == 0
+
+
+@pytest.mark.parametrize("fallbacks", ([], [{"primary": ["backup"]}]))
+@pytest.mark.asyncio
+async def test_customer_fallback_policy_cannot_be_replaced_by_a_client_router(
+    fallbacks: list[dict[str, list[str]]],
+) -> None:
+    from litellm.proxy._types import ProxyException
+
+    auth: Final = UserAPIKeyAuth(end_user_fallbacks=fallbacks)
+
+    with pytest.raises(ProxyException) as rejected:
+        await route_request(
+            {"model": "primary", "messages": list(_HELLO_MESSAGES), "user_config": {}},
+            None,
+            None,
+            "acompletion",
+            auth,
+        )
+
+    assert rejected.value.code == "400"
+    assert rejected.value.param == "user_config"
+
+
 @pytest.mark.parametrize(
     "route_type, param, route",
     [

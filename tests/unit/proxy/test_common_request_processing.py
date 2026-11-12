@@ -92,6 +92,7 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
     team_member_budget_entity_id,
 )
 from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.proxy_server import ProxyConfig as RuntimeProxyConfig
 from litellm.responses.mcp.parked_stream_dispatch import IN_FLIGHT_ROUND
 from litellm.router import Router
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -774,7 +775,7 @@ class TestProxyBaseLLMRequestProcessing:
         request_body: dict,
         guardrail_tags: Sequence[str],
         route: str = "/v1/chat/completions",
-    ) -> tuple[ProxyBaseLLMRequestProcessing, MagicMock, MagicMock, MagicMock, AsyncMock]:
+    ) -> tuple[ProxyBaseLLMRequestProcessing, MagicMock, MagicMock, RuntimeProxyConfig, AsyncMock]:
         processing_obj = ProxyBaseLLMRequestProcessing(data={})
         mock_request = MagicMock(spec=Request)
         mock_request.headers = {}
@@ -789,8 +790,7 @@ class TestProxyBaseLLMRequestProcessing:
 
         mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
         mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
-        mock_proxy_config = MagicMock(spec=ProxyConfig)
-        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(return_value=None)
+        mock_proxy_config = RuntimeProxyConfig()
         monkeypatch.setattr(
             litellm.proxy.common_request_processing,
             "add_litellm_data_to_request",
@@ -1166,8 +1166,7 @@ class TestProxyBaseLLMRequestProcessing:
                 },
             }
         ]
-        mock_proxy_config = MagicMock(spec=ProxyConfig)
-        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(return_value=None)
+        mock_proxy_config = RuntimeProxyConfig()
 
         try:
             await processing_obj.common_processing_pre_call_logic(
@@ -1228,14 +1227,14 @@ class TestProxyBaseLLMRequestProcessing:
 
         mock_general_settings = {}
         mock_user_api_key_dict = ProxyUserAPIKeyAuth()
-        mock_proxy_config = MagicMock(spec=ProxyConfig)
+        mock_proxy_config = RuntimeProxyConfig()
 
         mock_router_settings = {
             "routing_strategy": "least-busy",
             "timeout": 30.0,
             "num_retries": 3,
         }
-        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(return_value=mock_router_settings)
+        mock_user_api_key_dict.router_settings = mock_router_settings
 
         mock_llm_router = route_entry_points_to_stubs(MagicMock())
 
@@ -1260,11 +1259,6 @@ class TestProxyBaseLLMRequestProcessing:
             llm_router=mock_llm_router,
         )
 
-        mock_proxy_config._get_hierarchical_router_settings.assert_called_once_with(
-            user_api_key_dict=mock_user_api_key_dict,
-            prisma_client=mock_prisma_client,
-            proxy_logging_obj=mock_proxy_logging_obj,
-        )
         # get_model_list should NOT be called - we no longer copy model list for per-request routers
         mock_llm_router.get_model_list.assert_not_called()
 
@@ -8090,7 +8084,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             return processor.data, logging_obj
 
         mock_router = route_entry_points_to_stubs(MagicMock())
-        mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
+        mock_router.get_settings.return_value = {"fallbacks": [{"gpt-4": ["gpt-3.5-turbo"]}]}
 
         with patch.object(
             processor,
@@ -8103,7 +8097,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 proxy_logging_obj=MagicMock(),
                 user_api_key_dict=ProxyUserAPIKeyAuth(),
                 version=None,
-                proxy_config=MagicMock(),
+                proxy_config=RuntimeProxyConfig(),
                 user_model=None,
                 user_temperature=None,
                 user_request_timeout=None,
@@ -8157,7 +8151,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 proxy_logging_obj=MagicMock(),
                 user_api_key_dict=ProxyUserAPIKeyAuth(),
                 version=None,
-                proxy_config=MagicMock(),
+                proxy_config=RuntimeProxyConfig(),
                 user_model=None,
                 user_temperature=None,
                 user_request_timeout=None,
@@ -8184,7 +8178,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             )
 
         mock_router = route_entry_points_to_stubs(MagicMock())
-        mock_router.fallbacks = None
+        mock_router.get_settings.return_value = {"fallbacks": None}
 
         with patch.object(
             processor,
@@ -8196,9 +8190,9 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                     request=MagicMock(),
                     general_settings={},
                     proxy_logging_obj=MagicMock(),
-                    user_api_key_dict=MagicMock(router_settings=None),
+                    user_api_key_dict=ProxyUserAPIKeyAuth(),
                     version=None,
-                    proxy_config=MagicMock(),
+                    proxy_config=RuntimeProxyConfig(),
                     user_model=None,
                     user_temperature=None,
                     user_request_timeout=None,
@@ -8223,7 +8217,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             )
 
         mock_router = route_entry_points_to_stubs(MagicMock())
-        mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo", "claude-3-haiku"]}]
+        mock_router.get_settings.return_value = {"fallbacks": [{"gpt-4": ["gpt-3.5-turbo", "claude-3-haiku"]}]}
 
         with patch.object(
             processor,
@@ -8235,9 +8229,9 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                     request=MagicMock(),
                     general_settings={},
                     proxy_logging_obj=MagicMock(),
-                    user_api_key_dict=MagicMock(router_settings=None),
+                    user_api_key_dict=ProxyUserAPIKeyAuth(),
                     version=None,
-                    proxy_config=MagicMock(),
+                    proxy_config=RuntimeProxyConfig(),
                     user_model=None,
                     user_temperature=None,
                     user_request_timeout=None,
@@ -8266,7 +8260,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             return processor.data, MagicMock()
 
         mock_router = route_entry_points_to_stubs(MagicMock())
-        mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
+        mock_router.get_settings.return_value = {"fallbacks": [{"gpt-4": ["gpt-3.5-turbo"]}]}
 
         user_api_key_dict = ProxyUserAPIKeyAuth()
         user_api_key_dict.router_settings = {"fallbacks": [{"gpt-4": ["claude-3-haiku"]}]}
@@ -8282,7 +8276,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 proxy_logging_obj=MagicMock(),
                 user_api_key_dict=user_api_key_dict,
                 version=None,
-                proxy_config=MagicMock(),
+                proxy_config=RuntimeProxyConfig(),
                 user_model=None,
                 user_temperature=None,
                 user_request_timeout=None,
@@ -8309,7 +8303,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             )
 
         mock_router = route_entry_points_to_stubs(MagicMock())
-        mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
+        mock_router.get_settings.return_value = {"fallbacks": [{"gpt-4": ["gpt-3.5-turbo"]}]}
 
         with patch.object(
             processor,
@@ -8321,9 +8315,9 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                     request=MagicMock(),
                     general_settings={},
                     proxy_logging_obj=MagicMock(),
-                    user_api_key_dict=MagicMock(router_settings=None),
+                    user_api_key_dict=ProxyUserAPIKeyAuth(),
                     version=None,
-                    proxy_config=MagicMock(),
+                    proxy_config=RuntimeProxyConfig(),
                     user_model=None,
                     user_temperature=None,
                     user_request_timeout=None,
@@ -8353,7 +8347,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             raise ValueError("unexpected auth failure on fallback")
 
         mock_router = route_entry_points_to_stubs(MagicMock())
-        mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
+        mock_router.get_settings.return_value = {"fallbacks": [{"gpt-4": ["gpt-3.5-turbo"]}]}
 
         with patch.object(
             processor,
@@ -8367,7 +8361,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                     proxy_logging_obj=MagicMock(),
                     user_api_key_dict=ProxyUserAPIKeyAuth(),
                     version=None,
-                    proxy_config=MagicMock(),
+                    proxy_config=RuntimeProxyConfig(),
                     user_model=None,
                     user_temperature=None,
                     user_request_timeout=None,
@@ -8459,7 +8453,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             return processor.data, MagicMock()
 
         mock_router = route_entry_points_to_stubs(MagicMock())
-        mock_router.fallbacks = [{primary_model: [fallback_model]}]
+        mock_router.get_settings.return_value = {"fallbacks": [{primary_model: [fallback_model]}]}
 
         with patch.object(
             processor,
@@ -8472,7 +8466,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 proxy_logging_obj=MagicMock(),
                 user_api_key_dict=user_api_key_dict,
                 version=None,
-                proxy_config=MagicMock(),
+                proxy_config=RuntimeProxyConfig(),
                 user_model=None,
                 user_temperature=None,
                 user_request_timeout=None,
@@ -10280,7 +10274,9 @@ class TestPerRequestModelGroupAlias:
         resolved = await _resolve_per_request_model_group_alias(
             requested_model="group-a",
             router_settings={"model_group_alias": alias_map},
-            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=[]),
+            user_api_key_dict=ProxyUserAPIKeyAuth(
+                api_key="hash", models=[], router_settings={"model_group_alias": {"group-a": "group-b"}}
+            ),
             llm_router=self._router(),
         )
 
@@ -10320,7 +10316,9 @@ class TestPerRequestModelGroupAlias:
         resolved = await _resolve_per_request_model_group_alias(
             requested_model=requested_model,
             router_settings={"model_group_alias": {"group-a": "group-b"}},
-            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=[]),
+            user_api_key_dict=ProxyUserAPIKeyAuth(
+                api_key="hash", models=[], router_settings={"model_group_alias": {"group-a": "group-b"}}
+            ),
             llm_router=self._router(),
         )
 
@@ -10350,15 +10348,14 @@ class TestPerRequestModelGroupAlias:
         )
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
 
-        mock_proxy_config = MagicMock(spec=ProxyConfig)
-        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(
-            return_value={"model_group_alias": {"group-a": "group-b"}}
-        )
+        mock_proxy_config = RuntimeProxyConfig()
 
         returned_data, _ = await processing_obj.common_processing_pre_call_logic(
             request=mock_request,
             general_settings={},
-            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=[]),
+            user_api_key_dict=ProxyUserAPIKeyAuth(
+                api_key="hash", models=[], router_settings={"model_group_alias": {"group-a": "group-b"}}
+            ),
             proxy_logging_obj=mock_proxy_logging_obj,
             proxy_config=mock_proxy_config,
             route_type="acompletion",
@@ -10450,15 +10447,14 @@ class TestPerRequestModelGroupAlias:
             recording_merge,
         )
 
-        mock_proxy_config = MagicMock(spec=ProxyConfig)
-        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(
-            return_value={"model_group_alias": {"group-a": "group-b"}}
-        )
+        mock_proxy_config = RuntimeProxyConfig()
 
         await processing_obj.common_processing_pre_call_logic(
             request=mock_request,
             general_settings={},
-            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=[]),
+            user_api_key_dict=ProxyUserAPIKeyAuth(
+                api_key="hash", models=[], router_settings={"model_group_alias": {"group-a": "group-b"}}
+            ),
             proxy_logging_obj=mock_proxy_logging_obj,
             proxy_config=mock_proxy_config,
             route_type="acompletion",
@@ -10521,13 +10517,14 @@ class TestVideoServedModelPin:
             mock_add_litellm_data_to_request,
         )
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
-        mock_proxy_config = MagicMock(spec=ProxyConfig)
-        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(return_value=router_settings)
+        mock_proxy_config = RuntimeProxyConfig()
 
         returned_data, _ = await processing_obj.common_processing_pre_call_logic(
             request=mock_request,
             general_settings={},
-            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=[], aliases=key_aliases),
+            user_api_key_dict=ProxyUserAPIKeyAuth(
+                api_key="hash", models=[], aliases=key_aliases, router_settings=router_settings
+            ),
             proxy_logging_obj=mock_proxy_logging_obj,
             proxy_config=mock_proxy_config,
             route_type="avideo_status",
@@ -12681,8 +12678,7 @@ class TestBackgroundResponseRetrievalGovernance:
         )
         proxy_logging_obj = MagicMock(spec=ProxyLogging)
         proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=decrypting_pre_call_hook)
-        proxy_config = MagicMock(spec=ProxyConfig)
-        proxy_config._get_hierarchical_router_settings = AsyncMock(return_value=None)
+        proxy_config = RuntimeProxyConfig()
         returned_data, _ = await processing_obj.common_processing_pre_call_logic(
             request=mock_request,
             general_settings={},
