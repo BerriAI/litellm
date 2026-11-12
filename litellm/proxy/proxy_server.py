@@ -1216,7 +1216,7 @@ try:
 except Exception:
     # when using litellm docker image
     try:
-        import enterprise
+        from litellm import enterprise
     except Exception:
         pass
 

@@ -589,7 +589,7 @@ The Codex undo receipt is kept in a private `.litellm` directory beside the reso
 `lite configure claude` wires Claude Code up persistently with a long-lived virtual key, a pinned model and an undo, and `lite unconfigure claude` puts things back:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/scripts/install.sh | sh
 lite --base-url https://your-proxy.example.com configure claude --api-key sk-... --model claude-auto
 claude
 ```
@@ -625,17 +625,17 @@ After upgrading the CLI, run `lite configure claude` to refresh `~/.litellm/stat
 `lite autoroute start` builds and runs a throwaway litellm proxy locally, so unlike the rest of this CLI it needs the proxy server runtime, not just the thin `litellm[cli]` client. Install `litellm[proxy]` (which ships the `lite` command too) with a single curl command -- no existing Python tooling required, `uv` is bootstrapped automatically if missing:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/scripts/install.sh | sh
 ```
 
 To QA an unreleased branch or commit instead of the latest PyPI release, set `LITELLM_CLI_REF`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/<branch-or-commit>/scripts/install.sh | \
+curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/<branch-or-commit>/litellm/scripts/install.sh | \
   LITELLM_CLI_REF=<branch-or-commit> sh
 ```
 
-The thin `scripts/install-cli.sh` installs only `litellm[cli]`, which is enough for `lite login`, `lite claude`, and `lite up`, but not for `lite autoroute start`; running it against a `litellm[cli]` install fails fast with a message telling you to install the proxy runtime.
+The thin `litellm/scripts/install-cli.sh` installs only `litellm[cli]`, which is enough for `lite login`, `lite claude`, and `lite up`, but not for `lite autoroute start`; running it against a `litellm[cli]` install fails fast with a message telling you to install the proxy runtime.
 
 Point the CLI at your real proxy and key before running any `lite model-groups` or `lite autoroute` command -- like every other command in this CLI, they read `LITELLM_PROXY_URL`/`LITELLM_PROXY_API_KEY` (or `--base-url`/`--api-key`), no `lite login` required:
 

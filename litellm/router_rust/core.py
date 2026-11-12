@@ -1,5 +1,5 @@
 """
-``RustCore``: the router core served by litellm-rust/crates/router-core through ``_native``.
+``RustCore``: the router core served by litellm/rust/crates/router-core through ``_native``.
 
 The Rust core owns the registry, selection, retries, fallbacks and cooldowns. It reaches outside
 itself only through its host, and the host never calls back into a Python router:
