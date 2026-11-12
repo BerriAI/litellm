@@ -6953,6 +6953,38 @@ export const reviewSkillSubmission = (
 ): Promise<components["schemas"]["SkillHubReviewResponse"]> =>
   apiClient.put(`/skill-hub/submissions/${encodeURIComponent(id)}/${action}`, { accessToken, body });
 
+export const editSkillSubmission = (
+  accessToken: string,
+  id: string,
+  body: components["schemas"]["SkillHubSubmissionEdit"],
+): Promise<components["schemas"]["SkillHubSubmission"]> =>
+  apiClient.put(`/skill-hub/submissions/${encodeURIComponent(id)}`, { accessToken, body });
+
+export const uploadSkillSubmission = (
+  accessToken: string,
+  submission: components["schemas"]["SkillHubSubmission"],
+  file: File,
+  version: string,
+): Promise<components["schemas"]["SkillHubSubmission"]> => {
+  const body = new FormData();
+  body.append("file", file);
+  body.append("expected_revision", String(submission.revision ?? 0));
+  if (version.trim()) body.append("version", version.trim());
+  return apiClient.put(`/skill-hub/submissions/${encodeURIComponent(submission.id)}/upload`, {
+    accessToken,
+    rawBody: body,
+  });
+};
+
+export const withdrawSkillSubmission = (
+  accessToken: string,
+  submission: components["schemas"]["SkillHubSubmission"],
+): Promise<components["schemas"]["SkillHubSubmission"]> =>
+  apiClient.put(`/skill-hub/submissions/${encodeURIComponent(submission.id)}/withdraw`, {
+    accessToken,
+    body: { expected_revision: submission.revision ?? 0 },
+  });
+
 export const getSkillScan = (accessToken: string, id: string): Promise<components["schemas"]["SkillScanResponse"]> =>
   apiClient.get(`/skill-hub/submissions/${encodeURIComponent(id)}/scan`, { accessToken });
 

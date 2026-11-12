@@ -211,6 +211,7 @@ fn output_unit(unit: &str) -> Option<OutputUnit> {
         "second" => Some(OutputUnit::Second(None)),
         "video_per_second" => Some(OutputUnit::VideoSecond),
         "video" => Some(OutputUnit::Video),
+        "billable_unit" => Some(OutputUnit::BillableUnit),
         _ => None,
     }
 }
@@ -285,6 +286,10 @@ mod tests {
             Band::Base,
             None
         )
+    )]
+    #[case::billable_unit(
+        "output_cost_per_billable_unit",
+        key(Meter::Output(OutputUnit::BillableUnit), Band::Base, None)
     )]
     #[case::image_token_is_a_token(
         "output_cost_per_image_token",

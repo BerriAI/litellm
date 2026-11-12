@@ -470,6 +470,8 @@ class LiteLLMRoutes(enum.Enum):
         "/skill-hub/submissions",
         "/skill-hub/submissions/{submission_id}",
         "/skill-hub/submissions/{submission_id}/archive",
+        "/skill-hub/submissions/{submission_id}/upload",
+        "/skill-hub/submissions/{submission_id}/withdraw",
         "/skill-hub/submissions/{submission_id}/approve",
         "/skill-hub/submissions/{submission_id}/reject",
         "/skill-hub/submissions/{submission_id}/scan",

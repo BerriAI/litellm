@@ -51,6 +51,7 @@ pub enum OutputUnit {
     Second(Option<Resolution>),
     VideoSecond,
     Video,
+    BillableUnit,
 }
 
 /// `Explicit` is a cache the caller created ahead of time, spelled `explicit_cache_read_*`. `Implicit` is every other read

@@ -523,6 +523,41 @@ def test_a_complete_body_cut_is_a_synthesized_server_error(
     assert text in str(mapped)
 
 
+def _deployment_logger() -> Logging:
+    logger: Final = Logging(
+        model=_ADAPTIVE_OPUS,
+        messages=[],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="cut",
+        function_id="cut",
+    )
+    logger.model_call_details["custom_llm_provider"] = "anthropic"
+    logger.model_call_details["litellm_params"] = {
+        "api_base": "https://upstream.example/v1",
+        "metadata": {"model_group": "claude-group", "deployment": "anthropic/claude-opus-4-6"},
+    }
+    return logger
+
+
+@pytest.mark.parametrize("marker", ("body_cut", "body_timeout"))
+def test_a_stream_transport_error_names_the_deployment_like_the_python_stream_iterator(marker: str) -> None:
+    native: Final = RuntimeError("upstream network error")
+    if marker == "body_cut":
+        native.messages_body_cut = (19, None, False)  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
+    else:
+        native.messages_timeout = "Body"  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
+    request: Final = {"model": _ADAPTIVE_OPUS, "stream": True, "litellm_logging_obj": _deployment_logger()}
+
+    debug_info: Final = getattr(messages_host.map_failure(native, request, "anthropic"), "litellm_debug_info", None)
+
+    assert isinstance(debug_info, str)
+    assert "API Base: `https://upstream.example/v1`" in debug_info
+    assert "model_group: `claude-group`" in debug_info
+    assert "deployment: `anthropic/claude-opus-4-6`" in debug_info
+
+
 _TRANSPORT: Final = "error sending request: client error"
 
 

@@ -16,6 +16,7 @@ MODEL_TPM: Final = 1000
 MODEL_RPM: Final = 1000
 TEAM_TPM: Final = 100
 TEAM_RPM: Final = 3
+MAX_BORROW_MULTIPLE: Final = 2
 UPSTREAM_REPLY: Final = json.dumps(
     {
         "id": "chatcmpl_team_model_limit_borrowing",
@@ -29,8 +30,10 @@ UPSTREAM_REPLY: Final = json.dumps(
 
 
 def _respond(request: Request) -> Reply:
-    assert request.method == "POST" and request.target == "/v1/chat/completions", request.target
+    assert request.method == "POST" and request.target.endswith("/v1/chat/completions"), request.target
     assert request.headers["authorization"] == "Bearer synthetic-openai-key"
+    if request.target.startswith("/down/"):
+        return Reply(status=500, body=b'{"error": {"message": "upstream down"}}')
     return Reply(body=UPSTREAM_REPLY)
 
 
@@ -68,7 +71,7 @@ def saturated_model(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[
 
 
 def _team_calls(
-    owned: Gateway, upstream: str, calls: int, limit: str = "model_tpm_limit"
+    owned: Gateway, upstream: str, calls: int, limit: str = "model_tpm_limit", max_borrow_multiple: int | None = None
 ) -> tuple[httpx.Response, ...]:
     with owned.scenario() as scenario:
         model: Final = scenario.model(
@@ -78,8 +81,13 @@ def _team_calls(
             tpm=MODEL_TPM,
             rpm=MODEL_RPM,
         )
+        cap: Final = (
+            {} if max_borrow_multiple is None else {"team_model_limit_max_borrow_multiple": max_borrow_multiple}
+        )
         key: Final = scenario.key(
-            team_id=scenario.team(metadata={limit: {model: TEAM_TPM if limit == "model_tpm_limit" else TEAM_RPM}})
+            team_id=scenario.team(
+                metadata={limit: {model: TEAM_TPM if limit == "model_tpm_limit" else TEAM_RPM}, **cap}
+            )
         )
         return tuple(
             owned.request(
@@ -115,3 +123,59 @@ def test_team_is_held_to_its_model_limit_once_the_model_saturates(
     assert first.headers.get("rate_limit_type") == rate_limit_type, dict(first.headers)
     assert f"Team {limit} reached" in first.json()["error"]["message"], first.text
     assert "no idle capacity to borrow" in first.json()["error"]["message"], first.text
+
+
+def test_a_fallback_target_is_held_to_the_teams_share_on_it_once_it_saturates(
+    saturated_model: tuple[Gateway, str],
+) -> None:
+    owned, upstream = saturated_model
+    with owned.scenario() as scenario:
+        source: Final = scenario.model(
+            name=f"down-{uuid.uuid4().hex[:8]}",
+            model=f"openai/{OPENAI_MODEL}",
+            api_base=f"{upstream}/down/v1",
+            api_key="synthetic-openai-key",
+        )
+        target: Final = scenario.model(
+            model=f"openai/{OPENAI_MODEL}",
+            api_base=f"{upstream}/v1",
+            api_key="synthetic-openai-key",
+            tpm=MODEL_TPM,
+            rpm=MODEL_RPM,
+        )
+        owned.post("/config/update", {"router_settings": {"num_retries": 0, "fallbacks": [{source: [target]}]}})
+        key: Final = scenario.key(team_id=scenario.team(metadata={"model_rpm_limit": {target: 1}}))
+        responses: Final = tuple(
+            owned.request(
+                "POST",
+                "/v1/chat/completions",
+                {"model": source, "messages": [{"role": "user", "content": f"fallback borrowing {uuid.uuid4().hex}"}]},
+                key=key,
+            )
+            for _ in range(2)
+        )
+    assert responses[0].status_code == 200, responses[0].text
+    assert responses[0].headers.get("x-litellm-attempted-fallbacks") == "1", dict(responses[0].headers)
+    assert responses[1].status_code != 200, responses[1].text
+
+
+@pytest.mark.parametrize(
+    "limit, rate_limit_type", [("model_tpm_limit", "tokens"), ("model_rpm_limit", "requests")], ids=["tpm", "rpm"]
+)
+def test_team_borrowing_stops_at_its_max_borrow_multiple_while_the_model_is_idle(
+    idle_model: tuple[Gateway, str], limit: str, rate_limit_type: str
+) -> None:
+    owned, upstream = idle_model
+    responses: Final = _team_calls(owned, upstream, calls=12, limit=limit, max_borrow_multiple=MAX_BORROW_MULTIPLE)
+    admitted: Final = tuple(response for response in responses if response.status_code == 200)
+    blocked: Final = tuple(response for response in responses if response.status_code == 429)
+    assert blocked, [r.text for r in responses]
+    assert responses[0].status_code == 200, responses[0].text
+    share: Final = TEAM_TPM if limit == "model_tpm_limit" else TEAM_RPM
+    tokens_per_call: Final = 30 if limit == "model_tpm_limit" else 1
+    assert len(admitted) * tokens_per_call <= share * MAX_BORROW_MULTIPLE + tokens_per_call, [r.text for r in responses]
+    first: Final = blocked[0]
+    assert first.headers.get("rate_limited_by") == "model_per_team_max_borrow_multiple", dict(first.headers)
+    assert first.headers.get("rate_limit_type") == rate_limit_type, dict(first.headers)
+    assert f"Team {limit} borrow cap reached" in first.json()["error"]["message"], first.text
+    assert f"{MAX_BORROW_MULTIPLE}.0x its {limit}" in first.json()["error"]["message"], first.text
