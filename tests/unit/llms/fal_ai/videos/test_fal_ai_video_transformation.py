@@ -25,6 +25,34 @@ H3_TEXT_MODEL = "minimax/h3/text-to-video"
 H3_REFERENCE_MODEL = "minimax/h3/reference-to-video"
 
 
+@pytest.mark.parametrize("resolution", ["360p", "540p", "720p", "1080p"])
+@pytest.mark.parametrize("seconds", ["5", "8"])
+def test_pixverse_resolution_and_duration_reach_usage(resolution: str, seconds: str) -> None:
+    config: Final = FalAIVideoConfig()
+    model: Final = "fal-ai/pixverse/v5/text-to-video"
+    params: Final = config.map_openai_params({"size": resolution, "seconds": seconds}, model, False)
+    assert params == {"resolution": resolution, "duration": seconds}
+    video: Final = config.transform_video_create_response(
+        model=model,
+        raw_response=httpx.Response(200, json={"request_id": "clip"}),
+        logging_obj=Mock(),
+        custom_llm_provider="fal_ai",
+        request_data=params,
+    )
+    assert video.usage == {"duration_seconds": float(seconds), "video_resolution": resolution}
+
+
+def test_pixverse_missing_duration_uses_default_resolution() -> None:
+    video: Final = FalAIVideoConfig().transform_video_create_response(
+        model="fal-ai/pixverse/v5/text-to-video",
+        raw_response=httpx.Response(200, json={"request_id": "clip"}),
+        logging_obj=Mock(),
+        custom_llm_provider="fal_ai",
+        request_data={},
+    )
+    assert video.usage == {"video_resolution": "720p"}
+
+
 @pytest.mark.parametrize("drop_params", [False, True])
 def test_native_video_parameters_keep_precedence(drop_params: bool) -> None:
     params: Final = {"aspect_ratio": "1:1", "seed": 0, "duration": 6}
@@ -668,7 +696,9 @@ class TestFalAIVideoTransformation:
         rows = {
             model: row
             for model, row in litellm.model_cost.items()
-            if row.get("litellm_provider") == "fal_ai" and row.get("mode") == "video_generation"
+            if row.get("litellm_provider") == "fal_ai"
+            and row.get("mode") == "video_generation"
+            and row.get("output_cost_per_second") is not None
         }
         assert rows
         for model, row in rows.items():

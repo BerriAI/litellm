@@ -101,6 +101,7 @@ from litellm.llms.openai.cost_calculation import (
     cost_per_token as openai_cost_per_token,
 )
 from litellm.llms.openai.cost_calculation import (
+    video_clip_cost,
     video_output_cost_per_second,
 )
 from litellm.llms.perplexity.cost_calculator import (
@@ -2111,6 +2112,16 @@ def completion_cost(
                                 _video_model_info,
                                 getattr(completion_response, "usage", None),
                             )
+                        return (
+                            default_video_cost_calculator(
+                                model=model,
+                                duration_seconds=0.0,
+                                custom_llm_provider=custom_llm_provider,
+                                model_info=_video_model_info,
+                                video_resolution=video_resolution,
+                            )
+                            * video_count
+                        )
                     # Fallback to default video cost calculation if no duration available
                     return default_video_cost_calculator(
                         model=model,
@@ -3122,6 +3133,9 @@ def default_image_cost_calculator(
     return cost
 
 
+_VIDEO_COST_INFO: Final = TypeAdapter(Mapping[str, object])
+
+
 def default_video_cost_calculator(
     model: str,
     duration_seconds: float,
@@ -3183,6 +3197,10 @@ def default_video_cost_calculator(
 
     if cost_info is None:
         raise Exception(f"Model not found in cost map for model={model}")
+
+    clip_cost: Final = video_clip_cost(_VIDEO_COST_INFO.validate_python(cost_info), duration_seconds, video_resolution)
+    if clip_cost is not None:
+        return clip_cost
 
     # Check for video-specific cost per second first
     video_cost_per_second: Final = cost_info.get("output_cost_per_video_per_second")

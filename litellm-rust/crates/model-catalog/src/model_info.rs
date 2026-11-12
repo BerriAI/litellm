@@ -115,6 +115,7 @@ pub struct ModelInfoFields {
     pub output_cost_per_token_above_512k_tokens: Option<f64>,
     pub output_cost_per_second: Option<f64>,
     pub output_cost_per_second_1080p: Option<f64>,
+    pub output_cost_per_video_clip: Option<IndexMap<String, IndexMap<String, f64>>>,
     pub output_cost_per_second_480p: Option<f64>,
     pub output_cost_per_second_720p: Option<f64>,
     pub output_cost_per_second_768p: Option<f64>,

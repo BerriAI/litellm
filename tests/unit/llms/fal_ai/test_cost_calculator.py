@@ -8,6 +8,32 @@ from litellm.llms.fal_ai.cost_calculator import cost_calculator, fal_ai_passthro
 from litellm.types.utils import ImageObject, ImageResponse
 
 
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ({"duration": "8", "resolution": "720p"}, 0.6),
+        ({"duration": 5, "resolution": "540p"}, 0.1),
+        ({"resolution": "720p"}, 0.3),
+        ({"duration": 8}, None),
+        ({"duration": 8, "resolution": "1080p"}, None),
+        ({"duration": "invalid", "resolution": "720p"}, None),
+    ],
+)
+def test_passthrough_video_clip_pricing(body: dict[str, object], expected: float | None) -> None:
+    litellm.register_model(
+        {
+            "fal_ai/test-clip": {
+                "output_cost_per_video_clip": {
+                    "8s": {"720p": 0.6},
+                    "5s": {"720p": 0.3, "540p": 0.1},
+                }
+            }
+        },
+        persist_across_reloads=False,
+    )
+    assert fal_ai_passthrough_cost("test-clip", body) == expected
+
+
 @pytest.fixture(autouse=True)
 def _use_local_model_cost_map(monkeypatch):
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")

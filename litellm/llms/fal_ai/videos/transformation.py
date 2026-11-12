@@ -59,6 +59,14 @@ _SEEDANCE_PROFILE: Final[_ModelProfile] = _ModelProfile(
     reference_key="image_url",
     reference_as_list=False,
 )
+_PIXVERSE_PROFILE: Final[_ModelProfile] = _ModelProfile(
+    resolutions=frozenset({"360p", "540p", "720p", "1080p"}),
+    resolution_tiers=((360, "360p"), (540, "540p"), (720, "720p"), (sys.maxsize, "1080p")),
+    default_resolution="720p",
+    integer_duration=False,
+    reference_key="image_url",
+    reference_as_list=False,
+)
 _H3_PROFILE: Final[_ModelProfile] = _ModelProfile(
     resolutions=frozenset({"480P", "768P", "2K", "4K"}),
     resolution_tiers=((480, "480P"), (768, "768P"), (1440, "2K"), (sys.maxsize, "4K")),
@@ -101,6 +109,8 @@ def _duration_value(value: object) -> str | None:
 
 
 def _profile_for_model(model: str) -> _ModelProfile:
+    if model.removeprefix("fal_ai/").startswith("fal-ai/pixverse/"):
+        return _PIXVERSE_PROFILE
     return _H3_PROFILE if model.startswith("minimax/h3/") else _SEEDANCE_PROFILE
 
 

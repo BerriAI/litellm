@@ -36931,6 +36931,12 @@ export interface components {
             output_cost_per_token_priority?: number | null;
             /** Output Cost Per Token Ultrafast */
             output_cost_per_token_ultrafast?: number | null;
+            /** Output Cost Per Video Clip */
+            output_cost_per_video_clip?: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            } | null;
             /** Output Cost Per Video Per Second */
             output_cost_per_video_per_second?: number | null;
             /** Output Cost Per Video Token */
@@ -53129,6 +53135,12 @@ export interface components {
             output_cost_per_token_priority?: number | null;
             /** Output Cost Per Token Ultrafast */
             output_cost_per_token_ultrafast?: number | null;
+            /** Output Cost Per Video Clip */
+            output_cost_per_video_clip?: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            } | null;
             /** Output Cost Per Video Per Second */
             output_cost_per_video_per_second?: number | null;
             /** Output Cost Per Video Token */

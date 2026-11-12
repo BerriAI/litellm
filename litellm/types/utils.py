@@ -464,6 +464,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_reasoning_token_flex: float | None
     output_cost_per_reasoning_token_priority: float | None
     output_cost_per_video_per_second: float | None  # only for vertex ai models
+    output_cost_per_video_clip: ReadOnly[Mapping[str, Mapping[str, float]] | None]
     output_cost_per_audio_per_second: float | None  # only for vertex ai models
     output_cost_per_second: float | None  # for OpenAI Speech models
     output_cost_per_second_1080p: (
@@ -4153,6 +4154,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     input_cost_per_text_message: float | None = None
     output_cost_per_second: float | None = None
     output_cost_per_second_1080p: float | None = None
+    output_cost_per_video_clip: Mapping[str, Mapping[str, float]] | None = None
     output_cost_per_second_480p: float | None = None
     output_cost_per_second_720p: float | None = None
     output_cost_per_second_768p: float | None = None
