@@ -3982,7 +3982,10 @@ def model_info_with_pricing_overrides(model_info: ModelInfo, registration: Mappi
         name: value for name, value in registration.items() if value is not None and is_server_derived_pricing_key(name)
     }
     return _PRICING_MODEL_INFO.validate_python(
-        update_dictionary(dict(_without_overridden_price_variants(model_info, overrides)), overrides)
+        {
+            **update_dictionary(dict(_without_overridden_price_variants(model_info, overrides)), overrides),
+            **dict.fromkeys(_base_fields_replaced_by(registration)),
+        }
     )
 
 

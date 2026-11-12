@@ -9,8 +9,8 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
 from litellm.types.utils import ImageResponse, ModelInfo, Usage
 
 
-def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
-    return generic_cost_per_token(model=model, usage=usage, custom_llm_provider="tencent")
+def cost_per_token(model: str, usage: Usage, model_info: ModelInfo | None = None) -> tuple[float, float]:
+    return generic_cost_per_token(model=model, usage=usage, custom_llm_provider="tencent", model_info=model_info)
 
 
 def _deployment_image_token_pricing(model_info: ModelInfo | None) -> ModelInfo | None:

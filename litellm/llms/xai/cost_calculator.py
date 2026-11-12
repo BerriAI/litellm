@@ -62,7 +62,7 @@ def _split_reported_cost(model: str, usage: Usage, reported_cost: float) -> tupl
     return input_cost, reported_cost - input_cost
 
 
-def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
+def cost_per_token(model: str, usage: Usage, model_info: "ModelInfo | None" = None) -> tuple[float, float]:
     """
     Calculates the cost per token for a given XAI model, prompt tokens, and completion tokens.
     Uses the generic cost calculator for all pricing logic, with XAI-specific reasoning token handling.
@@ -74,13 +74,13 @@ def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
-    reported_cost: Final = _cost_reported_by_xai(usage)
+    reported_cost: Final = _cost_reported_by_xai(usage) if model_info is None else None
     if reported_cost is not None:
         return _split_reported_cost(model, usage, reported_cost)
-    return _token_math_cost_per_token(model, usage)
+    return _token_math_cost_per_token(model, usage, model_info)
 
 
-def _token_math_cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
+def _token_math_cost_per_token(model: str, usage: Usage, model_info: "ModelInfo | None" = None) -> tuple[float, float]:
     # XAI-specific completion cost: completion is billed as visible + reasoning
     # tokens. Detect when the transformation layer already folded them so we
     # don't double-count; fall back to raw xAI shape for callers that bypass
@@ -105,7 +105,9 @@ def _token_math_cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
         completion_tokens_details=None,
     )
 
-    prompt_cost, completion_cost = generic_cost_per_token(model=model, usage=modified_usage, custom_llm_provider="xai")
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model, usage=modified_usage, custom_llm_provider="xai", model_info=model_info
+    )
 
     return prompt_cost, completion_cost
 

@@ -159,6 +159,7 @@ from litellm.utils import (
     CostPerToken,
     EmbeddingResponse,
     ImageResponse,
+    ModelInfoLookupMiss,
     ModelResponse,
     ModelResponseStream,
     ProviderConfigManager,
@@ -166,6 +167,7 @@ from litellm.utils import (
     TranscriptionResponse,
     cached_cost_map_key,
     cached_get_model_info_helper,
+    lookup_model_info_for_registration,
     mapped_model_fill_missing,
     model_info_with_pricing_overrides,
     runtime_model_cost_registrations,
@@ -498,6 +500,7 @@ def cost_per_token(
     request_model: str | None = None,  # original request model for router detection
     custom_model_info: OCRPricing | None = None,
     bedrock_model_info: ModelInfo | None = None,
+    deployment_model_info: ModelInfo | None = None,
 ) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -583,7 +586,7 @@ def cost_per_token(
         cached_tokens=_cache_read_tokens,
         cache_creation_tokens=_cache_creation_tokens,
         custom_cost_per_second=custom_cost_per_second,
-        custom_cost_per_token=custom_cost_per_token,
+        custom_cost_per_token=None if deployment_model_info is not None else custom_cost_per_token,
     )
 
     if response_cost is not None:
@@ -792,19 +795,27 @@ def cost_per_token(
             optional_params=(getattr(response, "_hidden_params", None) if response else None),
         )
     elif (
-        per_second_cost := _per_second_pricing_cost(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            response_time_ms=response_time_ms,
-            audio_seconds=audio_transcription_file_duration,
+        deployment_model_info is None
+        and (
+            per_second_cost := _per_second_pricing_cost(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                response_time_ms=response_time_ms,
+                audio_seconds=audio_transcription_file_duration,
+            )
         )
-    ) is not None:
+        is not None
+    ):
         return per_second_cost
     elif custom_llm_provider == "vertex_ai":
-        cost_router: Final = google_cost_router(
-            model=model_without_prefix,
-            custom_llm_provider=custom_llm_provider,
-            call_type=call_type,
+        cost_router: Final = (
+            "cost_per_token"
+            if deployment_model_info is not None
+            else google_cost_router(
+                model=model_without_prefix,
+                custom_llm_provider=custom_llm_provider,
+                call_type=call_type,
+            )
         )
         if cost_router == "cost_per_character":
             return google_cost_per_character(
@@ -823,11 +834,16 @@ def cost_per_token(
                 usage=usage_block,
                 service_tier=service_tier,
                 vertex_location=vertex_location,
+                deployment_model_info=deployment_model_info,
             )
     elif custom_llm_provider == "anthropic":
-        return anthropic_cost_per_token(model=model, usage=usage_block, service_tier=service_tier)
+        return anthropic_cost_per_token(
+            model=model, usage=usage_block, service_tier=service_tier, model_info=deployment_model_info
+        )
     elif custom_llm_provider == "bedrock":
-        resolved_bedrock_info: Final = bedrock_model_info or _bedrock_pricing_info(model, None, "bedrock", False)
+        resolved_bedrock_info: Final = (
+            deployment_model_info or bedrock_model_info or _bedrock_pricing_info(model, None, "bedrock", False)
+        )
         if resolved_bedrock_info is not None:
             return generic_cost_per_token(
                 model=model,
@@ -843,36 +859,47 @@ def cost_per_token(
             usage=usage_block,
             service_tier=service_tier,
             data_residency=data_residency,
+            model_info=deployment_model_info,
         )
     elif custom_llm_provider == "databricks":
-        return databricks_cost_per_token(model=model, usage=usage_block, service_tier=service_tier)
+        return databricks_cost_per_token(
+            model=model, usage=usage_block, service_tier=service_tier, model_info=deployment_model_info
+        )
     elif custom_llm_provider == "fireworks_ai":
-        return fireworks_ai_cost_per_token(model=model, usage=usage_block)
+        return fireworks_ai_cost_per_token(model=model, usage=usage_block, deployment_model_info=deployment_model_info)
     elif custom_llm_provider == "azure":
         return azure_openai_cost_per_token(
             model=model,
             usage=usage_block,
             response_time_ms=response_time_ms,
             service_tier=service_tier,
+            model_info=deployment_model_info,
         )
     elif custom_llm_provider == "gemini":
-        return gemini_cost_per_token(model=model, usage=usage_block, service_tier=service_tier)
+        return gemini_cost_per_token(
+            model=model, usage=usage_block, service_tier=service_tier, model_info=deployment_model_info
+        )
     elif custom_llm_provider == "deepseek":
-        return deepseek_cost_per_token(model=model, usage=usage_block)
+        return deepseek_cost_per_token(model=model, usage=usage_block, model_info=deployment_model_info)
     elif custom_llm_provider == "tencent":
-        return tencent_cost_per_token(model=model, usage=usage_block)
+        return tencent_cost_per_token(model=model, usage=usage_block, model_info=deployment_model_info)
     elif custom_llm_provider == "perplexity":
-        return perplexity_cost_per_token(model=model, usage=usage_block)
+        return perplexity_cost_per_token(model=model, usage=usage_block, deployment_model_info=deployment_model_info)
     elif custom_llm_provider == "xai":
-        return xai_cost_per_token(model=model, usage=usage_block)
+        return xai_cost_per_token(model=model, usage=usage_block, model_info=deployment_model_info)
     elif custom_llm_provider == "lemonade":
-        return lemonade_cost_per_token(model=model, usage=usage_block)
+        return lemonade_cost_per_token(model=model, usage=usage_block, model_info=deployment_model_info)
     elif custom_llm_provider in ("dashscope", "qwencloud", "qwen_ai_platform"):
         from litellm.llms.dashscope.cost_calculator import (
             cost_per_token as dashscope_cost_per_token,
         )
 
-        return dashscope_cost_per_token(model=model, usage=usage_block, custom_llm_provider=custom_llm_provider)
+        return dashscope_cost_per_token(
+            model=model,
+            usage=usage_block,
+            custom_llm_provider=custom_llm_provider,
+            deployment_model_info=deployment_model_info,
+        )
     elif custom_llm_provider == "azure_ai":
         return azure_ai_cost_per_token(
             model=model,
@@ -880,16 +907,22 @@ def cost_per_token(
             response_time_ms=response_time_ms,
             request_model=request_model,
             service_tier=service_tier,
+            model_info=deployment_model_info,
         )
     else:
-        model_info: Final = cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
-        if _has_token_or_tiered_pricing(model_info):
+        model_info: Final = (
+            deployment_model_info
+            if deployment_model_info is not None
+            else cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+        )
+        if deployment_model_info is not None or _has_token_or_tiered_pricing(model_info):
             return generic_cost_per_token(
                 model=model,
                 usage=usage_block,
                 custom_llm_provider=custom_llm_provider,
                 service_tier=service_tier,
                 data_residency=data_residency,
+                model_info=deployment_model_info,
             )
         verbose_logger.debug("No per-token, tiered, or per-second pricing for model=%s; cost is 0", model)
         return 0.0, 0.0
@@ -1873,9 +1906,20 @@ def completion_cost(
         cache_creation_input_tokens: int | None = None
         cache_read_input_tokens: int | None = None
         audio_transcription_file_duration: float = 0.0
+        deployment_token_info: Final = _deployment_token_model_info(
+            model,
+            custom_llm_provider,
+            litellm_logging_obj,
+            custom_pricing,
+            router_model_id,
+            pricing_provider,
+            completion_response,
+        )
         provider_usage_object: Final = get_usage_object(completion_response=completion_response)
         cost_per_token_usage_object: Final[Usage | None] = (
-            _without_provider_stated_cost(provider_usage_object) if custom_pricing else provider_usage_object
+            _without_provider_stated_cost(provider_usage_object)
+            if custom_pricing or deployment_token_info is not None
+            else provider_usage_object
         )
         rerank_billed_units: RerankBilledUnits | None = None
 
@@ -1888,7 +1932,7 @@ def completion_cost(
                 served=_served_service_tier(completion_response, cost_per_token_usage_object),
             )
 
-        explicit_pricing: Final = custom_pricing is True or base_model is not None
+        explicit_pricing: Final = custom_pricing is True or base_model is not None or deployment_token_info is not None
         caller_set_prices: Final = (
             explicit_pricing or custom_cost_per_token is not None or custom_cost_per_second is not None
         )
@@ -2331,6 +2375,7 @@ def completion_cost(
                     response=completion_response,
                     custom_model_info=_ocr_model_info(litellm_logging_obj, custom_pricing, router_model_id),
                     bedrock_model_info=bedrock_model_info,
+                    deployment_model_info=deployment_token_info,
                 )
 
                 # Get additional costs from provider (e.g., routing fees, infrastructure costs)
@@ -2421,8 +2466,8 @@ def completion_cost(
                             service_tier=service_tier,
                             data_residency=data_residency,
                             vertex_location=vertex_location,
-                            custom_cost_per_token=custom_cost_per_token,
-                            model_info=bedrock_model_info,
+                            custom_cost_per_token=None if deployment_token_info is not None else custom_cost_per_token,
+                            model_info=deployment_token_info or bedrock_model_info,
                         )
                         _reasoning_cost = _token_type_breakdown.reasoning_cost
                         _cache_read_cost = _token_type_breakdown.cache_read_cost
@@ -2569,7 +2614,20 @@ def response_cost_calculator(
                         getattr(response_object, HIDDEN_PARAMS_ATTR),
                     )
                     provider_response_cost: Final = get_response_cost_from_hidden_params(hidden_params)
-                    if provider_response_cost is not None and not custom_pricing:
+                    if (
+                        provider_response_cost is not None
+                        and not custom_pricing
+                        and _deployment_token_model_info(
+                            model,
+                            custom_llm_provider,
+                            litellm_logging_obj,
+                            custom_pricing,
+                            router_model_id,
+                            pricing_provider,
+                            response_object,
+                        )
+                        is None
+                    ):
                         if _breakdown_total(litellm_logging_obj) != provider_response_cost:
                             header_priced_model: Final = select_model_name_for_cost_calc(
                                 model=model,
@@ -2685,6 +2743,67 @@ def _deployment_model_info(
             if (metadata := litellm_params.get(metadata_key)) and (model_info := metadata.get("model_info")) is not None
         ),
         None,
+    )
+
+
+def _deployment_token_model_info(
+    model: str | None,
+    custom_llm_provider: str | None,
+    litellm_logging_obj: LitellmLoggingObject | None,
+    custom_pricing: bool | None,
+    router_model_id: str | None,
+    pricing_provider: str | None = None,
+    response: object | None = None,
+) -> ModelInfo | None:
+    if router_model_id is None:
+        return None
+    registration: Final = next(
+        (
+            entry
+            for key, entry in runtime_model_cost_registrations(router_model_id, custom_llm_provider or "")
+            if key == router_model_id
+        ),
+        None,
+    )
+    if not custom_pricing and (registration is None or not _has_deployment_token_pricing(registration)):
+        return None
+    deployment_info: Final = _deployment_model_info(litellm_logging_obj, True, router_model_id)
+    if deployment_info is None:
+        return None
+    if not _has_deployment_token_pricing(deployment_info):
+        return None
+    if litellm_logging_obj is not None and litellm_logging_obj.spilled_over_ptu_for(response):
+        return None
+    if model is None:
+        return deployment_info
+    base_model: Final = deployment_info.get("base_model")
+    pricing_model: Final = base_model if isinstance(base_model, str) and base_model else model
+    prefix: Final = pricing_model.partition("/")[0]
+    public_provider: Final = pricing_provider or (prefix if prefix in LlmProvidersSet else custom_llm_provider)
+    public_info: Final = lookup_model_info_for_registration(pricing_model, public_provider)
+    if isinstance(public_info, ModelInfoLookupMiss):
+        return deployment_info
+    public_entry: Final = _raw_cost_map_entry(public_info["key"])
+    if public_entry is None or not (
+        _cost_map_entry_prices_anything(public_entry) or _has_deployment_token_pricing(public_entry)
+    ):
+        return deployment_info
+    effective_info: Final = model_info_with_pricing_overrides(
+        {**public_info, "mode": public_info.get("mode") or "chat"}, deployment_info
+    )
+    off_peak: Final = deployment_info.get("off_peak_pricing")
+    return {
+        **effective_info,
+        "off_peak_pricing": off_peak if off_peak is not None else effective_info.get("off_peak_pricing"),
+    }
+
+
+def _has_deployment_token_pricing(info: Mapping[str, object]) -> bool:
+    return any(
+        value is not None
+        and ("token" in field or field in ("tiered_pricing", "off_peak_pricing"))
+        and (is_server_derived_pricing_key(field) or field == "off_peak_pricing")
+        for field, value in info.items()
     )
 
 

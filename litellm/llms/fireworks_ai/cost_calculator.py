@@ -71,7 +71,9 @@ def _resolve_routed_model_info(model: str) -> ModelInfo:
         return get_model_info(model=base_model, custom_llm_provider="fireworks_ai")
 
 
-def cost_per_token(model: str, usage: Usage, current_time: datetime | None = None) -> tuple[float, float]:
+def cost_per_token(
+    model: str, usage: Usage, current_time: datetime | None = None, deployment_model_info: ModelInfo | None = None
+) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens,
     swapping in the model's off_peak_pricing rates while one of its windows is open.
@@ -84,11 +86,11 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
-    model_info: Final = _resolve_model_info(model)
+    model_info: Final = deployment_model_info if deployment_model_info is not None else _resolve_model_info(model)
     return generic_cost_per_token(
         model=model,
         usage=usage,
-        custom_llm_provider=model_info["litellm_provider"],
+        custom_llm_provider="fireworks_ai" if deployment_model_info is not None else model_info["litellm_provider"],
         model_info=model_info,
         current_time=current_time,
     )
