@@ -49,7 +49,6 @@ def _prompt_storage_config(
                     "disable_responses_id_security": True,
                     "store_model_in_db": True,
                     "store_prompts_in_spend_logs": store_prompts,
-                    "redact_tokens_in_spend_logs": True,
                     "proxy_batch_write_at": 1,
                     "proxy_batch_polling_interval": 1,
                 },

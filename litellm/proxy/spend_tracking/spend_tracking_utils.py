@@ -1463,7 +1463,7 @@ def _is_spend_log_content(parent: Mapping[str, object], key: str) -> bool:
 def _without_tokens(value: str) -> str:
     from litellm.proxy.proxy_server import general_settings_view
 
-    if general_settings_view().get("redact_tokens_in_spend_logs") is not True:
+    if general_settings_view().get("redact_tokens_in_spend_logs") is False:
         return value
     return redact_tokens(value, REDACTED_BY_LITELM_STRING)
 

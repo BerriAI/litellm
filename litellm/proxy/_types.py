@@ -2929,8 +2929,8 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description="If True, stores request messages and responses in spend logs. Default is False.",
     )
     redact_tokens_in_spend_logs: bool = Field(
-        False,
-        description="If True, masks token-shaped secrets in stored spend log request and response content. Default is False.",
+        True,
+        description="Masks token-shaped secrets in stored spend log request and response content by default. Set False to opt out.",
     )
     spend_logs_prompt_storage: Literal["latest_turn"] | None = Field(
         None,
