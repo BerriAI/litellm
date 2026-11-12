@@ -83,6 +83,10 @@ def replicate_prediction_url(api_base: str, prediction_id: str) -> str:
     return join_api_base(api_base, f"predictions/{encode_url_path_segment(prediction_id, field_name='prediction id')}")
 
 
+def replicate_model_owner(model: str) -> str:
+    return model.removeprefix("deployments/").split(":", 1)[0].split("/", 1)[0]
+
+
 def replicate_prediction(raw_response: httpx.Response) -> Mapping[str, object]:
     try:
         return _JSON_OBJECT.validate_python(raw_response.json())
@@ -130,8 +134,7 @@ def replicate_prediction_failure(prediction: Mapping[str, object]) -> str | None
 
 
 def replicate_prediction_is_done(prediction: Mapping[str, object]) -> bool:
-    status: Final = replicate_prediction_string(prediction, "status")
-    return status in REPLICATE_TERMINAL_STATUSES or bool(replicate_output_urls(prediction.get("output")))
+    return replicate_prediction_string(prediction, "status") in REPLICATE_TERMINAL_STATUSES
 
 
 def replicate_poll_headers(

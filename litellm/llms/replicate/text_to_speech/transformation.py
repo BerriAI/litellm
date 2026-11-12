@@ -18,6 +18,7 @@ from litellm.llms.replicate.common_utils import (
     async_wait_for_replicate_prediction,
     replicate_api_base,
     replicate_auth_headers,
+    replicate_model_owner,
     replicate_output_urls,
     replicate_prediction_failure,
     replicate_prediction_request,
@@ -38,7 +39,7 @@ _VOICE_KEY_BY_OWNER: Final[Mapping[str, str]] = MappingProxyType(
 
 
 def _voice_key(model: str) -> str:
-    return _VOICE_KEY_BY_OWNER.get(model.split("/", 1)[0], "voice")
+    return _VOICE_KEY_BY_OWNER.get(replicate_model_owner(model), "voice")
 
 
 def _get_replicate_async_httpx_client() -> AsyncHTTPHandler:

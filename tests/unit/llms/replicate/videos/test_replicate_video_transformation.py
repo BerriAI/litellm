@@ -56,9 +56,10 @@ def test_map_openai_params_generic_model():
     assert isinstance(mapped["duration"], int)
 
 
-def test_map_openai_params_minimax_profile():
+@pytest.mark.parametrize("model", [MINIMAX_MODEL, f"deployments/{MINIMAX_MODEL}", f"{MINIMAX_MODEL}:0123abcd"])
+def test_map_openai_params_minimax_profile(model: str):
     mapped = ReplicateVideoConfig().map_openai_params(
-        {"seconds": 5, "size": "1024x768", "input_reference": IMAGE_URL}, MINIMAX_MODEL, False
+        {"seconds": 5, "size": "1024x768", "input_reference": IMAGE_URL}, model, False
     )
     assert mapped == {"first_frame_image": IMAGE_URL, "duration": 5, "resolution": "768P", "ratio": "4:3"}
 
@@ -153,12 +154,30 @@ def test_status_request_uses_prediction_id_from_encoded_video_id():
     url, data = ReplicateVideoConfig().transform_video_status_retrieve_request(
         video.id, API_BASE, GenericLiteLLMParams(), {}
     )
-    assert url == f"{API_BASE}/predictions/abc"
+    assert url == f"{API_BASE}/predictions/abc#{MODEL}"
+    assert httpx.URL(url).raw_path == b"/v1/predictions/abc"
     assert data == {}
     content_url, _ = ReplicateVideoConfig().transform_video_content_request(
         video.id, API_BASE, GenericLiteLLMParams(), {}
     )
-    assert content_url == url
+    assert content_url == f"{API_BASE}/predictions/abc"
+
+
+@pytest.mark.parametrize("model", [f"{MODEL}:0123abcd", "deployments/acme/fast-video"])
+def test_status_response_keeps_the_requested_model_and_video_id(model: str):
+    create = _prediction_response({"id": "abc", "status": "starting", "model": "xai/grok-imagine-video"})
+    video = ReplicateVideoConfig().transform_video_create_response(model, create, Mock())
+    url, _ = ReplicateVideoConfig().transform_video_status_retrieve_request(
+        video.id, API_BASE, GenericLiteLLMParams(), {}
+    )
+    status = httpx.Response(
+        200,
+        json={"id": "abc", "status": "succeeded", "model": "xai/grok-imagine-video", "output": VIDEO_URL},
+        request=httpx.Request("GET", url),
+    )
+    polled = ReplicateVideoConfig().transform_video_status_retrieve_response(status, Mock())
+    assert polled.id == video.id
+    assert polled.model == model
 
 
 @pytest.mark.parametrize(

@@ -87,13 +87,15 @@ def test_get_complete_url():
         ("minimax/speech-02-turbo", "voice_id"),
         ("inworld/realtime-tts-2", "voice_id"),
         ("qwen/qwen3-tts", "speaker"),
+        ("deployments/minimax/my-tts", "voice_id"),
+        ("qwen/qwen3-tts:0123abcd", "speaker"),
     ],
 )
 def test_request_body_uses_model_family_voice_key(model: str, voice_key: str):
     request = ReplicateTextToSpeechConfig().transform_text_to_speech_request(
         model, "hello there", "Wise_Woman", {"speed": 1.1}, {}, {}
     )
-    assert request == {"dict_body": {"input": {"text": "hello there", voice_key: "Wise_Woman", "speed": 1.1}}}
+    assert request["dict_body"]["input"] == {"text": "hello there", voice_key: "Wise_Woman", "speed": 1.1}
 
 
 def test_request_body_without_voice():

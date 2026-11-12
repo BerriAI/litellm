@@ -156,6 +156,23 @@ def test_unfinished_prediction_is_polled_until_output(monkeypatch: pytest.Monkey
     assert "prefer" not in poll_headers
 
 
+def test_partial_output_keeps_polling_until_terminal_status(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(time, "sleep", lambda _: None)
+    poll_url = f"{API_BASE}/predictions/p1"
+    client = _FakeClient(
+        httpx.Response(
+            200,
+            json={"id": "p1", "status": "succeeded", "output": list(IMAGE_URLS)},
+            request=httpx.Request("GET", poll_url),
+        ),
+    )
+    partial = _prediction_response(
+        {"id": "p1", "status": "processing", "output": [IMAGE_URLS[0]], "urls": {"get": poll_url}}
+    )
+    result = _transform(_config(client), partial)
+    assert [image.url for image in result.data] == list(IMAGE_URLS)
+
+
 def test_polling_gives_up_after_retry_budget(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(time, "sleep", lambda _: None)
     monkeypatch.setattr(common_utils, "DEFAULT_REPLICATE_SYNC_POLLING_RETRIES", 2)

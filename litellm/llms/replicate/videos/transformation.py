@@ -22,6 +22,7 @@ from litellm.llms.replicate.common_utils import (
     ReplicateError,
     replicate_api_base,
     replicate_auth_headers,
+    replicate_model_owner,
     replicate_output_urls,
     replicate_prediction,
     replicate_prediction_failure,
@@ -71,7 +72,7 @@ _MINIMAX_PROFILE: Final[_ModelProfile] = _ModelProfile(
 
 
 def _profile_for_model(model: str) -> _ModelProfile:
-    return _MINIMAX_PROFILE if model.startswith("minimax/") else _GENERIC_PROFILE
+    return _MINIMAX_PROFILE if replicate_model_owner(model) == "minimax" else _GENERIC_PROFILE
 
 
 def _duration_value(seconds: object) -> int | float:
@@ -268,8 +269,9 @@ class ReplicateVideoConfig(BaseVideoConfig):
         litellm_params: GenericLiteLLMParams,
         headers: _VideoHeaders,
     ) -> tuple[str, _VideoParams]:
-        prediction_id, _ = self._decode_video_id(video_id)
-        return replicate_prediction_url(api_base, prediction_id), {}
+        prediction_id, model_id = self._decode_video_id(video_id)
+        status_url: Final = httpx.URL(replicate_prediction_url(api_base, prediction_id))
+        return str(status_url.copy_with(fragment=model_id) if model_id else status_url), {}
 
     def transform_video_status_retrieve_response(
         self,
@@ -279,7 +281,8 @@ class ReplicateVideoConfig(BaseVideoConfig):
         client: HTTPHandler | None = None,
     ) -> VideoObject:
         prediction: Final = replicate_prediction(raw_response)
-        return _video_object(prediction, replicate_prediction_string(prediction, "model"), custom_llm_provider, 0)
+        model: Final = raw_response.request.url.fragment or replicate_prediction_string(prediction, "model")
+        return _video_object(prediction, model, custom_llm_provider, 0)
 
     def transform_video_content_request(
         self,
