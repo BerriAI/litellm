@@ -21,6 +21,8 @@ from integration._support.tls import server_context
 from pydantic import JsonValue
 from websockets.asyncio.server import ServerConnection, serve
 
+from tests.integration._support.ports import allocate_port
+
 PROVIDER_MODEL: Final = "ws-peer-model"
 USAGE: Final = {"input_tokens": 5, "output_tokens": 2, "total_tokens": 7}
 TERMINAL: Final = frozenset({"response.completed", "response.failed", "error"})
@@ -105,7 +107,10 @@ async def _serve(
     script: Script,
 ) -> None:
     async with serve(
-        lambda connection: _answer(connection, paths, credentials, frames, script), "127.0.0.1", 0, ssl=tls
+        lambda connection: _answer(connection, paths, credentials, frames, script),
+        "127.0.0.1",
+        allocate_port(),
+        ssl=tls,
     ) as server:
         ports.put(next(iter(server.sockets)).getsockname()[1])
         await stop.wait()

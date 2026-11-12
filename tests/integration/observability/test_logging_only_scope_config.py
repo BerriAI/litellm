@@ -35,6 +35,7 @@ from _logging_only_scope_support import (
     _reset_upstream,
     _response_body_without_ids,
     _spend_row_for_call_id,
+    _spend_row_for_response_id,
     _spend_rows,
     _upstream_requests,
     wire_server,
@@ -404,6 +405,7 @@ def test_presidio_scope_matches_no_scope_behavior(gateway: Gateway, tmp_path: Pa
                         bool,
                         seconds=30,
                     )
+                    _spend_row_for_response_id(no_scope_result.response_id)
                     no_scope_analyzer_calls: Final = no_scope_analyzer.drain()
                     no_scope_anonymizer_calls: Final = no_scope_anonymizer.drain()
                     no_scope_call_counts: Final = (
@@ -431,6 +433,7 @@ def test_presidio_scope_matches_no_scope_behavior(gateway: Gateway, tmp_path: Pa
                         bool,
                         seconds=30,
                     )
+                    _spend_row_for_response_id(scoped_result.response_id)
                     scoped_analyzer_calls: Final = scoped_analyzer.drain()
                     scoped_anonymizer_calls: Final = scoped_anonymizer.drain()
                     scoped_call_counts: Final = (
@@ -470,6 +473,7 @@ def test_F7_guardrail_ui_settings_classify_directional_scope_support(gateway: Ga
     assert unsupported is not None, response
     assert isinstance(unsupported, list), response
     assert set(unsupported) == {
+        "collieai",
         "lakera",
         "lakera_v2",
         "presidio",

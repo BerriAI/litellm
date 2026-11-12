@@ -19,18 +19,31 @@ SCOPE_RESPONSE_KEY: Final = "litellm.mcp.scope_response"
 _REQUEST: Final = TypeAdapter[dict[str, object]](dict[str, object])
 
 
-def is_tool_call_request(body: bytes) -> bool:
+LISTING_METHODS: Final = frozenset({"tools/list", "prompts/list", "resources/list", "resources/templates/list"})
+
+
+def _request_method(body: bytes) -> object:
     try:
-        return _REQUEST.validate_json(body).get("method") == "tools/call"
+        return _REQUEST.validate_json(body).get("method")
     except ValidationError:
-        return False
+        return None
+
+
+def is_tool_call_request(body: bytes) -> bool:
+    return _request_method(body) == "tools/call"
+
+
+def is_listing_request(body: bytes) -> bool:
+    method: Final = _request_method(body)
+    return isinstance(method, str) and method in LISTING_METHODS
 
 
 class OAuthScopeResponse:
-    def __init__(self, send: Send, base_url: str, request_path: str | None) -> None:
+    def __init__(self, send: Send, base_url: str, request_path: str | None, reauthorize_as: str | None = None) -> None:
         self._send = send
         self._base_url = base_url
         self._request_path = request_path
+        self._reauthorize_as = reauthorize_as
         self._ready = asyncio.Event()
         self._lock = asyncio.Lock()
         self._challenge: MCPUpstreamAuthError | None = None
@@ -44,7 +57,15 @@ class OAuthScopeResponse:
         self._ready.set()
 
     def deny(self, error: MCPUpstreamAuthError) -> None:
-        if self.pending and error.status_code == 403 and error.required_scope is not None:
+        if error.status_code == 403 and error.required_scope is not None:
+            self._refuse(error)
+
+    def deny_reauth(self) -> None:
+        if self._reauthorize_as is not None:
+            self._refuse(MCPUpstreamAuthError(status_code=401, www_authenticate=None, server_name=self._reauthorize_as))
+
+    def _refuse(self, error: MCPUpstreamAuthError) -> None:
+        if self.pending:
             self._challenge = error
             self._ready.set()
 
