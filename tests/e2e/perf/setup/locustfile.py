@@ -223,12 +223,13 @@ class PlanUser(FastHttpUser):
     def on_start(self) -> None:
         self._last_run = 0.0
         self._last_wait = 0.0
+        self._idle = False
         if not _SCHEDULED:
             gevent.sleep(_RNG.uniform(0.0, _INTERVAL_S))
 
     def wait_time(self) -> float:
         if _SCHEDULED:
-            return 0.1
+            return 0.1 if self._idle else 0.0
         target: Final = _INTERVAL_S * _RNG.uniform(1.0 - _JITTER, 1.0 + _JITTER)
         now: Final = time.monotonic()
         run_s: Final = now - self._last_run - self._last_wait if self._last_run else 0.0
@@ -240,6 +241,7 @@ class PlanUser(FastHttpUser):
     def send(self) -> None:
         take: Final = _PROGRESS.take(stop=_STOP_FILE is not None and Path(_STOP_FILE).exists())
         item: Final = next(_NEXT, None) if take else None
+        self._idle = item is None
         if item is None:
             if _PROGRESS.drained:
                 _quit(self)

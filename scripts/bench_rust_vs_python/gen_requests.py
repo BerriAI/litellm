@@ -110,6 +110,19 @@ def build_plan(
     return (*warm, *timed)
 
 
+def sequential_plan(
+    *, path: BenchPath, seed: int, warmup: int, measured: int, master_key: str, input_tokens: tuple[int, int]
+) -> tuple[WireRequest, ...]:
+    """Requests sent one after another by a single client: every send time is 0, so each goes out as soon as the
+    previous one finishes, and CPU per request is measured without contention between concurrent requests."""
+    rng: Final = random.Random(seed)
+    seqs: Final = (*range(WARMUP_SEQ_START + 1, WARMUP_SEQ_START + warmup + 1), *range(1, measured + 1))
+    return tuple(
+        wire_request(rng, path=path, seq=seq, send_at_s=0.0, master_key=master_key, input_tokens=input_tokens)
+        for seq in seqs
+    )
+
+
 def step_windows(warmup_seconds: float, measured: tuple[Step, ...]) -> list[dict[str, float]]:
     starts: Final = tuple(accumulate((step.seconds for step in measured), initial=warmup_seconds))
     return [
@@ -140,8 +153,25 @@ def main() -> None:
     _ = parser.add_argument("--warmup-seconds", type=float, default=60.0)
     _ = parser.add_argument("--master-key", default="sk-bench-master")
     _ = parser.add_argument("--input-tokens", default="45000,55000", help="low,high input tokens per request")
+    _ = parser.add_argument("--sequential", type=int, help="measured requests sent one at a time, instead of --rps")
+    _ = parser.add_argument("--warmup-requests", type=int, default=300, help="discarded requests before --sequential")
     _ = parser.add_argument("--out", type=Path, required=True)
     args: Final = parser.parse_args()
+    out_path: Final[Path] = args.out  # pyright: ignore[reportAny]
+    sequential: Final[int | None] = args.sequential  # pyright: ignore[reportAny]
+    if sequential is not None:
+        plan_seq: Final = sequential_plan(
+            path=args.path,  # pyright: ignore[reportAny]
+            seed=int(args.seed),  # pyright: ignore[reportAny]
+            warmup=int(args.warmup_requests),  # pyright: ignore[reportAny]
+            measured=sequential,
+            master_key=str(args.master_key),  # pyright: ignore[reportAny]
+            input_tokens=parse_range(str(args.input_tokens)),  # pyright: ignore[reportAny]
+        )
+        _ = out_path.write_bytes(_PLAN.dump_json(list(plan_seq)))
+        _ = out_path.with_suffix(".steps.json").write_text("[]")
+        _ = sys.stdout.write(f"{out_path}: {len(plan_seq)} requests sent one at a time\n")
+        return
     ramp_spec: Final[str | None] = args.ramp  # pyright: ignore[reportAny]
     rps: Final[float | None] = args.rps  # pyright: ignore[reportAny]
     if (ramp_spec is None) == (rps is None):

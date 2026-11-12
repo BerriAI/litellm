@@ -161,6 +161,20 @@ def plan_steps(plan_path: Path) -> tuple[Step, ...]:
     return tuple(Step(**step) for step in json.loads(plan_path.with_suffix(".steps.json").read_text()))
 
 
+def measured_window(records: Sequence[Mapping[str, object]], send_at: Mapping[int, float]) -> tuple[float, float]:
+    """Wall-clock bounds of the measured requests. A sequential plan (every send at 0) is bounded by when its
+    measured requests actually ran; an open-loop plan by its own schedule, shifted to the run's clock."""
+    measured: Final = tuple(r for r in records if int(str(r["seq"])) < WARMUP_SEQ_START)
+    if all(at == 0.0 for at in send_at.values()):
+        return (
+            min(float(str(r["started_at"])) for r in measured),
+            max(float(str(r["started_at"])) + float(str(r["total_s"])) for r in measured),
+        )
+    t0: Final = statistics.median(float(str(r["started_at"])) - send_at[int(str(r["seq"]))] for r in records)
+    sends: Final = tuple(at for seq, at in send_at.items() if seq < WARMUP_SEQ_START)
+    return t0 + min(sends), t0 + max(sends)
+
+
 def run_metrics(run_dir: Path) -> RunMetrics:
     meta: Final = json.loads((run_dir / "meta.json").read_text())
     plan: Final = json.loads(Path(meta["plan"]).read_text())
@@ -176,10 +190,7 @@ def run_metrics(run_dir: Path) -> RunMetrics:
         if entry["marker"]
     }
     samples: Final = json.loads((run_dir / "samples.json").read_text())
-    t0: Final = statistics.median(float(r["started_at"]) - send_at[int(r["seq"])] for r in records)
-    measured_sends: Final = tuple(s for seq, s in send_at.items() if seq < WARMUP_SEQ_START)
-    start: Final = t0 + min(measured_sends)
-    end: Final = t0 + max(measured_sends)
+    start, end = measured_window(records, send_at)
     measured: Final = tuple(
         request_metrics(r, send_at[int(r["seq"])], mock) for r in records if int(r["seq"]) < WARMUP_SEQ_START
     )

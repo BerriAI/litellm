@@ -258,3 +258,31 @@ def test_segments_split_the_added_time_at_the_moments_the_provider_saw() -> None
     assert split.pre_upstream_s + split.tail_s == pytest.approx(overhead)
     assert segments({**record, "stream": False}, upstream).stream_start_s is None
     assert segments(record, {"delay_s": 0.8, "generation_s": 2.0}) is None
+
+
+def test_sequential_window_spans_the_measured_requests_as_they_ran() -> None:
+    from scripts.bench_rust_vs_python.report import measured_window
+
+    records: Final = [
+        {"seq": WARMUP_SEQ_START + 1, "started_at": 100.0, "total_s": 0.1},
+        {"seq": 1, "started_at": 100.2, "total_s": 0.1},
+        {"seq": 2, "started_at": 100.4, "total_s": 0.3},
+    ]
+
+    assert measured_window(records, {WARMUP_SEQ_START + 1: 0.0, 1: 0.0, 2: 0.0}) == pytest.approx((100.2, 100.7))
+    assert measured_window(records, {WARMUP_SEQ_START + 1: 0.0, 1: 0.2, 2: 0.4}) == pytest.approx((100.2, 100.4))
+
+
+def test_rounds_order_runs_every_variant_once_per_round() -> None:
+    from scripts.bench_rust_vs_python.run_bench import run_order
+
+    order: Final = run_order(("A0", "A1", "HP"), reps=3, seed=4, order="rounds")
+
+    assert [sorted(name for name, rep in order if rep == r) for r in (1, 2, 3)] == [["A0", "A1", "HP"]] * 3
+    assert [rep for _, rep in order] == [1, 1, 1, 2, 2, 2, 3, 3, 3]
+    assert sorted(run_order(("A0", "A1"), reps=2, seed=4, order="shuffle")) == [
+        ("A0", 1),
+        ("A0", 2),
+        ("A1", 1),
+        ("A1", 2),
+    ]

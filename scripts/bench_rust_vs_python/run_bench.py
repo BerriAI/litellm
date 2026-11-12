@@ -459,6 +459,17 @@ def run_once(spec: RunSpec) -> dict[str, object]:
         stop(s3)
 
 
+def run_order(names: Sequence[str], reps: int, seed: int, order: str) -> tuple[tuple[str, int], ...]:
+    rng: Final = random.Random(seed)
+    if order == "rounds":
+        return tuple(
+            (name, rep) for rep in range(1, reps + 1) for name in rng.sample(list(names), len(names))
+        )  # comprehension-ok: one shuffled pass per round
+    return tuple(
+        rng.sample([(name, rep) for rep in range(1, reps + 1) for name in names], reps * len(names))
+    )  # comprehension-ok: every run once
+
+
 def main() -> None:
     parser: Final = argparse.ArgumentParser(description=__doc__)
     _ = parser.add_argument("--worktrees", type=Path, required=True)
@@ -467,6 +478,9 @@ def main() -> None:
     _ = parser.add_argument("--variants", required=True, help="comma separated names from variants.yaml")
     _ = parser.add_argument("--reps", type=int, default=5)
     _ = parser.add_argument("--seed", type=int, default=0, help="shuffles the run order")
+    _ = parser.add_argument(
+        "--order", choices=("shuffle", "rounds"), default="shuffle", help="rounds: every variant once per round"
+    )
     _ = parser.add_argument("--plan-name", default="{path}", help="plan file stem, {path} is substituted")
     _ = parser.add_argument("--users", type=int, default=400)
     _ = parser.add_argument("--profile-seconds", type=float)
@@ -481,8 +495,7 @@ def main() -> None:
     args: Final = parser.parse_args()
     catalog: Final = load_variants()
     names: Final = tuple(str(args.variants).split(","))  # pyright: ignore[reportAny]
-    runs: Final = [(name, rep) for rep in range(1, int(args.reps) + 1) for name in names]  # pyright: ignore[reportAny]  # mutable-ok: shuffled in place below
-    random.Random(int(args.seed)).shuffle(runs)  # pyright: ignore[reportAny]
+    runs: Final = run_order(names, int(args.reps), int(args.seed), str(args.order))  # pyright: ignore[reportAny]
     cores: Final = Cores(
         proxy=str(args.proxy_cores),
         loadgen=str(args.loadgen_cores),  # pyright: ignore[reportAny]
