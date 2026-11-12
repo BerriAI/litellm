@@ -2993,6 +2993,7 @@ _ROUTE_MAX_REQUEST_SIZE_MB: Final[Mapping[tuple[str, str], float]] = MappingProx
         ("POST", "/claude-code/plugins/upload"): 11,
         ("POST", "/skill-hub/skills/upload"): 11,
         ("PUT", "/skill-hub/skills/{name}/upload"): 11,
+        ("PUT", "/skill-hub/submissions/{submission_id}/upload"): 11,
     }
 )
 
