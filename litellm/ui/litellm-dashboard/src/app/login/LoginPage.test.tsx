@@ -138,7 +138,7 @@ describe("LoginPage", () => {
     );
 
     await waitFor(() => {
-      expect(mockReplaceDocument).toHaveBeenCalledWith("/ui");
+      expect(mockReplaceDocument).toHaveBeenCalledWith(new URL("/ui", window.location.origin).href);
     });
   });
 
@@ -219,7 +219,7 @@ describe("LoginPage", () => {
     );
 
     await waitFor(() => {
-      expect(mockReplaceDocument).toHaveBeenCalledWith("/ui");
+      expect(mockReplaceDocument).toHaveBeenCalledWith(new URL("/ui", window.location.origin).href);
     });
 
     expect(mockPush).not.toHaveBeenCalled();
@@ -393,7 +393,9 @@ describe("LoginPage", () => {
         vi.mocked(isJwtExpired).mockReturnValue(false);
         renderLogin();
 
-        await waitFor(() => expect(mockReplaceDocument).toHaveBeenCalledWith("/ui"));
+        await waitFor(() =>
+          expect(mockReplaceDocument).toHaveBeenCalledWith(new URL("/ui", window.location.origin).href),
+        );
       },
     );
   });
@@ -470,7 +472,7 @@ describe("LoginPage", () => {
       );
 
       await waitFor(() => {
-        expect(mockReplaceDocument).toHaveBeenCalledWith("/ui");
+        expect(mockReplaceDocument).toHaveBeenCalledWith(new URL("/ui", window.location.origin).href);
       });
 
       expect(document.cookie).not.toContain("token=attacker.jwt.value");

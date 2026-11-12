@@ -7,7 +7,6 @@ import {
   exchangeLoginCode,
   getProxyBaseUrl,
   getRuntimeBackendBaseUrl,
-  getUiPageUrl,
   switchToWorkerUrl,
 } from "@/components/networking";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/shared/Alert";
@@ -24,6 +23,7 @@ import { useZodForm } from "@/lib/forms/useZodForm";
 import { clearTokenCookies, getCookieFromDocument } from "@/utils/cookieUtils";
 import { isJwtExpired } from "@/utils/jwtUtils";
 import { consumeReturnUrl, getLoginUrl, getReturnUrl, isValidReturnUrl } from "@/utils/returnUrlUtils";
+import { navigateToUiPage } from "@/utils/uiNavigation";
 import { CircleAlert, Info, TriangleAlert, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useState } from "react";
@@ -39,27 +39,6 @@ const loginSchema = z.object({
 });
 
 type LoginFormValues = z.infer<typeof loginSchema>;
-
-function navigateToUiPage(url: string, replace = false): void {
-  let target: URL;
-  try {
-    target = new URL(getUiPageUrl(url, true), window.location.origin);
-  } catch {
-    target = new URL("/ui", window.location.origin);
-  }
-
-  if (target.origin === window.location.origin && (target.protocol === "http:" || target.protocol === "https:")) {
-    if (replace) {
-      window.location.replace(target.href);
-    } else {
-      window.location.assign(target.href);
-    }
-  } else if (replace) {
-    window.location.replace("/ui");
-  } else {
-    window.location.assign("/ui");
-  }
-}
 
 function SsoEnabledNotice() {
   const { t } = useTranslation();
@@ -159,12 +138,7 @@ function LoginPageContent() {
     const rawToken = getCookieFromDocument("token");
     if (rawToken && !isJwtExpired(rawToken)) {
       // User already logged in - redirect to return URL or default
-      const returnUrl = consumeReturnUrl(getRuntimeBackendBaseUrl());
-      if (returnUrl) {
-        navigateToUiPage(returnUrl, true);
-      } else {
-        window.location.replace("/ui");
-      }
+      navigateToUiPage(consumeReturnUrl(getRuntimeBackendBaseUrl()) ?? "/ui", true);
       return;
     }
 
@@ -197,15 +171,10 @@ function LoginPageContent() {
           if (selectedWorker) {
             selectWorker(selectedWorker.worker_id);
             // Stay on the CP's UI — proxyBaseUrl already points at the worker
-            window.location.assign("/ui/?login=success");
+            navigateToUiPage("/ui/?login=success");
           } else {
             // Normal (non-control-plane) login — follow the server's redirect
-            const returnUrl = consumeReturnUrl(getRuntimeBackendBaseUrl());
-            if (returnUrl) {
-              navigateToUiPage(returnUrl);
-            } else {
-              navigateToUiPage(data.redirect_url);
-            }
+            navigateToUiPage(consumeReturnUrl(getRuntimeBackendBaseUrl()) ?? data.redirect_url);
           }
         },
         onError: () => {
