@@ -3520,6 +3520,87 @@ async def test_afile_retrieve_fetches_from_provider_when_file_object_none():
         assert managed_file_table.upsert_calls == []
 
 
+TEAM_BUCKET_FILE_ID: Final = "s3://team-a-bucket/litellm-batch-outputs/job-1/input.jsonl.out"
+
+
+def _managed_files_holding_a_team_bucket_file() -> PROXY_LiteLLMManagedFiles:
+    internal_usage_cache: Final = MagicMock()
+    internal_usage_cache.async_get_cache = AsyncMock(
+        return_value={
+            "unified_file_id": _managed_output_file_id(TEAM_BUCKET_FILE_ID),
+            "model_mappings": {"model-1": TEAM_BUCKET_FILE_ID},
+            "flat_model_file_ids": [TEAM_BUCKET_FILE_ID],
+            "file_object": None,
+            "created_by": "user-a",
+            "updated_by": "user-a",
+        }
+    )
+    internal_usage_cache.async_set_cache = AsyncMock()
+    prisma_client: Final = AsyncMock()
+    prisma_client.db.litellm_managedfiletable.find_first = AsyncMock(return_value=None)
+    managed_files: Final = PROXY_LiteLLMManagedFiles(
+        internal_usage_cache=internal_usage_cache, prisma_client=prisma_client
+    )
+    managed_files.delete_unified_file_id = AsyncMock(return_value=None)
+    return managed_files
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_managed_file_in_a_team_bucket_names_that_bucket_to_the_provider():
+    router: Final = MagicMock()
+    router.afile_delete = AsyncMock(return_value=MagicMock())
+
+    await _managed_files_holding_a_team_bucket_file().afile_delete(
+        file_id=_managed_output_file_id(TEAM_BUCKET_FILE_ID), litellm_parent_otel_span=None, llm_router=router
+    )
+
+    assert router.afile_delete.call_args.kwargs["file_id"] == TEAM_BUCKET_FILE_ID
+    assert router.afile_delete.call_args.kwargs["stored_s3_bucket_name"] == "team-a-bucket"
+
+
+@pytest.mark.asyncio
+async def test_reading_a_managed_file_in_a_team_bucket_names_that_bucket_to_the_provider():
+    router: Final = MagicMock()
+    router.afile_content = AsyncMock(return_value=MagicMock())
+
+    await _managed_files_holding_a_team_bucket_file().afile_content(
+        file_id=_managed_output_file_id(TEAM_BUCKET_FILE_ID), litellm_parent_otel_span=None, llm_router=router
+    )
+
+    assert router.afile_content.call_args.kwargs["file_id"] == TEAM_BUCKET_FILE_ID
+    assert router.afile_content.call_args.kwargs["stored_s3_bucket_name"] == "team-a-bucket"
+
+
+@pytest.mark.asyncio
+async def test_refreshing_a_managed_file_in_a_team_bucket_names_that_bucket_to_the_provider():
+    from litellm.types.llms.openai import OpenAIFileObject
+
+    stored_file: Final = LiteLLM_ManagedFileTable(
+        unified_file_id="unified-team-file",
+        file_object=None,
+        model_mappings={"model-1": TEAM_BUCKET_FILE_ID},
+        flat_model_file_ids=[TEAM_BUCKET_FILE_ID],
+        created_by="user-a",
+    )
+    proxy_managed_files, _ = _managed_files_with_fake_prisma(stored_file)
+    router: Final = MagicMock()
+    router.registry.return_value.credentials = MagicMock(
+        return_value={"custom_llm_provider": "bedrock", "s3_bucket_name": "model-bucket"}
+    )
+    provider_file: Final = OpenAIFileObject(
+        id=TEAM_BUCKET_FILE_ID, object="file", bytes=1, created_at=1, filename="input.jsonl.out", purpose="batch_output"
+    )
+
+    with patch("litellm.afile_retrieve", new_callable=AsyncMock, return_value=provider_file) as provider_retrieve:
+        refreshed: Final = await proxy_managed_files.afile_retrieve(
+            file_id="unified-team-file", litellm_parent_otel_span=None, llm_router=router
+        )
+
+    assert (refreshed.id, refreshed.filename) == ("unified-team-file", "input.jsonl.out")
+    assert provider_retrieve.call_args.kwargs["file_id"] == TEAM_BUCKET_FILE_ID
+    assert provider_retrieve.call_args.kwargs["stored_s3_bucket_name"] == "team-a-bucket"
+
+
 @pytest.mark.asyncio
 async def test_afile_retrieve_raises_error_when_no_router_and_file_object_none():
     """
@@ -5663,6 +5744,44 @@ async def test_provider_format_file_without_ownership_row_stays_accessible():
     )
 
     assert result["file_id"] == RAW_PROVIDER_FILE_ID
+
+
+def _managed_output_file_id(provider_file_id: str) -> str:
+    unified: Final = (
+        "litellm_proxy:application/json;unified_id,u-1;target_model_names,claude-batch;"
+        f"llm_output_file_id,{provider_file_id};llm_output_file_model_id,model-1"
+    )
+    return base64.urlsafe_b64encode(unified.encode()).decode().rstrip("=")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider_file_id,stored_bucket",
+    [("s3://team-a-bucket/litellm-batch-outputs/job-1/input.jsonl.out", "team-a-bucket"), ("file-openai-1", None)],
+)
+async def test_owned_managed_file_content_is_read_from_the_bucket_litellm_recorded(
+    provider_file_id: str, stored_bucket: str | None
+):
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    prisma_client = AsyncMock()
+    prisma_client.db.litellm_managedfiletable.find_first.return_value = _owned_record(
+        created_by="user_a", team_id="team_a"
+    )
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(MagicMock(), prisma_client=prisma_client)
+
+    result = await proxy_managed_files.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(user_id="user_a", team_id="team_a", parent_otel_span=MagicMock()),
+        cache=MagicMock(),
+        data={"file_id": _managed_output_file_id(provider_file_id)},
+        call_type="afile_content",
+    )
+
+    assert (result["model"], result["file_id"], result.get("stored_s3_bucket_name")) == (
+        "model-1",
+        provider_file_id,
+        stored_bucket,
+    )
 
 
 @pytest.mark.asyncio

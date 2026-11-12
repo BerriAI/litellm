@@ -81,14 +81,14 @@ class _FakeStreamWrapper:
         return self._chunks.pop(0)
 
 
-def _build_iterator(chunks) -> LiteLLMCompletionStreamingIterator:
+def _build_iterator(chunks, litellm_metadata: dict[str, object] | None = None) -> LiteLLMCompletionStreamingIterator:
     return LiteLLMCompletionStreamingIterator(
         model="claude-haiku-4-5",
         litellm_custom_stream_wrapper=_FakeStreamWrapper(chunks),
         request_input="What is the weather in San Francisco?",
         responses_api_request={},
         custom_llm_provider="anthropic",
-        litellm_metadata={},
+        litellm_metadata=litellm_metadata or {},
     )
 
 
@@ -1772,6 +1772,56 @@ async def test_completed_output_follows_the_streamed_output_indexes(sync_mode: b
     )
     assert [item.type for item in completed.response.output] == [event.item.type for event in added]
     assert [item.id for item in completed.response.output] == [event.item.id for event in added]
+
+
+_REASONING_ITEM_EVENT_TYPES: Final = frozenset(
+    {
+        ResponsesAPIStreamEvents.RESPONSE_PART_ADDED,
+        ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
+        ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DONE,
+        ResponsesAPIStreamEvents.REASONING_SUMMARY_PART_DONE,
+    }
+)
+
+
+def _reasoning_item_ids(events: list[BaseLiteLLMOpenAIResponseObject]) -> set[str]:
+    completed: Final = next(
+        event for event in events if getattr(event, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+    streamed_items: Final = {
+        event.item.id for event in events if getattr(getattr(event, "item", None), "type", None) == "reasoning"
+    }
+    scoped_events: Final = {
+        event.item_id for event in events if getattr(event, "type", None) in _REASONING_ITEM_EVENT_TYPES
+    }
+    completed_items: Final = {item.id for item in completed.response.output if item.type == "reasoning"}
+    return streamed_items | scoped_events | completed_items
+
+
+@pytest.mark.parametrize(
+    "stream_chunks",
+    [_reasoning_then_text_chunks, _signed_thinking_and_text_in_one_chunk],
+    ids=["reasoning_then_text_chunks", "signed_thinking_and_text_in_one_chunk"],
+)
+@pytest.mark.parametrize(
+    "litellm_metadata, origin",
+    [({"encrypted_content_affinity_enabled": True, "model_info": {"id": "dep-1"}}, "dep-1"), ({}, None)],
+    ids=["affinity-on", "affinity-off"],
+)
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_reasoning_item_keeps_one_id_across_bridged_events_and_completed_output(
+    stream_chunks: StreamChunks, litellm_metadata: dict[str, object], origin: str | None, sync_mode: bool
+):
+    events: Final = await _collect_events(_build_iterator(stream_chunks(), litellm_metadata), sync_mode)
+
+    reasoning_ids: Final = _reasoning_item_ids(events)
+    assert len(reasoning_ids) == 1
+    decoded: Final = ResponsesAPIRequestUtils.decode_encrypted_item_id(next(iter(reasoning_ids)))
+    assert (decoded or {}).get("model_id") == origin
+    message_ids: Final = {event.item.id for event in events if _is_message_item(event)}
+    assert message_ids
+    assert [ResponsesAPIRequestUtils.decode_encrypted_item_id(item_id) for item_id in message_ids] == [None]
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])

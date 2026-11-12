@@ -6,6 +6,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Final, Literal, cast, get_type_hints, overload
 
 from pydantic import TypeAdapter, ValidationError
+from typing_extensions import TypedDict
 
 if TYPE_CHECKING:
     from litellm.images.utils import ImageEditRequestUtils
@@ -699,7 +700,7 @@ async def aimage_variation(*args, **kwargs) -> ImageResponse:
         init_response = await loop.run_in_executor(None, func_with_context)
         if isinstance(init_response, dict) or isinstance(init_response, ImageResponse):  ## CACHING SCENARIO
             if isinstance(init_response, dict):
-                init_response = ImageResponse(**init_response)
+                init_response = _image_response_from_fields(init_response)
             response = init_response
         elif asyncio.iscoroutine(init_response):
             response = await init_response
@@ -716,6 +717,14 @@ async def aimage_variation(*args, **kwargs) -> ImageResponse:
             completion_kwargs=args,
             extra_kwargs=kwargs,
         )
+
+
+class _ImageResponseFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
+def _image_response_from_fields(fields: Mapping[str, object]) -> ImageResponse:
+    return ImageResponse(**_ImageResponseFields(**fields))
 
 
 @client

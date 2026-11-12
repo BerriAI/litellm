@@ -28,7 +28,7 @@ from litellm.proxy import proxy_server
 
 module_name: Final = {
     "unified": "litellm.proxy.proxy_server",
-    "backend": "backend.main",
+    "backend": "litellm.runtime.backend.main",
     "gateway": "gateway.main",
 }[sys.argv[2]]
 app: Final = importlib.import_module(module_name).app
