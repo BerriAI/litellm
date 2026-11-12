@@ -38,10 +38,12 @@ def _with_images_as_data_urls(request: DecisionsIRRequest) -> DecisionsIRRequest
 class NaceDecisionsConfig(BaseDecisionsConfig):
     api_key_env = ("NACE_API_KEY",)
     api_base_env = ("NACE_API_BASE", "NACE_BASE_URL")
-    supports_images = True
     max_images = 8
     image_media_types = frozenset({"image/png", "image/jpeg", "image/jpg", "image/webp"})
     inlines_remote_images = True
+
+    def __init__(self, model: str = "") -> None:
+        self.supports_images = model != "drex-v2.0"
 
     def get_default_api_base(self) -> str | None:
         return "https://console.nace.ai"

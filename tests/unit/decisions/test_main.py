@@ -2157,8 +2157,17 @@ _IMAGE_REFUSALS: Final[tuple[tuple[str, Mapping[str, object], str], ...]] = (
 )
 
 
+@pytest.mark.parametrize(
+    ("model", "url"),
+    (
+        ("perplexity/pplx-decider-v1-27b", _PERPLEXITY_DECISIONS_URL),
+        ("nace/drex-v2.0", "https://console.nace.ai/v1/systemone"),
+    ),
+)
 @pytest.mark.parametrize(("api", "request_kwargs", "param"), _IMAGE_REFUSALS, ids=_PREDICATE_REQUEST_IDS)
 def test_images_are_refused_before_http_when_the_provider_cannot_take_them(
+    model: str,
+    url: str,
     api: str,
     request_kwargs: Mapping[str, object],
     param: str,
@@ -2166,29 +2175,39 @@ def test_images_are_refused_before_http_when_the_provider_cannot_take_them(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
-    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
+    route: Final = respx_mock.post(url).respond(json=_RESPONSE)
 
     with pytest.raises(litellm.UnsupportedParamsError, match=rf"\['{param}'\].*drop_params") as caught:
-        getattr(litellm, api)(model="perplexity/pplx-decider-v1-27b", api_key="caller-key", **request_kwargs)
+        getattr(litellm, api)(model=model, api_key="caller-key", **request_kwargs)
 
     assert caught.value.status_code == 400
     assert not route.called
 
 
+@pytest.mark.parametrize(
+    ("model", "url"),
+    (
+        ("perplexity/pplx-decider-v1-27b", _PERPLEXITY_DECISIONS_URL),
+        ("nace/drex-v2.0", "https://console.nace.ai/v1/systemone"),
+    ),
+)
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("api", "request_kwargs"), _image_requests(_PNG_DATA_URL), ids=_PREDICATE_REQUEST_IDS)
 async def test_images_are_dropped_from_the_wire_under_drop_params(
-    api: str, request_kwargs: Mapping[str, object], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    model: str,
+    url: str,
+    api: str,
+    request_kwargs: Mapping[str, object],
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
-    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
+    route: Final = respx_mock.post(url).respond(json=_RESPONSE)
 
-    await getattr(litellm, f"a{api}")(
-        model="perplexity/pplx-decider-v1-27b", api_key="caller-key", drop_params=True, **request_kwargs
-    )
+    await getattr(litellm, f"a{api}")(model=model, api_key="caller-key", drop_params=True, **request_kwargs)
 
     assert json.loads(route.calls[0].request.content) == {
-        "model": "pplx-decider-v1-27b",
+        "model": model.split("/", 1)[1],
         "state": _SCREEN_TEXT,
         "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
     }
@@ -4941,7 +4960,9 @@ async def test_input_images_reach_nace_drex_max_as_a_top_level_images_array(resp
 
 
 @pytest.mark.usefixtures("nace_account")
-@pytest.mark.parametrize("nace_model", ["drex-max", "drex-max-v1.1"])
+@pytest.mark.parametrize(
+    "nace_model", ["drex-max", "drex-max-v1.1", "drex-v1.0", "drex-v1.5", "drex-latest", "drex-unlisted"]
+)
 def test_systemone_images_reach_nace_as_data_urls(nace_model: str, respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(_NACE_SYSTEMONE_URL).respond(json={**_DREX_MAX_RESPONSE, "model": nace_model})
 
