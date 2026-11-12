@@ -31,6 +31,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 from onelogin.saml2.utils import OneLogin_Saml2_Utils
 from starlette.datastructures import URL
+from starlette.types import Message
 
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -642,21 +643,32 @@ async def test_build_login_redirect_targets_idp_and_caches_request_id(saml_env):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("user_code", "relay_override", "sign", "unsolicited", "prefill_enabled", "direct_login"),
+    ("user_code", "relay_override", "sign", "unsolicited", "prefill_enabled", "direct_login", "disable_admin_ui"),
     [
-        (None, None, True, False, True, False),
-        ("ABCD-EFGH", None, True, False, True, False),
-        (None, "litellm-session-token:", True, False, True, False),
-        (None, "litellm-session-token:cli-never-issued-session-00", True, False, True, False),
-        (None, None, False, False, True, False),
-        (None, None, True, True, True, False),
-        ("ABCD-EFGH", None, True, False, False, True),
-        ("ABCD-EFGH", None, True, False, True, True),
+        (None, None, True, False, True, False, False),
+        ("ABCD-EFGH", None, True, False, True, False, False),
+        (None, "litellm-session-token:", True, False, True, False, False),
+        (None, "litellm-session-token:cli-never-issued-session-00", True, False, True, False, False),
+        (None, None, False, False, True, False, False),
+        (None, None, True, True, True, False, False),
+        ("ABCD-EFGH", None, True, False, False, True, False),
+        ("ABCD-EFGH", None, True, False, True, True, False),
+        pytest.param(None, None, True, False, True, False, True, id="disabled-ui-cli"),
+        pytest.param(None, None, False, False, True, False, True, id="disabled-ui-unsigned"),
+        pytest.param(None, None, True, True, True, False, True, id="disabled-ui-unsolicited"),
     ],
 )
 async def test_saml_cli_device_login_completes_after_signed_assertion(
-    saml_env, monkeypatch, user_code, relay_override, sign, unsolicited, prefill_enabled, direct_login
-):
+    saml_env: tuple[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    user_code: str | None,
+    relay_override: str | None,
+    sign: bool,
+    unsolicited: bool,
+    prefill_enabled: bool,
+    direct_login: bool,
+    disable_admin_ui: bool,
+) -> None:
     from litellm.proxy import proxy_server
     from litellm.proxy.management_endpoints.ui_sso import (
         _get_cli_sso_flow_cache_key,
@@ -693,6 +705,8 @@ async def test_saml_cli_device_login_completes_after_signed_assertion(
     monkeypatch.setattr(proxy_server, "user_custom_ui_sso_sign_in_handler", None)
     for name in ("MICROSOFT_CLIENT_ID", "GOOGLE_CLIENT_ID", "GENERIC_CLIENT_ID", "DISABLE_ADMIN_UI"):
         monkeypatch.delenv(name, raising=False)
+    if disable_admin_ui:
+        monkeypatch.setenv("DISABLE_ADMIN_UI", "true")
 
     request: Final = Request(
         {
@@ -716,7 +730,7 @@ async def test_saml_cli_device_login_completes_after_signed_assertion(
     signed: Final = _build_signed_response(key_pem, cert_pem, in_response_to=None if unsolicited else ticket, sign=sign)
     body: Final = urlencode({"SAMLResponse": _b64(signed), "RelayState": relay_override or relay}).encode()
 
-    async def receive():
+    async def receive() -> Message:
         return {"type": "http.request", "body": body, "more_body": False}
 
     callback: Final = Request(
@@ -757,7 +771,7 @@ async def test_saml_cli_device_login_completes_after_signed_assertion(
 
 
 @pytest.mark.asyncio
-async def test_saml_ui_login_preserves_return_to(saml_env, monkeypatch):
+async def test_saml_ui_login_preserves_return_to(saml_env: tuple[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.proxy import proxy_server
     from litellm.proxy.management_endpoints.ui_sso import google_login
 
@@ -769,6 +783,29 @@ async def test_saml_ui_login_preserves_return_to(saml_env, monkeypatch):
         monkeypatch.delenv(name, raising=False)
     response: Final = await google_login(_fake_request(), return_to="/ui/?tab=keys")
     assert parse_qs(urlparse(response.headers["location"]).query)["RelayState"] == ["/ui/?tab=keys"]
+
+
+@pytest.mark.asyncio
+async def test_saml_ui_login_stays_blocked_when_admin_ui_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.management_endpoints.ui_sso import google_login, saml_callback, saml_login
+
+    monkeypatch.setenv("DISABLE_ADMIN_UI", "true")
+    body: Final = urlencode({"SAMLResponse": "unused", "RelayState": "/ui/?tab=keys"}).encode()
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/sso/saml/callback",
+            "headers": [(b"content-type", b"application/x-www-form-urlencoded")],
+        },
+        receive,
+    )
+    for response in (await google_login(request), await saml_login(request), await saml_callback(request)):
+        assert "Admin UI is Disabled" in response.body.decode()
 
 
 @pytest.mark.asyncio

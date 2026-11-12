@@ -2432,7 +2432,12 @@ async def saml_callback(request: Request):
         saml_sso_cache,
     )
 
-    if is_admin_ui_disabled():
+    post_data: Final = await SAMLAuthHandler.read_acs_post_data(request)
+    cli_relay_state: Final = post_data.get("RelayState")
+    is_cli_login: Final = isinstance(cli_relay_state, str) and cli_relay_state.startswith(
+        f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:"
+    )
+    if is_admin_ui_disabled() and not is_cli_login:
         return admin_ui_disabled()
 
     if prisma_client is None:
@@ -2445,14 +2450,9 @@ async def saml_callback(request: Request):
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
-    post_data: Final = await SAMLAuthHandler.read_acs_post_data(request)
     if "SAMLResponse" not in post_data:
         raise HTTPException(status_code=400, detail="Missing SAMLResponse in callback request.")
 
-    cli_relay_state: Final = post_data.get("RelayState")
-    is_cli_login: Final = isinstance(cli_relay_state, str) and cli_relay_state.startswith(
-        f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:"
-    )
     user, retained = await SAMLAuthHandler.handle_acs(
         request=request, cache=saml_sso_cache, post_data=post_data, require_sp_initiated=is_cli_login
     )
