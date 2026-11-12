@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
+import { createParser, useQueryStates } from "nuqs";
 
 import { dailyActivityAggregatedCall } from "@/components/networking";
 import {
@@ -12,6 +13,15 @@ import { spendScopeUserId } from "@/utils/roles";
 import { useAggregatedDailyActivity } from "@/app/(dashboard)/usage/_components/hooks/useAggregatedDailyActivity";
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+const activityDate = createParser({
+  parse: (value) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+    const date = new Date(`${value}T12:00:00`);
+    return Number.isFinite(date.getTime()) && date.toLocaleDateString("en-CA") === value ? date : null;
+  },
+  serialize: (value) => value.toLocaleDateString("en-CA"),
+});
+const activityDates = { activity_from: activityDate, activity_to: activityDate };
 
 export interface DateRange {
   from?: Date;
@@ -41,8 +51,18 @@ export type ActivityDateRange = Pick<DailyActivityRange, "dateValue" | "onDateCh
 export const useActivityDateRange = (): ActivityDateRange => {
   const initialFrom = useMemo(() => new Date(new Date().getTime() - THIRTY_DAYS_MS), []);
   const initialTo = useMemo(() => new Date(), []);
-  const [dateValue, setDateValue] = useState<DateRange>({ from: initialFrom, to: initialTo });
-  return { dateValue, onDateChange: setDateValue };
+  const [params, setParams] = useQueryStates(activityDates);
+  const dateValue = useMemo<DateRange>(
+    () =>
+      params.activity_from && params.activity_to && params.activity_from <= params.activity_to
+        ? { from: params.activity_from, to: params.activity_to }
+        : { from: initialFrom, to: initialTo },
+    [params.activity_from, params.activity_to, initialFrom, initialTo],
+  );
+  const onDateChange = (value: DateRange) => {
+    void setParams({ activity_from: value.from ?? null, activity_to: value.to ?? null });
+  };
+  return { dateValue, onDateChange };
 };
 
 export interface ScopedActivityInput {

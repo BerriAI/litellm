@@ -26,6 +26,7 @@ import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { ColumnFiltersState, functionalUpdate, OnChangeFn } from "@tanstack/react-table";
 import { KeyRound } from "lucide-react";
 import { parseAsString, useQueryState } from "nuqs";
+import { useResetDetailState } from "@/hooks/useUrlTab";
 import React, { useCallback, useMemo, useState } from "react";
 import type { ParseKeys } from "i18next";
 import { useTranslation } from "react-i18next";
@@ -98,6 +99,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
   const { data: fetchedTeams } = useAllTeams();
   const allTeams = useMemo<Team[]>(() => fetchedTeams ?? [], [fetchedTeams]);
 
+  const resetDetailState = useResetDetailState();
   const [selectedKeyId, setSelectedKeyId] = useQueryState("key", parseAsString.withOptions({ history: "push" }));
   const {
     search: searchInput,
@@ -161,10 +163,13 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
       allTeams,
       organizations,
       teamMemberBudgets,
-      onSelectKey: (key: KeyResponse) => void setSelectedKeyId(key.token),
+      onSelectKey: (key: KeyResponse) => {
+        resetDetailState();
+        void setSelectedKeyId(key.token);
+      },
       applyUserBudgetToTeamKeys,
     }),
-    [allTeams, organizations, teamMemberBudgets, setSelectedKeyId, applyUserBudgetToTeamKeys],
+    [allTeams, organizations, teamMemberBudgets, setSelectedKeyId, applyUserBudgetToTeamKeys, resetDetailState],
   );
   const columns = useMemo(() => getKeyTableColumns(columnDeps, t), [columnDeps, t]);
 
@@ -235,7 +240,10 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
       <div className="w-full h-full overflow-hidden">
         <KeyInfoView
           keyId={selectedKeyId}
-          onClose={() => void setSelectedKeyId(null)}
+          onClose={() => {
+            resetDetailState();
+            void setSelectedKeyId(null);
+          }}
           keyData={selectedKey}
           teams={allTeams}
           onDelete={refetch}

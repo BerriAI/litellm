@@ -1,5 +1,10 @@
 import React from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderWithProviders as render } from "../../../../../tests/test-utils";
+import { parseAsString, useQueryStates } from "nuqs";
+import type { UrlUpdateEvent } from "nuqs/adapters/testing";
+import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
+import type { KeyResponse } from "@/components/key_team_helpers/key_list";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import AgentInfoView from "./agent_info";
 import AgentFormFields from "./agent_form_fields";
@@ -14,7 +19,30 @@ vi.mock("@/components/networking", () => ({
 }));
 
 vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
-  useKeys: () => ({ data: { keys: [] }, isLoading: false, refetch: vi.fn() }),
+  useKeys: vi.fn(() => ({ data: { keys: [] }, isLoading: false, refetch: vi.fn() })),
+}));
+
+vi.mock("@/components/templates/key_info_view", () => ({
+  default: function KeyInfoViewMock({ onClose, onDelete }: { onClose: () => void; onDelete: () => void }) {
+    const [, setActivity] = useQueryStates({
+      detail_tab: parseAsString,
+      activity_from: parseAsString,
+      activity_to: parseAsString,
+    });
+    return (
+      <div>
+        <button
+          onClick={() =>
+            void setActivity({ detail_tab: "activity", activity_from: "2026-11-01", activity_to: "2026-11-02" })
+          }
+        >
+          Select activity
+        </button>
+        <button onClick={onClose}>Back to agent</button>
+        <button onClick={onDelete}>Delete key</button>
+      </div>
+    );
+  },
 }));
 
 vi.mock("./AgentIdentityDetails", () => ({
@@ -82,6 +110,11 @@ const agent = {
 describe("AgentInfoView settings", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.mocked(useKeys).mockReturnValue({
+      data: { keys: [] },
+      isLoading: false,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useKeys>);
     vi.mocked(AgentFormFields)
       .mockReset()
       .mockImplementation(() => <div data-testid="agent-form-fields" />);
@@ -89,6 +122,31 @@ describe("AgentInfoView settings", () => {
     vi.mocked(networking.getAgentCreateMetadata).mockReset().mockResolvedValue([]);
     vi.mocked(networking.patchAgentCall).mockReset().mockResolvedValue({});
     vi.mocked(networking.triggerAgentKillSwitchCall).mockReset();
+  });
+
+  it.each(["Back to agent", "Delete key"])("clears key tabs and dates when opening a key and on %s", async (action) => {
+    const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
+    const refetch = vi.fn();
+    vi.mocked(useKeys).mockReturnValue({
+      data: { keys: [{ token: "agent-key-1", key_alias: "Agent key" } as KeyResponse] },
+      isLoading: false,
+      refetch,
+    } as unknown as ReturnType<typeof useKeys>);
+    render(<AgentInfoView agentId="agent-1" onClose={vi.fn()} accessToken="sk-test" isAdmin={true} />, {
+      searchParams: "?agent=agent-1&detail_tab=activity&activity_from=2026-10-01&activity_to=2026-10-02",
+      onUrlUpdate,
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "agent-key-1..." }));
+    expect(await screen.findByRole("button", { name: "Back to agent" })).toBeInTheDocument();
+    await waitFor(() => expect(onUrlUpdate.mock.lastCall?.[0].searchParams.toString()).toBe("agent=agent-1"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Select activity" }));
+    await waitFor(() => expect(onUrlUpdate.mock.lastCall?.[0].searchParams.get("activity_from")).toBe("2026-11-01"));
+    fireEvent.click(screen.getByRole("button", { name: action }));
+    await waitFor(() => expect(onUrlUpdate.mock.lastCall?.[0].searchParams.toString()).toBe("agent=agent-1"));
+    expect(await screen.findByRole("button", { name: "agent-key-1..." })).toBeInTheDocument();
+    if (action === "Delete key") expect(refetch).toHaveBeenCalledOnce();
   });
 
   it("submits the edited agent when Save Changes is pressed", async () => {

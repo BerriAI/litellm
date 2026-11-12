@@ -1,4 +1,5 @@
 import userEvent from "@testing-library/user-event";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { afterEach, beforeEach, describe, expect, it, vi, MockedFunction } from "vitest";
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { chooseSelectOption, fireEvent, renderWithProviders, screen, waitFor, within } from "../../../tests/test-utils";
@@ -503,7 +504,12 @@ describe("TeamVirtualKeysTable", () => {
       refetch: vi.fn(),
     } as any);
 
-    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />, {
+      searchParams:
+        "?team=team-1&detail_tab=virtual-keys&key_tab=activity&activity_from=2026-01-01&activity_to=2026-01-08",
+      onUrlUpdate,
+    });
 
     await waitFor(() => {
       expect(screen.getByText("clickable_key")).toBeInTheDocument();
@@ -515,6 +521,13 @@ describe("TeamVirtualKeysTable", () => {
     await waitFor(() => {
       expect(screen.getByText("Key Info View")).toBeInTheDocument();
     });
+    await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+    expect(Object.fromEntries(onUrlUpdate.mock.calls.at(-1)![0].searchParams)).toEqual({
+      team: "team-1",
+      detail_tab: "virtual-keys",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(await screen.findByText("Key ID")).toBeInTheDocument();
   });
 
   it("should open a key without its own organization without the team's organization", async () => {

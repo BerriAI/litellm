@@ -1,5 +1,6 @@
+import { renderWithProviders as render } from "../../../../../tests/test-utils";
 import React from "react";
-import { fireEvent, render, waitFor, screen } from "@testing-library/react";
+import { fireEvent, waitFor, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 

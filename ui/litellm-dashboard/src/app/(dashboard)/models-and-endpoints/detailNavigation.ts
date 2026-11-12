@@ -1,5 +1,6 @@
 import { parseAsString, useQueryState, useQueryStates } from "nuqs";
 import { useCallback } from "react";
+import { useResetDetailState } from "@/hooks/useUrlTab";
 
 export interface ModelDetailRouting {
   modelId: string | null;
@@ -10,6 +11,7 @@ export interface ModelDetailRouting {
 }
 
 export function useModelDetailRouting(): ModelDetailRouting {
+  const resetDetailState = useResetDetailState();
   const [{ model, team }, setParams] = useQueryStates(
     { model: parseAsString, team: parseAsString },
     { history: "push" },
@@ -17,21 +19,24 @@ export function useModelDetailRouting(): ModelDetailRouting {
 
   const openModel = useCallback(
     (id: string) => {
+      resetDetailState();
       void setParams({ model: id, team: null });
     },
-    [setParams],
+    [setParams, resetDetailState],
   );
 
   const openTeam = useCallback(
     (id: string) => {
+      resetDetailState();
       void setParams({ model: null, team: id });
     },
-    [setParams],
+    [setParams, resetDetailState],
   );
 
   const close = useCallback(() => {
+    resetDetailState();
     void setParams({ model: null, team: null });
-  }, [setParams]);
+  }, [setParams, resetDetailState]);
 
   return {
     modelId: model,

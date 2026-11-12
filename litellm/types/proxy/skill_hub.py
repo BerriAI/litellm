@@ -78,6 +78,14 @@ class SkillHubPublication(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
 
+class SkillHubRestore(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    expected_skill_id: str = Field(description="Current skill ID read by the editor")
+    expected_updated_at: datetime | None = Field(description="Current updated_at read by the editor, including null")
+    version: str | None = Field(None, description="Higher semantic version, or omit/null for an automatic patch bump")
+
+
 class SkillHubVersion(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 

@@ -11,7 +11,7 @@ from typing import Final
 import pytest
 
 ROOT: Final = Path(__file__).resolve().parents[2]
-CI_CD: Final = ROOT / "ci_cd"
+CI_CD: Final = ROOT / "scripts" / "ci_cd"
 
 
 def _load(name: str) -> ModuleType:
