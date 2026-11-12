@@ -39,21 +39,24 @@ def _database(keys: tuple[dict[str, object], ...], email: str | None = "owner@ex
 
 
 @pytest.mark.asyncio
-async def test_database_query_filters_opt_in_and_batches_distinct_owners() -> None:
+@pytest.mark.parametrize("clock_time", [NOW, NOW.astimezone(timezone(timedelta(hours=5)))])
+async def test_database_query_filters_opt_in_and_batches_distinct_owners(clock_time: datetime) -> None:
     db: Final = _database((_key(), _key(token="second-token"), _key(token="third-token", user_id="second-owner")))
     db.db.litellm_usertable.find_many.return_value = (
         SimpleNamespace(user_id="owner", user_email="owner@example.com"),
         SimpleNamespace(user_id="second-owner", user_email="second@example.com"),
     )
     email: Final = MagicMock(send_key_expiring_email=AsyncMock())
-    await KeyExpiryAlertManager(db, DualCache(), email, lambda: NOW).process_alerts()
+    await KeyExpiryAlertManager(db, DualCache(), email, lambda: clock_time).process_alerts()
     db.db.query_raw.assert_awaited_once()
     query, start, end = db.db.query_raw.call_args.args
     assert "SELECT token, key_alias, key_name, user_id, expires, metadata" in query
     assert "metadata ? 'key_expiry_alert_days'" in query
-    assert "expires IS NOT NULL AND expires > $1 AND expires <= $2" in query
+    assert "expires IS NOT NULL AND expires > $1::timestamp AND expires <= $2::timestamp" in query
     assert "user_id IS NOT NULL AND (blocked = FALSE OR blocked IS NULL)" in query
     assert (start, end) == (NOW, NOW + timedelta(days=KEY_EXPIRY_ALERT_MAX_DAYS))
+    assert start.tzinfo is timezone.utc
+    assert end.tzinfo is timezone.utc
     db.db.litellm_usertable.find_many.assert_awaited_once_with(where={"user_id": {"in": ["owner", "second-owner"]}})
     assert tuple(call.kwargs["user_email"] for call in email.send_key_expiring_email.await_args_list) == (
         "owner@example.com",

@@ -20,7 +20,7 @@ _EXPIRING_KEYS_SQL: Final = """
 SELECT token, key_alias, key_name, user_id, expires, metadata
 FROM "LiteLLM_VerificationToken"
 WHERE metadata ? 'key_expiry_alert_days'
-  AND expires IS NOT NULL AND expires > $1 AND expires <= $2
+  AND expires IS NOT NULL AND expires > $1::timestamp AND expires <= $2::timestamp
   AND user_id IS NOT NULL AND (blocked = FALSE OR blocked IS NULL)
 """
 logger: Final = logging.getLogger(__name__)
@@ -107,7 +107,7 @@ class KeyExpiryAlertManager:
         settings: Final = _SETTINGS.validate_python(await email_settings_module.get_email_settings(self.prisma_client))
         if not settings.get("Virtual Key Expiring", True):
             return
-        now: Final = self.clock()
+        now: Final = self.clock().astimezone(timezone.utc)
         rows: Final = _ROWS.validate_python(
             await self.prisma_client.db.query_raw(
                 _EXPIRING_KEYS_SQL, now, now + timedelta(days=KEY_EXPIRY_ALERT_MAX_DAYS)
