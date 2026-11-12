@@ -57,6 +57,8 @@ from litellm.litellm_core_utils.thread_pool_executor import executor as logging_
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, headers
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+from litellm.proxy.db.request_error_tracking import status_code_from_metadata
 from litellm.proxy.utils import is_valid_api_key
 from litellm.responses.main import aresponses, responses
 from litellm.types.caching import CachingSupportedCallTypes
@@ -119,6 +121,7 @@ from litellm.utils import (
     trim_messages,
     validate_environment,
     validate_chat_completion_tool_choice,
+    validate_and_fix_openai_messages,
 )
 from litellm.litellm_core_utils.model_cost_table import publish
 
@@ -859,6 +862,7 @@ def validate_model_cost_values(model_data, exceptions=None):
         "output_cost_per_image_1K",
         "output_cost_per_image_2K",
         "output_cost_per_image_4K",
+        "output_cost_per_billable_unit",
         "input_cost_per_pixel",
         "output_cost_per_pixel",
         "cost_per_second",
@@ -1153,6 +1157,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "output_cost_per_image_1K": {"type": "number"},
             "output_cost_per_image_2K": {"type": "number"},
             "output_cost_per_image_4K": {"type": "number"},
+            "output_cost_per_billable_unit": {"type": "number"},
             "output_cost_per_image_token": {"type": "number"},
             "output_cost_per_image_token_batches": {"type": "number"},
             "output_cost_per_image_token_priority": {"type": "number"},
@@ -8939,6 +8944,57 @@ def test_validate_tool_choice_without_model_is_still_a_400():
     assert exc_info.value.model == ""
 
 
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize(
+    ("messages", "index"),
+    [
+        ([{"content": "Say hi in two words."}], 0),
+        ([{"role": "user", "content": "hi"}, {"role": None, "content": "hello"}], 1),
+        ([{"role": "user", "content": "hi"}, {"role": "", "content": "hello"}], 1),
+    ],
+)
+def test_completion_message_without_role_is_a_400(messages: list[dict[str, str | None]], index: int):
+    """A message with no role is the caller's mistake, rejected before any provider sees it, never sent as assistant."""
+    with pytest.raises(
+        litellm.MissingMessageRoleError, match=re.escape(f"Missing required parameter: 'messages[{index}].role'.")
+    ) as exc_info:
+        litellm.completion(model=MODEL, messages=messages, mock_response="Hello there!")
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.model == MODEL
+    assert exc_info.value.llm_provider == "anthropic"
+    assert exc_info.value.param == f"messages[{index}].role"
+    error_information: Final = StandardLoggingPayloadSetup.get_error_information(exc_info.value)
+    assert status_code_from_metadata({"error_information": error_information}) == 400
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize(
+    "call_turn",
+    [
+        {
+            "content": "",
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+            ],
+        },
+        {"content": None, "function_call": {"name": "get_weather", "arguments": "{}"}},
+        {"content": "ok", "tool_calls": []},
+        {"content": "ok", "tool_calls": None},
+        {"content": "ok", "function_call": None},
+        {"content": "Sunny.", "reasoning_content": "The user wants the weather."},
+        {"content": "Sunny.", "reasoning_items": []},
+        {"content": "Sunny.", "thinking_blocks": [{"type": "thinking", "thinking": "Weather.", "signature": "sig"}]},
+        {"content": None, "refusal": "I can't help with that."},
+        {"content": None, "audio": {"id": "audio_1"}},
+    ],
+)
+def test_completion_role_less_assistant_turn_is_sent_as_assistant(call_turn: dict[str, object]):
+    """Only an assistant turn carries these keys, so one replayed without a role still goes upstream as assistant."""
+    messages: Final = [{"role": "user", "content": "Weather in Paris?"}, call_turn]
+
+    assert validate_and_fix_openai_messages(messages)[1]["role"] == "assistant"
+
+
 @pytest.fixture()
 def _vcr_outcome_gate_local_testing(request, vcr):
     install_live_call_probe(request, vcr)
@@ -10731,12 +10787,12 @@ def test_dict_to_response_format_helper():
 def test_validate_user_messages_invalid_content_type():
     from litellm.utils import validate_chat_completion_user_messages
 
-    messages = [{"content": [{"type": "invalid_type", "text": "Hello"}]}]
+    messages = [{"role": "user", "content": [{"type": "invalid_type", "text": "Hello"}]}]
 
-    with pytest.raises(Exception, match="Please ensure all messages are valid OpenAI chat completion") as e:
+    with pytest.raises(Exception, match="Please ensure all user messages are valid OpenAI chat completion") as e:
         validate_chat_completion_user_messages(messages)
 
-    assert "Invalid message" in str(e)
+    assert "Invalid user message at index 0" in str(e)
     print(e)
 
 
@@ -11794,6 +11850,11 @@ async def test_success_enqueue_is_tracked_without_starting_callbacks_synchronous
     assert GLOBAL_LOGGING_WORKER.pending_count > 0, "Tracked enqueue must finish before worker draining starts"
     await GLOBAL_LOGGING_WORKER.flush()
     assert logging_obj.model_call_details["has_logged_async_success"] is True
+
+
+@pytest.mark.parametrize("kwargs", [None, "not a mapping"], ids=["none", "string"])
+def test_get_first_chars_messages_returns_empty_text_for_input_that_is_not_a_mapping(kwargs: object) -> None:
+    assert litellm.get_first_chars_messages(kwargs=kwargs) == ""
 
 
 def test_get_response_string_joins_the_text_parts_of_a_completed_responses_event() -> None:

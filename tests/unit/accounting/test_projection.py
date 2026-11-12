@@ -277,6 +277,8 @@ async def test_entity_projection_matches_real_request_queues(monkeypatch: pytest
         "request_count": int(model.counts_as_request),
         "successful_requests": int(model.successful),
         "failed_requests": int(not model.successful),
+        "total_response_time_ms": model.duration_ms or 0,
+        "timed_requests": int(model.duration_ms is not None),
     }
 
 

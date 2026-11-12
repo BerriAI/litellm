@@ -1429,7 +1429,7 @@ def get_regional_uplift_multiplier(model_info: ModelInfo, data_residency: str | 
     residency: Final = data_residency.lower()
     if residency not in _VALID_DATA_RESIDENCIES:
         return 1.0
-    multiplier: Final = model_info.get(f"regional_processing_uplift_multiplier_{residency}")
+    multiplier: Final[object] = model_info.get(f"regional_processing_uplift_multiplier_{residency}")
     if multiplier is None:
         return 1.0
     if not isinstance(multiplier, (str, Buffer, SupportsFloat, SupportsIndex)):

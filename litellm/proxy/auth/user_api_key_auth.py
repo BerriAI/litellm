@@ -85,6 +85,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     is_model_cost_zero,
     is_user_proxy_admin,
     is_valid_fallback_model,
+    is_video_retrieval_request,
     jwt_key_mapping_cache_key,
     key_access_group_grants_model,
     key_model_aliases_for_auth_check,
@@ -2680,7 +2681,11 @@ async def user_api_key_auth_builder(
                             team_id=valid_token.team_id,
                         )
                         skip_budget_checks = request_skips_budget_checks(
-                            route=route, model=model, llm_router=llm_router, request_body=request_data
+                            route=route,
+                            model=model,
+                            llm_router=llm_router,
+                            request_body=request_data,
+                            http_method=RouteChecks.get_request_method(request),
                         )
 
                         # Fetch project object for JWT path if project_id is set
@@ -3198,6 +3203,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
             model=await budget_served_model(model, request_data, request, llm_router, valid_token),
             llm_router=llm_router,
             request_body=request_data,
+            http_method=RouteChecks.get_request_method(request),
         )
 
         # Check 3. Check if user is in their team budget
@@ -4002,7 +4008,11 @@ async def run_centralized_common_checks(
         user_api_key_auth_obj.project_metadata = project_object.metadata
         user_api_key_auth_obj.project_alias = project_object.project_alias
 
-    if end_user_id and key_end_user_budget_id is not None and prisma_client is not None:
+    if (
+        end_user_id
+        and (key_end_user_budget_id is not None or user_api_key_auth_obj.jwt_claims is not None)
+        and prisma_client is not None
+    ):
         await _apply_key_end_user_default_budget_to_token(
             valid_token=user_api_key_auth_obj,
             end_user_object=end_user_object,
@@ -4190,7 +4200,7 @@ async def _noop_none() -> None:
 async def _apply_key_end_user_default_budget_to_token(
     valid_token: UserAPIKeyAuth,
     end_user_object: LiteLLM_EndUserTable | None,
-    key_end_user_budget_id: str,
+    key_end_user_budget_id: str | None,
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Span | None,
@@ -4299,6 +4309,7 @@ async def _should_skip_budget_checks(
         model=(model if sub_call else await budget_served_model(model, request_data, request, llm_router, valid_token)),
         llm_router=llm_router,
         request_body=request_data,
+        http_method=RouteChecks.get_request_method(request),
     )
 
 
@@ -4976,7 +4987,9 @@ async def _run_post_custom_auth_checks(
     # spend some other model accrued. The JWT and virtual-key paths already skip
     # every budget check for these; this path did not, so the same request could
     # be refused under custom auth and served under the other two.
-    skip_budget_checks: Final = (
+    skip_budget_checks: Final = is_video_retrieval_request(
+        route=route, http_method=RouteChecks.get_request_method(request)
+    ) or (
         is_model_cost_zero(
             model=await budget_served_model(current_model, request_data, request, llm_router, valid_token),
             llm_router=llm_router,
