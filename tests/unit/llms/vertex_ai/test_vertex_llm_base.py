@@ -2807,6 +2807,33 @@ async def test_a_key_file_replaced_by_one_that_does_not_load_keeps_the_earlier_k
 
 
 @pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.asyncio
+async def test_a_key_file_that_does_not_load_raises_once_google_rejects_the_earlier_key(
+    tmp_path: pathlib.Path, is_async: bool
+) -> None:
+    vertex: Final = VertexBase()
+    now: Final = datetime(2025, 1, 1)
+    key_file: Final = tmp_path / "vertex-key.json"
+    key_file.write_text(_authorized_user_cache_credentials("old-key", quota_project="unit-project"))
+    old_key_revoked: Final = Event()
+
+    def token_response(request: requests.PreparedRequest) -> tuple[int, dict[str, str], str]:
+        if old_key_revoked.is_set():
+            return 400, {}, json.dumps({"error": "invalid_grant", "error_description": "Token has been expired or revoked."})
+        return _old_or_new_token_response(request)
+
+    fetch: Final = vertex.get_access_token_async if is_async else partial(asyncio.to_thread, vertex.get_access_token)
+    with patch("google.auth._helpers.utcnow", return_value=now) as clock, responses.RequestsMock() as oauth:
+        oauth.add_callback(responses.POST, "https://oauth2.googleapis.com/token", callback=token_response)
+        assert await fetch(str(key_file), "unit-project") == ("old-token", "unit-project")
+        _move_into_place(key_file, '{"type": "authorized_user", "client_id": "half-wri')
+        old_key_revoked.set()
+        clock.return_value = now + timedelta(seconds=7200)
+        with pytest.raises(google.auth.exceptions.RefreshError, match="invalid_grant"):
+            await fetch(str(key_file), "unit-project")
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize(
     "google_unavailable",
     [

@@ -1037,6 +1037,7 @@ class VertexBase:
                 # refresh/reauth before realizing the cached creds are stale.
                 self._cache_credentials(resolved_cache_key, _credentials, credential_project_id)
 
+            await asyncify(self._refresh_if_still_needed)(_credentials, self._needs_blocking_refresh)
             if _credentials.token is None or not isinstance(_credentials.token, str):
                 raise ValueError(
                     f"Could not resolve credentials token. Got None or non-string token (type={type(_credentials.token).__name__})"
