@@ -29,6 +29,7 @@ class _Delivery(BaseModel):
 
     revision: int = 1
     cursor: int
+    first_window_start: datetime
     next_send_at: datetime
     lease_until: datetime
 
@@ -99,6 +100,7 @@ class PerformanceAlertNotifier:
             else _Delivery(
                 revision=0,
                 cursor=0,
+                first_window_start=now - timedelta(days=1),
                 next_send_at=now,
                 lease_until=now,
             )
@@ -106,24 +108,28 @@ class PerformanceAlertNotifier:
         if previous.next_send_at > now or previous.lease_until > now:
             return
         through: Final = await self.alerts.latest_id()
-        claim: Final = previous.model_copy(
-            update={"revision": previous.revision + 1, "lease_until": now + timedelta(minutes=2)}
-        )
-        if not await self.config.set_param_if_revision(key, claim.model_dump(mode="json"), previous.revision):
-            return
         found: Final = await self.alerts.summaries(previous.cursor, through)
         alerts: Final = (
             found
             if previous.cursor
-            else tuple(alert for alert in found if alert.created_at >= previous.next_send_at - timedelta(days=1))
+            else tuple(alert for alert in found if alert.created_at >= previous.first_window_start)
         )
+        claim: Final = previous.model_copy(
+            update={
+                "revision": previous.revision + 1,
+                "lease_until": now + timedelta(minutes=2),
+                "next_send_at": now + timedelta(days=1) if alerts else now,
+            }
+        )
+        if not await self.config.set_param_if_revision(key, claim.model_dump(mode="json"), previous.revision):
+            return
         if alerts and not await send(alerts, f"{key}-{through}"):
             return
         sent: Final = claim.model_copy(
             update={
                 "revision": claim.revision + 1,
                 "cursor": through,
-                "next_send_at": now + timedelta(days=1),
+                "next_send_at": now + timedelta(days=1) if alerts else now,
                 "lease_until": now,
             }
         )
@@ -172,7 +178,6 @@ class PerformanceAlertNotifier:
         self, destination: str, send: Callable[[Sequence[AlertSummary], str], Awaitable[bool]], now: datetime
     ) -> None:
         try:
-            async with asyncio.timeout(60):
-                await self.deliver(destination, send, now)
+            await asyncio.wait_for(self.deliver(destination, send, now), timeout=60)
         except Exception as exc:  # noqa: BLE001  # one unavailable destination must not stop the other recipients
             verbose_proxy_logger.warning("Performance alert summary delivery failed (%s)", type(exc).__name__)

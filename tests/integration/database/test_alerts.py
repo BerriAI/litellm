@@ -407,14 +407,17 @@ async def test_daily_performance_summary_deduplicates_workers_and_keeps_failed_d
     tomorrow: Final = now + timedelta(days=1)
     await restarted.deliver(destination, unavailable, tomorrow)
     assert len(delivered) == 1
+    await restarted.deliver(destination, send, tomorrow + timedelta(minutes=3))
+    assert len(delivered) == 1
+    retry: Final = tomorrow + timedelta(days=1, minutes=3)
     await asyncio.gather(
-        notifier.deliver(destination, send, tomorrow + timedelta(minutes=3)),
-        restarted.deliver(destination, send, tomorrow + timedelta(minutes=3)),
+        notifier.deliver(destination, send, retry),
+        restarted.deliver(destination, send, retry),
     )
     assert len(delivered) == 2
     assert delivered[-1].count("?alert=") == 5
     assert f"?alert={first.id}|" not in delivered[-1]
-    await restarted.deliver(destination, send, tomorrow + timedelta(days=1, minutes=4))
+    await restarted.deliver(destination, send, retry + timedelta(days=1, minutes=1))
     assert len(delivered) == 2
 
 
@@ -431,12 +434,17 @@ async def test_first_summary_does_not_replay_old_alerts(alerts: Alerts) -> None:
         return True
 
     notifier: Final = PerformanceAlertNotifier(alerts.config, alerts.repository)
-    await notifier.deliver(f"test:{alerts.resource_id}", send, saved.created_at + timedelta(days=2))
+    now: Final = saved.created_at + timedelta(days=2)
+    await notifier.deliver(f"test:{alerts.resource_id}", send, now)
     assert delivered == []
+    recent: Final = await alerts.repository.record(alerts.detection(day=1))
+    await notifier.deliver(f"test:{alerts.resource_id}", send, now + timedelta(minutes=5))
+    assert tuple(row.id for row in delivered[0]) == (recent.id,)
 
 
 @pytest.mark.asyncio
-async def test_failed_first_summary_does_not_replay_old_alerts_on_retry(alerts: Alerts) -> None:
+@pytest.mark.parametrize("crash", (False, True))
+async def test_failed_first_summary_does_not_replay_old_alerts_on_retry(alerts: Alerts, crash: bool) -> None:
     from litellm.integrations.performance_alert_notifications import PerformanceAlertNotifier
     from litellm.models.alert import AlertSummary
 
@@ -448,6 +456,8 @@ async def test_failed_first_summary_does_not_replay_old_alerts_on_retry(alerts: 
     delivered: Final[list[tuple[str, ...]]] = []  # mutable-ok: captures the external delivery boundary
 
     async def unavailable(rows: Sequence[AlertSummary], receipt: str) -> bool:
+        if crash:
+            raise RuntimeError("Connection lost after sending")
         return False
 
     async def send(rows: Sequence[AlertSummary], receipt: str) -> bool:
@@ -455,8 +465,14 @@ async def test_failed_first_summary_does_not_replay_old_alerts_on_retry(alerts: 
         return True
 
     notifier: Final = PerformanceAlertNotifier(alerts.config, alerts.repository)
-    await notifier.deliver(f"test:{alerts.resource_id}", unavailable, now)
+    if crash:
+        with pytest.raises(RuntimeError, match="Connection lost after sending"):
+            await notifier.deliver(f"test:{alerts.resource_id}", unavailable, now)
+    else:
+        await notifier.deliver(f"test:{alerts.resource_id}", unavailable, now)
     await notifier.deliver(f"test:{alerts.resource_id}", send, now + timedelta(minutes=3))
+    assert delivered == []
+    await notifier.deliver(f"test:{alerts.resource_id}", send, now + timedelta(days=1, minutes=3))
     assert delivered == [(recent.id,)]
 
 
