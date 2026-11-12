@@ -155,6 +155,8 @@ describe("VectorStoreForm submit payload", () => {
       opensearch_embedding_field: "embedding",
       opensearch_text_field: "text",
       opensearch_index_name: undefined,
+      opensearch_search_pipeline: undefined,
+      opensearch_hybrid_search: undefined,
     };
 
     await vi.waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(1));
@@ -181,6 +183,60 @@ describe("VectorStoreForm submit payload", () => {
     await vi.waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(1));
     expect(createdPayload().vector_store_id).toBe("east-docs");
     expect(createdPayload().litellm_params).toMatchObject({ opensearch_index_name: "docs" });
+  });
+
+  it("registers an opensearch store for hybrid search with its search pipeline", async () => {
+    const user = setupUser();
+    renderForm();
+
+    await chooseProvider(user, "Amazon OpenSearch");
+    fireEvent.change(screen.getByPlaceholderText("my-knn-index (OpenSearch index name)"), {
+      target: { value: "cav-lucene" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("https://abc123.us-east-1.aoss.amazonaws.com"), {
+      target: { value: "http://127.0.0.1:27069" },
+    });
+    await chooseFromSelect(user, 1, "text-embedding-3-small");
+    fireEvent.change(screen.getByPlaceholderText("my-hybrid-search-pipeline"), {
+      target: { value: "litellm-qa-norm" },
+    });
+    await user.click(screen.getByRole("switch", { name: "Hybrid Search" }));
+    await submit(user);
+
+    const expectedLitellmParams = {
+      api_base: "http://127.0.0.1:27069",
+      aws_region_name: undefined,
+      litellm_embedding_model: "text-embedding-3-small",
+      opensearch_embedding_field: "embedding",
+      opensearch_text_field: "text",
+      opensearch_index_name: undefined,
+      opensearch_search_pipeline: "litellm-qa-norm",
+      opensearch_hybrid_search: true,
+    };
+
+    await vi.waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(1));
+    expect(createdPayload().litellm_params).toStrictEqual(expectedLitellmParams);
+  });
+
+  it("blocks a hybrid opensearch submit that has no search pipeline", async () => {
+    const user = setupUser();
+    renderForm();
+
+    await chooseProvider(user, "Amazon OpenSearch");
+    fireEvent.change(screen.getByPlaceholderText("my-knn-index (OpenSearch index name)"), {
+      target: { value: "cav-lucene" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("https://abc123.us-east-1.aoss.amazonaws.com"), {
+      target: { value: "http://127.0.0.1:27069" },
+    });
+    await chooseFromSelect(user, 1, "text-embedding-3-small");
+    await user.click(screen.getByRole("switch", { name: "Hybrid Search" }));
+    await submit(user);
+
+    expect(
+      await screen.findByText("Hybrid search needs a search pipeline with a normalization-processor"),
+    ).toBeInTheDocument();
+    expect(mockCreate).not.toHaveBeenCalled();
   });
 
   it("blocks an opensearch submit that has no endpoint or embedding model", async () => {
