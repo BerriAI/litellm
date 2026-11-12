@@ -59,7 +59,7 @@ interface AgentFamily {
 /**
  * Most specific first. Coding agents beat the SDK they are built on, so `codex_sdk_ts` lands on
  * Codex and only a bare `OpenAI/...` client falls through to the OpenAI SDK. Codex wears OpenAI's
- * mark as in the Lens trace view; Claude clients use the bundled Claude brand mark.
+ * mark for agent activity. Claude clients use the bundled Claude brand mark.
  */
 const FAMILIES: readonly AgentFamily[] = [
   {

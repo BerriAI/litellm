@@ -92,7 +92,6 @@ spec:
               containerPort: 4000
               protocol: TCP
           env:
-            {{- include "litellm.lensConnectionEnv" . | nindent 12 }}
             {{- if and (not .Values.monolith.enabled) .Values.ui.publicUrl }}
             - name: LITELLM_CORS_ORIGINS
               value: {{ include "litellm.ui.publicOrigin" . | quote }}

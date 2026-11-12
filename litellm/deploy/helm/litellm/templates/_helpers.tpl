@@ -733,31 +733,6 @@ shutdown drain window.
 {{- end }}
 {{- end -}}
 
-{{- define "litellm.lensConnectionEnv" -}}
-{{- with .Values.lensWorker }}
-{{- if or .enabled (and .mode (ne .mode "disabled")) }}
-{{- fail "lensWorker was removed; deploy Lens from its own chart and set lens.* instead, see the chart README" }}
-{{- end }}
-{{- end }}
-{{- with .Values.lens }}
-{{- if .enabled }}
-- name: LITELLM_LENS_URL
-  value: {{ required "lens.url is required when lens.enabled is true" .url | quote }}
-- name: LITELLM_LENS_PUBLIC_URL
-  value: {{ required "lens.publicUrl is required when lens.enabled is true" .publicUrl | quote }}
-- name: LENS_GATEWAY_SECRET
-  valueFrom:
-    secretKeyRef:
-      name: {{ required "lens.gatewaySecret.name is required when lens.enabled is true" .gatewaySecret.name | quote }}
-      key: {{ .gatewaySecret.key | quote }}
-- name: LITELLM_LENS_SERVICE_TOKEN
-  valueFrom:
-    secretKeyRef:
-      name: {{ required "lens.serviceTokenSecret.name is required when lens.enabled is true" .serviceTokenSecret.name | quote }}
-      key: {{ .serviceTokenSecret.key | quote }}
-{{- end }}
-{{- end }}
-{{- end -}}
 {{- define "litellm.liteadminEnv" -}}
 {{- $root := .root -}}
 {{- with $root.Values.liteadmin }}

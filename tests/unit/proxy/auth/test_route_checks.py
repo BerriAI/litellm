@@ -2671,26 +2671,6 @@ def test_proxy_admin_viewer_post_blocked_outside_allowlists(route):
     assert exc_info.value.status_code == 403
 
 
-@pytest.mark.parametrize("route", ("/lens/traces/findings", "/lens/example/runs"), ids=("read", "write"))
-def test_admin_viewer_delegates_lens_authorization_to_service(route: str) -> None:
-    request: Final = Request({"type": "http", "method": "POST", "path": route, "query_string": b""})
-    auth: Final = UserAPIKeyAuth(user_id="viewer", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
-
-    assert not RouteChecks.is_llm_api_route(route)
-
-    assert (
-        RouteChecks.non_proxy_admin_allowed_routes_check(
-            user_obj=LiteLLM_UserTable(user_id="viewer", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY),
-            _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
-            route=route,
-            request=request,
-            valid_token=auth,
-            request_data={},
-        )
-        is None
-    )
-
-
 # ── Admin Viewer: management_routes write endpoints stay blocked ─────────────
 #
 # `management_routes` is a mix of reads (info/list, handled via the safe-method
@@ -4623,26 +4603,6 @@ def test_legacy_sse_respects_virtual_key_route_permissions(route: str, route_gro
         request_data={},
     )
     assert RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=token, request=request)
-
-
-@pytest.mark.parametrize(
-    "route",
-    (
-        "/v1/traces",
-        "/v1/traces/trace-id",
-        "/v1/traces/trace-id/spans/span-id",
-        "/v1/traces/trace-id/spans/span-id/error",
-    ),
-)
-def test_non_admin_trace_reads_reach_endpoint_visibility_checks(route: str) -> None:
-    user_role: Final = LitellmUserRoles.INTERNAL_USER
-    user: Final = LiteLLM_UserTable(user_id="reader", user_role=user_role.value)
-    auth: Final = UserAPIKeyAuth(user_id="reader", user_role=user_role)
-    request: Final = Request({"type": "http", "method": "GET", "query_string": b""})
-    assert RouteChecks.is_llm_api_route(route)
-    RouteChecks.non_proxy_admin_allowed_routes_check(
-        user_obj=user, _user_role=user_role.value, route=route, request=request, valid_token=auth, request_data={}
-    )
 
 
 _DENY_TEST_REGISTERED_ROUTES: Final = {

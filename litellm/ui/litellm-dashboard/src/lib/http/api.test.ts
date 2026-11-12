@@ -75,7 +75,7 @@ describe("typed api client middleware", () => {
   it("asks for JSON on a bodyless GET so the next dev rewrite routes it to the proxy, not the page", async () => {
     const { fetch, requests } = capturingFetch(jsonResponse(200, { data: [] }));
 
-    await fetchClient.GET("/lens", { fetch });
+    await fetchClient.GET("/model_group/info", { fetch });
 
     expect(requests[0].headers.get("Accept")).toBe("application/json");
     expect(requests[0].headers.get("Content-Type")).toBeNull();
@@ -84,7 +84,7 @@ describe("typed api client middleware", () => {
   it("keeps an Accept header the caller set", async () => {
     const { fetch, requests } = capturingFetch(jsonResponse(200, { data: [] }));
 
-    await fetchClient.GET("/lens", { fetch, headers: { Accept: "text/event-stream" } });
+    await fetchClient.GET("/model_group/info", { fetch, headers: { Accept: "text/event-stream" } });
 
     expect(requests[0].headers.get("Accept")).toBe("text/event-stream");
   });
@@ -98,12 +98,12 @@ describe("typed api client middleware", () => {
     });
     const { fetch } = capturingFetch(html);
 
-    const error = await fetchClient.GET("/lens", { fetch }).catch((e: unknown) => e);
+    const error = await fetchClient.GET("/model_group/info", { fetch }).catch((e: unknown) => e);
 
     expect(error).toBeInstanceOf(ApiError);
-    expect((error as ApiError).message).toBe("Expected JSON from /lens but the server returned text/html");
+    expect((error as ApiError).message).toBe("Expected JSON from /model_group/info but the server returned text/html");
     expect((error as ApiError).status).toBe(200);
-    expect(onError).toHaveBeenCalledWith("Expected JSON from /lens but the server returned text/html");
+    expect(onError).toHaveBeenCalledWith("Expected JSON from /model_group/info but the server returned text/html");
     expect(shouldRetry(0, error)).toBe(false);
   });
 

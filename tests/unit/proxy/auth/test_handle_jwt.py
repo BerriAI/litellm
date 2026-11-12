@@ -1906,7 +1906,6 @@ async def test_find_team_with_model_access_v1_messages_default_routes(monkeypatc
         ("/v1/rag/query", True),
         ("/v1/skills", False),
         ("/v1/skills/skill_abc123", False),
-        ("/lens", False),
     ],
 )
 def test_default_team_allowed_routes_cover_messages_but_not_skills(route, expected):

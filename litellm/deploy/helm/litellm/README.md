@@ -45,9 +45,9 @@ With `monolith.enabled: true`:
 - the Ingress sends every path, built in or from `ingress.extraPaths`, to the monolith Service
 - the migrations Job renders exactly as in componentized mode
 
-## Lens
+## Removed Lens configuration
 
-This chart does not deploy Lens. Deploy Lens from [its own chart](https://github.com/BerriAI/lens/tree/main/helm/lens), then set `lens.enabled: true`, `lens.url`, `lens.publicUrl`, `lens.gatewaySecret.name` and `lens.serviceTokenSecret.name`. The secret keys default to `gateway-secret` and `service-token`. Set `lens.service.name` when that Lens runs in this release's namespace and the chart ingress should route `/lens-ingest` to it. The old `lensWorker` values are no longer read, and enabling them fails the render
+The external Lens integration has been removed. Existing `lens` and `lensWorker` values are ignored with a warning in the release notes. Remove these obsolete values when updating your configuration.
 
 For an ingress with separate component hostnames, set all three `ingress.componentHosts` values, leave `ingress.host` and `ingress.extraPaths` empty, configure `ui.backendUrl` as the backend's public origin and `backend.gatewayUrl` as the gateway's public origin, and set `ui.publicUrl` to the browser-facing UI origin. The UI Deployment receives `LITELLM_BACKEND_URL` from `ui.backendUrl` only when `ingress.componentHosts` is configured.
 
@@ -132,7 +132,7 @@ The `litellm-helm` chart (`oci://ghcr.io/berriai/litellm-helm`) is retired; its 
 | `nodeSelector` / `tolerations` / `affinity` / `topologySpreadConstraints` | `gateway.nodeSelector` / `gateway.tolerations` / `gateway.affinity` / `gateway.topologySpreadConstraints`. The retired chart also applied `nodeSelector`, `tolerations` and `affinity` to the migration Job; copy them to `migrationJob.nodeSelector` / `migrationJob.tolerations` / `migrationJob.affinity` too, or a Job that needs tainted or zoned nodes to reach the database stays Pending and blocks the install |
 | `terminationGracePeriodSeconds` | `gateway.terminationGracePeriodSeconds` |
 | `serviceAccount.*` | `serviceAccounts.gateway.*`. The retired chart also shared an existing ServiceAccount with migrations; set `migrationJob.serviceAccountName` to that existing account too when the Job needs its permissions, such as for IAM database auth |
-| `lens.*` | `lens.*`. Deploy Lens from its own chart. The removed `lensWorker.*` values fail the render when enabled |
+| `lens.*` / `lensWorker.*` | removed. Values are ignored with a warning in the release notes |
 | `extraResources` | `extraResources` |
 | `nameOverride: "litellm"` | `nameOverride: ""` (the chart name is already `litellm`) |
 | `fullnameOverride` | `fullnameOverride`. The new default always includes the chart-name suffix, even when the release name already contains it. Set this to the existing Service name to retain its DNS name |

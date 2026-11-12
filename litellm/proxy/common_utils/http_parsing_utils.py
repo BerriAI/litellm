@@ -7,9 +7,8 @@ from typing import Annotated, Any, Final, Literal, Protocol, Union, get_args, ge
 import orjson
 from fastapi import HTTPException, Request, UploadFile, status
 from pydantic import TypeAdapter, ValidationError
-from starlette._utils import get_route_path
 from starlette.datastructures import FormData
-from starlette.requests import ClientDisconnect, HTTPConnection
+from starlette.requests import ClientDisconnect
 from typing_extensions import NotRequired, ReadOnly, Required, assert_never
 
 from litellm._logging import verbose_proxy_logger
@@ -30,8 +29,6 @@ from litellm.proxy.common_utils.callback_utils import (
 from litellm.types.router import Deployment
 
 _FORM_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-www-form-urlencoded", "multipart/form-data"})
-# Binary bodies (e.g. OTLP trace exports on POST /v1/traces) are not JSON: arbitrary bytes used to
-# hit the JSON surrogate-repair path and fail auth with a 400. JSON under these types still parses.
 _BINARY_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-protobuf", "application/protobuf"})
 
 _ANNOTATION_QUALIFIERS: Final[frozenset[object]] = frozenset({Annotated, NotRequired, ReadOnly, Required})
@@ -217,12 +214,6 @@ def _mark_body_received(byte_count: int | None) -> None:
     )
 
 
-def is_otlp_trace_request(request: HTTPConnection) -> bool:
-    if request.scope.get("type") != "http":
-        return False
-    return request.scope.get("method") == "POST" and get_route_path(request.scope) in {"/v1/traces", "/v1/logs"}
-
-
 def _parse_form_metadata(raw_metadata: str) -> object:
     """The JSON body path rejects a lone surrogate escape (``"\\ud800"``) with a
     400 because no provider or database can encode it. ``json.loads`` accepts
@@ -282,9 +273,6 @@ async def read_request_body(request: Request | None) -> dict:
     if request is None:
         return {}
     try:
-        if is_otlp_trace_request(request):
-            return {}
-
         # Check if we already read and parsed the body
         _cached_request_body: Final[dict | None] = _safe_get_request_parsed_body(request=request)
         if _cached_request_body is not None:
@@ -365,13 +353,11 @@ async def read_request_body(request: Request | None) -> dict:
             request_dispatched_to_pass_through_endpoint,
             request_dispatched_to_provider_pass_through,
         )
-        from litellm.proxy.lens.buffering import LensRoute
 
         route: Final[object] = request.scope.get("route")
         if (
             request_dispatched_to_pass_through_endpoint(request)
             or request_dispatched_to_provider_pass_through(request)
-            or isinstance(route, LensRoute)
             or (
                 isinstance(route, APIRoute)
                 and route.body_field is not None

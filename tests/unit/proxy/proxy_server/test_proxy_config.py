@@ -17,7 +17,6 @@ import re
 import ssl
 import sys
 from collections.abc import Awaitable, Callable, Mapping
-from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -57,7 +56,7 @@ from litellm.proxy.proxy_server import (
     validate_deployment_max_agentic_loops,
 )
 from litellm.proxy.utils import evict_config_param
-from litellm.tracing.config import is_lens_tracing_enabled
+from litellm.proxy.proxy_server import warn_retired_lens_settings
 
 from .conftest import normalize
 
@@ -162,7 +161,7 @@ from tests._master_key import MASTER_KEY
 
 
 @pytest.mark.asyncio
-async def test_proxy_config_loads_lens_store_from_yaml(tmp_path, monkeypatch) -> None:
+async def test_proxy_config_accepts_retired_lens_store_from_yaml(tmp_path, monkeypatch) -> None:
     config_file: Final = tmp_path / "tracing.yaml"
     config_file.write_text("model_list: []\ngeneral_settings:\n  tracing:\n    store:\n      type: lens\n")
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
@@ -170,72 +169,35 @@ async def test_proxy_config_loads_lens_store_from_yaml(tmp_path, monkeypatch) ->
     monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
 
     _, _, settings = await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
-    assert is_lens_tracing_enabled(settings["tracing"], {}) is True
+    assert settings["tracing"] == {"store": {"type": "lens"}}
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("shutdown_error", [False, True])
-async def test_tracing_config_automatically_exports_spend_without_a_storage_dependency(
-    shutdown_error: bool, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("configured", (False, True))
+@pytest.mark.parametrize("environment_name", (
+    "LITELLM_LENS_URL", "LITELLM_LENS_PUBLIC_URL", "LITELLM_LENS_SERVICE_TOKEN", "LENS_GATEWAY_SECRET",
+))
+def test_retired_lens_settings_warn_without_disclosing_values(
+    configured: bool, environment_name: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
 ) -> None:
-    import httpx
-
-    from litellm.proxy.tracing_runtime import manage_tracing
-    from litellm.tracing.exporter import LensExporter
-    from litellm.tracing.remote import LensConnection
-
-    monkeypatch.setenv("LITELLM_LENS_URL", "http://lens.test")
-    monkeypatch.setenv("LITELLM_LENS_SERVICE_TOKEN", "test-service-token-with-32-characters")
-    received: Final = asyncio.Future[httpx.Request]()
-
-    def accept(request: httpx.Request) -> httpx.Response:
-        received.set_result(request)
-        return httpx.Response(204)
-
-    def client(connection: LensConnection) -> httpx.AsyncClient:
-        return httpx.AsyncClient(base_url=connection.url, transport=httpx.MockTransport(accept))
-
-    outcome: Final = pytest.raises(RuntimeError, match="shutdown failure") if shutdown_error else nullcontext()
-    with outcome:
-        async with manage_tracing(enabled=True, client_factory=client):
-            logger: Final = next(
-                callback for callback in litellm._async_success_callback if isinstance(callback, LensExporter)
-            )
-            await logger.async_log_success_event(
-                {"standard_logging_object": {"id": "response-1", "response_cost": 0.25}}, None, None, None
-            )
-            if shutdown_error:
-                raise RuntimeError("shutdown failure")
-
-    request: Final = received.result()
-    rows: Final = json.loads(request.content)
-    assert request.url.path == "/internal/spend"
-    assert rows[0]["spend"] == 0.25
-    assert rows[0]["response_id"] == "response-1"
-    assert logger not in litellm._async_success_callback
-    assert logger.task is not None and logger.task.done() and not logger.task.cancelled()
+    for name in ("LITELLM_LENS_URL", "LITELLM_LENS_PUBLIC_URL", "LITELLM_LENS_SERVICE_TOKEN", "LENS_GATEWAY_SECRET"):
+        monkeypatch.delenv(name, raising=False)
+    if configured:
+        monkeypatch.setenv(environment_name, "private-config-sentinel")
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        warn_retired_lens_settings({})
+    assert ("The Lens integration has been removed" in caplog.text) is configured
+    assert "private-config-sentinel" not in caplog.text
 
 
-@pytest.mark.asyncio
-async def test_tracing_logs_an_error_naming_the_store_when_lens_is_misconfigured(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+def test_retired_lens_yaml_warns_without_requiring_service_credentials(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
 ) -> None:
-    from litellm.proxy.tracing_runtime import manage_tracing
-
-    monkeypatch.delenv("LITELLM_LENS_URL", raising=False)
-    monkeypatch.delenv("LITELLM_LENS_SERVICE_TOKEN", raising=False)
-
-    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
-        async with manage_tracing(enabled=True) as receiver:
-            assert receiver is None
-
-    failures: Final = [
-        record.getMessage()
-        for record in caplog.records
-        if record.levelno == logging.ERROR and "lens" in record.getMessage()
-    ]
-    assert len(failures) == 1
-    assert "LITELLM_LENS_URL" in failures[0]
+    for name in ("LITELLM_LENS_URL", "LITELLM_LENS_PUBLIC_URL", "LITELLM_LENS_SERVICE_TOKEN", "LENS_GATEWAY_SECRET"):
+        monkeypatch.delenv(name, raising=False)
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        warn_retired_lens_settings({"tracing": {"store": {"type": "lens"}}})
+    assert "general_settings.tracing" in caplog.text
+    assert "are ignored" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -2291,7 +2253,6 @@ async def test_ProxyConfig_load_config_keeps_startup_output_off_once_either_sett
     assert litellm.suppress_startup_output is True
     assert "Setting Cache on Proxy" not in out, out
     assert "Proxy initialized with Search Tools:" not in out, out
-
 
 
 def test_ProxyConfig_merge_config_and_db_search_tools_returns_superset():

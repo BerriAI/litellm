@@ -127,7 +127,6 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
     from litellm.repositories.database import Database
-    from litellm.tracing import TraceReceiver
 
     Span = _Span | Any
 else:
@@ -135,7 +134,6 @@ else:
 
 
 class ProxyLifespanState(TypedDict):
-    tracing_receiver: ReadOnly["TraceReceiver | None"]
     database: ReadOnly["Database | None"]
 
 
@@ -442,16 +440,6 @@ class LiteLLMRoutes(enum.Enum):
     #########################################################
     passthrough_routes_wildcard = [f"{route}/*" for route in mapped_pass_through_routes]
 
-    trace_telemetry_routes = (
-        "/v1/traces",
-        "/v1/logs",
-        "/v1/traces/query",
-        "/v1/traces/query/help",
-        "/v1/traces/{trace_id}",
-        "/v1/traces/{trace_id}/spans/{span_id}",
-        "/v1/traces/{trace_id}/spans/{span_id}/error",
-    )
-
     skill_hub_routes = (
         "/skill-hub/skills",
         "/skill-hub/skills/upload",
@@ -482,7 +470,6 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/rag/ingest",
         "/rag/query",
         "/v1/rag/query",
-        *trace_telemetry_routes,
     ]
 
     anthropic_routes = [
@@ -879,8 +866,6 @@ class LiteLLMRoutes(enum.Enum):
     )
 
     self_managed_routes = [
-        "/lens",
-        "/lens/{path:path}",
         "/telemetry/ui_events",
         "/telemetry/ui_events/enabled",
         # update_team resolves proxy/org/team admin itself and filters team admins
@@ -1006,9 +991,6 @@ class LiteLLMRoutes(enum.Enum):
     admin_viewer_routes = (
         [
             "/telemetry/ui_events",
-            "/lens/traces/findings",
-            "/lens/traces/signals",
-            "/lens/feedback/summary",
             "/user/list",
             "/user/available_users",
             "/user/available_roles",

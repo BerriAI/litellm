@@ -19,13 +19,12 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY, USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY
 from litellm.integrations.clickhouse.clickhouse_batch_logger import ClickHouseBatchLogger
-from litellm.integrations.clickhouse.context import is_lens_analysis
 from litellm.integrations.clickhouse.schema import SPEND_LOGS_TABLE
+from litellm.integrations.clickhouse.types import SpendLogPayload, SpendLogRecord
 from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.internal_call_metadata import logged_event_key
 from litellm.litellm_core_utils.llm_response_utils.get_headers import get_provider_request_id
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
-from litellm.tracing.types import SpendLogPayload, SpendLogRecord
 from litellm.types.utils import StandardLoggingPayload
 
 # litellm_logging.py rewrites cache-hit ids as f"{id}_cache_hit{time.time()}"
@@ -35,7 +34,6 @@ _CACHE_HIT_SUFFIX: Final = re.compile(r"_cache_hit[0-9.]*$")
 _TRACEPARENT: Final = re.compile(r"^[0-9a-f]{2}-([0-9a-f]{32})-([0-9a-f]{16})-[0-9a-f]{2}$")
 _INVALID_TRACE_ID: Final = "0" * 32
 _INVALID_SPAN_ID: Final = "0" * 16
-TRACE_INGEST_ROUTE: Final = "/v1/traces"
 _METADATA_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _METADATA_VALUE: Final = TypeAdapter(JsonValue)
 _INTERNAL_METADATA_KEYS: Final = frozenset(
@@ -151,11 +149,6 @@ def _session_id(payload: StandardLoggingPayload | SpendLogPayload, kwargs: Mappi
     )
 
 
-def _is_trace_ingest(payload: StandardLoggingPayload) -> bool:
-    """OTLP exports to POST /v1/traces are not LLM requests; don't write them as spend rows."""
-    return str(payload.get("call_type") or "").startswith(TRACE_INGEST_ROUTE)
-
-
 def spend_log_row_from_payload(
     payload: StandardLoggingPayload | SpendLogPayload, kwargs: Mapping[str, object]
 ) -> SpendLogRecord:
@@ -229,7 +222,6 @@ def spend_log_row_from_payload(
                 {
                     **request_metadata,
                     **metadata,
-                    "litellm_lens_internal": is_lens_analysis(),
                     **({} if track_end_user else {"user_api_key_end_user_id": None}),
                 }
             )
@@ -251,7 +243,7 @@ class ClickHouseSpendLogger(ClickHouseBatchLogger):
     def _log(self, kwargs: _SpendLogKwargs) -> None:
         try:
             payload = kwargs.get("standard_logging_object")
-            if payload is None or _is_trace_ingest(payload):
+            if payload is None:
                 return
             row: Final = spend_log_row_from_payload(payload, kwargs)
             self.enqueue([dict(row)])

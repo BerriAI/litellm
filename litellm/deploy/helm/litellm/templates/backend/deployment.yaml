@@ -80,7 +80,6 @@ spec:
               containerPort: 4001
               protocol: TCP
           env:
-            {{- include "litellm.lensConnectionEnv" . | nindent 12 }}
             {{- if .Values.ui.publicUrl }}
             - name: LITELLM_CORS_ORIGINS
               value: {{ include "litellm.ui.publicOrigin" . | quote }}

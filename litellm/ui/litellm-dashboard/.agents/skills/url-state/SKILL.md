@@ -15,7 +15,7 @@ Clear a param with `setter(null)`; nuqs keeps unrelated params and the hash. Upd
 
 Raw reads are fine for one-time reads that never re-render on URL changes: OAuth callback pages, login, the legacy `?page=` redirect, and `networking.tsx`
 
-Reuse the existing helpers before adding a hook: `useUrlTab` in `src/hooks/useUrlTab.ts`, `useUrlTableState` in `src/components/shared/DataTable`, and the route modules `src/components/lens/route.ts` and `src/components/logs/request/logDetailRouting.ts`
+Reuse the existing helpers before adding a hook: `useUrlTab` in `src/hooks/useUrlTab.ts`, `useUrlTableState` in `src/components/shared/DataTable`, and the route module `src/components/logs/request/logDetailRouting.ts`
 
 In tests, render with `renderWithProviders` from `tests/test-utils.tsx`, passing `searchParams` for the initial URL and `onUrlUpdate` to assert writes. When a test asserts `window.location` directly, wrap the render in `NuqsAdapter` from `nuqs/adapters/react`; writes flush asynchronously, so assert them inside `waitFor`. For inputs bound to URL state, set values with one `fireEvent.change` rather than `user.type`, which flakes when a re-render between keystrokes moves focus
 

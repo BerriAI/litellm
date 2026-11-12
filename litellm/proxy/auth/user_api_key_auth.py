@@ -1282,18 +1282,13 @@ def _matches_routing_override(token_claims: dict, override: "JWTRoutingOverride"
 def oauth2_introspection_applies(
     api_key: str, route: str, *, enable_oauth2_auth: bool, enable_jwt_auth: bool, jwt_handler: JWTHandler
 ) -> bool:
-    """Whether LiteLLM validates ``api_key`` on ``route`` by OAuth2 token introspection, on LLM API, info and
-    lens routes only: a non-JWT token when OAuth2 auth is on globally, or a JWT matched by a routing override."""
+    """Whether LiteLLM validates ``api_key`` on ``route`` by OAuth2 token introspection, on LLM API and info
+    routes only: a non-JWT token when OAuth2 auth is on globally, or a JWT matched by a routing override."""
     is_jwt: Final = enable_jwt_auth and jwt_handler.is_jwt(token=api_key)
     # Routing uses unverified JWT claims only to choose auth path.
     # Final authentication is enforced by the selected validator.
     route_jwt_to_oauth2: Final = is_jwt and _should_route_jwt_to_oauth2_override(token=api_key, jwt_handler=jwt_handler)
-    covered_route: Final = (
-        RouteChecks.is_llm_api_route(route=route)
-        or RouteChecks.is_info_route(route=route)
-        or route == "/lens"
-        or route.startswith("/lens/")
-    )
+    covered_route: Final = RouteChecks.is_llm_api_route(route=route) or RouteChecks.is_info_route(route=route)
     return covered_route and ((enable_oauth2_auth and not is_jwt) or route_jwt_to_oauth2)
 
 

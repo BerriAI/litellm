@@ -734,8 +734,6 @@ from litellm.proxy.hooks.proxy_track_cost_callback import (  # noqa: F401, RUF10
     run_spend_event,
 )
 from litellm.proxy.image_endpoints.endpoints import router as image_router
-from litellm.proxy.lens.adapter import router as lens_router
-from litellm.proxy.lens.internal import LensInternalMiddleware
 from litellm.proxy.list_api.common import (
     ManagementProblem,
     problem_response,
@@ -942,7 +940,6 @@ from fastapi.exception_handlers import http_exception_handler
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.websockets import WebSocketState
 
-from litellm.proxy import tracing_endpoints
 from litellm.proxy.middleware.admission_control_middleware import (
     AdmissionControlMiddleware,
     admission_control_state,
@@ -1028,7 +1025,6 @@ from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
-from litellm.proxy.tracing_runtime import manage_tracing
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.proxy.ui_crud_endpoints.latest_release_endpoints import (
     router as latest_release_endpoints_router,
@@ -1100,7 +1096,6 @@ from litellm.secret_managers.main import (
     secret_manager_would_be_consulted,
     str_to_bool,
 )
-from litellm.tracing.config import is_lens_tracing_enabled
 from litellm.types.integrations.slack_alerting import AlertType, SlackAlertingArgs
 from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
 from litellm.types.llms.anthropic import (
@@ -1987,92 +1982,95 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
         if not model_info_scheduler.running:
             model_info_scheduler.start()
 
-    tracing_settings: Final = cast(  # cast-ok: Pydantic validates the legacy untyped settings value
-        dict[str, object] | None,
-        TypeAdapter(dict[str, object] | None).validate_python(general_settings.get("tracing")),
-    )
-    tracing_enabled: Final = is_lens_tracing_enabled(tracing_settings)
-    async with manage_tracing(
-        enabled=tracing_enabled,
-        settings=tracing_settings,
-    ) as receiver:
-        state: Final[ProxyLifespanState] = {"tracing_receiver": receiver, "database": database}
-        from litellm.proxy.admin_mcp import admin_mcp_lifespan
+    warn_retired_lens_settings(general_settings_view())
+    state: Final[ProxyLifespanState] = {"database": database}
+    from litellm.proxy.admin_mcp import admin_mcp_lifespan
 
-        telemetry_settings: Final = load_telemetry_settings()
-        if isinstance(telemetry_settings, ValidationError):
-            verbose_proxy_logger.warning(
-                "telemetry: invalid settings, leaving it off: %s", describe_telemetry_errors(telemetry_settings)
-            )
-        telemetry_start: Final = (
-            None
-            if isinstance(telemetry_settings, ValidationError)
-            else asyncio.create_task(
-                telemetry_runtime.start(
-                    litellm_version=version,
-                    settings=telemetry_settings,
-                    db=lambda: (  # pyright: ignore[reportArgumentType]  # PrismaWrapper forwards raw queries via __getattr__
-                        prisma_client.writer_db if prisma_client is not None else None
-                    ),
-                    register=litellm.logging_callback_manager.add_litellm_callback,
-                )
+    telemetry_settings: Final = load_telemetry_settings()
+    if isinstance(telemetry_settings, ValidationError):
+        verbose_proxy_logger.warning(
+            "telemetry: invalid settings, leaving it off: %s", describe_telemetry_errors(telemetry_settings)
+        )
+    telemetry_start: Final = (
+        None
+        if isinstance(telemetry_settings, ValidationError)
+        else asyncio.create_task(
+            telemetry_runtime.start(
+                litellm_version=version,
+                settings=telemetry_settings,
+                db=lambda: (  # pyright: ignore[reportArgumentType]  # PrismaWrapper forwards raw queries via __getattr__
+                    prisma_client.writer_db if prisma_client is not None else None
+                ),
+                register=litellm.logging_callback_manager.add_litellm_callback,
             )
         )
+    )
+    if telemetry_start is not None:
+        telemetry_start.add_done_callback(_log_telemetry_start_failure)
+    try:
+        async with AsyncExitStack() as admin_mcp_stack:
+            try:
+                await admin_mcp_stack.enter_async_context(admin_mcp_lifespan(app))
+                gc.freeze()
+                verbose_proxy_logger.warning("gc.freeze pinned %d startup objects", gc.get_freeze_count())
+                yield state
+            finally:
+                if model_info_scheduler is not None and model_info_scheduler.running:
+                    model_info_scheduler.remove_job("refresh_model_info")
+                    if model_info_scheduler is not scheduler:
+                        model_info_scheduler.shutdown(wait=False)
+
+                # Shutdown event - stop starting scheduled jobs; the ones already running keep the drain window
+                if scheduler is not None:
+                    pause_scheduled_jobs(scheduler)
+
+                # Shutdown event - drain in-flight requests before tearing down dependencies
+                # so SIGTERM (rolling update, scale-down, liveness kill) doesn't drop them.
+                GracefulShutdownManager.start_shutdown()
+                await GracefulShutdownManager.wait_for_drain()
+    finally:
+        # Shutdown event - close shared aiohttp session
+        if shared_aiohttp_session is not None:
+            try:
+                await shared_aiohttp_session.close()
+                verbose_proxy_logger.info("SESSION REUSE: Closed shared aiohttp session")
+            except Exception as e:
+                verbose_proxy_logger.error("Error closing shared aiohttp session: %s", e)
+
+        await _drain_spend_event_producer_on_shutdown()
         if telemetry_start is not None:
-            telemetry_start.add_done_callback(_log_telemetry_start_failure)
-        try:
-            async with AsyncExitStack() as admin_mcp_stack:
-                try:
-                    await admin_mcp_stack.enter_async_context(admin_mcp_lifespan(app))
-                    gc.freeze()
-                    verbose_proxy_logger.warning("gc.freeze pinned %d startup objects", gc.get_freeze_count())
-                    yield state
-                finally:
-                    if model_info_scheduler is not None and model_info_scheduler.running:
-                        model_info_scheduler.remove_job("refresh_model_info")
-                        if model_info_scheduler is not scheduler:
-                            model_info_scheduler.shutdown(wait=False)
+            telemetry_start.cancel()
+            await asyncio.gather(telemetry_start, return_exceptions=True)
+        await telemetry_runtime.stop()
 
-                    # Shutdown event - stop starting scheduled jobs; the ones already running keep the drain window
-                    if scheduler is not None:
-                        pause_scheduled_jobs(scheduler)
+        # Shutdown event - finish or cancel in-flight scheduled jobs before the shutdown flushes and the DB disconnect
+        if scheduler is not None and scheduler_executor is not None:
+            try:
+                await stop_in_flight_scheduler_jobs(scheduler, scheduler_executor)
+            except Exception as e:
+                verbose_proxy_logger.error("Error stopping in-flight scheduled jobs: %s", e)
 
-                    # Shutdown event - drain in-flight requests before tearing down dependencies
-                    # so SIGTERM (rolling update, scale-down, liveness kill) doesn't drop them.
-                    GracefulShutdownManager.start_shutdown()
-                    await GracefulShutdownManager.wait_for_drain()
-        finally:
-            # Shutdown event - close shared aiohttp session
-            if shared_aiohttp_session is not None:
-                try:
-                    await shared_aiohttp_session.close()
-                    verbose_proxy_logger.info("SESSION REUSE: Closed shared aiohttp session")
-                except Exception as e:
-                    verbose_proxy_logger.error("Error closing shared aiohttp session: %s", e)
+        await _flush_spend_around_logging_drain_on_shutdown()
 
-            await _drain_spend_event_producer_on_shutdown()
-            if telemetry_start is not None:
-                telemetry_start.cancel()
-                await asyncio.gather(telemetry_start, return_exceptions=True)
-            await telemetry_runtime.stop()
+        await proxy_config.stop_config_sync_subscriber()
 
-            # Shutdown event - finish or cancel in-flight scheduled jobs before the shutdown flushes and the DB disconnect
-            if scheduler is not None and scheduler_executor is not None:
-                try:
-                    await stop_in_flight_scheduler_jobs(scheduler, scheduler_executor)
-                except Exception as e:
-                    verbose_proxy_logger.error("Error stopping in-flight scheduled jobs: %s", e)
+        await proxy_config.stop_auth_cache_invalidation_subscriber()
 
-            await _flush_spend_around_logging_drain_on_shutdown()
+        await proxy_shutdown_event(worker_heartbeat=worker_heartbeat)
 
-            await proxy_config.stop_config_sync_subscriber()
+        if prometheus_multiproc_dir:
+            mark_worker_exit(os.getpid())
 
-            await proxy_config.stop_auth_cache_invalidation_subscriber()
 
-            await proxy_shutdown_event(worker_heartbeat=worker_heartbeat)
-
-            if prometheus_multiproc_dir:
-                mark_worker_exit(os.getpid())
+def warn_retired_lens_settings(settings: Mapping[str, object]) -> None:
+    if settings.get("tracing") is not None or any(
+        os.environ.get(name)
+        for name in ("LITELLM_LENS_URL", "LITELLM_LENS_PUBLIC_URL", "LITELLM_LENS_SERVICE_TOKEN", "LENS_GATEWAY_SECRET")
+    ):
+        verbose_proxy_logger.warning(
+            "The Lens integration has been removed. general_settings.tracing, LITELLM_LENS_* and "
+            "LENS_GATEWAY_SECRET are ignored. Remove these obsolete settings from your configuration."
+        )
 
 
 def _generate_stable_operation_id(route: "APIRoute") -> str:
@@ -2380,9 +2378,6 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
     )
     status_code: Final = int(exc.code) if exc.code else status.HTTP_500_INTERNAL_SERVER_ERROR
     _close_dangling_otel_server_span(request, status_code, exc=exc)
-    otlp_response: Final = tracing_endpoints.otlp_error_response(request, status_code, headers)
-    if otlp_response is not None:
-        return otlp_response
     return JSONResponse(
         status_code=status_code,
         content={"error": error_dict},
@@ -2402,13 +2397,9 @@ async def aws_error_type_exception_handler(request: Request, exc: AwsErrorTypePr
 
 
 @app.exception_handler(StarletteHTTPException)
-async def otlp_http_exception_handler(connection: Request | WebSocket, exc: StarletteHTTPException) -> Response | None:
+async def proxy_http_exception_handler(connection: Request | WebSocket, exc: StarletteHTTPException) -> Response | None:
     if isinstance(connection, WebSocket):
         return await _websocket_http_exception_response(connection, exc)
-    response: Final = tracing_endpoints.otlp_error_response(connection, exc.status_code, exc.headers)
-    if response is not None:
-        _close_dangling_otel_server_span(connection, exc.status_code, exc=exc)
-        return response
     if uses_anthropic_error_envelope(connection):
         return anthropic_error_json_response(
             proxy_exception_from_http_exception(exc, dict(exc.headers or {})), connection
@@ -2586,9 +2577,6 @@ async def otel_request_validation_exception_handler(request: Request, exc: Reque
         _close_dangling_otel_server_span(request, problem.status, exc=public_exc)
         return problem_response(problem)
     _close_dangling_otel_server_span(request, 422, exc=public_exc)
-    otlp_response: Final = tracing_endpoints.otlp_error_response(request, 422)
-    if otlp_response is not None:
-        return otlp_response
     return JSONResponse(status_code=422, content={"detail": public_errors})
 
 
@@ -2621,9 +2609,6 @@ async def _unhandled_exception_response(request: Request, exc: Exception) -> Res
             )
         )
     _close_dangling_otel_server_span(request, 500, exc=exc)
-    otlp_response: Final = tracing_endpoints.otlp_error_response(request, 500)
-    if otlp_response is not None:
-        return otlp_response
     if uses_anthropic_error_envelope(request):
         return anthropic_internal_server_error_response(request)
     return JSONResponse(
@@ -3060,7 +3045,6 @@ app.add_middleware(
 )
 app.add_middleware(BudgetReservationReleaseMiddleware, release=release_unbound_budget_reservation)
 app.add_middleware(RedisRequestBatchMiddleware)
-app.add_middleware(LensInternalMiddleware)
 app.add_middleware(InFlightRequestsMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(GZipBufferedResponseMiddleware)
@@ -22602,7 +22586,6 @@ app.include_router(rag_router)
 app.include_router(video_router)
 app.include_router(container_router)
 app.include_router(search_router)
-app.include_router(tracing_endpoints.router)
 app.include_router(image_router)
 app.include_router(fine_tuning_router)
 app.include_router(credential_router)
@@ -22641,7 +22624,6 @@ app.include_router(auto_router_management_router)
 app.include_router(tag_management_router)
 app.include_router(workflow_management_router)
 app.include_router(memory_router)
-app.include_router(lens_router)
 app.include_router(plugin_router)
 app.include_router(cost_tracking_settings_router)
 app.include_router(subscription_accounts_router)

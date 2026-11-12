@@ -93,14 +93,3 @@ def read_scope_bind_params(scope: ReadScope) -> tuple[bool, str | None, str]:
     if isinstance(scope, AllRows):
         return (True, None, "[]")
     return (False, scope.user_id, json.dumps(list(scope.team_ids)))
-
-
-async def resolve_trace_read_scope(
-    auth: UserAPIKeyAuth,
-    permitted_team_lookup: Callable[[], Awaitable[Sequence[str]]],
-) -> ReadScope | None:
-    if auth.user_role in (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY):
-        return AllRows()
-    if not auth.user_id:
-        return None
-    return await resolve_owned_read_scope(auth.user_id, permitted_team_lookup)

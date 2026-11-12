@@ -1,6 +1,5 @@
 import json
 import math
-import threading
 import uuid
 from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -19,7 +18,6 @@ from integration._support.client import Gateway, Scenario, eventually, gateway_f
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy, owned_proxy_process
 from integration._support.upstream import JsonResponse, SseResponse, delete_scenario, register_scenario
-from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 pytestmark: Final = [pytest.mark.timeout(2 * graceful_stop_seconds() + 120), pytest.mark.shares_worker_state]
@@ -37,33 +35,13 @@ _SURFACES: Final[tuple[Surface, ...]] = (
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _JSON_OBJECTS: Final = TypeAdapter(list[dict[str, JsonValue]])
 _OBSERVATIONS: Final = TypeAdapter(dict[str, list[dict[str, JsonValue]]])
-_LENS_TOKEN: Final = f"integration-lens-service-token-{uuid.uuid4().hex}"
 _ANSWER: Final = "scripted answer"
 _SPEND_PER_CALL: Final = 20 * 0.001 + 20 * 0.002
 
 
 @dataclass(frozen=True, slots=True)
-class _LensSink:
-    rows: list[dict[str, JsonValue]]  # mutable-ok: appended by the sink's handler threads
-    outages: threading.Semaphore
-
-    def respond(self, request: Request) -> Reply:
-        if request.method != "POST" or request.target != "/internal/spend":
-            return Reply(body=b"{}")
-        assert request.headers.get("authorization") == f"Bearer {_LENS_TOKEN}", request.headers
-        if self.outages.acquire(blocking=False):
-            return Reply(status=503, body=b'{"error":"lens unavailable"}')
-        self.rows.extend(_JSON_OBJECTS.validate_json(request.body))  # mutable-ok: see above
-        return Reply(status=204, body=b"")
-
-    def rows_for(self, model: str) -> tuple[dict[str, JsonValue], ...]:
-        return tuple(row for row in tuple(self.rows) if row.get("model_group") == model)
-
-
-@dataclass(frozen=True, slots=True)
 class _Rig:
     proxy: OwnedProxy
-    lens: _LensSink
 
 
 def _config(directory: Path, flag: bool | None) -> Path:
@@ -92,19 +70,17 @@ def _config(directory: Path, flag: bool | None) -> Path:
 @pytest.fixture(scope="module")
 def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
     directory: Final = tmp_path_factory.mktemp("disable-end-user-cost-tracking")
-    sink: Final = _LensSink(rows=[], outages=threading.Semaphore(0))
     with (
-        wire_server(sink.respond) as lens,
         gateway_from_environment() as shared,
         owned_proxy_process(
             shared,
             directory,
-            {"LITELLM_LENS_URL": lens.url, "LITELLM_LENS_SERVICE_TOKEN": _LENS_TOKEN},
+            {},
             config=_config(directory, True),
             workers=2,
         ) as proxy,
     ):
-        yield _Rig(proxy, sink)
+        yield _Rig(proxy)
 
 
 def _root(gateway: Gateway) -> str:
@@ -387,22 +363,12 @@ def _end_user_rows(end_users: tuple[str, ...]) -> tuple[tuple[dict[str, JsonValu
     )
 
 
-def _lens_rows(rig: _Rig, model: str, count: int) -> tuple[dict[str, JsonValue], ...]:
-    return eventually(lambda: rig.lens.rows_for(model), lambda rows: len(rows) >= count, seconds=70)
-
-
-def _assert_untracked_lens_rows(rows: tuple[dict[str, JsonValue], ...]) -> None:
-    assert [row["end_user"] for row in rows] == [""] * len(rows), rows
-    metadata: Final = tuple(_JSON_OBJECT.validate_json(str(row["metadata"])) for row in rows)
-    assert [entry.get("user_api_key_end_user_id") for entry in metadata] == [None] * len(rows), metadata
-
-
 def _forget_customers(scenario: Scenario, end_users: tuple[str, ...]) -> None:
     scenario.cleanups.callback(scenario.gateway.request, "POST", "/customer/delete", {"user_ids": list(end_users)})
 
 
 @pytest.mark.parametrize("surface", _SURFACES)
-def test_flag_on_keeps_end_user_out_of_spend_rows_and_lens_export_with_cache_twin(rig: _Rig, surface: Surface) -> None:
+def test_flag_on_keeps_end_user_out_of_spend_rows_with_cache_twin(rig: _Rig, surface: Surface) -> None:
     gateway: Final = rig.proxy.gateway
     with (
         gateway.scenario() as scenario,
@@ -436,12 +402,6 @@ def test_flag_on_keeps_end_user_out_of_spend_rows_and_lens_export_with_cache_twi
         assert float(str(rows[1]["spend"])) == 0.0, rows
         _team_requests_flushed(team, 2)
         assert _end_user_rows((end_user,)) == ((), ()), end_user
-        lens_rows: Final = _lens_rows(rig, model, 2)
-        assert sorted((bool(row["cache_hit"]), str(row["request_id"]).split("_cache_hit")[0]) for row in lens_rows) == [
-            (False, first),
-            (True, first),
-        ], lens_rows
-        _assert_untracked_lens_rows(lens_rows)
 
 
 @pytest.mark.parametrize("status", (401, 404, 500))
@@ -547,8 +507,6 @@ def test_flag_on_header_sent_twice_and_body_user_are_none_attributed(rig: _Rig) 
         assert [row["end_user"] for row in rows] == [""], rows
         _team_requests_flushed(team, 1)
         assert _end_user_rows(end_users) == ((), ()), end_users
-        lens_rows: Final = _lens_rows(rig, model, 1)
-        _assert_untracked_lens_rows(lens_rows)
 
 
 def test_flag_on_still_refuses_an_end_user_over_budget_at_auth(rig: _Rig) -> None:
@@ -666,21 +624,18 @@ def _burst(
         return tuple(pool.map(send, calls))
 
 
-def _assert_landed_once(rig: _Rig, model: str, ids: list[str]) -> None:
+def _assert_landed_once(model: str, ids: list[str]) -> None:
     rows: Final = _spend_rows(model, len(ids))
     assert sorted(str(row["request_id"]) for row in rows) == ids, (model, rows, ids)
     assert [row["end_user"] for row in rows] == [""] * len(rows), rows
-    lens_rows: Final = _lens_rows(rig, model, len(ids))
-    assert sorted(str(row["request_id"]) for row in lens_rows) == ids, (model, lens_rows, ids)
-    _assert_untracked_lens_rows(lens_rows)
 
 
-def _assert_burst_landed_once(rig: _Rig, models: Mapping[Surface, str], sent: tuple[tuple[Surface, str], ...]) -> None:
+def _assert_burst_landed_once(models: Mapping[Surface, str], sent: tuple[tuple[Surface, str], ...]) -> None:
     for surface, model in models.items():
-        _assert_landed_once(rig, model, sorted(response_id for kind, response_id in sent if kind == surface))
+        _assert_landed_once(model, sorted(response_id for kind, response_id in sent if kind == surface))
 
 
-def test_flag_on_burst_lands_each_row_once_through_sink_outage_and_worker_kill(rig: _Rig) -> None:
+def test_flag_on_burst_lands_each_row_once_through_worker_kill(rig: _Rig) -> None:
     gateway: Final = rig.proxy.gateway
     with gateway.scenario() as scenario:
         team: Final = scenario.team()
@@ -690,17 +645,15 @@ def test_flag_on_burst_lands_each_row_once_through_sink_outage_and_worker_kill(r
         key: Final = scenario.key(models=list(models.values()), team_id=team)
         calls: Final = _burst_calls("before-kill") + _burst_calls("after-kill")
         _forget_customers(scenario, tuple(call.end_user for call in calls))
-        rig.lens.outages.release(2)
 
         before_kill: Final = _burst(rig, models, key, calls[: len(_SURFACES) * 2])
-        _assert_burst_landed_once(rig, models, before_kill)
-        assert not rig.lens.outages.acquire(blocking=False), "the Lens sink outage was never hit"
+        _assert_burst_landed_once(models, before_kill)
         _team_requests_flushed(team, len(before_kill))
         victim: Final = min(rig.proxy.worker_pids())
         replacement: Final = rig.proxy.kill_worker(victim)
         assert replacement != victim, (victim, replacement)
         after_kill: Final = _burst(rig, models, key, calls[len(_SURFACES) * 2 :])
-        _assert_burst_landed_once(rig, models, before_kill + after_kill)
+        _assert_burst_landed_once(models, before_kill + after_kill)
 
         _team_requests_flushed(team, len(calls))
         assert _end_user_rows(tuple(call.end_user for call in calls)) == ((), ()), calls

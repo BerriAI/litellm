@@ -29,7 +29,7 @@ import sys
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from functools import partial
-from typing import Final, Literal, NoReturn
+from typing import Final, Literal
 
 import pytest
 from fastapi import FastAPI
@@ -66,10 +66,7 @@ if _REPO_ROOT not in sys.path:
 
 from litellm.runtime.backend.routes.allowlist import BACKEND_MOUNT_PATHS
 from gateway.routes.allowlist import GATEWAY_MOUNT_PATHS
-from litellm.proxy import tracing_endpoints
 from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
-from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app
 from litellm.integrations.prometheus_metrics_endpoint import make_metrics_asgi_app
 from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
@@ -146,28 +143,28 @@ def test_composed_lifespan_preserves_request_state_and_teardown(
     state_kind: Literal["enabled", "disabled", "stateless"],
 ) -> None:
     monkeypatch.setenv("LITELLM_DISABLE_LAZY_ROUTES", str(eager).lower())
-    receiver: Final = object()
+    database: Final = object()
     resource: Final = object()
     state: Final[Mapping[str, object]] = {
-        "tracing_receiver": receiver if state_kind == "enabled" else None,
+        "database": database if state_kind == "enabled" else None,
         "other_resource": resource,
     }
     events: Final[list[str]] = []  # mutable-ok: observe startup, requests and teardown across the ASGI boundary
 
-    async def trace_state(request: Request) -> JSONResponse:
+    async def resource_state(request: Request) -> JSONResponse:
         events.append("request")
         assert events[0] == "startup" and "shutdown" not in events
         assert getattr(request.state, "other_resource", None) is (resource if state_kind != "stateless" else None)
-        assert getattr(request.state, "tracing_receiver", None) is (receiver if state_kind == "enabled" else None)
+        assert getattr(request.state, "database", None) is (database if state_kind == "enabled" else None)
         return JSONResponse({"keys": sorted(request.scope["state"])})
 
-    def register_trace_route(application: Starlette, module: object) -> None:
-        application.router.routes.append(Route("/v1/traces", trace_state))
+    def register_resource_route(application: Starlette, module: object) -> None:
+        application.router.routes.append(Route("/health/liveliness", resource_state))
 
     @asynccontextmanager
     async def stateful_lifespan(application: Starlette) -> AsyncGenerator[Mapping[str, object], None]:
         events.append("startup")
-        application.router.routes.append(Route("/not-a-component-route", trace_state))
+        application.router.routes.append(Route("/not-a-component-route", resource_state))
         try:
             yield state
         finally:
@@ -179,13 +176,13 @@ def test_composed_lifespan_preserves_request_state_and_teardown(
             yield
 
     application: Final = type(app)(lifespan=stateless_lifespan if state_kind == "stateless" else stateful_lifespan)
-    feature: Final = LazyFeature("traces", __name__, ("/v1/traces",), register_fn=register_trace_route)
+    feature: Final = LazyFeature("model_info", __name__, ("/health/liveliness",), register_fn=register_resource_route)
     attach_lazy_features(application, (feature,))
     if component_lifespan is not None:
         application.router.lifespan_context = partial(component_lifespan, lifespan=application.router.lifespan_context)
 
     with TestClient(application) as client:
-        response: Final = client.get("/v1/traces")
+        response: Final = client.get("/health/liveliness")
         assert response.status_code == 200, response.text
         assert response.json() == {"keys": [] if state_kind == "stateless" else sorted(state)}
         filtered: Final = client.get("/not-a-component-route")
@@ -227,33 +224,6 @@ def test_composed_lifespan_propagates_lifecycle_failures(
             events.append("serving")
     assert caught.value is failure
     assert events == (["startup"] if phase == "startup" else ["startup", "serving", "shutdown"])
-
-
-@pytest.mark.parametrize("component_lifespan", (_gateway_lifespan, _backend_lifespan), ids=("gateway", "backend"))
-@pytest.mark.parametrize("endpoint", ("/v1/traces", "/v1/logs"), ids=("traces", "logs"))
-@pytest.mark.parametrize("authorization", (None, "Bearer team-a-key", "Bearer team-b-key"))
-def test_retired_otlp_routes_reject_uploads_without_dependencies_on_each_component(
-    component_lifespan: Lifespan[Starlette], endpoint: str, authorization: str | None
-) -> None:
-    application: Final = FastAPI()
-    application.include_router(tracing_endpoints.router)
-
-    def unused_dependency() -> NoReturn:
-        pytest.fail("Retired uploads must not resolve authentication, tenant, or storage dependencies")
-
-    application.dependency_overrides[tracing_endpoints.provide_receiver] = unused_dependency
-    application.dependency_overrides[get_log_team_lookup] = unused_dependency
-    application.dependency_overrides[user_api_key_auth] = unused_dependency
-    application.router.lifespan_context = partial(component_lifespan, lifespan=application.router.lifespan_context)
-    headers: Final = {"content-type": "application/json"} | (
-        {"Authorization": authorization} if authorization is not None else {}
-    )
-
-    with TestClient(application) as client:
-        response: Final = client.post(endpoint, content=b'{"resourceLogs": []}', headers=headers)
-
-    assert response.status_code == 410, response.text
-    assert response.json() == {"message": "Send traces and logs directly to the Lens endpoint shown in Lens setup."}
 
 
 def test_gateway_plus_backend_covers_full_app():
@@ -463,7 +433,7 @@ def test_admin_mcp_survives_only_management_component_lifespans(
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncGenerator[Mapping[str, object], None]:
         async with admin_mcp_lifespan(application):
-            yield {"tracing_receiver": None}
+            yield {"database": None}
 
     application: Final = FastAPI(lifespan=lifespan)
 

@@ -20,7 +20,6 @@ import {
 } from "@/components/shared/Sidebar";
 import {
   Activity,
-  Aperture,
   BarChart3,
   Bell,
   Blocks,
@@ -340,16 +339,6 @@ const menuGroups: MenuGroup[] = [
         label: "shell.nav.items.costOptimization",
       },
       { key: "logs", page: "logs", label: "shell.nav.items.logs", icon: <Activity {...ICON} /> },
-      {
-        key: "lens",
-        page: "lens",
-        label: (
-          <span className="flex items-center gap-2">
-            <Trans i18nKey="shell.nav.items.lens" /> <BetaBadge />
-          </span>
-        ),
-        icon: <Aperture {...ICON} />,
-      },
       {
         key: "guardrails-monitor",
         page: "guardrails-monitor",

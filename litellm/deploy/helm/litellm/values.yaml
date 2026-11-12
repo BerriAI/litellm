@@ -795,16 +795,3 @@ liteadmin:
       memory: 256Mi
     limits:
       memory: 1Gi
-lens:
-  enabled: false
-  url: ""
-  publicUrl: ""
-  service:
-    name: ""
-    port: 4318
-  gatewaySecret:
-    name: ""
-    key: gateway-secret
-  serviceTokenSecret:
-    name: ""
-    key: service-token

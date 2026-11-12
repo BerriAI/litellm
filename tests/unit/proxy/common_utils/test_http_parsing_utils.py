@@ -1,4 +1,4 @@
-import asyncio, gzip, importlib, os
+import asyncio, importlib, os
 import io
 import json
 from collections.abc import Awaitable, Callable, Mapping
@@ -37,7 +37,6 @@ from fastapi import Request as Request_http_parsing
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.model_cost_table import publish
 from starlette.types import Message
-from starlette.websockets import WebSocket
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -90,7 +89,7 @@ async def test_request_vector_store_values_cannot_forge_debug_log_lines(
     "body",
     [b"[]", b'[["model", "test"]]', b"null", b'"s"', b"1", b"true", b"false"],
 )
-@pytest.mark.parametrize("path", ["/v1/messages", "/vertex_ai/v1/messages", "/lens/datasets"])
+@pytest.mark.parametrize("path", ["/v1/messages", "/vertex_ai/v1/messages"])
 async def test_read_request_body_rejects_non_object_json(body: bytes, path: str) -> None:
     request: Final = _starlette_request(body, "application/json", path)
 
@@ -127,19 +126,16 @@ async def test_read_request_body_rejects_non_objects_from_json_fallback(body: by
         (b'{"value":"\\ud800"}', True),
     ],
 )
-@pytest.mark.parametrize("dispatch", ["custom", "provider", "lens"])
+@pytest.mark.parametrize("dispatch", ["custom", "provider"])
 async def test_pass_through_body_validation_preserves_bytes(dispatch: str, body: bytes, invalid_unicode: bool) -> None:
     from fastapi.routing import APIRoute
-    from litellm.proxy.lens.adapter import lens_request
-    from litellm.proxy.lens.buffering import LensRoute
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import vertex_proxy_route
     from litellm.proxy.pass_through_endpoints.pass_through_endpoints import create_pass_through_route
 
-    path: Final = {"custom": "/v1/messages", "provider": "/vertex_ai/predict", "lens": "/lens/datasets"}[dispatch]
+    path: Final = {"custom": "/v1/messages", "provider": "/vertex_ai/predict"}[dispatch]
     route: Final = {
         "custom": APIRoute(path, create_pass_through_route(path, "https://upstream.test"), methods=["POST"]),
         "provider": APIRoute("/vertex_ai/{endpoint:path}", vertex_proxy_route, methods=["POST"]),
-        "lens": LensRoute("/lens/{path:path}", lens_request, methods=["POST"]),
     }[dispatch]
     incoming: Final = _starlette_request(body, "application/json", path)
     _, dispatched_scope = route.matches(incoming.scope)
@@ -259,14 +255,6 @@ async def test_protobuf_body_is_not_parsed_as_json(content_type: str, body: byte
     assert await read_request_body(request) == {}
     assert await read_request_body(request) == {}
     assert await read_raw_json_body(request) == body
-    assert await request.body() == body
-
-
-@pytest.mark.asyncio
-async def test_gzipped_json_trace_body_survives_auth_pre_read():
-    body = gzip.compress(b'{"resourceSpans": []}')
-    request = _starlette_request(body, "application/json", "/v1/traces", "gzip")
-    assert await read_request_body(request) == {}
     assert await request.body() == body
 
 
@@ -1448,64 +1436,6 @@ def test_shared_inference_model_selection_preserves_handler_precedence(
     assert resolve_inference_model(body, settings, cli, path, kind=kind) == expected
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "method,path,skip_parse",
-    [
-        ("POST", "/v1/traces", True),
-        ("POST", "/v1/logs", True),
-        ("GET", "/v1/logs", False),
-        ("GET", "/v1/traces", False),
-        ("POST", "/v1/messages", False),
-        ("POST", "/v1/traces/other", False),
-    ],
-)
-@pytest.mark.parametrize("root_path", ["", "/tenant-a"])
-async def test_only_trace_ingest_skips_json_body(method: str, path: str, skip_parse: bool, root_path: str) -> None:
-    body: Final = b'{"key":"value"}'
-    receive: Final = AsyncMock(return_value={"type": "http.request", "body": body, "more_body": False})
-    request: Final = Request(
-        {
-            "type": "http",
-            "method": method,
-            "path": root_path + path,
-            "root_path": root_path,
-            "headers": [(b"content-type", b"application/json")],
-        },
-        receive,
-    )
-
-    parsed: Final = await read_request_body(request)
-    if skip_parse:
-        assert parsed == {}
-        receive.assert_not_awaited()
-    else:
-        assert parsed == {"key": "value"}
-        receive.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_auth_and_retired_trace_handler_never_consume_upload_body() -> None:
-    from litellm.constants import OTLP_MAX_BODY_BYTES
-    from litellm.proxy import tracing_endpoints
-    from litellm.proxy.auth.user_api_key_auth import _read_request_body_deferring_parse_failure
-
-    chunk: Final = b"x" * (OTLP_MAX_BODY_BYTES // 2 + 1)
-    receive: Final = AsyncMock(side_effect=[{"type": "http.request", "body": chunk, "more_body": True}] * 2)
-    request: Final = Request(
-        {"type": "http", "method": "POST", "path": "/v1/traces", "headers": [(b"content-type", b"application/json")]},
-        receive,
-    )
-    parsed, parse_error = await _read_request_body_deferring_parse_failure(request)
-    assert parsed == {}
-    assert parse_error is None
-    receive.assert_not_awaited()
-
-    response: Final = await tracing_endpoints.ingest_otlp_traces(request)
-    assert response.status_code == 410
-    receive.assert_not_awaited()
-
-
 @pytest.fixture()
 def _vcr_outcome_gate(request, vcr):
     install_live_call_probe(request, vcr)
@@ -1656,39 +1586,6 @@ async def test_read_request_body_unexpected_error():
 
     result = await read_request_body(_request(receive))
     assert result == {}
-
-
-async def _never_receive() -> Message:
-    raise AssertionError("the OTLP route check never reads the body")
-
-
-async def _never_send(message: Message) -> None:
-    raise AssertionError("the OTLP route check never sends")
-
-
-@pytest.mark.parametrize(
-    ("scope", "expected"),
-    [
-        ({"type": "http", "method": "POST", "path": "/v1/traces"}, True),
-        ({"type": "http", "method": "POST", "path": "/v1/logs"}, True),
-        ({"type": "http", "method": "GET", "path": "/v1/traces"}, False),
-        ({"type": "http", "method": "POST", "path": "/v1/responses"}, False),
-        ({"type": "http", "path": "/v1/traces"}, False),
-        ({"type": "websocket", "path": "/v1/traces"}, False),
-        ({"type": "websocket", "path": "/v1/responses"}, False),
-    ],
-)
-def test_is_otlp_trace_request_matches_only_http_posts_to_the_otlp_routes(
-    scope: dict[str, object], expected: bool
-) -> None:
-    full_scope: Final[dict[str, object]] = {**scope, "headers": [], "query_string": b""}
-    connection: Final = (
-        WebSocket(full_scope, _never_receive, _never_send)
-        if scope["type"] == "websocket"
-        else Request(full_scope, _never_receive)
-    )
-
-    assert http_parsing_utils.is_otlp_trace_request(connection) is expected
 
 
 @pytest.mark.asyncio

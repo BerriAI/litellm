@@ -4429,7 +4429,6 @@ dependencies = [
  "litellm-storage-clickhouse",
  "litellm-token-counter",
  "litellm-tracing",
- "prost",
  "pyo3",
  "pyo3-async-runtimes",
  "reqwest",

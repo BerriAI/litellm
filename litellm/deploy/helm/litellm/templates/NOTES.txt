@@ -73,3 +73,7 @@ Reminders:
                                                                 topology.kubernetes.io/zone)
   - Enable ingress.enabled=true to dispatch / to ui, gateway data-plane prefixes to gateway and the catch-all to
     backend; in monolith mode every path goes to the monolith Service
+
+{{- if or (hasKey .Values "lens") (hasKey .Values "lensWorker") }}
+WARNING: The Lens integration has been removed. lens and lensWorker values are ignored. Remove these obsolete values.
+{{- end }}

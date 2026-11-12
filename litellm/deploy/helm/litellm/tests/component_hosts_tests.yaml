@@ -73,7 +73,7 @@ tests:
                   port:
                     number: 4000
 
-  - it: keeps Lens ingestion ahead of the gateway catch-all
+  - it: keeps the gateway catch-all when obsolete Lens values are supplied
     set:
       ingress.enabled: true
       ingress.componentHosts.ui: ui.example.com
@@ -91,13 +91,10 @@ tests:
     asserts:
       - equal:
           path: spec.rules[2].http.paths[0].path
-          value: /lens-ingest
+          value: /
       - equal:
           path: spec.rules[2].http.paths[0].backend.service.name
-          value: existing-lens
-      - equal:
-          path: spec.rules[2].http.paths[1].path
-          value: /
+          value: RELEASE-NAME-litellm-gateway
     template: ingress.yaml
 
   - it: rejects a partial component host configuration

@@ -36,6 +36,6 @@ def test_spend_storage_rejects_invalid_retention(retention: str) -> None:
         spend_storage_config({"CLICKHOUSE_URL": "http://clickhouse:8123", "AGENT_TRACING_RETENTION_DAYS": retention})
 
 
-def test_spend_storage_requires_clickhouse_without_lens_configuration() -> None:
+def test_spend_storage_requires_clickhouse_url() -> None:
     with pytest.raises(ValueError, match="CLICKHOUSE_URL is required"):
-        spend_storage_config({"LITELLM_LENS_URL": "http://lens"})
+        spend_storage_config({})
