@@ -17,7 +17,7 @@ of them:
 - ``retire()``: release the router's global registrations.
 
 The views read the router's state when they are called; they hold no copy of it. A Rust core
-implements the same views (see litellm-rust/crates/router-core). Each query names the old Router
+implements the same views (see litellm/rust/crates/router-core). Each query names the old Router
 member it replaces in its docstring; ``DeprecatedRouterMembers`` keeps the old names working, typed
 as they were.
 """

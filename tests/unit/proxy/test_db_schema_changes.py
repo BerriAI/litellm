@@ -2,7 +2,7 @@ from typing import Final
 
 import pytest
 
-from scripts.check_schema_compatibility import check_breaking_changes, parse_model_fields
+from litellm.scripts.check_schema_compatibility import check_breaking_changes, parse_model_fields
 
 ORIGINAL: Final = "model Item {\n id String @id\n label String?\n}\n"
 

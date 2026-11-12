@@ -2119,12 +2119,17 @@ async def test_framing_keeps_the_400_for_blocks_the_provider_counter_cannot_conv
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "unreadable_body",
-    [
-        pytest.param(
-            {
-                "messages": [
+async def test_framed_estimate_counts_server_tool_history_when_the_provider_counter_rejects_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _framed_kimi(monkeypatch)
+    _available_kimi_k3(monkeypatch, tmp_path)
+
+    async def count(title: str) -> TokenCountResponse:
+        return await count_request_tokens(
+            request=TokenCountRequest(
+                model="kimi",
+                messages=[
                     {"role": "user", "content": "What is new?"},
                     {
                         "role": "assistant",
@@ -2135,13 +2140,31 @@ async def test_framing_keeps_the_400_for_blocks_the_provider_counter_cannot_conv
                                 "name": "web_search",
                                 "input": {"query": "new"},
                             },
-                            {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_01", "content": []},
+                            {
+                                "type": "web_search_tool_result",
+                                "tool_use_id": "srvtoolu_01",
+                                "content": [
+                                    {"type": "web_search_result", "url": "https://example.invalid", "title": title}
+                                ],
+                            },
                         ],
                     },
-                ]
-            },
-            id="web_search_blocks",
-        ),
+                ],
+            ),
+            call_endpoint=True,
+        )
+
+    short: Final = await count("Release")
+    long: Final = await count("Release notes " * 100)
+
+    assert (short.count_source, long.count_source) == ("local_estimate", "local_estimate")
+    assert long.total_tokens > short.total_tokens
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "unreadable_body",
+    [
         pytest.param(
             {"messages": [], "contents": [{"role": "user", "parts": [{"text": "What is new?"}]}]},
             id="google_contents",

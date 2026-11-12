@@ -259,17 +259,19 @@ def drop_params_flag(value: object, source: str, logger: logging.Logger) -> bool
 DROP_PARAMS_ENV_VAR: Final = "LITELLM_DROP_PARAMS"
 
 
-def drop_params_env_flag(environ: Mapping[str, str], logger: logging.Logger) -> bool:
-    configured: Final = environ.get(DROP_PARAMS_ENV_VAR, "").strip()
+def env_flag(environ: Mapping[str, str], name: str, logger: logging.Logger) -> bool:
+    configured: Final = environ.get(name, "").strip()
     if configured == "":
         return False
-    normalized: Final = normalize_drop_params(configured)
+    normalized: Final = lax_bool(configured)
     if normalized is None:
-        logger.warning(
-            "%s=%r is not a flag value, treating it as on. Set it to true or false", DROP_PARAMS_ENV_VAR, configured
-        )
+        logger.warning("%s=%r is not a flag value, treating it as on. Set it to true or false", name, configured)
         return True
     return normalized
+
+
+def drop_params_env_flag(environ: Mapping[str, str], logger: logging.Logger) -> bool:
+    return env_flag(environ, DROP_PARAMS_ENV_VAR, logger)
 
 
 def safe_divide(

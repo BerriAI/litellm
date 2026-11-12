@@ -9083,7 +9083,7 @@ def speech(
         custom_llm_provider=custom_llm_provider,
     )
     response: HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent] | None = None
-    if custom_llm_provider in ("edenai", "dashscope") and text_to_speech_provider_config is not None:
+    if custom_llm_provider in ("edenai", "dashscope", "replicate") and text_to_speech_provider_config is not None:
         litellm_params_dict["api_base"] = caller_api_base if custom_llm_provider == "dashscope" else api_base
         response = base_llm_http_handler.text_to_speech_handler(
             model=model,
@@ -9512,6 +9512,7 @@ async def ahealth_check(
     from litellm.litellm_core_utils.cached_imports import get_litellm_logging_class
     from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers, default_health_check_mode
     from litellm.litellm_core_utils.health_check_utils import OPTIONAL_STR
+    from litellm.types.utils import LIST_BATCHES_SUPPORTED_PROVIDERS
 
     # Use cached import helper to lazy-load Logging class (only loads when function is called)
     Logging: Final = get_litellm_logging_class()
@@ -9556,6 +9557,24 @@ async def ahealth_check(
         mode = mode or default_health_check_mode(
             requested_model=requested_model, model=model, custom_llm_provider=custom_llm_provider
         )
+        litellm_logging_obj.model = requested_model
+        litellm_logging_obj.call_type = {
+            "completion": "atext_completion",
+            "embedding": "aembedding",
+            "audio_speech": "aspeech",
+            "audio_transcription": "atranscription",
+            "image_generation": "aimage_generation",
+            "image_edit": "aimage_edit",
+            "video_generation": "avideo_generation",
+            "rerank": "arerank",
+            "realtime": "arealtime",
+            "responses": "aresponses",
+            "anthropic_messages": "anthropic_messages",
+            "ocr": "aocr",
+            "decisions": "asystemone",
+            "extraction": "aextraction",
+            "batch": ("alist_batches" if custom_llm_provider in LIST_BATCHES_SUPPORTED_PROVIDERS else "acompletion"),
+        }.get("decisions" if is_decisions_model_mode(mode) else mode, "acompletion")
         if "*" in model:
             return await HealthCheckHelpers.ahealth_check_wildcard_models(
                 model=model,
