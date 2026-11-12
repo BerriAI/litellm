@@ -2237,6 +2237,84 @@ async def test_a_read_only_fallback_check_does_not_use_the_teams_share(monkeypat
     assert await handler.async_fallback_target_allowed(key, "shared-model", {}) is False
 
 
+async def _model_requests_remaining(handler: PROXY_DynamicRateLimitHandlerV3) -> int:
+    group: Final = handler.llm_router.registry().group("shared-model")
+    assert group is not None
+    descriptor: Final = handler._create_model_tracking_descriptor("shared-model", group, high_limit_multiplier=1)
+    response: Final = await handler.v3_limiter.should_rate_limit([descriptor], read_only=True, skip_parallel_check=True)
+    return next(s["limit_remaining"] for s in response["statuses"] if s["rate_limit_type"] == "requests")
+
+
+def _fallback_prompt(words: int) -> dict[str, object]:
+    return {"messages": [{"role": "user", "content": "word " * words}], "max_tokens": 10}
+
+
+@pytest.mark.asyncio
+async def test_idle_fallbacks_past_the_teams_rpm_share_still_count_toward_the_targets_saturation(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    key: Final = _team_key(team_limits={"model_rpm_limit": {"shared-model": 1}})
+    assert await handler.async_fallback_target_allowed(key, "shared-model", {}) is True
+    assert await handler.async_fallback_target_allowed(key, "shared-model", {}) is True
+    assert await handler.async_fallback_target_allowed(key, "shared-model", {}) is True
+    assert await _model_requests_remaining(handler) == 97
+
+
+@pytest.mark.asyncio
+async def test_a_saturated_fallback_target_refuses_a_prompt_larger_than_the_teams_remaining_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
+    assert await handler.async_fallback_target_allowed(_team_key(), "shared-model", _fallback_prompt(300)) is False
+    assert (
+        await handler.async_fallback_target_allowed(_team_key(), "shared-model", _fallback_prompt(300), commit=False)
+        is False
+    )
+    assert await _team_tokens_remaining(handler) == 100
+    assert (
+        await handler.async_fallback_target_allowed(_team_key(), "shared-model", _fallback_prompt(30), commit=False)
+        is True
+    )
+    assert await _team_tokens_remaining(handler) == 100
+    assert await handler.async_fallback_target_allowed(_team_key(), "shared-model", _fallback_prompt(30)) is True
+    assert await _team_tokens_remaining(handler) < 70
+    await _settle_tokens(handler, 5)
+    assert await _team_tokens_remaining(handler) == 95
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_attempt_that_fails_gives_back_the_tokens_it_held(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
+    assert await handler.async_fallback_target_allowed(_team_key(), "shared-model", _fallback_prompt(30)) is True
+    assert await _team_tokens_remaining(handler) < 70
+    await handler.async_log_failure_event(
+        kwargs={"litellm_params": {"metadata": {"model_group": "shared-model"}}},
+        response_obj=None,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    assert await _team_tokens_remaining(handler) == 100
+
+
+@pytest.mark.asyncio
+async def test_a_prompt_the_token_estimator_cannot_read_is_still_held_to_the_teams_share(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=True)
+    key: Final = _team_key(
+        team_limits={"model_tpm_limit": {"shared-model": 100}, "model_rpm_limit": {"shared-model": 1}}
+    )
+    unreadable: Final = {
+        "model": "shared-model",
+        "messages": [{"role": "user", "content": [{"type": "text", "text": 1}, {"type": "text", "text": "hi"}]}],
+    }
+    await _check(handler, key, saturation=0.5, data=unreadable)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, key, saturation=0.5, data=unreadable)
+    _held_to_team_limit(exc.value, "requests", "model_rpm_limit")
+
+
 @pytest.mark.asyncio
 async def test_a_success_without_a_model_group_still_releases_the_reservation(monkeypatch: pytest.MonkeyPatch):
     handler = _borrowing_handler(monkeypatch, borrows=True)

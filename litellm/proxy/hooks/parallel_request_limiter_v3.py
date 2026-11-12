@@ -570,6 +570,15 @@ class CallTypeRateLimiter(Protocol):
     ) -> Exception | str | dict[str, object] | None: ...
 
 
+@dataclass(frozen=True, slots=True)
+class BorrowingTeamModelHold:
+    """A router fallback target's team share with the tokens held on it, settled to actual usage or given back."""
+
+    descriptor: RateLimitDescriptor
+    reserved_tokens: int = 0
+    window: ReservationWindowIdentity | None = None
+
+
 @dataclass(slots=True)
 class RequestRateLimiterStash:
     """
@@ -616,7 +625,7 @@ class RequestRateLimiterStash:
     borrowing_team_model_limit: RateLimitDescriptor | None = None
     borrowing_team_model_reserved_tokens: int = 0
     borrowing_team_model_reserved_window: ReservationWindowIdentity | None = None
-    borrowing_team_model_fallback_limits: Mapping[str, RateLimitDescriptor] = field(
+    borrowing_team_model_fallback_limits: Mapping[str, BorrowingTeamModelHold] = field(
         default_factory=lambda: MappingProxyType({})
     )
     reservation_released: bool = False
