@@ -5,6 +5,7 @@ This module owns all format conversions for the direct v1/messages -> Responses 
 path used for OpenAI and Azure models.
 """
 
+import copy
 import json
 from collections.abc import Iterable, Mapping, Sequence
 from itertools import groupby
@@ -697,12 +698,26 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         if isinstance(output_format, dict) and output_format.get("type") == "json_schema":
             schema: Final = output_format.get("schema")
             if schema:
+                strict: Final[bool] = self._resolve_output_format_strict(output_format.get("strict"))
+                # Deep-copy to avoid mutating the caller's schema (matches the
+                # Chat adapter behaviour in LiteLLMAnthropicMessagesAdapter).
+                # When strict mode is active, recursively enforce
+                # additionalProperties=false on every object sub-schema so that
+                # OpenAI does not reject the request with HTTP 400.  This is the
+                # same normalization the Chat adapter performs via
+                # _add_additional_properties_false but was missing here (#51200).
+                schema_copy = copy.deepcopy(schema)
+                if strict:
+                    from litellm.llms.anthropic.messages.adapters.transformation import (
+                        LiteLLMAnthropicMessagesAdapter,
+                    )
+                    LiteLLMAnthropicMessagesAdapter._add_additional_properties_false(schema_copy)
                 responses_kwargs["text"] = {
                     "format": {
                         "type": "json_schema",
                         "name": "structured_output",
-                        "schema": schema,
-                        "strict": self._resolve_output_format_strict(output_format.get("strict")),
+                        "schema": schema_copy,
+                        "strict": strict,
                     }
                 }
 

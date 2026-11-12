@@ -833,7 +833,10 @@ def model_has_no_cost_mapping(model: str | None, llm_router: Router | None) -> b
 def _unpriced_models_in_request(model: str | list[str] | None, llm_router: Router | None) -> tuple[str, ...]:
     candidates: Final = (model,) if isinstance(model, str) else tuple(model or ())
     return tuple(
-        candidate for candidate in candidates if model_has_no_cost_mapping(model=candidate, llm_router=llm_router)
+        candidate
+        for candidate in candidates
+        if not (isinstance(candidate, str) and candidate.startswith("a2a/"))
+        and model_has_no_cost_mapping(model=candidate, llm_router=llm_router)
     )
 
 
@@ -1241,11 +1244,37 @@ async def common_checks(
         raise Exception(f"Team={team_object.team_id} is blocked. Update via `/team/unblock` if you're an admin.")
 
     # 2. If team can call model (or key's access_group_ids grant it)
-    if _model and team_object:
+    a2a_models: Final = (
+        [_model]
+        if isinstance(_model, str) and _model.startswith("a2a/")
+        else [m for m in _model if isinstance(m, str) and m.startswith("a2a/")]
+        if isinstance(_model, list)
+        else []
+    )
+    non_a2a_model: Final = (
+        None
+        if isinstance(_model, str) and _model.startswith("a2a/")
+        else [m for m in _model if not (isinstance(m, str) and m.startswith("a2a/"))]
+        if isinstance(_model, list)
+        else _model
+    )
+
+    if a2a_models:
+        from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
+            AgentRequestHandler,
+        )
+
+        for a2a_m in a2a_models:
+            await AgentRequestHandler.verify_a2a_agent_access(
+                model_name=a2a_m,
+                user_api_key_auth=valid_token,
+            )
+
+    if non_a2a_model and team_object:
         with tracer.trace("litellm.proxy.auth.common_checks.can_team_access_model"):
             try:
                 await can_team_access_model(
-                    model=_model,
+                    model=non_a2a_model,
                     team_object=team_object,
                     llm_router=llm_router,
                     team_model_aliases=(valid_token.team_model_aliases if valid_token else None),
@@ -1255,7 +1284,7 @@ async def common_checks(
                 if team_denial.type != ProxyErrorTypes.team_model_access_denied:
                     raise
                 if not await key_access_group_grants_model(
-                    model=_model,
+                    model=non_a2a_model,
                     valid_token=valid_token,
                     team_object=team_object,
                     llm_router=llm_router,
@@ -1264,10 +1293,10 @@ async def common_checks(
                     raise
 
     # 2.2. If team member has per-member model scope, enforce it
-    if _model and team_object and valid_token and valid_token.user_id:
+    if non_a2a_model and team_object and valid_token and valid_token.user_id:
         with tracer.trace("litellm.proxy.auth.common_checks.check_team_member_model_access"):
             await check_team_member_model_access(
-                model=_model,
+                model=non_a2a_model,
                 team_object=team_object,
                 valid_token=valid_token,
                 llm_router=llm_router,
@@ -5553,6 +5582,33 @@ async def can_key_call_model(
     Raises:
         - Exception: If token not allowed to call model
     """
+    if isinstance(model, str) and model.startswith("a2a/"):
+        from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
+            AgentRequestHandler,
+        )
+
+        await AgentRequestHandler.verify_a2a_agent_access(
+            model_name=model,
+            user_api_key_auth=valid_token,
+        )
+        return True
+    if isinstance(model, list):
+        a2a_models = [m for m in model if isinstance(m, str) and m.startswith("a2a/")]
+        if a2a_models:
+            from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
+                AgentRequestHandler,
+            )
+
+            for m in a2a_models:
+                await AgentRequestHandler.verify_a2a_agent_access(
+                    model_name=m,
+                    user_api_key_auth=valid_token,
+                )
+            non_a2a = [m for m in model if not (isinstance(m, str) and m.startswith("a2a/"))]
+            if not non_a2a:
+                return True
+            model = non_a2a
+
     key_models: Final = _resolve_key_models_for_auth_check(valid_token=valid_token)
     try:
         return can_object_call_model(
@@ -5619,6 +5675,17 @@ async def can_key_call_resolved_model(
     valid_token: UserAPIKeyAuth,
     llm_router: RegistryReader | None,
 ) -> None:
+    if isinstance(model, str) and model.startswith("a2a/"):
+        from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
+            AgentRequestHandler,
+        )
+
+        await AgentRequestHandler.verify_a2a_agent_access(
+            model_name=model,
+            user_api_key_auth=valid_token,
+        )
+        return
+
     from litellm.proxy.proxy_server import (
         prisma_client,
         proxy_logging_obj,
@@ -5776,6 +5843,14 @@ async def can_team_access_model(
     1. First checks native team-level model permissions (current implementation)
     2. If not allowed natively, falls back to access_group_ids on the team
     """
+    if isinstance(model, str) and model.startswith("a2a/"):
+        return True
+    if isinstance(model, list):
+        non_a2a = [m for m in model if not (isinstance(m, str) and m.startswith("a2a/"))]
+        if not non_a2a:
+            return True
+        model = non_a2a
+
     try:
         return can_object_call_model(
             model=model,
@@ -5912,6 +5987,14 @@ def can_project_access_model(
 
     Raises ProxyException if access is denied.
     """
+    if isinstance(model, str) and model.startswith("a2a/"):
+        return True
+    if isinstance(model, list):
+        non_a2a = [m for m in model if not (isinstance(m, str) and m.startswith("a2a/"))]
+        if not non_a2a:
+            return True
+        model = non_a2a
+
     return can_object_call_model(
         model=model,
         llm_router=llm_router,
@@ -5928,6 +6011,14 @@ def can_customer_access_model(
     llm_router: RegistryReader | None,
     valid_token: UserAPIKeyAuth | None,
 ) -> Literal[True]:
+    if isinstance(model, str) and model.startswith("a2a/"):
+        return True
+    if isinstance(model, list):
+        non_a2a = [m for m in model if not (isinstance(m, str) and m.startswith("a2a/"))]
+        if not non_a2a:
+            return True
+        model = non_a2a
+
     team_model_aliases: Final = team_model_aliases_for_auth_check(valid_token) if valid_token is not None else None
     team_id: Final = valid_token.team_id if valid_token is not None else None
     key_model_aliases: Final = key_model_aliases_for_auth_check(valid_token)

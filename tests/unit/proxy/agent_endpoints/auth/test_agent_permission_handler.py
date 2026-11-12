@@ -2244,3 +2244,36 @@ async def test_personal_key_agent_access_is_denied_when_owner_teams_cannot_be_re
     assert await AgentRequestHandler.resolve_agent_access(personal_key_owner_teams) == RestrictedAgentAccess(
         frozenset()
     )
+
+
+@pytest.mark.asyncio
+async def test_verify_a2a_agent_access_raises_404_for_unknown_agent_name():
+    """Regression test: verify_a2a_agent_access must NOT fail open when the
+    agent name is unrecognised.
+
+    Before the fix the method returned None on 'agent is None', so a caller
+    with a key restricted to 'gpt-4o-mini' could request 'a2a/not-an-agent'
+    and have model routing fall through to a wildcard deployment that matched
+    any other model.  Now it must raise HTTPException(404) so the proxy
+    never routes an unresolvable A2A prefix through the LLM routing layer.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from fastapi import HTTPException
+
+    from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
+        AgentRequestHandler,
+    )
+
+    with patch(
+        "litellm.proxy.common_utils.registry_read_through.get_agent_with_read_through",
+        new_callable=AsyncMock,
+        return_value=None,  # agent not found
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await AgentRequestHandler.verify_a2a_agent_access(
+                model_name="a2a/not-an-agent",
+                user_api_key_auth=None,
+            )
+        assert exc_info.value.status_code == 404
+        assert "Agent not found" in str(exc_info.value.detail)

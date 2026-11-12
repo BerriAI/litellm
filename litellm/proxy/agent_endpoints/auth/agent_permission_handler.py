@@ -279,6 +279,39 @@ class AgentRequestHandler:
                 return not global_agent_registry.ids_for_agent(stable_id).isdisjoint(allowed_agent_ids)
 
     @staticmethod
+    async def verify_a2a_agent_access(
+        model_name: str,
+        user_api_key_auth: UserAPIKeyAuth | None = None,
+    ) -> None:
+        """
+        Verify that caller has permission to invoke an A2A agent model ('a2a/<agent_name>').
+        Raises HTTPException(403) if not allowed.
+        """
+        if not isinstance(model_name, str) or not model_name.startswith("a2a/"):
+            return
+        agent_name: Final = model_name[4:]
+        from litellm.proxy.common_utils.registry_read_through import get_agent_with_read_through
+
+        agent: Final = await get_agent_with_read_through(agent_name)
+        if agent is None:
+            # Fail closed: an unknown A2A name must not silently fall through to
+            # wildcard model routing (e.g. `model_name: "*"`) and bypass the
+            # model allowlist entirely.  Raise 404 so the caller gets a clear
+            # signal and cannot exploit the prefix to reach arbitrary backends.
+            raise HTTPException(status_code=404, detail="Agent not found")
+
+        if not _is_proxy_admin(user_api_key_auth) or agent.identity_managed:
+            is_allowed: Final = await AgentRequestHandler.is_agent_allowed(
+                agent_id=agent.agent_id,
+                user_api_key_auth=user_api_key_auth,
+            )
+            if not is_allowed:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Agent '{agent_name}' is not allowed for your key/team. Contact proxy admin for access.",
+                )
+
+    @staticmethod
     def _get_key_object_permission(
         user_api_key_auth: UserAPIKeyAuth | None = None,
     ) -> LiteLLM_ObjectPermissionTable | None:
