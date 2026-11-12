@@ -1944,8 +1944,8 @@ def _count_content_list(
                 tool_name = str(c.get("tool_name") or "")
                 if tool_name:
                     num_tokens += count_function(tool_name)
-            elif c["type"] in ("tool_addition", "tool_removal"):
-                num_tokens += _tool_change_tokens(count_function, as_str_mapping(c.get("tool")))
+            elif (change := as_str_mapping(c)) is not None and change.get("type") in ("tool_addition", "tool_removal"):
+                num_tokens += _tool_change_tokens(count_function, as_str_mapping(change.get("tool")))
             else:
                 content_type = c.get("type", type(c).__name__) if isinstance(c, dict) else type(c).__name__
                 raise UnsupportedContentTypeError(
