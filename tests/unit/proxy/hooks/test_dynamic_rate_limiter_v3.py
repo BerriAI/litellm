@@ -2602,6 +2602,22 @@ async def test_a_request_without_max_tokens_leaves_admission_capped_to_the_teams
 
 
 @pytest.mark.asyncio
+async def test_a_prompt_that_fits_once_its_output_is_capped_is_admitted(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
+    prompt: Final[dict[str, object]] = {"messages": [{"role": "user", "content": "word " * 60}]}
+    await _check(handler, _team_key(), saturation=1.0, data=prompt)
+    held: Final = handler.v3_limiter.estimate_request_tokens(
+        data={**prompt, "model": "shared-model"},
+        model="shared-model",
+        min_configured_tpm_limit=100,
+        call_type="acompletion",
+        team_id="team-a",
+    )
+    assert prompt["max_tokens"] == handler.v3_limiter.no_max_tokens_output_floor(100)
+    assert await _team_tokens_remaining(handler) == 100 - held
+
+
+@pytest.mark.asyncio
 async def test_a_refused_admission_leaves_the_requests_output_uncapped(monkeypatch: pytest.MonkeyPatch):
     handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
     prompt: Final[dict[str, object]] = {"messages": [{"role": "user", "content": "word " * 300}]}

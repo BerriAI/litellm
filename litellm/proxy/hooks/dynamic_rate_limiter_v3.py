@@ -1198,9 +1198,12 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         tpm_share: Final = (descriptor["rate_limit"] or {}).get("tokens_per_unit")
         if tpm_share is None or not data:
             return 0
+        as_dispatched: Final = dict(data)
+        if self.v3_limiter.get_rate_limit_type() != "input":
+            self.v3_limiter.bound_output_for_limit(as_dispatched, tpm_share, call_type)
         try:
             estimate: Final = await offload_token_count(self.v3_limiter.estimate_request_tokens)(
-                data=data,
+                data=as_dispatched,
                 model=model,
                 min_configured_tpm_limit=tpm_share,
                 call_type=call_type,
