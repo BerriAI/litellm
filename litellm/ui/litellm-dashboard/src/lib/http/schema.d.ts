@@ -32809,6 +32809,10 @@ export interface components {
             budget_id?: string | null;
             /** Default Model */
             default_model?: string | null;
+            /** Fallbacks */
+            fallbacks?: {
+                [key: string]: string[];
+            }[] | null;
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTableFull"] | null;
             /** Models */
             models?: string[];
@@ -36292,6 +36296,10 @@ export interface components {
             budget_id?: string | null;
             /** Default Model */
             default_model?: string | null;
+            /** Fallbacks */
+            fallbacks?: {
+                [key: string]: string[];
+            }[] | null;
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTable"] | null;
             /** Models */
             models?: string[];
@@ -40608,6 +40616,13 @@ export interface components {
             budget_reset_at?: string | null;
             /** Default Model */
             default_model?: string | null;
+            /**
+             * Fallbacks
+             * @description Customer model-group fallback rules, shared across keys. Null inherits existing routing; [] disables fallbacks; a configured list replaces request, key, team and gateway fallback rules.
+             */
+            fallbacks?: {
+                [key: string]: string[];
+            }[] | null;
             /**
              * Max Budget
              * @description Requests will fail if this budget (in USD) is exceeded.
@@ -50692,6 +50707,13 @@ export interface components {
             budget_id?: string | null;
             /** Default Model */
             default_model?: string | null;
+            /**
+             * Fallbacks
+             * @description Customer model-group fallback rules. Omit to preserve; null clears to inherited routing; [] disables fallbacks.
+             */
+            fallbacks?: {
+                [key: string]: string[];
+            }[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Models */
@@ -51925,6 +51947,10 @@ export interface components {
             created_by?: string | null;
             /** Created By User */
             created_by_user?: unknown | null;
+            /** End User Fallbacks */
+            end_user_fallbacks?: {
+                [key: string]: string[];
+            }[] | null;
             /** End User Id */
             end_user_id?: string | null;
             /** End User Max Budget */

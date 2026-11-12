@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
-import { Ban, Pencil } from "lucide-react";
+import { ArrowLeft, Ban, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { $api } from "@/lib/http/api";
@@ -14,6 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { customerStatus, useCustomerUsage } from "./customerPortalData";
 import EditCustomerDialog from "./EditCustomerDialog";
 import StatusBadge from "./StatusBadge";
+import { customerFallbackFields, modelRateLimitFields } from "./customerForms";
 
 function UsageSummary({ spend, budget }: { spend: number; budget: EndUser["litellm_budget_table"] | undefined }) {
   const { t } = useTranslation();
@@ -79,9 +80,14 @@ export default function CustomerDetail({ customerId, onBack }: { customerId: str
   const spend = usage?.spend ?? 0;
   const keys = usage?.keys ?? [];
   const label = c?.alias || customerId;
+  const modelLimits = modelRateLimitFields(c?.litellm_budget_table);
+  const fallbackRules = customerFallbackFields(c?.fallbacks);
 
   return (
     <div className="w-full space-y-4 px-6 py-5">
+      <Button variant="ghost" size="sm" className="-ml-2 w-fit text-muted-foreground" onClick={onBack}>
+        <ArrowLeft className="size-4" aria-hidden="true" /> {t("customerPortal.detail.back")}
+      </Button>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
@@ -111,6 +117,76 @@ export default function CustomerDetail({ customerId, onBack }: { customerId: str
         </div>
       </div>
       <p className="text-xs text-muted-foreground">{t("customerPortal.common.blockHint")}</p>
+
+      {fallbackRules !== null && (
+        <div className="rounded-lg border bg-card">
+          <div className="border-b px-4 py-3">
+            <h2 className="text-sm font-semibold">{t("customerPortal.fallbacks.title")}</h2>
+            <p className="text-xs text-muted-foreground">{t("customerPortal.fallbacks.customHelp")}</p>
+          </div>
+          {fallbackRules.length === 0 ? (
+            <p className="px-4 py-3 text-sm text-muted-foreground">{t("customerPortal.fallbacks.empty")}</p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="pl-4">{t("customerPortal.fallbacks.primary")}</TableHead>
+                  <TableHead className="pr-4">{t("customerPortal.fallbacks.backups")}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {fallbackRules.map((rule) => (
+                  <TableRow key={rule.model}>
+                    <TableCell className="pl-4 font-medium">{rule.model}</TableCell>
+                    <TableCell className="pr-4">
+                      <ol className="list-inside list-decimal">
+                        {rule.fallbacks.map((model) => (
+                          <li key={model}>{model}</li>
+                        ))}
+                      </ol>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </div>
+      )}
+
+      {modelLimits.length > 0 && (
+        <div className="rounded-lg border bg-card">
+          <div className="border-b px-4 py-3">
+            <h2 className="text-sm font-semibold">{t("customerPortal.rateLimits.modelTitle")}</h2>
+            <p className="text-xs text-muted-foreground">{t("customerPortal.rateLimits.modelHelp")}</p>
+          </div>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="pl-4">{t("customerPortal.rateLimits.modelGroup")}</TableHead>
+                <TableHead className="text-right">{t("customerPortal.rateLimits.tpm")}</TableHead>
+                <TableHead className="pr-4 text-right">{t("customerPortal.rateLimits.rpm")}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {modelLimits.map((row) => (
+                <TableRow key={row.model}>
+                  <TableCell className="pl-4 font-medium">{row.model}</TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {row.tpm === ""
+                      ? t("customerPortal.rateLimits.noLimit")
+                      : t("format.number", { val: Number(row.tpm) })}
+                  </TableCell>
+                  <TableCell className="pr-4 text-right tabular-nums">
+                    {row.rpm === ""
+                      ? t("customerPortal.rateLimits.noLimit")
+                      : t("format.number", { val: Number(row.rpm) })}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
 
       <div className="rounded-lg border bg-card">
         <div className="flex items-baseline gap-3 border-b px-4 py-3">
@@ -147,9 +223,6 @@ export default function CustomerDetail({ customerId, onBack }: { customerId: str
           </Table>
         )}
       </div>
-      <Button variant="link" size="sm" className="h-auto p-0 text-xs text-muted-foreground" onClick={onBack}>
-        {t("customerPortal.detail.back")}
-      </Button>
       {c && <EditCustomerDialog open={editOpen} onOpenChange={setEditOpen} customer={c} onSaved={refresh} />}
     </div>
   );

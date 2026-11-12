@@ -21,6 +21,7 @@ from litellm.types.proxy.carried_budget_state import (
     TeamBudgetSnapshot,
     UserBudgetSnapshot,
 )
+from litellm.types.proxy.customer_fallbacks import CustomerFallbacks
 from litellm.types.router import AllowedModelRegion
 
 if TYPE_CHECKING:
@@ -89,6 +90,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     end_user_model_max_budget: _UntypedDict | None = None
     end_user_model_tpm_limit: Mapping[str, int] | None = None
     end_user_model_rpm_limit: Mapping[str, int] | None = None
+    end_user_fallbacks: CustomerFallbacks | None = None
 
     # Organization Params
     organization_alias: str | None = None

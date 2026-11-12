@@ -37,7 +37,7 @@ import litellm
 from litellm._logging import turn_on_json
 from litellm.constants import DEFAULT_SSL_CIPHERS
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
-from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings
+from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings, UserAPIKeyAuth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.common_utils.fips import enforce_fips_mode
 from litellm.proxy.config_resolvers.settings_store import SettingsStore
@@ -2247,6 +2247,7 @@ async def test_ProxyConfig_lists_each_search_tool_as_its_own_json_record(
         "    news-search (exa_ai)",
     ], messages
 
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("already_on", "config_value"),
@@ -2291,7 +2292,6 @@ async def test_ProxyConfig_load_config_keeps_startup_output_off_once_either_sett
     assert litellm.suppress_startup_output is True
     assert "Setting Cache on Proxy" not in out, out
     assert "Proxy initialized with Search Tools:" not in out, out
-
 
 
 def test_ProxyConfig_merge_config_and_db_search_tools_returns_superset():
@@ -4408,7 +4408,7 @@ def test_ProxyConfig__parse_router_settings_value_invalid_returns_none():
 @pytest.mark.asyncio
 async def test_ProxyConfig__get_hierarchical_router_settings_key_wins():
     pc = ProxyConfig()
-    fake_key = SimpleNamespace(
+    fake_key = UserAPIKeyAuth(
         router_settings={"timeout": 30, "retries": 2, "model": "gpt-4"},
         team_id=None,
     )
@@ -4423,7 +4423,7 @@ async def test_ProxyConfig__get_hierarchical_router_settings_key_wins():
 @pytest.mark.asyncio
 async def test_ProxyConfig__get_hierarchical_router_settings_missing_returns_none():
     pc = ProxyConfig()
-    fake_key = SimpleNamespace(router_settings=None, team_id=None)
+    fake_key = UserAPIKeyAuth(router_settings=None, team_id=None)
     out = await pc._get_hierarchical_router_settings(
         user_api_key_dict=fake_key,
         prisma_client=None,
@@ -4437,7 +4437,7 @@ async def test_ProxyConfig__get_hierarchical_router_settings_falls_back_to_team(
     """A key with no router_settings inherits the team's, so a team-level
     model_group_alias reaches the request path at all."""
     pc = ProxyConfig()
-    fake_key = SimpleNamespace(router_settings=None, team_id="team-1")
+    fake_key = UserAPIKeyAuth(router_settings=None, team_id="team-1")
     team_settings = {"model_group_alias": {"group-a": "group-b"}}
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.get_team_object",
@@ -4459,7 +4459,7 @@ async def test_ProxyConfig__get_hierarchical_router_settings_key_shadows_team_en
     per field, so a key that sets any router setting hides every team setting
     including an alias the key itself never set."""
     pc = ProxyConfig()
-    fake_key = SimpleNamespace(router_settings={"num_retries": 3}, team_id="team-1")
+    fake_key = UserAPIKeyAuth(router_settings={"num_retries": 3}, team_id="team-1")
     team_lookup = AsyncMock(return_value=SimpleNamespace(router_settings={"model_group_alias": {"group-a": "group-b"}}))
     monkeypatch.setattr("litellm.proxy.proxy_server.get_team_object", team_lookup)
 
@@ -4801,7 +4801,9 @@ async def test_ProxyConfig__update_general_settings_does_not_warn_about_a_stored
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
         await pc._update_general_settings({"budget_rollover": True, "enforce_user_param": True})
 
-    warned: Final = [record.getMessage().split(" ")[0] for record in caplog.records if "is ignored" in record.getMessage()]
+    warned: Final = [
+        record.getMessage().split(" ")[0] for record in caplog.records if "is ignored" in record.getMessage()
+    ]
     assert warned == ["general_settings.enforce_user_param"]
 
 
@@ -4821,10 +4823,14 @@ async def test_ProxyConfig__update_general_settings_warns_once_each_time_the_sto
         await pc._update_general_settings('{"store_prompts_in_spend_logs": true}')
 
     warnings: Final = [record.getMessage() for record in caplog.records if "JSON object" in record.getMessage()]
-    assert warnings == [
-        "general_settings is stored in the database as something other than a JSON object, so the proxy ignores "
-        "every stored general setting."
-    ] * 2
+    assert (
+        warnings
+        == [
+            "general_settings is stored in the database as something other than a JSON object, so the proxy ignores "
+            "every stored general setting."
+        ]
+        * 2
+    )
 
 
 def _paused_scheduler(monkeypatch):
@@ -5317,7 +5323,9 @@ async def test_ProxyConfig_add_deployment_rebuilds_pass_through_routes_only_from
     rebuild_routes: Final = AsyncMock()
     monkeypatch.setattr(proxy_server, "general_settings", {})
     monkeypatch.setattr(proxy_server, "prefetch_config_params", AsyncMock())
-    monkeypatch.setattr(proxy_server, "get_config_param", AsyncMock(return_value=SimpleNamespace(param_value=stored_row)))
+    monkeypatch.setattr(
+        proxy_server, "get_config_param", AsyncMock(return_value=SimpleNamespace(param_value=stored_row))
+    )
     monkeypatch.setattr(pass_through_endpoints, "initialize_pass_through_endpoints_in_db", rebuild_routes)
     monkeypatch.setattr(pc, "_should_load_db_object", lambda *, object_type: object_type == "pass_through_endpoints")
     monkeypatch.setattr(pc, "get_credentials", AsyncMock())

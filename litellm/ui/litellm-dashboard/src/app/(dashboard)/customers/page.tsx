@@ -39,7 +39,8 @@ export default function CustomersPage() {
     },
   });
 
-  if (selectedId) return <CustomerDetail customerId={selectedId} onBack={() => setSelectedId(null)} />;
+  if (selectedId)
+    return <CustomerDetail customerId={selectedId} onBack={() => setSelectedId(null, { history: "replace" })} />;
 
   return (
     <div className="w-full space-y-4 px-6 py-5">

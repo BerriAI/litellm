@@ -111,12 +111,14 @@ from litellm.proxy.auth.auth_checks import (
     tag_max_budget_check_for_tags,
 )
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe, get_request_route
+from litellm.proxy.auth.fallback_model_access import is_model_authorized_for_token
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.bug_report_config import build_proxy_bug_report
 from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
     get_remaining_tokens_and_requests_from_request_data,
 )
+from litellm.proxy.common_utils.customer_fallbacks import customer_fallback_settings
 from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_body_call_id, with_call_id
 from litellm.proxy.common_utils.http_parsing_utils import (
     get_client_requested_model,
@@ -2962,6 +2964,7 @@ class ProxyBaseLLMRequestProcessing:
             if (
                 pristine is None
                 or not configured_fallbacks
+                or llm_router is None
                 or rate_limited_data.get("disable_fallbacks")
                 or not isinstance(original_model, str)
                 or is_hard_per_model_limit(original_exc)
@@ -2992,6 +2995,12 @@ class ProxyBaseLLMRequestProcessing:
             try:
                 for fallback_model in fallback_models:
                     if fallback_model == original_model:
+                        continue
+                    if user_api_key_dict.end_user_fallbacks is not None and not await is_model_authorized_for_token(
+                        model=fallback_model,
+                        valid_token=user_api_key_dict,
+                        llm_router=llm_router,
+                    ):
                         continue
                     if not await _team_member_within_fallback_model_budget(
                         user_api_key_dict=user_api_key_dict,
@@ -3059,6 +3068,9 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     def _configured_fallbacks(llm_router: Router, user_api_key_dict: UserAPIKeyAuth) -> list | None:
+        customer_settings: Final = customer_fallback_settings(user_api_key_dict.end_user_fallbacks)
+        if customer_settings:
+            return customer_settings["fallbacks"] or None
         key_router_settings: Final = user_api_key_dict.router_settings
         key_fallbacks: Final = key_router_settings.get("fallbacks") if isinstance(key_router_settings, dict) else None
         fallbacks: Final = key_fallbacks if key_fallbacks is not None else llm_router.settings().fallbacks

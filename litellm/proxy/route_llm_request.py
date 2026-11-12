@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.routing_common_utils import is_proxy_admin_request
 from litellm.litellm_core_utils.total_deadline import enforce_total_timeout_scope
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy.common_utils.customer_fallbacks import apply_customer_fallbacks
 from litellm.proxy.openai_files_endpoints.common_utils import (
     TeamProviderDeployment,
     carries_explicit_credentials,
@@ -841,6 +842,10 @@ async def route_request(
     """
     enforce_total_timeout_scope(data)  # pyright: ignore[reportUnknownArgumentType]  # route_request takes an untyped dict body
     router_only_settings_from_override: Final = _merge_router_settings_override(data)  # pyright: ignore[reportUnknownArgumentType]  # route_request takes an untyped dict body
+    if user_api_key_dict is not None:
+        data.update(
+            apply_customer_fallbacks(JSON_OBJECT_ADAPTER.validate_python(data), user_api_key_dict.end_user_fallbacks)
+        )
     try:
         return await _route_request_single_attempt(
             data=data,

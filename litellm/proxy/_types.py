@@ -88,6 +88,7 @@ from litellm.types.proxy.carried_budget_state import (
     UserBudgetSnapshot as UserBudgetSnapshot,  # noqa: PLC0414  # public re-export
 )
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
+from litellm.types.proxy.customer_fallbacks import CustomerFallbacks
 from litellm.types.proxy.request_tag_mappings import RequestTagMapping
 from litellm.types.proxy.skill_scanning import SkillScannerConfig
 from litellm.types.proxy.spend_capture_rate import SpendCaptureRateCheckSettings
@@ -1893,6 +1894,10 @@ class NewCustomerRequest(BudgetNewRequest):
     )
     default_model: str | None = None  # if no equivalent model in allowed region - default all requests to this model
     models: list[str] | None = None
+    fallbacks: CustomerFallbacks | None = Field(
+        default=None,
+        description="Customer model-group fallback rules, shared across keys. Null inherits existing routing; [] disables fallbacks; a configured list replaces request, key, team and gateway fallback rules.",
+    )
     object_permission: LiteLLM_ObjectPermissionBase | None = None
 
     @model_validator(mode="before")
@@ -1925,6 +1930,10 @@ class UpdateCustomerRequest(LiteLLMPydanticObjectBase):
     )
     default_model: str | None = None  # if no equivalent model in allowed region - default all requests to this model
     models: list[str] | None = None
+    fallbacks: CustomerFallbacks | None = Field(
+        default=None,
+        description="Customer model-group fallback rules. Omit to preserve; null clears to inherited routing; [] disables fallbacks.",
+    )
     object_permission: LiteLLM_ObjectPermissionBase | None = None
 
     @model_validator(mode="before")

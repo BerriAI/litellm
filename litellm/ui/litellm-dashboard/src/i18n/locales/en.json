@@ -20658,7 +20658,7 @@
     },
     "createDialog": {
       "title": "Create customer",
-      "description": "A customer is an end user of your product. Pass its id as `user` on every request to track spend and apply its limits.",
+      "description": "Set a budget and optional rules shared across this customer's keys.",
       "customerId": "Customer id",
       "customerIdPlaceholder": "e.g. acme-corp",
       "alias": "Alias",
@@ -20671,12 +20671,59 @@
       "limitsHelp": "Budget and limits apply to this customer across every key it uses.",
       "submit": "Create"
     },
+    "rules": {
+      "rateLimits": "Rate limits",
+      "fallbacks": "Fallbacks"
+    },
+    "fallbacks": {
+      "title": "Fallbacks",
+      "inherit": "Use gateway defaults",
+      "inheritHelp": "Use the fallback rules from the key, team, or gateway.",
+      "customHelp": "These rules replace inherited fallbacks for this customer. Customer and target-model limits still apply.",
+      "empty": "No fallback chains. Fallbacks are disabled for this customer.",
+      "primary": "Primary model group",
+      "primaryForModel": "Primary model group for {{model}}",
+      "backups": "Fallback model groups",
+      "backupsForModel": "Fallback model groups for {{model}}",
+      "fallbackPosition": "Fallback {{position}}",
+      "targetForModel": "Fallback {{position}} for {{model}}",
+      "addTarget": "Add fallback model",
+      "removeTarget": "Remove {{model}} fallback",
+      "orderHelp": "Fallback models are tried in the order shown.",
+      "add": "Add fallback chain",
+      "remove": "Remove fallback chain for {{model}}",
+      "moveUp": "Move {{model}} up",
+      "moveDown": "Move {{model}} down",
+      "selectBackup": "Select at least one fallback model group."
+    },
+    "rateLimits": {
+      "overallTitle": "Customer-wide limits",
+      "overallHelp": "Shared across all model groups and keys for this customer.",
+      "numberHelp": "Use K, M or B, for example 1.5M = 1,500,000.",
+      "invalidNumber": "Enter a whole number, or use K, M or B (for example 1.5M).",
+      "tpm": "Tokens per minute",
+      "rpm": "Requests per minute",
+      "noLimit": "No limit",
+      "modelTitle": "Model group limits",
+      "modelHelp": "Optional limits for individual model groups. Customer-wide limits still apply.",
+      "modelGroup": "Model group",
+      "addModel": "Add model group limit",
+      "removeModel": "Remove {{model}} limit",
+      "tpmForModel": "Tokens per minute for {{model}}",
+      "rpmForModel": "Requests per minute for {{model}}",
+      "groupForModel": "Model group for {{model}}",
+      "loading": "Loading model groups...",
+      "loadError": "Could not load model groups.",
+      "retry": "Retry",
+      "noModels": "No model groups available. Add a model to the gateway first."
+    },
     "editDialog": {
       "title": "Edit customer",
+      "missingBudget": "The budget could not be linked. Try saving again.",
       "alias": "Alias",
       "maxBudget": "Max budget (USD)",
       "maxBudgetPlaceholder": "Leave empty for no budget",
-      "sharedBudgetWarning": "This customer is on budget {{budgetId}}. Changing the budget here changes it for every customer on that budget."
+      "sharedBudgetWarning": "If this budget is shared, budget and rate limit changes apply to everyone using it."
     },
     "chargebacks": {
       "title": "Chargebacks",

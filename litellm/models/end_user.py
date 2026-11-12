@@ -12,6 +12,7 @@ from pydantic import ConfigDict, Field, field_validator
 from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
+from litellm.types.proxy.customer_fallbacks import CustomerFallbacks
 
 
 class LiteLLM_EndUserTable(LiteLLMPydanticObjectBase):
@@ -22,6 +23,7 @@ class LiteLLM_EndUserTable(LiteLLMPydanticObjectBase):
     allowed_model_region: Literal["eu", "us"] | None = None
     default_model: str | None = None
     models: list[str] = Field(default_factory=list)
+    fallbacks: CustomerFallbacks | None = None
     budget_id: str | None = None
     litellm_budget_table: LiteLLM_BudgetTable | None = None
     object_permission_id: str | None = None
