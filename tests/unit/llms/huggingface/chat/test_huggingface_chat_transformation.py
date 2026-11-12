@@ -427,6 +427,27 @@ def test_completion_with_api_base_uses_endpoint_url(respx_mock: respx.MockRouter
     assert response.choices[0].message.content == "Hugging Face response"
 
 
+@pytest.mark.parametrize("env_var", ["HF_API_BASE", "HUGGINGFACE_API_BASE"])
+@pytest.mark.respx(assert_all_called=True)
+def test_completion_with_env_api_base_uses_endpoint_url(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, env_var: str
+) -> None:
+    monkeypatch.setenv(env_var, "https://custom.huggingface.test/v1/chat/completions")
+    route: Final = respx_mock.post("https://custom.huggingface.test/v1/chat/completions")
+    route.return_value = httpx.Response(200, json=HUGGINGFACE_COMPLETION_RESPONSE)
+    messages: Final = [{"role": "user", "content": "This is a test message"}]
+
+    response: Final = litellm.completion(
+        model="huggingface/tgi",
+        messages=messages,
+        api_key="test-api-key",
+        client=HTTPHandler(),
+    )
+
+    assert json.loads(route.calls[0].request.content) == {"model": "tgi", "messages": messages}
+    assert response.choices[0].message.content == "Hugging Face response"
+
+
 @pytest.mark.asyncio
 @pytest.mark.respx(assert_all_called=True)
 async def test_async_completion_with_api_base_uses_endpoint_url(
