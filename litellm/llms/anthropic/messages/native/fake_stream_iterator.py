@@ -103,14 +103,12 @@ class FakeAnthropicMessagesStreamIterator:
                     "delta": {"type": "thinking_delta", "thinking": thinking_text},
                 }
                 chunks.append(f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode())
-            signature: Final = block_dict.get("signature", "")
-            if signature:
-                signature_delta: Final = {
-                    "type": "content_block_delta",
-                    "index": index,
-                    "delta": {"type": "signature_delta", "signature": signature},
-                }
-                chunks.append(f"event: content_block_delta\ndata: {json.dumps(signature_delta)}\n\n".encode())
+            signature_delta: Final = {
+                "type": "content_block_delta",
+                "index": index,
+                "delta": {"type": "signature_delta", "signature": block_dict.get("signature") or ""},
+            }
+            chunks.append(f"event: content_block_delta\ndata: {json.dumps(signature_delta)}\n\n".encode())
 
         elif block_type in ("tool_use", "server_tool_use"):
             empty_input: Final[Mapping[str, object]] = {}
