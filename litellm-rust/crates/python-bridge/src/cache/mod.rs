@@ -2,7 +2,7 @@ mod python;
 mod selection;
 
 pub(crate) use python::{CacheCall, PythonCache};
-pub(crate) use selection::{Cached, Selection, configure, ensure_cache_disabled};
+pub(crate) use selection::{Selection, configure, ensure_cache_disabled};
 
 use pyo3::{exceptions::PyRuntimeError, prelude::*};
 

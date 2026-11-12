@@ -72,7 +72,7 @@ impl NativeRedisBreaker {
         redis_kwargs: RedisSpec,
         settings: BreakerSettings,
     ) -> PyResult<Self> {
-        let endpoint = resolved_endpoint(py, &redis_kwargs)?;
+        let endpoint = resolved_endpoint(&redis_kwargs);
         Self::build(py, &settings, endpoint)
     }
 

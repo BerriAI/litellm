@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import re
+import ssl
 import sys
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import nullcontext
@@ -34,9 +35,11 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import turn_on_json
+from litellm.constants import DEFAULT_SSL_CIPHERS
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.proxy.common_utils.fips import enforce_fips_mode
 from litellm.proxy.config_resolvers.settings_store import SettingsStore
 from litellm.router_api import ApplyResult, RouterSettings
 from litellm.types.router import Deployment, LiteLLM_Params
@@ -1899,6 +1902,73 @@ async def test_ProxyConfig_get_config_reuses_an_already_initialized_secret_manag
         "client_reused": litellm.secret_manager_client is first_client,
         "master_key": second["general_settings"]["master_key"],
     } == {"client_reused": True, "master_key": "master-from-vault"}
+
+
+TLS_RECORDING_SECRET_MANAGER_MODULE = """
+import os
+
+from litellm.integrations.custom_secret_manager import CustomSecretManager
+from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
+
+
+class TlsRecordingSecretManager(CustomSecretManager):
+    def sync_read_secret(self, secret_name, optional_params=None, timeout=None, **kwargs):
+        offers_rsa = any(c["kea"] == "kx-rsa" for c in get_ssl_configuration().get_ciphers())
+        with open(os.environ["RSA_OFFER_LOG"], "a") as f:
+            f.write(f"{secret_name} {offers_rsa}\\n")
+        return "provider-from-vault"
+
+    async def async_read_secret(self, secret_name, optional_params=None, timeout=None, **kwargs):
+        return self.sync_read_secret(secret_name)
+"""
+
+TLS_RECORDING_CONFIG = """
+model_list:
+  - model_name: my-model
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/MY_PROVIDER_KEY
+
+general_settings:
+  fips_mode: {fips_mode}
+  key_management_system: custom
+  key_management_settings:
+    custom_secret_manager: tls_recording_secret_manager.TlsRecordingSecretManager
+    hosted_keys:
+      - MY_PROVIDER_KEY
+"""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fips_mode, rsa_offered",
+    [("true", False), ('"true"', False), ("false", True)],
+    ids=["fips-mode", "fips-mode-from-a-string", "standard-mode"],
+)
+async def test_ProxyConfig_get_config_reads_secrets_without_rsa_key_exchange_in_fips_mode(
+    tmp_path, monkeypatch, fips_mode: str, rsa_offered: bool
+):
+    """Secret reads during get_config run before enforce_fips_mode, so fips_mode already excludes RSA key exchange."""
+    default_cipher_list: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    default_cipher_list.set_ciphers(DEFAULT_SSL_CIPHERS)
+    if not any(cipher["kea"] == "kx-rsa" for cipher in default_cipher_list.get_ciphers()):
+        pytest.skip("this OpenSSL offers no RSA key exchange suite from DEFAULT_SSL_CIPHERS")
+    config_file_path = _write_vault_backed_config(
+        tmp_path, monkeypatch, TLS_RECORDING_CONFIG.format(fips_mode=fips_mode)
+    )
+    (tmp_path / "tls_recording_secret_manager.py").write_text(TLS_RECORDING_SECRET_MANAGER_MODULE)
+    rsa_offer_log: Final = tmp_path / "rsa_offers.log"
+    monkeypatch.setenv("RSA_OFFER_LOG", str(rsa_offer_log))
+
+    try:
+        cfg = await ProxyConfig().get_config(config_file_path=config_file_path)
+    finally:
+        enforce_fips_mode({})
+
+    assert {
+        "reads": set(rsa_offer_log.read_text().splitlines()),
+        "api_key": cfg["model_list"][0]["litellm_params"]["api_key"],
+    } == {"reads": {f"MY_PROVIDER_KEY {rsa_offered}"}, "api_key": "provider-from-vault"}
 
 
 @pytest.mark.asyncio

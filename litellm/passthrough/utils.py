@@ -96,7 +96,6 @@ class BasePassthroughUtils:
                         header_name,
                     )
                     continue
-                # Strip the 'x-pass-' prefix and normalize to lowercase
                 actual_header_name = header_name[len(PASS_THROUGH_HEADER_PREFIX) :].lower()
                 headers[actual_header_name] = header_value
 

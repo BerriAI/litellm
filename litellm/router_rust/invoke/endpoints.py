@@ -53,6 +53,7 @@ from litellm.router_strategy.complexity_router.context_compaction import (
     surface_for_call,
 )
 from litellm.router_utils.endpoint_eligibility import endpoint_for_call, endpoint_selection
+from litellm.vector_stores.search_query import store_search_params
 
 if TYPE_CHECKING:
     from litellm.caching.dual_cache import DualCache
@@ -121,6 +122,8 @@ class EndpointCore(Protocol):
         """``_core_get_model_list(model_name=...)`` on the host registry."""
         ...
 
+    def group_members(self, model_name: str) -> Sequence[tuple[object, object]] | None: ...
+
     def routed_name(self, model: object) -> str:
         """``RustCore.routed_name``: what a ``model`` that is no string raises, or the name it routes under."""
         ...
@@ -147,6 +150,7 @@ class EndpointCore(Protocol):
         kind: str = "pick",
         specific_deployment: bool | None = None,
         messages: object = None,
+        batch_upload: bool = False,
     ) -> Mapping[str, object] | Sequence[Mapping[str, object]]: ...
 
     async def acompletion(self, *args: object, **kwargs: object) -> object: ...  # kwargs-ok: endpoint payload
@@ -677,6 +681,10 @@ _DIRECT_ENDPOINTS: Final = frozenset(
 )
 
 
+def is_batch_upload(request: Mapping[str, object]) -> bool:
+    return request.get("purpose") == "batch"
+
+
 def endpoint_names() -> frozenset[str]:
     """Every endpoint name ``RustEndpoints.member`` may serve: what ``dir()`` of a router lists."""
     return frozenset(
@@ -849,6 +857,16 @@ async def compacted_attempt(
     return await compact_to_fit(ctx, deployment, call.kwargs, _compaction_surface(core, plan))
 
 
+_VECTOR_STORE_SEARCH_OPS: Final = frozenset({"vector_stores.main.asearch", "vector_stores.main.search"})
+
+
+def _deployment_params(
+    plan: Plan, deployment: Mapping[str, object]
+) -> dict[str, object]:  # mutable-ok: the attempt's own copy of the deployment params
+    params: Final = as_dict(deployment.get("litellm_params"))
+    return as_dict(store_search_params(params)) if plan.host_op in _VECTOR_STORE_SEARCH_OPS else params
+
+
 def attempt_call(
     core: EndpointCore,
     plan: Plan,
@@ -864,7 +882,7 @@ def attempt_call(
     shaping: Final = core.shaping
     kwargs: Final = without(request, *ROUTING_KEYS)
     named: Final = {name: kwargs.pop(name) for name in plan.named if name in kwargs}
-    data: Final = as_dict(deployment.get("litellm_params"))
+    data: Final = _deployment_params(plan, deployment)
     model_name: Final = str(data.get("model"))
     cache: Final = core.routing_cache
     caching: Final = shaping.cache_responses
@@ -2313,6 +2331,7 @@ class RustEndpoints:
             kind="healthy",
             specific_deployment=bool(specific) or None,
             messages=_user_message(_PICK_TEXTS["create_file"]),
+            batch_upload=is_batch_upload(kwargs),
         )
         deployments: Final = list(healthy) if isinstance(healthy, Sequence) else [healthy]
 

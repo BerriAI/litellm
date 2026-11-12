@@ -19,7 +19,7 @@ from openai.types.chat import ChatCompletionMessage
 from pydantic import BaseModel, ConfigDict
 
 import litellm
-from litellm.rust_bridge.host.model_cost import publish
+from litellm.litellm_core_utils.model_cost_table import publish
 from litellm import Router
 from litellm._logging import verbose_logger
 from litellm.integrations.anthropic_cache_control_hook import (

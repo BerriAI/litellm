@@ -48,7 +48,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
             level: log.log_level(),
         })
         .install_global()?;
-        litellm_gateway_forward::run(forward, shutdown_signal()).await?;
+        let stdin_closed = litellm_gateway_forward::input_closed(std::io::stdin());
+        litellm_gateway_forward::run(forward, async {
+            tokio::select! { () = shutdown_signal() => (), () = stdin_closed => () }
+        })
+        .await?;
         return Ok(());
     }
     let settings: Settings = settings::from_iter(std::env::vars_os())?;

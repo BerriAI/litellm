@@ -44,6 +44,8 @@ PUBLISHED_DBU_PER_MILLION: Final = {
     "databricks/databricks-claude-opus-5-5": ("57.143", "285.714", "71.429", "2.857"),
     "databricks/databricks-claude-fable-5-1": ("142.858", "714.286", "178.572", "3.572"),
     "databricks/databricks-claude-fable-5": ("142.858", "714.286", "178.572", "14.286"),
+    "databricks/databricks-claude-fable-5-2": ("114.286", "571.429", "142.857", "2.857"),
+    "databricks/system.ai.claude-fable-5-2": ("114.286", "571.429", "142.857", "2.857"),
     "databricks/databricks-claude-opus-5": ("71.429", "357.143", "89.286", "7.143"),
     "databricks/databricks-claude-opus-4-8": ("71.429", "357.143", "89.286", "7.143"),
     "databricks/databricks-claude-opus-4-7": ("71.429", "357.143", "89.286", "7.143"),

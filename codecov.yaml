@@ -6,7 +6,7 @@ codecov:
 ignore:
   - "litellm-rust/**"
 
-# Uploads are flagged per workflow tier (GHA) or "circleci". carryforward makes
+# Uploads are flagged per workflow tier. carryforward makes
 # a re-upload of a flag replace its prior session instead of accumulating a
 # conflicting one, and lets a commit reuse a flag from its parent when that flag
 # was not re-uploaded. Required because the same commit can receive the
@@ -59,6 +59,12 @@ flag_management:
     - name: proxy-infra
       carryforward: false
     - name: proxy-infra-root
+      carryforward: false
+    - name: proxy-infra-root-a-p
+      carryforward: false
+    - name: proxy-infra-root-q-z
+      carryforward: false
+    - name: proxy-subprocess
       carryforward: false
     - name: caching-local
       carryforward: false
