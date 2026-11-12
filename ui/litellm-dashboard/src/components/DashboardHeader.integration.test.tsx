@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PluginModeProvider } from "@/contexts/PluginModeContext";
@@ -12,7 +12,10 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(),
 }));
 
+const updatesVisibility = vi.hoisted(() => ({ hidden: false }));
+
 beforeEach(() => {
+  updatesVisibility.hidden = false;
   localStorage.clear();
   vi.stubGlobal(
     "fetch",
@@ -36,6 +39,7 @@ beforeEach(() => {
       }
       if (url.endsWith("/public/litellm_blog_posts")) {
         return Response.json({
+          hide_updates: updatesVisibility.hidden,
           posts: [
             {
               title: "Gateway update",
@@ -93,6 +97,21 @@ describe("dashboard header controls", () => {
       "href",
       "https://docs.litellm.ai/docs/",
     );
+    expect(within(tools).getByRole("link", { name: "Discord", exact: true })).toBeVisible();
+  });
+
+  it("hides deployment-disabled updates and announcements while keeping resources", async () => {
+    updatesVisibility.hidden = true;
+    const { user } = renderHeader();
+    await user.click(await screen.findByRole("button", { name: /^Notifications$/ }));
+    const tools = await screen.findByRole("dialog", { name: "Notifications" });
+    await waitFor(() =>
+      expect(within(tools).queryByRole("link", { name: "Blog", exact: true })).not.toBeInTheDocument(),
+    );
+    expect(within(tools).queryByRole("region", { name: "Latest posts" })).not.toBeInTheDocument();
+    expect(within(tools).queryByRole("link", { name: /Gateway update/ })).not.toBeInTheDocument();
+    expect(within(tools).queryByRole("article")).not.toBeInTheDocument();
+    expect(within(tools).getByRole("link", { name: "Docs", exact: true })).toBeVisible();
     expect(within(tools).getByRole("link", { name: "Discord", exact: true })).toBeVisible();
   });
 

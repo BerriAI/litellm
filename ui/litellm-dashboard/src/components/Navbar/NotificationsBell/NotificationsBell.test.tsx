@@ -5,6 +5,15 @@ import React from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const updatesVisibility = vi.hoisted(() => ({ hidden: false }));
+vi.mock("@/app/(dashboard)/hooks/blogPosts/useBlogPosts", () => ({
+  useBlogPosts: () => ({ data: { posts: [], hide_updates: updatesVisibility.hidden } }),
+}));
+
+beforeEach(() => {
+  updatesVisibility.hidden = false;
+});
+
 vi.mock("@/components/ModelDeprecationAlerts/useDeprecationAlerts", () => ({
   useDeprecationAlerts: () => ({
     data: [],
@@ -269,4 +278,23 @@ describe("model deprecation notifications", () => {
     );
     expect(screen.getByRole("button", { name: /1 model deprecation alert/ })).toBeInTheDocument();
   });
+});
+
+it("keeps operational notices but excludes hidden announcements from the unread count", async () => {
+  updatesVisibility.hidden = true;
+  const user = userEvent.setup();
+  renderWithProviders(
+    <NotificationsBellView
+      currentVersion="1.102.0"
+      latestRelease={RELEASE}
+      deprecationAlerts={[DEPRECATION]}
+      deploymentHealthLink={<a href="/health">Deployment health</a>}
+    />,
+  );
+  await user.click(screen.getByRole("button", { name: /1 model deprecation alert/ }));
+  expect(screen.queryByRole("article", { name: /LiteLLM v/ })).not.toBeInTheDocument();
+  expect(screen.queryByRole("article", { name: "LiteLLM Auto Router" })).not.toBeInTheDocument();
+  expect(screen.queryByText("Announcements")).not.toBeInTheDocument();
+  expect(screen.getByRole("article", { name: /retires in 26 days/ })).toBeVisible();
+  expect(screen.getByRole("link", { name: "Deployment health" })).toBeVisible();
 });

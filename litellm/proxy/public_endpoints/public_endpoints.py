@@ -544,7 +544,11 @@ async def get_litellm_blog_posts() -> BlogPostsResponse:
 
     Fetches the docs RSS feed with a 1-hour in-process cache.
     Falls back to the bundled local backup on any failure.
+    LITELLM_HIDE_UPDATES=true disables both sources and returns hide_updates=true with no posts.
     """
+    if os.getenv("LITELLM_HIDE_UPDATES", "").strip().lower() == "true":
+        return BlogPostsResponse(posts=(), hide_updates=True)
+
     try:
         return BlogPostsResponse(posts=get_blog_posts(url=litellm.blog_posts_url))
     except Exception as e:

@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -42,7 +42,7 @@ const post = (title: string, date: string, tags: string[] = []) => ({
   tags,
 });
 
-const blogPosts = vi.hoisted(() => ({ posts: [] as unknown[] }));
+const blogPosts = vi.hoisted(() => ({ posts: [] as unknown[], hide_updates: false }));
 
 const requestUrl = (input: RequestInfo | URL): string => {
   if (typeof input === "string") return input;
@@ -119,6 +119,7 @@ describe("HomePage", () => {
     network.aggregated.mockReset().mockResolvedValue(activity);
     network.gateway.mockReset().mockResolvedValue({ total_successful_requests: 0, total_failed_requests: 0 });
     network.userInfo.mockReset().mockResolvedValue({ user_info: { max_budget: null } });
+    blogPosts.hide_updates = false;
     blogPosts.posts = [post("Post one", "2026-10-09"), post("mid", "2026-10-06", ["day 0 support"])];
     vi.stubGlobal("fetch", vi.fn(fakeFetch));
   });
@@ -227,6 +228,14 @@ describe("HomePage", () => {
     expect(within(rows[0]!).getByText("gpt-6.1-sol")).toBeInTheDocument();
     expect(within(rows[0]!).getByText("90.0%")).toBeInTheDocument();
     expect(within(rows[1]!).getByText("claude-haiku-5-5")).toBeInTheDocument();
+  });
+
+  it("hides update content without hiding the home dashboard", async () => {
+    blogPosts.hide_updates = true;
+    renderHome();
+    expect(await screen.findByTestId("home-leaderboard")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByTestId("home-updates")).not.toBeInTheDocument());
+    expect(screen.queryByTestId("home-whats-new")).not.toBeInTheDocument();
   });
 
   it("renders the blog posts fetched from /public/litellm_blog_posts in the Updates feed", async () => {

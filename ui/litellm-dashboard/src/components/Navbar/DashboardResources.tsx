@@ -85,9 +85,10 @@ export function DashboardCommunityLinks({ className }: { className?: string }) {
 
 export function DashboardResources({ children }: { children?: ReactNode }) {
   const { t } = useTranslation();
-  const hideBlog = useDisableBlogPosts();
+  const locallyHidden = useDisableBlogPosts();
   const hideCommunity = useDisableShowPrompts();
   const { data, isPending, isError, refetch } = useBlogPosts();
+  const hideBlog = locallyHidden || data?.hide_updates === true;
   const links = [
     ...[...DOCS, ...(hideBlog ? [] : [BLOG])].map((link) => ({ ...link, label: t(link.label) })),
     ...(hideCommunity ? [] : COMMUNITY),

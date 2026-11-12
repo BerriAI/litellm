@@ -40,6 +40,7 @@ class BlogPostsResponse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     posts: tuple[BlogPost, ...]
+    hide_updates: bool = False
 
 
 def _pub_date(pub_date_el: ET.Element | None) -> str:

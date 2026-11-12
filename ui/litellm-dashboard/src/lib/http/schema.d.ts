@@ -13908,6 +13908,7 @@ export interface paths {
          *
          *     Fetches the docs RSS feed with a 1-hour in-process cache.
          *     Falls back to the bundled local backup on any failure.
+         *     LITELLM_HIDE_UPDATES=true disables both sources and returns hide_updates=true with no posts.
          */
         get: operations["get_litellm_blog_posts_public_litellm_blog_posts_get"];
         put?: never;
@@ -28426,6 +28427,11 @@ export interface components {
         };
         /** BlogPostsResponse */
         BlogPostsResponse: {
+            /**
+             * Hide Updates
+             * @default false
+             */
+            hide_updates: boolean;
             /** Posts */
             posts: components["schemas"]["BlogPost"][];
         };

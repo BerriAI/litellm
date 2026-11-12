@@ -6,7 +6,10 @@ import { BlogDropdown } from "./BlogDropdown";
 let mockDisableBlogPosts = false;
 let mockRefetch = vi.fn();
 let mockUseBlogPostsResult: {
-  data: { posts: { title: string; date: string; description: string; url: string }[] } | null | undefined;
+  data:
+    | { hide_updates?: boolean; posts: { title: string; date: string; description: string; url: string }[] }
+    | null
+    | undefined;
   isLoading: boolean;
   isError: boolean;
   refetch: () => void;
@@ -58,6 +61,12 @@ describe("BlogDropdown", () => {
       const { container } = renderWithProviders(<BlogDropdown />);
       expect(container).toBeEmptyDOMElement();
     });
+  });
+
+  it("hides the Blog entry when the deployment hides updates", () => {
+    mockUseBlogPostsResult = { ...mockUseBlogPostsResult, data: { posts: MOCK_POSTS, hide_updates: true } };
+    renderWithProviders(<BlogDropdown />);
+    expect(screen.queryByRole("button", { name: /blog/i })).not.toBeInTheDocument();
   });
 
   describe("when blog posts are enabled", () => {

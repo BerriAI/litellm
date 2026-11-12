@@ -1,5 +1,6 @@
 "use client";
 
+import { useBlogPosts } from "@/app/(dashboard)/hooks/blogPosts/useBlogPosts";
 import { useHealthReadinessDetails } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails";
 import {
   type LatestReleaseInfo,
@@ -127,8 +128,11 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
   deprecationAlerts,
 }) => {
   const { t } = useTranslation();
+  const { data: blogPosts } = useBlogPosts();
+  const hideUpdates = blogPosts?.hide_updates === true;
   const upgrade = upgradeAnnouncement(currentVersion, latestRelease);
-  const announcements = upgrade ? [upgrade, autoRouterAnnouncement()] : [autoRouterAnnouncement()];
+  const availableAnnouncements = upgrade ? [upgrade, autoRouterAnnouncement()] : [autoRouterAnnouncement()];
+  const announcements = hideUpdates ? [] : availableAnnouncements;
   const unreadCount = useUnreadAnnouncementCount(announcements.map((announcement) => announcement.readKey));
 
   const openAlerts = (deprecationAlerts ?? []).filter((alert) => effectiveAlertStatus(alert) === AlertStatus.Open);
@@ -165,48 +169,54 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
         className="w-96 max-w-[calc(100vw-1rem)] gap-0 overflow-hidden p-0"
       >
         <PopoverTitle className="border-b border-border px-4 py-3 text-sm font-semibold">
-          {t("shell.notifications.bell.title")}
+          {t(hideUpdates ? "shell.notifications.bell.trigger" : "shell.notifications.bell.title")}
         </PopoverTitle>
         <div className="max-h-[min(32rem,calc(100dvh-10rem))] overflow-y-auto">
-          <div className="space-y-4 p-4">
-            {openAlerts.length > 0 && (
-              <>
-                <div>
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="text-sm font-semibold">{t("shell.notifications.bell.deprecationsTitle")}</p>
-                    <a className="text-xs text-primary hover:underline" href={migrationHref()}>
-                      {t("shell.notifications.bell.viewAllDeprecations", { total: openDeprecations })}
-                    </a>
+          {(announcements.length > 0 || deprecationAlerts !== undefined) && (
+            <div className="space-y-4 p-4">
+              {openAlerts.length > 0 && (
+                <>
+                  <div>
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm font-semibold">{t("shell.notifications.bell.deprecationsTitle")}</p>
+                      <a className="text-xs text-primary hover:underline" href={migrationHref()}>
+                        {t("shell.notifications.bell.viewAllDeprecations", { total: openDeprecations })}
+                      </a>
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {t("shell.notifications.bell.deprecationsDescription")}
+                    </p>
                   </div>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {t("shell.notifications.bell.deprecationsDescription")}
-                  </p>
-                </div>
-                {openAlerts.slice(0, 3).map((alert) => (
-                  <Fragment key={alert.id}>
-                    <Separator />
-                    <DeprecationAlertItem alert={alert} />
-                  </Fragment>
-                ))}
-                <Separator />
-                <p className="text-xs font-medium text-muted-foreground">
-                  {t("shell.notifications.bell.announcementsHeading")}
-                </p>
-              </>
-            )}
-            {deprecationAlerts && openAlerts.length === 0 && (
-              <a href={migrationHref()} className="text-sm font-medium text-primary hover:underline">
-                {t("shell.notifications.bell.viewDeprecations")}
-              </a>
-            )}
+                  {openAlerts.slice(0, 3).map((alert) => (
+                    <Fragment key={alert.id}>
+                      <Separator />
+                      <DeprecationAlertItem alert={alert} />
+                    </Fragment>
+                  ))}
+                  {announcements.length > 0 && (
+                    <>
+                      <Separator />
+                      <p className="text-xs font-medium text-muted-foreground">
+                        {t("shell.notifications.bell.announcementsHeading")}
+                      </p>
+                    </>
+                  )}
+                </>
+              )}
+              {deprecationAlerts && openAlerts.length === 0 && (
+                <a href={migrationHref()} className="text-sm font-medium text-primary hover:underline">
+                  {t("shell.notifications.bell.viewDeprecations")}
+                </a>
+              )}
 
-            {announcements.map((announcement, index) => (
-              <Fragment key={announcement.readKey}>
-                {index > 0 ? <Separator /> : null}
-                <AnnouncementItem announcement={announcement} />
-              </Fragment>
-            ))}
-          </div>
+              {announcements.map((announcement, index) => (
+                <Fragment key={announcement.readKey}>
+                  {index > 0 ? <Separator /> : null}
+                  <AnnouncementItem announcement={announcement} />
+                </Fragment>
+              ))}
+            </div>
+          )}
           <DashboardResources>{deploymentHealthLink}</DashboardResources>
         </div>
       </PopoverContent>
