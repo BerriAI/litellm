@@ -201,10 +201,7 @@ async def update_budget(
         }
     )
 
-    response: Final = await BudgetRepository(prisma_client).table.update(
-        where={"budget_id": budget_obj.budget_id},
-        data=budget_obj_jsonified,
-    )
+    response: Final = await BudgetRepository(prisma_client).update_tier(budget_obj.budget_id, budget_obj_jsonified)
     with service_target("team_member_budgets"):
         try:
             await user_api_key_cache.async_delete_cache(key=f"team_member_default_budget:{budget_obj.budget_id}")

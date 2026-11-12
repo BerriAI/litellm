@@ -24,10 +24,12 @@ def client_and_mocks(monkeypatch):
     mock_table.create = AsyncMock(side_effect=lambda *, data: data)
     mock_table.update = AsyncMock(side_effect=lambda *, where, data: {**where, **data})
 
+    mock_table.find_unique = AsyncMock(return_value=None)
     mock_prisma.db = types.SimpleNamespace(
         litellm_budgettable=mock_table,
         litellm_dailyspend=mock_table,
     )
+    mock_prisma.writer_db = mock_prisma.db
 
     # Monkeypatch Mocked Prisma client into the server module
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)

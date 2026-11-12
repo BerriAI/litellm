@@ -14,7 +14,7 @@ import prisma
 import pytest
 
 
-from litellm.proxy._types import LiteLLM_BudgetTableFull, LiteLLM_VerificationToken
+from litellm.proxy._types import BudgetNewRequest, LiteLLM_BudgetTableFull, LiteLLM_VerificationToken, UserAPIKeyAuth
 from litellm.proxy.common_utils import reset_budget_job as reset_budget_job_module
 from litellm.constants import (
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
@@ -29,6 +29,7 @@ from litellm.proxy.common_utils.reset_budget_job import (
     _write_team_windows,
 )
 from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
+from litellm.proxy.management_endpoints.budget_management_endpoints import update_budget
 from litellm.proxy.utils import PrismaClient
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
@@ -3722,14 +3723,15 @@ class _EndUserLedger:
         self.client = types.SimpleNamespace(
             writer_db=types.SimpleNamespace(
                 litellm_budgettable=types.SimpleNamespace(
-                    update_many=self._update_budgets, find_many=self._find_budgets
+                    update_many=self._update_budgets, find_many=self._find_budgets, find_unique=self._find_budget
                 ),
             ),
             db=types.SimpleNamespace(
                 litellm_budgettable=types.SimpleNamespace(
                     find_many=lambda where: _async_value(
                         [budget for budget in replica if _row_matches(vars(budget), where)]
-                    )
+                    ),
+                    update=self._write_budget,
                 ),
                 litellm_endusertable=self,
                 litellm_teammembership=MockTable(),
@@ -3778,6 +3780,20 @@ class _EndUserLedger:
             for budget in self.budgets.values()
             if _row_matches(vars(budget), where)
         ]
+
+    async def _find_budget(self, where: dict[str, object]):
+        return next(iter(await self._find_budgets(where)), None)
+
+    async def _write_budget(self, where: dict[str, object], data: dict[str, object]):
+        budget = self.budgets[cast(str, where["budget_id"])]
+        vars(budget).update(data)
+        return types.SimpleNamespace(**vars(budget))
+
+    async def update_many(self, where: dict[str, object], data: dict[str, _Cell]) -> int:
+        matching = [row for row in self.rows.values() if _row_matches(row, where)]
+        for row in matching:
+            row.update(data)
+        return len(matching)
 
     async def find_many(self, where: dict[str, object], order: dict[str, str], take: int):
         matching = sorted(
@@ -3904,6 +3920,64 @@ def test_end_users_are_reset_again_when_the_next_window_closes(
     asyncio.run(job.reset_budget_for_litellm_budget_table())
 
     assert ledger.spend() == {"over-cap": 12.0}
+
+
+async def _post_budget_update(monkeypatch, ledger: _EndUserLedger, budget_id: str, budget_reset_at: datetime) -> None:
+    proxy_server: Final = sys.modules["litellm.proxy.proxy_server"]
+    monkeypatch.setattr(proxy_server, "prisma_client", ledger.client, raising=False)
+    monkeypatch.setattr(proxy_server, "litellm_proxy_admin_name", "admin", raising=False)
+    await update_budget(
+        BudgetNewRequest(budget_id=budget_id, budget_reset_at=budget_reset_at),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin"),
+    )
+
+
+def test_a_reset_forced_back_to_the_window_just_closed_resets_its_end_users_again(
+    rollover_enabled, ticking_reset_clock, monkeypatch
+):
+    """An admin forces a reset by writing the time the window last closed
+    through /budget/update. The end users that window already reset must reset
+    again with the tier's orgs, not keep their spend behind its stamp."""
+    _make_counter_invalidation_job(monkeypatch)
+    ledger: Final = _EndUserLedger(
+        budgets={"capped": (10.0, _CLOSED_WINDOW)},
+        endusers={"over-cap": ("capped", 15.0, None)},
+        orgs={"org-over-cap": ("capped", 15.0)},
+    )
+    job: Final = ResetBudgetJob(proxy_logging_obj=MockProxyLogging(), prisma_client=ledger.client)
+    asyncio.run(job.reset_budget_for_litellm_budget_table())
+    ledger.add_spend("over-cap", 17.0)
+    ledger.orgs["org-over-cap"]["spend"] = 22.0
+
+    asyncio.run(_post_budget_update(monkeypatch, ledger, "capped", _CLOSED_WINDOW))
+    asyncio.run(job.reset_budget_for_litellm_budget_table())
+
+    assert ledger.org_spend() == {"org-over-cap": 12.0}
+    assert ledger.spend() == {"over-cap": 12.0}
+
+
+def test_rewriting_the_reset_time_a_failed_advance_left_does_not_reset_its_end_users_twice(
+    rollover_enabled, ticking_reset_clock, monkeypatch
+):
+    """A client that sends the stored reset time back unchanged while the
+    window advance waits for its retry must not clear the stamps that retry
+    relies on."""
+    _make_counter_invalidation_job(monkeypatch)
+    ledger: Final = _EndUserLedger(
+        budgets={"capped": (10.0, _CLOSED_WINDOW)}, endusers={"over-cap": ("capped", 15.0, None)}
+    )
+    ledger.fail_commit = 2
+    job: Final = ResetBudgetJob(proxy_logging_obj=MockProxyLogging(), prisma_client=ledger.client)
+    asyncio.run(job.reset_budget_for_litellm_budget_table())
+    assert ledger.advances == 0
+    assert ledger.spend() == {"over-cap": 5.0}
+
+    asyncio.run(_post_budget_update(monkeypatch, ledger, "capped", _CLOSED_WINDOW))
+    ledger.add_spend("over-cap", 3.0)
+    asyncio.run(job.reset_budget_for_litellm_budget_table())
+
+    assert ledger.advances == 1
+    assert ledger.spend() == {"over-cap": 8.0}
 
 
 def test_a_sweep_that_read_an_unset_reset_time_resets_in_the_window_another_sweep_pinned(

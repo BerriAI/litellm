@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Final
 from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.repositories.base_repository import BaseRepository
 from litellm.repositories.prisma_protocols import TableActions
-from litellm.repositories.table_repositories import PrismaTableRepository
+from litellm.repositories.table_repositories import EndUserRepository, PrismaTableRepository
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -103,6 +103,26 @@ class BudgetRepository(BaseRepository[LiteLLM_BudgetTable]):
             data["allowed_models"] = allowed_models
 
         return await self.update(budget_id, data, id_field="budget_id")
+
+    async def update_tier(
+        self, budget_id: str, data: Mapping[str, object]
+    ) -> "prisma_models.LiteLLM_BudgetTable | None":
+        """Moving the tier's reset time back to a window its end users were
+        already reset in clears their stamp, so that window resets them again.
+        Rewriting the stored time keeps the stamps a failed advance's retry needs."""
+        before: Final = (
+            await _BudgetTable(self._prisma_client, use_writer=True).table.find_unique(where={"budget_id": budget_id})
+            if "budget_reset_at" in data
+            else None
+        )
+        after: Final = await self.table.update(where={"budget_id": budget_id}, data=data)
+        if before is None or after is None or after.budget_reset_at in (None, before.budget_reset_at):
+            return after
+        await EndUserRepository(self._prisma_client).table.update_many(
+            where={"budget_id": budget_id, "spend_reset_window": after.budget_reset_at},
+            data={"spend_reset_window": None},
+        )
+        return after
 
     async def pin_unset_reset_times(self, budget_ids: Sequence[str], at: datetime) -> Mapping[str, datetime]:
         """Set ``budget_reset_at`` to ``at`` on the tiers that have none, then
