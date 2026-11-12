@@ -116,6 +116,16 @@ jobs:
         timeout-minutes: 20
         run: .github/scripts/uv_sync_with_retries.sh --frozen --all-groups --all-extras
 
+      - name: Install the Rust gateway
+        timeout-minutes: 15
+        working-directory: packaging/litellm-proxy
+        env:
+          CARGO_INCREMENTAL: "0"
+        run: |
+          uv run --no-project --with maturin==1.15.0 maturin build --profile dev --strip --out "$RUNNER_TEMP/gateway-dist"
+          uv pip install --no-deps --python ../../.venv/bin/python "$RUNNER_TEMP"/gateway-dist/*.whl
+          test -x ../../.venv/bin/litellm-gateway
+
       - name: Install redis-server 7.2.16
         timeout-minutes: 3
         run: |
