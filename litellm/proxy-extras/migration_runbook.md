@@ -10,7 +10,7 @@ Before doing anything else, make sure all `schema.prisma` files in the repo are 
 
 | File | Purpose |
 |------|---------|
-| `schema.prisma` (repo root) | Source of truth |
+| `litellm/schema.prisma` (canonical) | Source of truth |
 | `litellm/proxy/schema.prisma` | Used by the proxy server |
 | `litellm/proxy-extras/litellm_proxy_extras/schema.prisma` | Used for migration generation |
 
@@ -18,16 +18,16 @@ Before doing anything else, make sure all `schema.prisma` files in the repo are 
 
 ```bash
 # 1. Diff all schema files against the root source of truth
-diff schema.prisma litellm/proxy/schema.prisma
-diff schema.prisma litellm/proxy-extras/litellm_proxy_extras/schema.prisma
+diff litellm/schema.prisma litellm/proxy/schema.prisma
+diff litellm/schema.prisma litellm/proxy-extras/litellm_proxy_extras/schema.prisma
 
 # 2. If there are differences, copy the root schema to all locations
-cp schema.prisma litellm/proxy/schema.prisma
-cp schema.prisma litellm/proxy-extras/litellm_proxy_extras/schema.prisma
+cp litellm/schema.prisma litellm/proxy/schema.prisma
+cp litellm/schema.prisma litellm/proxy-extras/litellm_proxy_extras/schema.prisma
 
 # 3. Verify all files are now identical
-diff schema.prisma litellm/proxy/schema.prisma && echo "proxy schema in sync" || echo "MISMATCH"
-diff schema.prisma litellm/proxy-extras/litellm_proxy_extras/schema.prisma && echo "extras schema in sync" || echo "MISMATCH"
+diff litellm/schema.prisma litellm/proxy/schema.prisma && echo "proxy schema in sync" || echo "MISMATCH"
+diff litellm/schema.prisma litellm/proxy-extras/litellm_proxy_extras/schema.prisma && echo "extras schema in sync" || echo "MISMATCH"
 ```
 
 > **Do NOT proceed to migration generation until all schema files are identical.**
@@ -43,7 +43,7 @@ brew install postgresql@14  # macOS
 export PATH="/opt/homebrew/opt/postgresql@14/bin:$PATH"
 
 # Run migration
-uv run --with testing.postgresql python scripts/ci_cd/run_migration.py "your_migration_name"
+uv run --with testing.postgresql python litellm/scripts/ci_cd/run_migration.py "your_migration_name"
 ```
 
 ## What It Does
@@ -69,7 +69,7 @@ When the guard fires:
 1. Update your branch:
 
    ```bash
-   base_branch=$(python3 scripts/default_branch.py --branch) &&
+   base_branch=$(python3 litellm/scripts/default_branch.py --branch) &&
      git fetch origin "+refs/heads/$base_branch:refs/remotes/origin/$base_branch" &&
      git rebase "origin/$base_branch"
    ```
@@ -89,7 +89,7 @@ When the guard fires:
 4. Only if the drops are genuinely intentional, re-run with the flag:
 
    ```bash
-   uv run --with testing.postgresql python scripts/ci_cd/run_migration.py "your_migration_name" --allow-destructive
+   uv run --with testing.postgresql python litellm/scripts/ci_cd/run_migration.py "your_migration_name" --allow-destructive
    ```
 
 > **AI AGENTS / ASSISTANTS:** Do **not** automatically re-run the command with `--allow-destructive`. If the guard fires while you are driving the runbook for a human, stop, show them the error, and wait for their explicit confirmation before passing the flag. Auto-passing `--allow-destructive` is the exact failure mode this guard exists to prevent.
@@ -98,7 +98,7 @@ When the guard fires:
 
 **Missing testing module:**
 ```bash
-uv run --with testing.postgresql python scripts/ci_cd/run_migration.py "your_migration_name"
+uv run --with testing.postgresql python litellm/scripts/ci_cd/run_migration.py "your_migration_name"
 ```
 
 **initdb not found:**
@@ -115,7 +115,7 @@ rm -rf litellm/proxy-extras/litellm_proxy_extras/migrations/[empty_dir]
 ## Rules
 
 - Sync all `schema.prisma` files first (Step 0)
-- Update `schema.prisma` at the repo root first, then sync copies
+- Update `litellm/schema.prisma` first, then sync copies
 - Review generated SQL before committing
 - Use descriptive migration names
 - Never edit existing migration files

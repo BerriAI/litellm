@@ -46,7 +46,7 @@ starts the process named by its first argument, so each workload only
 differs in the argument the module passes
 
 The load balancer routes gateway path prefixes (mirrored verbatim from
-`gateway/routes/allowlist.py`) to the gateway, UI asset paths (`/`,
+`litellm/runtime/gateway/routes/allowlist.py`) to the gateway, UI asset paths (`/`,
 `/litellm-asset-prefix/*`, `/_next/*`, `/favicon.ico`) to the UI, and
 everything else to the backend.
 

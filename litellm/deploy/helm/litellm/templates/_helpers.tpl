@@ -296,7 +296,7 @@ by the controller rather than declared, so nothing there can collide.
 LITELLM_MASTER_KEY, and PROXY_MASTER_KEY for configs copied from litellm-helm,
 for the app containers only. The migrations Job runs as a
 pre-install hook, before the chart's generated master key Secret exists, and
-migrations/run.py never reads the key, so the Job must not reference it.
+litellm/runtime/migrations/run.py never reads the key, so the Job must not reference it.
 */}}
 {{- define "litellm.masterKeyEnv" -}}
 {{- range list "LITELLM_MASTER_KEY" "PROXY_MASTER_KEY" }}
@@ -507,7 +507,7 @@ The migrations Job (helm.sh/hook: pre-upgrade) is the single owner of
 Prisma schema-update on startup and contends with the Job — and with each
 other — for Prisma's Postgres advisory lock on the writer, which makes the
 Job's `migrate deploy` intermittently block until its per-attempt timeout
-and retry-exhaust. The Job's entrypoint (migrations/run.py) does not import
+and retry-exhaust. The Job's entrypoint (litellm/runtime/migrations/run.py) does not import
 proxy_server and never reads DISABLE_SCHEMA_UPDATE, so emitting it here is a
 harmless no-op for the Job and authoritative for the app pods.
 */}}

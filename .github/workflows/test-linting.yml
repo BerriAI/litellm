@@ -114,7 +114,7 @@ jobs:
       - name: Check ruff format
         if: steps.changes.outputs.decision != 'skip'
         run: |
-          git diff --name-only --diff-filter=ACMR "$GATE_BASE_SHA" HEAD -- ':(glob)litellm/**/*.py' | grep -Ev '^litellm/(enterprise|ui|vscode-extension|rust|proxy-extras|packaging|cli)/' > "$RUNNER_TEMP/ruff_format_files.txt" || true
+          git diff --name-only --diff-filter=ACMR "$GATE_BASE_SHA" HEAD -- ':(glob)litellm/**/*.py' | grep -Ev '^litellm/(enterprise|ui|vscode-extension|rust|proxy-extras|packaging|cli|scripts|runtime)/' > "$RUNNER_TEMP/ruff_format_files.txt" || true
           if [ ! -s "$RUNNER_TEMP/ruff_format_files.txt" ]; then
             echo "No changed litellm Python files to check with ruff format."
             exit 0
@@ -133,7 +133,7 @@ jobs:
 
       - name: Check MCP operation boundary
         if: steps.changes.outputs.decision != 'skip'
-        run: uv run --no-sync python scripts/check_mcp_operation_boundary.py
+        run: uv run --no-sync python litellm/scripts/check_mcp_operation_boundary.py
 
       - name: Run Ruff linting
         if: steps.changes.outputs.decision != 'skip'
@@ -152,21 +152,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          uv run --no-sync python scripts/ruff_strict_gate.py --base "$GATE_BASE_SHA"
+          uv run --no-sync python litellm/scripts/ruff_strict_gate.py --base "$GATE_BASE_SHA"
 
       - name: Check type discipline (mutable collections / casts / type guards / kwargs / unexplained suppressions, delta vs merge-base counts)
         if: steps.changes.outputs.decision != 'skip'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          uv run --no-sync python scripts/type_discipline_gate.py --base "$GATE_BASE_SHA"
+          uv run --no-sync python litellm/scripts/type_discipline_gate.py --base "$GATE_BASE_SHA"
 
       - name: Check test quality (zero-assert / mock-echo tests, sys.path.insert, raw env writes, litellm global mutation, credential-gated skips, conftest snapshot inventory, delta vs merge-base counts)
         if: steps.changes.outputs.decision != 'skip'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          uv run --no-sync python scripts/test_quality_gate.py --base "$GATE_BASE_SHA"
+          uv run --no-sync python litellm/scripts/test_quality_gate.py --base "$GATE_BASE_SHA"
 
       - name: Check OpenAPI docs (POST routes without a request schema, description or 200 schema, delta vs merge-base counts)
         if: steps.changes.outputs.decision != 'skip'
@@ -174,7 +174,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           uv sync --frozen --group proxy-dev --group e2e-dev --extra proxy
-          uv run --no-sync python scripts/openapi_docs_gate.py --base "$GATE_BASE_SHA"
+          uv run --no-sync python litellm/scripts/openapi_docs_gate.py --base "$GATE_BASE_SHA"
 
       - name: Print OpenAI version
         if: steps.changes.outputs.decision != 'skip'
@@ -186,7 +186,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          uv run --no-sync python scripts/type_check_gate.py --base "$GATE_BASE_SHA"
+          uv run --no-sync python litellm/scripts/type_check_gate.py --base "$GATE_BASE_SHA"
 
       - name: Check tests/e2e basedpyright (zero errors)
         if: steps.changes.outputs.decision != 'skip'
@@ -258,7 +258,7 @@ jobs:
           if [ -n "$GITGUARDIAN_API_KEY" ]; then
             retry() { "$@" || { sleep 15; "$@"; } || { sleep 30; "$@"; }; }
             retry git fetch --no-tags --unshallow origin
-            uv tool run --from 'ggshield==1.48.0' ggshield secret scan repo .
+            uv tool run --from 'ggshield==1.48.0' ggshield --config-path .github/gitguardian.yaml secret scan repo .
           else
             echo "GITGUARDIAN_API_KEY not set, skipping ggshield scan"
           fi
@@ -375,7 +375,7 @@ jobs:
             exit 0
           fi
           files="$(git diff --name-only "$base" HEAD)"
-          if grep -Ev '^litellm/(ui|vscode-extension|rust|proxy-extras|packaging|cli)/' <<< "$files" | grep -E '^(litellm/|enterprise/|(pyproject\.toml|uv\.lock)$|\.github/workflows/test-linting\.yml$)' >/dev/null || grep -Eq '^litellm/ui/litellm-dashboard/(src/lib/http/schema\.d\.ts|scripts/gen-api-types\.mjs|package(-lock)?\.json)$' <<< "$files"; then
+          if grep -Ev '^litellm/(ui|vscode-extension|rust|proxy-extras|packaging|cli|scripts|runtime)/' <<< "$files" | grep -E '^(litellm/|enterprise/|(pyproject\.toml|uv\.lock)$|\.github/workflows/test-linting\.yml$)' >/dev/null || grep -Eq '^litellm/ui/litellm-dashboard/(src/lib/http/schema\.d\.ts|scripts/gen-api-types\.mjs|package(-lock)?\.json)$' <<< "$files"; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
           else
             echo "No litellm, enterprise, dependency or generator changes in this pull request, nothing to verify."
@@ -524,7 +524,7 @@ jobs:
         run: uv run --no-sync python ./tests/code_coverage_tests/check_provider_folders_documented.py
 
       - name: check_provider_endpoints_support_generated
-        run: uv run --no-sync python scripts/generate_provider_endpoints_support.py --check
+        run: uv run --no-sync python litellm/scripts/generate_provider_endpoints_support.py --check
 
       - name: test_generate_provider_endpoints_support
         run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_generate_provider_endpoints_support.py

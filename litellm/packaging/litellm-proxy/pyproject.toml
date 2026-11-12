@@ -16,8 +16,8 @@ targets = [{ name = "litellm-gateway", kind = "bin" }]
 profile = "release"
 editable-profile = "dev"
 include = [
-    { path = "rust-toolchain.toml", format = "sdist" },
-    { path = ".cargo/config.toml", format = "sdist" },
+    { path = "litellm/rust/rust-toolchain.toml", format = "sdist" },
+    { path = "litellm/rust/.cargo/config.toml", format = "sdist" },
     { path = "model_prices_and_context_window.json", format = "sdist" },
 ]
 

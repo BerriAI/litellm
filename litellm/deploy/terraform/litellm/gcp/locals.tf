@@ -1,4 +1,4 @@
-# Gateway path prefixes — mirrored verbatim from gateway/routes/allowlist.py
+# Gateway path prefixes — mirrored verbatim from litellm/runtime/gateway/routes/allowlist.py
 # and litellm/deploy/helm/litellm/templates/ingress.yaml. URL maps use the "path matcher"
 # rule with `paths` lists; up to 10 path globs per rule, up to 50 rules
 # per matcher. Easily fits the gateway list in one rule per chunk-of-10.

@@ -144,6 +144,10 @@ def test_accepts_expected_release_wheel_tags(tmp_path: Path) -> None:
         "litellm/proxy-extras/litellm_proxy_extras/__init__.py",
         "litellm/rust/crates/config/src/lib.rs",
         "litellm/packaging/litellm-core/pyproject.toml",
+        "litellm/scripts/default_branch.py",
+        "litellm/runtime/backend/main.py",
+        "litellm/runtime/gateway/launch.py",
+        "litellm/schema.prisma",
     ),
 )
 def test_rejects_repository_sources_in_the_wheel(

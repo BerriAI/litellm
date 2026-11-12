@@ -99,7 +99,7 @@ proxy, CLI, and optional extras
 Build and install core from this checkout while its release integration is pending:
 
 ```shell
-python scripts/build_core_distribution.py --out-dir dist/core
+python litellm/scripts/build_core_distribution.py --out-dir dist/core
 python -m pip install dist/core/litellm_core-*.whl
 ```
 

@@ -360,7 +360,7 @@ Local lint and budget checks follow origin's current default branch. They refres
 ## Submitting Your PR
 
 1. **Push your branch**: `git push origin your-feature-branch`
-2. **Create a PR**: Go to GitHub and open a pull request against the repository's current default branch. Run `python3 scripts/default_branch.py --branch` to check its name
+2. **Create a PR**: Go to GitHub and open a pull request against the repository's current default branch. Run `python3 litellm/scripts/default_branch.py --branch` to check its name
 3. **Fill out the PR template**: Provide clear description of changes
 4. **Wait for review**: Maintainers will review and provide feedback
 5. **Address feedback**: Make requested changes and push updates

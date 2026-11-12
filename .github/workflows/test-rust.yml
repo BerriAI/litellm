@@ -6,9 +6,9 @@ on:
       - "litellm/rust/**"
       - "model_prices_and_context_window.json"
       - "litellm/rust_bridge/**"
-      - "scripts/generate_trace_types.py"
-      - "scripts/trace_codegen/**"
-      - "scripts/lens_assets/**"
+      - "litellm/scripts/generate_trace_types.py"
+      - "litellm/scripts/trace_codegen/**"
+      - "litellm/scripts/lens_assets/**"
       - "litellm/tracing/**"
       - "tests/test_litellm_rust/**"
       - "litellm/integrations/custom_logger.py"
@@ -24,10 +24,10 @@ on:
       - "litellm/llms/base_llm/ocr/**"
       - "litellm/llms/custom_httpx/llm_http_handler.py"
       - "Makefile"
-      - ".cargo/**"
+      - "litellm/rust/.cargo/**"
       - "pyproject.toml"
       - "uv.lock"
-      - "rust-toolchain.toml"
+      - "litellm/rust/rust-toolchain.toml"
       - ".github/actions/setup-uv-with-retries/**"
       - ".github/scripts/smoke_test_native_wheel.py"
       - ".github/scripts/verify_linux_native_wheel.py"
@@ -41,9 +41,9 @@ on:
       - "litellm/rust/**"
       - "model_prices_and_context_window.json"
       - "litellm/rust_bridge/**"
-      - "scripts/generate_trace_types.py"
-      - "scripts/trace_codegen/**"
-      - "scripts/lens_assets/**"
+      - "litellm/scripts/generate_trace_types.py"
+      - "litellm/scripts/trace_codegen/**"
+      - "litellm/scripts/lens_assets/**"
       - "litellm/tracing/**"
       - "tests/test_litellm_rust/**"
       - "litellm/integrations/custom_logger.py"
@@ -59,10 +59,10 @@ on:
       - "litellm/llms/base_llm/ocr/**"
       - "litellm/llms/custom_httpx/llm_http_handler.py"
       - "Makefile"
-      - ".cargo/**"
+      - "litellm/rust/.cargo/**"
       - "pyproject.toml"
       - "uv.lock"
-      - "rust-toolchain.toml"
+      - "litellm/rust/rust-toolchain.toml"
       - ".github/actions/setup-uv-with-retries/**"
       - ".github/scripts/smoke_test_native_wheel.py"
       - ".github/scripts/verify_linux_native_wheel.py"
@@ -96,7 +96,9 @@ jobs:
         with:
           persist-credentials: false
 
-      - run: rustup toolchain install --no-self-update
+      - name: Configure the Rust build environment
+        working-directory: .
+        run: bash .github/scripts/setup_rust_environment.sh
 
       - run: cargo fmt --all --check
 
@@ -160,7 +162,7 @@ jobs:
 
       - name: Check generated trace contracts
         working-directory: .
-        run: uv run scripts/generate_trace_types.py --check
+        run: uv run litellm/scripts/generate_trace_types.py --check
 
       - run: cargo nextest run --workspace --locked
 

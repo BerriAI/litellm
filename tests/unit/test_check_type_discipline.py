@@ -1,4 +1,4 @@
-"""Tests for scripts/check_type_discipline.py.
+"""Tests for litellm/scripts/check_type_discipline.py.
 
 Each rule is exercised on a snippet that violates it and on one that does not, so a
 mutation that drops a rule, inverts a suppression, or breaks the comment scanner makes
@@ -16,7 +16,7 @@ from typing import Final
 import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_MODULE_PATH = _REPO_ROOT / "scripts" / "check_type_discipline.py"
+_MODULE_PATH = _REPO_ROOT / "litellm/scripts" / "check_type_discipline.py"
 _spec = importlib.util.spec_from_file_location("check_type_discipline", _MODULE_PATH)
 checker = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = checker  # let the frozen dataclass resolve its own module
