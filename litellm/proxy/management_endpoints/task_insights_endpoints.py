@@ -63,7 +63,6 @@ _DEFAULT_DAYS: Final = 30
 _MAX_RANGE_DAYS: Final = 366
 _MAP_POINT_LIMIT: Final = 600
 _REQUEST_SAMPLE_LIMIT: Final = 25
-_TAGS: Final = ["task insights"]
 _READ_ROLES: Final = frozenset({LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY})
 
 
@@ -90,13 +89,10 @@ class _Deployment(BaseModel):
 _DEPLOYMENTS: Final = TypeAdapter(tuple[_Deployment, ...])
 
 
-def get_model_catalog() -> tuple[ModelConfigSummary, ...]:
-    from litellm.proxy.proxy_server import llm_router
-
-    if llm_router is None:
-        return ()
+def model_catalog(deployments: object) -> tuple[ModelConfigSummary, ...]:
+    """Deployments with an id, read from the router's list. An unreadable list yields no columns rather than an error."""
     try:
-        deployments: Final = _DEPLOYMENTS.validate_python(tuple(llm_router.registry().deployments() or ()))
+        validated: Final = _DEPLOYMENTS.validate_python(deployments)
     except ValidationError:
         return ()
     return tuple(
@@ -106,9 +102,15 @@ def get_model_catalog() -> tuple[ModelConfigSummary, ...]:
             provider_model=deployment.litellm_params.model,
             configured=True,
         )
-        for deployment in deployments
+        for deployment in validated
         if deployment.model_info.id
     )
+
+
+def get_model_catalog() -> tuple[ModelConfigSummary, ...]:
+    from litellm.proxy.proxy_server import llm_router
+
+    return () if llm_router is None else model_catalog(tuple(llm_router.registry().deployments() or ()))
 
 
 def get_capability_probe() -> CapabilityProbe:
@@ -183,7 +185,7 @@ def _latest(*moments: datetime | None) -> datetime | None:
     return max(known) if known else None
 
 
-@router.get("/task-insights/overview", tags=_TAGS, response_model=TaskInsightsOverviewResponse)
+@router.get("/task-insights/overview", tags=["task insights"], response_model=TaskInsightsOverviewResponse)
 async def get_task_insights_overview(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     repository: TaskInsightsRepositoryDep,
@@ -208,7 +210,7 @@ async def get_task_insights_overview(
     )
 
 
-@router.get("/task-insights/matrix", tags=_TAGS, response_model=TaskMatrixResponse)
+@router.get("/task-insights/matrix", tags=["task insights"], response_model=TaskMatrixResponse)
 async def get_task_insights_matrix(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     repository: TaskInsightsRepositoryDep,
@@ -239,7 +241,7 @@ async def get_task_insights_matrix(
     )
 
 
-@router.get("/task-insights/tasks/{task_id}", tags=_TAGS, response_model=TaskDetailResponse)
+@router.get("/task-insights/tasks/{task_id}", tags=["task insights"], response_model=TaskDetailResponse)
 async def get_task_insights_task(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     repository: TaskInsightsRepositoryDep,
@@ -271,7 +273,7 @@ async def get_task_insights_task(
     )
 
 
-@router.get("/task-insights/taxonomy", tags=_TAGS, response_model=TaskTaxonomyResponse)
+@router.get("/task-insights/taxonomy", tags=["task insights"], response_model=TaskTaxonomyResponse)
 async def get_task_insights_taxonomy(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     repository: TaskInsightsRepositoryDep,
@@ -282,7 +284,7 @@ async def get_task_insights_taxonomy(
     return TaskTaxonomyResponse(status=_status(await store.get_state(), definitions), definitions=definitions)
 
 
-@router.patch("/task-insights/tasks/{task_id}", tags=_TAGS, response_model=TaskDefinition)
+@router.patch("/task-insights/tasks/{task_id}", tags=["task insights"], response_model=TaskDefinition)
 async def edit_task_insights_draft(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     repository: TaskInsightsRepositoryDep,
@@ -297,7 +299,7 @@ async def edit_task_insights_draft(
     return updated
 
 
-@router.post("/task-insights/taxonomy/freeze", tags=_TAGS, response_model=TaskFreezeResponse)
+@router.post("/task-insights/taxonomy/freeze", tags=["task insights"], response_model=TaskFreezeResponse)
 async def freeze_task_insights_taxonomy(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     repository: TaskInsightsRepositoryDep,
@@ -317,7 +319,7 @@ async def freeze_task_insights_taxonomy(
     return TaskFreezeResponse(frozen_task_count=frozen)
 
 
-@router.post("/task-insights/discovery", tags=_TAGS, response_model=TaskTaxonomyResponse)
+@router.post("/task-insights/discovery", tags=["task insights"], response_model=TaskTaxonomyResponse)
 async def request_task_insights_discovery(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     repository: TaskInsightsRepositoryDep,

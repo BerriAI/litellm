@@ -169,3 +169,19 @@ def test_a_task_without_requirements_is_compatible_with_any_model():
     (result,) = compatibility((_task("a"),), (_config("c", None),), _probe({}))
 
     assert result.status == "compatible"
+
+
+def test_model_capabilities_mirror_the_cost_map_and_unknown_models_report_nothing():
+    import litellm
+
+    from litellm.task_insights.summaries import model_capabilities
+
+    model = "anthropic/claude-sonnet-5-5"
+    info = litellm.get_model_info(model)
+    metadata = model_capabilities(model)
+
+    assert metadata.capabilities["function_calling"] == info.get("supports_function_calling")
+    assert metadata.capabilities["structured_output"] == info.get("supports_response_schema")
+    assert metadata.max_input_tokens == info.get("max_input_tokens")
+    assert metadata.mode == info.get("mode")
+    assert model_capabilities("not-a-provider/not-a-model") == ModelMetadata(capabilities={}, max_input_tokens=None)

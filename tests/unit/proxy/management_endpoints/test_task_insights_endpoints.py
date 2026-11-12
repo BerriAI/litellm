@@ -20,6 +20,7 @@ from litellm.proxy.management_endpoints.task_insights_endpoints import (
     get_capability_probe,
     get_clock,
     get_model_catalog,
+    model_catalog,
     router,
 )
 from litellm.task_insights.summaries import ModelMetadata
@@ -247,3 +248,21 @@ def test_only_draft_definitions_can_be_edited():
     assert client.patch("/task-insights/tasks/debug", json={"name": "Renamed"}).status_code == 404
     assert client.patch("/task-insights/tasks/draft", json={"name": "Renamed"}).json()["name"] == "Renamed"
     assert client.patch("/task-insights/tasks/draft", json={"name": ""}).status_code == 422
+
+
+def test_a_freeze_that_finds_nothing_left_to_freeze_conflicts():
+    client = _client(_Store(_WITH_DRAFT, frozen=0))
+
+    assert client.post("/task-insights/taxonomy/freeze", json={"draft_task_count": 1}).status_code == 409
+
+
+def test_the_model_catalog_keeps_deployments_with_an_id_and_survives_an_unreadable_list():
+    deployments = (
+        {"model_name": "claude-opus", "litellm_params": {"model": "anthropic/claude-opus"}, "model_info": {"id": "opus"}},
+        {"model_name": "no-id", "litellm_params": {"model": "anthropic/x"}, "model_info": {}},
+    )
+
+    assert [(config.model_config_id, config.provider_model) for config in model_catalog(deployments)] == [
+        ("opus", "anthropic/claude-opus")
+    ]
+    assert model_catalog("not a list") == ()

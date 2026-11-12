@@ -109,3 +109,12 @@ async def test_nothing_is_decided_without_a_frozen_taxonomy():
 
     assert await bucket_pending(store, decider, now=lambda: _AT, batch_size=10) == 0
     assert decider.asked == []
+
+
+@pytest.mark.asyncio
+async def test_nothing_is_decided_or_saved_when_no_request_is_pending():
+    store = _Store(())
+    decider = _Decider()
+
+    assert await bucket_pending(store, decider, now=lambda: _AT, batch_size=10) == 0
+    assert (decider.asked, store.saved) == ([], ())

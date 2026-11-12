@@ -31,7 +31,15 @@ import TaskClusterMap from "./TaskClusterMap";
 import TaskDetailSheet from "./TaskDetailSheet";
 import TaskHeatmap from "./TaskHeatmap";
 import TaxonomyReview from "./TaxonomyReview";
-import { coverage, formatCount, formatShare, formatUsdTotal, isDiscoveryBusy, taskColors } from "./taskInsightsData";
+import {
+  coverage,
+  formatCount,
+  formatShare,
+  formatUsdTotal,
+  isDiscoveryBusy,
+  taskColors,
+  type TaskInsightsOverview,
+} from "./taskInsightsData";
 import {
   useEditDraftTask,
   useFreezeTaxonomy,
@@ -94,10 +102,123 @@ function MatrixBody({
 
 function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div className="flex min-w-36 flex-col rounded-lg border bg-card px-4 py-3">
+    <div role="group" aria-label={label} className="flex min-w-36 flex-col rounded-lg border bg-card px-4 py-3">
       <span className="text-xs text-muted-foreground">{label}</span>
       <span className="text-lg font-semibold tabular-nums">{value}</span>
       {hint && <span className="text-xs text-muted-foreground">{hint}</span>}
+    </div>
+  );
+}
+
+function TaskInsightsToolbar({
+  teams,
+  teamId,
+  onTeamChange,
+  sampleData,
+  busy,
+  canEdit,
+  discovering,
+  onDiscover,
+}: {
+  teams: readonly Team[];
+  teamId: string | null;
+  onTeamChange: (teamId: string | null) => void;
+  sampleData: boolean;
+  busy: boolean;
+  canEdit: boolean;
+  discovering: boolean;
+  onDiscover: () => void;
+}) {
+  const { t } = useTranslation();
+  const teamItems = React.useMemo(
+    () => [
+      { value: ALL_TEAMS, label: t("usage.taskInsights.allTeams") },
+      ...teams.map((team) => ({ value: team.team_id, label: team.team_alias ?? team.team_id })),
+    ],
+    [teams, t],
+  );
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="w-56">
+          <Select
+            items={teamItems}
+            value={teamId ?? ALL_TEAMS}
+            onValueChange={(value) => onTeamChange(value === ALL_TEAMS || value === null ? null : value)}
+          >
+            <SelectTrigger aria-label={t("usage.taskInsights.teamFilter")} className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {teamItems.map((item) => (
+                <SelectItem key={item.value} value={item.value}>
+                  {item.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        {sampleData && <Badge variant="outline">{t("usage.taskInsights.sampleBadge")}</Badge>}
+        {busy && <Badge variant="secondary">{t("usage.taskInsights.discoveryRunning")}</Badge>}
+      </div>
+      {canEdit && (
+        <AlertDialog>
+          <AlertDialogTrigger render={<Button variant="outline" size="sm" disabled={busy || discovering} />}>
+            <Sparkles />
+            {t("usage.taskInsights.discover")}
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{t("usage.taskInsights.discoverTitle")}</AlertDialogTitle>
+              <AlertDialogDescription>{t("usage.taskInsights.discoverDescription")}</AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>{t("usage.taskInsights.cancel")}</AlertDialogCancel>
+              <AlertDialogAction onClick={onDiscover}>{t("usage.taskInsights.discoverConfirm")}</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
+    </div>
+  );
+}
+
+function TaskInsightsStats({ totals }: { totals: TaskInsightsOverview["totals"] }) {
+  const { t } = useTranslation();
+  const covered = coverage(totals);
+  return (
+    <div className="flex flex-wrap gap-2">
+      <Stat
+        label={t("usage.taskInsights.stats.requests")}
+        value={formatCount(totals.request_count)}
+        hint={t("usage.taskInsights.stats.deliveries", { deliveries: formatCount(totals.delivery_count) })}
+      />
+      <Stat label={t("usage.taskInsights.stats.sessions")} value={formatCount(totals.session_count)} />
+      <Stat
+        label={t("usage.taskInsights.stats.coverage")}
+        value={formatShare(covered) ?? t("usage.taskInsights.noData")}
+        hint={t("usage.taskInsights.stats.coverageHint", {
+          unknown: formatCount(totals.unknown_count),
+          unclassified: formatCount(totals.unclassified_count),
+        })}
+      />
+      <Stat
+        label={t("usage.taskInsights.stats.spend")}
+        value={formatUsdTotal(totals.spend) ?? t("usage.taskInsights.noData")}
+        hint={t("usage.taskInsights.breakdown.costKnownFor", {
+          known: formatCount(totals.cost_observations),
+          total: formatCount(totals.request_count),
+        })}
+      />
+      {totals.analysis_request_count > 0 && (
+        <Stat
+          label={t("usage.taskInsights.stats.analysis")}
+          value={formatUsdTotal(totals.analysis_spend) ?? t("usage.taskInsights.noData")}
+          hint={t("usage.taskInsights.stats.analysisHint", {
+            requests: formatCount(totals.analysis_request_count),
+          })}
+        />
+      )}
     </div>
   );
 }
@@ -115,15 +236,8 @@ export default function TaskInsightsTab({ startTime, endTime, teams, canEdit, ac
   const editDraft = useEditDraftTask();
   const freeze = useFreezeTaxonomy();
   const metric = params.ti_metric ?? "share";
-  const tasks = overview.data?.tasks ?? [];
+  const tasks = React.useMemo(() => overview.data?.tasks ?? [], [overview.data]);
   const colors = React.useMemo(() => taskColors(tasks), [tasks]);
-  const teamItems = React.useMemo(
-    () => [
-      { value: ALL_TEAMS, label: t("usage.taskInsights.allTeams") },
-      ...teams.map((team) => ({ value: team.team_id, label: team.team_alias ?? team.team_id })),
-    ],
-    [teams, t],
-  );
 
   const selectTask = (taskId: string) =>
     void setParams({ ti_task: params.ti_task === taskId && params.ti_model === null ? null : taskId, ti_model: null });
@@ -152,56 +266,19 @@ export default function TaskInsightsTab({ startTime, endTime, teams, canEdit, ac
   const data = overview.data;
   const busy = isDiscoveryBusy(data.status);
   const drafts = (taxonomy.data?.definitions ?? []).filter((task) => task.status === "draft");
-  const covered = coverage(data.totals);
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="w-56">
-            <Select
-              items={teamItems}
-              value={params.ti_team ?? ALL_TEAMS}
-              onValueChange={(value) =>
-                void setParams({ ti_team: value === ALL_TEAMS || value === null ? null : value })
-              }
-            >
-              <SelectTrigger aria-label={t("usage.taskInsights.teamFilter")} className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {teamItems.map((item) => (
-                  <SelectItem key={item.value} value={item.value}>
-                    {item.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          {data.status.sample_data && <Badge variant="outline">{t("usage.taskInsights.sampleBadge")}</Badge>}
-          {busy && <Badge variant="secondary">{t("usage.taskInsights.discoveryRunning")}</Badge>}
-        </div>
-        {canEdit && (
-          <AlertDialog>
-            <AlertDialogTrigger render={<Button variant="outline" size="sm" disabled={busy || discovery.isPending} />}>
-              <Sparkles />
-              {t("usage.taskInsights.discover")}
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>{t("usage.taskInsights.discoverTitle")}</AlertDialogTitle>
-                <AlertDialogDescription>{t("usage.taskInsights.discoverDescription")}</AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>{t("usage.taskInsights.cancel")}</AlertDialogCancel>
-                <AlertDialogAction onClick={() => discovery.mutate(filter)}>
-                  {t("usage.taskInsights.discoverConfirm")}
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-        )}
-      </div>
+      <TaskInsightsToolbar
+        teams={teams}
+        teamId={params.ti_team}
+        onTeamChange={(teamId) => void setParams({ ti_team: teamId })}
+        sampleData={data.status.sample_data}
+        busy={busy}
+        canEdit={canEdit}
+        discovering={discovery.isPending}
+        onDiscover={() => discovery.mutate(filter)}
+      />
 
       {data.status.discovery_status === "failed" && data.status.discovery_error && (
         <ErrorState title={t("usage.taskInsights.discoveryFailed")} message={data.status.discovery_error} />
@@ -231,39 +308,7 @@ export default function TaskInsightsTab({ startTime, endTime, teams, canEdit, ac
         </Empty>
       ) : (
         <>
-          <div className="flex flex-wrap gap-2">
-            <Stat
-              label={t("usage.taskInsights.stats.requests")}
-              value={formatCount(data.totals.request_count)}
-              hint={t("usage.taskInsights.stats.deliveries", { deliveries: formatCount(data.totals.delivery_count) })}
-            />
-            <Stat label={t("usage.taskInsights.stats.sessions")} value={formatCount(data.totals.session_count)} />
-            <Stat
-              label={t("usage.taskInsights.stats.coverage")}
-              value={formatShare(covered) ?? t("usage.taskInsights.noData")}
-              hint={t("usage.taskInsights.stats.coverageHint", {
-                unknown: formatCount(data.totals.unknown_count),
-                unclassified: formatCount(data.totals.unclassified_count),
-              })}
-            />
-            <Stat
-              label={t("usage.taskInsights.stats.spend")}
-              value={formatUsdTotal(data.totals.spend) ?? t("usage.taskInsights.noData")}
-              hint={t("usage.taskInsights.breakdown.costKnownFor", {
-                known: formatCount(data.totals.cost_observations),
-                total: formatCount(data.totals.request_count),
-              })}
-            />
-            {data.totals.analysis_request_count > 0 && (
-              <Stat
-                label={t("usage.taskInsights.stats.analysis")}
-                value={formatUsdTotal(data.totals.analysis_spend) ?? t("usage.taskInsights.noData")}
-                hint={t("usage.taskInsights.stats.analysisHint", {
-                  requests: formatCount(data.totals.analysis_request_count),
-                })}
-              />
-            )}
-          </div>
+          <TaskInsightsStats totals={data.totals} />
           <div className="grid gap-3 xl:grid-cols-5">
             <Panel
               icon={MapIcon}

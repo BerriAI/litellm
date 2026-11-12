@@ -9,7 +9,9 @@ also runs on the unreduced embeddings and the provenance records how far the two
 The libraries are untyped and absent from the proxy image, so they load on use and their outputs are validated here.
 """
 
+from collections.abc import Callable
 from importlib import import_module
+from types import ModuleType
 from typing import Final
 
 from pydantic import TypeAdapter
@@ -23,16 +25,24 @@ _SCORE: Final = TypeAdapter(float)
 
 
 class UmapHdbscanClusterer:
-    def __init__(self, *, cluster_dimensions: int = 10, neighbors: int = 15, seed: int = SEED) -> None:
+    def __init__(
+        self,
+        *,
+        cluster_dimensions: int = 10,
+        neighbors: int = 15,
+        seed: int = SEED,
+        load: Callable[[str], ModuleType] = import_module,
+    ) -> None:
         self._cluster_dimensions = cluster_dimensions
         self._neighbors = neighbors
         self._seed = seed
+        self._load = load
 
     def cluster(self, vectors: tuple[tuple[float, ...], ...]) -> ClusterLayout:
-        numpy: Final = import_module("numpy")
-        umap: Final = import_module("umap")
-        cluster_module: Final = import_module("sklearn.cluster")
-        metrics: Final = import_module("sklearn.metrics")
+        numpy: Final = self._load("numpy")
+        umap: Final = self._load("umap")
+        cluster_module: Final = self._load("sklearn.cluster")
+        metrics: Final = self._load("sklearn.metrics")
         size: Final = len(vectors)
         neighbors: Final = max(2, min(self._neighbors, size - 1))
         dimensions: Final = max(2, min(self._cluster_dimensions, size - 2))

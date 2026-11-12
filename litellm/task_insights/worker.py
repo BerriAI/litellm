@@ -9,8 +9,9 @@ with the analysis tag, so it is billed like other traffic and never analyzed its
 import argparse
 import asyncio
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Final
+from typing import Final, Protocol
 
 import httpx
 from openai import AsyncOpenAI
@@ -18,10 +19,11 @@ from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.models.task_insights import TaskAnalysisStore, TaskInsightsState
 from litellm.repositories.task_insights_repository import TaskInsightsRepository
 from litellm.task_insights.bucketing import TaskDecider, bucket_pending
 from litellm.task_insights.database import connected_database
-from litellm.task_insights.discovery import discover
+from litellm.task_insights.discovery import Clusterer, Embedder, Synthesizer, discover
 from litellm.task_insights.gateway import ANALYSIS_HEADERS
 from litellm.task_insights.jev import GatewayJevDecider
 
@@ -44,34 +46,47 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class WorkerStore(TaskAnalysisStore, Protocol):
+    async def get_state(self) -> TaskInsightsState: ...
+
+
+@dataclass(frozen=True, slots=True)
+class DiscoveryPipeline:
+    embedder: Embedder
+    clusterer: Clusterer
+    synthesizer: Synthesizer
+
+
 async def run_once(
-    repository: TaskInsightsRepository,
-    settings: WorkerSettings,
+    store: WorkerStore,
+    *,
+    pipeline: DiscoveryPipeline | None,
     decider: TaskDecider | None,
-    gateway: AsyncOpenAI | None,
+    batch_size: int,
     now: Callable[[], datetime],
 ) -> int:
-    if gateway is None:
-        if (await repository.get_state()).discovery_status == "requested":
-            await repository.claim_discovery()
-            await repository.fail_discovery(
-                "Set LITELLM_TASK_INSIGHTS_GATEWAY_KEY so the worker can call the embedding and synthesis models",
-                now(),
-            )
-    else:
-        from litellm.task_insights.clustering import UmapHdbscanClusterer
-        from litellm.task_insights.gateway import GatewayEmbedder, GatewaySynthesizer
-
-        await discover(
-            repository,
-            GatewayEmbedder(gateway, settings.embedding_model),
-            UmapHdbscanClusterer(),
-            GatewaySynthesizer(gateway, settings.synthesis_model),
-            now=now,
+    """One pass: run a queued discovery, then bucket one batch. Without gateway access a queued discovery fails with
+    the reason instead of waiting forever."""
+    if pipeline is not None:
+        await discover(store, pipeline.embedder, pipeline.clusterer, pipeline.synthesizer, now=now)
+    elif (await store.get_state()).discovery_status == "requested" and await store.claim_discovery() is not None:
+        await store.fail_discovery(
+            "Set LITELLM_TASK_INSIGHTS_GATEWAY_KEY so the worker can call the embedding and synthesis models", now()
         )
     if decider is None:
         return 0
-    return await bucket_pending(repository, decider, now=now, batch_size=settings.bucket_batch_size)
+    return await bucket_pending(store, decider, now=now, batch_size=batch_size)
+
+
+def _pipeline(gateway: AsyncOpenAI, settings: WorkerSettings) -> DiscoveryPipeline:
+    from litellm.task_insights.clustering import UmapHdbscanClusterer
+    from litellm.task_insights.gateway import GatewayEmbedder, GatewaySynthesizer
+
+    return DiscoveryPipeline(
+        embedder=GatewayEmbedder(gateway, settings.embedding_model),
+        clusterer=UmapHdbscanClusterer(),
+        synthesizer=GatewaySynthesizer(gateway, settings.synthesis_model),
+    )
 
 
 async def _serve(once: bool) -> None:
@@ -101,8 +116,11 @@ async def _serve(once: bool) -> None:
             if key is not None
             else None
         )
+        pipeline: Final = _pipeline(gateway, settings) if gateway is not None else None
         while True:
-            bucketed = await run_once(repository, settings, decider, gateway, _now)
+            bucketed = await run_once(
+                repository, pipeline=pipeline, decider=decider, batch_size=settings.bucket_batch_size, now=_now
+            )
             if once:
                 return
             if bucketed < settings.bucket_batch_size:

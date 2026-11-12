@@ -253,7 +253,9 @@ def compatibility(
 def _compatibility(
     model_config_id: str, task: TaskDefinition, supported: Mapping[TaskCapability, bool | None]
 ) -> TaskCompatibility:
-    missing: Final = tuple(cap for cap in task.required_capabilities if supported.get(cap) is False)
+    missing: Final[tuple[TaskCapability, ...]] = tuple(
+        cap for cap in task.required_capabilities if supported.get(cap) is False
+    )
     unknown: Final = any(supported.get(cap) is None for cap in task.required_capabilities)
     status: Final = "incompatible" if missing else ("unknown" if unknown else "compatible")
     return TaskCompatibility(model_config_id=model_config_id, task_id=task.task_id, status=status, missing=missing)

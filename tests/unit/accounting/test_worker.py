@@ -131,3 +131,4 @@ async def test_cleanup_keeps_unobserved_deliveries_only_while_task_insights_is_o
 
     assert ['"LiteLLM_TaskObservation"' in query for query in cleanups] == [enabled]
     assert analytics.query_raw.await_count == int(enabled)
+    assert analytics.execute_raw.await_count == int(enabled and not observation_fails)

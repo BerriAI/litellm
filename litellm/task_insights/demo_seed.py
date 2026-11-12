@@ -167,7 +167,10 @@ def _iso(value: datetime) -> str:
 
 def _tool_step(step: int) -> tuple[Mapping[str, object], ...]:
     return (
-        {"role": "assistant", "content": [{"type": "tool_use", "id": f"call-{step}", "name": "run", "input": {}}]},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": f"call-{step}", "name": "run", "input": dict[str, object]()}],
+        },
         {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"call-{step}", "content": "ok"}]},
     )
 

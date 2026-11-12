@@ -134,7 +134,7 @@ describe("TaskInsightsTab", () => {
 
     expect(screen.getAllByText("Sample data").length).toBeGreaterThan(0);
     expect(screen.getByText("12 ledger deliveries")).toBeInTheDocument();
-    expect(screen.getByText("Task coverage").parentElement).toHaveTextContent("80%");
+    expect(screen.getByRole("group", { name: "Task coverage" })).toHaveTextContent("80%");
   });
 
   it("opens a task from the breakdown by writing it to the URL", async () => {

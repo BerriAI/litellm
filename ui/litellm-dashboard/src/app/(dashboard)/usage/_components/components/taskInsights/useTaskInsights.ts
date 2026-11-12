@@ -10,6 +10,7 @@ const MATRIX = "/task-insights/matrix" as const;
 const TASK = "/task-insights/tasks/{task_id}" as const;
 const TAXONOMY = "/task-insights/taxonomy" as const;
 const BUSY_POLL_MS = 10_000;
+const MAX_DISCOVERY_REQUESTS = 500;
 
 export interface TaskInsightsFilter {
   startTime: Date | null;
@@ -88,7 +89,9 @@ const useTaskInsightsMutation = <TVariables, TResult>(mutationFn: (variables: TV
 export const useRequestDiscovery = () =>
   useTaskInsightsMutation(async (filter: TaskInsightsFilter) => {
     const { start_date, end_date } = windowQuery(filter);
-    const { data } = await fetchClient.POST("/task-insights/discovery", { body: { start_date, end_date } });
+    const { data } = await fetchClient.POST("/task-insights/discovery", {
+      body: { start_date, end_date, max_requests: MAX_DISCOVERY_REQUESTS },
+    });
     return data;
   });
 
