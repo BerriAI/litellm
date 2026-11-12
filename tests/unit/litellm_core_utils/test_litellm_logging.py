@@ -7207,7 +7207,7 @@ def _upstream_messages_reply(usage: Mapping[str, object], message_id: str | None
         **({} if message_id is None else {"id": message_id}),
         "type": "message",
         "role": "assistant",
-        "model": "claude-sonnet-5",
+        "model": "claude-sonnet-5-5",
         "content": [{"type": "text", "text": "answer"}],
         "stop_reason": "end_turn",
         "stop_sequence": None,
@@ -7227,9 +7227,7 @@ def _logging_obj_answered_by(
     return logging_obj
 
 
-def test_websearch_first_round_spend_row_keeps_its_own_id_when_the_follow_up_reply_is_served():
-    """#49651: the first call of a /v1/messages web search loop serves the follow-up's reply. Its spend row must
-    keep the first upstream reply's id and usage, or it collides with the follow-up's row and is dropped."""
+def test_websearch_first_round_spend_row_keeps_its_own_id_when_the_follow_up_reply_is_served() -> None:
     from litellm.proxy.spend_tracking.spend_tracking_utils import get_spend_logs_id
 
     first_round: Final = _upstream_messages_reply({"input_tokens": 100, "output_tokens": 10}, "msg_first_round")
@@ -7250,7 +7248,7 @@ def test_websearch_first_round_spend_row_keeps_its_own_id_when_the_follow_up_rep
     )
 
 
-def test_anthropic_messages_spend_row_keeps_the_served_id_when_the_upstream_reply_has_none():
+def test_anthropic_messages_spend_row_keeps_the_served_id_when_the_upstream_reply_has_none() -> None:
     upstream: Final = _upstream_messages_reply({"input_tokens": 12, "output_tokens": 7})
     served: Final = _upstream_messages_reply({"input_tokens": 12, "output_tokens": 7}, "msg_served")
 
@@ -7259,7 +7257,7 @@ def test_anthropic_messages_spend_row_keeps_the_served_id_when_the_upstream_repl
     assert logged.id == "msg_served"
 
 
-def test_websearch_first_round_spend_row_bills_the_first_upstream_reported_cost():
+def test_websearch_first_round_spend_row_bills_the_first_upstream_reported_cost() -> None:
     from litellm.litellm_core_utils.core_helpers import RESPONSE_COST_HEADER
 
     first_round: Final = _upstream_messages_reply(

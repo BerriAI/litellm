@@ -21,7 +21,7 @@ from functools import lru_cache
 from types import MappingProxyType, TracebackType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Protocol, TypeVar, cast
 
-from httpx import Response, ResponseNotRead, Timeout
+from httpx import Response, Timeout
 from openai import AsyncStream as OpenAIAsyncStream
 from openai import Stream as OpenAIStream
 from pydantic import BaseModel, JsonValue, TypeAdapter
@@ -620,16 +620,6 @@ def _without_guardrail_information(metadata: Mapping[str, object]) -> Mapping[st
 def _provider_response_id(source: object) -> str | None:
     candidate: Final = source.get("id") if isinstance(source, dict) else getattr(source, "id", None)
     return candidate if isinstance(candidate, str) and candidate else None
-
-
-def _upstream_messages_body(httpx_response: object) -> dict[str, object] | None:
-    if not isinstance(httpx_response, Response):
-        return None
-    try:
-        body: Final[object] = httpx_response.json()
-    except (ValueError, ResponseNotRead):
-        return None
-    return _LITELLM_PARAMS.validate_python(body) if isinstance(body, dict) else None
 
 
 def mask_api_base_credentials(api_base: str) -> str:
@@ -5502,21 +5492,19 @@ class Logging(LiteLLMLoggingBaseClass):
 
         raw_body: Final[object] = result
         served_body: Final = _LITELLM_PARAMS.validate_python(raw_body) if isinstance(result, dict) else None
+        reported_cost: Final = native_messages_reported_cost(
+            served_body.get("usage") if served_body is not None else None,
+            self.model_call_details.get("custom_llm_provider"),
+        )
         provider_response_id: Final = _provider_response_id(raw_body)
         bridged: Final = self.bridged_model_response
         if bridged is not None and isinstance(result, dict):
             return bridged if provider_response_id is None else bridged.model_copy(update={"id": provider_response_id})
         httpx_response: Final = self.model_call_details.get("httpx_response", None)
-        upstream_body: Final = _upstream_messages_body(httpx_response)
-        priced_body: Final = served_body if upstream_body is None else upstream_body
-        reported_cost: Final = native_messages_reported_cost(
-            priced_body.get("usage") if priced_body is not None else None,
-            self.model_call_details.get("custom_llm_provider"),
-        )
         if httpx_response and isinstance(httpx_response, httpx.Response):
-            result = litellm.AnthropicConfig().transform_response(
+            reparsed: Final = litellm.AnthropicConfig().transform_response(
                 raw_response=httpx_response,
-                model_response=litellm.ModelResponse(id=_provider_response_id(upstream_body) or provider_response_id),
+                model_response=litellm.ModelResponse(id=provider_response_id),
                 model=self.model,
                 messages=[],
                 logging_obj=self,
@@ -5527,6 +5515,16 @@ class Logging(LiteLLMLoggingBaseClass):
                 json_mode=False,
                 litellm_params={},
             )
+            upstream_body: Final = _LITELLM_PARAMS.validate_python(httpx_response.json())
+            upstream_id: Final = _provider_response_id(upstream_body)
+            logged: Final = reparsed if upstream_id is None else reparsed.model_copy(update={"id": upstream_id})
+            set_response_cost_in_hidden_params(
+                logged,
+                native_messages_reported_cost(
+                    upstream_body.get("usage"), self.model_call_details.get("custom_llm_provider")
+                ),
+            )
+            return logged
         elif result is None:
             verbose_logger.warning("LiteLLM: the anthropic_messages stream assembled no response, logging an empty one")
             return litellm.ModelResponse(model=self.model)
