@@ -748,6 +748,7 @@ class Logging(LiteLLMLoggingBaseClass):
     stream_options = None
     litellm_request_debug: bool = False
     streamed_anthropic_message_id: str | None = None
+    served_agentic_follow_up: bool = False
     bridged_model_response: ModelResponse | None = None
     classifier_input: Mapping[str, JsonValue] | None = None
     baseline_cache_context: "BaselineCacheContext | None" = None
@@ -5400,6 +5401,10 @@ class Logging(LiteLLMLoggingBaseClass):
     def record_streamed_anthropic_message_id(self, message_id: str) -> None:
         self.streamed_anthropic_message_id = message_id
 
+    def record_served_agentic_follow_up(self) -> None:
+        """This call served an agentic follow-up's reply, so its own spend row is keyed by its upstream reply."""
+        self.served_agentic_follow_up = True
+
     def record_bridged_model_response(self, response: ModelResponse) -> None:
         """The chat completion a /v1/messages response was translated from.
 
@@ -5515,6 +5520,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 json_mode=False,
                 litellm_params={},
             )
+            if self.served_agentic_follow_up:
+                return self._first_round_row(result, httpx_response)
         elif result is None:
             verbose_logger.warning("LiteLLM: the anthropic_messages stream assembled no response, logging an empty one")
             return litellm.ModelResponse(model=self.model)
@@ -5538,6 +5545,15 @@ class Logging(LiteLLMLoggingBaseClass):
             )
         set_response_cost_in_hidden_params(result, reported_cost)
         return result
+
+    def _first_round_row(self, reparsed: ModelResponse, upstream: Response) -> ModelResponse:
+        body: Final = _LITELLM_PARAMS.validate_python(upstream.json())
+        upstream_id: Final = _provider_response_id(body)
+        row: Final = reparsed if upstream_id is None else reparsed.model_copy(update={"id": upstream_id})
+        set_response_cost_in_hidden_params(
+            row, native_messages_reported_cost(body.get("usage"), self.model_call_details.get("custom_llm_provider"))
+        )
+        return row
 
     def _translate_responses_api_response_to_model_response(
         self, result: ResponsesAPIResponse, request: BridgedChatRequest | None = None
