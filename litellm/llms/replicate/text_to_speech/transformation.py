@@ -22,11 +22,13 @@ from litellm.llms.replicate.common_utils import (
     replicate_download,
     replicate_model_owner,
     replicate_output_urls,
+    replicate_positive_int,
     replicate_prediction_failure,
+    replicate_prediction_metrics,
     replicate_prediction_request,
     wait_for_replicate_prediction,
 )
-from litellm.types.utils import LlmProviders
+from litellm.types.utils import LlmProviders, Usage
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -133,11 +135,26 @@ class ReplicateTextToSpeechConfig(BaseTextToSpeechConfig):
         return urls[0]
 
     @staticmethod
-    def _binary_response(audio_response: httpx.Response, raw_response: httpx.Response) -> "HttpxBinaryResponseContent":
+    def _usage(prediction: Mapping[str, object]) -> Usage | None:
+        metrics: Final = replicate_prediction_metrics(prediction)
+        prompt_tokens: Final = replicate_positive_int(metrics.get("token_input_count"))
+        completion_tokens: Final = replicate_positive_int(metrics.get("token_output_count"))
+        if prompt_tokens is None and completion_tokens is None:
+            return None
+        return Usage(
+            prompt_tokens=prompt_tokens or 0,
+            completion_tokens=completion_tokens or 0,
+            total_tokens=(prompt_tokens or 0) + (completion_tokens or 0),
+        )
+
+    @staticmethod
+    def _binary_response(
+        audio_response: httpx.Response, raw_response: httpx.Response, usage: Usage | None
+    ) -> "HttpxBinaryResponseContent":
         from litellm.types.llms.openai import HttpxBinaryResponseContent
 
         audio_response.raise_for_status()
-        return HttpxBinaryResponseContent(
+        binary: Final = HttpxBinaryResponseContent(
             httpx.Response(
                 status_code=200,
                 headers={
@@ -148,6 +165,8 @@ class ReplicateTextToSpeechConfig(BaseTextToSpeechConfig):
                 request=raw_response.request,
             )
         )
+        binary.usage = usage
+        return binary
 
     def transform_text_to_speech_response(
         self,
@@ -156,8 +175,9 @@ class ReplicateTextToSpeechConfig(BaseTextToSpeechConfig):
         logging_obj: "LiteLLMLoggingObj",
     ) -> "HttpxBinaryResponseContent":
         client: Final = self._sync_client_factory(_ssl_verify(logging_obj))
-        audio_url: Final = self._audio_url(wait_for_replicate_prediction(raw_response, client), raw_response)
-        return self._binary_response(replicate_download(client, audio_url), raw_response)
+        prediction: Final = wait_for_replicate_prediction(raw_response, client)
+        audio_url: Final = self._audio_url(prediction, raw_response)
+        return self._binary_response(replicate_download(client, audio_url), raw_response, self._usage(prediction))
 
     async def async_transform_text_to_speech_response(
         self,
@@ -166,10 +186,11 @@ class ReplicateTextToSpeechConfig(BaseTextToSpeechConfig):
         logging_obj: "LiteLLMLoggingObj",
     ) -> "HttpxBinaryResponseContent":
         client: Final = self._async_client_factory(_ssl_verify(logging_obj))
-        audio_url: Final = self._audio_url(
-            await async_wait_for_replicate_prediction(raw_response, client), raw_response
+        prediction: Final = await async_wait_for_replicate_prediction(raw_response, client)
+        audio_url: Final = self._audio_url(prediction, raw_response)
+        return self._binary_response(
+            await async_replicate_download(client, audio_url), raw_response, self._usage(prediction)
         )
-        return self._binary_response(await async_replicate_download(client, audio_url), raw_response)
 
     def get_error_class(
         self,

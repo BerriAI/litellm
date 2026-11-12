@@ -290,3 +290,35 @@ async def test_async_transform_downloads_b64_json_with_async_client():
         encoding=None,
     )
     assert [image.b64_json for image in result.data] == [base64.b64encode(b"img0").decode()]
+
+
+def test_native_width_and_height_become_the_response_size():
+    result = _transform(
+        _config(_FakeClient()),
+        _prediction_response(
+            {
+                "id": "p1",
+                "status": "succeeded",
+                "output": IMAGE_URLS[0],
+                "input": {"prompt": "x", "aspect_ratio": "custom", "width": 2048, "height": 1536},
+            }
+        ),
+    )
+    assert result.size == "2048x1536"
+
+
+@pytest.mark.parametrize(
+    "prediction_input",
+    [
+        {"prompt": "x"},
+        {"prompt": "x", "width": 1024},
+        {"prompt": "x", "width": "1024", "height": "768"},
+        {"width": 0, "height": 768},
+    ],
+)
+def test_response_size_stays_unset_without_both_native_dimensions(prediction_input: dict[str, object]):
+    result = _transform(
+        _config(_FakeClient()),
+        _prediction_response({"id": "p1", "status": "succeeded", "output": IMAGE_URLS[0], "input": prediction_input}),
+    )
+    assert result.size is None

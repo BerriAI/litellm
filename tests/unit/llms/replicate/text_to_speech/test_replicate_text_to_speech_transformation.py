@@ -170,3 +170,32 @@ def test_failed_prediction_raises():
         config.transform_text_to_speech_response(
             MODEL, _prediction_response({"id": "p1", "status": "succeeded", "output": None}), Mock()
         )
+
+
+def test_response_usage_comes_from_prediction_token_metrics():
+    config = ReplicateTextToSpeechConfig(sync_client_factory=lambda _ssl: _FakeClient(_audio(b"mp3-bytes")))  # pyright: ignore[reportArgumentType]  # fake stands in for HTTPHandler
+    result = config.transform_text_to_speech_response(
+        MODEL,
+        _prediction_response(
+            {
+                "id": "p1",
+                "status": "succeeded",
+                "output": AUDIO_URL,
+                "metrics": {"predict_time": 2.3, "token_input_count": 8, "token_output_count": 32},
+            }
+        ),
+        Mock(),
+    )
+    assert result.usage is not None
+    assert (result.usage.prompt_tokens, result.usage.completion_tokens, result.usage.total_tokens) == (8, 32, 40)
+    assert result.logging_summary()["usage"]["completion_tokens"] == 32
+
+
+@pytest.mark.parametrize("metrics", [None, {"predict_time": 2.3}, {"token_input_count": 0, "token_output_count": -1}])
+def test_response_without_token_metrics_has_no_usage(metrics: dict[str, object] | None):
+    config = ReplicateTextToSpeechConfig(sync_client_factory=lambda _ssl: _FakeClient(_audio(b"mp3-bytes")))  # pyright: ignore[reportArgumentType]  # fake stands in for HTTPHandler
+    body: dict[str, object] = {"id": "p1", "status": "succeeded", "output": AUDIO_URL}
+    result = config.transform_text_to_speech_response(
+        MODEL, _prediction_response(body if metrics is None else {**body, "metrics": metrics}), Mock()
+    )
+    assert result.usage is None

@@ -23,7 +23,9 @@ from litellm.llms.replicate.common_utils import (
     replicate_auth_headers,
     replicate_download,
     replicate_output_urls,
+    replicate_positive_int,
     replicate_prediction_failure,
+    replicate_prediction_input,
     replicate_prediction_request,
     wait_for_replicate_prediction,
 )
@@ -150,6 +152,13 @@ class ReplicateImageGenerationConfig(BaseImageGenerationConfig):
         return urls
 
     @staticmethod
+    def _native_size(prediction: Mapping[str, object]) -> Mapping[str, str]:
+        prediction_input: Final = replicate_prediction_input(prediction)
+        width: Final = replicate_positive_int(prediction_input.get("width"))
+        height: Final = replicate_positive_int(prediction_input.get("height"))
+        return {"size": f"{width}x{height}"} if width is not None and height is not None else {}
+
+    @staticmethod
     def _image_objects(urls: tuple[str, ...], contents: tuple[bytes, ...] | None) -> tuple[ImageObject, ...]:
         if contents is None:
             return tuple(ImageObject(url=url, b64_json=None) for url in urls)
@@ -169,13 +178,16 @@ class ReplicateImageGenerationConfig(BaseImageGenerationConfig):
         json_mode: bool | None = None,
     ) -> ImageResponse:
         client: Final = self._sync_client_factory(litellm_params.get("ssl_verify"))
-        urls: Final = self._image_urls(wait_for_replicate_prediction(raw_response, client), raw_response)
+        prediction: Final = wait_for_replicate_prediction(raw_response, client)
+        urls: Final = self._image_urls(prediction, raw_response)
         contents: Final = (
             tuple(self._download(client, url) for url in urls)
             if optional_params.get("response_format") == "b64_json"
             else None
         )
-        return model_response.model_copy(update={"data": list(self._image_objects(urls, contents))})
+        return model_response.model_copy(
+            update={"data": list(self._image_objects(urls, contents)), **self._native_size(prediction)}
+        )
 
     async def async_transform_image_generation_response(
         self,
@@ -191,13 +203,16 @@ class ReplicateImageGenerationConfig(BaseImageGenerationConfig):
         json_mode: bool | None = None,
     ) -> ImageResponse:
         client: Final = self._async_client_factory(litellm_params.get("ssl_verify"))
-        urls: Final = self._image_urls(await async_wait_for_replicate_prediction(raw_response, client), raw_response)
+        prediction: Final = await async_wait_for_replicate_prediction(raw_response, client)
+        urls: Final = self._image_urls(prediction, raw_response)
         contents: Final = (
             tuple([await self._async_download(client, url) for url in urls])
             if optional_params.get("response_format") == "b64_json"
             else None
         )
-        return model_response.model_copy(update={"data": list(self._image_objects(urls, contents))})
+        return model_response.model_copy(
+            update={"data": list(self._image_objects(urls, contents)), **self._native_size(prediction)}
+        )
 
     @staticmethod
     def _download(client: HTTPHandler, url: str) -> bytes:

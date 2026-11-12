@@ -115,6 +115,15 @@ def replicate_prediction_input(prediction: Mapping[str, object]) -> Mapping[str,
     return _JSON_OBJECT.validate_python(raw_input) if isinstance(raw_input, Mapping) else MappingProxyType({})
 
 
+def replicate_prediction_metrics(prediction: Mapping[str, object]) -> Mapping[str, object]:
+    raw_metrics: Final = prediction.get("metrics")
+    return _JSON_OBJECT.validate_python(raw_metrics) if isinstance(raw_metrics, Mapping) else MappingProxyType({})
+
+
+def replicate_positive_int(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
 def _output_leaves(output: object) -> Iterator[object]:
     pending: Final = deque([output])
     while pending:
