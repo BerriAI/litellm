@@ -44,15 +44,24 @@ def _voice_key(model: str) -> str:
     return _VOICE_KEY_BY_OWNER.get(replicate_model_owner(model), "voice")
 
 
-def _get_replicate_async_httpx_client() -> AsyncHTTPHandler:
-    return get_async_httpx_client(llm_provider=LlmProviders.REPLICATE)
+def _get_replicate_httpx_client(ssl_verify: object) -> HTTPHandler:
+    return get_httpx_client(params={"ssl_verify": ssl_verify})
+
+
+def _get_replicate_async_httpx_client(ssl_verify: object) -> AsyncHTTPHandler:
+    return get_async_httpx_client(llm_provider=LlmProviders.REPLICATE, params={"ssl_verify": ssl_verify})
+
+
+def _ssl_verify(logging_obj: "LiteLLMLoggingObj") -> object:
+    litellm_params: Final = getattr(logging_obj, "litellm_params", None)
+    return litellm_params.get("ssl_verify") if isinstance(litellm_params, Mapping) else None
 
 
 class ReplicateTextToSpeechConfig(BaseTextToSpeechConfig):
     def __init__(
         self,
-        sync_client_factory: Callable[[], HTTPHandler] = get_httpx_client,
-        async_client_factory: Callable[[], AsyncHTTPHandler] = _get_replicate_async_httpx_client,
+        sync_client_factory: Callable[[object], HTTPHandler] = _get_replicate_httpx_client,
+        async_client_factory: Callable[[object], AsyncHTTPHandler] = _get_replicate_async_httpx_client,
     ) -> None:
         super().__init__()
         self._sync_client_factory: Final = sync_client_factory
@@ -146,7 +155,7 @@ class ReplicateTextToSpeechConfig(BaseTextToSpeechConfig):
         raw_response: httpx.Response,
         logging_obj: "LiteLLMLoggingObj",
     ) -> "HttpxBinaryResponseContent":
-        client: Final = self._sync_client_factory()
+        client: Final = self._sync_client_factory(_ssl_verify(logging_obj))
         audio_url: Final = self._audio_url(wait_for_replicate_prediction(raw_response, client), raw_response)
         return self._binary_response(replicate_download(client, audio_url), raw_response)
 
@@ -156,7 +165,7 @@ class ReplicateTextToSpeechConfig(BaseTextToSpeechConfig):
         raw_response: httpx.Response,
         logging_obj: "LiteLLMLoggingObj",
     ) -> "HttpxBinaryResponseContent":
-        client: Final = self._async_client_factory()
+        client: Final = self._async_client_factory(_ssl_verify(logging_obj))
         audio_url: Final = self._audio_url(
             await async_wait_for_replicate_prediction(raw_response, client), raw_response
         )

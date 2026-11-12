@@ -123,7 +123,7 @@ def test_request_input_wins_over_extra_body_text():
 
 def test_response_downloads_audio_from_output_url():
     client = _FakeClient(_audio(b"mp3-bytes"))
-    config = ReplicateTextToSpeechConfig(sync_client_factory=lambda: client)  # pyright: ignore[reportArgumentType]  # fake stands in for HTTPHandler
+    config = ReplicateTextToSpeechConfig(sync_client_factory=lambda _ssl: client)  # pyright: ignore[reportArgumentType]  # fake stands in for HTTPHandler
     result = config.transform_text_to_speech_response(
         MODEL, _prediction_response({"id": "p1", "status": "succeeded", "output": AUDIO_URL}), Mock()
     )
@@ -136,7 +136,7 @@ def test_response_downloads_audio_from_output_url():
 @pytest.mark.asyncio
 async def test_async_response_downloads_audio_with_async_client():
     client = _FakeAsyncClient(_audio(b"wav-bytes", "audio/wav"))
-    config = ReplicateTextToSpeechConfig(async_client_factory=lambda: client)  # pyright: ignore[reportArgumentType]  # fake stands in for AsyncHTTPHandler
+    config = ReplicateTextToSpeechConfig(async_client_factory=lambda _ssl: client)  # pyright: ignore[reportArgumentType]  # fake stands in for AsyncHTTPHandler
     result = await config.async_transform_text_to_speech_response(
         MODEL, _prediction_response({"id": "p1", "status": "succeeded", "output": [AUDIO_URL]}), Mock()
     )
@@ -144,8 +144,24 @@ async def test_async_response_downloads_audio_with_async_client():
     assert result.response.headers["content-type"] == "audio/wav"
 
 
+def test_response_client_uses_the_request_ssl_verify():
+    seen: list[object] = []
+
+    def factory(ssl_verify: object) -> _FakeClient:
+        seen.append(ssl_verify)
+        return _FakeClient(_audio(b"mp3-bytes"))
+
+    config = ReplicateTextToSpeechConfig(sync_client_factory=factory)  # pyright: ignore[reportArgumentType]  # fake stands in for HTTPHandler
+    logging_obj = Mock()
+    logging_obj.litellm_params = {"ssl_verify": "/certs/gateway.pem"}
+    config.transform_text_to_speech_response(
+        MODEL, _prediction_response({"id": "p1", "status": "succeeded", "output": AUDIO_URL}), logging_obj
+    )
+    assert seen == ["/certs/gateway.pem"]
+
+
 def test_failed_prediction_raises():
-    config = ReplicateTextToSpeechConfig(sync_client_factory=lambda: _FakeClient())  # pyright: ignore[reportArgumentType]  # fake stands in for HTTPHandler
+    config = ReplicateTextToSpeechConfig(sync_client_factory=lambda _ssl: _FakeClient())  # pyright: ignore[reportArgumentType]  # fake stands in for HTTPHandler
     with pytest.raises(ReplicateError, match="text too long"):
         config.transform_text_to_speech_response(
             MODEL, _prediction_response({"id": "p1", "status": "failed", "error": "text too long"}), Mock()
