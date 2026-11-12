@@ -2462,7 +2462,11 @@ async def saml_callback(request: Request):
         return await cli_sso_callback(
             request=request,
             key=cli_state_parts[1],
-            prefill_user_code=cli_state_parts[2] if len(cli_state_parts) > 2 else None,
+            prefill_user_code=(
+                cli_state_parts[2]
+                if len(cli_state_parts) > 2 and _cli_sso_verification_uri_complete_enabled()
+                else None
+            ),
             result=user,
             received_response=None,
             sso_assertion=retained,

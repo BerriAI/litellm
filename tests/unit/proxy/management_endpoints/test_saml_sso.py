@@ -642,24 +642,27 @@ async def test_build_login_redirect_targets_idp_and_caches_request_id(saml_env):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("user_code", "relay_override", "sign", "unsolicited"),
+    ("user_code", "relay_override", "sign", "unsolicited", "prefill_enabled", "direct_login"),
     [
-        (None, None, True, False),
-        ("ABCD-EFGH", None, True, False),
-        (None, "litellm-session-token:", True, False),
-        (None, "litellm-session-token:cli-never-issued-session-00", True, False),
-        (None, None, False, False),
-        (None, None, True, True),
+        (None, None, True, False, True, False),
+        ("ABCD-EFGH", None, True, False, True, False),
+        (None, "litellm-session-token:", True, False, True, False),
+        (None, "litellm-session-token:cli-never-issued-session-00", True, False, True, False),
+        (None, None, False, False, True, False),
+        (None, None, True, True, True, False),
+        ("ABCD-EFGH", None, True, False, False, True),
+        ("ABCD-EFGH", None, True, False, True, True),
     ],
 )
 async def test_saml_cli_device_login_completes_after_signed_assertion(
-    saml_env, monkeypatch, user_code, relay_override, sign, unsolicited
+    saml_env, monkeypatch, user_code, relay_override, sign, unsolicited, prefill_enabled, direct_login
 ):
     from litellm.proxy import proxy_server
     from litellm.proxy.management_endpoints.ui_sso import (
         _get_cli_sso_flow_cache_key,
         google_login,
         saml_callback,
+        saml_login,
     )
 
     key_pem, cert_pem = saml_env
@@ -686,7 +689,7 @@ async def test_saml_cli_device_login_completes_after_signed_assertion(
         ),
     )
     monkeypatch.setattr(proxy_server, "master_key", "sk-test-master")
-    monkeypatch.setattr(proxy_server, "general_settings", {"allow_cli_sso_verification_uri_complete": True})
+    monkeypatch.setattr(proxy_server, "general_settings", {"allow_cli_sso_verification_uri_complete": prefill_enabled})
     monkeypatch.setattr(proxy_server, "user_custom_ui_sso_sign_in_handler", None)
     for name in ("MICROSOFT_CLIENT_ID", "GOOGLE_CLIENT_ID", "GENERIC_CLIENT_ID", "DISABLE_ADMIN_UI"):
         monkeypatch.delenv(name, raising=False)
@@ -701,9 +704,14 @@ async def test_saml_cli_device_login_completes_after_signed_assertion(
             "headers": [],
         }
     )
-    redirect: Final = await google_login(request, source="litellm-cli", key=login_id, user_code=user_code)
+    expected_relay: Final = f"litellm-session-token:{login_id}" + (f":{user_code}" if user_code else "")
+    redirect: Final = (
+        await saml_login(request, return_to=expected_relay)
+        if direct_login
+        else await google_login(request, source="litellm-cli", key=login_id, user_code=user_code)
+    )
     relay: Final = parse_qs(urlparse(redirect.headers["location"]).query)["RelayState"][0]
-    assert relay == f"litellm-session-token:{login_id}" + (f":{user_code}" if user_code else "")
+    assert relay == expected_relay
     ticket: Final = SimpleCookie(redirect.headers["set-cookie"])[_SAML_AUTHN_STATE_COOKIE].value
     signed: Final = _build_signed_response(key_pem, cert_pem, in_response_to=None if unsolicited else ticket, sign=sign)
     body: Final = urlencode({"SAMLResponse": _b64(signed), "RelayState": relay_override or relay}).encode()
@@ -740,8 +748,12 @@ async def test_saml_cli_device_login_completes_after_signed_assertion(
     assert completed["code_challenge"] == "pkce-challenge"
     assert response.status_code == 200
     assert f"sso/cli/complete/{login_id}" in response.body.decode()
-    if user_code:
-        assert f'value="{user_code}"' in response.body.decode()
+    verification_input: Final = re.search(r'<input\b[^>]*\bname="user_code"[^>]*>', response.body.decode())
+    assert verification_input is not None
+    if user_code and prefill_enabled:
+        assert f'value="{user_code}"' in verification_input.group()
+    else:
+        assert "value=" not in verification_input.group()
 
 
 @pytest.mark.asyncio
