@@ -41,7 +41,6 @@ from litellm._internal_context import internal_sub_call
 from litellm._logging import redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import (
     aload_beta_headers_config,
-    resolve_beta_provider,
     update_headers_with_filtered_beta,
 )
 from litellm.constants import MAX_FILE_LIST_LIMIT, REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
@@ -82,7 +81,7 @@ from litellm.litellm_core_utils.realtime_errors import (
 )
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
-from litellm.llms.anthropic.common_utils import AnthropicModelInfo, merge_anthropic_beta_headers
+from litellm.llms.anthropic.common_utils import merge_anthropic_beta_headers
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -2633,17 +2632,10 @@ class BaseLLMHTTPHandler:
             litellm_params.get("additional_drop_params") or (),
             anthropic_messages_optional_request_params,
         )
-        affinity_api_base: Final = (
-            AnthropicModelInfo.get_api_base(api_base) if custom_llm_provider == "anthropic" else api_base
-        )
-        takes_another_beta_row: Final = (
-            resolve_beta_provider(custom_llm_provider, affinity_api_base) != custom_llm_provider
-        )
-        provider_filters_betas: Final = anthropic_messages_provider_config.should_filter_anthropic_beta_headers()
-        filters_beta_headers: Final = provider_filters_betas or takes_another_beta_row
+        filters_beta_headers: Final = anthropic_messages_provider_config.should_filter_anthropic_beta_headers()
         if request_params.get("safeguards") is not None and filters_beta_headers:
             await aload_beta_headers_config()
-        default_affinity_header: Final = get_provider_affinity_header(affinity_api_base)
+        default_affinity_header: Final = get_provider_affinity_header(api_base)
         (
             headers,
             api_base,
@@ -2666,8 +2658,6 @@ class BaseLLMHTTPHandler:
             headers = update_headers_with_filtered_beta(
                 headers=headers,
                 provider=custom_llm_provider,
-                api_base=affinity_api_base,
-                unlisted="drop" if provider_filters_betas else "forward",
                 keep=anthropic_messages_provider_config.model_specific_anthropic_betas(model, litellm_params),
             )
 
