@@ -8,6 +8,7 @@ from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFi
 from litellm.caching.caching import DualCache
 from litellm.proxy.openai_files_endpoints.common_utils import (
     apply_unified_file_ids,
+    canonical_provider_file_id,
     get_credentials_for_model,
     is_litellm_executed_batch,
     map_raw_file_ids_to_unified,
@@ -652,3 +653,21 @@ async def test_batch_cancel_updates_database(caplog: pytest.LogCaptureFixture):
     assert "batch_processed" not in written
     assert json.loads(written["file_object"])["cancelled_at"] == 1234567999
     assert f"Updating batch {batch_id} status to cancelled after cancel" in caplog.messages
+
+
+@pytest.mark.parametrize(
+    ("file_id", "canonical"),
+    (
+        ("batch-out1", "batch-out1"),
+        ("files/batch-out1", "batch-out1"),
+        ("files%2Fbatch-out1", "batch-out1"),
+        ("batch-out1/", "batch-out1"),
+        ("/files/batch-out1/", "batch-out1"),
+        ("https://generativelanguage.googleapis.com/v1beta/files/batch-out1", "batch-out1"),
+        ("file-abc123", "file-abc123"),
+        ("s3://bucket/path/files/output.jsonl", "s3://bucket/path/files/output.jsonl"),
+        ("gs://bucket/prefix/predictions.jsonl", "gs://bucket/prefix/predictions.jsonl"),
+    ),
+)
+def test_canonical_provider_file_id_collapses_every_spelling_to_the_stored_id(file_id: str, canonical: str):
+    assert canonical_provider_file_id(file_id) == canonical

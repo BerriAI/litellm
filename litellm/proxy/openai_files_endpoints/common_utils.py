@@ -15,6 +15,7 @@ from typing import (
     get_args,
     runtime_checkable,
 )
+from urllib.parse import unquote, urlparse
 
 from pydantic import TypeAdapter
 
@@ -341,6 +342,20 @@ def get_original_file_id(encoded_id: str) -> str:
         return encoded_id
     except Exception:
         return encoded_id
+
+
+def canonical_provider_file_id(file_id: str) -> str:
+    """The one spelling of a provider file id that ownership rows store and look up, so ``files/abc``,
+    ``files%2Fabc``, ``abc/`` and the Gemini file URL all resolve to the bare ``abc``. Cloud storage URIs
+    (``s3://``, ``gs://``) are returned unchanged."""
+    decoded: Final = unquote(file_id).strip()
+    is_http_url: Final = decoded.startswith(("http://", "https://"))
+    if "://" in decoded and not is_http_url:
+        return decoded
+    path: Final = urlparse(decoded).path if is_http_url else decoded
+    files_index: Final = path.find("files/")
+    bare: Final = (path[files_index:] if files_index != -1 else path).strip("/").removeprefix("files/").strip("/")
+    return bare or decoded
 
 
 def is_model_embedded_id(file_id: str) -> bool:
