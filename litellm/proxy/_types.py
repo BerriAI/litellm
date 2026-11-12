@@ -18,6 +18,9 @@ from pydantic import (
     NonNegativeInt,
     PositiveInt,
     TypeAdapter,
+    ValidationError,
+    ValidatorFunctionWrapHandler,
+    WrapValidator,
     field_validator,
     model_validator,
 )
@@ -3569,6 +3572,13 @@ class LiteLLM_SpendLogs_ResponseObject(LiteLLMPydanticObjectBase):
     response: list[LiteLLM_SpendLogs | Any] | None = None
 
 
+def _none_when_invalid(value: object, handler: ValidatorFunctionWrapHandler) -> object:
+    try:
+        return handler(value)
+    except ValidationError:
+        return None
+
+
 class TokenCountRequest(LiteLLMPydanticObjectBase):
     model: str
     prompt: str | None = None
@@ -3583,8 +3593,8 @@ class TokenCountRequest(LiteLLMPydanticObjectBase):
     """
 
     tools: list[dict] | None = None
-    tool_choice: JsonValue = None
-    additional_drop_params: JsonValue = None
+    tool_choice: Annotated[JsonValue, WrapValidator(_none_when_invalid)] = None
+    additional_drop_params: Annotated[JsonValue, WrapValidator(_none_when_invalid)] = None
     system: Any | None = None
 
 

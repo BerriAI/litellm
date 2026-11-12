@@ -5889,6 +5889,32 @@ async def test_count_routes_leave_the_provider_login_alone_when_counting_a_tool_
     assert _litellm_warnings(caplog) == warnings_without_choice
 
 
+def _nested_json(depth: int) -> JsonValue:
+    return "none" if depth == 0 else {"nested": _nested_json(depth - 1)}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route_count", "field"),
+    [
+        (_utils_route_count, "tool_choice"),
+        (_utils_route_count, "additional_drop_params"),
+        (_messages_route_count, "tool_choice"),
+        (_responses_route_count, "tool_choice"),
+    ],
+    ids=["utils-tool-choice", "utils-drop-params", "messages-tool-choice", "responses-tool-choice"],
+)
+async def test_count_routes_skip_a_value_nested_too_deep_to_validate(
+    monkeypatch: pytest.MonkeyPatch,
+    route_count: Callable[[Mapping[str, JsonValue]], Coroutine[None, None, int]],
+    field: str,
+) -> None:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _tool_choice_router())
+    monkeypatch.setattr(litellm.proxy.proxy_server, "proxy_config", litellm.proxy.proxy_server.ProxyConfig())
+
+    assert await route_count({field: _nested_json(300)}) == await route_count({})
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("route_count", "tool_choice"),
