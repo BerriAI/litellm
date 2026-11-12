@@ -897,6 +897,7 @@ model LiteLLM_DailyUserSpend {
   @@index([date])
   @@index([user_id, date])
   @@index([api_key])
+  @@index([api_key, date])
   @@index([model])
   @@index([mcp_namespaced_tool_name])
   @@index([endpoint])
@@ -1155,6 +1156,31 @@ enum JobStatus {
   INACTIVE
 }
 
+model LiteLLM_ScheduledJobRun {
+  id               String                @id @default(uuid())
+  job_name         String
+  lock_group       String
+  schedule         String
+  scheduled_for    DateTime              @client.Timestamptz(3)
+  status           ScheduledJobRunStatus @default(PENDING)
+  claimed_by       String?
+  claimed_at       DateTime?             @client.Timestamptz(3)
+  lease_expires_at DateTime?             @client.Timestamptz(3)
+  finished_at      DateTime?             @client.Timestamptz(3)
+  created_at       DateTime              @default(now()) @client.Timestamptz(3)
+
+  @@index([job_name, status])
+  @@index([lock_group, status])
+}
+
+enum ScheduledJobRunStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
 model LiteLLM_ManagedFileTable {
   id String @id @default(uuid())
   unified_file_id String @unique // The base64 encoded unified file ID
@@ -1358,6 +1384,8 @@ model LiteLLM_DailyModelUsage {
   request_count       BigInt   @default(0)
   successful_requests BigInt   @default(0)
   failed_requests     BigInt   @default(0)
+  total_response_time_ms BigInt @default(0)
+  timed_requests      BigInt   @default(0)
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
@@ -2181,4 +2209,39 @@ model LiteLLM_SubscriptionAccountTable {
   updated_by String
 
   @@unique([custom_llm_provider, account_id], map: "LiteLLM_SubscriptionAccountTable_provider_account_key")
+}
+
+model LiteLLM_Alert {
+  id            BigInt   @id @default(autoincrement())
+  detection_key String   @unique @client.VarChar(64)
+  type          String   @client.VarChar(32)
+  resource_type String   @client.VarChar(16)
+  resource_id   String   @client.VarChar(1024)
+  status        String   @default("open") @client.VarChar(16)
+  window_start  DateTime
+  window_end    DateTime
+  evidence      Json
+  created_at    DateTime @default(now())
+  updated_at    DateTime @default(now()) @updatedAt
+  updated_by    String?  @client.VarChar(1024)
+
+  @@index([status, id])
+}
+
+model LiteLLM_PerformanceAlertState {
+  enabled      Boolean  @default(true)
+  alerts_used  Int?
+  id           Int       @id
+  owner        String    @client.VarChar(32)
+  next_run_at  DateTime  @client.Timestamptz(3)
+  day          String?   @client.VarChar(10)
+  scope        String?   @client.VarChar(16)
+  resume_after String    @default("") @client.VarChar(1024)
+  wrapped      Boolean   @default(false)
+  checked      Int       @default(0)
+  skipped      Int       @default(0)
+  start_scope  String?   @client.VarChar(16)
+  start_after  String    @default("") @client.VarChar(1024)
+  completed_at DateTime?
+  updated_at   DateTime  @default(now()) @updatedAt
 }

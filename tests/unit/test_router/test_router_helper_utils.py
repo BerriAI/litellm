@@ -750,9 +750,11 @@ async def test_retried_call_settles_deployment_io_tokens_to_the_successful_attem
     respx_mock: respx.MockRouter,
 ):
     from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    from litellm.llms.anthropic.messages.native import handler as python_messages
     from litellm.responses.streaming_iterator import drain_logging_tasks
 
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "anthropic_messages", python_messages.anthropic_messages)
     litellm.in_memory_llm_clients_cache.flush_cache()
     provider: Final = respx_mock.post(provider_url).mock(
         side_effect=[
