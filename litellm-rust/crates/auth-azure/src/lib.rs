@@ -3,5 +3,5 @@ mod native;
 mod resolve;
 mod types;
 
-pub use resolve::{AzureAuthService, SECRET_NAMES};
+pub use resolve::{AzureAuthService, AzureIdentity, SECRET_NAMES};
 pub use types::{AzureAuthInputs, ConfigValue};

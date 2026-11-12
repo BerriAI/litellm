@@ -27,6 +27,10 @@ impl Default for ResponseCacheConfig {
 pub trait ResponseCacheService: Send + Sync {
     fn config(&self) -> &ResponseCacheConfig;
 
+    fn keyed_by_caller(&self) -> bool {
+        false
+    }
+
     fn lookup<'a>(
         &'a self,
         request: &'a ResponseCacheRequest,

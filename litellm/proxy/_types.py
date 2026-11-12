@@ -15,6 +15,7 @@ from pydantic import (
     Field,
     Json,
     JsonValue,
+    NonNegativeInt,
     PositiveInt,
     TypeAdapter,
     field_validator,
@@ -30,13 +31,13 @@ from typing_extensions import (
 from litellm._uuid import uuid
 from litellm.constants import DEFAULT_STAGGER_WINDOW_SECONDS, MCP_STDIO_ALLOWED_COMMANDS
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    OTEL_DESTINATION_VALIDATORS,
     validate_arize_otlp_protocol_value,
-    validate_capture_message_content_value,
-    validate_excluded_services_value,
     validate_langfuse_environment_value,
     validate_langfuse_span_scope_value,
     validate_no_callback_env_reference,
 )
+from litellm.proxy.auth.access_group_rules import AccessGroupRule, _validate_rules
 from litellm.proxy.mcp_server.stdio_gate import MCP_STDIO_DISABLED_MESSAGE, is_mcp_stdio_enabled
 from litellm.types.agents import (
     AgentCaller as AgentCaller,  # noqa: PLC0414  # public re-export
@@ -44,6 +45,7 @@ from litellm.types.agents import (
 from litellm.types.agents import (
     AgentResponse as AgentResponse,  # noqa: PLC0414  # public re-export
 )
+from litellm.types.decisions import OpenAIDecisionResponse
 from litellm.types.integrations.compression_interception import (
     CompressionSavingsMetadata,
 )
@@ -87,13 +89,13 @@ from litellm.types.proxy.carried_budget_state import (
 )
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.proxy.request_tag_mappings import RequestTagMapping
+from litellm.types.proxy.skill_scanning import SkillScannerConfig
 from litellm.types.proxy.spend_capture_rate import SpendCaptureRateCheckSettings
 from litellm.types.router import AllowedModelRegion, RouterErrors, UpdateRouterConfig
 from litellm.types.router_weights import validate_router_settings_dict
 from litellm.types.secret_managers.main import KeyManagementSystem
 from litellm.types.utils import (
-    CAPTURE_MESSAGE_CONTENT_VAR,
-    EXCLUDED_SERVICES_VAR,
+    OTEL_DESTINATION_VARS,
     AzureSpillover,
     CallTypes,
     CostBreakdown,
@@ -124,6 +126,7 @@ from .types_utils.utils import get_instance_fn, validate_custom_validate_return_
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.repositories.database import Database
     from litellm.tracing import TraceReceiver
 
     Span = _Span | Any
@@ -133,6 +136,7 @@ else:
 
 class ProxyLifespanState(TypedDict):
     tracing_receiver: ReadOnly["TraceReceiver | None"]
+    database: ReadOnly["Database | None"]
 
 
 class ReconcileOutcome(NamedTuple):
@@ -207,6 +211,7 @@ class LitellmTableNames(str, enum.Enum):
     SSO_CONFIG_TABLE_NAME = "LiteLLM_SSOConfig"
     UI_SETTINGS_TABLE_NAME = "LiteLLM_UISettings"
     AGENT_TABLE_NAME = "LiteLLM_AgentsTable"
+    GUARDRAILS_TABLE_NAME = "LiteLLM_GuardrailsTable"
 
 
 from litellm.types.integrations.slack_alerting import (
@@ -328,6 +333,8 @@ class LiteLLMRoutes(enum.Enum):
         "/realtime?{model}",
         "/v1/realtime?{model}",
         "/openai/v1/realtime?{model}",
+        "/realtime/translations",
+        "/v1/realtime/translations",
         # realtime (GA WebRTC HTTP routes)
         "/realtime/client_secrets",
         "/v1/realtime/client_secrets",
@@ -338,6 +345,10 @@ class LiteLLMRoutes(enum.Enum):
         "/realtime/transcription_sessions",
         "/v1/realtime/transcription_sessions",
         "/openai/v1/realtime/transcription_sessions",
+        "/realtime/translations/client_secrets",
+        "/v1/realtime/translations/client_secrets",
+        "/realtime/translations/calls",
+        "/v1/realtime/translations/calls",
         # responses API
         "/responses",
         "/v1/responses",
@@ -417,6 +428,7 @@ class LiteLLMRoutes(enum.Enum):
         "/bespoke",
         "/openrouter",
         "/milvus",
+        "/opensearch",
         "/gigachat",
         "/watsonx",
         "/nvidia_nim",
@@ -440,6 +452,28 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/traces/{trace_id}/spans/{span_id}/error",
     )
 
+    skill_hub_routes = (
+        "/skill-hub/skills",
+        "/skill-hub/skills/upload",
+        "/skill-hub/skills/import",
+        "/skill-hub/skills/{name}",
+        "/skill-hub/skills/{name}/archive",
+        "/skill-hub/skills/{name}/content",
+        "/skill-hub/skills/{plugin_name}/downloads",
+        "/skill-hub/skills/{name}/versions",
+        "/skill-hub/skills/{name}/versions/{version_id}",
+        "/skill-hub/skills/{name}/versions/{version_id}/archive",
+        "/skill-hub/skills/{name}/publish",
+        "/skill-hub/skills/{name}/unpublish",
+        "/skill-hub/skills/{name}/upload",
+        "/skill-hub/submissions",
+        "/skill-hub/submissions/{submission_id}",
+        "/skill-hub/submissions/{submission_id}/archive",
+        "/skill-hub/submissions/{submission_id}/approve",
+        "/skill-hub/submissions/{submission_id}/reject",
+        "/skill-hub/submissions/{submission_id}/scan",
+    )
+
     litellm_native_routes = [
         "/rag/ingest",
         "/v1/rag/ingest",
@@ -457,6 +491,9 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/skills/{skill_id}",
         "/claude-code/marketplace.json",
         "/claude-code/plugins",
+        "/claude-code/plugins/upload",
+        "/claude-code/plugins/{plugin_name}/archive/{digest}.zip",
+        "/claude-code/plugins/{plugin_name}/downloads",
         "/claude-code/plugins/{plugin_name}",
     ]
 
@@ -497,6 +534,7 @@ class LiteLLMRoutes(enum.Enum):
         "/a2a/{agent_id}/message/send",
         "/v1/a2a/{agent_id}/message/send",
         "/a2a/{agent_id}/message/stream",
+        "/v1/a2a/{agent_id}/message/stream",
         "/a2a/{agent_id}/.well-known/agent-card.json",
     )
 
@@ -667,9 +705,14 @@ class LiteLLMRoutes(enum.Enum):
             "/team/spend/by_user",
             # gateway request counts (SGR); deployment-wide, admin-only
             "/gateway/daily/activity",
+            "/subscription_accounts/usage",
+            "/subscription_accounts/new",
+            "/subscription_accounts/update",
+            "/subscription_accounts/delete",
             # model
             "/model/new",
             "/model/update",
+            "/model/{model_id}/update",
             "/model/delete",
             "/model/info",
             "/model/{model_id}/kubernetes_pods",
@@ -682,6 +725,7 @@ class LiteLLMRoutes(enum.Enum):
         + key_management_routes
         + mcp_management_routes
         + list(agent_management_routes)
+        + list(skill_hub_routes)
     )
 
     spend_tracking_routes = [
@@ -924,6 +968,7 @@ class LiteLLMRoutes(enum.Enum):
         # Agent registry - reads are role-scoped and writes are proxy-admin-gated
         # inside agent_endpoints/endpoints.py
         *agent_management_routes,
+        *skill_hub_routes,
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##
@@ -1782,6 +1827,14 @@ class BudgetNewRequest(LiteLLMPydanticObjectBase):
         default=None,
         description="Max budget for each model (e.g. {'gpt-4o': {'max_budget': '0.0000001', 'budget_duration': '1d', 'tpm_limit': 1000, 'rpm_limit': 1000}})",
     )
+    model_tpm_limit: Mapping[str, NonNegativeInt] | None = Field(
+        default=None,
+        description="Max tokens per minute per model for this budget id, shared by every key, team and customer on it (e.g. {'gpt-4o': 400000})",
+    )
+    model_rpm_limit: Mapping[str, NonNegativeInt] | None = Field(
+        default=None,
+        description="Max requests per minute per model for this budget id, shared by every key, team and customer on it (e.g. {'gpt-4o': 200})",
+    )
     budget_reset_at: datetime | None = Field(
         default=None,
         description="Datetime when the budget is reset",
@@ -1807,6 +1860,21 @@ class CustomerBase(LiteLLMPydanticObjectBase):
     blocked: bool = False
 
 
+def reject_unknown_customer_fields(request: type[BaseModel], values: object) -> object:
+    if not isinstance(values, dict):
+        return values
+    unknown: Final = tuple(sorted(str(key) for key in values if key not in request.model_fields))  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]  # raw request body
+    if not unknown:
+        return values
+    on_budget: Final = tuple(field for field in unknown if field in BudgetNewRequest.model_fields)
+    hint: Final = (
+        f" {', '.join(on_budget)}: these live on the customer's budget object, update it with /budget/update."
+        if on_budget
+        else ""
+    )
+    raise ValueError(f"Unknown fields: {', '.join(unknown)}.{hint}")
+
+
 class NewCustomerRequest(BudgetNewRequest):
     """
     Create a new customer, allocate a budget to them
@@ -1823,6 +1891,11 @@ class NewCustomerRequest(BudgetNewRequest):
     default_model: str | None = None  # if no equivalent model in allowed region - default all requests to this model
     models: list[str] | None = None
     object_permission: LiteLLM_ObjectPermissionBase | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_unknown_fields(cls, values: object) -> object:
+        return reject_unknown_customer_fields(cls, values)
 
     @model_validator(mode="before")
     @classmethod
@@ -1850,6 +1923,11 @@ class UpdateCustomerRequest(LiteLLMPydanticObjectBase):
     default_model: str | None = None  # if no equivalent model in allowed region - default all requests to this model
     models: list[str] | None = None
     object_permission: LiteLLM_ObjectPermissionBase | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_unknown_fields(cls, values: object) -> object:
+        return reject_unknown_customer_fields(cls, values)
 
 
 class DeleteCustomerRequest(LiteLLMPydanticObjectBase):
@@ -2057,6 +2135,9 @@ class BlockModelRequest(LiteLLMPydanticObjectBase):
     model_id: str  # required
 
 
+CALLBACK_VAR_NAMES: Final = frozenset({*StandardCallbackDynamicParams.__annotations__, *OTEL_DESTINATION_VARS})
+
+
 class AddTeamCallback(LiteLLMPydanticObjectBase):
     callback_name: str
     callback_type: Literal["success", "failure", "success_and_failure"] | None = "success_and_failure"
@@ -2066,15 +2147,10 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
     @classmethod
     def validate_callback_vars(cls, values):
         callback_vars: Final = values.get("callback_vars", {})
-        valid_keys: Final = {
-            *StandardCallbackDynamicParams.__annotations__,
-            CAPTURE_MESSAGE_CONTENT_VAR,
-            EXCLUDED_SERVICES_VAR,
-        }
         for key, value in callback_vars.items():
-            if key not in valid_keys:
-                raise ValueError(f"Invalid callback variable: {key}. Must be one of {valid_keys}")
-            if key in (CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_VAR) and not isinstance(value, str):
+            if key not in CALLBACK_VAR_NAMES:
+                raise ValueError(f"Invalid callback variable: {key}. Must be one of {set(CALLBACK_VAR_NAMES)}")
+            if key in OTEL_DESTINATION_VARS and not isinstance(value, str):
                 raise ValueError(f"{key} must be a string, got {type(value).__name__}")
             callback_vars[key] = str(value)
             validate_no_callback_env_reference(key, callback_vars[key], source="key/team callback metadata")
@@ -2084,10 +2160,8 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
                 validate_langfuse_span_scope_value(callback_vars[key])
             if key == "arize_otlp_protocol":
                 validate_arize_otlp_protocol_value(callback_vars[key])
-            if key == CAPTURE_MESSAGE_CONTENT_VAR:
-                validate_capture_message_content_value(callback_vars[key])
-            if key == EXCLUDED_SERVICES_VAR:
-                validate_excluded_services_value(callback_vars[key])
+            if (destination_validator := OTEL_DESTINATION_VALIDATORS.get(key)) is not None:
+                destination_validator(callback_vars[key])
         return values
 
 
@@ -2464,6 +2538,18 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     Documents all the fields supported by `general_settings` in config.yaml
     """
 
+    access_group_rules: tuple[AccessGroupRule, ...] | None = None
+
+    @field_validator("access_group_rules", mode="before")
+    @classmethod
+    def validate_access_group_rules(cls, value: object) -> tuple[AccessGroupRule, ...] | None:
+        return _validate_rules(value) if value is not None else None
+
+    use_spend_logs_ledger: bool = Field(
+        True,
+        description="Apply request accounting from stored SpendLogs deliveries. Set to false to roll back to the previous in-memory and Redis spend queues.",
+    )
+
     request_tag_mappings: Sequence[RequestTagMapping] | None = Field(
         None,
         description="Map W3C baggage values to request tags. Exact value/tag rules take precedence over tag_prefix fallbacks.",
@@ -2766,6 +2852,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description="How long a blocked source address, or source address and username, stays blocked. Every attempt from a blocked key, right or wrong, is refused with 429 before the password is checked; the block is not extended by refused attempts. Set under `general_settings` in config.yaml. Defaults to 300",
     )
     allowed_routes: list | None = Field(None, description="Proxy API Endpoints you want users to be able to access")
+    allowed_client_side_s3_buckets: tuple[str, ...] | None = Field(
+        None,
+        description="S3 bucket names a client may send as `s3_bucket_name` or `s3_output_bucket_name` in a request body, e.g. on /v1/batches. Any other bucket is rejected unless client-side credentials are allowed",
+    )
+    allowed_client_side_s3_endpoint_urls: tuple[str, ...] | None = Field(
+        None,
+        description="Exact `s3_endpoint_url` values a client may send in a request body. Any other value is rejected unless client-side credentials are allowed",
+    )
     reject_clientside_metadata_tags: bool | None = Field(
         None,
         description="When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.",
@@ -2832,6 +2926,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     store_prompts_in_spend_logs: bool | None = Field(
         None,
         description="If True, stores request messages and responses in spend logs. Default is False.",
+    )
+    spend_logs_prompt_storage: Literal["latest_turn"] | None = Field(
+        None,
+        description="With store_prompts_in_spend_logs on, 'latest_turn' stores only the current turn of a stateless request (/chat/completions, /v1/messages, and /v1/responses without previous_response_id): the model and the latest user message, with the system prompt, tool definitions and earlier turns dropped. Requests that continue a stored conversation and the response are stored as they are today. Unset stores the full request.",
     )
     claude_code_marketplace_auth_required: bool = Field(
         False,
@@ -2997,6 +3095,9 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     forward_client_headers_to_llm_api: bool | None = Field(
         None,
         description="If True, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.",
+    )
+    skill_scanner: SkillScannerConfig | None = Field(
+        None, description="Opt-in external scanner for manual admin review of skill submissions"
     )
     mcp_required_fields: list[str] | None = Field(
         None,
@@ -3754,6 +3855,7 @@ class SpendLogsMetadata(TypedDict):
     kubernetes_pod_routing: ReadOnly[StandardLoggingKubernetesPodRouting | None]
     internal_call_origin: InternalCallOrigin | None
     billed_retry_attempt: ReadOnly[NotRequired[bool | None]]
+    upstream_provider: ReadOnly[NotRequired[str | None]]
     litellm_roi_estimator: ReadOnly[NotRequired[bool | None]]
     is_silent_experiment: ReadOnly[NotRequired[bool | None]]
     guardrail_information: list[StandardLoggingGuardrailInformation] | None
@@ -3783,6 +3885,9 @@ class SpendLogsMetadata(TypedDict):
 
 
 class SpendLogsPayload(TypedDict):
+    accounting_payload: NotRequired[Mapping[str, object]]  # writable-ok: capture before buffering
+    accounting_log_disabled: NotRequired[bool]  # writable-ok: capture logging mode before buffering
+    accounting_delivery_id: NotRequired[str]  # writable-ok: assigned once before buffering
     request_id: str
     call_type: str
     api_key: str
@@ -4577,6 +4682,7 @@ PassThroughEndpointLoggingResultValues = (
     | StandardPassThroughResponseObject
     | ResponsesAPIResponse
     | TranscriptionResponse
+    | OpenAIDecisionResponse
 )
 
 
@@ -4763,11 +4869,14 @@ class UnregisteredJWTClientBehavior(str, enum.Enum):
     - auto_register: Automatically create a new virtual key and mapping on first
       encounter. The new key has no budget/model restrictions; admins can tighten
       it later via /jwt_client/update.
+    - link_only: Map an eligible existing user key or return HTTP 403, without
+      creating a key. Proxy admins authenticate without a mapped key.
     """
 
     FALLBACK_TEAM_MAPPING = "fallback_team_mapping"
     REJECT = "reject"
     AUTO_REGISTER = "auto_register"
+    LINK_ONLY = "link_only"
 
 
 class JWTIssuerConfig(LiteLLMBaseModel):
@@ -5005,7 +5114,12 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
             "What to do when virtual_key_claim_field is set but the JWT claim value "
             "has no registered mapping. 'fallback_team_mapping' (default): fall through "
             "to team-based JWT auth. 'reject': return HTTP 403. "
-            "'auto_register': auto-create a virtual key and mapping on first encounter."
+            "'auto_register': auto-create a virtual key and mapping on first encounter. "
+            "'link_only': map an eligible existing user key or return HTTP 403, without creating a key. "
+            "link_only ignores auto_register_map_existing_key; user provisioning still follows user_id_upsert. "
+            "Existing-key selection ignores allowed_routes; JWTs inherit the selected key's permissions, "
+            "including management routes, with request-time key restrictions still enforced. "
+            "Unmapped proxy admins authenticate directly in auto_register and link_only modes."
         ),
     )
     auto_register_map_existing_key: bool = Field(
@@ -5015,8 +5129,10 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
             "field is the user_id_jwt_field or user_email_jwt_field, the JWT claim is mapped to a virtual key the "
             "JWT-resolved user already owns instead of minting a new one. If the user owns several, the most recently created key in the "
             "JWT-resolved team (or with no team when the JWT resolves none) is chosen among keys that never "
-            "expire, are not blocked, are not Admin UI session keys, were not minted by auto_register, and "
-            "have no allowed_routes or include llm_api_routes. Otherwise a new key is minted as usual."
+            "expire, are not blocked, are not Admin UI session keys, and were not minted by auto_register. "
+            "allowed_routes does not affect key selection. JWTs inherit the selected key's permissions, "
+            "including management routes; request-time key restrictions still apply. "
+            "Otherwise a new key is minted as usual."
         ),
     )
     routing_overrides: list[JWTRoutingOverride] | None = Field(
@@ -5215,6 +5331,7 @@ class BaseDailySpendTransaction(TypedDict):
     # missing value to zero, so requiring it here would describe a shape the aggregation
     # is explicitly tested against.
     autorouter_savings_spend: NotRequired[float]
+    guardrail_spend: NotRequired[float]  # writable-ok: the rollup queue accumulates into this key in place
 
     # request level metrics
     spend: float

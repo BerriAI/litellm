@@ -3,7 +3,7 @@ use litellm_llms_types::{
         AdaptiveThinking, EnabledThinking, Message, MessagesOptionalParams, MessagesRequest,
         ThinkingConfig, ThinkingDisplay,
     },
-    recognized::Recognized,
+    recognized::{Recognized, map_known_runs},
 };
 use serde_json::{Value, json};
 
@@ -13,14 +13,19 @@ use crate::{
         flatten_unencrypted_web_search_results, sanitize_tool_use_ids, strip_empty_content_blocks,
         strip_provider_specific_fields,
     },
+    base_llm::messages::context::MessagesShapeOptions,
 };
 
 pub fn shape_anthropic_messages_request(
     request: MessagesRequest,
-    reasoning_auto_summary: bool,
+    options: MessagesShapeOptions,
 ) -> Result<MessagesRequest, Error> {
     Ok(MessagesRequest {
-        messages: sanitize_anthropic_messages(request.messages),
+        messages: if options.presanitized {
+            map_known_runs(request.messages, strip_provider_specific_fields)
+        } else {
+            map_known_runs(request.messages, sanitize_anthropic_messages)
+        },
         params: MessagesOptionalParams {
             metadata: request
                 .params
@@ -28,7 +33,10 @@ pub fn shape_anthropic_messages_request(
                 .as_ref()
                 .map(validate_anthropic_api_metadata)
                 .transpose()?,
-            thinking: with_reasoning_auto_summary(request.params.thinking, reasoning_auto_summary),
+            thinking: with_reasoning_auto_summary(
+                request.params.thinking,
+                options.reasoning_auto_summary,
+            ),
             ..request.params
         },
         ..request
@@ -299,7 +307,10 @@ mod tests {
                 "thinking": {"type": "enabled", "budget_tokens": 1024},
                 "safeguards": [{"type": "dangerous_tool_use"}]
             })),
-            true,
+            MessagesShapeOptions {
+                reasoning_auto_summary: true,
+                presanitized: false,
+            },
         )
         .unwrap();
         assert_eq!(
@@ -313,6 +324,29 @@ mod tests {
                 "thinking": {"type": "enabled", "budget_tokens": 1024, "display": "summarized"},
                 "safeguards": [{"type": "dangerous_tool_use"}]
             })
+        );
+    }
+
+    #[test]
+    fn presanitized_shaping_keeps_blocks_and_strips_only_provider_fields() {
+        let messages = json!([{"role": "user", "content": [
+            {"type": "text", "text": " ", "cache_control": {"type": "ephemeral"}},
+            {"type": "tool_result", "tool_use_id": "functions.Bash:0", "content": "ok", "provider_specific_fields": {"x": 1}}
+        ]}]);
+        let sanitized = shape_anthropic_messages_request(
+            request(json!({"model": "m", "messages": messages})),
+            MessagesShapeOptions {
+                reasoning_auto_summary: false,
+                presanitized: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(sanitized).unwrap(),
+            json!({"model": "m", "messages": [{"role": "user", "content": [
+                {"type": "text", "text": " ", "cache_control": {"type": "ephemeral"}},
+                {"type": "tool_result", "tool_use_id": "functions.Bash:0", "content": "ok"}
+            ]}]})
         );
     }
 }

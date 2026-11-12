@@ -1,5 +1,7 @@
 use litellm_auth::AwsParams;
-use litellm_auth::{CredentialPlacement, SecretValue};
+use litellm_auth::CredentialPlacement;
+use litellm_secret_value::SecretValue;
+
 use litellm_auth_aws::{
     AwsCredentialSource, bedrock_model_id_and_region,
     constants::{AWS_BEARER_TOKEN_BEDROCK, BEDROCK_RUNTIME_ENDPOINT_TEMPLATE, BEDROCK_SERVICE},

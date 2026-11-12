@@ -4,7 +4,9 @@ Unit tests for auth_utils functions related to rate limiting and customer ID ext
 
 import base64
 import logging
-from collections.abc import Callable
+import time
+from collections.abc import Callable, Mapping
+from types import SimpleNamespace
 from typing import Final, Optional
 from unittest.mock import MagicMock, patch
 
@@ -12,7 +14,7 @@ import pytest
 from fastapi import HTTPException, Request
 
 import litellm
-from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     _allow_model_level_clientside_configurable_parameters,
     _get_customer_id_from_standard_headers,
@@ -33,7 +35,9 @@ from litellm.proxy.auth.auth_utils import (
     get_project_model_rpm_limit,
     get_project_model_tpm_limit,
     get_request_route_template,
+    enforce_team_s3_bucket_allowlist,
     is_request_body_safe,
+    pre_db_read_auth_checks,
 )
 from litellm.router import Router
 from litellm.types.utils import oauth_token_exchange_litellm_params, server_owned_wif_litellm_params
@@ -55,7 +59,7 @@ def test_token_exchange_settings_in_request_body_are_rejected(field: str) -> Non
         match="server-owned workload identity federation or OAuth token exchange parameter",
     ) as error:
         is_request_body_safe(
-            request_body={"model": "microsoft_365_copilot/chat", field: "attacker-chosen"},
+            request_body={"model": "microsoft_365_copilot/chat", field: "caller-chosen"},
             general_settings={"allow_client_side_credentials": True},
             llm_router=None,
             model="microsoft_365_copilot/chat",
@@ -145,6 +149,302 @@ def test_model_opt_in_cannot_allow_a_token_exchange_endpoint_in_a_request_body()
             llm_router=router,
             model="microsoft_365_copilot/chat",
         )
+
+
+_AZURE_ENTRA_CREDENTIAL_PARAMS: Final = (
+    "tenant_id",
+    "client_id",
+    "client_secret",
+    "azure_username",
+    "azure_password",
+    "azure_scope",
+)
+
+
+def _azure_entra_router(configurable_clientside_auth_params: tuple[str, ...] = ()) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "azure-group",
+                "litellm_params": {
+                    "model": "azure/gpt-4o",
+                    "api_base": "https://admin-endpoint.example.com",
+                    "tenant_id": "admin-tenant",
+                    "client_id": "admin-client",
+                    "client_secret": "admin-secret",
+                    "configurable_clientside_auth_params": list(configurable_clientside_auth_params),
+                },
+            }
+        ]
+    )
+
+
+@pytest.mark.parametrize("param", _AZURE_ENTRA_CREDENTIAL_PARAMS)
+@pytest.mark.parametrize("container", (None, "extra_body", "litellm_embedding_config"))
+def test_azure_entra_credential_params_in_request_body_are_rejected(param: str, container: str | None) -> None:
+    override: Final = {param: "caller-chosen"}
+    with pytest.raises(ValueError, match=f"{param} is not allowed in request body"):
+        is_request_body_safe(
+            request_body={"model": "azure-group", **({container: override} if container else override)},
+            general_settings={},
+            llm_router=_azure_entra_router(),
+            model="azure-group",
+            route="/v1/chat/completions",
+        )
+
+
+@pytest.mark.parametrize("param", _AZURE_ENTRA_CREDENTIAL_PARAMS)
+@pytest.mark.parametrize("metadata_key", ("metadata", "litellm_metadata"))
+def test_azure_entra_credential_names_are_allowed_as_request_metadata(param: str, metadata_key: str) -> None:
+    assert (
+        is_request_body_safe(
+            request_body={"model": "azure-group", metadata_key: {param: "caller-tag"}},
+            general_settings={},
+            llm_router=_azure_entra_router(),
+            model="azure-group",
+            route="/v1/chat/completions",
+        )
+        is True
+    )
+
+
+def test_deployment_opt_in_allows_only_the_named_azure_entra_credential_param() -> None:
+    router: Final = _azure_entra_router(configurable_clientside_auth_params=("client_id",))
+
+    assert (
+        is_request_body_safe(
+            request_body={"model": "azure-group", "client_id": "caller-client"},
+            general_settings={},
+            llm_router=router,
+            model="azure-group",
+            route="/v1/chat/completions",
+        )
+        is True
+    )
+    with pytest.raises(ValueError, match="client_secret"):
+        is_request_body_safe(
+            request_body={"model": "azure-group", "client_id": "caller-client", "client_secret": "caller-secret"},
+            general_settings={},
+            llm_router=router,
+            model="azure-group",
+            route="/v1/chat/completions",
+        )
+
+
+@pytest.mark.parametrize("param", (*_AZURE_ENTRA_CREDENTIAL_PARAMS, "api_key", "aws_access_key_id", "azure_ad_token"))
+@pytest.mark.parametrize("reference", ("os.environ/LITELLM_MASTER_KEY", "oidc/env/LITELLM_MASTER_KEY"))
+@pytest.mark.parametrize("container", (None, "extra_body"))
+def test_secret_reference_in_a_credential_param_is_rejected_despite_client_side_opt_in(
+    param: str, reference: str, container: str | None
+) -> None:
+    override: Final = {param: reference}
+    with pytest.raises(ValueError, match=f"{param} holds an? (oidc/ )?secret reference"):
+        is_request_body_safe(
+            request_body={"model": "azure-group", **({container: override} if container else override)},
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=_azure_entra_router(),
+            model="azure-group",
+            route="/v1/chat/completions",
+        )
+
+
+def test_secret_reference_is_rejected_for_a_param_the_deployment_opted_in() -> None:
+    with pytest.raises(ValueError, match="client_id holds a secret reference"):
+        is_request_body_safe(
+            request_body={"model": "azure-group", "client_id": "os.environ/LITELLM_MASTER_KEY"},
+            general_settings={},
+            llm_router=_azure_entra_router(configurable_clientside_auth_params=("client_id",)),
+            model="azure-group",
+            route="/v1/chat/completions",
+        )
+
+
+@pytest.mark.parametrize(
+    "body",
+    (
+        {"prompt": "os.environ/PATH is what in Python?"},
+        {"input": "oidc/env/ tokens explained"},
+        {"api_key": "sk-caller-own-key"},
+        {"client_id": "an os.environ/ mention that is not a prefix"},
+    ),
+)
+def test_values_that_are_not_secret_references_in_credential_params_are_allowed(body: Mapping[str, str]) -> None:
+    assert (
+        is_request_body_safe(
+            request_body={"model": "azure-group", **body},
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=_azure_entra_router(),
+            model="azure-group",
+            route="/v1/chat/completions",
+        )
+        is True
+    )
+
+
+def test_deployment_management_body_may_carry_a_secret_reference() -> None:
+    assert (
+        is_request_body_safe(
+            request_body={"model_name": "azure-group", "api_key": "os.environ/AZURE_API_KEY"},
+            general_settings={},
+            llm_router=None,
+            model="",
+            route="/model/new",
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize("field", ("client_id", "client_secret"))
+def test_mcp_oauth_token_form_may_carry_oauth_client_fields(field: str) -> None:
+    assert (
+        is_request_body_safe(
+            request_body={"grant_type": "authorization_code", "code": "abc", field: "mcp-oauth-client"},
+            general_settings={},
+            llm_router=None,
+            model="",
+            route="/v1/mcp/server/oauth/abc123/token",
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize("field", ("tenant_id", "azure_username", "azure_password", "azure_scope"))
+def test_mcp_server_routes_still_reject_non_oauth_azure_entra_params(field: str) -> None:
+    with pytest.raises(ValueError, match=field):
+        is_request_body_safe(
+            request_body={"grant_type": "authorization_code", "code": "abc", field: "caller-chosen"},
+            general_settings={},
+            llm_router=None,
+            model="",
+            route="/v1/mcp/server/oauth/abc123/token",
+        )
+
+
+@pytest.mark.parametrize("body", ({"client_id": "gateway-1"}, {"client_id": "gateway-1", "client_secret": "gw-secret"}))
+def test_token_introspection_form_may_carry_oauth_client_fields(body: Mapping[str, str]) -> None:
+    assert (
+        is_request_body_safe(
+            request_body={"token": "llm_session_abc", **body},
+            general_settings={},
+            llm_router=None,
+            model="",
+            route="/introspect",
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize("body", ({"tenant_id": "caller-tenant"}, {"client_id": "os.environ/LITELLM_MASTER_KEY"}))
+def test_token_introspection_still_rejects_other_entra_params_and_secret_references(body: Mapping[str, str]) -> None:
+    with pytest.raises(ValueError, match=next(iter(body))):
+        is_request_body_safe(
+            request_body={"token": "llm_session_abc", **body},
+            general_settings={},
+            llm_router=None,
+            model="",
+            route="/introspect",
+        )
+
+
+_TRANSCRIPTION_SESSION_ROUTES: Final = (
+    "/v1/realtime/transcription_sessions",
+    "/realtime/transcription_sessions",
+    "/openai/v1/realtime/transcription_sessions",
+)
+
+
+@pytest.mark.parametrize("route", _TRANSCRIPTION_SESSION_ROUTES)
+def test_transcription_session_body_may_carry_its_client_secret_config(route: str) -> None:
+    assert (
+        is_request_body_safe(
+            request_body={
+                "model": "gpt-4o-transcribe",
+                "client_secret": {"expires_at": {"anchor": "created_at", "seconds": 600}},
+            },
+            general_settings={},
+            llm_router=None,
+            model="",
+            route=route,
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize("route", _TRANSCRIPTION_SESSION_ROUTES)
+@pytest.mark.parametrize("body", ({"tenant_id": "caller-tenant"}, {"client_secret": "os.environ/LITELLM_MASTER_KEY"}))
+def test_transcription_session_routes_still_reject_other_entra_params_and_secret_references(
+    route: str, body: Mapping[str, str]
+) -> None:
+    with pytest.raises(ValueError, match=next(iter(body))):
+        is_request_body_safe(
+            request_body={"model": "gpt-4o-transcribe", **body},
+            general_settings={},
+            llm_router=None,
+            model="",
+            route=route,
+        )
+
+
+@pytest.mark.parametrize("param", _AZURE_ENTRA_CREDENTIAL_PARAMS)
+@pytest.mark.parametrize("metadata_key", ("metadata", "litellm_metadata"))
+@pytest.mark.parametrize("value", ("os.environ/HOME", "oidc/azure/team-a"))
+def test_metadata_tags_whose_value_looks_like_a_secret_reference_are_allowed(
+    param: str, metadata_key: str, value: str
+) -> None:
+    assert (
+        is_request_body_safe(
+            request_body={"model": "azure-group", metadata_key: {param: value}},
+            general_settings={},
+            llm_router=_azure_entra_router(),
+            model="azure-group",
+            route="/v1/chat/completions",
+        )
+        is True
+    )
+
+
+_USER_CONFIG_SECRET_REFERENCE_PARAMS: Final = (
+    {"model": "openai/gpt-4o", "api_base": "https://caller.example.com", "api_key": "os.environ/LITELLM_MASTER_KEY"},
+    {"model": "openai/gpt-4o", "organization": "os.environ/LITELLM_MASTER_KEY"},
+    {"model": "openai/gpt-4o", "extra_body": {"api_key": "oidc/env/LITELLM_MASTER_KEY"}},
+    {"model": "azure/gpt-4o", "dataSources": [{"parameters": {"key": "os.environ/LITELLM_MASTER_KEY"}}]},
+)
+
+
+def _user_config(slot: str, litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+    if slot == "default_litellm_params":
+        return {"default_litellm_params": dict(litellm_params)}
+    return {"model_list": [{"model_name": "caller-model", "litellm_params": dict(litellm_params)}]}
+
+
+@pytest.mark.parametrize("litellm_params", _USER_CONFIG_SECRET_REFERENCE_PARAMS)
+@pytest.mark.parametrize("slot", ("model_list", "default_litellm_params"))
+def test_user_config_secret_references_are_rejected_despite_client_side_opt_in(
+    litellm_params: Mapping[str, object], slot: str
+) -> None:
+    with pytest.raises(ValueError, match="holds a secret reference"):
+        is_request_body_safe(
+            request_body={"model": "caller-model", "user_config": _user_config(slot, litellm_params)},
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="caller-model",
+            route="/v1/chat/completions",
+        )
+
+
+def test_user_config_with_literal_credentials_is_allowed_with_client_side_opt_in() -> None:
+    litellm_params: Final = {"model": "openai/gpt-4o", "api_base": "https://caller.example.com", "api_key": "sk-own"}
+
+    assert (
+        is_request_body_safe(
+            request_body={"model": "caller-model", "user_config": _user_config("model_list", litellm_params)},
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="caller-model",
+            route="/v1/chat/completions",
+        )
+        is True
+    )
 
 
 @pytest.mark.parametrize(
@@ -368,7 +668,11 @@ _SERVICE_ACCOUNT_TOKEN_REFERENCE: Final = "oidc/file//var/run/secrets/kubernetes
 
 
 def _user_config_with(litellm_params: dict[str, str]) -> dict[str, object]:
-    return {"model_list": [{"model_name": "devstral", "litellm_params": {"model": "mistral/devstral-latest", **litellm_params}}]}
+    return {
+        "model_list": [
+            {"model_name": "devstral", "litellm_params": {"model": "mistral/devstral-latest", **litellm_params}}
+        ]
+    }
 
 
 def _user_config_defaulting_to(litellm_params: dict[str, str]) -> dict[str, object]:
@@ -388,7 +692,11 @@ def _user_config_search_tool_with(litellm_params: dict[str, str]) -> dict[str, o
         "search_tools": [
             {
                 "search_tool_name": "web",
-                "litellm_params": {"search_provider": "tavily", "api_base": "https://attacker.example", **litellm_params},
+                "litellm_params": {
+                    "search_provider": "tavily",
+                    "api_base": "https://attacker.example",
+                    **litellm_params,
+                },
             }
         ]
     }
@@ -509,7 +817,9 @@ def test_a_call_cannot_carry_an_oidc_api_key_in_litellm_params(route: str | None
         )
 
 
-@pytest.mark.parametrize("route", ["/model/new", "/model/update", "/model/deployment-1/update", "/health/test_connection"])
+@pytest.mark.parametrize(
+    "route", ["/model/new", "/model/update", "/model/deployment-1/update", "/health/test_connection"]
+)
 def test_a_deployment_write_may_carry_an_oidc_api_key_in_litellm_params(route: str):
     """A proxy admin configures an oidc/ api_key on a deployment through these routes, and the model management role
     gate refuses anyone else with a 403."""
@@ -540,7 +850,7 @@ def test_a_base_override_cannot_send_the_deployments_oidc_api_key(
     oidc_api_key_credential, deployment_params: dict, override: str
 ):
     from litellm.exceptions import BadRequestError
-    from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+    from litellm.litellm_core_utils.clientside_credential_handler import get_dynamic_litellm_params
 
     with pytest.raises(BadRequestError, match="api_key is an oidc/ secret reference"):
         get_dynamic_litellm_params(
@@ -550,7 +860,7 @@ def test_a_base_override_cannot_send_the_deployments_oidc_api_key(
 
 @pytest.mark.parametrize("deployment_params", _OIDC_DEPLOYMENT_PARAMS)
 def test_a_base_override_with_the_callers_own_api_key_is_allowed(oidc_api_key_credential, deployment_params: dict):
-    from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+    from litellm.litellm_core_utils.clientside_credential_handler import get_dynamic_litellm_params
 
     out: Final = get_dynamic_litellm_params(
         litellm_params=dict(deployment_params),
@@ -1363,6 +1673,107 @@ def test_get_model_from_request_supports_google_model_names_with_slashes():
         )
         == "hosted_vllm/gpt-oss-20b"
     )
+
+
+_URL_SELECTED_MODEL_ROUTES: Final = (
+    ("/v1beta/models/premium-model:generateContent", "premium-model"),
+    ("/models/premium-model:generateContent", "premium-model"),
+    ("/v1beta/models/premium-model:streamGenerateContent", "premium-model"),
+    ("/models/provider/premium-model:7b:streamGenerateContent", "provider/premium-model:7b"),
+    ("/openai/deployments/premium-model/images/generations", "premium-model"),
+    ("/openai/deployments/provider/premium-model/images/edits", "provider/premium-model"),
+)
+
+
+@pytest.fixture
+def no_inference_model_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "user_model", None)
+
+
+@pytest.mark.usefixtures("no_inference_model_override")
+@pytest.mark.parametrize("route, url_model", _URL_SELECTED_MODEL_ROUTES)
+@pytest.mark.parametrize(
+    "request_data",
+    [
+        {"model": "cheap-model"},
+        {"target_model_names": ["cheap-model"]},
+        {"model": "cheap-model", "target_model_names": "cheap-model"},
+    ],
+)
+def test_get_model_from_request_checks_the_url_model_on_routes_served_from_the_url(
+    route: str, url_model: str, request_data: dict[str, object]
+) -> None:
+    assert get_model_from_request(request_data=request_data, route=route) == url_model
+
+
+@pytest.mark.usefixtures("no_inference_model_override")
+@pytest.mark.parametrize(
+    "route, path_params",
+    [
+        ("/v1beta/models/premium-model:generateContent", {"model_name": "cheap-model"}),
+        ("/models/premium-model:streamGenerateContent", {"model_name": "cheap-model"}),
+        ("/openai/deployments/premium-model/images/generations", {"model": "cheap-model"}),
+        ("/openai/deployments/premium-model/images/edits", {"model": "cheap-model"}),
+    ],
+)
+def test_get_model_from_request_follows_the_handlers_path_param_over_route_and_body(
+    route: str, path_params: dict[str, str]
+) -> None:
+    request: Final = Request(scope={"type": "http", "path": route, "path_params": path_params, "headers": []})
+    body: Final = {"model": "body-model"}
+
+    assert get_model_from_request(request_data=body, route=route, request=request) == "cheap-model"
+    assert get_model_from_request(request_data=body, route=route, path_params=path_params) == "cheap-model"
+    assert get_model_from_request(request_data=body, route=route, path_params={"other": "x"}) == "premium-model"
+
+
+@pytest.mark.parametrize(
+    "route, settings, cli_model, expected",
+    [
+        ("/v1beta/models/url-model:generateContent", {"completion_model": "configured"}, None, "configured"),
+        ("/models/url-model:streamGenerateContent", {}, "cli", "cli"),
+        ("/v1beta/models/url-model:generateContent", {"image_generation_model": "configured"}, None, "url-model"),
+        ("/openai/deployments/url-model/images/generations", {}, "cli", "cli"),
+        ("/openai/deployments/url-model/images/generations", {"completion_model": "configured"}, None, "url-model"),
+        (
+            "/openai/deployments/url-model/images/generations",
+            {"image_generation_model": "configured"},
+            None,
+            "url-model",
+        ),
+        ("/openai/deployments/url-model/images/edits", {"completion_model": "configured"}, "cli", "configured"),
+        ("/openai/deployments/url-model/images/edits", {}, "cli", "cli"),
+        ("/openai/deployments/url-model/images/edits", {"image_generation_model": "configured"}, None, "url-model"),
+    ],
+)
+def test_get_model_from_request_applies_the_handlers_server_model_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+    route: str,
+    settings: dict[str, str],
+    cli_model: str | None,
+    expected: str,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", settings)
+    monkeypatch.setattr(proxy_server, "user_model", cli_model)
+
+    assert get_model_from_request(request_data={"model": "body-model"}, route=route) == expected
+
+
+@pytest.mark.usefixtures("no_inference_model_override")
+@pytest.mark.parametrize("route", ["/v1/images/generations", "/images/edits", "/v1/chat/completions"])
+def test_get_model_from_request_keeps_the_body_model_where_the_url_names_none(route: str) -> None:
+    assert get_model_from_request(request_data={"model": "cheap-model"}, route=route) == "cheap-model"
+
+
+@pytest.mark.parametrize("route, url_model", _URL_SELECTED_MODEL_ROUTES)
+def test_get_model_from_request_skips_url_model_on_configured_pass_through(route: str, url_model: str) -> None:
+    request: Final = _request_dispatched_to(_pass_through_endpoint())
+    assert get_model_from_request(request_data={"model": url_model}, route=route, request=request) is None
 
 
 def test_get_model_from_request_vertex_passthrough_still_works():
@@ -3009,7 +3420,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
     """
 
     def test_clears_admin_organization_and_extra_body_on_base_override(self):
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
 
@@ -3035,7 +3446,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert "api_version" not in out
 
     def test_clears_aws_and_vertex_secrets_on_base_override(self):
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
 
@@ -3058,7 +3469,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert "vertex_project" not in out
 
     def test_clears_nvcf_function_id_on_base_override(self):
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
 
@@ -3076,7 +3487,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert "nvcf_function_id" not in out
 
     def test_clears_use_ssl_on_base_override(self):
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
 
@@ -3094,7 +3505,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert "use_ssl" not in out
 
     def test_clears_oauth_token_exchange_fields_for_other_provider_base_overrides(self):
-        from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+        from litellm.litellm_core_utils.clientside_credential_handler import get_dynamic_litellm_params
 
         oauth_values: Final = {
             "token_exchange_audience": "https://graph.microsoft.com",
@@ -3116,7 +3527,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert all(field not in out for field in oauth_values)
 
     def test_clears_oauth_token_exchange_fields_for_microsoft_365_copilot_base_overrides(self):
-        from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+        from litellm.litellm_core_utils.clientside_credential_handler import get_dynamic_litellm_params
 
         oauth_values: Final = {
             "token_exchange_audience": "https://graph.microsoft.com",
@@ -3146,7 +3557,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         # the field name with any value (or empty string) to keep the
         # admin's value forwarded, which is the exfiltration vector this
         # test guards against.
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
 
@@ -3172,7 +3583,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         # deployment, which would flip the call to shared mode and send the
         # admin's Copilot token to the attacker's host. Keeping them is safe
         # because per-user mode ignores the caller api_base anyway.
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
         from litellm.types.utils import CredentialItem
@@ -3201,7 +3612,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert out["api_base"] == "https://attacker.example"
 
     def test_shared_oauth_credential_name_is_cleared_on_base_override(self):
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
         from litellm.types.utils import CredentialItem
@@ -3231,7 +3642,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         # Regression: a caller that echoes an admin-config field name with
         # an *empty* value (or any value) must not be able to keep the
         # admin's value in ``litellm_params``.
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
 
@@ -3253,7 +3664,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert "org-admin-secret" not in str(out)
 
     def test_no_clearing_when_only_api_key_overridden(self):
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
 
@@ -3272,7 +3683,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert out["api_base"] == "https://admin.upstream/v1"
 
     def test_client_api_key_used_when_supplied_with_base_override(self):
-        from litellm.router_utils.clientside_credential_handler import (
+        from litellm.litellm_core_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
 
@@ -3672,6 +4083,7 @@ def test_request_cannot_select_chatgpt_auth_file(allow_client_side_credentials: 
             model="chatgpt-account-a",
         )
 
+
 class TestIsRequestBodySafeBlocksBedrockProjectOverride:
     """``aws_bedrock_project_id`` pins a deployment to a Bedrock project so
     that project's data-retention policy applies to its requests. A
@@ -3931,7 +4343,7 @@ class TestIsRequestBodySafeBlocksNVCFFunctionOverride:
         monkeypatch.setattr(
             auth_utils,
             "_allow_model_level_clientside_configurable_parameters",
-            lambda model, param, request_body_value, llm_router: param == "nvcf_function_id",
+            lambda model, param, request_body_value, llm_router, team_id=None: param == "nvcf_function_id",
         )
 
         assert (
@@ -3971,7 +4383,7 @@ def test_admin_opt_in_proxy_wide_allows_riva_offline() -> None:
 
 
 def test_api_base_override_keeps_the_deployments_riva_offline_mode() -> None:
-    from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+    from litellm.litellm_core_utils.clientside_credential_handler import get_dynamic_litellm_params
 
     out: Final = get_dynamic_litellm_params(
         litellm_params={"model": "nvidia_riva/nvidia/parakeet-0.6b-tdt", "riva_offline": True},
@@ -4016,7 +4428,7 @@ class TestIsRequestBodySafeBlocksRivaUseSsl:
         monkeypatch.setattr(
             auth_utils,
             "_allow_model_level_clientside_configurable_parameters",
-            lambda model, param, request_body_value, llm_router: param == "use_ssl",
+            lambda model, param, request_body_value, llm_router, team_id=None: param == "use_ssl",
         )
 
         assert (
@@ -4454,7 +4866,7 @@ def test_model_level_allow_does_not_skip_subsequent_banned_params(monkeypatch):
     monkeypatch.setattr(
         auth_utils,
         "_allow_model_level_clientside_configurable_parameters",
-        lambda model, param, request_body_value, llm_router: param == "api_base",
+        lambda model, param, request_body_value, llm_router, team_id=None: param == "api_base",
     )
 
     with pytest.raises(ValueError, match="Rejected Request: langfuse_host is not allowed in request") as exc:
@@ -4978,6 +5390,538 @@ class TestIsRequestBodySafeBlocksAwsIdentitySelectors:
         )
 
 
+_VERTEX_TARGET_PARAMS: Final = ("vertex_location", "vertex_project", "vertex_ai_location", "vertex_ai_project")
+
+
+def _vertex_pinned_router(configurable_clientside_auth_params: list[str]) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "gemini-2.5-flash",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-flash",
+                    "vertex_project": "admin-project",
+                    "vertex_location": "europe-west4",
+                    "configurable_clientside_auth_params": configurable_clientside_auth_params,
+                },
+            }
+        ]
+    )
+
+
+class TestIsRequestBodySafeBlocksVertexTargetOverrides:
+    @pytest.mark.parametrize("param", _VERTEX_TARGET_PARAMS)
+    @pytest.mark.parametrize(
+        "placement",
+        [
+            lambda param: {param: "us-central1"},
+            lambda param: {"extra_body": {param: "us-central1"}},
+        ],
+        ids=["root", "extra_body"],
+    )
+    def test_vertex_target_is_rejected_without_admin_opt_in(
+        self, param: str, placement: Callable[[str], dict[str, object]]
+    ) -> None:
+        with pytest.raises(ValueError, match=param):
+            is_request_body_safe(
+                request_body={"model": "gemini-2.5-flash", **placement(param)},
+                general_settings={},
+                llm_router=_vertex_pinned_router([]),
+                model="gemini-2.5-flash",
+                route="/v1/chat/completions",
+            )
+
+    @pytest.mark.parametrize("param", _VERTEX_TARGET_PARAMS)
+    @pytest.mark.parametrize(
+        "placement",
+        [
+            lambda param: {"metadata": {param: "us-central1"}},
+            lambda param: {"litellm_metadata": {param: "us-central1"}},
+            lambda param: {f"metadata[{param}]": "us-central1"},
+            lambda param: {"litellm_params": {"metadata": {param: "us-central1"}}},
+        ],
+        ids=["metadata", "litellm_metadata", "form_metadata", "litellm_params_metadata"],
+    )
+    def test_vertex_target_in_metadata_never_reaches_the_provider_and_is_allowed(
+        self, param: str, placement: Callable[[str], dict[str, object]]
+    ) -> None:
+        assert (
+            is_request_body_safe(
+                request_body={"model": "gemini-2.5-flash", **placement(param)},
+                general_settings={},
+                llm_router=_vertex_pinned_router([]),
+                model="gemini-2.5-flash",
+                route="/v1/chat/completions",
+            )
+            is True
+        )
+
+    def test_vertex_target_is_allowed_under_proxy_wide_opt_in(self) -> None:
+        assert (
+            is_request_body_safe(
+                request_body={"model": "gemini-2.5-flash", **{param: "us-central1" for param in _VERTEX_TARGET_PARAMS}},
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="gemini-2.5-flash",
+                route="/v1/chat/completions",
+            )
+            is True
+        )
+
+    def test_deployment_opt_in_allows_only_the_listed_vertex_target(self) -> None:
+        router: Final = _vertex_pinned_router(["vertex_location"])
+        assert (
+            is_request_body_safe(
+                request_body={"model": "gemini-2.5-flash", "vertex_location": "us-central1"},
+                general_settings={},
+                llm_router=router,
+                model="gemini-2.5-flash",
+                route="/v1/chat/completions",
+            )
+            is True
+        )
+        with pytest.raises(ValueError, match="vertex_project"):
+            is_request_body_safe(
+                request_body={
+                    "model": "gemini-2.5-flash",
+                    "vertex_location": "us-central1",
+                    "vertex_project": "caller-project",
+                },
+                general_settings={},
+                llm_router=router,
+                model="gemini-2.5-flash",
+                route="/v1/chat/completions",
+            )
+
+    @pytest.mark.parametrize("opted_in_first", [True, False])
+    def test_group_opt_in_does_not_count_while_any_deployment_lacks_it(self, opted_in_first: bool) -> None:
+        opted_in: Final = {
+            "model_name": "gemini-group",
+            "litellm_params": {
+                "model": "vertex_ai/gemini-2.5-flash",
+                "vertex_location": "us-central1",
+                "configurable_clientside_auth_params": ["vertex_location"],
+            },
+        }
+        pinned: Final = {
+            "model_name": "gemini-group",
+            "litellm_params": {"model": "vertex_ai/gemini-2.5-flash", "vertex_location": "europe-west4"},
+        }
+        router: Final = Router(model_list=[opted_in, pinned] if opted_in_first else [pinned, opted_in])
+        with pytest.raises(ValueError, match="vertex_location"):
+            is_request_body_safe(
+                request_body={"model": "gemini-group", "vertex_location": "us-central1"},
+                general_settings={},
+                llm_router=router,
+                model="gemini-group",
+                route="/v1/chat/completions",
+            )
+
+    @pytest.mark.parametrize("model", ["chat", "chat-alias", "entry"])
+    @pytest.mark.parametrize("opted_in", [False, True])
+    def test_team_public_model_requires_the_team_deployment_opt_in(self, model: str, opted_in: bool) -> None:
+        router: Final = Router(
+            model_list=[
+                {"model_name": "chat", "litellm_params": {"model": "openai/test-model", "api_key": "test-key"}},
+                {"model_name": "entry", "litellm_params": {"model": "openai/test-model", "api_key": "test-key"}},
+                {
+                    "model_name": "team-chat",
+                    "model_info": {"team_id": "team-one", "team_public_model_name": "chat"},
+                    "litellm_params": {
+                        "model": "vertex_ai/test-model",
+                        "vertex_location": "europe-west4",
+                        "configurable_clientside_auth_params": ["vertex_location"] if opted_in else [],
+                    },
+                },
+            ],
+            model_group_alias={"chat-alias": "chat"},
+            fallbacks=[{"entry": ["chat"]}],
+        )
+        request_body: Final = {"model": model, "vertex_location": "us-central1"}
+        if opted_in:
+            assert (
+                is_request_body_safe(request_body, {}, router, model, route="/v1/chat/completions", team_id="team-one")
+                is True
+            )
+            return
+        with pytest.raises(ValueError, match="vertex_location"):
+            is_request_body_safe(request_body, {}, router, model, route="/v1/chat/completions", team_id="team-one")
+
+    @pytest.mark.parametrize(
+        "model, opted_in, global_exact, is_allowed",
+        [
+            ("chat-test-model", False, False, False),
+            ("chat-test-model", True, False, True),
+            ("other-test-model", False, False, True),
+            ("chat-test-model", False, True, True),
+        ],
+    )
+    def test_team_public_wildcard_keeps_its_own_opt_in(
+        self, model: str, opted_in: bool, global_exact: bool, is_allowed: bool
+    ) -> None:
+        router: Final = Router(
+            model_list=[
+                {"model_name": "*", "litellm_params": {"model": "openai/*", "api_key": "test-key"}},
+                {
+                    "model_name": "team-chat",
+                    "model_info": {"team_id": "team-one", "team_public_model_name": "chat-*"},
+                    "litellm_params": {
+                        "model": "vertex_ai/*",
+                        "configurable_clientside_auth_params": ["vertex_location"] if opted_in else [],
+                    },
+                },
+            ]
+            + (
+                [
+                    {
+                        "model_name": "chat-test-model",
+                        "litellm_params": {"model": "openai/test-model", "api_key": "test-key"},
+                    }
+                ]
+                if global_exact
+                else []
+            )
+        )
+        request_body: Final = {"model": model, "vertex_location": "us-central1"}
+        if is_allowed:
+            assert (
+                is_request_body_safe(request_body, {}, router, model, route="/v1/chat/completions", team_id="team-one")
+                is True
+            )
+            return
+        with pytest.raises(ValueError, match="vertex_location"):
+            is_request_body_safe(request_body, {}, router, model, route="/v1/chat/completions", team_id="team-one")
+
+    @pytest.mark.parametrize("fallback_setting", ["fallbacks", "context_window_fallbacks", "content_policy_fallbacks"])
+    def test_team_internal_fallback_to_another_public_name_keeps_its_pin(self, fallback_setting: str) -> None:
+        router: Final = Router(
+            model_list=[
+                {"model_name": name, "litellm_params": {"model": "openai/test-model", "api_key": "test-key"}}
+                for name in ("chat", "backup")
+            ]
+            + [
+                {
+                    "model_name": internal,
+                    "model_info": {"team_id": "team-one", "team_public_model_name": public},
+                    "litellm_params": {
+                        "model": "vertex_ai/test-model",
+                        "configurable_clientside_auth_params": opt_in,
+                    },
+                }
+                for internal, public, opt_in in (
+                    ("team-chat", "chat", ["vertex_location"]),
+                    ("team-backup", "backup", []),
+                )
+            ],
+            **{fallback_setting: [{"team-chat": ["backup"]}]},
+        )
+        with pytest.raises(ValueError, match="vertex_location"):
+            is_request_body_safe(
+                {"model": "chat", "vertex_location": "us-central1"},
+                {},
+                router,
+                "chat",
+                route="/v1/chat/completions",
+                team_id="team-one",
+            )
+
+    def test_model_with_no_deployment_has_no_opt_in(self) -> None:
+        with pytest.raises(ValueError, match="vertex_location"):
+            is_request_body_safe(
+                request_body={"model": "not-configured", "vertex_location": "us-central1"},
+                general_settings={},
+                llm_router=_vertex_pinned_router(["vertex_location"]),
+                model="not-configured",
+                route="/v1/chat/completions",
+            )
+
+    def test_group_opt_in_counts_when_every_deployment_carries_it(self) -> None:
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "gemini-group",
+                    "litellm_params": {
+                        "model": "vertex_ai/gemini-2.5-flash",
+                        "vertex_location": location,
+                        "configurable_clientside_auth_params": ["vertex_location"],
+                    },
+                }
+                for location in ("us-central1", "europe-west4")
+            ]
+        )
+        assert (
+            is_request_body_safe(
+                request_body={"model": "gemini-group", "vertex_location": "us-central1"},
+                general_settings={},
+                llm_router=router,
+                model="gemini-group",
+                route="/v1/chat/completions",
+            )
+            is True
+        )
+
+    @pytest.mark.parametrize(
+        "model, is_allowed", [("public-alias", False), ("public-gemini-2.5-flash", True)], ids=["alias", "direct"]
+    )
+    def test_alias_opt_in_comes_from_the_group_the_alias_routes_to(self, model: str, is_allowed: bool) -> None:
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "gemini-eu/*",
+                    "litellm_params": {"model": "vertex_ai/*", "vertex_location": "europe-west4"},
+                },
+                {
+                    "model_name": "public-*",
+                    "litellm_params": {
+                        "model": "vertex_ai/*",
+                        "vertex_location": "europe-west4",
+                        "configurable_clientside_auth_params": ["vertex_location"],
+                    },
+                },
+            ],
+            model_group_alias={"public-alias": "gemini-eu/gemini-2.5-flash"},
+        )
+        request_body: Final = {"model": model, "vertex_location": "us-central1"}
+        if is_allowed:
+            assert is_request_body_safe(request_body, {}, router, model, route="/v1/chat/completions") is True
+            return
+        with pytest.raises(ValueError, match="vertex_location"):
+            is_request_body_safe(request_body, {}, router, model, route="/v1/chat/completions")
+
+    @staticmethod
+    def _opted_in_and_pinned_router(
+        router_fallbacks: list[dict[str, list[str]]],
+        fallback_setting: str = "fallbacks",
+        model_group_alias: dict[str, str] | None = None,
+    ) -> Router:
+        return Router(
+            model_list=[
+                {
+                    "model_name": name,
+                    "litellm_params": {
+                        "model": "vertex_ai/gemini-2.5-flash",
+                        "vertex_location": "europe-west4",
+                        "configurable_clientside_auth_params": opt_in,
+                    },
+                }
+                for name, opt_in in (
+                    ("gemini-optin", ["vertex_location"]),
+                    ("gemini-optin-other", ["vertex_location"]),
+                    ("gemini-pinned", []),
+                )
+            ],
+            model_group_alias=model_group_alias or {},
+            **{fallback_setting: router_fallbacks},
+        )
+
+    @pytest.mark.parametrize(
+        "fields, is_allowed",
+        [
+            ({"vertex_location": "us-central1", "fallbacks": ["gemini-pinned"]}, False),
+            ({"fallbacks": [{"model": "gemini-pinned", "vertex_location": "us-central1"}]}, False),
+            ({"vertex_location": "us-central1", "fallbacks": ["gemini-optin-other"]}, True),
+            ({"fallbacks": [{"model": "gemini-optin-other", "vertex_location": "us-central1"}]}, True),
+        ],
+        ids=["pinned", "pinned_entry_with_field", "opted_in", "opted_in_entry_with_field"],
+    )
+    def test_request_fallback_needs_the_same_opt_in(self, fields: dict[str, object], is_allowed: bool) -> None:
+        router: Final = self._opted_in_and_pinned_router([])
+        request_body: Final = {"model": "gemini-optin", **fields}
+        if is_allowed:
+            assert is_request_body_safe(request_body, {}, router, "gemini-optin", route="/v1/chat/completions") is True
+            return
+        with pytest.raises(ValueError, match="vertex_location"):
+            is_request_body_safe(request_body, {}, router, "gemini-optin", route="/v1/chat/completions")
+
+    @pytest.mark.parametrize("fallback_setting", ["fallbacks", "context_window_fallbacks", "content_policy_fallbacks"])
+    @pytest.mark.parametrize(
+        "fallback_group, is_allowed",
+        [("gemini-pinned", False), ("gemini-optin-other", True)],
+        ids=["pinned", "opted_in"],
+    )
+    def test_router_fallback_needs_the_same_opt_in(
+        self, fallback_setting: str, fallback_group: str, is_allowed: bool
+    ) -> None:
+        router: Final = self._opted_in_and_pinned_router([{"gemini-optin": [fallback_group]}], fallback_setting)
+        request_body: Final = {"model": "gemini-optin", "vertex_location": "us-central1"}
+        if is_allowed:
+            assert is_request_body_safe(request_body, {}, router, "gemini-optin", route="/v1/chat/completions") is True
+            return
+        with pytest.raises(ValueError, match="vertex_location"):
+            is_request_body_safe(request_body, {}, router, "gemini-optin", route="/v1/chat/completions")
+
+    @pytest.mark.parametrize(
+        "model, fields, is_allowed",
+        [
+            ("gemini-optin", {"vertex_location": "us-central1"}, True),
+            ("openai-group", {"vertex_location": "us-central1"}, True),
+            ("gemini-optin", {"api_base": "https://eu.example.com"}, False),
+            ("studio-group", {"vertex_location": "us-central1"}, False),
+        ],
+        ids=["vertex_field_to_openai_fallback", "vertex_field_on_openai", "api_base_to_openai_fallback", "gemini"],
+    )
+    def test_only_google_groups_need_the_vertex_opt_in(
+        self, model: str, fields: dict[str, object], is_allowed: bool
+    ) -> None:
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "gemini-optin",
+                    "litellm_params": {
+                        "model": "vertex_ai/gemini-2.5-flash",
+                        "configurable_clientside_auth_params": ["vertex_location", {"api_base": r"https://eu\..*"}],
+                    },
+                },
+                {"model_name": "openai-group", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"}},
+                {"model_name": "studio-group", "litellm_params": {"model": "gemini/gemini-2.5-flash", "api_key": "k"}},
+            ],
+            fallbacks=[{"gemini-optin": ["openai-group"]}, {"studio-group": ["openai-group"]}],
+        )
+        request_body: Final = {"model": model, **fields}
+        if is_allowed:
+            assert is_request_body_safe(request_body, {}, router, model, route="/v1/chat/completions") is True
+            return
+        with pytest.raises(ValueError, match=r"vertex_location|api_base"):
+            is_request_body_safe(request_body, {}, router, model, route="/v1/chat/completions")
+
+    def test_many_fallback_entries_on_one_wildcard_are_checked_in_linear_time(self) -> None:
+        router: Final = Router(
+            model_list=[{"model_name": "*", "litellm_params": {"model": "openai/*", "api_key": "k"}}]
+        )
+        request_body: Final = {
+            "model": "gpt-4o-mini",
+            "fallbacks": [{"model": f"model-{index % 100}", "vertex_location": f"r{index}"} for index in range(5000)],
+        }
+
+        started: Final = time.perf_counter()
+        assert is_request_body_safe(request_body, {}, router, "gpt-4o-mini", route="/v1/chat/completions") is True
+        assert time.perf_counter() - started < 10
+
+    def test_too_many_fallback_models_for_an_opt_in_check_are_rejected(self) -> None:
+        router: Final = Router(
+            model_list=[{"model_name": "*", "litellm_params": {"model": "openai/*", "api_key": "k"}}]
+        )
+        request_body: Final = {
+            "model": "gpt-4o-mini",
+            "vertex_location": "us-central1",
+            "fallbacks": [f"model-{index}" for index in range(101)],
+        }
+
+        with pytest.raises(ValueError, match="more than 100 fallback models"):
+            is_request_body_safe(request_body, {}, router, "gpt-4o-mini", route="/v1/chat/completions")
+
+    def test_one_wildcard_serving_two_providers_checks_the_google_one(self) -> None:
+        router: Final = Router(model_list=[{"model_name": "*", "litellm_params": {"model": "*"}}])
+        request_body: Final = {
+            "model": "vertex_ai/gemini-2.5-flash",
+            "vertex_location": "us-central1",
+            "fallbacks": ["xai/grok-3"],
+        }
+
+        with pytest.raises(ValueError, match="vertex_location"):
+            is_request_body_safe(request_body, {}, router, "vertex_ai/gemini-2.5-flash", route="/v1/chat/completions")
+
+    def test_a_pinned_group_sharing_a_deployment_id_with_an_opted_in_group_is_still_checked(self) -> None:
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": name,
+                    "litellm_params": {
+                        "model": "vertex_ai/gemini-2.5-flash",
+                        "vertex_location": "europe-west4",
+                        "configurable_clientside_auth_params": opt_in,
+                    },
+                    "model_info": {"id": "shared-id"},
+                }
+                for name, opt_in in (("a-pinned", []), ("z-optin", ["vertex_location"]))
+            ]
+        )
+        request_body: Final = {"model": "a-pinned", "vertex_location": "us-central1", "fallbacks": ["z-optin"]}
+
+        with pytest.raises(ValueError, match="vertex_location"):
+            is_request_body_safe(request_body, {}, router, "a-pinned", route="/v1/chat/completions")
+
+    @pytest.mark.parametrize(
+        "model, is_allowed", [("public-alias", True), ("gemini-optin", False)], ids=["alias", "aliased_target"]
+    )
+    def test_alias_chain_is_checked_one_hop_like_the_router_serves_it(self, model: str, is_allowed: bool) -> None:
+        router: Final = self._opted_in_and_pinned_router(
+            [], model_group_alias={"public-alias": "gemini-optin", "gemini-optin": "gemini-pinned"}
+        )
+        request_body: Final = {"model": model, "vertex_location": "us-central1"}
+        if is_allowed:
+            assert is_request_body_safe(request_body, {}, router, model, route="/v1/chat/completions") is True
+            return
+        with pytest.raises(ValueError, match="vertex_location"):
+            is_request_body_safe(request_body, {}, router, model, route="/v1/chat/completions")
+
+    @pytest.mark.parametrize(
+        "route",
+        [
+            "/openai/deployments/gemini-pinned/chat/completions",
+            "/v1beta/models/gemini-pinned:generateContent",
+        ],
+    )
+    def test_model_named_in_the_route_needs_the_opt_in_too(self, route: str) -> None:
+        router: Final = self._opted_in_and_pinned_router([])
+        request_body: Final = {"model": "gemini-optin", "vertex_location": "us-central1"}
+        with pytest.raises(ValueError, match="vertex_location"):
+            is_request_body_safe(request_body, {}, router, "gemini-optin", route=route)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("opted_in", [True, False])
+    async def test_opt_in_of_the_model_named_in_a_google_route_decides(self, monkeypatch, opted_in: bool) -> None:
+        route: Final = "/v1beta/models/gemini-2.5-flash:generateContent"
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.llm_router", _vertex_pinned_router(["vertex_location"] if opted_in else [])
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+        request: Final = Request({"type": "http", "method": "POST", "path": route, "headers": [], "query_string": b""})
+        if opted_in:
+            await pre_db_read_auth_checks(request=request, request_data={"vertex_location": "us-central1"}, route=route)
+            return
+        with pytest.raises(ValueError, match="vertex_location"):
+            await pre_db_read_auth_checks(request=request, request_data={"vertex_location": "us-central1"}, route=route)
+
+    @pytest.mark.parametrize(
+        "route, kept_params",
+        [
+            ("/vertex_ai/live", _VERTEX_TARGET_PARAMS),
+            ("/rag/ingest", _VERTEX_TARGET_PARAMS),
+            ("/v1/rag/ingest", _VERTEX_TARGET_PARAMS),
+        ],
+    )
+    def test_routes_that_name_their_vertex_target_keep_it(self, route: str, kept_params: tuple[str, ...]) -> None:
+        assert (
+            is_request_body_safe(
+                request_body={param: "caller-chosen" for param in kept_params},
+                general_settings={},
+                llm_router=None,
+                model="",
+                route=route,
+            )
+            is True
+        )
+
+    @pytest.mark.parametrize(
+        "route, param",
+        [
+            ("/vertex_ai/live", "api_base"),
+            ("/rag/ingest", "api_base"),
+            ("/v1/rag/ingest", "api_base"),
+        ],
+    )
+    def test_routes_that_name_their_vertex_target_reject_every_other_banned_param(self, route: str, param: str) -> None:
+        with pytest.raises(ValueError, match=param):
+            is_request_body_safe(
+                request_body={"vertex_location": "us-central1", param: "caller-chosen"},
+                general_settings={},
+                llm_router=None,
+                model="",
+                route=route,
+            )
+
+
 @pytest.mark.parametrize(
     "allowed_param, input_value, should_return_true",
     [
@@ -5173,7 +6117,7 @@ def test_per_user_credential_slots_in_request_body_are_rejected(field: str) -> N
     connection by proxy-injected secret_fields; a body-supplied value could only spoof either."""
     with pytest.raises(ValueError, match="Rejected Request") as error:
         is_request_body_safe(
-            request_body={"model": "github_copilot/gpt-4o", field: "attacker-chosen"},
+            request_body={"model": "github_copilot/gpt-4o", field: "caller-chosen"},
             general_settings={},
             llm_router=None,
             model="github_copilot/gpt-4o",
@@ -5311,6 +6255,336 @@ def test_get_end_user_id_from_request_body_backwards_compatibility():
         assert get_end_user_id_from_request_body(request_body) == expected_end_user_id
 
 
+_BUCKET_ALLOWLIST: Final = {"allowed_client_side_s3_buckets": ["team-batch-bucket"]}
+_ENDPOINT_ALLOWLIST: Final = {"allowed_client_side_s3_endpoint_urls": ["https://s3.us-west-2.amazonaws.com"]}
+
+
+def _batches_body_is_safe(body: dict[str, object], general_settings: dict[str, object]) -> bool:
+    return is_request_body_safe(
+        request_body=body,
+        general_settings=general_settings,
+        llm_router=None,
+        model="",
+        route="/v1/batches",
+    )
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("s3_bucket_name", "team-batch-bucket"),
+        ("s3_output_bucket_name", "team-batch-bucket"),
+        ("allow_legacy_cloud_file_ids", True),
+        ("s3_endpoint_url", "https://s3.us-west-2.amazonaws.com"),
+    ],
+)
+def test_storage_setting_in_request_body_is_rejected_without_an_allowlist(field: str, value: object) -> None:
+    with pytest.raises(ValueError, match="Rejected Request") as error:
+        _batches_body_is_safe({field: value}, {})
+
+    assert field in str(error.value)
+
+
+@pytest.mark.parametrize("field", ["s3_bucket_name", "s3_output_bucket_name"])
+def test_bucket_on_the_proxy_allowlist_is_accepted(field: str) -> None:
+    assert _batches_body_is_safe({field: "team-batch-bucket"}, _BUCKET_ALLOWLIST) is True
+
+
+@pytest.mark.parametrize("field", ["s3_bucket_name", "s3_output_bucket_name"])
+def test_bucket_off_the_proxy_allowlist_is_rejected_and_names_the_setting(field: str) -> None:
+    with pytest.raises(ValueError, match=field) as error:
+        _batches_body_is_safe({field: "someone-elses-bucket"}, _BUCKET_ALLOWLIST)
+
+    assert "general_settings.allowed_client_side_s3_buckets" in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "general_settings,accepted_body,rejected_field",
+    [
+        (
+            {**_BUCKET_ALLOWLIST, "allowed_client_side_s3_endpoint_urls": None},
+            {"s3_bucket_name": "team-batch-bucket"},
+            "s3_endpoint_url",
+        ),
+        (
+            {**_ENDPOINT_ALLOWLIST, "allowed_client_side_s3_buckets": None},
+            {"s3_endpoint_url": "https://s3.us-west-2.amazonaws.com"},
+            "s3_bucket_name",
+        ),
+    ],
+)
+def test_allowlist_left_null_in_config_is_treated_as_empty(
+    general_settings: dict[str, object], accepted_body: dict[str, object], rejected_field: str
+) -> None:
+    assert _batches_body_is_safe(accepted_body, general_settings) is True
+    with pytest.raises(ValueError, match=f"{rejected_field} is not allowed"):
+        _batches_body_is_safe({rejected_field: "team-batch-bucket"}, general_settings)
+
+
+def test_endpoint_on_the_proxy_allowlist_is_accepted() -> None:
+    assert _batches_body_is_safe({"s3_endpoint_url": "https://s3.us-west-2.amazonaws.com"}, _ENDPOINT_ALLOWLIST) is True
+
+
+def test_endpoint_off_the_proxy_allowlist_is_rejected_and_names_the_setting() -> None:
+    with pytest.raises(ValueError, match="s3_endpoint_url") as error:
+        _batches_body_is_safe({"s3_endpoint_url": "https://attacker.example"}, _ENDPOINT_ALLOWLIST)
+
+    assert "general_settings.allowed_client_side_s3_endpoint_urls" in str(error.value)
+
+
+def test_bucket_allowlist_admits_neither_an_endpoint_nor_the_legacy_file_flag() -> None:
+    with pytest.raises(ValueError, match="s3_endpoint_url"):
+        _batches_body_is_safe(
+            {"s3_bucket_name": "team-batch-bucket", "s3_endpoint_url": "team-batch-bucket"},
+            _BUCKET_ALLOWLIST,
+        )
+    with pytest.raises(ValueError, match="allow_legacy_cloud_file_ids"):
+        _batches_body_is_safe(
+            {"s3_bucket_name": "team-batch-bucket", "allow_legacy_cloud_file_ids": True},
+            _BUCKET_ALLOWLIST,
+        )
+
+
+def test_endpoint_allowlist_does_not_admit_a_bucket() -> None:
+    with pytest.raises(ValueError, match="s3_bucket_name"):
+        _batches_body_is_safe({"s3_bucket_name": "https://s3.us-west-2.amazonaws.com"}, _ENDPOINT_ALLOWLIST)
+
+
+def test_bucket_nested_in_extra_body_is_checked_against_the_allowlist() -> None:
+    assert _batches_body_is_safe({"extra_body": {"s3_bucket_name": "team-batch-bucket"}}, _BUCKET_ALLOWLIST) is True
+    with pytest.raises(ValueError, match="s3_bucket_name"):
+        _batches_body_is_safe({"extra_body": {"s3_bucket_name": "someone-elses-bucket"}}, _BUCKET_ALLOWLIST)
+
+
+def test_proxy_wide_client_side_credentials_still_admit_any_bucket() -> None:
+    assert (
+        _batches_body_is_safe(
+            {"s3_bucket_name": "any-bucket", "allow_legacy_cloud_file_ids": True},
+            {"allow_client_side_credentials": True},
+        )
+        is True
+    )
+
+
+def test_other_blocked_fields_do_not_point_at_the_storage_allowlist() -> None:
+    with pytest.raises(ValueError, match="api_base") as error:
+        _batches_body_is_safe({"api_base": "https://attacker.example"}, _BUCKET_ALLOWLIST)
+
+    assert "allowed_client_side" not in str(error.value)
+
+
+_TEAM_A_METADATA: Final = {"allowed_s3_buckets": ["team-a-bucket"]}
+
+
+def _enforce_for_team(
+    body: Mapping[str, object], team_metadata: Mapping[str, object] | None, **general_settings: object
+) -> None:
+    enforce_team_s3_bucket_allowlist(
+        request_body=body,
+        general_settings=general_settings,
+        llm_router=None,
+        team_metadata=team_metadata,
+    )
+
+
+@pytest.mark.parametrize("opted_in", [False, True])
+def test_team_bucket_validation_preserves_the_authenticated_model_opt_in(opted_in: bool) -> None:
+    router: Final = Router(
+        model_list=[
+            {"model_name": "chat", "litellm_params": {"model": "openai/test-model"}},
+            {
+                "model_name": "team-chat",
+                "model_info": {"team_id": "team-one", "team_public_model_name": "chat"},
+                "litellm_params": {
+                    "model": "vertex_ai/test-model",
+                    "configurable_clientside_auth_params": ["vertex_location"] if opted_in else [],
+                },
+            },
+        ]
+    )
+    body: Final = {"model": "chat", "s3_bucket_name": "team-a-bucket", "vertex_location": "us-central1"}
+    if opted_in:
+        enforce_team_s3_bucket_allowlist(body, {}, router, _TEAM_A_METADATA, team_id="team-one")
+        return
+    with pytest.raises(HTTPException, match="vertex_location"):
+        enforce_team_s3_bucket_allowlist(body, {}, router, _TEAM_A_METADATA, team_id="team-one")
+
+
+def _rejection_for_team(body: Mapping[str, object], team_metadata: Mapping[str, object] | None) -> HTTPException:
+    with pytest.raises(HTTPException) as rejection:
+        _enforce_for_team(body, team_metadata)
+    assert rejection.value.status_code == 401, rejection.value.detail
+    return rejection.value
+
+
+@pytest.mark.parametrize("field", ["s3_bucket_name", "s3_output_bucket_name"])
+def test_team_allowlist_admits_its_own_bucket_and_rejects_another_teams(field: str) -> None:
+    _enforce_for_team({field: "team-a-bucket"}, _TEAM_A_METADATA)
+    rejection: Final = _rejection_for_team({field: "team-b-bucket"}, _TEAM_A_METADATA)
+    assert f"{field} is not allowed in request body" in str(rejection.detail)
+    assert "metadata.allowed_s3_buckets" in str(rejection.detail)
+
+
+@pytest.mark.parametrize(
+    "team_metadata",
+    [None, {}, {"allowed_s3_buckets": None}, {"allowed_s3_buckets": "team-a-bucket"}, {"allowed_s3_buckets": [1]}],
+)
+def test_team_without_a_usable_allowlist_cannot_pick_a_bucket(team_metadata: Mapping[str, object] | None) -> None:
+    _rejection_for_team({"s3_bucket_name": "team-a-bucket"}, team_metadata)
+
+
+def _team_bucket_admitted(
+    body: Mapping[str, object], team_metadata: Mapping[str, object] | None, **general_settings: object
+) -> bool:
+    try:
+        _enforce_for_team(body, team_metadata, **general_settings)
+    except HTTPException:
+        return False
+    return True
+
+
+def test_proxy_wide_allowlist_still_applies_alongside_the_team_allowlist() -> None:
+    assert _team_bucket_admitted(
+        {"s3_bucket_name": "team-a-bucket", "s3_output_bucket_name": "shared-bucket"},
+        _TEAM_A_METADATA,
+        allowed_client_side_s3_buckets=["shared-bucket"],
+    )
+    assert not _team_bucket_admitted({"s3_output_bucket_name": "shared-bucket"}, _TEAM_A_METADATA)
+
+
+def test_team_allowlist_is_checked_for_buckets_nested_in_the_body() -> None:
+    _enforce_for_team({"extra_body": {"s3_bucket_name": "team-a-bucket"}}, _TEAM_A_METADATA)
+    _rejection_for_team({"litellm_metadata": {"s3_bucket_name": "team-b-bucket"}}, _TEAM_A_METADATA)
+
+
+def test_team_allowlist_admits_no_other_blocked_field() -> None:
+    rejection: Final = _rejection_for_team({"s3_endpoint_url": "team-a-bucket"}, _TEAM_A_METADATA)
+    assert "s3_endpoint_url" in str(rejection.detail)
+
+
+def _routed_request(method: str, route_template: str | None, path: str) -> Request:
+    scope: Final[dict[str, object]] = {
+        "type": "http",
+        "method": method,
+        "path": path,
+        "headers": [],
+        "query_string": b"",
+    }
+    return Request(scope if route_template is None else {**scope, "route": SimpleNamespace(path=route_template)})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route_template,path",
+    [
+        ("/v1/files", "/v1/files"),
+        ("/files", "/files"),
+        ("/{provider}/v1/files", "/bedrock/v1/files"),
+        ("/v1/batches", "/v1/batches"),
+        ("/batches", "/batches"),
+        ("/{provider}/v1/batches", "/bedrock/v1/batches"),
+    ],
+)
+async def test_auth_leaves_request_buckets_to_the_upload_and_batch_create_handlers(
+    route_template: str, path: str
+) -> None:
+    assert await _auth_admits(
+        _routed_request("POST", route_template, path),
+        {"s3_bucket_name": "team-b-bucket", "s3_output_bucket_name": "team-b-bucket"},
+        path,
+    )
+
+
+async def _auth_admits(request: Request, request_data: dict[str, object], route: str) -> bool:
+    try:
+        await pre_db_read_auth_checks(request=request, request_data=request_data, route=route)
+    except ValueError:
+        return False
+    return True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method,route_template,path",
+    [
+        ("GET", "/v1/files", "/v1/files"),
+        ("POST", "/v1/files/{file_id}/content", "/v1/files/file-1/content"),
+        ("POST", "/v1/chat/completions", "/v1/chat/completions"),
+        ("POST", None, "/v1/batches"),
+    ],
+)
+async def test_auth_still_rejects_request_buckets_on_every_other_route(
+    method: str, route_template: str | None, path: str
+) -> None:
+    with pytest.raises(ValueError, match="s3_bucket_name is not allowed"):
+        await pre_db_read_auth_checks(
+            request=_routed_request(method, route_template, path),
+            request_data={"s3_bucket_name": "team-b-bucket"},
+            route=path,
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_caller_can_never_send_the_stored_bucket_param() -> None:
+    with pytest.raises(ValueError, match="stored_s3_bucket_name is not allowed"):
+        await pre_db_read_auth_checks(
+            request=_routed_request("POST", "/v1/batches", "/v1/batches"),
+            request_data={"stored_s3_bucket_name": "team-b-bucket"},
+            route="/v1/batches",
+        )
+    rejection: Final = _rejection_for_team(
+        {"stored_s3_bucket_name": "team-a-bucket"}, {"allowed_s3_buckets": ["team-a-bucket"]}
+    )
+    assert "stored_s3_bucket_name" in str(rejection.detail)
+    with pytest.raises(ValueError, match="stored_s3_bucket_name"):
+        _batches_body_is_safe({"stored_s3_bucket_name": "team-a-bucket"}, _BUCKET_ALLOWLIST)
+
+
+@pytest.mark.asyncio
+async def test_auth_still_rejects_other_blocked_fields_on_the_upload_and_batch_create_routes() -> None:
+    with pytest.raises(ValueError, match="api_base"):
+        await pre_db_read_auth_checks(
+            request=_routed_request("POST", "/v1/batches", "/v1/batches"),
+            request_data={"s3_bucket_name": "team-b-bucket", "api_base": "https://attacker.example"},
+            route="/v1/batches",
+        )
+
+
+@pytest.mark.parametrize(
+    "role,stored,sent,refused",
+    [
+        (LitellmUserRoles.PROXY_ADMIN, None, ["any-bucket"], False),
+        (LitellmUserRoles.INTERNAL_USER, None, ["any-bucket"], True),
+        (LitellmUserRoles.INTERNAL_USER, ["team-a-bucket"], ["team-a-bucket", "other"], True),
+        (LitellmUserRoles.INTERNAL_USER, ["team-a-bucket"], None, True),
+        (LitellmUserRoles.INTERNAL_USER, ["team-a-bucket"], ["team-a-bucket"], False),
+    ],
+)
+def test_only_proxy_admins_change_a_teams_s3_bucket_list(
+    role: LitellmUserRoles, stored: list[str] | None, sent: list[str] | None, refused: bool
+) -> None:
+    from litellm.proxy._types import UpdateTeamRequest
+    from litellm.proxy.auth.auth_utils import enforce_batch_limits_are_admin_only
+
+    existing: Final = None if stored is None else {"allowed_s3_buckets": stored, "project": "x"}
+    request: Final = UpdateTeamRequest(
+        team_id="t1", metadata={"project": "x"} if sent is None else {"allowed_s3_buckets": sent, "project": "x"}
+    )
+    caller: Final = UserAPIKeyAuth(user_role=role, user_id="u1")
+
+    if not refused:
+        enforce_batch_limits_are_admin_only(
+            data=request, existing_metadata=existing, user_api_key_dict=caller, entity="team"
+        )
+        return
+    with pytest.raises(HTTPException) as rejection:
+        enforce_batch_limits_are_admin_only(
+            data=request, existing_metadata=existing, user_api_key_dict=caller, entity="team"
+        )
+    assert rejection.value.status_code == 403
+    assert "Only proxy admins can set allowed_s3_buckets on a team." in str(rejection.value.detail)
+
+
 def _request_with_content_length(content_length: int) -> Request:
     return Request(
         {
@@ -5357,7 +6631,9 @@ async def test_a_non_numeric_max_request_size_mb_is_ignored_without_premium():
 def test_chatgpt_model_configuration_reaches_role_authorization(
     allow_client_side_credentials: bool, route: str
 ) -> None:
-    body: Final = {"litellm_params": {"model": "chatgpt/gpt-6-luna", "chatgpt_auth_file": "/tokens/account-a/auth.json"}}
+    body: Final = {
+        "litellm_params": {"model": "chatgpt/gpt-6-luna", "chatgpt_auth_file": "/tokens/account-a/auth.json"}
+    }
     assert is_request_body_safe(
         request_body=body,
         general_settings={"allow_client_side_credentials": allow_client_side_credentials},
