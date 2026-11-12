@@ -23,14 +23,15 @@ from pydantic import BaseModel
 from litellm.types.utils import Usage, PromptTokensDetailsWrapper, CompletionTokensDetailsWrapper
 
 source, first_line = inspect.getsourcelines(BaseModel.model_rebuild)
-delete_line = first_line + next(i for i, line in enumerate(source) if "delattr(cls, attr)" in line)
+delete_line = next((first_line + i for i, line in enumerate(source) if "delattr(cls, attr)" in line), None)
 sys.setswitchinterval(1e-6)
 
 for model in (Usage, PromptTokensDetailsWrapper, CompletionTokensDetailsWrapper):
     barrier = threading.Barrier(8, timeout=5)
+    start_barrier = threading.Barrier(8, timeout=5)
     def trace(frame, event, arg):
         if (event == "line" and frame.f_code is BaseModel.model_rebuild.__func__.__code__
-            and frame.f_lineno == delete_line and frame.f_locals.get("cls") is model
+            and delete_line is not None and frame.f_lineno == delete_line and frame.f_locals.get("cls") is model
             and frame.f_locals.get("attr") == "__pydantic_core_schema__"):
             barrier.wait()
         return trace
@@ -38,6 +39,7 @@ for model in (Usage, PromptTokensDetailsWrapper, CompletionTokensDetailsWrapper)
     def construct(index):
         sys.settrace(trace)
         try:
+            start_barrier.wait()
             return model().model_dump()
         finally:
             sys.settrace(None)
