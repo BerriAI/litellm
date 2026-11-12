@@ -599,7 +599,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
-        data: dict,
+        data: dict[str, object],
         call_type: CallTypesLiteral,
     ) -> Exception | str | dict | None:
         """
@@ -690,8 +690,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
         if steered is None:
             return None
-        rewritten: Final[dict[str, object]] = {**data, "model": served_model}
-        return rewritten
+        return dict(data, model=served_model)
 
     def _team_may_call(self, user_api_key_dict: UserAPIKeyAuth, model: str) -> bool:
         from litellm.proxy.auth.auth_checks import model_in_access_group
@@ -731,7 +730,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
     @with_service_target(RATE_LIMITS_TARGET)
     async def async_post_call_success_hook(
-        self, data: dict, user_api_key_dict: UserAPIKeyAuth, response
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response
     ) -> LLMResponseTypes:
         """
         Post-call hook to add rate limit headers to response.
