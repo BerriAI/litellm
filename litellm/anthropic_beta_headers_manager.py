@@ -49,7 +49,6 @@ _BETA_HEADERS_CONFIG_ADAPTER: Final = TypeAdapter(BetaHeadersConfig)
 _DECODED_JSON: Final = TypeAdapter(object)
 
 BetaPlacement: TypeAlias = Literal["header", "body"]
-UnlistedBetas: TypeAlias = Literal["drop", "forward"]
 _HEADER_ONLY_COLUMN_SUFFIX: Final = "_header_only"
 
 
@@ -281,13 +280,12 @@ def filter_and_transform_beta_headers(
     beta_headers: list[str],
     provider: str,
     placement: BetaPlacement = "header",
-    unlisted: UnlistedBetas = "drop",
 ) -> list[str]:
     """
     Filter and transform beta headers based on provider's mapping configuration.
 
     This function:
-    1. Only allows headers that are present in the provider's mapping keys, unless ``unlisted`` is "forward"
+    1. Only allows headers that are present in the provider's mapping keys
     2. Filters out headers with null values (unsupported)
     3. Maps headers to provider-specific names (e.g., advanced-tool-use -> tool-search-tool)
 
@@ -295,7 +293,6 @@ def filter_and_transform_beta_headers(
         beta_headers: List of Anthropic beta header values
         provider: Provider name (e.g., "anthropic", "bedrock", "vertex_ai")
         placement: Whether the betas travel as the anthropic-beta header or the anthropic_beta body field
-        unlisted: Whether a beta missing from the mapping is dropped or forwarded as sent
 
     Returns:
         List of filtered and transformed beta headers for the provider
@@ -309,10 +306,6 @@ def filter_and_transform_beta_headers(
 
     for header in beta_headers:
         header = header.strip()
-
-        if header not in provider_mapping and unlisted == "forward":
-            filtered_headers.add(header)
-            continue
 
         # Check if header is in the mapping
         if header not in provider_mapping:
@@ -426,7 +419,6 @@ def update_headers_with_filtered_beta(
     headers: dict,
     provider: str,
     api_base: str | None = None,
-    unlisted: UnlistedBetas = "drop",
     keep: frozenset[str] = frozenset(),
 ) -> dict:
     """
@@ -437,7 +429,6 @@ def update_headers_with_filtered_beta(
         headers: Request headers dict (will be modified in place)
         provider: Provider name
         api_base: Deployment api_base, used to pick the allowlist row (Foundry hosts use ``azure_ai``)
-        unlisted: Whether a beta missing from the row is dropped or forwarded as sent
         keep: Betas the routed model accepts, forwarded as sent whatever the row says
 
     Returns:
@@ -457,7 +448,6 @@ def update_headers_with_filtered_beta(
                 *filter_and_transform_beta_headers(
                     beta_headers=[b for b in beta_values if b not in keep],
                     provider=resolve_beta_provider(provider, api_base),
-                    unlisted=unlisted,
                 ),
                 *(b for b in beta_values if b in keep),
             ]

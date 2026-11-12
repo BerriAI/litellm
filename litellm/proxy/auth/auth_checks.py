@@ -1081,6 +1081,15 @@ BUDGET_ENFORCED_SIDE_EFFECT_ROUTES: Final = frozenset(
     }
 )
 
+VIDEO_RETRIEVAL_ROUTES: Final = frozenset(
+    {
+        "/videos/{video_id}",
+        "/v1/videos/{video_id}",
+        "/videos/{video_id}/content",
+        "/v1/videos/{video_id}/content",
+    }
+)
+
 MCP_DISCOVERY_ROUTES: Final = frozenset({"/mcp-rest/tools/list", "/v1/mcp/tools"})
 
 MCP_ZERO_SPEND_JSONRPC_METHODS: Final = frozenset({"initialize", "notifications/initialized", "ping", "tools/list"})
@@ -1095,6 +1104,10 @@ def is_mcp_discovery_request(route: str, request_body: Mapping[str, object]) -> 
         return False
     method: Final = request_body.get("method")
     return isinstance(method, str) and method in MCP_ZERO_SPEND_JSONRPC_METHODS
+
+
+def is_video_retrieval_request(route: str, http_method: str | None) -> bool:
+    return http_method == "GET" and RouteChecks.check_route_access(route=route, allowed_routes=VIDEO_RETRIEVAL_ROUTES)
 
 
 class ModelMaxBudgetHolder(Protocol):
@@ -1126,8 +1139,9 @@ def request_skips_budget_checks(
     llm_router: Router | None,
     *,
     request_body: Mapping[str, object] | None = None,
+    http_method: str | None = None,
 ) -> bool:
-    if route_skips_budget_checks(route=route):
+    if route_skips_budget_checks(route=route) or is_video_retrieval_request(route=route, http_method=http_method):
         return True
     if request_body is not None and is_mcp_discovery_request(route=route, request_body=request_body):
         return True
@@ -1189,6 +1203,7 @@ async def common_checks(
             model=_model,
             llm_router=llm_router,
             request_body=_typed_request_body(request_body),
+            http_method=RouteChecks.get_request_method(request),
         )
     )
 

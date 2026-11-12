@@ -86,6 +86,39 @@ def test_a_broken_factory_exits_the_worker_as_a_startup_failure(
     assert exit_info.value.code == uvicorn_config.STARTUP_FAILURE
 
 
+@pytest.mark.parametrize("worker_overrides", [None, {"factory": True}])
+def test_a_factory_flag_in_the_options_reaches_the_workers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, worker_overrides: dict[str, object] | None
+) -> None:
+    (tmp_path / "reload_factory_flag_app.py").write_text(
+        "async def served(scope, receive, send):\n"
+        "    await send({'type': 'http.response.start', 'status': 204, 'headers': []})\n"
+        "    await send({'type': 'http.response.body', 'body': b'', 'more_body': False})\n"
+        "\n"
+        "def factory():\n"
+        "    return served\n"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    config: Final = pool_config(
+        RELOAD_OPTIONS.validate_python({**_options("reload_factory_flag_app:factory"), "factory": True}),
+        workers=POOL_WORKERS,
+        worker_overrides=worker_overrides,
+    )
+    config.load()
+    loaded_app: Final = config.loaded_app
+    assert loaded_app is not None
+    sent: Final[list[Message]] = []
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: Message) -> None:
+        sent.append(message)
+
+    asyncio.run(loaded_app({"type": "http", "method": "GET", "path": "/", "headers": []}, receive, send))
+    assert sent[0] == {"type": "http.response.start", "status": 204, "headers": []}
+
+
 @REQUIRES_UVICORN_STARTUP_FAILURE
 @pytest.mark.parametrize(
     ("module", "source"),
@@ -118,7 +151,9 @@ def test_the_reload_pool_defaults_the_worker_healthcheck_and_keeps_an_explicit_o
     explicit: Final = RELOAD_WORKER_HEALTHCHECK_SECONDS + 7
     assert pool_config(_options("app:app"), workers=2).timeout_worker_healthcheck == RELOAD_WORKER_HEALTHCHECK_SECONDS
     assert (
-        pool_config({**_options("app:app"), "timeout_worker_healthcheck": explicit}, workers=2).timeout_worker_healthcheck
+        pool_config(
+            {**_options("app:app"), "timeout_worker_healthcheck": explicit}, workers=2
+        ).timeout_worker_healthcheck
         == explicit
     )
 
@@ -142,7 +177,9 @@ def test_the_reload_pool_accepts_and_keeps_every_uvicorn_arg_the_proxy_cli_build
 
 
 def test_the_reload_pool_passes_a_uvicorn_arg_it_does_not_list_through_to_the_workers() -> None:
-    config: Final = pool_config(RELOAD_OPTIONS.validate_python({**_options("app:app"), "backlog": 123}), workers=POOL_WORKERS)
+    config: Final = pool_config(
+        RELOAD_OPTIONS.validate_python({**_options("app:app"), "backlog": 123}), workers=POOL_WORKERS
+    )
     assert (config.backlog, config.reload) == (123, False)
 
 
