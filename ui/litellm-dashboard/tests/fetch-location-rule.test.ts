@@ -18,7 +18,7 @@ describe("location-based fetch() rule", () => {
   });
 
   it("flags a raw fetch() in a normal source file", async () => {
-    const messages = await fetchMessages("src/components/some_feature.tsx");
+    const messages = await fetchMessages("src/app/layout.tsx");
     expect(messages).toHaveLength(1);
     expect(messages[0].message).toMatch(/@\/lib\/http\/client/);
   });

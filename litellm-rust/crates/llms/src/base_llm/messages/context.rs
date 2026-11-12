@@ -23,6 +23,12 @@ impl SupportedEffortTiers {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MessagesShapeOptions {
+    pub reasoning_auto_summary: bool,
+    pub presanitized: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MessagesModelCapabilities {
     #[serde(default)]
@@ -31,6 +37,8 @@ pub struct MessagesModelCapabilities {
     pub supports_adaptive_thinking: bool,
     #[serde(default)]
     pub thinking_always_on: bool,
+    #[serde(default)]
+    pub thinking_on_by_default: bool,
     #[serde(default)]
     pub supports_legacy_thinking: bool,
     #[serde(default)]
@@ -55,6 +63,7 @@ impl Default for MessagesModelCapabilities {
             supports_reasoning: false,
             supports_adaptive_thinking: false,
             thinking_always_on: false,
+            thinking_on_by_default: false,
             supports_legacy_thinking: false,
             supports_output_config: false,
             supports_sampling_params: true,
@@ -120,6 +129,7 @@ pub struct ThinkingContext {
 pub struct MessagesTransformContext {
     pub thinking: ThinkingContext,
     pub drop_params: bool,
+    pub drops_unsupported_params: bool,
 }
 impl MessagesTransformContext {
     pub fn new(capabilities: MessagesModelCapabilities, drop_params: bool) -> Self {
@@ -139,6 +149,7 @@ impl MessagesTransformContext {
                 keeps_display_updates: false,
             },
             drop_params,
+            drops_unsupported_params: false,
         }
     }
 

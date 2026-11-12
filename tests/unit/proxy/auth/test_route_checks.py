@@ -387,6 +387,25 @@ def test_virtual_key_allowed_routes_with_litellm_routes_member_name_allowed(grou
     assert result is True
 
 
+@pytest.mark.parametrize(
+    "route,method",
+    [
+        ("/model/update", "POST"),
+        ("/model/123e4567-e89b-12d3-a456-426614174000/update", "PATCH"),
+    ],
+)
+def test_virtual_key_management_routes_allows_model_update(route: str, method: str) -> None:
+    valid_token: Final = UserAPIKeyAuth(user_id="test_user", allowed_routes=["management_routes"])
+
+    result: Final = RouteChecks.is_virtual_key_allowed_to_call_route(
+        route=route,
+        valid_token=valid_token,
+        request=_mock_request(method),
+    )
+
+    assert result is True
+
+
 def test_virtual_key_mcp_routes_allows_v1_mcp_server():
     """Regression test for #20325: allow virtual keys to list MCP servers."""
 

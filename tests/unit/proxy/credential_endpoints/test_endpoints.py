@@ -1,6 +1,8 @@
 """Tests for the credential management endpoints."""
 
+import asyncio
 import json
+from collections.abc import Awaitable, Callable
 from contextlib import contextmanager
 from functools import reduce
 from types import SimpleNamespace
@@ -19,11 +21,22 @@ import litellm
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import get_masked_values
 from litellm.llms.github_copilot.per_user_auth import _SESSION_CACHE, _session_cache_key
-from litellm.models.credentials import CredentialSource, UserConnectionFlowHandle
+from litellm.models.credentials import (
+    CreateCredentialItem,
+    CredentialSource,
+    UpdateCredentialItem,
+    UserConnectionFlowHandle,
+)
 from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
-from litellm.proxy.credential_endpoints.endpoints import _decode_flow_handle, get_llm_router
+from litellm.proxy.credential_endpoints.endpoints import (
+    _decode_flow_handle,
+    create_credential,
+    delete_credential,
+    get_llm_router,
+    update_credential,
+)
 from litellm.proxy.proxy_server import app
 from litellm.types.utils import CredentialItem
 
@@ -3345,3 +3358,101 @@ def test_get_credential_by_model_masks_the_deployment_credentials(monkeypatch):
     with pytest.raises(ProxyException) as missing:
         asyncio.run(get_credential_by_model(MagicMock(), MagicMock(), "no-such-id", caller))
     assert missing.value.code == "404"
+
+
+class TestCredentialWritesHoldTheReconcileLock:
+    """A config reload snapshots the credential table, awaits the config rows, then prunes and
+    upserts ``litellm.credential_list`` from that snapshot. A credential write that lands inside
+    that gap is undone in memory until the next reload, so each write has to queue behind
+    DB_RECONCILE_LOCK, the lock the reload already holds."""
+
+    @staticmethod
+    async def _assert_write_waits_for_the_lock(
+        monkeypatch: pytest.MonkeyPatch, call_endpoint: Callable[[], Awaitable[dict[str, object]]], write: str
+    ) -> dict[str, object]:
+        lock: Final = asyncio.Lock()
+        monkeypatch.setattr("litellm.proxy.proxy_server.DB_RECONCILE_LOCK", lock)
+        async with lock:
+            task: Final = asyncio.create_task(call_endpoint())
+            for _ in range(50):
+                await asyncio.sleep(0)
+            assert not task.done(), (
+                f"{write} did not wait for DB_RECONCILE_LOCK, so an in-flight config reload can undo it in memory"
+            )
+        return await asyncio.wait_for(task, timeout=5)
+
+    async def test_create_credential_waits_for_an_in_flight_reload(
+        self, monkeypatch: pytest.MonkeyPatch, credential_store: Callable[..., None]
+    ) -> None:
+        credential_store(create=AsyncMock(return_value=None))
+
+        async def call_endpoint() -> dict[str, object]:
+            return await create_credential(
+                request=MagicMock(spec=Request),
+                fastapi_response=MagicMock(),
+                credential=CreateCredentialItem(
+                    credential_name="fresh",
+                    credential_values={"api_key": "sk-new"},
+                    credential_info={"custom_llm_provider": "openai"},
+                ),
+                user_api_key_dict=_as_admin(),
+                llm_router=None,
+            )
+
+        response: Final = await self._assert_write_waits_for_the_lock(monkeypatch, call_endpoint, "create")
+
+        assert response["success"] is True
+        assert [credential.credential_name for credential in litellm.credential_list] == ["fresh"]
+
+    async def test_update_credential_waits_for_an_in_flight_reload(
+        self, monkeypatch: pytest.MonkeyPatch, credential_store: Callable[..., None]
+    ) -> None:
+        stored: Final = CredentialItem(
+            credential_name="existing",
+            display_name="before",
+            credential_values={"api_key": "sk-old"},
+            credential_info={"custom_llm_provider": "openai"},
+        )
+        credential_store(
+            in_memory=(stored,),
+            find_by_name=AsyncMock(return_value=stored),
+            update_by_name=AsyncMock(return_value=None),
+        )
+
+        async def call_endpoint() -> dict[str, object]:
+            return await update_credential(
+                request=MagicMock(spec=Request),
+                fastapi_response=MagicMock(),
+                credential=UpdateCredentialItem(display_name="after", credential_info={}),
+                credential_name="existing",
+                user_api_key_dict=_as_admin(),
+                llm_router=None,
+            )
+
+        response: Final = await self._assert_write_waits_for_the_lock(monkeypatch, call_endpoint, "update")
+
+        assert response["success"] is True
+        assert [credential.display_name for credential in litellm.credential_list] == ["after"]
+
+    async def test_delete_credential_waits_for_an_in_flight_reload(
+        self, monkeypatch: pytest.MonkeyPatch, credential_store: Callable[..., None]
+    ) -> None:
+        stored: Final = CredentialItem(
+            credential_name="doomed",
+            credential_values={"api_key": "sk-old"},
+            credential_info={"custom_llm_provider": "openai"},
+        )
+        credential_store(in_memory=(stored,), delete_by_name=AsyncMock(return_value=MagicMock()))
+
+        async def call_endpoint() -> dict[str, object]:
+            return await delete_credential(
+                request=MagicMock(spec=Request),
+                fastapi_response=MagicMock(),
+                credential_name="doomed",
+                user_api_key_dict=_as_admin(),
+            )
+
+        response: Final = await self._assert_write_waits_for_the_lock(monkeypatch, call_endpoint, "delete")
+
+        assert response["success"] is True
+        assert litellm.credential_list == []

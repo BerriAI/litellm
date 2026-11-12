@@ -1,3 +1,5 @@
+import { useUrlTab } from "@/hooks/useUrlTab";
+import ResourceActivity from "@/components/UsagePage/ResourceActivity";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import type { components } from "@/lib/http/schema";
 import useCan from "@/app/(dashboard)/hooks/useCan";
@@ -114,6 +116,8 @@ import SearchToolSelector from "../search_tools/SearchToolSelector";
 import SkillSelector from "../skills/SkillSelector";
 import EditLoggingSettings from "./EditLoggingSettings";
 import RouterSettingsAccordion, { RouterSettingsAccordionRef } from "../common_components/RouterSettingsAccordion";
+import { RouterWeightsSummary } from "../common_components/RouterSettingsSummary";
+import { StorePromptsToggle } from "../common_components/StorePromptsToggle";
 import MemberModal from "./EditMembership";
 import MemberPermissions from "./member_permissions";
 import MyUserTab from "./MyUserTab";
@@ -138,6 +142,7 @@ import { customBudgetMemberUserIds, shouldPromptMemberBudgetReset } from "./memb
 import { useMemberBudgetReset } from "./useMemberBudgetReset";
 import { fetchClient } from "@/lib/http/api";
 import { BudgetPeriodTooltip } from "@/components/shared/BudgetPeriodTooltip";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 const UI_MANAGED_METADATA_KEYS: ReadonlySet<string> = new Set([
   "logging",
@@ -699,7 +704,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const canEditTeam = is_team_admin || is_proxy_admin || teamEditAccess.kind !== "none";
   const visibleTabs = useMemo(() => getTeamInfoVisibleTabs(canEditTeam), [canEditTeam]);
   const defaultTabKey = useMemo(() => getTeamInfoDefaultTab(editTeam, canEditTeam), [editTeam, canEditTeam]);
-  const { onTabChange, hasVisited } = useVisitedTabs(defaultTabKey);
+  const [activeTab, setActiveTab] = useUrlTab(
+    loading ? getTeamInfoVisibleTabs(true) : visibleTabs,
+    defaultTabKey,
+    "detail_tab",
+  );
+  const { onTabChange, hasVisited } = useVisitedTabs(activeTab);
 
   const teamFormValues = (): TeamUpdateFormValues => {
     const info = teamData?.team_info;
@@ -1605,6 +1615,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       ),
     },
     {
+      key: TEAM_INFO_TAB_KEYS.ACTIVITY,
+      label: t(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.ACTIVITY]),
+      children: <ResourceActivity scope="team" id={teamId} />,
+    },
+    {
       key: TEAM_INFO_TAB_KEYS.MY_USER,
       label: t(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.MY_USER]),
       children: <MyUserTab teamId={teamId} />,
@@ -1728,7 +1743,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         {...field}
                         ref={ref}
                         value={typeof value === "string" ? value : ""}
-                        placeholder="example1@test.com, example2@test.com"
+                        placeholder={codeSamples.teams.memberEmails}
                       />
                     )}
                   </FormField>
@@ -1976,6 +1991,19 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
                   <Field>
                     <FieldLabel>{t("teams.teamInfo.editForm.metadata")}</FieldLabel>
+                    <FormField control={form.control} name="metadata">
+                      {({ value, onChange }) => (
+                        <StorePromptsToggle
+                          value={metadataPairsToObject(value).store_prompts_in_spend_logs}
+                          onChange={(store) =>
+                            onChange([
+                              ...(value ?? []).filter((pair) => pair.key !== "store_prompts_in_spend_logs"),
+                              { key: "store_prompts_in_spend_logs", value: JSON.stringify(store) },
+                            ])
+                          }
+                        />
+                      )}
+                    </FormField>
                     <MetadataKeyValueFields
                       control={form.control}
                       getValues={form.getValues}
@@ -2098,7 +2126,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         ref={ref}
                         value={value ?? ""}
                         rows={4}
-                        placeholder='{"gpt-4": 4096}'
+                        placeholder={codeSamples.models.perModelMaxTokensJson}
                         disabled={!canEditTeamEstimates}
                       />
                     )}
@@ -2393,7 +2421,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         ref={ref}
                         value={value ?? ""}
                         rows={6}
-                        placeholder='{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}'
+                        placeholder={codeSamples.teams.vaultConfigJson}
                         disabled={!premiumUser}
                       />
                     )}
@@ -2659,6 +2687,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     {info.router_settings.enable_tag_filtering && (
                       <div>{t("teams.teamInfo.settingsView.router.tagFilteringEnabled")}</div>
                     )}
+                    <RouterWeightsSummary weights={info.router_settings.weights} />
                   </div>
                 ) : (
                   <div className="text-muted-foreground">{t("teams.teamInfo.settingsView.router.none")}</div>
@@ -2748,7 +2777,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         </div>
       </div>
 
-      <Tabs defaultValue={defaultTabKey} className="mb-4" onValueChange={onTabChange}>
+      <Tabs
+        value={activeTab}
+        className="mb-4"
+        onValueChange={(value) => {
+          setActiveTab(String(value));
+          onTabChange(value);
+        }}
+      >
         <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
           {tabItems.map(({ key, label }) => (
             <TabsTrigger key={key} value={key} className="flex-none rounded-none px-4 py-2">

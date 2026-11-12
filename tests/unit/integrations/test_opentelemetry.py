@@ -372,6 +372,35 @@ def test_v1_routing_diagnostics_add_scalar_attributes_and_preserve_legacy_metada
     assert finished.attributes["metadata.routing_decision"] == str(decision)
 
 
+@pytest.mark.parametrize(
+    ("decision", "expected"),
+    [({"router_model_name": "auto-router", "routed_model": "answer"}, "answer"), ("not-a-mapping", "auto-router")],
+    ids=["routed", "malformed-decision"],
+)
+def test_v1_auto_router_response_model_names_the_routed_model(decision: object, expected: str) -> None:
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    otel: Final = OpenTelemetry(tracer_provider=provider)
+    with provider.get_tracer(__name__).start_as_current_span("inference") as span:
+        otel.set_attributes(
+            span,
+            {
+                "model": "gpt-4o-mini",
+                "standard_logging_object": {
+                    "id": "routing-call",
+                    "call_type": "acompletion",
+                    "model_group": "auto-router",
+                    "metadata": {"routing_decision": decision},
+                },
+            },
+            {"model": "auto-router", "choices": [], "usage": {"prompt_tokens": 3}},
+        )
+    (finished,) = exporter.get_finished_spans()
+    attributes: Final = finished.attributes
+    assert (attributes["gen_ai.response.model"], attributes["gen_ai.usage.input_tokens"]) == (expected, 3)
+
+
 def test_v1_server_tool_calls_lead_the_completion_function_call_attributes() -> None:
     exporter: Final = InMemorySpanExporter()
     provider: Final = TracerProvider()

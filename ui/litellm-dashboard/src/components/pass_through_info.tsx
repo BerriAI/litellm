@@ -20,6 +20,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import i18n from "@/i18n/i18n";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 const HTTP_METHODS = ["GET", "POST", "PUT", "DELETE", "PATCH"] as const;
 const HTTP_METHOD_OPTIONS = HTTP_METHODS.map((method) => ({ label: method, value: method }));
@@ -427,7 +428,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                           {...field}
                           rows={5}
                           value={value ?? ""}
-                          placeholder='{"Authorization": "Bearer your-token", "Content-Type": "application/json"}'
+                          placeholder={codeSamples.passThrough.headersJson}
                         />
                       )}
                     </FormField>

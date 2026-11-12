@@ -28,6 +28,7 @@ import { ToolbarSeparator } from "@/components/shared/ToolbarSeparator";
 import { Button as UIButton } from "@/components/ui/button";
 import { teamsTableKeys } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { parseAsString, useQueryState } from "nuqs";
+import { useResetDetailState } from "@/hooks/useUrlTab";
 import { TeamsTable } from "./TeamsPage/TeamsTable";
 import AccessGroupSelector from "./common_components/AccessGroupSelector";
 import MetadataKeyValueFields, {
@@ -71,6 +72,8 @@ import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import { teamCreateCall } from "./networking";
 import { normalizeTeamModelSelection } from "./team/teamModelAccess";
 import { ModelSelect } from "./ModelSelect/ModelSelect";
+import { StorePromptsToggle } from "./common_components/StorePromptsToggle";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 const SUPPRESSED_BY_DESCRIPTION = "";
 
@@ -268,6 +271,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
   const watchedMcpSelection = form.watch("allowed_mcp_servers_and_groups");
   const watchedToolPermissions = form.watch("mcp_tool_permissions");
 
+  const resetDetailState = useResetDetailState();
   const [selectedTeam, setSelectedTeam] = useState<Team | null>(null);
   const [selectedTeamId, setSelectedTeamId] = useQueryState("team", parseAsString.withOptions({ history: "push" }));
   const [editTeam, setEditTeam] = useState<boolean>(false);
@@ -617,11 +621,13 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
             userRole={userRole}
             userID={userID}
             onSelectTeam={(team) => {
+              resetDetailState();
               setSelectedTeam(team);
               void setSelectedTeamId(team.team_id);
               setEditTeam(false);
             }}
             onEditTeam={(team) => {
+              resetDetailState();
               setSelectedTeam(team);
               void setSelectedTeamId(team.team_id);
               setEditTeam(true);
@@ -684,6 +690,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
             refreshTeams();
           }}
           onClose={() => {
+            resetDetailState();
             setSelectedTeam(null);
             void setSelectedTeamId(null);
             setEditTeam(false);
@@ -877,6 +884,19 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
                   </FormField>
                   <Field>
                     <FieldLabel>{t("teams.page.create.fields.metadata.label")}</FieldLabel>
+                    <FormField control={form.control} name="metadata">
+                      {({ value, onChange }) => (
+                        <StorePromptsToggle
+                          value={metadataPairsToObject(value).store_prompts_in_spend_logs}
+                          onChange={(store) =>
+                            onChange([
+                              ...(value ?? []).filter((pair) => pair.key !== "store_prompts_in_spend_logs"),
+                              { key: "store_prompts_in_spend_logs", value: JSON.stringify(store) },
+                            ])
+                          }
+                        />
+                      )}
+                    </FormField>
                     <MetadataKeyValueFields
                       control={form.control}
                       getValues={form.getValues}
@@ -996,7 +1016,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
                               ref={ref}
                               value={value ?? ""}
                               rows={4}
-                              placeholder='{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}'
+                              placeholder={codeSamples.teams.vaultConfigJson}
                               disabled={!premiumUser}
                             />
                           )}

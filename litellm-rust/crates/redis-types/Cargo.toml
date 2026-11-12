@@ -7,3 +7,7 @@ repository.workspace = true
 
 [dependencies]
 litellm-secret-value.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+rstest.workspace = true
