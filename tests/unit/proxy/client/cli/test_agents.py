@@ -1714,7 +1714,6 @@ class TestRunAgent:
             read_settings=lambda path: files.get(path, {}),
             project_dir=tmp_path / "repo",
             key_from_stored_login=key_from_stored_login,
-            which_lite=lambda name: f"/usr/local/bin/{name}",
         )
         assert launched["env"]["ANTHROPIC_BASE_URL"] == "http://localhost:4000"
         assert launched["env"].get("ANTHROPIC_AUTH_TOKEN") == ("sk-key" if exports_the_key else None)
@@ -1723,9 +1722,10 @@ class TestRunAgent:
         ("args", "user", "key_from_stored_login", "expected_overlay"),
         [
             ((), {"apiKeyHelper": LITE_HELPER}, False, {"apiKeyHelper": "", "env": {"ANTHROPIC_AUTH_TOKEN": "sk-key"}}),
+            ((), {"apiKeyHelper": LITE_HELPER.replace("/usr/local/bin/lite", "/opt/other-venv/bin/lite")}, True, None),
             (
                 (),
-                {"apiKeyHelper": LITE_HELPER.replace("/usr/local/bin/lite", "/opt/old-venv/bin/lite")},
+                {"apiKeyHelper": LITE_HELPER.replace("localhost:4000", "other-proxy.example.com")},
                 True,
                 {"apiKeyHelper": "", "env": {"ANTHROPIC_AUTH_TOKEN": "sk-key"}},
             ),
@@ -1752,7 +1752,8 @@ class TestRunAgent:
         ],
         ids=[
             "key-passed-with-api-key",
-            "helper-from-another-lite-install",
+            "helper-from-another-lite-install-renews-the-same-login",
+            "helper-for-another-proxy",
             "lites-helper-renews-the-stored-key",
             "users-own-helper",
             "users-settings-flag-is-merged",
@@ -1778,7 +1779,6 @@ class TestRunAgent:
             write_overlay=_overlay_writer(tmp_path),
             project_dir=tmp_path / "repo",
             key_from_stored_login=key_from_stored_login,
-            which_lite=lambda name: f"/usr/local/bin/{name}",
         )
         if expected_overlay is None:
             assert launched["args"] == ("claude", *args)
@@ -1800,8 +1800,7 @@ class TestRunAgent:
                 read_settings=lambda path: {"apiKeyHelper": LITE_HELPER},
                 write_overlay=_overlay_writer(tmp_path),
                 project_dir=tmp_path / "repo",
-                which_lite=lambda name: f"/usr/local/bin/{name}",
-            )
+                )
         assert launched == {}
 
     def test_a_malformed_settings_file_still_launches_claude_with_the_key(self, tmp_path):

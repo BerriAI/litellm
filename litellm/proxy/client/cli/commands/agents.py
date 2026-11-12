@@ -34,9 +34,8 @@ from .claude_settings import (
     ClaudeSettingsError,
     claude_settings_path,
     install_statusline_script,
-    installed_executable,
     is_lite_api_key_helper,
-    lite_api_key_helper,
+    is_lite_api_key_helper_for,
     load_json_or_empty,
 )
 from .cmd_quoting import quote_for_cmd
@@ -289,9 +288,8 @@ def claude_api_key_helper(
     environ: Mapping[str, str],
     project_dir: Path,
 ) -> JsonValue:
-    """The apiKeyHelper Claude Code will run, the first one in settings precedence, with the last `--settings`
-    the user passed above every settings file. A `--settings` lite cannot read counts as no helper, so the key
-    stays exported, as it was before lite wrote a helper."""
+    """The first apiKeyHelper in Claude Code's settings precedence, the user's last `--settings` on top. One lite
+    cannot read counts as none, so the key stays exported as before."""
     override_value, _ = _split_settings_flags(args)
     try:
         override: Final = () if override_value is None else (_load_settings_override(override_value),)
@@ -299,14 +297,6 @@ def claude_api_key_helper(
         return None
     settings_files: Final = (*override, *_readable_settings_files(read_settings, environ, project_dir))
     return next((settings[API_KEY_HELPER_KEY] for settings in settings_files if API_KEY_HELPER_KEY in settings), None)
-
-
-def lite_helper_renews_key(base_url: str, configured: JsonValue, which: Callable[[str], str | None]) -> bool:
-    """Whether the configured apiKeyHelper is the one `lite login --pkce --config-claude` wrote for this proxy.
-    Claude Code prefers ANTHROPIC_AUTH_TOKEN over a helper, so exporting the key too would pin a copy that
-    expires mid-session."""
-    helper: Final = lite_api_key_helper(base_url, which=which)
-    return helper is not None and configured == helper.command
 
 
 def _launch_key_overlay_args(
@@ -317,12 +307,8 @@ def _launch_key_overlay_args(
     environ: Mapping[str, str],
     write_overlay: Callable[[str, Mapping[str, str]], Path],
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """The `--settings` that makes Claude Code send the key this launch resolved when its settings files run a
-    `lite auth print-token` helper, plus the user's remaining args. Those files also blank ANTHROPIC_AUTH_TOKEN,
-    so the exported key would be dropped, and the helper would send the stored login's key in its place. The
-    overlay turns the helper off and carries the key, in a private file for the same reason as the subscription
-    overlay. The user's last `--settings` is merged in and its own apiKeyHelper or ANTHROPIC_AUTH_TOKEN kept,
-    since Claude Code keeps only the last `--settings`."""
+    """A `--settings` overlay carrying the key this launch resolved when lite's helper would send another one.
+    It merges the user's last `--settings`, since Claude Code keeps only the last."""
     if renews or not is_lite_api_key_helper(settings_helper):
         return (), tuple(command[1:])
     user_value, rest = _split_settings_flags(tuple(command[1:]))
@@ -338,7 +324,6 @@ def _launch_key_overlay_args(
 def _readable_settings_files(
     read_settings: Callable[[Path], Mapping[str, JsonValue]], environ: Mapping[str, str], project_dir: Path
 ) -> tuple[Mapping[str, JsonValue], ...]:
-    """A launch that only checks for lite's helper goes ahead on a malformed settings file, as it did before."""
     try:
         return claude_settings_files(read_settings, environ, project_dir)
     except AgentRunError:
@@ -1174,7 +1159,6 @@ def run_agent(
     write_overlay: Callable[[str, Mapping[str, str]], Path] = write_settings_overlay,
     project_dir: Path | None = None,
     key_from_stored_login: bool = False,
-    which_lite: Callable[[str], str | None] = installed_executable,
 ) -> None:
     """Validate, wire the environment, and hand off to the agent.
 
@@ -1207,7 +1191,7 @@ def run_agent(
     settings_helper: Final = (
         claude_api_key_helper((), read_settings, env_before_sync, project) if reads_helper else None
     )
-    helper_renews_key: Final = key_from_stored_login and lite_helper_renews_key(base_url, configured_helper, which_lite)
+    helper_renews_key: Final = key_from_stored_login and is_lite_api_key_helper_for(configured_helper, base_url)
     synced: Final = (
         _NO_EXTRA_ENV if subscription else sync_models(binary, env_before_sync, base_url, api_key, skip_verify)
     )

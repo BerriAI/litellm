@@ -39,6 +39,7 @@ from litellm.proxy.client.cli.commands.claude_settings import (
     configure_state_path,
     installed_executable,
     is_lite_api_key_helper,
+    is_lite_api_key_helper_for,
     lite_api_key_helper,
     merge_claude_settings,
     statusline_command,
@@ -233,6 +234,22 @@ class TestLiteApiKeyHelper:
     )
     def test_leaves_every_other_helper_alone(self, command):
         assert not is_lite_api_key_helper(command)
+
+    @pytest.mark.parametrize(
+        ("command", "matches"),
+        [
+            ("/usr/local/bin/lite --base-url https://proxy.example.com auth print-token", True),
+            ("'/home/me/my tools/lite' --base-url https://proxy.example.com auth print-token", True),
+            (r'"C:\Program Files\lite\lite.exe" "--base-url" "https://proxy.example.com" "auth" "print-token"', True),
+            ("/usr/local/bin/lite --base-url https://other.example.com auth print-token", False),
+            ("/usr/local/bin/lite --base-url https://proxy.example.com/v2 auth print-token", False),
+            ("/opt/mine/helper", False),
+            (None, False),
+        ],
+        ids=["posix", "posix-quoted-path", "windows", "other-proxy", "other-path-on-the-proxy", "users-own", "unset"],
+    )
+    def test_matches_a_helper_any_lite_wrote_for_this_proxy_only(self, command, matches):
+        assert is_lite_api_key_helper_for(command, "https://proxy.example.com/") is matches
 
 
 @pytest.mark.skipif(sys.platform.startswith("win"), reason="runs the command through sh, as Claude Code does on POSIX")

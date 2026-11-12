@@ -321,43 +321,44 @@ def _land(
 
 
 def installed_executable(name: str, scripts_dir: str = sysconfig.get_path("scripts")) -> str | None:
-    """`name` from this interpreter's own scripts directory, else the first one on PATH. A version manager's shim
-    that comes first on PATH, such as pyenv's, runs whichever Python the current directory pins, and that one may
-    not have it."""
+    """This interpreter's own `name` first, since a version manager's shim earlier on PATH may run a Python
+    that lacks it."""
     return shutil.which(name, path=scripts_dir) or shutil.which(name)
 
 
 _HELPER_SUBCOMMAND: Final = ("auth", "print-token")
 
 
+def _helper_args(base_url: str) -> tuple[str, ...]:
+    return ("--base-url", base_url.rstrip("/"), *_HELPER_SUBCOMMAND)
+
+
 def lite_api_key_helper(
     base_url: str, platform: str = sys.platform, which: Callable[[str], str | None] = installed_executable
 ) -> ApiKeyHelper | None:
-    """The helper for a renewing login, or None when `lite` is not found.
-
-    Claude Code hands the string to `sh` on POSIX and cmd.exe on Windows, so every token is quoted for
-    that shell. The path is made absolute, since a relative PATH entry would otherwise run whichever `lite`
-    the directory Claude Code starts in holds. `--base-url` makes `print-token` refuse a key a later
-    `lite login` minted for another proxy, and it belongs to the top-level group, so it goes before the
-    subcommand.
-    """
+    """Quoted for the shell Claude Code runs it in, `sh` on POSIX and cmd.exe on Windows, with an absolute path
+    so the directory Claude Code starts in cannot pick another `lite`."""
     lite_path: Final = which("lite")
     if lite_path is None:
         return None
     windows: Final = platform.startswith("win")
     quote: Final = quote_for_cmd if windows else shlex.quote
     absolute_path: Final = (ntpath if windows else posixpath).abspath(lite_path)
-    return ApiKeyHelper(
-        " ".join(quote(token) for token in (absolute_path, "--base-url", base_url.rstrip("/"), *_HELPER_SUBCOMMAND))
+    return ApiKeyHelper(" ".join(quote(token) for token in (absolute_path, *_helper_args(base_url))))
+
+
+def _runs_lite_with(command: JsonValue, args: tuple[str, ...]) -> bool:
+    return isinstance(command, str) and any(
+        command.endswith(" " + " ".join(quote(token) for token in args)) for quote in (shlex.quote, quote_for_cmd)
     )
 
 
 def is_lite_api_key_helper(command: JsonValue) -> bool:
-    """Whether a configured apiKeyHelper runs `lite auth print-token`, whichever `lite` and proxy it names."""
-    return isinstance(command, str) and any(
-        command.endswith(" " + " ".join(quote(token) for token in _HELPER_SUBCOMMAND))
-        for quote in (shlex.quote, quote_for_cmd)
-    )
+    return _runs_lite_with(command, _HELPER_SUBCOMMAND)
+
+
+def is_lite_api_key_helper_for(command: JsonValue, base_url: str) -> bool:
+    return _runs_lite_with(command, _helper_args(base_url))
 
 
 def statusline_command(script_path: Path, platform: str = sys.platform) -> str:
@@ -748,6 +749,7 @@ __all__ = (
     "configure_state_path",
     "installed_executable",
     "is_lite_api_key_helper",
+    "is_lite_api_key_helper_for",
     "lite_api_key_helper",
     "load_json_or_empty",
     "merge_claude_settings",

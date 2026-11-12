@@ -1076,8 +1076,8 @@ class TestPrintTokenCommand:
         ("proxy_answer", "expected_exit_code", "expected_stdout", "expected_stderr"),
         [
             (200, 0, "sk-stale-key\n", ""),
-            (401, 1, "", "Token expired. Run 'lite login' again.\n"),
-            (403, 1, "", "Token expired. Run 'lite login' again.\n"),
+            (401, 1, "", "Token expired. Run 'lite login --pkce' again.\n"),
+            (403, 1, "", "Token expired. Run 'lite login --pkce' again.\n"),
             (404, 0, "sk-stale-key\n", ""),
             (500, 0, "sk-stale-key\n", ""),
             (requests.ConnectionError("proxy unreachable"), 0, "sk-stale-key\n", ""),
@@ -1138,7 +1138,7 @@ class TestPrintTokenCommand:
 
         assert result.exit_code == 1
         assert result.stdout == ""
-        assert result.stderr == "Token expired. Run 'lite login' again.\n"
+        assert result.stderr == "Token expired. Run 'lite login --pkce' again.\n"
         assert len(responses.calls) == 0
 
 
@@ -1363,21 +1363,29 @@ class TestKeychainBackedCommands:
         assert print_result.exit_code == 1
         assert print_result.output == "Not authenticated. Run 'lite login --pkce'.\n"
 
+    @pytest.mark.parametrize(
+        ("base_url_explicit", "login_command"),
+        [(False, "lite login --pkce"), (True, "lite --base-url https://test.example.com login --pkce")],
+        ids=["bare", "as-claude-codes-helper"],
+    )
     def test_print_token_explains_a_locked_keychain_instead_of_printing_nothing(
-        self, isolated_home, secret_vault_factory
+        self, isolated_home, secret_vault_factory, base_url_explicit, login_command
     ):
         _write_home_json(
             isolated_home,
             "token.json",
             {"base_url": "https://test.example.com", "user_id": "u-1", "timestamp": time.time()},
         )
-        obj = {"base_url": "https://test.example.com", "secret_vault": secret_vault_factory(available=False)}
+        obj = {
+            "base_url": "https://test.example.com",
+            "base_url_explicit": base_url_explicit,
+            "secret_vault": secret_vault_factory(available=False),
+        }
 
         result = self.runner.invoke(print_token, obj=obj)
 
         assert result.exit_code == 1
-        assert "could not be read" in result.output
-        assert "lite login" in result.output
+        assert f"could not be read. Unlock it, or run '{login_command}' to start over." in result.output
 
     def test_whoami_does_not_call_a_credential_it_cannot_read_authenticated(self, isolated_home, secret_vault_factory):
         """A login whose secret is stuck in an unreachable keychain authenticates nothing. Leading
@@ -2407,7 +2415,7 @@ class TestPkcePrintToken:
             "Could not renew the key: token request failed with 400: the refresh token was already used"
             in result.output
         )
-        assert "Key expired. Run 'lite login --pkce' again." in result.output
+        assert "Key expired. Run 'lite --base-url https://llm.example.com login --pkce' again." in result.output
         save.assert_not_called()
 
     def test_print_token_through_the_cli_group_prints_the_key_the_group_renewed(self, monkeypatch):
@@ -2473,7 +2481,7 @@ class TestPkcePrintToken:
 
         assert result.exit_code == 1
         assert result.stdout == ""
-        assert result.stderr == "Token expired. Run 'lite login' again.\n"
+        assert result.stderr == "Token expired. Run 'lite login --pkce' again.\n"
         assert len(responses.calls) == 0
         assert _FakeSession.instances == []
 

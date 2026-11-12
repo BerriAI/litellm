@@ -845,8 +845,7 @@ def _render_and_prompt_for_team_selection(teams: list[CliTeam]) -> str | None:
 
 
 def _claude_credential(base_url: str, api_key: str, renews: bool, stored: SecretSave) -> ClaudeCredential:
-    """A helper only for a key `lite` can renew and kept: `print-token` renews from the stored record, so a
-    login the store refused, or one with no refresh token, gets the minted key as a static token."""
+    """`print-token` renews from the stored record, so only a stored login with a refresh token gets the helper."""
     if not renews or isinstance(stored, (CredentialNotSaved, CredentialNotRecorded)):
         return StaticToken(api_key)
     helper: Final = lite_api_key_helper(base_url)
@@ -857,8 +856,8 @@ def _claude_credential(base_url: str, api_key: str, renews: bool, stored: Secret
 
 
 def _configure_claude_code(base_url: str, credential: ClaudeCredential, renews: bool) -> None:
-    """Wire Claude Code's settings.json to this login, undoable with `lite unconfigure claude`. A static key
-    expires with the login, so the flag is then the re-wire step of each login; a helper renews in place."""
+    """Undoable with `lite unconfigure claude`. A static key expires with the login, so the flag is then the
+    re-wire step of each login."""
     settings_path: Final = claude_settings_path(os.environ)
     try:
         configure_claude_settings(
@@ -1121,7 +1120,6 @@ def logout(ctx: click.Context):
 
 
 def _renewing_login_command(ctx_obj: CliContextObj | None) -> str:
-    """Claude Code runs `print-token` as its apiKeyHelper with `--base-url`, and only a `--pkce` login renews."""
     if ctx_obj is None or not ctx_obj.get("base_url_explicit"):
         return "lite login --pkce"
     return f"lite --base-url {ctx_obj['base_url'].rstrip('/')} login --pkce"
@@ -1159,11 +1157,11 @@ def print_token(ctx: click.Context):
 
     renews: Final = "refresh_token" in token_data
     if not renews and token_expired(token_data):
-        click.echo("Token expired. Run 'lite login' again.", err=True)
+        click.echo(f"Token expired. Run '{_renewing_login_command(ctx_obj)}' again.", err=True)
         sys.exit(1)
 
     if token_data.get("key") is None:
-        click.echo(keychain_unreadable_notice(vault), err=True)
+        click.echo(keychain_unreadable_notice(vault, _renewing_login_command(ctx_obj)), err=True)
         sys.exit(1)
 
     http: Final = requests.Session()
@@ -1179,7 +1177,7 @@ def print_token(ctx: click.Context):
         )
     )
     if not api_key:
-        click.echo(f"Key expired. Run '{_login_command(renews)}' again.", err=True)
+        click.echo(f"Key expired. Run '{_renewing_login_command(ctx_obj)}' again.", err=True)
         sys.exit(1)
 
     click.echo(api_key)
