@@ -5,7 +5,7 @@ This module handles the transformation of requests to Anthropic's CountTokens AP
 """
 
 import copy
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain
 from types import MappingProxyType
@@ -44,6 +44,7 @@ _SYSTEM_BLOCKS: Final = TypeAdapter(list[JsonValue])
 _IMAGE_BLOCK: Final = TypeAdapter(ChatCompletionImageObject)
 COUNT_TOKEN_OPTION_NAMES: Final = ("thinking", "tool_choice", "output_config")
 _PLAIN_MESSAGE_KEYS: Final = frozenset({"role", "content"})
+_CHAT_ROLES_WITHOUT_CONTENT: Final = frozenset({"user", "assistant"})
 
 
 def _count_image(block: JsonValue) -> JsonValue:
@@ -304,6 +305,39 @@ def _translated_chat_request(
     )
 
 
+def _message_problem(index: int, message: Mapping[str, object]) -> str | None:
+    if "role" not in message:
+        return f"Message {index} must have a 'role' field"
+    if "content" not in message:
+        return f"Message {index} must have a 'content' field"
+    return None
+
+
+def _chat_message_problem(index: int, message: Mapping[str, object]) -> str | None:
+    if "role" not in message:
+        return f"Message {index} must have a 'role' field"
+    if message.get("content") is None and message["role"] not in _CHAT_ROLES_WITHOUT_CONTENT:
+        return f"Message {index} must have a 'content' field"
+    return None
+
+
+def _first_message_problem(
+    messages: Sequence[Mapping[str, object]], problem_of: Callable[[int, Mapping[str, object]], str | None]
+) -> ChatCountTranslationError | None:
+    return next(
+        (
+            ChatCountTranslationError(problem)
+            for index, message in enumerate(messages)
+            if (problem := problem_of(index, message)) is not None
+        ),
+        None,
+    )
+
+
+def malformed_message_error(messages: Sequence[Mapping[str, object]]) -> ChatCountTranslationError | None:
+    return _first_message_problem(messages, _message_problem)
+
+
 def anthropic_fields_for_chat_tool_use(
     model: str,
     messages: Sequence[Mapping[str, object]],
@@ -328,9 +362,13 @@ def anthropic_fields_for_chat_tool_use(
     try:
         request: Final = _translated_chat_request(model, messages, system, counted_tools, chat_params, translator)
     except (AnthropicError, BadRequestError) as e:
-        return ChatCountTranslationError(message=str(e.message))
+        return _first_message_problem(messages, _chat_message_problem) or ChatCountTranslationError(
+            message=str(e.message)
+        )
     except (ValueError, KeyError) as e:
-        return ChatCountTranslationError(message=f"Invalid request for token counting: {e}")
+        return _first_message_problem(messages, _chat_message_problem) or ChatCountTranslationError(
+            message=f"Invalid request for token counting: {e}"
+        )
     translated: Final = _ANTHROPIC_CHAT_REQUEST.validate_python(request)
     return AnthropicCountFields(
         messages=translated["messages"],
@@ -352,25 +390,6 @@ async def anthropic_count_fields(
     if messages_format != "openai":
         return None
     return await asyncify(anthropic_fields_for_chat_tool_use)(model, messages, system, tools, translator, chat_params)
-
-
-def _message_problem(index: int, message: Mapping[str, object]) -> str | None:
-    if "role" not in message:
-        return f"Message {index} must have a 'role' field"
-    if "content" not in message:
-        return f"Message {index} must have a 'content' field"
-    return None
-
-
-def malformed_message_error(messages: Sequence[Mapping[str, object]]) -> ChatCountTranslationError | None:
-    return next(
-        (
-            ChatCountTranslationError(problem)
-            for index, message in enumerate(messages)
-            if (problem := _message_problem(index, message)) is not None
-        ),
-        None,
-    )
 
 
 class AnthropicCountTokensConfig:

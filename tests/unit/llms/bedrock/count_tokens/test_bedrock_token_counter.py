@@ -1,5 +1,6 @@
 import base64
 from collections.abc import Mapping
+from copy import deepcopy
 from typing import Final
 
 import httpx
@@ -7,6 +8,7 @@ import pytest
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import CountContextManagement
@@ -444,6 +446,32 @@ async def test_claude_count_rejects_a_lone_responses_tool_without_calling_bedroc
     assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
     assert bedrock.posted_hosts() == ()
 
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("message", ({"role": "user"}, {"role": "user", "content": None}))
+async def test_claude_count_sends_a_chat_message_without_content_as_chat_inference_sends_it(
+    message: dict[str, JsonValue],
+) -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
+    messages: Final = [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello"}, message]
+    inference: Final = AnthropicConfig().transform_request(
+        model="claude-opus-5-5", messages=deepcopy(messages), optional_params={}, litellm_params={}, headers={}
+    )
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="us.anthropic.claude-opus-5-5",
+        messages=messages,
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-opus-5-5",
+        messages_format="openai",
+    )
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 412)
+    assert bedrock.posted_hosts() == (RUNTIME_HOST,)
+    assert _invoke_body(bedrock.requests[0])["messages"] == inference["messages"]
 
 _CLAUDE_REPLY: Final = {
     "id": "msg_1",
