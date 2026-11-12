@@ -510,6 +510,48 @@ async def test_claude_invoke_count_sends_a_chat_message_without_content_as_chat_
     assert _invoke_body(bedrock.requests[0])["messages"] == inference["messages"]
 
 
+_TOOL_CALL: Final = {
+    "role": "assistant",
+    "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}],
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "messages",
+    (
+        [
+            {"role": "user", "content": "Weather in SF?"},
+            _TOOL_CALL,
+            {"role": "tool", "tool_call_id": "call_1", "content": None},
+        ],
+        [
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": "Hello"},
+            {"role": "user", "name": "bob", "content": None},
+        ],
+    ),
+    ids=("null-content-tool-result", "null-content-named-user-turn"),
+)
+async def test_claude_converse_count_sends_a_null_content_message_chat_translation_already_sent(
+    messages: list[dict[str, JsonValue]],
+) -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="us.anthropic.claude-opus-5-5",
+        messages=messages,
+        contents=None,
+        deployment=_deployment("bedrock/us.anthropic.claude-opus-5-5"),
+        request_model="claude-opus-5-5",
+        messages_format="openai",
+    )
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 412)
+    assert bedrock.posted_hosts() == (RUNTIME_HOST,)
+
+
 @pytest.mark.asyncio
 async def test_claude_count_sends_a_chat_tool_call_turn_sent_without_a_content_key() -> None:
     bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))

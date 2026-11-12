@@ -17,7 +17,7 @@ from litellm.llms.anthropic.common_utils import context_management_betas, contex
 from litellm.llms.anthropic.count_tokens.transformation import (
     ChatCountTranslationError,
     anthropic_count_fields,
-    chat_message_error,
+    plain_message_error,
 )
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.bedrock.common_utils import (
@@ -211,7 +211,7 @@ class BedrockTokenCounter(BaseTokenCounter):
         claude: Final = is_mantle_claude_model(resolved_model)
         chat_config: Final = _anthropic_chat_config(litellm_params) if claude else None
         converse_drops: Final = (
-            chat_message_error(messages, _CONVERSE_ROLES_WITHOUT_CONTENT)
+            plain_message_error(messages, _CONVERSE_ROLES_WITHOUT_CONTENT)
             if claude and chat_config is None and messages_format == "openai"
             else None
         )

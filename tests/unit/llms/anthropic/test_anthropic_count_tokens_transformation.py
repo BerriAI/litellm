@@ -838,8 +838,20 @@ async def test_counter_rejects_a_message_anthropic_rejects_without_calling_anthr
             [{"role": "user"}, _CHAT_TOOL_TURNS[2], {"role": "tool", "tool_call_id": "call_1"}],
             "Message 2 must have a 'content' field",
         ),
+        ([{"role": "assistant"}], "At least one non-system message with content is required"),
+        (
+            [_CHAT_TOOL_TURNS[0], {"role": "assistant", "content": None}],
+            "At least one non-system message with content is required",
+        ),
     ),
-    ids=("system-without-content", "developer-without-content", "empty-message", "tool-result-without-content"),
+    ids=(
+        "system-without-content",
+        "developer-without-content",
+        "empty-message",
+        "tool-result-without-content",
+        "lone-assistant-without-content",
+        "nothing-left-after-system",
+    ),
 )
 async def test_counter_names_the_chat_message_chat_translation_cannot_send(
     counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
@@ -853,6 +865,28 @@ async def test_counter_names_the_chat_message_chat_translation_cannot_send(
     assert result is not None
     assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
     assert result.error_message == problem
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+async def test_counter_blames_the_message_chat_translation_fails_on_not_a_null_content_tool_result(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    count_endpoint: str,
+) -> None:
+    messages: Final = [
+        *_CHAT_TOOL_TURNS[1:3],
+        {"role": "tool", "tool_call_id": "call_1", "content": None},
+        {"role": "tool", "content": "sunny"},
+    ]
+
+    result, bodies = await _counted_body(counter_type, count_endpoint, messages, None, "openai")
+
+    assert bodies == ()
+    assert result is not None
+    assert (result.error, result.status_code) == (True, 400)
+    assert result.error_message is not None
+    assert "'tool_call_id'" in result.error_message
 
 
 @pytest.mark.asyncio

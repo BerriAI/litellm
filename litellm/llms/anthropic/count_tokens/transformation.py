@@ -156,12 +156,12 @@ class _ChatRequestTranslator(Protocol):
     ) -> _ChatParams: ...
 
 
+def _is_plain_message(message: Mapping[str, object]) -> bool:
+    return message.get("role") != "tool" and _PLAIN_MESSAGE_KEYS.issuperset(message.keys())
+
+
 def _needs_chat_translation(message: Mapping[str, object]) -> bool:
-    return (
-        message.get("role") == "tool"
-        or message.get("content") is None
-        or not _PLAIN_MESSAGE_KEYS.issuperset(message.keys())
-    )
+    return message.get("content") is None or not _is_plain_message(message)
 
 
 def _is_chat_tool(tool: Mapping[str, object]) -> bool:
@@ -314,14 +314,18 @@ def _message_problem(index: int, message: Mapping[str, object]) -> str | None:
     return None
 
 
-def _chat_message_problem(
+def _chat_message_problem(index: int, message: Mapping[str, object]) -> str | None:
+    return None if message.get("role") in _CHAT_ROLES_WITHOUT_CONTENT else _message_problem(index, message)
+
+
+def _plain_message_problem(
     roles_without_content: frozenset[str], index: int, message: Mapping[str, object]
 ) -> str | None:
-    if "role" not in message:
-        return f"Message {index} must have a 'role' field"
-    if message.get("content") is None and message["role"] not in roles_without_content:
-        return f"Message {index} must have a 'content' field"
-    return None
+    if not _is_plain_message(message) or message.get("role") in roles_without_content:
+        return None
+    return _message_problem(index, message) or (
+        f"Message {index} must have a 'content' field" if message["content"] is None else None
+    )
 
 
 def _first_message_problem(
@@ -341,10 +345,14 @@ def malformed_message_error(messages: Sequence[Mapping[str, object]]) -> ChatCou
     return _first_message_problem(messages, _message_problem)
 
 
-def chat_message_error(
-    messages: Sequence[Mapping[str, object]], roles_without_content: frozenset[str] = _CHAT_ROLES_WITHOUT_CONTENT
+def chat_message_error(messages: Sequence[Mapping[str, object]]) -> ChatCountTranslationError | None:
+    return _first_message_problem(messages, _chat_message_problem)
+
+
+def plain_message_error(
+    messages: Sequence[Mapping[str, object]], roles_without_content: frozenset[str]
 ) -> ChatCountTranslationError | None:
-    return _first_message_problem(messages, partial(_chat_message_problem, roles_without_content))
+    return _first_message_problem(messages, partial(_plain_message_problem, roles_without_content))
 
 
 def anthropic_fields_for_chat_tool_use(
@@ -377,6 +385,8 @@ def anthropic_fields_for_chat_tool_use(
             message=f"Invalid request for token counting: {e}"
         )
     translated: Final = _ANTHROPIC_CHAT_REQUEST.validate_python(request)
+    if messages and not translated["messages"]:
+        return ChatCountTranslationError(message="At least one non-system message with content is required")
     return AnthropicCountFields(
         messages=translated["messages"],
         system=translated.get("system"),
