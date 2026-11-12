@@ -2053,6 +2053,12 @@ async def test_a_pricier_alternate_is_never_used_while_a_budget_reservation_is_h
     assert isinstance(steered, dict)
     assert steered["model"] == "opus"
 
+    unpriced: Final = _steering_handler()
+    unpriced_opus: Final = {"opus": {"model": "openai/no-such-model-xyz"}}
+    unpriced.update_variables(llm_router=_steering_router("luna", "opus", extra_params=unpriced_opus))
+    await _saturate(unpriced, "luna")
+    assert await unpriced.async_pre_call_hook(reserved, DualCache(), {"model": "luna"}, "completion") is None
+
 
 @pytest.mark.asyncio
 async def test_an_alternate_that_does_not_serve_the_endpoint_is_never_used(monkeypatch: pytest.MonkeyPatch):

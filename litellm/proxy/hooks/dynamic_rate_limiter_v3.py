@@ -271,9 +271,11 @@ def _with_access_groups(data: Mapping[str, object], access_groups: tuple[str, ..
 def _priced_within(preferred: ModelGroupInfo, alternate: ModelGroupInfo) -> bool:
     """Whether ``alternate`` costs no more per token than ``preferred``, so a budget reserved for the preferred
     model's estimate still covers the alternate."""
-    return (alternate.input_cost_per_token or 0.0) <= (preferred.input_cost_per_token or 0.0) and (
-        alternate.output_cost_per_token or 0.0
-    ) <= (preferred.output_cost_per_token or 0.0)
+    if alternate.input_cost_per_token is None or alternate.output_cost_per_token is None:
+        return False
+    return alternate.input_cost_per_token <= (preferred.input_cost_per_token or 0.0) and (
+        alternate.output_cost_per_token <= (preferred.output_cost_per_token or 0.0)
+    )
 
 
 def _reservation_covers(
