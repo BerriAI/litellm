@@ -279,6 +279,7 @@ class RustHealthCallbacks:
             is_caller_scoped_auth_failure,
             is_caller_timeout_408,
             is_failure_outside_selected_deployment,
+            is_message_thread_not_found,
             is_response_lookup_not_found,
             is_video_lookup_not_found,
         )
@@ -290,6 +291,7 @@ class RustHealthCallbacks:
             or (isinstance(exception, Exception) and is_background_response_poll_not_found(exception, litellm_params))
             or is_video_lookup_not_found(exception, logged)
             or is_response_lookup_not_found(exception, logged)
+            or is_message_thread_not_found(exception)
             or is_caller_timeout_408(logged, status)  # pyright: ignore[reportArgumentType]  # the status as raised
             or is_caller_scoped_auth_failure(self._deployment_of(deployment_id), status)  # pyright: ignore[reportArgumentType]  # see above
         )

@@ -23,6 +23,9 @@ from litellm.utils import ProviderConfigManager
 MODEL = "bytedance/seedance-2.5/text-to-video"
 H3_TEXT_MODEL = "minimax/h3/text-to-video"
 H3_REFERENCE_MODEL = "minimax/h3/reference-to-video"
+H3_MAX_TEXT_MODEL = "minimax/h3-max/text-to-video"
+H3_MAX_TURBO_IMAGE_MODEL = "minimax/h3-max-turbo/image-to-video"
+H3_MAX_RECAST_MODEL = "minimax/h3-max/recast"
 
 
 @pytest.mark.parametrize("drop_params", [False, True])
@@ -95,6 +98,37 @@ class TestFalAIVideoTransformation:
         assert isinstance(mapped["duration"], int)
         assert mapped["reference_image_urls"] == [url]
         assert "image_url" not in mapped
+
+    def test_map_openai_params_supports_h3_max_profile(self) -> None:
+        url: Final = "https://example.com/image.png"
+
+        assert self.config.map_openai_params({"size": "768p"}, H3_MAX_TEXT_MODEL, False) == {"resolution": "768P"}
+        assert self.config.map_openai_params({"size": "1920x1080"}, H3_MAX_TEXT_MODEL, False) == {
+            "resolution": "1080P",
+            "aspect_ratio": "16:9",
+        }
+        mapped: Final = self.config.map_openai_params(
+            {"seconds": 5.5, "input_reference": url, "size": "1280x768"},
+            H3_MAX_TURBO_IMAGE_MODEL,
+            False,
+        )
+        assert mapped["resolution"] == "768P"
+        assert mapped["image_url"] == url
+        assert "reference_image_urls" not in mapped
+        assert mapped["duration"] == "5"
+
+    @pytest.mark.parametrize(
+        ("model", "expected"),
+        [
+            ("bytedance/seedance-2.5/reference-to-video", {"image_urls": ["https://example.com/image.png"]}),
+            ("bytedance/seedance-2.0/fast/reference-to-video", {"image_urls": ["https://example.com/image.png"]}),
+            ("bytedance/seedance-2.5/image-to-video", {"image_url": "https://example.com/image.png"}),
+        ],
+    )
+    def test_map_openai_params_seedance_input_reference_follows_task(self, model: str, expected: dict[str, object]):
+        mapped = self.config.map_openai_params({"input_reference": "https://example.com/image.png"}, model, False)
+
+        assert mapped == expected
 
     def test_map_openai_params_h3_omits_auto_duration(self):
         assert self.config.map_openai_params({"seconds": "auto"}, H3_TEXT_MODEL, False) == {}
@@ -197,6 +231,30 @@ class TestFalAIVideoTransformation:
         )
 
         assert video.usage == {"duration_seconds": 5.0, "video_resolution": "2K"}
+
+    def test_transform_video_create_response_h3_max_leaves_default_resolution_to_cost_map(
+        self, local_model_cost_map: None
+    ) -> None:
+        response: Final = Mock(spec=httpx.Response)
+        response.json.return_value = {"request_id": "abc"}
+
+        video: Final = self.config.transform_video_create_response(
+            model=H3_MAX_RECAST_MODEL,
+            raw_response=response,
+            logging_obj=self.logging_obj,
+            custom_llm_provider="fal_ai",
+            request_data={"duration": 5},
+        )
+
+        assert video.usage == {"duration_seconds": 5.0}
+        row: Final = litellm.model_cost[f"fal_ai/{H3_MAX_RECAST_MODEL}"]
+        assert default_video_cost_calculator(
+            model=H3_MAX_RECAST_MODEL,
+            duration_seconds=5.0,
+            custom_llm_provider="fal_ai",
+            model_info=None,
+            video_resolution=None,
+        ) == pytest.approx(row["output_cost_per_second"] * 5.0)
 
     def test_status_request_uses_queue_base_path(self):
         response = Mock(spec=httpx.Response)

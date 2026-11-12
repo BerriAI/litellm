@@ -557,7 +557,7 @@ def _get_router_zero_cost_cache(llm_router: RegistryReader) -> dict[str, bool] |
     return cache if isinstance(cache, dict) else None
 
 
-def is_model_cost_zero(model: str | list[str] | None, llm_router: RegistryReader | None) -> bool:
+def is_model_cost_zero(model: str | Sequence[str] | None, llm_router: RegistryReader | None) -> bool:
     """
     Check if a model has zero cost (no configured pricing).
 
@@ -1081,6 +1081,15 @@ BUDGET_ENFORCED_SIDE_EFFECT_ROUTES: Final = frozenset(
     }
 )
 
+VIDEO_RETRIEVAL_ROUTES: Final = frozenset(
+    {
+        "/videos/{video_id}",
+        "/v1/videos/{video_id}",
+        "/videos/{video_id}/content",
+        "/v1/videos/{video_id}/content",
+    }
+)
+
 MCP_DISCOVERY_ROUTES: Final = frozenset({"/mcp-rest/tools/list", "/v1/mcp/tools"})
 
 MCP_ZERO_SPEND_JSONRPC_METHODS: Final = frozenset({"initialize", "notifications/initialized", "ping", "tools/list"})
@@ -1095,6 +1104,10 @@ def is_mcp_discovery_request(route: str, request_body: Mapping[str, object]) -> 
         return False
     method: Final = request_body.get("method")
     return isinstance(method, str) and method in MCP_ZERO_SPEND_JSONRPC_METHODS
+
+
+def is_video_retrieval_request(route: str, http_method: str | None) -> bool:
+    return http_method == "GET" and RouteChecks.check_route_access(route=route, allowed_routes=VIDEO_RETRIEVAL_ROUTES)
 
 
 class ModelMaxBudgetHolder(Protocol):
@@ -1122,12 +1135,13 @@ def route_skips_budget_checks(route: str) -> bool:
 
 def request_skips_budget_checks(
     route: str,
-    model: str | list[str] | None,
+    model: str | Sequence[str] | None,
     llm_router: Router | None,
     *,
     request_body: Mapping[str, object] | None = None,
+    http_method: str | None = None,
 ) -> bool:
-    if route_skips_budget_checks(route=route):
+    if route_skips_budget_checks(route=route) or is_video_retrieval_request(route=route, http_method=http_method):
         return True
     if request_body is not None and is_mcp_discovery_request(route=route, request_body=request_body):
         return True
@@ -1146,7 +1160,7 @@ async def common_checks(
     proxy_logging_obj: ProxyLogging,
     valid_token: UserAPIKeyAuth | None,
     request: Request,
-    skip_budget_checks: bool = False,
+    skip_budget_checks: bool | None = None,
     project_object: LiteLLM_ProjectTableCachedObj | None = None,
 ) -> bool:
     """
@@ -1181,11 +1195,16 @@ async def common_checks(
         team_id=valid_token.team_id if valid_token is not None else None,
     )
 
-    skip_all_budget_checks: Final = skip_budget_checks or request_skips_budget_checks(
-        route=route,
-        model=_model,
-        llm_router=llm_router,
-        request_body=_typed_request_body(request_body),
+    skip_all_budget_checks: Final = (
+        skip_budget_checks
+        if skip_budget_checks is not None
+        else request_skips_budget_checks(
+            route=route,
+            model=_model,
+            llm_router=llm_router,
+            request_body=_typed_request_body(request_body),
+            http_method=RouteChecks.get_request_method(request),
+        )
     )
 
     membership_user_id: Final = (

@@ -1,0 +1,142 @@
+suite: retired Lens configuration
+templates:
+  - gateway/deployment.yaml
+  - backend/deployment.yaml
+  - gateway/configmap.yaml
+  - monolith/deployment.yaml
+  - ingress.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: renders gateway/deployment.yaml with ignored lens.enabled and no Lens secret references
+    template: gateway/deployment.yaml
+    set:
+      lens.enabled: true
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_LENS_URL
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LENS_GATEWAY_SECRET
+          any: true
+  - it: renders gateway/deployment.yaml with ignored lensWorker.enabled and no Lens secret references
+    template: gateway/deployment.yaml
+    set:
+      lensWorker.enabled: true
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_LENS_URL
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LENS_GATEWAY_SECRET
+          any: true
+  - it: renders backend/deployment.yaml with ignored lens.enabled and no Lens secret references
+    template: backend/deployment.yaml
+    set:
+      lens.enabled: true
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_LENS_URL
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LENS_GATEWAY_SECRET
+          any: true
+  - it: renders backend/deployment.yaml with ignored lensWorker.enabled and no Lens secret references
+    template: backend/deployment.yaml
+    set:
+      lensWorker.enabled: true
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_LENS_URL
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LENS_GATEWAY_SECRET
+          any: true
+  - it: renders the monolith with ignored lens.enabled and no Lens environment
+    template: monolith/deployment.yaml
+    set:
+      monolith.enabled: true
+      lens.enabled: true
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_LENS_URL
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_LENS_PUBLIC_URL
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LENS_GATEWAY_SECRET
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_LENS_SERVICE_TOKEN
+          any: true
+  - it: renders the monolith with ignored lensWorker mode and no Lens secret references
+    template: monolith/deployment.yaml
+    set:
+      monolith.enabled: true
+      lensWorker.enabled: true
+      lensWorker.mode: sidecar
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_LENS_URL
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LENS_GATEWAY_SECRET
+          any: true
+  - it: ignores the obsolete Lens ingress service on a shared host
+    template: ingress.yaml
+    set:
+      ingress.enabled: true
+      ingress.host: litellm.example.com
+      lens.enabled: true
+      lens.service.name: retired-lens
+      lens.service.port: 4318
+    asserts:
+      - notContains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /lens-ingest
+          any: true
+  - it: ignores the obsolete Lens ingress service in monolith mode
+    template: ingress.yaml
+    set:
+      monolith.enabled: true
+      ingress.enabled: true
+      ingress.host: litellm.example.com
+      lens.enabled: true
+      lens.service.name: retired-lens
+      lens.service.port: 4318
+    asserts:
+      - notContains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /lens-ingest
+          any: true

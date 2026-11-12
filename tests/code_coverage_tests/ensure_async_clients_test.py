@@ -1,5 +1,11 @@
 import ast
 import os
+from itertools import filterfalse
+from typing import Final
+
+NON_SDK_SOURCE_DIRS: Final = frozenset(
+    {"cli", "deploy", "enterprise", "packaging", "proxy-extras", "runtime", "rust", "scripts", "ui", "vscode-extension"}
+)
 
 ALLOWED_FILES = [
     # Only a guardrail check retry opens a client, on purpose to get a new connection, and closes it right after.
@@ -83,7 +89,9 @@ def scan_directory_for_async_handler(base_dir):
     """
     violations = {}
 
-    for root, _, files in os.walk(base_dir):
+    for root, dirs, files in os.walk(base_dir):
+        if os.path.normpath(root) == os.path.normpath(base_dir):
+            dirs[:] = filterfalse(NON_SDK_SOURCE_DIRS.__contains__, dirs)
         for file in files:
             if file.endswith(".py"):
                 file_path = os.path.join(root, file)

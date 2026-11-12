@@ -12,7 +12,7 @@ from typing import Final
 import pytest
 
 from litellm.rust_bridge._native import NativeInstalled, NativeModelCostMap, NativeRejected
-from litellm.rust_bridge.host.model_cost import AliasedCostEntry
+from litellm.litellm_core_utils.model_cost_table import AliasedCostEntry
 
 
 def _install(document: dict[str, dict[str, object]]) -> NativeInstalled:

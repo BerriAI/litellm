@@ -31,8 +31,7 @@ uv tool run --from datamodel-code-generator==0.66.0 datamodel-codegen \
     --base-class litellm.types.llms.base.LiteLLMBaseModel
 ```
 
-The pin is the same `datamodel-code-generator` version `scripts/generate_trace_types.py` uses. The generator names
-inline enums by order of appearance (`Status`, `Status1`, `Status2`, ...), so a regeneration can rename them. The
+The generator names inline enums by order of appearance (`Status`, `Status1`, `Status2`, ...), so a regeneration can rename them. The
 compliance tests resolve each status enum through its model's `status` field, but
 `tests/unit/interactions/test_background_cost_polling.py` and
 `tests/unit/proxy/hooks/test_proxy_track_cost_callback.py` import `Status1` by name and need the new name, and
