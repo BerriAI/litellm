@@ -1,6 +1,4 @@
-import asyncio
 import base64
-import importlib
 import json
 from collections.abc import Iterator, Mapping
 from typing import Final
@@ -17,6 +15,9 @@ import litellm
 from litellm import Router
 from litellm.router import Deployment, LiteLLM_Params
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+
+
+pytestmark: Final = pytest.mark.usefixtures("drained_logging_worker")
 
 
 @pytest.fixture
@@ -176,28 +177,6 @@ def _vcr_outcome_gate(request, vcr):
     install_live_call_probe(request, vcr)
     yield
     record_vcr_outcome(request, vcr)
-
-
-@pytest.fixture(scope="function", autouse=True)
-def setup_and_teardown():
-    """
-    This fixture reloads litellm before every function. To speed up testing by removing callbacks being chained.
-    """
-    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-
-    asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
-    importlib.reload(litellm)
-    try:
-        if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
-            importlib.reload(litellm.proxy.proxy_server)
-    except Exception as e:
-        print(f"Error reloading litellm.proxy.proxy_server: {e}")
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    asyncio.set_event_loop(loop)
-    print(litellm)
-    yield
-    loop.close()
-    asyncio.set_event_loop(None)
 
 
 @pytest.mark.asyncio

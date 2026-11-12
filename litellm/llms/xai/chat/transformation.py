@@ -1,15 +1,17 @@
 import copy
 from collections.abc import AsyncIterator, Iterator, Mapping
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Final, Protocol, SupportsIndex, SupportsInt, runtime_checkable
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter
+from typing_extensions import Buffer
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import XAI_API_BASE
 from litellm.exceptions import AuthenticationError
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     filter_value_from_dict,
     strip_name_from_messages,
@@ -34,6 +36,28 @@ from ...openai.chat.gpt_transformation import (
 
 _RESPONSE_BODY: Final = TypeAdapter(dict[object, object], config=ConfigDict(hide_input_in_errors=True))
 _FILTERED_TOOL: Final = TypeAdapter(object)
+
+
+@runtime_checkable
+class _SupportsTrunc(Protocol):
+    def __trunc__(self) -> int: ...
+
+
+def _token_count(value: object) -> int:
+    if isinstance(value, (str, Buffer, SupportsInt, SupportsIndex, _SupportsTrunc)):
+        return int(value)
+    raise TypeError(
+        f"int() argument must be a string, a bytes-like object or a real number, not '{type(value).__name__}'"
+    )
+
+
+def _reasoning_tokens(details: object) -> int:
+    if not details:
+        return 0
+    details_fields: Final = as_str_mapping(details)
+    if details_fields is not None and isinstance(details, dict):
+        return _token_count(details_fields.get("reasoning_tokens") or 0)
+    return _token_count(attribute_or_none(details, "reasoning_tokens") or 0)
 
 
 def _usage_restated_from_xai_ticks(usage: Usage | None) -> Usage | None:
@@ -324,7 +348,7 @@ class XAIChatConfig(OpenAIGPTConfig):
 
     @staticmethod
     def fold_reasoning_tokens_into_completion(
-        target: ModelResponse | Usage | dict[str, Any] | None,
+        target: ModelResponse | Usage | dict[str, object] | None,
     ) -> None:
         """Reconcile xAI Usage to the OpenAI invariant.
 
@@ -341,24 +365,20 @@ class XAIChatConfig(OpenAIGPTConfig):
             return
 
         if isinstance(target, ModelResponse):
-            usage: Usage | dict[str, Any] | None = getattr(target, "usage", None)
+            usage: Usage | dict[str, object] | None = getattr(target, "usage", None)
         else:
             usage = target
         if usage is None:
             return
 
         if isinstance(usage, dict):
-            details = usage.get("completion_tokens_details") or {}
-            if isinstance(details, dict):
-                reasoning_tokens = int(details.get("reasoning_tokens") or 0)
-            else:
-                reasoning_tokens = int(getattr(details, "reasoning_tokens", 0) or 0)
+            reasoning_tokens = _reasoning_tokens(usage.get("completion_tokens_details"))
             if reasoning_tokens <= 0:
                 return
 
-            prompt_tokens = int(usage.get("prompt_tokens") or 0)
-            completion_tokens = int(usage.get("completion_tokens") or 0)
-            total_tokens = int(usage.get("total_tokens") or 0)
+            prompt_tokens = _token_count(usage.get("prompt_tokens") or 0)
+            completion_tokens = _token_count(usage.get("completion_tokens") or 0)
+            total_tokens = _token_count(usage.get("total_tokens") or 0)
 
             if total_tokens == prompt_tokens + completion_tokens:
                 return
@@ -370,8 +390,8 @@ class XAIChatConfig(OpenAIGPTConfig):
             usage["completion_tokens"] = completion_tokens + reasoning_tokens
             return
 
-        details = getattr(usage, "completion_tokens_details", None)
-        reasoning_tokens = int(getattr(details, "reasoning_tokens", 0) or 0) if details else 0
+        details = attribute_or_none(usage, "completion_tokens_details")
+        reasoning_tokens = _token_count(attribute_or_none(details, "reasoning_tokens") or 0) if details else 0
         if reasoning_tokens <= 0:
             return
 
@@ -407,15 +427,15 @@ class XAIChatConfig(OpenAIGPTConfig):
 
     @staticmethod
     def _normalize_openai_compatible_usage_totals(
-        usage: Usage | dict[str, Any] | None,
+        usage: Usage | dict[str, object] | None,
     ) -> None:
         if usage is None:
             return
         if isinstance(usage, dict):
-            prompt_tokens = int(usage.get("prompt_tokens") or 0)
-            completion_tokens = int(usage.get("completion_tokens") or 0)
+            prompt_tokens = _token_count(usage.get("prompt_tokens") or 0)
+            completion_tokens = _token_count(usage.get("completion_tokens") or 0)
             expected_total = prompt_tokens + completion_tokens
-            if int(usage.get("total_tokens") or 0) < expected_total:
+            if _token_count(usage.get("total_tokens") or 0) < expected_total:
                 usage["total_tokens"] = expected_total
             return
         prompt_tokens = int(usage.prompt_tokens or 0)
