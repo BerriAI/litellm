@@ -13,7 +13,15 @@ import openai
 import pytest
 import yaml
 from anthropic.types import RawContentBlockDeltaEvent, TextDelta
-from integration._support.anthropic_sse import DROP_PAUSE, dropping_reply, stream_reply
+from integration._support.anthropic_sse import (
+    CONTENT_BLOCK_START,
+    DROP_PAUSE,
+    dropping_reply,
+    error_body,
+    message_start,
+    stream_reply,
+    text_delta,
+)
 from integration._support.client import (
     JSON_OBJECT,
     Gateway,
@@ -30,6 +38,7 @@ from integration._support.responses_ws_peer import PROVIDER_MODEL, Script, event
 from integration._support.tls import write_self_signed_cert
 from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
+from openai.types import Completion
 from openai.types.chat import ChatCompletionChunk
 from openai.types.responses import ResponseFailedEvent, ResponseTextDeltaEvent
 from pydantic import JsonValue
@@ -39,6 +48,7 @@ pytestmark: Final = [pytest.mark.timeout(2 * graceful_stop_seconds() + 120), pyt
 AZURE_KEY: Final = "synthetic-azure-key"
 API_VERSION: Final = "2025-04-01-preview"
 AZURE_CHAT_BACKEND: Final = "azure/gpt-4o-mini"
+ANTHROPIC_BACKEND: Final = "anthropic/claude-opus-5-5"
 PARTIAL_TEXT: Final = "partial answer"
 ALERT_SECONDS: Final = 40
 NO_RETRY_NO_CACHE: Final[Mapping[str, JsonValue]] = MappingProxyType({"num_retries": 0, "cache": {"no-cache": True}})
@@ -234,6 +244,10 @@ def responses_text(item: object) -> str:
     return item.delta if isinstance(item, ResponseTextDeltaEvent) else ""
 
 
+def completion_text(item: object) -> str:
+    return "".join(choice.text for choice in item.choices) if isinstance(item, Completion) else ""
+
+
 def failure_of(item: object) -> str:
     if isinstance(item, Exception):
         return str(item)
@@ -294,6 +308,19 @@ def responses_outcome(gateway: Gateway, key: str, model: str) -> Outcome:
             )
         )
         return outcome(items, responses_text)
+
+
+def completions_outcome(gateway: Gateway, key: str, model: str) -> Outcome:
+    with openai_client(gateway, key) as client:
+        items: Final = tuple(
+            items_or_error(
+                lambda: client.completions.create(
+                    model=model, prompt="stream an answer", stream=True, extra_body=dict(NO_RETRY_NO_CACHE)
+                ),
+                openai.APIError,
+            )
+        )
+        return outcome(items, completion_text)
 
 
 ENTRYPOINTS: Final[Mapping[str, Callable[[Gateway, str, str], Outcome]]] = MappingProxyType(
@@ -480,3 +507,74 @@ def test_fallback_mid_stream_failure_alert_names_the_fallback_deployment(alertin
         alert: Final = alert_naming(alerting.alerts, marker)
         assert_names_deployment(alert, backup_wire.url, backup, AZURE_CHAT_BACKEND, caller)
         assert primary_wire.url not in alert, alert
+
+
+PING_NEVER_SENT: Final = b"event: ping\ndata: {}\n\n"
+
+
+def anthropic_cut_after_text(marker: str) -> Reply:
+    return dropping_reply(
+        (
+            message_start(f"msg_{marker}", ANTHROPIC_BACKEND),
+            CONTENT_BLOCK_START,
+            text_delta(PARTIAL_TEXT),
+            PING_NEVER_SENT,
+        ),
+        abort_after=3,
+    )
+
+
+def responses_cut_after_text(marker: str) -> Reply:
+    identity: Final = f"resp_{marker}"
+    return dropping_reply(
+        (frame(created(identity)), frame(delta(identity, PARTIAL_TEXT)), b": never sent\n\n"), abort_after=2
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class CutPath:
+    backend: str
+    reply: Callable[[str], Reply]
+    call: Callable[[Gateway, str, str], Outcome]
+
+
+CUT_PATHS: Final[Mapping[str, CutPath]] = MappingProxyType(
+    {
+        "anthropic-chat": CutPath(ANTHROPIC_BACKEND, anthropic_cut_after_text, chat_outcome),
+        "completions": CutPath(AZURE_CHAT_BACKEND, cut_after_text, completions_outcome),
+        "native-responses": CutPath(AZURE_CHAT_BACKEND, responses_cut_after_text, responses_outcome),
+        "native-messages": CutPath(ANTHROPIC_BACKEND, anthropic_cut_after_text, messages_outcome),
+    }
+)
+
+
+def scripted_model(scenario: Scenario, backend: str, api_base: str) -> str:
+    if backend == AZURE_CHAT_BACKEND:
+        return azure_chat(scenario, api_base)
+    return scenario.model(model=backend, api_base=api_base, api_key="synthetic-anthropic-key", num_retries=0)
+
+
+@pytest.mark.parametrize("path", list(CUT_PATHS))
+def test_stream_cut_alert_names_the_deployment(alerting: AlertingProxy, path: str) -> None:
+    marker: Final = uuid.uuid4().hex
+    cut: Final = CUT_PATHS[path]
+    with wire_server(chat_upstream(cut.reply, marker)) as wire, alerting.gateway.scenario() as scenario:
+        model: Final = scripted_model(scenario, cut.backend, wire.url)
+        caller: Final = keyed_caller(scenario)
+        seen: Final = cut.call(alerting.gateway, caller.key, model)
+        assert seen.text == PARTIAL_TEXT and seen.failure, seen
+        assert_names_deployment(alert_naming(alerting.alerts, model), wire.url, model, cut.backend, caller)
+
+
+def test_anthropic_rejection_before_stream_alert_names_the_deployment(alerting: AlertingProxy) -> None:
+    marker: Final = uuid.uuid4().hex
+
+    def rejected(_: str) -> Reply:
+        return Reply(status=500, body=error_body(500, provider_message(marker)))
+
+    with wire_server(chat_upstream(rejected, marker)) as wire, alerting.gateway.scenario() as scenario:
+        model: Final = scripted_model(scenario, ANTHROPIC_BACKEND, wire.url)
+        caller: Final = keyed_caller(scenario)
+        seen: Final = chat_outcome(alerting.gateway, caller.key, model)
+        assert provider_message(marker) in seen.failure and not seen.text, seen
+        assert_names_deployment(alert_naming(alerting.alerts, marker), wire.url, model, ANTHROPIC_BACKEND, caller)

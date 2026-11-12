@@ -260,6 +260,16 @@ Delete a credential:
 lite credentials delete <credential-name>
 ```
 
+#### Connect a GitHub Copilot Credential
+
+Connect your own GitHub Copilot account to a per-user GitHub Copilot credential, the same as the Connect button in the UI. Run it with your own virtual key, since the connection belongs to the user that key resolves to:
+
+```bash
+lite --api-key sk-your-key credentials connect <credential-name>
+```
+
+It prints a code and a GitHub link, then waits. Open the link, enter the code, and approve. The command exits 0 once GitHub confirms the login, and exits 1 if the code expires, the login is denied, or the GitHub account has no Copilot seat.
+
 ### Keys Management
 
 The CLI provides commands for managing API keys on your LiteLLM proxy server:

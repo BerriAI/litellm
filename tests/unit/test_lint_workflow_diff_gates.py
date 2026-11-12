@@ -248,14 +248,14 @@ def test_diff_gate_selects_top_level_and_nested_python_files_only(tmp_path: Path
     (
         "tests/e2e_harness/top_level_module.py",
         "tests/e2e_harness/pkg/sub/nested_module.py",
-        "pyrightconfig.json",
+        "pyproject.toml",
     ),
 )
 def test_e2e_basedpyright_gate_also_fires_on_harness_python_and_pyrightconfig(tmp_path: Path, trigger: str) -> None:
     selected = _changed_files_selected_by(
         tmp_path,
         _gate_rooted_at("tests/e2e/"),
-        (trigger, "tests/e2e_harness/notes.md", "elsewhere/pyrightconfig.json", "tests/e2e_harnessish/module.py"),
+        (trigger, "tests/e2e_harness/notes.md", "elsewhere/pyproject.toml", "tests/e2e_harnessish/module.py"),
     )
     assert selected == frozenset({trigger})
 
@@ -383,8 +383,18 @@ def _guard_base_argument_and_checkout(run: StepRun) -> tuple[str, str]:
     return argv[argv.index("--base") + 1], _sha(run.runner.checkout, "HEAD")
 
 
+def _schema_base_commit_and_its_type_in_the_checkout(run: StepRun) -> tuple[str, str]:
+    argv: Final = _argv_recorded(run.runner, "uv")
+    base_commit: Final = argv[argv.index("--base-commit") + 1]
+    return base_commit, _git(run.runner.checkout, "cat-file", "-t", base_commit).strip()
+
+
 def _merge_base(upstream: StaleBaseUpstream, ref: str) -> str:
     return upstream.merge_base_by_ref[ref]
+
+
+def _merge_base_as_a_commit(upstream: StaleBaseUpstream, ref: str) -> tuple[str, str]:
+    return upstream.merge_base_by_ref[ref], "commit"
 
 
 def _ui_files_changed_since_merge_base(upstream: StaleBaseUpstream, ref: str) -> frozenset[str]:
@@ -402,6 +412,7 @@ CONSUMERS: Final = MappingProxyType(
         "test-linting.yml:python": Consumer(_gate_base_exported, _merge_base),
         "test-linting.yml:ui": Consumer(_ui_files_queued_for_prettier, _ui_files_changed_since_merge_base),
         "test-unit.yml:ui-unit": Consumer(_ui_files_passed_to_vitest_related, _ui_files_changed_since_merge_base),
+        "test-unit.yml:unit": Consumer(_schema_base_commit_and_its_type_in_the_checkout, _merge_base_as_a_commit),
         "spend-logs-guard.yml:spend-logs-guard": Consumer(_guard_base_argument_and_checkout, _merge_base_and_tip),
         "cost-map-guard.yml:cost-map-guard": Consumer(_guard_base_argument_and_checkout, _merge_base_and_tip),
     }

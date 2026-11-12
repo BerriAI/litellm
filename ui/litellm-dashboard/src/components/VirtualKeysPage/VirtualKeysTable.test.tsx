@@ -1,7 +1,7 @@
 import { act, screen, waitFor, within, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
-import { vi, it, expect, beforeEach, describe, Mock, MockedFunction } from "vitest";
+import { vi, it, expect, beforeEach, afterEach, describe, Mock, MockedFunction } from "vitest";
 import { chooseSelectOption, renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import { VirtualKeysTable } from "./VirtualKeysTable";
 import { KEY_TABLE_HIDDEN_COLUMNS, KEY_TABLE_SORT_FIELDS } from "./keyTableColumns";
@@ -25,7 +25,10 @@ vi.mock("@tanstack/react-pacer/debouncer", async () => {
   };
 });
 
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock("next/navigation", () => ({
+  usePathname: () => "/ui/",
+  useRouter: () => ({ push: vi.fn() }),
+}));
 
 vi.mock("../networking", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../networking")>()),
@@ -480,7 +483,10 @@ it.each([
 
 it("clicking the key cell deep-links via ?key=", async () => {
   const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
-  renderWithProviders(<VirtualKeysTable />, { onUrlUpdate });
+  renderWithProviders(<VirtualKeysTable />, {
+    onUrlUpdate,
+    searchParams: { detail_tab: "activity", activity_from: "2026-01-01", activity_to: "2026-01-08" },
+  });
 
   await waitFor(() => {
     expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
@@ -491,12 +497,21 @@ it("clicking the key cell deep-links via ?key=", async () => {
   await waitFor(() => {
     expect(lastKeyParam(onUrlUpdate)).toBe(mockKey.token);
   });
+  expect(Object.fromEntries(onUrlUpdate.mock.calls.at(-1)![0].searchParams)).toEqual({ key: mockKey.token });
   expect(lastHistoryMode(onUrlUpdate)).toBe("push");
 });
 
 it("renders KeyInfoView when the URL has ?key= for a key on the current page, without refetching it", async () => {
   const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
-  renderWithProviders(<VirtualKeysTable />, { searchParams: { key: mockKey.token }, onUrlUpdate });
+  renderWithProviders(<VirtualKeysTable />, {
+    searchParams: {
+      key: mockKey.token,
+      activity_from: "2026-01-01",
+      activity_to: "2026-01-08",
+      filter_user: "user-42",
+    },
+    onUrlUpdate,
+  });
 
   await waitFor(() => {
     expect(screen.getByText("Back to Keys")).toBeInTheDocument();
@@ -509,6 +524,7 @@ it("renders KeyInfoView when the URL has ?key= for a key on the current page, wi
   await waitFor(() => {
     expect(lastKeyParam(onUrlUpdate)).toBeNull();
   });
+  expect(Object.fromEntries(onUrlUpdate.mock.calls.at(-1)![0].searchParams)).toEqual({ filter_user: "user-42" });
   expect(screen.getByTestId("pagination-range")).toBeInTheDocument();
 });
 
@@ -582,6 +598,27 @@ it("should display 'Default Proxy Admin' for user_id when value is 'default_user
 
   await waitFor(() => {
     expect(screen.getByText("Default Proxy Admin")).toBeInTheDocument();
+  });
+});
+
+describe("Budget Reset column", () => {
+  const originalTimezone: string | undefined = process.env.TZ;
+
+  afterEach(() => {
+    if (originalTimezone === undefined) {
+      delete process.env.TZ;
+      return;
+    }
+    process.env.TZ = originalTimezone;
+  });
+
+  it("shows the reset time in UTC with a UTC label for a viewer in another timezone", async () => {
+    process.env.TZ = "America/Los_Angeles";
+    mockUseKeys.mockReturnValue(keysResult([{ ...mockKey, budget_reset_at: "2026-11-01T00:00:00Z" }]));
+
+    renderWithProviders(<VirtualKeysTable />);
+
+    expect(await screen.findByText("Nov 1, 00:00:00 UTC")).toBeInTheDocument();
   });
 });
 

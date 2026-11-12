@@ -310,6 +310,14 @@ where
                 reply.send(Ok(()));
                 Ok(())
             }
+            HostRequest::Intercept(InterceptRequest::ProviderRequestRetried { retry, reply }) => {
+                self.notify(PythonCallEvent::Execution(
+                    ExecutionEvent::ProviderRequestRetried { retry },
+                ))
+                .await?;
+                reply.send(Ok(()));
+                Ok(())
+            }
             HostRequest::Stream(StreamDelivery::Open(head, reply)) => {
                 self.streaming = true;
                 let head = {
@@ -399,7 +407,15 @@ where
             Ok(step) => step,
             Err(error) => return self.failure(error, FailureOrigin::Host).await,
         };
-        match self.settle(step).await {
+        let response = match self.settle(step).await {
+            Ok(response) => response,
+            Err(error) => return self.failure(error, FailureOrigin::Host).await,
+        };
+        let delivered = {
+            let mut parts = self.parts();
+            Python::attach(|py| parts.binding.deliver_response(py, response))
+        };
+        match delivered {
             Ok(response) => self.succeeded(response).await,
             Err(error) => self.failure(error, FailureOrigin::Host).await,
         }

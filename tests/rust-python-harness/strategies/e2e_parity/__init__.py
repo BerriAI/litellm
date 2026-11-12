@@ -20,7 +20,7 @@ CASES: Final[tuple[CaseDefinition, ...]] = (
     CaseDefinition(
         "messages",
         NotImplementedCaseSpec(
-            reason="Bridge unit tests exist, but no standalone end-to-end parity case is registered."
+            reason="Parity runs as the pytest suite in sdk/messages/test_native_parity.py, not as a runner case."
         ),
         surface="sdk",
     ),

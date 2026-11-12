@@ -55,6 +55,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/cache_settings",
     "/coordination_redis/",
     "/cost_tracking",
+    "/subscription_accounts/",
     "/cost_optimization/",
     "/cost/",
     "/credentials",
@@ -109,6 +110,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/v1/rust_control_plane/",
     # Alerting / email / IP allowlist
     "/alerting/",
+    "/alerts/",
     "/email/",
     "/add/allowed_ip",
     "/delete/allowed_ip",
@@ -153,6 +155,7 @@ BACKEND_EXACT_PATHS: frozenset[str] = frozenset(
         "/",
         "/routes",
         "/lens",
+        "/alerts",
         "/openapi.json",
         "/docs",
         "/docs/oauth2-redirect",

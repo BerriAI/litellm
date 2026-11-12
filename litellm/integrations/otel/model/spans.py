@@ -260,6 +260,8 @@ _PRISMA_VIEWS: Final[frozenset[str]] = frozenset(
 )
 _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
     (
+        "LiteLLM_Alert",
+        "LiteLLM_PerformanceAlertState",
         "LiteLLM_BudgetTable",
         "LiteLLM_CredentialsTable",
         "LiteLLM_ProxyModelTable",
@@ -292,6 +294,7 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_SpendLogs",
         "LiteLLM_BudgetWindowSpend",
         "LiteLLM_BackgroundInteractionSettlement",
+        "LiteLLM_BackgroundResponseSettlement",
         "LiteLLM_ErrorLogs",
         "LiteLLM_UserNotifications",
         "LiteLLM_UserProviderCredentials",
@@ -327,6 +330,7 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_PromptTable",
         "LiteLLM_HealthCheckTable",
         "LiteLLM_SearchToolsTable",
+        "LiteLLM_ScheduledJobRun",
         "LiteLLM_SSOConfig",
         "LiteLLM_ManagedVectorStoreIndexTable",
         "LiteLLM_CacheConfig",
@@ -338,9 +342,12 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_ToolTable",
         "LiteLLM_TelemetryReport",
         "LiteLLM_AccessGroupTable",
-        "LiteLLM_AccountingDelivery",
-        "LiteLLM_AccountingEvent",
+        "LiteLLM_SpendLogDelivery",
         "LiteLLM_ClaudeCodePluginTable",
+        "LiteLLM_ClaudeCodePluginUpload",
+        "LiteLLM_ClaudeCodePluginVersion",
+        "LiteLLM_SkillSubmission",
+        "LiteLLM_ClaudeCodePluginDownload",
         "LiteLLM_MemoryTable",
         "LiteLLM_AdaptiveRouterState",
         "LiteLLM_AdaptiveRouterSession",
@@ -361,6 +368,7 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_LensReview",
         "LiteLLM_LensIngestionKey",
         "LiteLLM_LensWorker",
+        "LiteLLM_SubscriptionAccountTable",
         "LiteLLM_LensSignalConfig",
         "LiteLLM_LensTraceSignal",
     )

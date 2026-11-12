@@ -23,10 +23,10 @@ impl FromStr for KeyExchangeGroup {
     type Err = Unsupported;
 
     fn from_str(name: &str) -> Result<Self, Self::Err> {
-        match name.trim().to_ascii_lowercase().as_str() {
-            "x25519" => Ok(Self::X25519),
-            "prime256v1" | "secp256r1" | "p-256" => Ok(Self::Secp256r1),
-            "secp384r1" | "p-384" => Ok(Self::Secp384r1),
+        match name {
+            "X25519" => Ok(Self::X25519),
+            "prime256v1" => Ok(Self::Secp256r1),
+            "secp384r1" => Ok(Self::Secp384r1),
             _ => Err(Unsupported::EcdhCurve(name.to_owned())),
         }
     }

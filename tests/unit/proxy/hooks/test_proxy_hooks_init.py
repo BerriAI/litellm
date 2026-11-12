@@ -33,7 +33,7 @@ def test_managed_vector_stores_hook_registered():
     assert hook_cls.__name__ == "_PROXY_LiteLLMManagedVectorStores"
 
 
-def test_isolation_module_does_not_pull_in_proxy_utils():
+def test_isolation_module_does_not_pull_in_proxy_utils(monkeypatch):
     """Layering guard: litellm.llms.* must not transitively import
     litellm.proxy.utils, which would reintroduce the import cycle."""
     import importlib
@@ -44,7 +44,7 @@ def test_isolation_module_does_not_pull_in_proxy_utils():
         "litellm.proxy.management_endpoints.common_utils",
         "litellm.llms.base_llm.managed_resources.isolation",
     ]:
-        sys.modules.pop(mod, None)
+        monkeypatch.delitem(sys.modules, mod, raising=False)
 
     importlib.import_module("litellm.llms.base_llm.managed_resources.isolation")
     assert "litellm.proxy.utils" not in sys.modules

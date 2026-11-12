@@ -1,9 +1,25 @@
-import { renderWithProviders, screen } from "../../../../tests/test-utils";
+import { renderWithProviders, screen, within } from "../../../../tests/test-utils";
 import { AUTO_ROUTER_DOCS_URL, NotificationsBell, NotificationsBellView } from "./NotificationsBell";
 import type { LatestReleaseInfo } from "@/app/(dashboard)/hooks/latestRelease/useLatestReleaseInfo";
 import React from "react";
+import type { SavedAlert } from "@/components/Alerts/alertPresentation";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@/components/ModelDeprecationAlerts/useDeprecationAlerts", () => ({
+  useDeprecationAlerts: () => ({
+    data: [],
+    scope: "test",
+    range: { start_date: "2026-10-06", end_date: "2026-11-04" },
+  }),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/currentUser/useCurrentUser", () => ({
+  useCurrentUser: () => ({ data: undefined }),
+}));
+vi.mock("@/components/Alerts/useAlerts", () => ({
+  useAlerts: () => ({ data: undefined }),
+}));
 
 vi.mock("@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails", () => ({
   useHealthReadinessDetails: vi.fn(),
@@ -65,6 +81,21 @@ describe("NotificationsBellView", () => {
     );
     await user.click(bell(2));
     expect(announcement("LiteLLM v1.103.0 is available")).toHaveTextContent("1 new feature, 1 fix, and 1 other update");
+  });
+
+  it("leaves the counts out when the release notes yielded none", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <NotificationsBellView
+        currentVersion="1.102.0"
+        latestRelease={{ ...RELEASE, new_features: 0, bug_fixes: 0, other_updates: 0 }}
+      />,
+    );
+    await user.click(bell(2));
+    const upgrade = announcement("LiteLLM v1.103.0 is available");
+    expect(upgrade).toHaveTextContent("Your current version is v1.102.0");
+    expect(upgrade).not.toHaveTextContent("0 new features");
+    expect(upgrade).not.toHaveTextContent("other update");
   });
 
   it.each([
@@ -171,5 +202,119 @@ describe("NotificationsBell", () => {
     renderWithProviders(<NotificationsBell accessToken="token" />);
     await user.click(bell(2));
     expect(announcement("LiteLLM v1.103.0 is available")).toHaveTextContent("Your current version is v1.102.0");
+  });
+});
+
+const DEPRECATION = {
+  id: "sonnet:2026-11-30:imminent",
+  usageModel: "anthropic/claude-sonnet-4-5",
+  requests: 18432,
+  lastUsedDate: "2026-11-04",
+  lastDayRequests: 123,
+  model: {
+    model_name: "support",
+    litellm_model: "anthropic/claude-sonnet-4-5",
+    deprecation_date: "2026-11-30",
+    days_until_deprecation: 26,
+    status: "imminent" as const,
+    successor_model: "recommended-model",
+  },
+};
+
+describe("model deprecation notifications", () => {
+  beforeEach(() => localStorage.clear());
+  afterEach(() => localStorage.clear());
+  it("links a concise deprecation summary to its detail and the unified inbox", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <NotificationsBellView currentVersion={null} latestRelease={null} deprecationAlerts={[DEPRECATION]} />,
+    );
+    await user.click(screen.getByRole("button", { name: /alerts need attention/ }));
+    expect(screen.getByRole("link", { name: /anthropic\/claude-sonnet-4-5 retires/ })).toHaveAttribute(
+      "href",
+      "/ui/alerts?type=model-deprecations&model=anthropic%2Fclaude-sonnet-4-5",
+    );
+    expect(screen.getByRole("link", { name: "See all" })).toHaveAttribute("href", "/ui/alerts");
+    expect(screen.queryByRole("button", { name: "Mark resolved" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Dismiss", exact: true })).not.toBeInTheDocument();
+  });
+  it("should clear the warning when the alert has a shared resolved acknowledgement", () => {
+    const state = {
+      model: DEPRECATION.usageModel,
+      deprecation_date: "2026-11-30",
+      status: "resolved" as const,
+      last_seen_date: "2026-11-04",
+      last_seen_requests: 123,
+    };
+    renderWithProviders(
+      <NotificationsBellView
+        currentVersion={null}
+        latestRelease={null}
+        deprecationAlerts={[{ ...DEPRECATION, state }]}
+      />,
+    );
+    expect(bell(1)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /alerts need attention/ })).not.toBeInTheDocument();
+  });
+  it("should reopen a resolved alert when more requests arrive on the last-seen day", () => {
+    const state = {
+      model: DEPRECATION.usageModel,
+      deprecation_date: "2026-11-30",
+      status: "resolved" as const,
+      last_seen_date: "2026-11-04",
+      last_seen_requests: 122,
+    };
+    renderWithProviders(
+      <NotificationsBellView
+        currentVersion={null}
+        latestRelease={null}
+        deprecationAlerts={[{ ...DEPRECATION, state }]}
+      />,
+    );
+    expect(screen.getByRole("button", { name: /alerts need attention/ })).toBeInTheDocument();
+  });
+});
+
+const PERFORMANCE: SavedAlert = {
+  id: "9007199254740993",
+  type: "spend",
+  resource_type: "team",
+  resource_id: "example-team",
+  resource_name: "Research",
+  status: "open",
+  window_start: "2026-11-10T00:00:00Z",
+  window_end: "2026-11-11T00:00:00Z",
+  created_at: "2026-11-11T03:00:00Z",
+  updated_at: "2026-11-11T03:00:00Z",
+  evidence: { value: 1200, baseline: 200, unit: "usd", sample_size: 1000 },
+};
+
+describe("combined alert notifications", () => {
+  it("shows at most five open alerts across both sources with detail links", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <NotificationsBellView
+        currentVersion={null}
+        latestRelease={null}
+        deprecationAlerts={[DEPRECATION]}
+        performanceAlerts={[
+          { ...PERFORMANCE, id: "resolved", status: "resolved" },
+          { ...PERFORMANCE, id: "dismissed", status: "dismissed" },
+          PERFORMANCE,
+          ...["2", "3", "4", "5"].map((id) => ({ ...PERFORMANCE, id, resource_name: `Team ${id}` })),
+        ]}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: /alerts need attention/ }));
+    const alerts = within(screen.getByRole("region", { name: "Alerts" }));
+    expect(alerts.getAllByRole("listitem")).toHaveLength(5);
+    expect(alerts.getByRole("link", { name: /Spend on Research/ })).toHaveAttribute(
+      "href",
+      `/ui/alerts?alert=${PERFORMANCE.id}`,
+    );
+    expect(alerts.getByRole("link", { name: /Spend on Team 4/ })).toBeInTheDocument();
+    expect(alerts.queryByRole("link", { name: /Spend on Team 5/ })).not.toBeInTheDocument();
+    expect(alerts.getByRole("link", { name: "See all" })).toHaveAttribute("href", "/ui/alerts");
+    expect(alerts.queryByRole("button")).not.toBeInTheDocument();
   });
 });

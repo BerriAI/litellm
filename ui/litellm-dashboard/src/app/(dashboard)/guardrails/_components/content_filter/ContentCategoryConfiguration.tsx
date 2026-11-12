@@ -1,4 +1,5 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 import { ChevronRight, FileText, Plus, Trash2 } from "lucide-react";
 import type { ColumnDef } from "@tanstack/react-table";
 import { getCategoryYaml } from "@/components/networking";
@@ -16,7 +17,9 @@ import {
   ComboboxList,
 } from "@/components/ui/combobox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ACTION_ITEMS, SEVERITY_ITEMS } from "./action_options";
+import { ACTION_ITEMS, SEVERITY_ITEMS, translateOptions } from "./action_options";
+
+const DEFAULT_CATEGORY_FILE_TYPE = "yaml";
 
 interface ContentCategory {
   name: string;
@@ -38,7 +41,7 @@ interface ContentCategoryConfigurationProps {
   selectedCategories: SelectedCategory[];
   onCategoryAdd: (category: SelectedCategory) => void;
   onCategoryRemove: (id: string) => void;
-  onCategoryUpdate: (id: string, field: string, value: any) => void;
+  onCategoryUpdate: (id: string, field: "action" | "severity_threshold", value: any) => void;
   accessToken?: string | null;
   pendingSelection?: string;
   onPendingSelectionChange?: (value: string) => void;
@@ -54,6 +57,9 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
   pendingSelection,
   onPendingSelectionChange,
 }) => {
+  const { t } = useTranslation();
+  const actionItems = translateOptions(ACTION_ITEMS, t);
+  const severityItems = translateOptions(SEVERITY_ITEMS, t);
   // Use controlled state if parent provides it, otherwise use local state
   const [localSelectedCategoryName, setLocalSelectedCategoryName] = React.useState<string>("");
   const selectedCategoryName = pendingSelection !== undefined ? pendingSelection : localSelectedCategoryName;
@@ -119,7 +125,7 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
       }
 
       setCategoryYaml((prev) => ({ ...prev, [categoryName]: content }));
-      setCategoryFileTypes((prev) => ({ ...prev, [categoryName]: data.file_type || "yaml" }));
+      setCategoryFileTypes((prev) => ({ ...prev, [categoryName]: data.file_type || DEFAULT_CATEGORY_FILE_TYPE }));
     } catch (error) {
       console.error(`Failed to fetch content for category ${categoryName}:`, error);
     } finally {
@@ -156,7 +162,10 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
           setPreviewYaml(content);
           // Also cache it for later use
           setCategoryYaml((prev) => ({ ...prev, [selectedCategoryName]: content }));
-          setCategoryFileTypes((prev) => ({ ...prev, [selectedCategoryName]: data.file_type || "yaml" }));
+          setCategoryFileTypes((prev) => ({
+            ...prev,
+            [selectedCategoryName]: data.file_type || DEFAULT_CATEGORY_FILE_TYPE,
+          }));
         })
         .catch((error) => {
           console.error(`Failed to fetch preview content for category ${selectedCategoryName}:`, error);
@@ -174,7 +183,7 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
 
   const columns: ColumnDef<SelectedCategory>[] = [
     {
-      header: "Category",
+      header: t("guardrails.contentFilter.categoryConfiguration.columns.category"),
       accessorKey: "display_name",
       cell: ({ row }) => {
         const category = availableCategories.find((c) => c.name === row.original.category);
@@ -187,20 +196,24 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
       },
     },
     {
-      header: "Action",
+      header: t("guardrails.contentFilter.categoryConfiguration.columns.action"),
       accessorKey: "action",
       size: 150,
       cell: ({ row }) => (
         <Select
-          items={ACTION_ITEMS}
+          items={actionItems}
           value={row.original.action}
           onValueChange={(value: string | null) => value && onCategoryUpdate(row.original.id, "action", value)}
         >
-          <SelectTrigger size="sm" className="w-full" aria-label="Action">
+          <SelectTrigger
+            size="sm"
+            className="w-full"
+            aria-label={t("guardrails.contentFilter.categoryConfiguration.columns.action")}
+          >
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {ACTION_ITEMS.map((item) => (
+            {actionItems.map((item) => (
               <SelectItem key={item.value} value={item.value}>
                 <Badge variant={item.value === "BLOCK" ? "destructive" : "secondary"}>{item.value}</Badge>
               </SelectItem>
@@ -210,22 +223,26 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
       ),
     },
     {
-      header: "Severity Threshold",
+      header: t("guardrails.contentFilter.categoryConfiguration.columns.severityThreshold"),
       accessorKey: "severity_threshold",
       size: 180,
       cell: ({ row }) => (
         <Select
-          items={SEVERITY_ITEMS}
+          items={severityItems}
           value={row.original.severity_threshold}
           onValueChange={(value: string | null) =>
             value && onCategoryUpdate(row.original.id, "severity_threshold", value)
           }
         >
-          <SelectTrigger size="sm" className="w-full" aria-label="Severity Threshold">
+          <SelectTrigger
+            size="sm"
+            className="w-full"
+            aria-label={t("guardrails.contentFilter.categoryConfiguration.columns.severityThreshold")}
+          >
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {SEVERITY_ITEMS.map((item) => (
+            {severityItems.map((item) => (
               <SelectItem key={item.value} value={item.value}>
                 {item.label}
               </SelectItem>
@@ -241,7 +258,7 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
       cell: ({ row }) => (
         <Button variant="outline" size="sm" onClick={() => onCategoryRemove(row.original.id)}>
           <Trash2 />
-          Remove
+          {t("guardrails.contentFilter.categoryConfiguration.remove")}
         </Button>
       ),
     },
@@ -256,9 +273,9 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
     <Card>
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <CardTitle>Blocked topics</CardTitle>
+          <CardTitle>{t("guardrails.contentFilter.categoryConfiguration.title")}</CardTitle>
           <p className="text-xs font-normal text-muted-foreground">
-            Select topics to block using keyword and semantic analysis
+            {t("guardrails.contentFilter.categoryConfiguration.subtitle")}
           </p>
         </div>
       </CardHeader>
@@ -270,9 +287,12 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
             onValueChange={(category: ContentCategory | null) => setSelectedCategoryName(category?.name ?? "")}
             itemToStringLabel={(category: ContentCategory) => category.display_name}
           >
-            <ComboboxInput className="w-full" placeholder="Select a content category" />
+            <ComboboxInput
+              className="w-full"
+              placeholder={t("guardrails.contentFilter.categoryConfiguration.placeholder")}
+            />
             <ComboboxContent>
-              <ComboboxEmpty>No matching categories</ComboboxEmpty>
+              <ComboboxEmpty>{t("guardrails.contentFilter.categoryConfiguration.noMatches")}</ComboboxEmpty>
               <ComboboxList>
                 {(cat: ContentCategory) => (
                   <ComboboxItem key={cat.name} value={cat}>
@@ -287,7 +307,7 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
           </Combobox>
           <Button onClick={handleAddCategory} disabled={!selectedCategoryName}>
             <Plus />
-            Add
+            {t("guardrails.contentFilter.categoryConfiguration.add")}
           </Button>
         </div>
 
@@ -295,7 +315,8 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
         {selectedCategoryName && (
           <div className="mb-4 rounded-md border border-border bg-muted/40 p-3">
             <div className="mb-2 text-sm font-medium">
-              Preview: {availableCategories.find((c) => c.name === selectedCategoryName)?.display_name}
+              {t("guardrails.contentFilter.categoryConfiguration.preview")}{" "}
+              {availableCategories.find((c) => c.name === selectedCategoryName)?.display_name}
               {categoryFileTypes[selectedCategoryName] && (
                 <span className="ml-2 text-xs font-normal text-muted-foreground">
                   ({categoryFileTypes[selectedCategoryName]?.toUpperCase()})
@@ -303,13 +324,17 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
               )}
             </div>
             {loadingPreviewYaml ? (
-              <div className="p-4 text-center text-muted-foreground">Loading content...</div>
+              <div className="p-4 text-center text-muted-foreground">
+                {t("guardrails.contentFilter.categoryConfiguration.loadingContent")}
+              </div>
             ) : previewYaml ? (
               <pre className="m-0 max-h-[300px] max-w-full overflow-auto rounded-md border border-border bg-background p-3 text-xs leading-relaxed break-words whitespace-pre-wrap">
                 <code>{previewYaml}</code>
               </pre>
             ) : (
-              <div className="p-2 text-center text-xs text-muted-foreground">Unable to load category content</div>
+              <div className="p-2 text-center text-xs text-muted-foreground">
+                {t("guardrails.contentFilter.categoryConfiguration.previewUnavailable")}
+              </div>
             )}
           </div>
         )}
@@ -319,7 +344,7 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
             <DataTable data={selectedCategories} columns={columns} getRowId={(row) => row.id} size="compact" />
             <div className="mt-4 space-y-2">
               {selectedCategories.map((category) => {
-                const fileType = categoryFileTypes[category.category] || "yaml";
+                const fileType = categoryFileTypes[category.category] || DEFAULT_CATEGORY_FILE_TYPE;
                 const isExpanded = expandedYamlCategories.includes(category.category);
 
                 return (
@@ -339,18 +364,25 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
                       <ChevronRight className={`size-4 transition-transform ${isExpanded ? "rotate-90" : ""}`} />
                       <FileText className="size-4" />
                       <span>
-                        View {fileType.toUpperCase()} for {category.display_name}
+                        {t("guardrails.contentFilter.categoryConfiguration.viewContent", {
+                          fileType: fileType.toUpperCase(),
+                          name: category.display_name,
+                        })}
                       </span>
                     </CollapsibleTrigger>
                     <CollapsibleContent>
                       {loadingYaml[category.category] ? (
-                        <div className="p-4 text-center text-muted-foreground">Loading content...</div>
+                        <div className="p-4 text-center text-muted-foreground">
+                          {t("guardrails.contentFilter.categoryConfiguration.loadingContent")}
+                        </div>
                       ) : categoryYaml[category.category] ? (
                         <pre className="m-0 max-h-[400px] overflow-auto rounded-md bg-muted p-4 text-xs leading-relaxed">
                           <code>{categoryYaml[category.category]}</code>
                         </pre>
                       ) : (
-                        <div className="p-4 text-center text-muted-foreground">Content will load when expanded</div>
+                        <div className="p-4 text-center text-muted-foreground">
+                          {t("guardrails.contentFilter.categoryConfiguration.contentLoadsOnExpand")}
+                        </div>
                       )}
                     </CollapsibleContent>
                   </Collapsible>
@@ -360,7 +392,7 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
           </>
         ) : (
           <div className="rounded-md border border-dashed border-border p-6 text-center text-muted-foreground">
-            No blocked topics selected. Add topics to detect and block harmful content.
+            {t("guardrails.contentFilter.categoryConfiguration.empty")}
           </div>
         )}
       </CardContent>

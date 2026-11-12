@@ -13,6 +13,7 @@ from litellm.rust_bridge.public_call import (
     AsyncFlag,
     NativeCall,
     bind,
+    native_acall_hook,
     native_call,
     native_call_hook,
     optional_str,
@@ -89,7 +90,7 @@ async def aembedding(*args: object, **kwargs: object) -> EmbeddingResponse:  # k
         _FLAG.dropped(kwargs),
         python=_PYTHON_AEMBEDDING,
         binding=NATIVE_AEMBEDDING,
-        native=native_call_hook,
+        native=native_acall_hook,
     )
 
 
