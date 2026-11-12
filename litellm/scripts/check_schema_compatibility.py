@@ -14,6 +14,9 @@ from pydantic import TypeAdapter
 Schema = Mapping[str, Mapping[str, str]]
 MODELS: Final = re.compile(r"^[ \t]*model\s+(\w+)\s*\{(.*?)^[ \t]*\}", re.MULTILINE | re.DOTALL)
 DROPPED_UNUSED_MODELS: Final = frozenset({"LiteLLM_AccountingDelivery", "LiteLLM_AccountingEvent"})
+RENAMED_UNRELEASED_FIELDS: Final = frozenset(
+    {("LiteLLM_CustomerMemberTable", "budget_id"), ("LiteLLM_CustomerMemberTable", "budget")}
+)
 
 
 def parse_model_fields(schema: str) -> Schema:
@@ -26,6 +29,8 @@ def parse_model_fields(schema: str) -> Schema:
 
 def _field_changes(model: str, field: str, old_type: str, new_fields: Mapping[str, str]) -> Iterator[str]:
     if field not in new_fields:
+        if (model, field) in RENAMED_UNRELEASED_FIELDS:
+            return
         yield f"Breaking: Field {model}.{field} was removed"
         return
     old_base: Final = old_type.split()[0]
