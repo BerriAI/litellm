@@ -24,7 +24,7 @@ from pydantic import JsonValue, TypeAdapter
 
 from tests.integration._support.client import Gateway, eventually, object_value, string_value
 from tests.integration._support.database import write_rows
-from tests.integration._support.process import owned_proxy, owned_proxy_process
+from tests.integration._support.process import OwnedState, owned_proxy, owned_proxy_process
 
 PASS_THROUGH_MODE: Final = "passthrough"
 STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
@@ -432,7 +432,7 @@ def test_hub_reads_survive_a_killed_proxy_worker(gateway: Gateway, tmp_path: Pat
 
     with (
         pass_through(gateway, show_in_model_hub=True, display_name=display_name) as shown,
-        owned_proxy_process(gateway, tmp_path, {}, workers=2) as owned,
+        owned_proxy_process(gateway, tmp_path, {}, workers=2, state=OwnedState.SHARED_WITH_WORKER) as owned,
     ):
         workers: Final = eventually(
             lambda: tuple(int(pid) for pid in STARTED_WORKER.findall(owned.log.read_text())),
