@@ -9,6 +9,7 @@ import time
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
+from pydantic import TypeAdapter
 from typing_extensions import TypedDict
 
 from litellm import verbose_logger
@@ -23,6 +24,9 @@ if TYPE_CHECKING:
     Span = _Span
 else:
     Span = Any
+
+
+_CACHED_HEALTH_SNAPSHOT: Final = TypeAdapter(object)
 
 
 class DeploymentHealthStateValue(TypedDict):
@@ -92,7 +96,7 @@ class DeploymentHealthCache:
                 str(e),
             )
 
-    def _extract_unhealthy_ids(self, raw: Any) -> set[str]:
+    def _extract_unhealthy_ids(self, raw: object) -> set[str]:
         """Given raw cache value, return set of non-stale unhealthy deployment IDs."""
         if not raw or not isinstance(raw, dict):
             return set()
@@ -109,7 +113,7 @@ class DeploymentHealthCache:
     async def async_get_unhealthy_deployment_ids(self, parent_otel_span: Span | None = None) -> set[str]:
         """Return set of deployment IDs currently marked unhealthy and not stale."""
         try:
-            raw: Final = await self.cache.async_get_cache(key=self.CACHE_KEY)
+            raw: Final = _CACHED_HEALTH_SNAPSHOT.validate_python(await self.cache.async_get_cache(key=self.CACHE_KEY))
             return self._extract_unhealthy_ids(raw)
         except Exception as e:
             verbose_logger.debug(
@@ -122,7 +126,7 @@ class DeploymentHealthCache:
     def get_unhealthy_deployment_ids(self, parent_otel_span: Span | None = None) -> set[str]:
         """Sync version: return set of deployment IDs currently marked unhealthy and not stale."""
         try:
-            raw: Final = self.cache.get_cache(key=self.CACHE_KEY)
+            raw: Final = _CACHED_HEALTH_SNAPSHOT.validate_python(self.cache.get_cache(key=self.CACHE_KEY))
             return self._extract_unhealthy_ids(raw)
         except Exception as e:
             verbose_logger.debug(

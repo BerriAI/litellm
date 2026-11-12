@@ -12,6 +12,8 @@ from litellm.llms.anthropic.common_utils import context_management_betas, tools_
 from litellm.llms.anthropic.count_tokens.transformation import COUNT_TOKEN_OPTION_NAMES, AnthropicCountTokensConfig
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, run_aws_signing
 from litellm.llms.bedrock.common_utils import BedrockError, build_mantle_messages_url
+from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensRequestError
+from litellm.llms.bedrock.count_tokens.transformation import count_tokens_messages_problem
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 
 MANTLE_COUNT_TOKENS_SUFFIX: Final = "/count_tokens"
@@ -58,6 +60,9 @@ class BedrockMantleCountTokensHandler(BaseAWSLLM):
     ) -> dict[str, JsonValue]:
         try:
             request: Final = _COUNT_REQUEST.validate_python(request_data)
+            problem: Final = count_tokens_messages_problem(request["messages"])
+            if problem is not None:
+                raise BedrockCountTokensRequestError(problem)
             aws_region_name: Final = await run_aws_signing(
                 self.get_aws_region_name, optional_params=litellm_params, model=resolved_model, model_id=None
             )

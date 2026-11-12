@@ -180,6 +180,7 @@ from litellm.repositories.table_repositories import (
 )
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
+from litellm.responses.additional_tools import additional_tools_in_input
 from litellm.router import Router
 from litellm.router_api import RegistryReader
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
@@ -556,7 +557,7 @@ def _get_router_zero_cost_cache(llm_router: RegistryReader) -> dict[str, bool] |
     return cache if isinstance(cache, dict) else None
 
 
-def is_model_cost_zero(model: str | list[str] | None, llm_router: RegistryReader | None) -> bool:
+def is_model_cost_zero(model: str | Sequence[str] | None, llm_router: RegistryReader | None) -> bool:
     """
     Check if a model has zero cost (no configured pricing).
 
@@ -1037,15 +1038,15 @@ async def check_tools_allowlist(
     call_types: Final = get_call_types_for_route(route)
     if not call_types or not any(ct.value in TOOL_CAPABLE_CALL_TYPES for ct in call_types):
         return
-    tool_names: Final = extract_request_tool_names(route, request_body)
-    if not tool_names:
-        return
     key_meta: Final = (valid_token.metadata or {}) if isinstance(valid_token.metadata, dict) else {}
     team_meta: Final = (valid_token.team_metadata or {}) if isinstance(valid_token.team_metadata, dict) else {}
     key_allowed: Final = key_meta.get("allowed_tools")
     team_allowed: Final = team_meta.get("allowed_tools")
     effective: Final = key_allowed if (isinstance(key_allowed, list) and len(key_allowed) > 0) else team_allowed
     if not isinstance(effective, list) or len(effective) == 0:
+        return
+    tool_names: Final = extract_request_tool_names(route, request_body)
+    if not tool_names:
         return
     allowed_set: Final = {str(t) for t in effective}
     disallowed: Final = [n for n in tool_names if n not in allowed_set]
@@ -1080,6 +1081,15 @@ BUDGET_ENFORCED_SIDE_EFFECT_ROUTES: Final = frozenset(
     }
 )
 
+VIDEO_RETRIEVAL_ROUTES: Final = frozenset(
+    {
+        "/videos/{video_id}",
+        "/v1/videos/{video_id}",
+        "/videos/{video_id}/content",
+        "/v1/videos/{video_id}/content",
+    }
+)
+
 MCP_DISCOVERY_ROUTES: Final = frozenset({"/mcp-rest/tools/list", "/v1/mcp/tools"})
 
 MCP_ZERO_SPEND_JSONRPC_METHODS: Final = frozenset({"initialize", "notifications/initialized", "ping", "tools/list"})
@@ -1094,6 +1104,10 @@ def is_mcp_discovery_request(route: str, request_body: Mapping[str, object]) -> 
         return False
     method: Final = request_body.get("method")
     return isinstance(method, str) and method in MCP_ZERO_SPEND_JSONRPC_METHODS
+
+
+def is_video_retrieval_request(route: str, http_method: str | None) -> bool:
+    return http_method == "GET" and RouteChecks.check_route_access(route=route, allowed_routes=VIDEO_RETRIEVAL_ROUTES)
 
 
 class ModelMaxBudgetHolder(Protocol):
@@ -1121,12 +1135,13 @@ def route_skips_budget_checks(route: str) -> bool:
 
 def request_skips_budget_checks(
     route: str,
-    model: str | list[str] | None,
+    model: str | Sequence[str] | None,
     llm_router: Router | None,
     *,
     request_body: Mapping[str, object] | None = None,
+    http_method: str | None = None,
 ) -> bool:
-    if route_skips_budget_checks(route=route):
+    if route_skips_budget_checks(route=route) or is_video_retrieval_request(route=route, http_method=http_method):
         return True
     if request_body is not None and is_mcp_discovery_request(route=route, request_body=request_body):
         return True
@@ -1145,7 +1160,7 @@ async def common_checks(
     proxy_logging_obj: ProxyLogging,
     valid_token: UserAPIKeyAuth | None,
     request: Request,
-    skip_budget_checks: bool = False,
+    skip_budget_checks: bool | None = None,
     project_object: LiteLLM_ProjectTableCachedObj | None = None,
 ) -> bool:
     """
@@ -1180,11 +1195,16 @@ async def common_checks(
         team_id=valid_token.team_id if valid_token is not None else None,
     )
 
-    skip_all_budget_checks: Final = skip_budget_checks or request_skips_budget_checks(
-        route=route,
-        model=_model,
-        llm_router=llm_router,
-        request_body=_typed_request_body(request_body),
+    skip_all_budget_checks: Final = (
+        skip_budget_checks
+        if skip_budget_checks is not None
+        else request_skips_budget_checks(
+            route=route,
+            model=_model,
+            llm_router=llm_router,
+            request_body=_typed_request_body(request_body),
+            http_method=RouteChecks.get_request_method(request),
+        )
     )
 
     membership_user_id: Final = (
@@ -4968,11 +4988,9 @@ def _owning_team_names_for_team_deployment(
     if llm_router is None or team_id is None or not model.startswith(f"model_name_{team_id}_"):
         return ()
     deployment: Final = llm_router.registry().deployments(model, source="first_in_group")
-    public_name: Final = (
-        deployment.model_info.team_public_model_name
-        if deployment is not None and deployment.model_info.team_id == team_id
-        else None
-    )
+    if deployment is None or deployment.model_info.team_id != team_id:
+        return ()
+    public_name: Final = deployment.model_info.team_public_model_name
     legacy_aliases: Final = tuple(alias for alias, target in (team_model_aliases or {}).items() if target == model)
     return (*((public_name,) if public_name else ()), *legacy_aliases)
 
@@ -5840,7 +5858,7 @@ async def get_authorized_resources_from_key_access_groups(
             continue
         team_authorized = bool(key_team_id and key_team_id in (ag.assigned_team_ids or []))
         key_authorized = bool(key_token and key_token in (ag.assigned_key_ids or []))
-        if team_authorized or key_authorized:
+        if team_authorized or key_authorized or ag_id in valid_token.access_group_rule_grants:
             authorized_resources.extend(getattr(ag, resource_field, []) or [])
 
     return list(set(authorized_resources))
@@ -7077,6 +7095,27 @@ def team_member_max_budget_alert_check(
 _team_member_max_budget_alert_check: Final = team_member_max_budget_alert_check
 
 
+def _raise_team_member_without_membership(user_id: str, team_id: str) -> None:
+    from litellm.proxy.litellm_pre_call_utils import sanitize_for_log
+
+    verbose_proxy_logger.warning(
+        "fail_closed_budget_enforcement: rejecting request, user_id=%s has no membership row in team_id=%s "
+        "so spend against the team member budget cannot be verified",
+        sanitize_for_log(user_id),
+        sanitize_for_log(team_id),
+    )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={
+            "error": (
+                f"User={user_id} has no membership in Team={team_id}, so their spend against the team member "
+                "budget cannot be verified and fail_closed_budget_enforcement is enabled. Add them to the team "
+                "with POST /team/member_add."
+            )
+        },
+    )
+
+
 async def _check_team_member_budget(
     team_object: LiteLLM_TeamTable | None,
     user_object: LiteLLM_UserTable | None,
@@ -7126,11 +7165,14 @@ async def _check_team_member_budget(
         )
 
         if team_member_budget is not None:
+            from litellm.proxy.proxy_server import fail_closed_budget_enforcement_enabled, get_current_spend
+
+            if loaded_membership is None and fail_closed_budget_enforcement_enabled():
+                _raise_team_member_without_membership(user_id=valid_token.user_id, team_id=team_object.team_id)
+
             team_member_spend = (loaded_membership.spend if loaded_membership is not None else 0.0) or 0.0
 
             # Read from cross-pod counter (Redis-first) if available
-            from litellm.proxy.proxy_server import get_current_spend
-
             team_member_spend = await get_current_spend(
                 counter_key=team_member_counter(valid_token.user_id, team_object.team_id),
                 fallback_spend=team_member_spend,
@@ -7988,6 +8030,10 @@ def _tools(tools: object) -> tuple[object, ...]:
         return ()
 
 
+def _request_tools(request_body: Mapping[str, object]) -> tuple[object, ...]:
+    return (*_tools(request_body.get("tools")), *additional_tools_in_input(request_body.get("input")))
+
+
 def _tool_vector_store_ids(tool: object) -> tuple[str, ...]:
     try:
         tool_fields: Final = _TOOL_ADAPTER.validate_python(tool, strict=True)
@@ -7998,14 +8044,14 @@ def _tool_vector_store_ids(tool: object) -> tuple[str, ...]:
 
 def _strict_requested_vector_store_ids(request_body: Mapping[str, object]) -> tuple[str, ...]:
     """
-    Same fields VectorStoreRegistry.get_vector_store_ids_to_run reads, but a vector_store_ids that is
-    not a list of strings is a 400 instead of being skipped or iterated, and tools that are not
-    objects name no store.
+    Same fields VectorStoreRegistry.get_vector_store_ids_to_run reads, plus the tools of `additional_tools`
+    input items, but a vector_store_ids that is not a list of strings is a 400 instead of being skipped or
+    iterated, and tools that are not objects name no store.
     """
     return tuple(
         chain(
             _validated_vector_store_ids(request_body.get("vector_store_ids")),
-            chain.from_iterable(_tool_vector_store_ids(tool) for tool in _tools(request_body.get("tools"))),
+            chain.from_iterable(_tool_vector_store_ids(tool) for tool in _request_tools(request_body)),
         )
     )
 
@@ -8044,7 +8090,7 @@ def _legacy_requested_vector_store_ids(
     return tuple(
         chain(
             top_level,
-            chain.from_iterable(vector_store_ids_in_tool(tool) for tool in _tools(request_body.get("tools"))),
+            chain.from_iterable(vector_store_ids_in_tool(tool) for tool in _request_tools(request_body)),
         )
     )
 
@@ -8113,8 +8159,8 @@ async def vector_store_access_check(
     """
     Checks whether the caller may use every vector store the request names.
 
-    Requested stores come from `vector_store_ids`, `tools[].vector_store_ids` and the RAG
-    `retrieval_config.vector_store_id`. Grants come from each identity's
+    Requested stores come from `vector_store_ids`, `tools[].vector_store_ids`, the tools of
+    `additional_tools` input items and the RAG `retrieval_config.vector_store_id`. Grants come from each identity's
     `object_permission.vector_stores`.
 
     Both modes read the same request fields, with or without a vector store registry, and answer 400

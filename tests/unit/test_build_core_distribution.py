@@ -14,7 +14,7 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 
 
 def test_core_manifest_preserves_runtime_dependencies_without_extras() -> None:
-    manifest: Final = ROOT / "packaging/litellm-core/pyproject.toml"
+    manifest: Final = ROOT / "litellm/packaging/litellm-core/pyproject.toml"
     assert manifest.is_file(), "The core distribution needs its own build manifest"
     core: Final = tomllib.loads(manifest.read_text())
     legacy: Final = tomllib.loads((ROOT / "pyproject.toml").read_text())

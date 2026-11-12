@@ -24,6 +24,7 @@ T = TypeVar("T", bound=BaseModel)
 from litellm.constants import AUTH_OBJECTS_TARGET as AUTH_OBJECTS_TARGET  # noqa: E402, PLC0414  # public re-export
 
 _HASHED_TOKEN_CACHE_KEY: Final = re.compile(r"[0-9a-f]{64}")
+_CACHED_VALUE: Final = TypeAdapter(object)
 _BUDGET_WINDOWS_ABSENT_PREFIX: Final = "budget_windows_absent:"
 
 AuthCacheFactory: TypeAlias = Callable[[RedisCache, AuthCacheSettings], AuthCacheStore]
@@ -217,7 +218,7 @@ class UserApiKeyCache(DualCache):
         if model_type is None and "model_type" in kwargs:
             model_type = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
         shared: Final = self._shared
-        cached: Final = (
+        cached: Final = _CACHED_VALUE.validate_python(
             self._get_shared_sync(shared, key, local_only)
             if shared is not None
             else self.key_object_cache.get_cache(
@@ -260,7 +261,7 @@ class UserApiKeyCache(DualCache):
         if model_type is None and "model_type" in kwargs:
             model_type = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
         shared: Final = self._shared
-        cached: Final = (
+        cached: Final = _CACHED_VALUE.validate_python(
             await self._get_shared(shared, key, local_only)
             if shared is not None
             else await self.key_object_cache.async_get_cache(

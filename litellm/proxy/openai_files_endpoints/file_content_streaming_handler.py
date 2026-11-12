@@ -1,5 +1,5 @@
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
 
 from fastapi.responses import StreamingResponse
 
@@ -10,6 +10,14 @@ from litellm.types.utils import FILE_CONTENT_STREAMING_PROVIDERS
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.utils import ProxyLogging
+
+
+class _CallIdFields(Protocol):
+    def get(self, key: Literal["litellm_call_id"], default: str, /) -> str: ...
+
+
+def _call_id_fields(data: _CallIdFields) -> _CallIdFields:
+    return data
 
 
 class FileContentStreamingHandler:
@@ -77,7 +85,7 @@ class FileContentStreamingHandler:
             async for chunk in stream_iterator:
                 yield chunk
             await proxy_logging_obj.update_request_status(
-                litellm_call_id=data.get("litellm_call_id", ""), status="success"
+                litellm_call_id=_call_id_fields(data).get("litellm_call_id", ""), status="success"
             )
         except Exception as e:
             await proxy_logging_obj.post_call_failure_hook(

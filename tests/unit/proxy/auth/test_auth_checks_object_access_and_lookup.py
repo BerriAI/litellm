@@ -2402,6 +2402,37 @@ async def test_deny_by_default_ignores_tools_that_name_no_vector_store(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("deny_by_default", [False, True], ids=["legacy", "deny-by-default"])
+@pytest.mark.parametrize(
+    ("key_vector_stores", "denied_by"),
+    [(["KBSTOREA"], _KEY_DENIED), (["KBSTOREB"], None)],
+    ids=["ungranted", "granted"],
+)
+async def test_file_search_inside_additional_tools_input_item_needs_a_vector_store_grant(
+    deny_by_default: bool, key_vector_stores: list[str], denied_by: ProxyErrorTypes | None
+):
+    await _assert_rag_query_outcome(
+        _common_checks_for_rag_query(
+            {"vector_store_deny_by_default": deny_by_default},
+            _virtual_key(object_permission_id="key-permission"),
+            SimpleNamespace(vector_stores=key_vector_stores),
+            request_body={
+                "model": "gpt-4o-mini",
+                "input": [
+                    {
+                        "type": "additional_tools",
+                        "role": "developer",
+                        "tools": [{"type": "file_search", "vector_store_ids": ["KBSTOREB"]}],
+                    },
+                    {"type": "message", "role": "user", "content": "what is in this KB?"},
+                ],
+            },
+        ),
+        denied_by,
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "request_body",
     [
@@ -6049,6 +6080,71 @@ class TestGuardrailModificationCheck:
         self._call({"metadata": '"just a string"'})
 
 
+def _member_without_row_prisma(max_budget: float) -> MagicMock:
+    budget_row: Final = MagicMock()
+    budget_row.max_budget = max_budget
+    budget_row.dict = MagicMock(return_value={"budget_id": "budget-default", "max_budget": max_budget})
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=budget_row)
+    prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
+    return prisma_client
+
+
+async def _check_member_without_membership_row(prisma_client: MagicMock) -> None:
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    await _check_team_member_budget(
+        team_object=LiteLLM_TeamTable(team_id="team-1", metadata={"team_member_budget_id": "budget-default"}),
+        user_object=LiteLLM_UserTable(user_id="user-1"),
+        valid_token=UserAPIKeyAuth(token="tok-1", user_id="user-1", team_id="team-1"),
+        prisma_client=prisma_client,
+        user_api_key_cache=DualCache(),
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+    )
+
+
+@pytest.mark.asyncio
+async def test_fail_closed_rejects_member_without_membership_row_with_a_403_naming_member_add(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi import HTTPException
+
+    import litellm.proxy.proxy_server as ps
+    from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+    spend: Final = FakeSpendCounters(redis={})
+    prisma_client: Final = _member_without_row_prisma(100.0)
+    monkeypatch.setattr(ps, "general_settings", {"fail_closed_budget_enforcement": True})
+    monkeypatch.setattr(ps, "spend_counter_store", spend.store())
+    monkeypatch.setattr(ps, "prisma_client", prisma_client)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _check_member_without_membership_row(prisma_client)
+
+    assert exc_info.value.status_code == 403
+    message: Final = str(exc_info.value.detail)
+    assert "user-1" in message and "team-1" in message and "/team/member_add" in message
+    prisma_client.db.litellm_teammembership.find_unique.assert_awaited_once()
+    assert spend.commands == []
+
+
+@pytest.mark.asyncio
+async def test_fail_closed_off_still_admits_member_without_membership_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm.proxy.proxy_server as ps
+    from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+    spend: Final = FakeSpendCounters(redis={})
+    prisma_client: Final = _member_without_row_prisma(100.0)
+    monkeypatch.setattr(ps, "general_settings", {})
+    monkeypatch.setattr(ps, "spend_counter_store", spend.store())
+    monkeypatch.setattr(ps, "prisma_client", prisma_client)
+
+    await _check_member_without_membership_row(prisma_client)
+
+    assert spend.commands, "the member budget check must still read the spend counter with the flag off"
+
+
 @pytest.mark.asyncio
 async def test_team_member_budget_check_falls_back_to_team_default_budget_id():
     """When a member's TeamMembership has no linked budget row, the check
@@ -7188,6 +7284,45 @@ async def test_model_discovery_route_bypasses_user_budget():
     )
 
     assert result is True
+
+
+@pytest.mark.parametrize(
+    "method, route, expect_blocked",
+    [
+        ("GET", "/v1/videos/video_abc", False),
+        ("GET", "/videos/video_abc/content", False),
+        ("POST", "/v1/videos", True),
+        ("POST", "/v1/videos/video_abc/remix", True),
+        ("GET", "/v1/videos", True),
+    ],
+)
+@pytest.mark.asyncio
+async def test_exhausted_team_budget_spares_only_video_retrieval(method: str, route: str, expect_blocked: bool) -> None:
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    request: Final = MagicMock()
+    request.method = method
+
+    async def run() -> bool:
+        return await common_checks(
+            request_body={},
+            team_object=LiteLLM_TeamTable(team_id="test-team", spend=0.4, max_budget=0.3),
+            user_object=None,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route=route,
+            llm_router=None,
+            proxy_logging_obj=AsyncMock(),
+            valid_token=UserAPIKeyAuth(token="test-token", team_id="test-team"),
+            request=request,
+        )
+
+    if expect_blocked:
+        with pytest.raises(litellm.BudgetExceededError):
+            await run()
+    else:
+        assert await run() is True
 
 
 @pytest.mark.parametrize("route", ["/health/services", "/auto_router/test_routing"])
@@ -11106,6 +11241,34 @@ def test_request_skips_budget_checks_for_non_spending_requests(
     )
 
 
+@pytest.mark.parametrize(
+    "route, http_method, expected",
+    [
+        ("/v1/videos/video_abc", "GET", True),
+        ("/videos/video_abc", "GET", True),
+        ("/v1/videos/video_abc/content", "GET", True),
+        ("/videos/video_abc/content", "GET", True),
+        ("/v1/videos/video_abc", "POST", False),
+        ("/v1/videos/video_abc/content", None, False),
+        ("/v1/videos", "GET", False),
+        ("/v1/videos", "POST", False),
+        ("/v1/videos/video_abc/remix", "POST", False),
+        ("/v1/videos/edits", "POST", False),
+        ("/v1/videos/video_abc/remix", "GET", False),
+        ("/v1/chat/completions", "GET", False),
+    ],
+)
+def test_request_skips_budget_checks_only_for_paid_video_retrieval(
+    route: str, http_method: str | None, expected: bool, free_and_paid_router: litellm.Router
+) -> None:
+    assert (
+        request_skips_budget_checks(
+            route=route, model="paid-model", llm_router=free_and_paid_router, http_method=http_method
+        )
+        is expected
+    )
+
+
 def _agent_model_ceiling_resolver(
     models: frozenset[str] | None,
 ) -> tuple[CeilingResolver, list[str]]:
@@ -11819,7 +11982,9 @@ async def test_baggage_mapping_rejects_exactly_the_client_tags_rejected_without_
     unmapped_request = _client_tag_request(client_tags, baggage=False)
     unmapped = _client_tag_body(client_tags, client_slot)
     LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(unmapped, route)
-    LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(unmapped_request, unmapped, UserAPIKeyAuth(api_key="qa-key"))
+    LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
+        unmapped_request, unmapped, UserAPIKeyAuth(api_key="qa-key")
+    )
 
     mapped_request = _client_tag_request(client_tags, baggage=baggage)
     mapped = _client_tag_body(client_tags, client_slot)
