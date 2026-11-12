@@ -998,6 +998,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         saturation: Final = await self._check_model_saturation(requested_model, model_group_info)
         saturated: Final = saturation >= _get_priority_settings().saturation_threshold
         enforced_team: Final = None if borrowing is None else borrowing.enforced(saturated)
+        if connection_stash is not None and borrowing is not None:
+            connection_stash.borrowing_team_model_limit = enforced_team
         descriptors: Final = (share_descriptors if saturated else ()) + (
             () if enforced_team is None else (enforced_team,)
         )
@@ -1333,8 +1335,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
     ) -> bool:
         """Hold a router fallback target to the team's share on it once it saturates, and to its borrow ceiling before.
 
-        With ``commit`` the attempt is counted toward the target's saturation and the team's counter, holding the
-        prompt's estimated tokens when the share is enforced, otherwise only checked.
+        With ``commit`` the attempt is counted toward the target's saturation, and toward the team's counter only
+        while the share is enforced, holding the prompt's estimated tokens there. An idle target is only checked.
         """
         team_share: Final = self._borrowing_team_share(model=model, user_api_key_dict=user_api_key_dict)
         model_group_info: Final = self.llm_router.registry().group(model)
@@ -1369,11 +1371,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         if response["overall_code"] == "OVER_LIMIT":
             return False
         if enforced is None:
-            await self.v3_limiter.atomic_check_and_increment_by_n(
-                descriptors=[team_share.share],
-                increments=[{"requests": 1, "tokens": reservation}],
-                parent_otel_span=user_api_key_dict.parent_otel_span,
-            )
+            return True
         self._hold_fallback_share(model, team_share.share, reservation, _reserved_window(response, enforced))
         return True
 

@@ -2479,6 +2479,29 @@ async def test_a_websocket_turns_tokens_count_against_the_team_limit(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_a_websocket_admitted_while_idle_has_its_turns_counted_once_the_model_saturates(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.1)
+    await _check(handler, _team_key(), saturation=0.0)
+    await _settle_tokens(
+        handler,
+        150,
+        response=[],
+        combined_usage_object=litellm.Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+    assert await _team_tokens_remaining(handler) == 100
+    await handler.enforce_token_limits_for_frame(user_api_key_dict=_team_key(), requested_model="shared-model")
+    await _settle_tokens(
+        handler,
+        90,
+        response=[],
+        combined_usage_object=litellm.Usage(prompt_tokens=60, completion_tokens=30, total_tokens=90),
+    )
+    assert await _team_tokens_remaining(handler) == 10
+
+
+@pytest.mark.asyncio
 async def test_a_websocket_turn_gets_a_503_when_the_team_counter_cannot_be_read(monkeypatch: pytest.MonkeyPatch):
     from litellm.exceptions import ServiceUnavailableError
     from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitUnverifiableError
@@ -2537,15 +2560,14 @@ async def test_a_fallback_target_is_refused_once_it_saturates_and_the_teams_shar
 
 
 @pytest.mark.asyncio
-async def test_a_fallback_target_still_borrows_while_idle_and_its_tokens_count_against_that_teams_share(
+async def test_a_fallback_target_still_borrows_while_idle_and_its_tokens_are_forgiven_once_it_saturates(
     monkeypatch: pytest.MonkeyPatch,
 ):
     handler = _borrowing_handler(monkeypatch, borrows=True)
     assert await handler.async_fallback_target_allowed(_team_key(), "shared-model", {}) is True
     await _settle_tokens(handler, 150)
-    with pytest.raises(ProxyRateLimitError) as exc:
-        await _check(handler, _team_key(), saturation=0.5)
-    _held_to_team_limit(exc.value, "tokens", "model_tpm_limit")
+    await _check(handler, _team_key(), saturation=0.5)
+    assert await _team_tokens_remaining(handler) == 100
 
 
 @pytest.mark.asyncio
