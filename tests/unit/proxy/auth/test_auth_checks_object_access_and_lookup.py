@@ -90,6 +90,7 @@ from litellm.proxy.utils import ProxyLogging
 from litellm.proxy import proxy_server
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_bearer_token, encrypt_value_helper
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from prisma import Json
 from prisma.errors import DataError
 from litellm.proxy.common_utils.user_api_key_cache import (
     END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL,
@@ -8459,6 +8460,7 @@ _RESTRICTED_END_USER_WHERE = {
         {"default_model": {"not": None}},
         {"object_permission_id": {"not": None}},
         {"models": {"is_empty": False}},
+        {"fallbacks": {"not": Json(None)}},
     ]
 }
 

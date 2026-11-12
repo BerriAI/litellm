@@ -4433,6 +4433,22 @@ async def test_ProxyConfig__get_hierarchical_router_settings_missing_returns_non
 
 
 @pytest.mark.asyncio
+async def test_customer_routing_settings_are_not_inherited_without_a_principal() -> None:
+    config: Final = ProxyConfig()
+    customer_rules: Final = [{"primary": ["customer-backup"]}]
+    customer: Final = UserAPIKeyAuth(
+        router_settings={"fallbacks": [{"primary": ["key-backup"]}], "timeout": 30},
+        end_user_fallbacks=customer_rules,
+    )
+
+    assert await config.get_hierarchical_router_settings(customer, None) == {
+        "fallbacks": customer_rules,
+        "timeout": 30,
+    }
+    assert await config.get_hierarchical_router_settings(None, None) is None
+
+
+@pytest.mark.asyncio
 async def test_ProxyConfig__get_hierarchical_router_settings_falls_back_to_team(monkeypatch):
     """A key with no router_settings inherits the team's, so a team-level
     model_group_alias reaches the request path at all."""

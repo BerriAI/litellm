@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
+from prisma import Json
 
 import litellm
 from litellm.caching.caching import DualCache
@@ -21,6 +22,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_checks import check_end_user_budget
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.management_endpoints.customer_endpoints import _should_update_field, router
+from litellm.types.proxy.customer_fallbacks import CustomerFallbacks
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
@@ -175,6 +177,81 @@ def test_update_customer_keeps_blocked_when_omitted(mock_prisma_client, mock_use
     update_mock = mock_prisma_client.db.litellm_endusertable.update
     update_mock.assert_called_once()
     assert "blocked" not in update_mock.call_args.kwargs["data"]
+
+
+class _CustomerFallbackTable:
+    def __init__(self) -> None:
+        self.customer: LiteLLM_EndUserTable | None = None
+
+    def _store(self, data: Mapping[str, object]) -> LiteLLM_EndUserTable:
+        if "fallbacks" in data:
+            assert isinstance(data["fallbacks"], Json)
+        stored: Final = {key: value.data if isinstance(value, Json) else value for key, value in data.items()}
+        previous: Final = self.customer.model_dump() if self.customer is not None else {}
+        self.customer = LiteLLM_EndUserTable.model_validate({**previous, **stored})
+        return self.customer
+
+    async def create(self, *, data: Mapping[str, object], include: Mapping[str, bool]) -> LiteLLM_EndUserTable:
+        assert self.customer is None
+        return self._store(data)
+
+    async def find_first(
+        self, *, where: Mapping[str, object], include: Mapping[str, bool]
+    ) -> LiteLLM_EndUserTable | None:
+        return self.customer
+
+    async def update(
+        self, *, where: Mapping[str, object], data: Mapping[str, object], include: Mapping[str, bool]
+    ) -> LiteLLM_EndUserTable:
+        assert self.customer is not None
+        return self._store(data)
+
+
+@pytest.mark.parametrize("fallbacks", ([{"primary-model": ["backup-model", "reserve-model"]}], []))
+def test_create_customer_stores_and_returns_regular_fallback_policy(
+    mock_prisma_client: MagicMock, mock_user_api_key_auth: None, fallbacks: CustomerFallbacks
+) -> None:
+    table: Final = _CustomerFallbackTable()
+    mock_prisma_client.db.litellm_endusertable = table
+
+    response: Final = client.post("/customer/new", json={"user_id": "fallback-customer", "fallbacks": fallbacks})
+
+    assert response.status_code == 200, response.text
+    assert response.json()["fallbacks"] == fallbacks
+    assert table.customer is not None
+    assert table.customer.fallbacks == fallbacks
+
+
+@pytest.mark.parametrize(
+    "updates,expected",
+    (
+        ({"alias": "Renamed customer"}, [{"primary-model": ["backup-model"]}]),
+        ({"fallbacks": [{"primary-model": ["reserve-model"]}]}, [{"primary-model": ["reserve-model"]}]),
+        ({"fallbacks": []}, []),
+        ({"fallbacks": None}, None),
+    ),
+    ids=("omitted", "replacement", "disabled", "inherit"),
+)
+def test_customer_fallback_update_preserves_replaces_disables_or_clears_saved_policy(
+    mock_prisma_client: MagicMock,
+    mock_user_api_key_auth: None,
+    updates: Mapping[str, object],
+    expected: CustomerFallbacks | None,
+) -> None:
+    table: Final = _CustomerFallbackTable()
+    mock_prisma_client.db.litellm_endusertable = table
+    created: Final = client.post(
+        "/customer/new",
+        json={"user_id": "fallback-customer", "fallbacks": [{"primary-model": ["backup-model"]}]},
+    )
+    assert created.status_code == 200, created.text
+
+    response: Final = client.post("/customer/update", json={"user_id": "fallback-customer", **updates})
+
+    assert response.status_code == 200, response.text
+    assert response.json()["fallbacks"] == expected
+    assert table.customer is not None
+    assert table.customer.fallbacks == expected
 
 
 def test_update_customer_not_found(mock_prisma_client, mock_user_api_key_auth):

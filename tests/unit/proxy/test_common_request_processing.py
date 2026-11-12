@@ -8606,7 +8606,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         self,
         processor: ProxyBaseLLMRequestProcessing,
         user_api_key_dict: ProxyUserAPIKeyAuth,
-        rig: tuple[ProxyLogging, litellm.Router, ProxyConfig, list[str]],
+        rig: tuple[ProxyLogging, litellm.Router | None, ProxyConfig, list[str]],
         general_settings: Mapping[str, object] | None = None,
     ) -> tuple[dict[str, object], LiteLLMLoggingObj]:
         proxy_logging_obj, router, proxy_config, _ = rig
@@ -8631,7 +8631,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         self,
         data: dict[str, object],
         user_api_key_dict: ProxyUserAPIKeyAuth,
-        rig: tuple[ProxyLogging, litellm.Router, ProxyConfig, list[str]],
+        rig: tuple[ProxyLogging, litellm.Router | None, ProxyConfig, list[str]],
         general_settings: Mapping[str, object] | None = None,
     ) -> tuple[ProxyBaseLLMRequestProcessing, tuple[dict[str, object], LiteLLMLoggingObj]]:
         processor = ProxyBaseLLMRequestProcessing(data=data)
@@ -9078,6 +9078,87 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
     @staticmethod
     def _client_request(model: str) -> dict[str, object]:
         return {"model": model, "messages": [{"role": "user", "content": "hi"}]}
+
+    @pytest.mark.asyncio
+    async def test_customer_request_without_a_router_preserves_the_direct_model(self) -> None:
+        model: Final = "openai/gpt-5.4-nano"
+        auth: Final = self._otel_key().model_copy(
+            update={"end_user_id": "direct-customer", "end_user_fallbacks": [{model: ["customer-backup"]}]}
+        )
+        rig: Final[tuple[ProxyLogging, Router | None, RuntimeProxyConfig, list[str]]] = (
+            ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+            None,
+            RuntimeProxyConfig(),
+            [],
+        )
+
+        _, (admitted, logging_obj) = await self._pre_call(self._client_request(model), auth, rig)
+
+        assert admitted["model"] == model
+        assert logging_obj.model == model
+        assert "fallbacks" not in admitted
+
+    @pytest.mark.parametrize("customer_rpm_limit", (None, 1))
+    @pytest.mark.asyncio
+    async def test_customer_quota_fallback_skips_disallowed_targets_and_retains_overall_limit(
+        self, customer_rpm_limit: int | None
+    ) -> None:
+        from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
+        from litellm.proxy.utils import InternalUsageCache
+
+        primary: Final = "customer-primary"
+        denied: Final = "customer-denied"
+        allowed: Final = "customer-allowed"
+        fixed_time: Final = datetime.datetime(2026, 1, 1, 12, 30)
+        limiter: Final = PROXY_MaxParallelRequestsHandler_v3(
+            internal_usage_cache=InternalUsageCache(DualCache()),
+            time_provider=lambda: fixed_time,
+        )
+        litellm.logging_callback_manager.add_litellm_callback(limiter)
+        auth: Final = self._otel_key().model_copy(
+            update={
+                "models": [primary, allowed],
+                "end_user_id": "customer-quota",
+                "end_user_model_rpm_limit": {primary: 1},
+                "end_user_rpm_limit": customer_rpm_limit,
+                "end_user_fallbacks": [{primary: [denied, allowed]}],
+            }
+        )
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": group,
+                    "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "fake"},
+                }
+                for group in (primary, denied, allowed)
+            ],
+        )
+        rig: Final[tuple[ProxyLogging, Router, RuntimeProxyConfig, list[str]]] = (
+            ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+            router,
+            RuntimeProxyConfig(),
+            [],
+        )
+
+        _, (first, _) = await self._pre_call(self._client_request(primary), auth, rig)
+        assert first["model"] == primary
+
+        if customer_rpm_limit is not None:
+            processor: Final = ProxyBaseLLMRequestProcessing(data=self._client_request(primary))
+            with pytest.raises(ProxyRateLimitError):
+                await self._run(processor, auth, rig)
+            assert processor.data["model"] == primary
+            with pytest.raises(ProxyRateLimitError) as exhausted:
+                await self._pre_call(self._client_request(allowed), auth, rig)
+            assert exhausted.value.descriptor_key == "end_user"
+            return
+
+        _, (admitted, logging_obj) = await self._pre_call(self._client_request(primary), auth, rig)
+        assert admitted["model"] == allowed
+        assert logging_obj.model == allowed
+        headers: Final = ProxyBaseLLMRequestProcessing.get_custom_headers(user_api_key_dict=auth, request_data=admitted)
+        assert headers["x-litellm-fallback-reason"] == "rate_limit:model_per_end_user"
+        assert headers["x-litellm-attempted-fallbacks"] == "1"
 
     @pytest.mark.asyncio
     async def test_rate_limit_fallback_skips_backup_over_member_model_budget(
