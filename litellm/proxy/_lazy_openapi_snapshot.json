@@ -5147,6 +5147,18 @@
               }
             },
             {
+              "description": "Include per-entity usage and key counts.",
+              "in": "query",
+              "name": "include_entity_breakdown",
+              "required": false,
+              "schema": {
+                "default": true,
+                "description": "Include per-entity usage and key counts.",
+                "title": "Include Entity Breakdown",
+                "type": "boolean"
+              }
+            },
+            {
               "in": "query",
               "name": "agent_ids",
               "required": false,
