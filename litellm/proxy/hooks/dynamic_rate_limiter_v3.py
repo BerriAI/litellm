@@ -3,7 +3,7 @@ Dynamic rate limiter v3 - Saturation-aware priority-based rate limiting
 """
 
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Final, Literal
@@ -57,7 +57,7 @@ if TYPE_CHECKING:
     from litellm.types.utils import PriorityReservationSettings
 
 
-def _prometheus_loggers() -> "list[PrometheusLogger]":
+def _prometheus_loggers() -> "Sequence[PrometheusLogger]":
     from litellm.integrations.prometheus import PrometheusLogger
 
     return [
