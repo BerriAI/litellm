@@ -18,6 +18,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
     PROXY_DynamicRateLimitHandlerV3,
+    _PROXY_DynamicRateLimitHandlerV3,  # pyright: ignore[reportPrivateUsage]  # the public name is a Final alias, not a type
 )
 from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
     PROXY_DynamicRateLimitHandlerV3 as DynamicRateLimitHandler,
@@ -1830,7 +1831,7 @@ def _borrowing_handler(
     saturation_threshold: float = 0.5,
     model_group_alias: dict[str, str] | None = None,
     splits: bool = False,
-) -> PROXY_DynamicRateLimitHandlerV3:
+) -> _PROXY_DynamicRateLimitHandlerV3:
     from litellm.types.utils import PriorityReservationSettings
 
     monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
@@ -1864,12 +1865,14 @@ def _borrowing_handler(
     return handler
 
 
-async def _admit_then_settle(handler: PROXY_DynamicRateLimitHandlerV3, auth: UserAPIKeyAuth, tokens: int) -> None:
+async def _admit_then_settle(handler: _PROXY_DynamicRateLimitHandlerV3, auth: UserAPIKeyAuth, tokens: int) -> None:
     await _check(handler, auth, saturation=0.0)
     await _settle_tokens(handler, tokens)
 
 
-async def _settle_tokens(handler: PROXY_DynamicRateLimitHandlerV3, tokens: int, response: object | None = None) -> None:
+async def _settle_tokens(
+    handler: _PROXY_DynamicRateLimitHandlerV3, tokens: int, response: object | None = None
+) -> None:
     await handler.async_log_success_event(
         kwargs={
             "litellm_params": {"metadata": {"model_group": "shared-model"}},
@@ -1899,12 +1902,16 @@ def _team_key(
 
 
 async def _check(
-    handler: PROXY_DynamicRateLimitHandlerV3, auth: UserAPIKeyAuth, saturation: float, model: str = "shared-model"
+    handler: _PROXY_DynamicRateLimitHandlerV3,
+    auth: UserAPIKeyAuth,
+    saturation: float,
+    model: str = "shared-model",
+    priority: str | None = None,
 ) -> None:
     group: Final = handler.llm_router.registry().group(model)
     assert group is not None
-    await handler._check_rate_limits(
-        model=model, model_group_info=group, user_api_key_dict=auth, priority=None, saturation=saturation
+    await handler._check_rate_limits(  # pyright: ignore[reportPrivateUsage]  # saturation is an input here, the public hook reads it from Redis
+        model=model, model_group_info=group, user_api_key_dict=auth, priority=priority, saturation=saturation
     )
 
 
@@ -2093,22 +2100,8 @@ def _class_team(team_id: str, priority: str | None = "interactive") -> UserAPIKe
     return UserAPIKeyAuth(api_key="sk-class", team_id=team_id, team_metadata={}, metadata={"priority": priority})
 
 
-async def _check_class(
-    handler: PROXY_DynamicRateLimitHandlerV3,
-    auth: UserAPIKeyAuth,
-    saturation: float,
-    priority: str | None,
-    model: str = "shared-model",
-) -> None:
-    group: Final = handler.llm_router.registry().group(model)
-    assert group is not None
-    await handler._check_rate_limits(
-        model=model, model_group_info=group, user_api_key_dict=auth, priority=priority, saturation=saturation
-    )
-
-
-async def _burn(handler: PROXY_DynamicRateLimitHandlerV3, auth: UserAPIKeyAuth, priority: str | None, tokens: int):
-    await _check_class(handler, auth, saturation=0.0, priority=priority)
+async def _burn(handler: _PROXY_DynamicRateLimitHandlerV3, auth: UserAPIKeyAuth, priority: str | None, tokens: int):
+    await _check(handler, auth, saturation=0.0, priority=priority)
     await handler.async_log_success_event(
         kwargs={
             "litellm_params": {"metadata": {"model_group": "shared-model"}},
@@ -2141,23 +2134,23 @@ async def test_two_interactive_teams_each_keep_half_of_the_interactive_share(mon
     await _burn(handler, _class_team("team-b"), "interactive", 300)
     await _burn(handler, _class_team("team-b"), "interactive", 200)
     with pytest.raises(ProxyRateLimitError) as exc:
-        await _check_class(handler, _class_team("team-b"), saturation=0.52, priority="interactive")
+        await _check(handler, _class_team("team-b"), saturation=0.52, priority="interactive")
     _held_to_class_share(exc.value)
     assert "Team: team-b, Priority: interactive, Active teams in class: 2, Active classes: 1, " in str(exc.value.detail)
     assert "Team share: 500, Remaining: 0, Model saturation: 52.0%" in str(exc.value.detail)
-    await _check_class(handler, _class_team("team-a"), saturation=0.52, priority="interactive")
+    await _check(handler, _class_team("team-a"), saturation=0.52, priority="interactive")
 
 
 @pytest.mark.asyncio
 async def test_the_only_active_class_gets_the_whole_model_instead_of_its_weight(monkeypatch: pytest.MonkeyPatch):
     handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
     await _burn(handler, _class_team("team-b", "batch"), "batch", 950)
-    await _check_class(handler, _class_team("team-b", "batch"), saturation=0.95, priority="batch")
+    await _check(handler, _class_team("team-b", "batch"), saturation=0.95, priority="batch")
 
     unsplit = _borrowing_handler(monkeypatch, borrows=False)
     await _burn(unsplit, _class_team("team-b", "batch"), "batch", 950)
     with pytest.raises(ProxyRateLimitError) as exc:
-        await _check_class(unsplit, _class_team("team-b", "batch"), saturation=0.95, priority="batch")
+        await _check(unsplit, _class_team("team-b", "batch"), saturation=0.95, priority="batch")
     assert "Priority-based rate limit exceeded" in str(exc.value.detail)
 
 
@@ -2167,11 +2160,11 @@ async def test_class_weights_apply_again_once_a_team_of_the_other_class_is_activ
     await _burn(handler, _class_team("team-b", "batch"), "batch", 10)
     await _burn(handler, _class_team("team-a"), "interactive", 600)
     with pytest.raises(ProxyRateLimitError) as exc:
-        await _check_class(handler, _class_team("team-a"), saturation=0.61, priority="interactive")
+        await _check(handler, _class_team("team-a"), saturation=0.61, priority="interactive")
     assert "Active teams in class: 1, Active classes: 2, Rate limit type: tokens, Team share: 600, " in str(
         exc.value.detail
     )
-    await _check_class(handler, _class_team("team-b", "batch"), saturation=0.61, priority="batch")
+    await _check(handler, _class_team("team-b", "batch"), saturation=0.61, priority="batch")
 
 
 @pytest.mark.asyncio
@@ -2180,10 +2173,10 @@ async def test_teams_without_a_priority_split_the_default_share_between_them(mon
     await _burn(handler, _class_team("team-x", None), None, 600)
     await _burn(handler, _class_team("team-y", None), None, 1)
     with pytest.raises(ProxyRateLimitError) as exc:
-        await _check_class(handler, _class_team("team-x", None), saturation=0.6, priority=None)
+        await _check(handler, _class_team("team-x", None), saturation=0.6, priority=None)
     assert "Priority: default, Active teams in class: 2, Active classes: 1, " in str(exc.value.detail)
     assert "Team share: 500, " in str(exc.value.detail)
-    await _check_class(handler, _class_team("team-y", None), saturation=0.6, priority=None)
+    await _check(handler, _class_team("team-y", None), saturation=0.6, priority=None)
     assert exc.value.headers is not None and exc.value.headers["x-litellm-priority"] == "default"
 
 
@@ -2194,10 +2187,10 @@ async def test_a_key_without_a_team_keeps_the_shared_class_pool(monkeypatch: pyt
     no_team: Final = UserAPIKeyAuth(api_key="sk-plain", metadata={"priority": "interactive"})
     await _burn(handler, no_team, "interactive", 600)
     with pytest.raises(ProxyRateLimitError) as exc:
-        await _check_class(handler, no_team, saturation=0.7, priority="interactive")
+        await _check(handler, no_team, saturation=0.7, priority="interactive")
     assert exc.value.headers is not None and "rate_limited_by" not in exc.value.headers
     assert "Priority-based rate limit exceeded" in str(exc.value.detail)
-    await _check_class(handler, _class_team("team-a"), saturation=0.7, priority="interactive")
+    await _check(handler, _class_team("team-a"), saturation=0.7, priority="interactive")
 
 
 @pytest.mark.asyncio
@@ -2205,7 +2198,7 @@ async def test_below_saturation_a_team_may_run_past_its_share(monkeypatch: pytes
     handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
     await _burn(handler, _class_team("team-a"), "interactive", 1)
     await _burn(handler, _class_team("team-b"), "interactive", 400)
-    await _check_class(handler, _class_team("team-b"), saturation=0.49, priority="interactive")
+    await _check(handler, _class_team("team-b"), saturation=0.49, priority="interactive")
 
 
 @pytest.mark.asyncio
@@ -2213,7 +2206,7 @@ async def test_the_split_is_off_by_default_so_one_team_can_still_empty_the_class
     handler = _borrowing_handler(monkeypatch, borrows=False)
     await _burn(handler, _class_team("team-a"), "interactive", 600)
     with pytest.raises(ProxyRateLimitError) as exc:
-        await _check_class(handler, _class_team("team-b"), saturation=0.6, priority="interactive")
+        await _check(handler, _class_team("team-b"), saturation=0.6, priority="interactive")
     assert exc.value.headers is not None and "rate_limited_by" not in exc.value.headers
     assert "Priority-based rate limit exceeded" in str(exc.value.detail)
 
@@ -2229,13 +2222,13 @@ async def test_the_team_model_limit_and_the_class_share_both_apply_when_both_are
     )
     await _burn(handler, team, "interactive", 150)
     with pytest.raises(ProxyRateLimitError) as exc:
-        await _check_class(handler, team, saturation=0.5, priority="interactive")
+        await _check(handler, team, saturation=0.5, priority="interactive")
     _held_to_team_limit(exc.value, "tokens", "model_tpm_limit")
 
 
 @pytest.mark.asyncio
 async def test_a_team_active_on_another_model_does_not_shrink_this_models_shares(monkeypatch: pytest.MonkeyPatch):
     handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
-    await _check_class(handler, _class_team("team-b"), saturation=0.0, priority="interactive", model="other-model")
+    await _check(handler, _class_team("team-b"), saturation=0.0, priority="interactive", model="other-model")
     await _burn(handler, _class_team("team-a"), "interactive", 700)
-    await _check_class(handler, _class_team("team-a"), saturation=0.7, priority="interactive")
+    await _check(handler, _class_team("team-a"), saturation=0.7, priority="interactive")
