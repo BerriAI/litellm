@@ -125,16 +125,10 @@ def _arize_default_project() -> Mapping[str, str]:
 
 
 def _langfuse_environment(params: StandardCallbackDynamicParams) -> Mapping[str, str]:
-    """The key's or team's ``langfuse_environment``, else the proxy's own."""
+    """The key's or team's ``langfuse_environment``, else ``LANGFUSE_TRACING_ENVIRONMENT``."""
     from litellm.integrations.otel.presets.langfuse import langfuse_environment_attributes
-    from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
 
-    environment: Final = params.get("langfuse_environment")
-    return MappingProxyType(
-        {LangfuseSpanAttributes.LANGFUSE_ENVIRONMENT.value: environment}
-        if environment
-        else langfuse_environment_attributes()
-    )
+    return MappingProxyType(langfuse_environment_attributes(params.get("langfuse_environment")))
 
 
 #: Resource attributes a backend gets on every export the team receives, over the

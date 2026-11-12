@@ -94,6 +94,10 @@ class ExporterSpec(LiteLLMBaseModel):
             "different backend's exporter."
         ),
     )
+    resource_attributes: dict[str, str] = Field(
+        default_factory=dict,
+        description="Resource attributes only this exporter's copy of a span carries, over the provider's resource.",
+    )
     options: dict[str, str] | None = Field(
         default=None,
         description=(

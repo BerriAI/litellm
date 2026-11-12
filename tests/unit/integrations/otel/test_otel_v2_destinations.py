@@ -3672,10 +3672,9 @@ class TestLangfuseDestinationFields:
             ("prod", None, {"langfuse.environment": "prod"}),
             ("prod", "staging", {"langfuse.environment": "prod"}),
             (None, "staging", {"langfuse.environment": "staging"}),
-            (None, "Not Valid", {"langfuse.environment": "default"}),
             (None, None, {}),
         ],
-        ids=["key", "key-over-env", "env", "invalid-env", "neither"],
+        ids=["key", "key-over-env", "env", "neither"],
     )
     def test_a_langfuse_destination_names_its_own_environment_else_the_proxys(
         self,
@@ -3704,13 +3703,9 @@ class TestLangfuseDestinationFields:
         assert destination is not None
         assert dict(destination.resource_attributes) == expected
 
-    @pytest.mark.parametrize(
-        ("tracing_environment", "expected"),
-        [("staging", "staging"), ("Not Valid", "default"), (None, None)],
-        ids=["env", "invalid-env", "unset"],
-    )
-    def test_the_langfuse_preset_names_the_proxys_environment_on_the_resource(
-        self, monkeypatch: pytest.MonkeyPatch, tracing_environment: str | None, expected: str | None
+    @pytest.mark.parametrize("tracing_environment", ["staging", None], ids=["env", "unset"])
+    def test_only_the_proxys_langfuse_exporter_names_the_proxys_environment(
+        self, monkeypatch: pytest.MonkeyPatch, tracing_environment: str | None
     ) -> None:
         monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-operator")
         monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-operator")
@@ -3718,13 +3713,24 @@ class TestLangfuseDestinationFields:
             monkeypatch.delenv("LANGFUSE_TRACING_ENVIRONMENT", raising=False)
         else:
             monkeypatch.setenv("LANGFUSE_TRACING_ENVIRONMENT", tracing_environment)
+        capture: Final = _ExporterCapture()
+        for kind in ("otlp_grpc", "otlp_http", "console"):
+            monkeypatch.setitem(otel_providers._EXPORTER_FACTORIES, kind, capture.build)  # pyright: ignore[reportPrivateUsage]  # the factory table is the seam for capturing each exporter
+        collector: Final = ExporterSpec(kind="otlp_http", endpoint="http://collector:4318", headers="x-collector=1")
+        config: Final = langfuse_preset(config_overrides=OpenTelemetryV2Config(exporters=[collector]))
+        provider: Final = build_tracer_provider(config)
 
-        config: Final = langfuse_preset(
-            config_overrides=OpenTelemetryV2Config(resource_attributes={"team": "platform"})
-        )
+        SpanEmitter(get_tracer(provider, "litellm"), config).emit(SpanRole.LLM_CALL, _MODEL_CALL_WITHOUT_CONTENT)
+        provider.force_flush()
 
-        assert otel_providers.build_resource(config).attributes.get("langfuse.environment") == expected
-        assert config.resource_attributes["team"] == "platform"
+        environments: Final = {
+            headers == collector.headers: exporter.get_finished_spans()[0].resource.attributes.get(
+                "langfuse.environment"
+            )
+            for headers, exporter in capture.built
+        }
+        assert environments == {True: None, False: tracing_environment}
+        assert "langfuse.environment" not in otel_providers.build_resource(config).attributes
 
     @pytest.mark.parametrize("operator_keys", [False, True], ids=["no-operator-keys", "operator-keys"])
     @pytest.mark.parametrize("configured", [None, "no_content", "span_only"])

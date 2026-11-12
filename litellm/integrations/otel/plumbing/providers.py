@@ -471,8 +471,14 @@ def without_message_content(span: ReadableSpan) -> ReadableSpan:
 class _CountedSpanView(_SpanView):
     """A ``_SpanView`` of ``inner`` with other attributes that reports the dropped counts ``inner`` reports."""
 
-    def __init__(self, inner: ReadableSpan, attributes: Attributes, dropped_attributes: int = 0) -> None:
-        super().__init__(inner, inner.resource, attributes, inner.events, inner.status, parent=inner.parent)
+    def __init__(
+        self,
+        inner: ReadableSpan,
+        attributes: Attributes,
+        dropped_attributes: int = 0,
+        resource: Resource | None = None,
+    ) -> None:
+        super().__init__(inner, resource or inner.resource, attributes, inner.events, inner.status, parent=inner.parent)
         self._dropped_counts: Final = (
             inner.dropped_attributes + dropped_attributes,
             inner.dropped_events,
@@ -1299,6 +1305,26 @@ class _DestinationLangfuseAttributeFilter(SpanProcessor):
         return self._inner.force_flush(timeout_millis)
 
 
+class _ExporterResource(SpanProcessor):
+    """Add one exporter's own resource attributes to every span before ``inner`` exports it."""
+
+    def __init__(self, inner: SpanProcessor, attributes: Mapping[str, str]) -> None:
+        self._inner: Final = inner
+        self._extra: Final = Resource(dict(attributes))
+
+    def on_start(self, span: SDKSpan, parent_context: Context | None = None) -> None:
+        self._inner.on_start(span, parent_context)
+
+    def on_end(self, span: ReadableSpan) -> None:
+        self._inner.on_end(_CountedSpanView(span, span.attributes, resource=span.resource.merge(self._extra)))
+
+    def shutdown(self) -> None:
+        self._inner.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return self._inner.force_flush(timeout_millis)
+
+
 class _MessageContentFilter(SpanProcessor):
     """Strip prompt and response content from every span before ``inner`` exports it."""
 
@@ -1576,10 +1602,11 @@ def _spec_processor(
     strip_destination_langfuse_attributes: bool,
     langfuse_mapped: bool,
 ) -> SpanProcessor:
-    exporting: Final = _processor_for(
+    batching: Final = _processor_for(
         _exporter_from_spec(spec),
         (spec.use_simple_processor if spec.use_simple_processor is not None else use_simple_processor),
     )
+    exporting: Final = _ExporterResource(batching, spec.resource_attributes) if spec.resource_attributes else batching
     scoped: Final = (
         _DestinationLangfuseAttributeFilter(exporting, langfuse_mapped)
         if strip_destination_langfuse_attributes
