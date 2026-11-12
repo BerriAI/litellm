@@ -327,19 +327,24 @@ def _legacy_ciphertext_bytes(value: str) -> bytes:
         return base64.b64decode(value)
 
 
+def _unreadable_in_fips_mode(value: str) -> bool:
+    """With general_settings.fips_mode on, only v2:gcm: values are decrypted."""
+    return fips_mode_active() and not value.startswith(V2_GCM_PREFIX)
+
+
 def _decrypt_with_signing_key(value: str, signing_key: str) -> str:
     # Versioned AES-256-GCM values are detected before any base64 decode.
     # The prefix is the algorithm tag the legacy nacl format never carried.
     if value.startswith(V2_GCM_PREFIX):
         return _decrypt_aes_gcm(value=value, signing_key=signing_key)
-    if fips_mode_active():
-        raise ValueError("With general_settings.fips_mode on, only v2:gcm: values can be decrypted")
 
     return decrypt_value(value=_legacy_ciphertext_bytes(value), signing_key=signing_key)
 
 
 def decrypt_if_encrypted_with(value: str, signing_key: str) -> str | None:
     """None unless value is a ciphertext under signing_key."""
+    if _unreadable_in_fips_mode(value):
+        return None
     try:
         # base64 decoding skips characters outside its alphabet, so "" and "*" decode to no bytes,
         # which decrypt_value reads as an empty plaintext under any key.
@@ -359,6 +364,8 @@ def decrypt_value_helper(
 
     try:
         if isinstance(value, str):
+            if _unreadable_in_fips_mode(value):
+                raise ValueError("With general_settings.fips_mode on, only v2:gcm: values can be decrypted")
             return _decrypt_with_signing_key(value=value, signing_key=cast(str, signing_key))
 
         # if it's not str - do not decrypt it, return the value
