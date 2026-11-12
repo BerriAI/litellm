@@ -2535,7 +2535,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             #############################################
 
             # The name of the LLM a request is being made to
-            request_model: Final = as_str(kwargs.get("model"))
+            raw_request_model: Final[object] = kwargs.get("model")
+            request_model: Final = as_str(raw_request_model)
             if request_model:
                 self.safe_set_attribute(
                     span=span,
