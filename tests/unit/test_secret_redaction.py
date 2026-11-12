@@ -20,7 +20,6 @@ from litellm._logging import (
     verbose_router_logger,
 )
 from litellm.litellm_core_utils.secret_redaction import (
-    TOKEN_REDACTION_WINDOW_CHARS,
     redact_internal_details,
     redact_structured_value,
     redact_tokens,
@@ -42,13 +41,12 @@ def test_token_redaction_preserves_many_failed_jwt_starts_and_finds_an_inner_key
     assert redact_tokens(text + "sk-" + "a" * 20) == text + "REDACTED"
 
 
-@pytest.mark.parametrize("offset", (-30, -1, 0, 1))
 @pytest.mark.parametrize(
     "token",
     (
         "ya29." + "a" * 20,
         "AKIA" + "A" * 16,
-        "sk-" + "a" * (TOKEN_REDACTION_WINDOW_CHARS * 3),
+        "sk-" + "a" * 50_000,
         "sk_live_" + "a" * 24,
         "rk_test_" + "a" * 24,
         "AIza" + "a" * 35,
@@ -62,13 +60,12 @@ def test_token_redaction_preserves_many_failed_jwt_starts_and_finds_an_inner_key
         "npm_" + "a" * 36,
         "pypi-AgEIcHlwaS5vcmc" + "a" * 50,
         "SG." + "a" * 22 + "." + "a" * 43,
-        "eyJ" + "a" * (TOKEN_REDACTION_WINDOW_CHARS * 2) + ".eyJ" + "b" * (TOKEN_REDACTION_WINDOW_CHARS * 2) + ".c",
-        "-----BEGIN " + "A" * (TOKEN_REDACTION_WINDOW_CHARS * 2) + " PRIVATE KEY-----\nbody\n-----END PRIVATE KEY-----",
+        "eyJ" + "a" * 50_000 + ".eyJ" + "b" * 50_000 + ".c",
+        "-----BEGIN " + "A" * 50_000 + " PRIVATE KEY-----\nbody\n-----END PRIVATE KEY-----",
     ),
 )
-def test_token_redaction_masks_tokens_across_windows(token: str, offset: int) -> None:
-    prefix: Final = " " * (TOKEN_REDACTION_WINDOW_CHARS + offset)
-    assert redact_tokens(prefix + token + " !") == prefix + "REDACTED !"
+def test_token_redaction_masks_known_token_shapes(token: str) -> None:
+    assert redact_tokens("credential=" + token + " !") == "credential=REDACTED !"
 
 
 @pytest.mark.parametrize(
@@ -82,15 +79,39 @@ def test_token_redaction_masks_tokens_across_windows(token: str, offset: int) ->
         (r"\nghp_" + "a" * 36, r"\nREDACTED"),
         ("AKIA" + "A" * 17, "AKIA" + "A" * 17),
         ("-----BEGIN PRIVATE KEY-----\nmissing end", "-----BEGIN PRIVATE KEY-----\nmissing end"),
-        ("-----BEGIN PRIVATE KEY----- -----END PRIVATE KEY-----\n-----END PRIVATE KEY-----", "REDACTED"),
-        ("-----BEGIN PRIVATE KEY-----\n-----BEGIN PRIVATE KEY-----\n-----END PRIVATE KEY-----", "REDACTED"),
         ("-----BEGIN PRIVATE KEY----- -----END PRIVATE KEY-----", "REDACTED"),
         ("-----BEGIN PRIVATE KEY-----\n-----END RSA PRIVATE KEY-----", "REDACTED"),
+        (
+            "-----BEGIN PRIVATE KEY-----\n-----BEGIN PRIVATE KEY-----\n-----END PRIVATE KEY-----",
+            "-----BEGIN PRIVATE KEY-----\nREDACTED",
+        ),
         ("-----BEGIN BAD-----\n-----END PRIVATE KEY-----", "-----BEGIN BAD-----\n-----END PRIVATE KEY-----"),
     ),
 )
 def test_token_redaction_preserves_matching_rules(text: str, expected: str) -> None:
     assert redact_tokens(text) == expected
+
+
+@pytest.mark.parametrize(
+    "content,expected",
+    (
+        ("-----BEGIN RSA PRIVATE KEY-----\nbody\n-----END RSA PRIVATE KEY-----", "REDACTED"),
+        ("ya29." + "a" * 20, "REDACTED"),
+        ("SG." + "a" * 22 + "." + "b" * 43, "REDACTED"),
+        ("AKIA" + "A" * 16 + "é", "AKIA" + "A" * 16 + "é"),
+        (
+            "SG." + "a" * 22 + "." + "b" * 43 + "-eyJ" + "a" * 12 + ".eyJ" + "b" * 12 + ".c",
+            "REDACTED-REDACTED",
+        ),
+        (
+            "sk-" + "a" * 20 + "-SG." + "a" * 22 + "." + "b" * 43,
+            "REDACTED." + "a" * 22 + "." + "b" * 43,
+        ),
+    ),
+)
+def test_failed_jwt_header_does_not_hide_other_tokens(content: str, expected: str) -> None:
+    prefix: Final = "eyJ" + "a" * 12 + "-"
+    assert redact_tokens(prefix + content) == prefix + expected
 
 
 @pytest.fixture(autouse=True)

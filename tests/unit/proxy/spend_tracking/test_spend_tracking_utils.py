@@ -3,6 +3,7 @@ import datetime
 import json
 import threading
 from collections.abc import Callable, Mapping
+from copy import deepcopy
 from datetime import timezone
 from types import MappingProxyType
 from typing import Any, Final, cast
@@ -44,7 +45,6 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import HttpPass
 from litellm.types.passthrough_endpoints.pass_through_endpoints import PassthroughStandardLoggingPayload
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
-    SPEND_LOG_REDACTION_OFFLOAD_THRESHOLD_CHARS,
     _extract_usage_for_ocr_call,
     _get_messages_for_spend_logs_payload,
     _get_proxy_server_request_for_spend_logs_payload,
@@ -1619,26 +1619,32 @@ _GITHUB_TOKEN: Final = "ghp_" + "a1B2c3D4e5" * 3 + "F6g7H8"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("large", (False, True))
-@pytest.mark.parametrize("redact", (False, True))
-async def test_token_redaction_offloads_large_spend_payloads_only_when_enabled(
-    monkeypatch: pytest.MonkeyPatch, large: bool, redact: bool
+@pytest.mark.parametrize("redact", (None, False, True))
+async def test_token_redaction_thread_and_inline_payloads_match(
+    monkeypatch: pytest.MonkeyPatch, redact: bool | None
 ) -> None:
     from litellm.proxy import proxy_server
 
     monkeypatch.setattr(
-        proxy_server, "general_settings", {"store_prompts_in_spend_logs": True, "redact_tokens_in_spend_logs": redact}
+        proxy_server,
+        "general_settings",
+        {"store_prompts_in_spend_logs": True, **({"redact_tokens_in_spend_logs": redact} if redact is not None else {})},
     )
-    monkeypatch.setattr(litellm, "cache", None)
     loop_thread: Final = threading.get_ident()
+    monkeypatch.setattr(litellm, "cache", litellm.Cache(type="local"))
     worker_threads: Final[list[int]] = []
-    text: Final = f"TOKEN={_GITHUB_TOKEN} " + "x" * (SPEND_LOG_REDACTION_OFFLOAD_THRESHOLD_CHARS if large else 1)
+    text: Final = f"TOKEN={_GITHUB_TOKEN} ordinary tool output"
     body: Final = {"messages": [{"role": "tool", "content": text}]}
     kwargs: Final[dict[str, object]] = {
         "model": "gpt-4o-mini",
         "litellm_trace_id": "trace-1",
-        "litellm_params": {"proxy_server_request": {"body": body}, "metadata": {"session_id": "session-1"}},
+        "litellm_params": {
+            "proxy_server_request": {"body": body},
+            "metadata": {"user_api_key_alias": "key-alias"},
+            "litellm_metadata": {"session_id": "session-1"},
+        },
     }
+    original: Final = deepcopy(kwargs)
     response: Final = litellm.ModelResponse(id="chatcmpl-thread-test", choices=[])
     now: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
 
@@ -1648,13 +1654,14 @@ async def test_token_redaction_offloads_large_spend_payloads_only_when_enabled(
         return payload
 
     payload: Final = await get_logging_payload_async(kwargs, response, now, now, run_in_thread=run_in_thread)
-    expected: Final = get_logging_payload(kwargs, response, now, now)
+    expected: Final = get_logging_payload(deepcopy(original), response, now, now)
 
     assert payload == expected
-    assert (len(worker_threads) == 1) is (large and redact)
+    assert redact is False or kwargs == original
+    assert (len(worker_threads) == 1) is (redact is not False)
     assert all(thread_id != loop_thread for thread_id in worker_threads)
     stored: Final = json.loads(payload["proxy_server_request"])["messages"][0]["content"]
-    assert stored.startswith("TOKEN=REDACTED_BY_LITELM " if redact else f"TOKEN={_GITHUB_TOKEN} ")
+    assert stored == ("TOKEN=REDACTED_BY_LITELM ordinary tool output" if redact is not False else text)
     assert body["messages"][0]["content"] == text
 
 

@@ -4,11 +4,10 @@ import json
 import os
 import re
 import secrets
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from datetime import datetime as dt
 from functools import partial, reduce
-from itertools import accumulate
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, cast, runtime_checkable
 
@@ -612,45 +611,16 @@ def _scrub_raw_model_from_error_information(
     )
 
 
-SPEND_LOG_REDACTION_OFFLOAD_THRESHOLD_CHARS: Final = 64_000
-_SPEND_LOG_INLINE_MAX_NODES: Final = 1024
-
-
-def _spend_log_string_lengths(value: object) -> Iterator[int]:
-    stack: Final[list[object]] = [value]  # mutable-ok: bounded iterative traversal avoids recursion and cycles
-    for _ in range(_SPEND_LOG_INLINE_MAX_NODES):
-        if not stack:
-            return
-        if isinstance(item := stack.pop(), str):
-            yield len(item)
-            continue
-        if (mapping := as_str_mapping(item.__dict__ if isinstance(item, BaseModel) else item)) is not None:
-            if len(mapping) >= _SPEND_LOG_INLINE_MAX_NODES:
-                yield SPEND_LOG_REDACTION_OFFLOAD_THRESHOLD_CHARS
-                return
-            stack.extend(mapping.values())
-        elif isinstance(item, (list, tuple)):
-            if len(cast(Sequence[object], item)) >= _SPEND_LOG_INLINE_MAX_NODES:  # cast-ok: object items
-                yield SPEND_LOG_REDACTION_OFFLOAD_THRESHOLD_CHARS
-                return
-            stack.extend(cast(Sequence[object], item))  # cast-ok: list and tuple elements are objects
-    if stack:
-        yield SPEND_LOG_REDACTION_OFFLOAD_THRESHOLD_CHARS
-
-
 def _spend_log_worker_kwargs(kwargs: Mapping[str, object]) -> Mapping[str, object]:
     params: Final = as_str_mapping(kwargs.get("litellm_params"))
     if params is None:
         return kwargs
+    metadata: Final = as_str_mapping(params.get("litellm_metadata"))
     return {
         **kwargs,
         "litellm_params": {
             **params,
-            **{
-                key: dict(bucket)
-                for key in ("metadata", "litellm_metadata")
-                if (bucket := as_str_mapping(params.get(key))) is not None
-            },
+            **({"litellm_metadata": dict(metadata)} if metadata is not None else {}),
         },
     }
 
@@ -666,14 +636,7 @@ async def get_logging_payload_async(
     from litellm.proxy.proxy_server import general_settings_view
 
     call_kwargs: Final[Mapping[str, object]] = kwargs if kwargs is not None else MappingProxyType({})
-    offload: Final = (
-        general_settings_view().get("redact_tokens_in_spend_logs") is not False
-        and should_store_prompts_for_call(dict(_spend_log_worker_kwargs(call_kwargs)))
-        and any(
-            size >= SPEND_LOG_REDACTION_OFFLOAD_THRESHOLD_CHARS
-            for size in accumulate(_spend_log_string_lengths((kwargs, response_obj)))
-        )
-    )
+    offload: Final = general_settings_view().get("redact_tokens_in_spend_logs") is not False
     build: Final = partial(
         get_logging_payload,
         kwargs=dict(_spend_log_worker_kwargs(call_kwargs)) if offload else dict(call_kwargs),
