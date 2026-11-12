@@ -1,5 +1,5 @@
 """
-Tests for enterprise/litellm_enterprise/proxy/hooks/managed_files.py
+Tests for litellm/enterprise/litellm_enterprise/proxy/hooks/managed_files.py
 
 Regression test for afile_retrieve called without credentials in
 async_post_call_success_hook when processing completed batch responses.

@@ -8,7 +8,6 @@ from typing import Annotated, Final, Literal, Protocol
 from fastapi import APIRouter, Depends, Request
 from typing_extensions import ReadOnly, TypedDict
 
-import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -23,6 +22,13 @@ from litellm.proxy.list_api.list_framework import (
     SortKey,
     handle_facet,
     handle_list,
+)
+from litellm.proxy.public_endpoints.model_hub_rows import (
+    HubRow,
+    ModelGroupRow,
+    NoModelsConfigured,
+    PassThroughRow,
+    published_hub_rows,
 )
 from litellm.proxy.utils import PrismaClient
 from litellm.types.proxy.management_endpoints.management_v1 import (
@@ -93,9 +99,19 @@ class HealthEnricher:
 
     lookup: HealthSnapshotLookup
 
-    async def __call__(self, rows: Sequence[ModelGroupInfoProxy]) -> Sequence[ModelGroupInfoProxy]:
-        health: Final = await self.lookup.latest_for(tuple(row.model_group for row in rows))
-        return tuple(_with_health(row, health.get(row.model_group)) for row in rows)
+    async def __call__(self, rows: Sequence[HubRow]) -> Sequence[HubRow]:
+        health: Final = await self.lookup.latest_for(
+            tuple(row.info.model_group for row in rows if isinstance(row, ModelGroupRow))
+        )
+        return tuple(_row_with_health(row, health) for row in rows)
+
+
+def _row_with_health(row: HubRow, health: Mapping[str, HealthSnapshot]) -> HubRow:
+    match row:
+        case PassThroughRow():
+            return row
+        case ModelGroupRow():
+            return ModelGroupRow(info=_with_health(row.info, health.get(row.info.model_group)))
 
 
 FEATURE_PREFIX: Final = "supports_"
@@ -120,26 +136,26 @@ def _enabled_features(fields: Mapping[str, object]) -> tuple[str, ...]:
     )
 
 
-def _cells(row: ModelGroupInfoProxy) -> Cells:
+def _cells(row: HubRow) -> Cells:
+    info: Final = row.info
     return MappingProxyType(
         {
-            "model_group": row.model_group,
-            "mode": row.mode,
-            "providers": tuple(row.providers),
-            "features": _features(row),
-            "max_input_tokens": row.max_input_tokens,
-            "max_output_tokens": row.max_output_tokens,
-            "input_cost_per_token": row.input_cost_per_token,
-            "output_cost_per_token": row.output_cost_per_token,
-            "rpm": row.rpm,
-            "tpm": row.tpm,
+            "model_group": info.model_group,
+            "mode": info.mode,
+            "providers": tuple(info.providers),
+            "features": _features(info),
+            "max_input_tokens": info.max_input_tokens,
+            "max_output_tokens": info.max_output_tokens,
+            "input_cost_per_token": info.input_cost_per_token,
+            "output_cost_per_token": info.output_cost_per_token,
+            "rpm": info.rpm,
+            "tpm": info.tpm,
         }
     )
 
 
-def _serialize(row: ModelGroupInfoProxy) -> ModelGroupInfoProxy:
-    """The row shape is the wire shape: the rows served are the router's own model group records."""
-    return row
+def _serialize(row: HubRow) -> ModelGroupInfoProxy:
+    return row.info
 
 
 def _scope(_caller: UserAPIKeyAuth) -> Scope:
@@ -163,7 +179,7 @@ MODEL_HUB_FACETS: Final[Mapping[str, str]] = MappingProxyType(
     {"providers": "providers", "modes": "mode", "features": "features"}
 )
 
-MODEL_HUB_LIST_SPEC: Final[ListSpec[ModelGroupInfoProxy, ModelGroupInfoProxy]] = ListSpec(
+MODEL_HUB_LIST_SPEC: Final[ListSpec[HubRow, ModelGroupInfoProxy]] = ListSpec(
     resource="model groups",
     sortable=frozenset(
         (
@@ -189,13 +205,9 @@ MODEL_HUB_LIST_SPEC: Final[ListSpec[ModelGroupInfoProxy, ModelGroupInfoProxy]] =
 )
 
 
-def _published_rows() -> Sequence[ModelGroupInfoProxy]:
-    from litellm.proxy.proxy_server import (
-        get_model_group_info,  # pyright: ignore[reportPrivateUsage]  # /public/model_hub imports it the same way
-        llm_router,
-    )
-
-    if llm_router is None:
+def _published_rows() -> Sequence[HubRow]:
+    rows: Final = published_hub_rows()
+    if isinstance(rows, NoModelsConfigured):
         raise ManagementProblem(
             ProblemDetail(
                 type=f"{PROBLEM_TYPE_BASE}no-llm-router",
@@ -204,21 +216,13 @@ def _published_rows() -> Sequence[ModelGroupInfoProxy]:
                 detail=CommonProxyErrors.no_llm_router.value,
             )
         )
-    if litellm.public_model_groups is None:
-        return ()
-    return tuple(
-        get_model_group_info(
-            llm_router=llm_router,
-            all_models_str=litellm.public_model_groups,
-            model_group=None,
-        )
-    )
+    return rows
 
 
 def _executor(
-    rows: Sequence[ModelGroupInfoProxy],
+    rows: Sequence[HubRow],
     prisma_client: PrismaClient | None,
-) -> InMemoryListExecutor[ModelGroupInfoProxy]:
+) -> InMemoryListExecutor[HubRow]:
     if prisma_client is None:
         return InMemoryListExecutor(rows=rows, cells=_cells)
     return InMemoryListExecutor(

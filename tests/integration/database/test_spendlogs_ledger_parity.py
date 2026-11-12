@@ -257,7 +257,7 @@ def ledger_schema() -> str:
             "diff",
             "--from-empty",
             "--to-schema-datamodel",
-            str(_ROOT / "schema.prisma"),
+            str(_ROOT / "litellm/schema.prisma"),
             "--script",
         ],
         check=True,
@@ -424,6 +424,7 @@ async def _assert_legacy_database_parity(
                             "guardrail_status": "success",
                             "guardrail_usage": {"text": 2},
                             "guardrail_cost_by_unit": {"text": 0.02},
+                            "guardrail_cost": 0.02,
                             "guardrail_cost_in_spend": True,
                         }
                     ],
@@ -579,6 +580,7 @@ async def _assert_legacy_database_parity(
         assert daily["autorouter_savings_spend"] == pytest.approx(
             (0 if origin == "auto_router" else 0.125) + (0.2 if correction_order else 0)
         )
+        assert daily["guardrail_spend"] == pytest.approx(min(0.02, cost))
         group_spend = {row["access_group_name"]: row["spend"] for row in results[-1]["LiteLLM_ModelAccessGroupBudgetTable"]}
         assert group_spend == {"group": cost + prior_spend, **({"unserved-group": prior_spend} if fallback_narrowing else {})}
         assert results[-1]["LiteLLM_DailyGuardrailUsageUnits"]
