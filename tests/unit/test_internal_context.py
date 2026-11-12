@@ -74,6 +74,7 @@ _IN_MEMORY_ONLY_CALLERS: Final = frozenset(
         "litellm/proxy/agent_endpoints/databricks_oauth.py",
         "litellm/proxy/common_utils/registry_read_through.py",
         "litellm/proxy/container_endpoints/ownership.py",
+        "litellm/proxy/credential_endpoints/nim_model_discovery.py",
         "litellm/proxy/discovery_endpoints/agent_skills_endpoints.py",
         "litellm/proxy/guardrails/guardrail_hooks/straiker/straiker.py",
         "litellm/proxy/hooks/model_budget_shared_windows.py",

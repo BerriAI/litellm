@@ -49106,6 +49106,566 @@
         "output_cost_per_token": 0.0,
         "source": "https://cohere.com/blog/rerank-5"
     },
+    "nvidia_nim/01-ai/yi-large": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "chat",
+        "source": "https://build.nvidia.com/01-ai/yi-large.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
+    "nvidia_nim/adept/fuyu-8b": {
+        "litellm_provider": "nvidia_nim",
+        "source": "https://build.nvidia.com/adept/fuyu-8b.md"
+    },
+    "nvidia_nim/ai21labs/jamba-1.5-large-instruct": {
+        "litellm_provider": "nvidia_nim",
+        "source": "https://integrate.api.nvidia.com/v1/models"
+    },
+    "nvidia_nim/aisingapore/sea-lion-7b-instruct": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "chat",
+        "source": "https://build.nvidia.com/aisingapore/sea-lion-7b-instruct.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
+    "nvidia_nim/bigcode/starcoder2-15b": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "completion",
+        "source": "https://build.nvidia.com/bigcode/starcoder2-15b.md",
+        "supported_endpoints": [
+            "/v1/completions"
+        ]
+    },
+    "nvidia_nim/databricks/dbrx-instruct": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "chat",
+        "source": "https://build.nvidia.com/databricks/dbrx-instruct.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
+    "nvidia_nim/deepseek-ai/deepseek-coder-6.7b-instruct": {
+        "litellm_provider": "nvidia_nim",
+        "source": "https://integrate.api.nvidia.com/v1/models"
+    },
+    "nvidia_nim/deepseek-ai/deepseek-v4.1-flash": {
+        "litellm_provider": "nvidia_nim",
+        "max_output_tokens": 1048576,
+        "mode": "chat",
+        "source": "https://build.nvidia.com/deepseek-ai/deepseek-v4.1-flash.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
+    "nvidia_nim/google/codegemma-1.1-7b": {
+        "litellm_provider": "nvidia_nim",
+        "source": "https://integrate.api.nvidia.com/v1/models"
+    },
+    "nvidia_nim/google/codegemma-7b": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "chat",
+        "source": "https://build.nvidia.com/google/codegemma-7b.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
+    "nvidia_nim/google/deplot": {
+        "litellm_provider": "nvidia_nim",
+        "source": "https://integrate.api.nvidia.com/v1/models"
+    },
+    "nvidia_nim/google/diffusiongemma-26b-a4b-it": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "chat",
+        "source": "https://build.nvidia.com/google/diffusiongemma-26b-a4b-it.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
+    "nvidia_nim/google/gemma-2b": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "chat",
+        "source": "https://build.nvidia.com/google/gemma-2b.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
+    "nvidia_nim/google/gemma-3-12b-it": {
+        "litellm_provider": "nvidia_nim",
+        "source": "https://integrate.api.nvidia.com/v1/models"
+    },
+    "nvidia_nim/google/gemma-3-4b-it": {
+        "litellm_provider": "nvidia_nim",
+        "source": "https://integrate.api.nvidia.com/v1/models"
+    },
+    "nvidia_nim/google/gemma-4-31b-it": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "chat",
+        "source": "https://build.nvidia.com/google/gemma-4-31b-it.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
+    "nvidia_nim/google/recurrentgemma-2b": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "chat",
+        "source": "https://build.nvidia.com/google/recurrentgemma-2b.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
+    "nvidia_nim/ibm/granite-3.0-3b-a800m-instruct": {
+        "litellm_provider": "nvidia_nim",
+        "source": "https://integrate.api.nvidia.com/v1/models"
+    },
+    "nvidia_nim/ibm/granite-3.0-8b-instruct": {
+        "litellm_provider": "nvidia_nim",
+        "source": "https://integrate.api.nvidia.com/v1/models"
+    },
+    "nvidia_nim/ibm/granite-34b-code-instruct": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "chat",
+        "source": "https://build.nvidia.com/ibm/granite-34b-code-instruct.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
+    "nvidia_nim/ibm/granite-8b-code-instruct": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "chat",
+        "source": "https://build.nvidia.com/ibm/granite-8b-code-instruct.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
+    "nvidia_nim/meta/codellama-70b": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "chat",
+        "source": "https://build.nvidia.com/meta/codellama-70b.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
+    "nvidia_nim/meta/llama-3.2-90b-vision-instruct": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "chat",
+        "source": "https://build.nvidia.com/meta/llama-3.2-90b-vision-instruct.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
+    "nvidia_nim/meta/llama-guard-4-12b": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "chat",
+        "source": "https://build.nvidia.com/meta/llama-guard-4-12b.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
+    "nvidia_nim/meta/llama2-70b": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "chat",
+        "source": "https://build.nvidia.com/meta/llama2-70b.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
+    "nvidia_nim/meta/muse-glimmer-30b": {
+        "litellm_provider": "nvidia_nim",
+        "max_output_tokens": 16384,
+        "mode": "chat",
+        "source": "https://build.nvidia.com/meta/muse-glimmer-30b.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
+    "nvidia_nim/microsoft/kosmos-2": {
+        "litellm_provider": "nvidia_nim",
+        "source": "https://integrate.api.nvidia.com/v1/models"
+    },
+    "nvidia_nim/microsoft/phi-3-vision-128k-instruct": {
+        "litellm_provider": "nvidia_nim",
+        "source": "https://build.nvidia.com/microsoft/phi-3-vision-128k-instruct.md"
+    },
+    "nvidia_nim/microsoft/phi-3.5-moe-instruct": {
+        "litellm_provider": "nvidia_nim",
+        "source": "https://integrate.api.nvidia.com/v1/models"
+    },
+    "nvidia_nim/minimaxai/minimax-m3.1-flash": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "chat",
+        "source": "https://build.nvidia.com/minimaxai/minimax-m3.1-flash.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true
+    },
+    "nvidia_nim/mistralai/codestral-22b-instruct-v0.1": {
+        "litellm_provider": "nvidia_nim",
+        "source": "https://integrate.api.nvidia.com/v1/models"
+    },
+    "nvidia_nim/mistralai/mistral-7b-instruct-v0.3": {
+        "litellm_provider": "nvidia_nim",
+        "source": "https://integrate.api.nvidia.com/v1/models"
+    },
+    "nvidia_nim/mistralai/mistral-large": {
+        "litellm_provider": "nvidia_nim",
+        "source": "https://integrate.api.nvidia.com/v1/models"
+    },
+    "nvidia_nim/mistralai/mistral-large-2-instruct": {
+        "litellm_provider": "nvidia_nim",
+        "source": "https://integrate.api.nvidia.com/v1/models"
+    },
+    "nvidia_nim/mistralai/mistral-large-4-1t-a52b": {
+        "litellm_provider": "nvidia_nim",
+        "max_output_tokens": 262144,
+        "mode": "chat",
+        "source": "https://build.nvidia.com/mistralai/mistral-large-4-1t-a52b.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "nvidia_nim/mistralai/mixtral-8x22b-v0.1": {
+        "litellm_provider": "nvidia_nim",
+        "source": "https://integrate.api.nvidia.com/v1/models"
+    },
+    "nvidia_nim/moonshotai/kimi-k2.6": {
+        "litellm_provider": "nvidia_nim",
+        "source": "https://integrate.api.nvidia.com/v1/models"
+    },
+    "nvidia_nim/nv-mistralai/mistral-nemo-12b-instruct": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "chat",
+        "source": "https://build.nvidia.com/nv-mistralai/mistral-nemo-12b-instruct.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
+    "nvidia_nim/nvidia/ai-synthetic-video-detector": {
+        "litellm_provider": "nvidia_nim",
+        "source": "https://integrate.api.nvidia.com/v1/models"
+    },
+    "nvidia_nim/nvidia/cosmos-reason2-8b": {
+        "litellm_provider": "nvidia_nim",
+        "max_output_tokens": 4096,
+        "mode": "chat",
+        "source": "https://build.nvidia.com/nvidia/cosmos-reason2-8b/modelcard",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
+    "nvidia_nim/nvidia/embed-qa-4": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "embedding",
+        "source": "https://build.nvidia.com/nvidia/embed-qa-4.md",
+        "supported_endpoints": [
+            "/v1/embeddings"
+        ]
+    },
+    "nvidia_nim/nvidia/ising-calibration-1.5-31b": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "chat",
+        "source": "https://build.nvidia.com/nvidia/ising-calibration-1.5-31b.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
+    "nvidia_nim/nvidia/llama-3.1-nemoguard-8b-content-safety": {
+        "litellm_provider": "nvidia_nim",
+        "source": "https://integrate.api.nvidia.com/v1/models"
+    },
+    "nvidia_nim/nvidia/llama-3.1-nemoguard-8b-topic-control": {
+        "litellm_provider": "nvidia_nim",
+        "source": "https://integrate.api.nvidia.com/v1/models"
+    },
+    "nvidia_nim/nvidia/llama-3.1-nemotron-51b-instruct": {
+        "litellm_provider": "nvidia_nim",
+        "source": "https://integrate.api.nvidia.com/v1/models"
+    },
+    "nvidia_nim/nvidia/llama-3.1-nemotron-70b-instruct": {
+        "litellm_provider": "nvidia_nim",
+        "source": "https://integrate.api.nvidia.com/v1/models"
+    },
+    "nvidia_nim/nvidia/llama-3.1-nemotron-safety-guard-8b-v3": {
+        "litellm_provider": "nvidia_nim",
+        "source": "https://integrate.api.nvidia.com/v1/models"
+    },
+    "nvidia_nim/nvidia/llama-3.1-nemotron-ultra-253b-v1": {
+        "litellm_provider": "nvidia_nim",
+        "source": "https://integrate.api.nvidia.com/v1/models"
+    },
+    "nvidia_nim/nvidia/llama-3.2-nemoretriever-1b-vlm-embed-v1": {
+        "litellm_provider": "nvidia_nim",
+        "source": "https://integrate.api.nvidia.com/v1/models"
+    },
+    "nvidia_nim/nvidia/llama-3.2-nv-embedqa-1b-v1": {
+        "litellm_provider": "nvidia_nim",
+        "source": "https://integrate.api.nvidia.com/v1/models"
+    },
+    "nvidia_nim/nvidia/llama-nemotron-embed-vl-1b-v2": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "embedding",
+        "source": "https://build.nvidia.com/nvidia/llama-nemotron-embed-vl-1b-v2.md",
+        "supported_endpoints": [
+            "/v1/embeddings"
+        ]
+    },
+    "nvidia_nim/nvidia/llama3-chatqa-1.5-70b": {
+        "litellm_provider": "nvidia_nim",
+        "source": "https://integrate.api.nvidia.com/v1/models"
+    },
+    "nvidia_nim/nvidia/mistral-nemo-minitron-8b-8k-instruct": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "chat",
+        "source": "https://build.nvidia.com/nvidia/mistral-nemo-minitron-8b-8k-instruct.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
+    "nvidia_nim/nvidia/nemotron-3-embed-1b": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "embedding",
+        "source": "https://build.nvidia.com/nvidia/nemotron-3-embed-1b.md",
+        "supported_endpoints": [
+            "/v1/embeddings"
+        ]
+    },
+    "nvidia_nim/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "chat",
+        "source": "https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
+    "nvidia_nim/nvidia/nemotron-3-super-120b-a12b": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "chat",
+        "source": "https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
+    "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b": {
+        "litellm_provider": "nvidia_nim",
+        "max_output_tokens": 32768,
+        "mode": "chat",
+        "source": "https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
+    "nvidia_nim/nvidia/nemotron-3.5-bolt-e4b": {
+        "litellm_provider": "nvidia_nim",
+        "max_output_tokens": 65536,
+        "mode": "chat",
+        "source": "https://build.nvidia.com/nvidia/nemotron-3.5-bolt-e4b.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "nvidia_nim/nvidia/nemotron-3.5-content-safety": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "chat",
+        "source": "https://build.nvidia.com/nvidia/nemotron-3.5-content-safety.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
+    "nvidia_nim/nvidia/nemotron-3.5-embed-1b": {
+        "litellm_provider": "nvidia_nim",
+        "source": "https://integrate.api.nvidia.com/v1/models"
+    },
+    "nvidia_nim/nvidia/nemotron-3.5-embed-8b": {
+        "litellm_provider": "nvidia_nim",
+        "source": "https://integrate.api.nvidia.com/v1/models"
+    },
+    "nvidia_nim/nvidia/nemotron-3.5-lightning-30b-a3b": {
+        "litellm_provider": "nvidia_nim",
+        "max_output_tokens": 32768,
+        "mode": "chat",
+        "source": "https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
+    "nvidia_nim/nvidia/nemotron-3.5-super-vl-120b-a12b": {
+        "litellm_provider": "nvidia_nim",
+        "max_output_tokens": 131072,
+        "mode": "chat",
+        "source": "https://build.nvidia.com/nvidia/nemotron-3.5-super-vl-120b-a12b.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "nvidia_nim/nvidia/nemotron-4-340b-instruct": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "chat",
+        "source": "https://build.nvidia.com/nvidia/nemotron-4-340b-instruct.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
+    "nvidia_nim/nvidia/nemotron-4-340b-reward": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "chat",
+        "source": "https://build.nvidia.com/nvidia/nemotron-4-340b-reward.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
+    "nvidia_nim/nvidia/nemotron-nano-3-30b-a3b": {
+        "litellm_provider": "nvidia_nim",
+        "source": "https://integrate.api.nvidia.com/v1/models"
+    },
+    "nvidia_nim/nvidia/nemotron-parse": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "chat",
+        "source": "https://build.nvidia.com/nvidia/nemotron-parse.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
+    "nvidia_nim/nvidia/nemotron-parse-2.0": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "chat",
+        "source": "https://build.nvidia.com/nvidia/nemotron-parse-2.0.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
+    "nvidia_nim/nvidia/neva-22b": {
+        "litellm_provider": "nvidia_nim",
+        "source": "https://build.nvidia.com/nvidia/neva-22b.md"
+    },
+    "nvidia_nim/nvidia/nv-embedqa-mistral-7b-v2": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "embedding",
+        "source": "https://build.nvidia.com/nvidia/nv-embedqa-mistral-7b-v2.md",
+        "supported_endpoints": [
+            "/v1/embeddings"
+        ]
+    },
+    "nvidia_nim/nvidia/nvclip": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "embedding",
+        "source": "https://build.nvidia.com/nvidia/nvclip.md",
+        "supported_endpoints": [
+            "/v1/embeddings"
+        ]
+    },
+    "nvidia_nim/nvidia/riva-translate-4b-instruct": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "chat",
+        "source": "https://build.nvidia.com/nvidia/riva-translate-4b-instruct.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
+    "nvidia_nim/nvidia/riva-translate-4b-instruct-v2": {
+        "litellm_provider": "nvidia_nim",
+        "max_output_tokens": 4096,
+        "mode": "chat",
+        "source": "https://build.nvidia.com/nvidia/riva-translate-4b-instruct-v2.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
+    "nvidia_nim/nvidia/vila": {
+        "litellm_provider": "nvidia_nim",
+        "source": "https://build.nvidia.com/nvidia/vila.md"
+    },
+    "nvidia_nim/openai/gpt-oss-20b": {
+        "litellm_provider": "nvidia_nim",
+        "max_output_tokens": 4096,
+        "mode": "chat",
+        "source": "https://build.nvidia.com/openai/gpt-oss-20b.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true
+    },
+    "nvidia_nim/poolside/laguna-xs-2.1": {
+        "litellm_provider": "nvidia_nim",
+        "max_output_tokens": 16384,
+        "mode": "chat",
+        "source": "https://build.nvidia.com/poolside/laguna-xs-2.1.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
+    "nvidia_nim/snowflake/arctic-embed-l": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "embedding",
+        "source": "https://build.nvidia.com/snowflake/arctic-embed-l.md",
+        "supported_endpoints": [
+            "/v1/embeddings"
+        ]
+    },
+    "nvidia_nim/stepfun-ai/step-5-preview": {
+        "litellm_provider": "nvidia_nim",
+        "max_output_tokens": 1048576,
+        "mode": "chat",
+        "source": "https://build.nvidia.com/stepfun-ai/step-5-preview.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "nvidia_nim/writer/palmyra-creative-122b": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "chat",
+        "source": "https://build.nvidia.com/writer/palmyra-creative-122b.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
+    "nvidia_nim/writer/palmyra-fin-70b-32k": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "chat",
+        "source": "https://build.nvidia.com/writer/palmyra-fin-70b-32k.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
+    "nvidia_nim/writer/palmyra-med-70b": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "chat",
+        "source": "https://build.nvidia.com/writer/palmyra-med-70b.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
+    "nvidia_nim/writer/palmyra-med-70b-32k": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "chat",
+        "source": "https://build.nvidia.com/writer/palmyra-med-70b-32k.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
+    "nvidia_nim/z-ai/glm-5.3-flash": {
+        "litellm_provider": "nvidia_nim",
+        "source": "https://integrate.api.nvidia.com/v1/models"
+    },
+    "nvidia_nim/zyphra/zamba2-7b-instruct": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "chat",
+        "source": "https://build.nvidia.com/zyphra/zamba2-7b-instruct.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ]
+    },
     "nvidia_nim/nvidia/nv-rerankqa-mistral-4b-v3": {
         "input_cost_per_query": 0.0,
         "input_cost_per_token": 0.0,

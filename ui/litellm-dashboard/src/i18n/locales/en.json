@@ -18618,6 +18618,13 @@
     "decisionModelSelect": {
       "label": "Decision model",
       "placeholder": "Select the decision model"
+    },
+    "nimModelDiscovery": {
+      "ready": "Enter your connection settings, then click Refresh NIM models",
+      "loading": "Loading models from NVIDIA NIM",
+      "success": "Models listed by your NIM endpoint. Inference access and capabilities may vary",
+      "unavailable": "Could not refresh NIM models. Showing the built-in catalog. You can also enter a custom model",
+      "refresh": "Refresh NIM models"
     }
   },
   "modelAdd": {
