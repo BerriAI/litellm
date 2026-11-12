@@ -3935,9 +3935,10 @@ async def _relay_passthrough_response_bytes(
                 url_route,
                 bytes_relayed,
             )
+        stream_exception: Final = sys.exc_info()[1]
         await response.aclose()
         if response.status_code < 400 and (
-            upstream_fully_relayed or isinstance(sys.exc_info()[1], (GeneratorExit, asyncio.CancelledError))
+            upstream_fully_relayed or isinstance(stream_exception, (GeneratorExit, asyncio.CancelledError))
         ):
             GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
                 async_coroutine=pass_through_endpoint_logging.pass_through_async_success_handler(

@@ -2,7 +2,7 @@ import asyncio
 import gzip
 import json
 from collections.abc import AsyncIterator, Iterator
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, nullcontext
 from datetime import datetime
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -317,8 +317,10 @@ def test_provider_status_body_and_redirects_are_not_rewritten(
 
 
 class StagedStream(httpx.AsyncByteStream):
-    def __init__(self, failure: Exception | None = None) -> None:
+    def __init__(self, failure: Exception | None = None, close_gate: asyncio.Event | None = None) -> None:
         self.failure: Final = failure
+        self.close_gate: Final = close_gate
+        self.closing: Final = asyncio.Event()
         self.release: Final = asyncio.Event()
         self.waiting: Final = asyncio.Event()
         self.closed: Final = asyncio.Event()
@@ -332,6 +334,9 @@ class StagedStream(httpx.AsyncByteStream):
         yield b"\x00\x02{}\x02\x00\x00\x00\x02{}"
 
     async def aclose(self) -> None:
+        self.closing.set()
+        if self.close_gate is not None:
+            await self.close_gate.wait()
         self.closed.set()
 
 
@@ -486,6 +491,85 @@ class UsageRecorder(CustomLogger):
         self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
         await self.failures.put(kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel", [False, True], ids=["generator-close", "task-cancel"])
+async def test_client_disconnect_logs_after_suspending_upstream_cleanup(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, cancel: bool
+) -> None:
+    recorder: Final = UsageRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [recorder])
+    close_gate: Final = asyncio.Event()
+    stream: Final = StagedStream(close_gate=close_gate)
+    respx_mock.post(f"{_BASE}/{_RUN}").mock(return_value=httpx.Response(200, stream=stream))
+    async with AsyncExitStack() as owner:
+        response: Final = await _native_stream(owner)
+        assert await anext(response.body_iterator) == b"\x00\x00\x00"
+        closing: Final = asyncio.create_task(
+            anext(response.body_iterator) if cancel else response.body_iterator.aclose()
+        )
+        try:
+            if cancel:
+                await stream.waiting.wait()
+                closing.cancel()
+            await stream.closing.wait()
+            assert not closing.done()
+            close_gate.set()
+            expected: Final = pytest.raises(asyncio.CancelledError) if cancel else nullcontext()
+            with expected:
+                await closing
+        finally:
+            close_gate.set()
+            await asyncio.gather(closing, return_exceptions=True)
+        await GLOBAL_LOGGING_WORKER.flush()
+    assert stream.closed.is_set()
+    assert recorder.events.qsize() == 1
+    assert recorder.failures.empty()
+    assert recorder.post_failures.empty()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_session_releases_parallel_request_slot(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    key: Final = "sk-cursor-cancelled-session"
+    limiter: Final = proxy_server.proxy_logging_obj.max_parallel_request_limiter
+    recorder: Final = UsageRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [limiter, recorder])
+    monkeypatch.setattr(litellm, "_async_success_callback", [limiter, recorder])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [limiter, recorder])
+    monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
+    proxy_server.user_api_key_cache.set_cache(
+        key=hash_token(key),
+        value=UserAPIKeyAuth.model_validate({"token": hash_token(key), "max_parallel_requests": 1}),
+    )
+    stream: Final = StagedStream()
+    respx_mock.post(f"{_BASE}/{_RUN}").mock(return_value=httpx.Response(200, stream=stream))
+    respx_mock.post(f"{_BASE}/{_APPEND}").respond(content=b"\x08\x01")
+    headers: Final = {**_HEADERS, "x-litellm-api-key": key}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=proxy_server.app), base_url="http://test") as caller:
+        running: Final = asyncio.create_task(caller.post(f"/cursor-cli/{_RUN}", headers=headers, content=b"\xff"))
+        waiting: Final = asyncio.create_task(stream.waiting.wait())
+        try:
+            completed, _ = await asyncio.wait((running, waiting), return_when=asyncio.FIRST_COMPLETED)
+            assert waiting in completed
+            running.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await running
+            await GLOBAL_LOGGING_WORKER.flush()
+            assert stream.closed.is_set()
+            assert recorder.events.qsize() == 1
+            assert recorder.failures.empty()
+            response: Final = await caller.post(f"/cursor-cli/{_APPEND}", headers=headers, content=b"\xff")
+            assert response.status_code == 200, response.text
+        finally:
+            stream.release.set()
+            waiting.cancel()
+            await asyncio.gather(running, waiting, return_exceptions=True)
+        await GLOBAL_LOGGING_WORKER.flush()
 
 
 @pytest.mark.asyncio
