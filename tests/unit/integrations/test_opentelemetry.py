@@ -57,6 +57,7 @@ from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 from collections.abc import AsyncIterator, Callable, Mapping
 from litellm.constants import KUBERNETES_POD_ROUTING_KEY, LOGGING_WORKER_MAX_TIME_PER_COROUTINE
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.litellm_core_utils.hidden_params import set_hidden_params
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.types.utils import ChatCompletionMessageToolCall, Delta, Function, ModelResponseStream, StreamingChoices
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
@@ -402,11 +403,15 @@ def test_v1_auto_router_response_model_names_the_routed_model(decision: object, 
     assert (attributes["gen_ai.response.model"], attributes["gen_ai.usage.input_tokens"]) == (expected, 3)
 
 
+def _response_with_provider_model(model: str, provider_model: str | None) -> litellm.ModelResponse:
+    response: Final = litellm.ModelResponse(model=model)
+    if provider_model:
+        set_hidden_params(response, {"provider_response_model": provider_model})
+    return response
+
+
 def _aliased_response(provider_model: str | None) -> litellm.ModelResponse:
-    return litellm.ModelResponse(
-        model="qwen-small",
-        hidden_params={"provider_response_model": provider_model} if provider_model else {},
-    )
+    return _response_with_provider_model("qwen-small", provider_model)
 
 
 def _streamed_aliased_response(provider_model: str | None) -> litellm.ModelResponse:
@@ -431,7 +436,7 @@ def _streamed_aliased_response(provider_model: str | None) -> litellm.ModelRespo
 def _logged_model_names(
     response_obj: object, latest_semconv: bool, model_group: str = "qwen-small", decision: object = None
 ) -> tuple[object, object, object]:
-    semconv: Final = {OTELSemconvCategory.GEN_AI_LATEST_EXPERIMENTAL} if latest_semconv else set()
+    semconv: Final = {OTELSemconvCategory.GEN_AI_LATEST_EXPERIMENTAL} if latest_semconv else set[OTELSemconvCategory]()
     exporter: Final = InMemorySpanExporter()
     provider: Final = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
@@ -494,12 +499,8 @@ def test_aliased_response_model_names_the_provider_model_only_under_latest_semco
 def test_latest_semconv_auto_router_response_model_prefers_provider_then_routed_model(
     provider_model: str | None, expected_response_model: str
 ) -> None:
-    response_obj: Final = litellm.ModelResponse(
-        model="auto-router",
-        hidden_params={"provider_response_model": provider_model} if provider_model else {},
-    )
     assert _logged_model_names(
-        response_obj,
+        _response_with_provider_model("auto-router", provider_model),
         latest_semconv=True,
         model_group="auto-router",
         decision={"router_model_name": "auto-router", "routed_model": "answer"},

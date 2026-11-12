@@ -143,13 +143,13 @@ def _response_field(response_obj: object, key: str) -> object:
 
 
 def _semconv_response_model(
-    response_obj: object, response_model: object, model_group: object, deployment_model: object
+    response_obj: object, response_model: object, model_group: str | None, deployment_model: str | None
 ) -> object:
     hidden_params: Final = get_hidden_params(response_obj)
     provider_model: Final = hidden_params.get("provider_response_model") if hidden_params is not None else None
     if isinstance(provider_model, str) and provider_model:
         return provider_model
-    if response_model and response_model == model_group and isinstance(deployment_model, str) and deployment_model:
+    if response_model and response_model == model_group and deployment_model:
         return deployment_model
     return response_model
 
@@ -2535,11 +2535,12 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             #############################################
 
             # The name of the LLM a request is being made to
-            if kwargs.get("model"):
+            request_model: Final = as_str(kwargs.get("model"))
+            if request_model:
                 self.safe_set_attribute(
                     span=span,
                     key=SpanAttributes.LLM_REQUEST_MODEL.value,
-                    value=kwargs.get("model"),
+                    value=request_model,
                 )
 
             # The LLM request type
@@ -2636,7 +2637,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 _response_field(response_obj, "model"), model_group, decision
             )
             response_model: Final = (
-                _semconv_response_model(response_obj, routed_response_model, model_group, kwargs.get("model"))
+                _semconv_response_model(response_obj, routed_response_model, model_group, request_model)
                 if self._gen_ai_semconv_latest_experimental
                 else routed_response_model
             )
