@@ -11071,7 +11071,7 @@
         },
         "microsoft": {
           "name": "Microsoft Decision Model",
-          "description": "Microsoft Foundry decision models, such as Microsoft-Decision-1, answer your yes/no questions about each request or response."
+          "description": "Microsoft Foundry decision models, such as Decision-1, answer your yes/no questions about each request or response."
         },
         "openai": {
           "name": "OpenAI Decision Model",

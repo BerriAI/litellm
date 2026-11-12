@@ -98,11 +98,11 @@ def test_typesafe_limits_require_unambiguous_long_context_opt_in(
     )
 
 
-@pytest.mark.parametrize("model", ("Microsoft-Decision-1", "unmapped-decision-deployment"))
+@pytest.mark.parametrize("model", ("Decision-1", "unmapped-decision-deployment"))
 def test_azure_decision_deployments_use_catalog_limits_without_typesafe_modes(
     local_model_cost_map: None, model: str
 ) -> None:
-    catalog_limit: Final = litellm.get_model_info("Microsoft-Decision-1", "azure_ai")["max_input_tokens"]
+    catalog_limit: Final = litellm.get_model_info("Decision-1", "azure_ai")["max_input_tokens"]
     limits: Final = AzureAIDecisionsConfig().get_input_limits(
         model, "azure_ai", {"TypeSafe-Danger-Zone-Long-Context": "true"}
     )

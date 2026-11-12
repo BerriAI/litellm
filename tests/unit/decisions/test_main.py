@@ -191,7 +191,7 @@ _DECISIONS_PRICING_FIELDS: Final[dict[str, dict[str, object]]] = {
         "cache_creation_input_token_cost_decisions": _GPT_6_LUNA_DECISIONS_INPUT_RATE,
         "output_cost_per_token_decisions": 0.0,
     },
-    "azure_ai/Microsoft-Decision-1": {"input_cost_per_token_decisions": _MICROSOFT_DECISION_1_DECISIONS_INPUT_RATE},
+    "azure_ai/Decision-1": {"input_cost_per_token_decisions": _MICROSOFT_DECISION_1_DECISIONS_INPUT_RATE},
 }
 
 
@@ -2779,7 +2779,7 @@ async def test_azure_ai_systemone_uses_its_decisions_pricing_fields(
         json={**_RESPONSE, "model": "microsoft-decision-1"}
     )
     response: Final = await litellm.asystemone(
-        model="azure_ai/Microsoft-Decision-1",
+        model="azure_ai/Decision-1",
         state="review",
         questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
         api_base="https://res.services.ai.azure.com",
@@ -2787,7 +2787,7 @@ async def test_azure_ai_systemone_uses_its_decisions_pricing_fields(
     )
 
     assert route.called
-    assert response._hidden_params["provider_response_model"] == "azure_ai/Microsoft-Decision-1"
+    assert response._hidden_params["provider_response_model"] == "azure_ai/Decision-1"
     assert litellm.completion_cost(completion_response=response) == pytest.approx(
         _INPUT_TOKENS * _MICROSOFT_DECISION_1_DECISIONS_INPUT_RATE
     )

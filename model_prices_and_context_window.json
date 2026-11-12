@@ -78899,7 +78899,7 @@
         "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-twelvelabs-pegasus-v1-5.html",
         "supports_video_input": true
     },
-    "azure_ai/Microsoft-Decision-1": {
+    "azure_ai/Decision-1": {
         "input_cost_per_token": 4.2e-08,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 32768,
