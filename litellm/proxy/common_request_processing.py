@@ -3083,12 +3083,10 @@ class ProxyBaseLLMRequestProcessing:
                     original_model,
                     original_model,
                 )
-                exhausted: dict = dict(  # mutable-ok: caller-defined request-payload shape
-                    with_saturation_fallbacks_exhausted(
-                        independent_snapshot(pristine), get_metadata_variable_name(request, pristine)
-                    )
+                snapshot: Final = _REQUEST_FIELDS.validate_python(pristine)
+                self.data = independent_snapshot(
+                    dict(with_saturation_fallbacks_exhausted(snapshot, get_metadata_variable_name(request, snapshot)))
                 )
-                self.data = exhausted
                 return await self.common_processing_pre_call_logic(
                     request=request,
                     general_settings=general_settings,
@@ -3102,7 +3100,7 @@ class ProxyBaseLLMRequestProcessing:
                     user_max_tokens=user_max_tokens,
                     user_api_base=user_api_base,
                     model=original_model,
-                    route_type=route_type,
+                    route_type=route_type,  # pyright: ignore[reportArgumentType]  # the proxy hands its route literal over as str, as the two calls above take it
                     llm_router=llm_router,
                 )
             except BaseException:

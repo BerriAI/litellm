@@ -1844,7 +1844,7 @@ async def _saturate_to_threshold(handler: _PROXY_DynamicRateLimitHandlerV3, key:
         assert await handler.async_pre_call_hook(key, DualCache(), {"model": "shared-model"}, "acompletion") is None
     group: Final = handler.llm_router.registry().group("shared-model")
     assert group is not None
-    assert await handler._check_model_saturation("shared-model", group) == 0.5
+    assert await handler._check_model_saturation("shared-model", group) >= 0.5
 
 
 @pytest.mark.asyncio

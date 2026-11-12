@@ -84,11 +84,9 @@ _FALLBACK_ON_SATURATION_FLAG: Final[TypeAdapter[bool | None]] = TypeAdapter(bool
 def fallback_on_saturation_enabled(router_settings: object) -> bool:
     """Whether the key's or team's ``router_settings`` ask for fallbacks once the requested model reaches
     ``saturation_threshold``, before the dynamic rate limiter admits or refuses the request on that model."""
-    if not isinstance(router_settings, Mapping):
-        return False
     raw_value: Final = _metadata_bucket(router_settings).get(FALLBACK_ON_SATURATION_SETTING)
     try:
-        return _FALLBACK_ON_SATURATION_FLAG.validate_python(raw_value) is True
+        return _FALLBACK_ON_SATURATION_FLAG.validate_python(raw_value, strict=True) is True
     except ValidationError:
         verbose_proxy_logger.warning(
             "router_settings.%s=%r is not a boolean, treating it as disabled", FALLBACK_ON_SATURATION_SETTING, raw_value

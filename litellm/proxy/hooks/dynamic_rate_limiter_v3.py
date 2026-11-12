@@ -56,7 +56,6 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (  # noqa: F401  # l
     claim_request_stash_for_data,
     get_or_create_request_stash,
     get_request_stash,
-    get_request_stash_for_call,
     request_stash_for_callback,
 )
 from litellm.proxy.hooks.priority_class_share import (
