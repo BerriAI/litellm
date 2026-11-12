@@ -2463,6 +2463,112 @@ def _key() -> UserAPIKeyAuth:
 
 
 class TestResponsesWSFirstFrameModelAuth:
+    @pytest.mark.parametrize("query_model", [None, "gpt-6.1-sol"])
+    @pytest.mark.parametrize("nested", [False, True])
+    def test_team_alias_keeps_websocket_turns_on_the_authorized_deployment(
+        self, monkeypatch: pytest.MonkeyPatch, query_model: str | None, nested: bool
+    ) -> None:
+        from openai.types.responses import ResponseCompletedEvent
+
+        import litellm.proxy.proxy_server as ps
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+        from litellm.types.llms.openai import InputTokensDetails, OutputTokensDetails
+
+        model: Final = "gpt-6.1-sol"
+        authorized_model: Final = "restricted/" + model
+        deployment_id: Final = "restricted-deployment"
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "shared/" + model,
+                    "litellm_params": {
+                        "model": model,
+                        "custom_llm_provider": "openai",
+                        "api_key": "shared-fixture-key",
+                        "order": 0,
+                    },
+                    "model_info": {"id": "shared-deployment"},
+                },
+                {
+                    "model_name": authorized_model,
+                    "litellm_params": {
+                        "model": model,
+                        "custom_llm_provider": "openai",
+                        "api_key": "restricted-fixture-key",
+                        "order": 1,
+                    },
+                    "model_info": {"id": deployment_id, "access_groups": ["Restricted"]},
+                },
+            ],
+            num_retries=0,
+        )
+        auth: Final = UserAPIKeyAuth(
+            api_key="hashed-fixture-key",
+            team_id="alias-team",
+            models=["all-team-models"],
+            team_models=["Restricted"],
+            team_model_aliases={model: authorized_model},
+        )
+        completed: Final = json.dumps(
+            {
+                "type": "response.completed",
+                "sequence_number": 1,
+                "response": ResponsesAPIResponse(
+                    id="resp_alias",
+                    object="response",
+                    created_at=1,
+                    status="completed",
+                    model=model,
+                    output=[],
+                    parallel_tool_calls=True,
+                    tool_choice="auto",
+                    tools=[],
+                    usage=ResponseAPIUsage(
+                        input_tokens=1,
+                        output_tokens=0,
+                        total_tokens=1,
+                        input_tokens_details=InputTokensDetails(cached_tokens=0),
+                        output_tokens_details=OutputTokensDetails(reasoning_tokens=0),
+                    ),
+                ).model_dump(mode="json"),
+            }
+        )
+
+        def provider_connect(*_args: object, **_kwargs: object) -> MagicMock:
+            replies: Final[asyncio.Queue[str]] = asyncio.Queue()
+
+            async def send(_message: str) -> None:
+                await replies.put(completed)
+
+            async def receive(**_kwargs: object) -> str:
+                return await replies.get()
+
+            peer: Final = MagicMock()
+            peer.send = AsyncMock(side_effect=send)
+            peer.recv = AsyncMock(side_effect=receive)
+            peer.close = AsyncMock()
+            connection: Final = MagicMock()
+            connection.__aenter__ = AsyncMock(return_value=peer)
+            connection.__aexit__ = AsyncMock(return_value=None)
+            return connection
+
+        monkeypatch.setattr(ps, "llm_router", router)
+        monkeypatch.setattr(ps, "master_key", None)
+        monkeypatch.setattr(ps, "general_settings", {})
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth_websocket, lambda: auth)
+        monkeypatch.setattr("websockets.connect", provider_connect)
+        payload: Final = {"model": model, "input": "hello"}
+        frame: Final = (
+            {"type": "response.create", "response": payload} if nested else {"type": "response.create", **payload}
+        )
+        path: Final = "/v1/responses" + (f"?model={query_model}" if query_model is not None else "")
+        with TestClient(app).websocket_connect(path) as websocket:
+            websocket.send_json(frame)
+            response: Final = ResponseCompletedEvent.model_validate_json(websocket.receive_text())
+
+        assert ResponsesAPIRequestUtils.get_model_id_from_response_id(response.response.id) == deployment_id
+
     @pytest.mark.asyncio
     async def test_endpoint_enforces_auth_after_model_from_first_frame(self):
         from litellm.proxy.response_api_endpoints.endpoints import (
@@ -2643,7 +2749,7 @@ class TestResponsesWSFirstFrameModelAuth:
         assert routed["model"] == "gpt-4o-mini"
         assert routed["input"] == replayed_input
         assert routed["previous_response_id"] == "resp_prev"
-        assert processor.common_processing_pre_call_logic.await_args.kwargs["model"] == "gpt-4o-mini"
+        assert "model" not in processor.common_processing_pre_call_logic.await_args.kwargs
         assert processor.common_processing_pre_call_logic.await_args.kwargs["skip_guardrails"] is True
         assert callable(routed["responses_ws_frame_guard"])
         assert mock_route_request.await_args.kwargs["route_type"] == "_aresponses_websocket"
