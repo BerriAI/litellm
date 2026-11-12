@@ -1708,19 +1708,18 @@ async def test_handle_stream_message_frames_events_as_sse():
         },
     ]
 
-    stream_kwargs: Final[list[dict[str, object]]] = []
-
-    async def fake_stream(**kwargs):
-        stream_kwargs.append(kwargs)
+    async def fake_stream():
         for event in events:
             yield event
+
+    stream_mock: Final = MagicMock(side_effect=lambda **kwargs: fake_stream())
 
     with ExitStack() as stack:
         stack.enter_context(patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", True))
         stack.enter_context(
             patch(
                 "litellm.a2a_protocol.asend_message_streaming",
-                new=fake_stream,
+                new=stream_mock,
             )
         )
 
@@ -1740,7 +1739,8 @@ async def test_handle_stream_message_frames_events_as_sse():
         assert response.media_type == "text/event-stream"
         chunks = [chunk.decode() if isinstance(chunk, bytes) else chunk async for chunk in response.body_iterator]
 
-    assert [kwargs["agent_name"] for kwargs in stream_kwargs] == ["Test Agent"]
+    stream_mock.assert_called_once()
+    assert stream_mock.call_args.kwargs["agent_name"] == "Test Agent"
     assert len(chunks) == len(events)
     for chunk, event in zip(chunks, events):
         assert chunk.startswith("data: ")
