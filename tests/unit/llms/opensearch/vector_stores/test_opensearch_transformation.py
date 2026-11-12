@@ -1104,6 +1104,31 @@ async def test_a_connection_failure_on_the_index_mapping_read_raises_what_one_on
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.asyncio
+async def test_a_timeout_on_the_index_mapping_read_answers_408_like_one_on_the_search_without_embedding(
+    asynchronous: bool,
+) -> None:
+    def time_out(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("timed out", request=request)
+
+    executor: Final = RecordingEmbeddingExecutor()
+    with pytest.raises(openai.APIError) as on_search:
+        await _search(asynchronous, MagicMock(side_effect=time_out), RecordingEmbeddingExecutor(), {})
+    with pytest.raises(openai.APIError) as on_mapping_read:
+        await _search(
+            asynchronous,
+            MagicMock(side_effect=time_out),
+            executor,
+            {"filters": {"type": "eq", "key": "category", "value": "hr"}},
+        )
+
+    assert getattr(on_search.value, "status_code", None) == 408
+    assert type(on_mapping_read.value) is type(on_search.value)
+    assert getattr(on_mapping_read.value, "status_code", None) == 408
+    executor.call.assert_not_called()
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("refusal", [ENGINE_REFUSES_FILTERS, KNN_PARSER_REFUSES_FILTERS])
 @pytest.mark.asyncio
 async def test_a_filter_the_index_refuses_is_dropped_under_drop_params_without_embedding_again(
