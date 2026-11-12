@@ -13,14 +13,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/cva.config";
-import {
-  UNASSIGNED_COLOR,
-  formatCount,
-  formatShare,
-  formatUsd,
-  formatUsdTotal,
-  type TaskSummary,
-} from "./taskInsightsData";
+import { UNASSIGNED_COLOR, formatCount, formatShare, formatUsdTotal, type TaskSummary } from "./taskInsightsData";
 
 const RANKS = ["requests", "spend"] as const;
 type Rank = (typeof RANKS)[number];
@@ -74,9 +67,7 @@ export default function TaskBreakdown({ tasks, colors, selectedTaskId, onSelect 
           <TableRow>
             <TableHead>{t("usage.taskInsights.breakdown.task")}</TableHead>
             <TableHead className={NUMERIC_CELL_CLASS}>{t("usage.taskInsights.breakdown.requests")}</TableHead>
-            <TableHead className={NUMERIC_CELL_CLASS}>{t("usage.taskInsights.breakdown.sessions")}</TableHead>
             <TableHead className={NUMERIC_CELL_CLASS}>{t("usage.taskInsights.breakdown.spend")}</TableHead>
-            <TableHead className={NUMERIC_CELL_CLASS}>{t("usage.taskInsights.breakdown.avgCost")}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -107,7 +98,6 @@ export default function TaskBreakdown({ tasks, colors, selectedTaskId, onSelect 
                   <span className="w-12 text-muted-foreground">{formatShare(task.share)}</span>
                 </div>
               </TableCell>
-              <TableCell className={NUMERIC_CELL_CLASS}>{formatCount(task.session_count)}</TableCell>
               <TableCell className={NUMERIC_CELL_CLASS}>
                 <span>{formatUsdTotal(task.spend) ?? t("usage.taskInsights.noData")}</span>
                 {task.cost_observations < task.request_count && (
@@ -118,9 +108,6 @@ export default function TaskBreakdown({ tasks, colors, selectedTaskId, onSelect 
                     })}
                   </span>
                 )}
-              </TableCell>
-              <TableCell className={NUMERIC_CELL_CLASS}>
-                {formatUsd(task.avg_cost_usd) ?? t("usage.taskInsights.noData")}
               </TableCell>
             </TableRow>
           ))}

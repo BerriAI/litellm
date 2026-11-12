@@ -2,13 +2,37 @@
 
 import React from "react";
 import { useTranslation } from "react-i18next";
-import { Cell, LabelList, Scatter, ScatterChart, XAxis, YAxis, ZAxis } from "recharts";
+import { Cell, LabelList, Scatter, ScatterChart, Tooltip, XAxis, YAxis, ZAxis } from "recharts";
 
 import { ChartContainer } from "@/components/ui/chart";
 import { UNASSIGNED_COLOR, formatCount, mapBubbles, type TaskMapPoint, type TaskSummary } from "./taskInsightsData";
 
 const EMPTY_CONFIG = {};
 const DOMAIN: [number, number] = [0, 100];
+
+interface BubbleTooltipProps {
+  active?: boolean;
+  payload?: ReadonlyArray<{ payload?: unknown }>;
+}
+
+const bubbleOf = (value: unknown): { name: string; countLabel: string } | null =>
+  typeof value === "object" && value !== null && "name" in value && "countLabel" in value
+    ? { name: String(value.name), countLabel: String(value.countLabel) }
+    : null;
+
+function BubbleTooltip({ active, payload }: BubbleTooltipProps) {
+  const { t } = useTranslation();
+  const bubble = active ? bubbleOf(payload?.[0]?.payload) : null;
+  if (!bubble) return null;
+  return (
+    <div className="rounded-md border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-sm">
+      <p className="font-medium">{bubble.name}</p>
+      <p className="text-muted-foreground">
+        {t("usage.taskInsights.detail.requests", { requests: bubble.countLabel })}
+      </p>
+    </div>
+  );
+}
 
 interface TaskClusterMapProps {
   tasks: readonly TaskSummary[];
@@ -20,7 +44,10 @@ interface TaskClusterMapProps {
 
 export default function TaskClusterMap({ tasks, points, colors, selectedTaskId, onSelect }: TaskClusterMapProps) {
   const { t } = useTranslation();
-  const bubbles = React.useMemo(() => mapBubbles(tasks), [tasks]);
+  const bubbles = React.useMemo(
+    () => mapBubbles(tasks).map((bubble) => ({ ...bubble, countLabel: formatCount(bubble.z) })),
+    [tasks],
+  );
   const plotted = React.useMemo(() => points.filter((point) => colors.has(point.task_id)), [points, colors]);
   return (
     <figure className="flex flex-col gap-2">
@@ -31,6 +58,7 @@ export default function TaskClusterMap({ tasks, points, colors, selectedTaskId, 
         className="aspect-auto h-80 w-full"
       >
         <ScatterChart margin={{ top: 24, right: 24, bottom: 12, left: 24 }} accessibilityLayer={false}>
+          <Tooltip cursor={false} content={<BubbleTooltip />} />
           <XAxis type="number" dataKey="x" domain={DOMAIN} hide />
           <YAxis type="number" dataKey="y" domain={DOMAIN} hide reversed />
           <ZAxis zAxisId="points" type="number" dataKey="z" range={[14, 14]} />
@@ -66,7 +94,7 @@ export default function TaskClusterMap({ tasks, points, colors, selectedTaskId, 
                 onClick={() => onSelect(bubble.task_id)}
               />
             ))}
-            <LabelList dataKey="name" position="top" className="fill-foreground text-xs font-medium" />
+            <LabelList dataKey="countLabel" position="center" className="fill-foreground text-xs font-medium" />
           </Scatter>
         </ScatterChart>
       </ChartContainer>

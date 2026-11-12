@@ -16048,9 +16048,7 @@
         "bySpend": "Spend",
         "task": "Task",
         "requests": "Requests",
-        "sessions": "Sessions",
         "spend": "Spend",
-        "avgCost": "Mean cost",
         "costKnownFor": "Cost known for {{known}} of {{total}}"
       },
       "heatmap": {
