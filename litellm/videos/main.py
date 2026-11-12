@@ -15,6 +15,7 @@ from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
 from litellm.litellm_core_utils.core_helpers import iter_items, keyword_arguments
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.per_call_pricing import video_pricing_override
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.main import base_llm_http_handler
@@ -255,6 +256,10 @@ def video_generation(
         )
 
         # Pre Call logging
+        if isinstance(litellm_logging_obj, LiteLLMLoggingObj):
+            litellm_logging_obj.set_per_call_pricing(
+                video_pricing_override(model, custom_llm_provider, litellm_params.model_dump())
+            )
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
             model=model,

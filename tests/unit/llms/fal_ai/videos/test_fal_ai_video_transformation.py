@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
+import respx
 from litellm.exceptions import UnsupportedParamsError
 
 import litellm
@@ -154,13 +155,124 @@ def test_custom_clip_pricing_controls_admission(pricing_source: str) -> None:
         )
 
 
+@pytest.mark.parametrize("pricing_source", ["direct", "model_info", "registered"])
+@pytest.mark.parametrize(
+    ("pricing", "expected_cost"),
+    [
+        ({"output_cost_per_second": 0.12}, 8 * 0.12),
+        ({"output_cost_per_second_720p": 0.13}, 8 * 0.13),
+        ({"output_cost_per_video_per_second": 0.14}, 8 * 0.14),
+        ({"output_cost_per_video_clip": {"8s": {"720p": 0.73}}}, 0.73),
+        ({"output_cost_per_video_clip": {"8s": {"720p": 0.0}}}, 0.0),
+    ],
+)
+def test_video_override_is_admitted_and_billed_without_leaking(
+    monkeypatch: pytest.MonkeyPatch,
+    pricing_source: str,
+    pricing: dict[str, object],
+    expected_cost: float,
+) -> None:
+    model: Final = "fal_ai/fal-ai/pixverse/v5/effects"
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            model: {"output_cost_per_video_clip": {"5s": {"720p": 0.5}}},
+            "video-price-deployment": pricing,
+        },
+    )
+    custom: Final = (
+        pricing
+        if pricing_source == "direct"
+        else {"model_info": pricing}
+        if pricing_source == "model_info"
+        else {"model_info": {"id": "video-price-deployment"}}
+    )
+    upstream: Final = Mock(return_value=httpx.Response(200, json={"request_id": "custom-priced-clip"}))
+    with httpx.Client(transport=httpx.MockTransport(upstream)) as client:
+        video: Final = litellm.video_generation(
+            model=model,
+            prompt="clip",
+            seconds="8",
+            size="720p",
+            api_key="synthetic-fal-key",
+            client=HTTPHandler(client=client),
+            **custom,
+        )
+        assert video.status == "queued"
+        assert video._hidden_params["response_cost"] == pytest.approx(expected_cost)
+        with pytest.raises(litellm.BadRequestError, match="has no pricing entry"):
+            litellm.video_generation(
+                model=model,
+                prompt="clip",
+                seconds="8",
+                size="720p",
+                api_key="synthetic-fal-key",
+                client=HTTPHandler(client=client),
+            )
+    upstream.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pricing_source", ["litellm_params", "model_info"])
+@pytest.mark.parametrize(
+    ("pricing", "expected_cost"),
+    [
+        ({"output_cost_per_second": 0.12}, 8 * 0.12),
+        ({"output_cost_per_second_720p": 0.13}, 8 * 0.13),
+        ({"output_cost_per_video_clip": {"8s": {"720p": 0.73}}}, 0.73),
+    ],
+)
+async def test_router_deployment_video_pricing_is_admitted_and_billed(
+    monkeypatch: pytest.MonkeyPatch, pricing_source: str, pricing: dict[str, object], expected_cost: float
+) -> None:
+    model: Final = "fal_ai/fal-ai/pixverse/v5/transition"
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {**litellm.model_cost, model: {"output_cost_per_video_clip": {"5s": {"720p": 0.5}}}},
+    )
+    router: Final = litellm.Router(
+        num_retries=0,
+        model_list=[
+            {
+                "model_name": "custom-video",
+                "litellm_params": {
+                    "model": model,
+                    "api_key": "synthetic-fal-key",
+                    **(pricing if pricing_source == "litellm_params" else {}),
+                },
+                "model_info": pricing if pricing_source == "model_info" else {},
+            }
+        ],
+    )
+    with respx.mock:
+        upstream: Final = respx.post("https://queue.fal.run/fal-ai/pixverse/v5/transition").mock(
+            return_value=httpx.Response(200, json={"request_id": "deployment-priced-clip"})
+        )
+        video: Final = await router.avideo_generation(
+            model="custom-video",
+            prompt="clip",
+            seconds="8",
+            size="720p",
+        )
+    assert video.status == "queued"
+    assert video._hidden_params["response_cost"] == pytest.approx(expected_cost)
+    assert upstream.call_count == 1
+
+
 @pytest.mark.parametrize("table", [{}, {"5s": {"360p": "invalid"}}])
 def test_empty_or_invalid_clip_table_is_rejected(table: dict[str, object]) -> None:
     with pytest.raises(FalAIVideoError, match="has no pricing entry") as error:
         FalAIVideoConfig().transform_video_create_request(
-            model="fal-ai/pixverse/v5/effects", prompt="clip", api_base="https://queue.fal.run",
+            model="fal-ai/pixverse/v5/effects",
+            prompt="clip",
+            api_base="https://queue.fal.run",
             video_create_optional_request_params={"duration": "5", "resolution": "360p"},
-            litellm_params=GenericLiteLLMParams(model_info={"output_cost_per_video_clip": table}), headers={},
+            litellm_params=GenericLiteLLMParams(model_info={"output_cost_per_video_clip": table}),
+            headers={},
         )
     assert error.value.status_code == 400
 
@@ -216,7 +328,8 @@ def test_pixverse_missing_duration_uses_default_resolution() -> None:
 def test_native_video_parameters_keep_precedence(drop_params: bool) -> None:
     params: Final = {"aspect_ratio": "1:1", "seed": 0, "duration": 6}
     assert FalAIVideoConfig().map_openai_params({"seconds": "5", "size": "1280x720", **params}, MODEL, drop_params) == {
-        "resolution": "720p", **params,
+        "resolution": "720p",
+        **params,
     }
 
 
@@ -955,4 +1068,6 @@ def test_first_class_video_fields_are_rejected_or_dropped(field: str) -> None:
     config: Final = FalAIVideoConfig()
     with pytest.raises(UnsupportedParamsError, match=field):
         config.map_openai_params({field: 1}, "video-model", False)
-    assert config.map_openai_params({field: 1}, "video-model", True) == config.map_openai_params({}, "video-model", True)
+    assert config.map_openai_params({field: 1}, "video-model", True) == config.map_openai_params(
+        {}, "video-model", True
+    )

@@ -497,19 +497,22 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     tiered_pricing: list[dict[str, Any]] | None  # Tiered pricing structure for models like Dashscope
     litellm_provider: Required[str]
     mode: Required[
-        Literal[
-            "completion",
-            "embedding",
-            "image_generation",
-            "chat",
-            "audio_transcription",
-            "audio_speech",
-            "responses",
-            "decisions",
-            "evaluation",
-            "extraction",
-            "ocr",
-            "realtime",
+        ReadOnly[
+            Literal[
+                "completion",
+                "embedding",
+                "image_generation",
+                "video_generation",
+                "chat",
+                "audio_transcription",
+                "audio_speech",
+                "responses",
+                "decisions",
+                "evaluation",
+                "extraction",
+                "ocr",
+                "realtime",
+            ]
         ]
     ]
     supported_endpoints: list[str] | None

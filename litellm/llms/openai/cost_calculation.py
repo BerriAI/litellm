@@ -162,6 +162,19 @@ def video_clip_cost(model_info: Mapping[str, object], duration: object, resoluti
     return prices.get(requested_key, {}).get(resolution.strip().lower())
 
 
+def video_generation_output_cost(
+    model_info: Mapping[str, object], duration_seconds: float, video_resolution: str | None
+) -> float | None:
+    clip_cost: Final = video_clip_cost(model_info, duration_seconds, video_resolution)
+    if clip_cost is not None:
+        return clip_cost
+    video_rate: Final = model_info.get("output_cost_per_video_per_second")
+    if video_rate is not None:
+        return _native_float(video_rate) * duration_seconds
+    rate: Final = video_output_cost_per_second(model_info, video_resolution)
+    return rate * duration_seconds if rate is not None else None
+
+
 def video_generation_cost(
     model: str,
     duration_seconds: float,
@@ -188,27 +201,9 @@ def video_generation_cost(
     if model_info is None:
         model_info = get_model_info(model=model, custom_llm_provider=custom_llm_provider or "openai")
 
-    clip_cost: Final = video_clip_cost(model_info, duration_seconds, video_resolution)
-    if clip_cost is not None:
-        return clip_cost
-
-    # Check for video-specific cost per second
-    video_cost_per_second: Final = model_info.get("output_cost_per_video_per_second")
-    if video_cost_per_second is not None:
-        verbose_logger.debug(
-            "For model=%s - output_cost_per_video_per_second: %s; duration: %s",
-            model,
-            video_cost_per_second,
-            duration_seconds,
-        )
-        return video_cost_per_second * duration_seconds
-
-    output_cost_per_second: Final = video_output_cost_per_second(model_info, video_resolution)
-    if output_cost_per_second is not None:
-        verbose_logger.debug(
-            "For model=%s - output_cost_per_second: %s; duration: %s", model, output_cost_per_second, duration_seconds
-        )
-        return output_cost_per_second * duration_seconds
+    cost: Final = video_generation_output_cost(model_info, duration_seconds, video_resolution)
+    if cost is not None:
+        return cost
 
     # If no cost information found, return 0
     verbose_logger.warning(

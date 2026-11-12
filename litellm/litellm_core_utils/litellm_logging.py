@@ -2509,7 +2509,9 @@ class Logging(LiteLLMLoggingBaseClass):
     def custom_pricing_for(self, result: object) -> bool:
         if self.spilled_over_ptu_for(result):
             return False
-        return use_custom_pricing_for_model(litellm_params=getattr(self, "litellm_params", None))
+        return self.custom_model_info is not None or use_custom_pricing_for_model(
+            litellm_params=getattr(self, "litellm_params", None)
+        )
 
     def _prompt_for_cost_calculation(self) -> str:
         """

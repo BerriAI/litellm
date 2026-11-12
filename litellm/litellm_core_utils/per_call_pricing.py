@@ -1,11 +1,13 @@
 """The price entry for a single call that sets its own custom pricing, built without writing ``litellm.model_cost``."""
 
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final, Literal
 
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.model_cost_table import published
 from litellm.litellm_core_utils.ptu_pricing import zeroed_ptu_pricing
 from litellm.types.utils import CustomPricingLiteLLMParams, ModelInfo
 
@@ -27,7 +29,10 @@ def _router_deployment_model_info(kwargs: Mapping[str, object]) -> Mapping[str, 
 
 
 def per_call_model_info(
-    model: str, custom_llm_provider: str, kwargs: Mapping[str, object], mode: Literal["chat", "embedding"]
+    model: str,
+    custom_llm_provider: str,
+    kwargs: Mapping[str, object],
+    mode: Literal["chat", "embedding", "video_generation"],
 ) -> ModelInfo | None:
     """The full price entry for one call, or None when the cost map (or the Router's registered deployment entry)
     already prices it. The cost map row for the model is overlaid with the registered deployment entry and then with
@@ -69,6 +74,39 @@ def per_call_model_info(
             "mode": catalog.get("mode") or mode,
         }
     )
+
+
+def video_pricing_override(model: str, custom_llm_provider: str, kwargs: Mapping[str, object]) -> ModelInfo | None:
+    metadata: Final = tuple(
+        _STR_MAPPING.validate_python(value)
+        for key in ("litellm_metadata", "metadata")
+        if isinstance(value := kwargs.get(key), Mapping)
+    )
+    supplied: Final = next(
+        (
+            _STR_MAPPING.validate_python(value)
+            for value in (kwargs.get("model_info"), *(item.get("model_info") for item in metadata))
+            if isinstance(value, Mapping)
+        ),
+        MappingProxyType[str, object]({}),
+    )
+    deployment_id: Final = supplied.get("id")
+    registered: Final = (
+        _STR_MAPPING.validate_python(published().get(deployment_id) or {})
+        if isinstance(deployment_id, str)
+        else MappingProxyType[str, object]({})
+    )
+    direct: Final = {
+        key: direct_value
+        for key in CustomPricingLiteLLMParams.model_fields
+        if (direct_value := kwargs.get(key)) is not None
+    }
+    return per_call_model_info(model, custom_llm_provider, {**registered, **supplied, **direct}, "video_generation")
+
+
+def resolve_video_model_info(model: str, custom_llm_provider: str, kwargs: Mapping[str, object]) -> ModelInfo | None:
+    override: Final = video_pricing_override(model, custom_llm_provider, kwargs)
+    return override if override is not None else _catalog_row(model, custom_llm_provider)
 
 
 _FLAT_TOKEN_RATE_FIELDS: Final = ("input_cost_per_token", "output_cost_per_token")

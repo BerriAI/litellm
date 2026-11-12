@@ -101,8 +101,7 @@ from litellm.llms.openai.cost_calculation import (
     cost_per_token as openai_cost_per_token,
 )
 from litellm.llms.openai.cost_calculation import (
-    video_clip_cost,
-    video_output_cost_per_second,
+    video_generation_output_cost,
 )
 from litellm.llms.perplexity.cost_calculator import (
     cost_per_token as perplexity_cost_per_token,
@@ -2067,7 +2066,7 @@ def completion_cost(
                     )
                 elif call_type in _VIDEO_CALL_TYPES:
                     ### VIDEO GENERATION COST CALCULATION ###
-                    _video_model_info: ModelInfo | None = _deployment_model_info(
+                    _video_model_info: ModelInfo | None = requested_model_info_override or _deployment_model_info(
                         litellm_logging_obj, custom_pricing, router_model_id
                     )
 
@@ -3198,25 +3197,10 @@ def default_video_cost_calculator(
     if cost_info is None:
         raise Exception(f"Model not found in cost map for model={model}")
 
-    clip_cost: Final = video_clip_cost(_VIDEO_COST_INFO.validate_python(cost_info), duration_seconds, video_resolution)
-    if clip_cost is not None:
-        return clip_cost
-
-    # Check for video-specific cost per second first
-    video_cost_per_second: Final = cost_info.get("output_cost_per_video_per_second")
-    if video_cost_per_second is not None:
-        return video_cost_per_second * duration_seconds
-
-    output_cost_per_second: Final = video_output_cost_per_second(cost_info, video_resolution)
-    if output_cost_per_second is not None:
-        return output_cost_per_second * duration_seconds
-
-    # If no cost information found, return 0
-    verbose_logger.info(
-        "No cost information found for video model %s. Please add pricing to model_prices_and_context_window.json",
-        model,
+    cost: Final = video_generation_output_cost(
+        _VIDEO_COST_INFO.validate_python(cost_info), duration_seconds, video_resolution
     )
-    return 0.0
+    return cost if cost is not None else 0.0
 
 
 def _optional_batch_rate(
