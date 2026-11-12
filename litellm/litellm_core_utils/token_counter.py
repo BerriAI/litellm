@@ -1944,13 +1944,16 @@ def _count_content_list(
                 tool_name = str(c.get("tool_name") or "")
                 if tool_name:
                     num_tokens += count_function(tool_name)
+            elif c["type"] in ("tool_addition", "tool_removal"):
+                num_tokens += _tool_change_tokens(count_function, as_str_mapping(c.get("tool")))
             else:
                 content_type = c.get("type", type(c).__name__) if isinstance(c, dict) else type(c).__name__
                 raise UnsupportedContentTypeError(
                     f"Invalid content item type: {content_type}. "
                     f"Expected str or dict with 'type' field "
                     f"(text, image_url, image, document, file, tool_use, tool_result, thinking, redacted_thinking, "
-                    f"compaction, tool_reference, search_result, or Anthropic server tool blocks)."
+                    f"compaction, tool_reference, tool_addition, tool_removal, search_result, "
+                    f"or Anthropic server tool blocks)."
                 )
         return num_tokens
     except Exception as e:
@@ -1960,6 +1963,24 @@ def _count_content_list(
         raise error_type(
             f"Error getting number of tokens from content list: {e}, default_token_count={default_token_count}"
         )
+
+
+def _tool_change_tokens(count_function: TokenCounterFunction, tool: Mapping[str, object] | None) -> int:
+    match tool:
+        case {"type": "tool_definition", "definition": definition} if (
+            function := as_str_mapping(definition)
+        ) is not None:
+            return count_function(_format_function_definitions((function,)))
+        case {"type": "tool_reference", "name": str() as name}:
+            return count_function(name)
+        case {"type": "mcp_tool_reference", "server_name": str() as server_name, "name": str() as name}:
+            return count_function(server_name) + count_function(name)
+        case {"type": "mcp_toolset_reference", "server_name": str() as server_name}:
+            return count_function(server_name)
+        case _:
+            raise UnsupportedContentTypeError(
+                f"Invalid tool change target type: {None if tool is None else tool.get('type')}"
+            )
 
 
 def _format_function_definitions(tools: Sequence[object]) -> str:
