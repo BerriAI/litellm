@@ -211,6 +211,7 @@ export enum Providers {
   ZAI = "Z.AI (Zhipu AI)",
   BIGMODEL = "BigModel (Zhipu AI)",
   ZeroGPU = "ZeroGPU",
+  OptiQCloud = "OptiQ Cloud",
 }
 
 export const provider_map: Record<string, string> = {
@@ -348,6 +349,7 @@ export const provider_map: Record<string, string> = {
   ZAI: "zai",
   BIGMODEL: "bigmodel",
   ZeroGPU: "zerogpu",
+  OptiQCloud: "optiq_cloud",
 };
 
 const standaloneSubproviderSlugs = new Set<string>(["bedrock_mantle", "meta_llama"]);
@@ -535,6 +537,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.ZAI]: "zai/glm-4.5",
   [Providers.BIGMODEL]: "bigmodel/glm-5.3",
   [Providers.ZeroGPU]: "zerogpu/gpt-oss-120b",
+  [Providers.OptiQCloud]: "optiq_cloud/glm-5.3-flash",
 };
 
 export const getPlaceholder = (selectedProvider: string): string => {

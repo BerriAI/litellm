@@ -285,6 +285,7 @@ describe("provider_info_helpers", () => {
         Providers.WANDB,
         Providers.ZAI,
         Providers.ZeroGPU,
+        Providers.OptiQCloud,
       ];
       const logolessProviders = Object.values(Providers).filter((provider) => !providerLogoMap[provider]);
       expect([...logolessProviders].sort()).toEqual([...knownLogolessProviders].sort());

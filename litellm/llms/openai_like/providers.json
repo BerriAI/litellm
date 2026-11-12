@@ -58,6 +58,11 @@
       "max_completion_tokens": "max_tokens"
     }
   },
+  "optiq_cloud": {
+    "base_url": "https://cloud.mlx-optiq.com/api/v1",
+    "api_key_env": "OPTIQ_CLOUD_API_KEY",
+    "api_base_env": "OPTIQ_CLOUD_API_BASE"
+  },
   "zerogpu": {
     "base_url": "https://api.zerogpu.ai/v1",
     "api_key_env": "ZEROGPU_API_KEY",
