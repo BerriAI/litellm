@@ -43,6 +43,7 @@ from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.models.end_user import LiteLLM_EndUserTable
+from litellm.models.team import LiteLLM_TeamRebuiltFromToken
 from litellm.proxy._types import *
 from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_from_headers
 from litellm.proxy.auth.access_group_rules import access_group_ids_for_identity
@@ -3614,13 +3615,13 @@ async def _safe_fetch(label: str, awaitable):
         return None
 
 
-def _team_obj_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamTableCachedObj:
+def _team_obj_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamRebuiltFromToken:
     """Reconstruct a cached team object from the fields already on the
     UserAPIKeyAuth. Only called when valid_token.team_id is known to be
     non-None (the caller gates on it)."""
     assert valid_token.team_id is not None
     token_team_models: Final = _token_team_models(valid_token)
-    return LiteLLM_TeamTableCachedObj(
+    return LiteLLM_TeamRebuiltFromToken(
         team_id=valid_token.team_id,
         max_budget=valid_token.team_max_budget,
         soft_budget=valid_token.team_soft_budget,
