@@ -151,3 +151,19 @@ async def test_uberllm_anthropic_messages_request(monkeypatch: pytest.MonkeyPatc
     assert body["model"] == "deepseek/deepseek-v4.1-flash"
     assert body["messages"] == [{"role": "user", "content": "Say hello"}]
     assert response["content"][0]["text"] == "Hello from UberLLM"
+
+
+def test_uberllm_never_borrows_the_openai_key(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("UBERLLM_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-env-key")
+    monkeypatch.setattr(litellm, "openai_key", "openai-module-key")
+
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post("https://api.uberllm.dev/v1/chat/completions").respond(200, json={})
+        with pytest.raises(litellm.AuthenticationError, match="UBERLLM_API_KEY"):
+            litellm.completion(
+                model="uberllm/deepseek/deepseek-v4.1-flash",
+                messages=[{"role": "user", "content": "Say hello"}],
+            )
+
+    assert route.call_count == 0

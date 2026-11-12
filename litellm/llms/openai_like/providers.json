@@ -316,6 +316,9 @@
     "base_url": "https://api.uberllm.dev/v1",
     "api_key_env": "UBERLLM_API_KEY",
     "api_base_env": "UBERLLM_API_BASE",
+    "special_handling": {
+      "require_own_api_key": true
+    },
     "provider_info": {
       "supports_function_calling": true,
       "supports_reasoning": true

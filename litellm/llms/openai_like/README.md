@@ -62,7 +62,9 @@ That's it! The provider will be automatically loaded and available.
     
     // Optional: Special handling flags
     "special_handling": {
-      "convert_content_list_to_string": true
+      "convert_content_list_to_string": true,
+      // refuse a call with no key instead of falling back to OPENAI_API_KEY
+      "require_own_api_key": true
     },
 
     // Optional: Capabilities every model of this provider has, used when a
