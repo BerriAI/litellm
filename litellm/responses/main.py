@@ -122,6 +122,7 @@ from .input_items_query import (
     DEFAULT_INPUT_ITEMS_QUERY,
     InputItemsQuery,
     InvalidInputItemsQuery,
+    parse_input_items_extra_query,
     parse_input_items_query,
 )
 from .retrieve_stream_query import (
@@ -2322,14 +2323,14 @@ def _raise_invalid_input_items_query(invalid: InvalidInputItemsQuery, custom_llm
 
 def _requested_input_items_query(
     arguments: Mapping[str, object],
-    extra_query: Mapping[str, object] | None,
+    extra_query: object,
     custom_llm_provider: str,
     drop_malformed: bool,
 ) -> InputItemsQuery:
     called_with: Final = parse_input_items_query(arguments, DEFAULT_INPUT_ITEMS_QUERY, drop_malformed=drop_malformed)
     if isinstance(called_with, InvalidInputItemsQuery):
         _raise_invalid_input_items_query(called_with, custom_llm_provider)
-    requested: Final = parse_input_items_query(extra_query or {}, called_with, drop_malformed=drop_malformed)
+    requested: Final = parse_input_items_extra_query(extra_query, called_with, drop_malformed=drop_malformed)
     if isinstance(requested, InvalidInputItemsQuery):
         _raise_invalid_input_items_query(requested, custom_llm_provider)
     return requested

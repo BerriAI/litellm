@@ -1829,6 +1829,24 @@ async def test_an_input_items_query_param_wins_over_the_same_key_in_a_body_extra
     ]
 
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "drop_params, status_code, forwarded",
+    [(False, 400, []), (True, 200, [[("limit", "20"), ("order", "desc")]])],
+)
+async def test_a_body_extra_query_that_is_not_an_object_is_a_400_or_dropped_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch, drop_params: bool, status_code: int, forwarded: list[list[tuple[str, str]]]
+):
+    result, upstream_requests = await _list_items_through_proxy(
+        monkeypatch, (), drop_params=drop_params, body={"extra_query": "limit=2"}
+    )
+
+    assert result.status_code == status_code, result.text
+    assert ("Invalid 'extra_query'" in result.text) is (status_code == 400)
+    assert [sorted(request.url.params.multi_items()) for request in upstream_requests] == forwarded
+
+
 @pytest.mark.asyncio
 async def test_a_malformed_input_items_query_under_drop_params_is_dropped_and_the_rest_forwarded(
     monkeypatch: pytest.MonkeyPatch,

@@ -15,7 +15,7 @@ _EMPTY_PAGE: Final = {"object": "list", "data": [], "has_more": False}
 
 
 def _list_items(
-    extra_query: Mapping[str, object], drop_params: bool, order: Literal["asc", "desc"] = "desc"
+    extra_query: object, drop_params: bool, order: Literal["asc", "desc"] = "desc"
 ) -> tuple[tuple[tuple[str, str], ...], int]:
     with respx.mock() as mock_router:
         route: Final = mock_router.get(_ITEMS_URL).mock(return_value=httpx.Response(200, json=_EMPTY_PAGE))
@@ -50,6 +50,12 @@ def test_sdk_extra_query_under_drop_params_falls_back_to_the_callers_own_argumen
     assert forwarded == ((("limit", "3"), ("order", "asc")), 1)
 
 
+
+@pytest.mark.parametrize("extra_query", ("limit=2", [("limit", 2)]))
+def test_sdk_a_non_object_extra_query_under_drop_params_asks_for_the_default_page(extra_query: object) -> None:
+    assert _list_items(extra_query, True) == ((("limit", "20"), ("order", "desc")), 1)
+
+
 @pytest.mark.parametrize(("limit", "order"), ((None, "desc"), (20, None)))
 def test_sdk_none_limit_or_order_asks_for_the_default_page(
     limit: int | None, order: Literal["asc", "desc"] | None
@@ -75,10 +81,12 @@ def test_sdk_none_limit_or_order_asks_for_the_default_page(
         ({"include[]": {"name": "x"}}, "include"),
         ({"limit": True}, "limit"),
         ({"limit": -1}, "limit"),
+        ("limit=2", "extra_query"),
+        ([("limit", 2)], "extra_query"),
     ),
 )
 def test_sdk_extra_query_with_a_malformed_value_is_a_400_before_any_upstream_call(
-    extra_query: Mapping[str, object], param: str
+    extra_query: object, param: str
 ) -> None:
     with respx.mock(assert_all_called=False) as mock_router:
         route: Final = mock_router.get(_ITEMS_URL).mock(return_value=httpx.Response(200, json=_EMPTY_PAGE))

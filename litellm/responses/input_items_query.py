@@ -2,8 +2,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final, Literal
 
+from pydantic import TypeAdapter, ValidationError
+
 INPUT_ITEMS_QUERY_KEYS: Final = frozenset({"after", "before", "include", "include[]", "limit", "order"})
 _MAX_LIMIT_DIGITS: Final = len(str(2**63 - 1))
+_EXTRA_QUERY_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,7 +23,7 @@ DEFAULT_INPUT_ITEMS_QUERY: Final = InputItemsQuery(after=None, before=None, incl
 
 @dataclass(frozen=True, slots=True)
 class InvalidInputItemsQuery:
-    param: Literal["after", "before", "include", "limit", "order"]
+    param: Literal["after", "before", "extra_query", "include", "limit", "order"]
     message: str
 
 
@@ -115,3 +118,17 @@ def parse_input_items_query(
     if isinstance(order, InvalidInputItemsQuery):
         return order
     return InputItemsQuery(after=after, before=before, include=include, limit=limit, order=order)
+
+
+def parse_input_items_extra_query(
+    extra_query: object, defaults: InputItemsQuery, drop_malformed: bool
+) -> InputItemsQuery | InvalidInputItemsQuery:
+    if extra_query is None:
+        return defaults
+    try:
+        query: Final = _EXTRA_QUERY_ADAPTER.validate_python(extra_query)
+    except ValidationError:
+        if drop_malformed:
+            return defaults
+        return InvalidInputItemsQuery("extra_query", f"Invalid 'extra_query': expected an object, got {extra_query!r}")
+    return parse_input_items_query(query, defaults, drop_malformed)
