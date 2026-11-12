@@ -24,7 +24,7 @@ jobs:
           persist-credentials: false
 
       - name: Build the dashboard stage
-        run: docker build --target ui-builder -f Dockerfile .
+        run: docker build --target ui-builder -f litellm/deploy/docker/Dockerfile .
 
   core-checks:
     name: py${{ matrix.python-version }}
@@ -229,7 +229,7 @@ jobs:
             "prisma==0.11.0" \
             "openai==2.24.0"
           export PATH="/tmp/litellm-pip/bin:$PATH"
-          /tmp/litellm-pip/bin/prisma generate --schema=schema.prisma
+          /tmp/litellm-pip/bin/prisma generate --schema=litellm/schema.prisma
 
       - name: Start the fake OpenAI endpoint
         run: |

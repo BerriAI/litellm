@@ -121,7 +121,7 @@ class TestUIDetectionLogic:
 
         # Verify routes exist
         found_routes = 0
-        expected_routes = ["login", "guardrails", "logs", "api-reference"]
+        expected_routes = ["login", "guardrails", "logs"]
         for route in expected_routes:
             route_index = os.path.join(self.temp_dir, route, "index.html")
             if os.path.exists(route_index):

@@ -1,0 +1,3 @@
+{{- if and (include "litellm.gateway.render" .) .Values.gateway.serviceMonitor.enabled }}
+{{- include "litellm.workload.serviceMonitor" . }}
+{{- end }}
