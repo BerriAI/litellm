@@ -12232,26 +12232,23 @@ class ProxyStartupEvent:
             verbose_proxy_logger.debug("Key rotation disabled (set LITELLM_KEY_ROTATION_ENABLED=true to enable)")
 
         if premium_user is True and prisma_client is not None:
-            if TYPE_CHECKING:
-                from litellm.enterprise.litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
-                    BaseEmailLogger,
-                )
-            else:
-                from litellm_enterprise.enterprise_callbacks.send_emails.base_email import BaseEmailLogger
-
             from litellm.constants import LITELLM_KEY_EXPIRY_ALERT_CHECK_INTERVAL_SECONDS
-            from litellm.proxy.common_utils.key_expiry_alert_manager import KeyExpiryAlertManager
+            from litellm.proxy.common_utils.key_expiry_alert_manager import (
+                KeyExpiryAlertManager,
+                KeyExpiryEmailLogger,
+                key_expiry_email_logger_type,
+            )
 
             expiry_email_loggers: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(
-                callback_type=BaseEmailLogger
+                callback_type=key_expiry_email_logger_type()
             )
             expiry_alerting_config: Final = _GENERAL_SETTINGS_VIEW.validate_python(general_settings).get("alerting")
             if expiry_email_loggers or "email" in (as_object_list(expiry_alerting_config) or ()):
                 expiry_email_logger: Final = next(
-                    (logger for logger in expiry_email_loggers if isinstance(logger, BaseEmailLogger)),
+                    (logger for logger in expiry_email_loggers if isinstance(logger, KeyExpiryEmailLogger)),
                     proxy_logging_obj.email_logging_instance,
                 )
-                if isinstance(expiry_email_logger, BaseEmailLogger):
+                if isinstance(expiry_email_logger, KeyExpiryEmailLogger):
                     expiry_alert_manager: Final = KeyExpiryAlertManager(
                         prisma_client=prisma_client,
                         cache=proxy_logging_obj.internal_usage_cache.dual_cache,

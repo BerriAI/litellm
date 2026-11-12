@@ -2,56 +2,101 @@ import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Final
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from prisma.models import LiteLLM_VerificationToken
+from litellm_enterprise.enterprise_callbacks.send_emails.base_email import BaseEmailLogger
 
 from litellm.caching.dual_cache import DualCache
+from litellm.constants import KEY_EXPIRY_ALERT_MAX_DAYS
 from litellm.proxy.common_utils.key_expiry_alert_manager import KeyExpiryAlertManager
-
-if TYPE_CHECKING:
-    from litellm.enterprise.litellm_enterprise.enterprise_callbacks.send_emails.base_email import BaseEmailLogger
-else:
-    from litellm_enterprise.enterprise_callbacks.send_emails.base_email import BaseEmailLogger
 
 NOW: Final = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
 
 
-def _key(**updates: object) -> LiteLLM_VerificationToken:
-    return LiteLLM_VerificationToken.model_validate(
-        {
-            "token": "secret-token-hash",
-            "user_id": "owner",
-            "key_alias": "build key",
-            "expires": NOW + timedelta(days=6),
-            "metadata": json.dumps({"key_expiry_alert_days": [7, 1]}),
-            "soft_budget_cooldown": False,
-            "spend": 0,
-            "total_spend": 0,
-            "models": [],
-            "aliases": "{}",
-            "config": "{}",
-            "permissions": "{}",
-            "allowed_cache_controls": [],
-            "allowed_routes": [],
-            "policies": [],
-            "access_group_ids": [],
-            "model_spend": "{}",
-            "model_max_budget": "{}",
-            "budget_fallbacks": "{}",
-            **updates,
-        }
+def _key(**updates: object) -> dict[str, object]:
+    return {
+        "token": "secret-token-hash",
+        "user_id": "owner",
+        "key_alias": "build key",
+        "expires": NOW + timedelta(days=6),
+        "metadata": json.dumps({"key_expiry_alert_days": [7, 1]}),
+        **updates,
+    }
+
+
+def _database(keys: tuple[dict[str, object], ...], email: str | None = "owner@example.com") -> SimpleNamespace:
+    return SimpleNamespace(
+        db=SimpleNamespace(
+            query_raw=AsyncMock(return_value=keys),
+            litellm_usertable=SimpleNamespace(
+                find_many=AsyncMock(return_value=(SimpleNamespace(user_id="owner", user_email=email),))
+            ),
+            litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=None)),
+        )
     )
 
 
-def _database(keys: tuple[LiteLLM_VerificationToken, ...], email: str | None = "owner@example.com") -> MagicMock:
-    db: Final = MagicMock()
-    db.db.litellm_verificationtoken.find_many = AsyncMock(return_value=keys)
-    db.db.litellm_usertable.find_unique = AsyncMock(return_value=SimpleNamespace(user_email=email))
-    db.db.litellm_config.find_unique = AsyncMock(return_value=None)
-    return db
+@pytest.mark.asyncio
+async def test_database_query_filters_opt_in_and_batches_distinct_owners() -> None:
+    db: Final = _database((_key(), _key(token="second-token"), _key(token="third-token", user_id="second-owner")))
+    db.db.litellm_usertable.find_many.return_value = (
+        SimpleNamespace(user_id="owner", user_email="owner@example.com"),
+        SimpleNamespace(user_id="second-owner", user_email="second@example.com"),
+    )
+    email: Final = MagicMock(send_key_expiring_email=AsyncMock())
+    await KeyExpiryAlertManager(db, DualCache(), email, lambda: NOW).process_alerts()
+    db.db.query_raw.assert_awaited_once()
+    query, start, end = db.db.query_raw.call_args.args
+    assert "SELECT token, key_alias, key_name, user_id, expires, metadata" in query
+    assert "metadata ? 'key_expiry_alert_days'" in query
+    assert "expires IS NOT NULL AND expires > $1 AND expires <= $2" in query
+    assert "user_id IS NOT NULL AND (blocked = FALSE OR blocked IS NULL)" in query
+    assert (start, end) == (NOW, NOW + timedelta(days=KEY_EXPIRY_ALERT_MAX_DAYS))
+    db.db.litellm_usertable.find_many.assert_awaited_once_with(where={"user_id": {"in": ["owner", "second-owner"]}})
+    assert tuple(call.kwargs["user_email"] for call in email.send_key_expiring_email.await_args_list) == (
+        "owner@example.com",
+        "owner@example.com",
+        "second@example.com",
+    )
+
+
+@pytest.mark.asyncio
+async def test_empty_query_does_not_fetch_owners_or_send() -> None:
+    db: Final = _database(())
+    email: Final = MagicMock(send_key_expiring_email=AsyncMock())
+    await KeyExpiryAlertManager(db, DualCache(), email, lambda: NOW).process_alerts()
+    db.db.litellm_usertable.find_many.assert_not_awaited()
+    email.send_key_expiring_email.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_missing_owner_does_not_send() -> None:
+    db: Final = _database((_key(),))
+    db.db.litellm_usertable.find_many.return_value = ()
+    email: Final = MagicMock(send_key_expiring_email=AsyncMock())
+    await KeyExpiryAlertManager(db, DualCache(), email, lambda: NOW).process_alerts()
+    email.send_key_expiring_email.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_bad_raw_row_does_not_block_valid_row() -> None:
+    db: Final = _database((_key(expires="invalid"), _key(token="second-token")))
+    email: Final = MagicMock(send_key_expiring_email=AsyncMock())
+    await KeyExpiryAlertManager(db, DualCache(), email, lambda: NOW).process_alerts()
+    assert email.send_key_expiring_email.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_query_failure_does_not_send_or_fetch_owners() -> None:
+    db: Final = _database((_key(),))
+    db.db.query_raw.side_effect = RuntimeError("database unavailable")
+    email: Final = MagicMock(send_key_expiring_email=AsyncMock())
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        await KeyExpiryAlertManager(db, DualCache(), email, lambda: NOW).process_alerts()
+    db.db.litellm_usertable.find_many.assert_not_awaited()
+    email.send_key_expiring_email.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -68,7 +113,7 @@ async def test_shared_claim_sends_once_per_due_threshold_and_new_expiry_rearms()
     await later.process_alerts()
     await later.process_alerts()
     assert email.send_key_expiring_email.await_count == 2
-    db.db.litellm_verificationtoken.find_many.return_value = (_key(expires=NOW + timedelta(days=7)),)
+    db.db.query_raw.return_value = (_key(expires=NOW + timedelta(days=7)),)
     await first.process_alerts()
     assert email.send_key_expiring_email.await_count == 3
     assert email.send_key_expiring_email.call_args.kwargs == {
@@ -100,7 +145,6 @@ async def test_only_smallest_due_threshold_is_claimed() -> None:
     "updates",
     [
         {"user_id": None},
-        {"blocked": True},
         {"expires": NOW},
         {"expires": NOW - timedelta(seconds=1)},
         {"metadata": "{}"},
@@ -126,7 +170,7 @@ async def test_no_email_and_disabled_event_do_not_send() -> None:
     db.db.litellm_config.find_unique.return_value = SimpleNamespace(
         param_value=json.dumps({"email_settings": {"Virtual Key Expiring": False}})
     )
-    db.db.litellm_usertable.find_unique.return_value = SimpleNamespace(user_email="owner@example.com")
+    db.db.litellm_usertable.find_many.return_value = (SimpleNamespace(user_id="owner", user_email="owner@example.com"),)
     await manager.process_alerts()
     assert email.send_key_expiring_email.await_count == 0
 
@@ -160,7 +204,7 @@ async def test_job_email_uses_abbreviated_name_and_never_includes_token() -> Non
     assert len(email.bodies) == 1
     assert "sk-...cret" in email.bodies[0]
     assert "2026-01-07 12:00:00 UTC" in email.bodies[0]
-    assert key.token not in email.bodies[0]
+    assert str(key["token"]) not in email.bodies[0]
     assert "sk-raw-secret" not in email.bodies[0]
 
 

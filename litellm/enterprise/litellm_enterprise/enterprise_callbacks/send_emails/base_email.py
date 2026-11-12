@@ -28,6 +28,7 @@ from litellm.integrations.email_templates.email_footer import EMAIL_FOOTER
 from litellm.integrations.email_templates.key_created_email import (
     KEY_CREATED_EMAIL_TEMPLATE,
 )
+from litellm.integrations.email_templates.key_expiring_email import KEY_EXPIRING_EMAIL_TEMPLATE
 from litellm.integrations.email_templates.key_rotated_email import (
     KEY_ROTATED_EMAIL_TEMPLATE,
 )
@@ -191,11 +192,16 @@ class BaseEmailLogger(CustomLogger):
             event_message="Virtual Key Expiring",
         )
         expiry_display: Final = expires.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        body: Final = (
-            f"<p>Your virtual key <strong>{html.escape(key_display)}</strong> expires at {expiry_display} "
-            f"({days_remaining} days remaining).</p>"
-            f'<p><a href="{html.escape(email_params.base_url, quote=True)}">Regenerate your key in the dashboard</a></p>'
-            f"{email_params.signature}"
+        body: Final = KEY_EXPIRING_EMAIL_TEMPLATE.format(
+            email_logo_url=html.escape(email_params.logo_url, quote=True),
+            recipient_email=html.escape(email_params.recipient_email),
+            key_display=html.escape(key_display),
+            expiry_display=expiry_display,
+            days_remaining=days_remaining,
+            day_label="day" if days_remaining == 1 else "days",
+            base_url=html.escape(email_params.base_url, quote=True),
+            email_support_contact=html.escape(email_params.support_contact),
+            email_footer=email_params.signature,
         )
         await self.send_email(
             from_email=self.DEFAULT_LITELLM_EMAIL,

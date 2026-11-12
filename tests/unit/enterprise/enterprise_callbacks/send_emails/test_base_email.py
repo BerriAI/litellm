@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timezone
 import unittest.mock as mock
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Final
+from typing import Final
 from unittest.mock import patch
 
 import pytest
@@ -1493,15 +1493,7 @@ async def test_key_created_email_is_refused_for_a_user_the_database_does_not_kno
     assert email_logger.recipients == []
 
 
-if TYPE_CHECKING:
-    from litellm.enterprise.litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
-        BaseEmailLogger as _ExpiryBaseEmailLogger,
-    )
-else:
-    _ExpiryBaseEmailLogger = BaseEmailLogger
-
-
-class _ExpiryEmailTransport(_ExpiryBaseEmailLogger):
+class _ExpiryEmailTransport(BaseEmailLogger):
     def __init__(self) -> None:
         super().__init__()
         self.deliveries: tuple[tuple[tuple[str, ...], str, str], ...] = ()
@@ -1511,11 +1503,14 @@ class _ExpiryEmailTransport(_ExpiryBaseEmailLogger):
 
 
 @pytest.mark.asyncio
-async def test_expiry_email_contains_alias_utc_expiry_and_dashboard_link_without_key() -> None:
+@pytest.mark.parametrize("days_remaining, remaining_text", [(1, "1 day remaining"), (7, "7 days remaining")])
+async def test_expiry_email_contains_alias_utc_expiry_and_dashboard_link_without_key(
+    days_remaining: int, remaining_text: str
+) -> None:
     logger: Final = _ExpiryEmailTransport()
     await logger.send_key_expiring_email(
         user_id="owner", user_email="owner@example.com", key_display="build <key>",
-        expires=datetime(2026, 1, 8, 12, tzinfo=timezone.utc), days_remaining=7,
+        expires=datetime(2026, 1, 8, 12, tzinfo=timezone.utc), days_remaining=days_remaining,
     )
     assert len(logger.deliveries) == 1
     recipients, subject, body = logger.deliveries[0]
@@ -1523,7 +1518,12 @@ async def test_expiry_email_contains_alias_utc_expiry_and_dashboard_link_without
     assert subject == "LiteLLM: Virtual Key Expiring"
     assert "build &lt;key&gt;" in body
     assert "2026-01-08 12:00:00 UTC" in body
-    assert "7 days remaining" in body
+    assert remaining_text in body
+    assert "1 days remaining" not in body
+    assert 'alt="LiteLLM Logo"' in body
+    assert "Hi owner@example.com," in body
+    assert "If you need assistance, please contact us at" in body
+    assert EMAIL_FOOTER in body
     assert "Regenerate your key in the dashboard" in body
     assert 'href="' in body
     assert "secret-token-hash" not in body
