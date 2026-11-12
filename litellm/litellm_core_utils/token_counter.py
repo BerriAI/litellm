@@ -31,6 +31,7 @@ from litellm.constants import (
     DEFAULT_IMAGE_HEIGHT,
     DEFAULT_IMAGE_TOKEN_COUNT,
     DEFAULT_IMAGE_WIDTH,
+    DEFAULT_MAX_RECURSE_DEPTH,
     MAX_IMAGE_URL_DOWNLOAD_SIZE_MB,
     MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES,
     MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES,
@@ -1794,12 +1795,16 @@ def _count_anthropic_content(
     use_default_image_token_count: bool,
     default_token_count: int | None,
     pdf_pricing: PdfPagePricing = "claude",
+    *,
+    _content_depth: int = 0,
 ) -> int:
     """
     Count tokens in Anthropic-specific content blocks (tool_use, tool_result, etc.).
 
     Uses readable server tool fields or the client tool TypedDict definitions.
     """
+    if _content_depth >= DEFAULT_MAX_RECURSE_DEPTH:
+        raise UnsupportedContentTypeError("Anthropic tool content nesting exceeds the token counter limit")
     content_type: Final = content.get("type")
     if content_type == "document":
         return _count_document_tokens(
@@ -1849,6 +1854,7 @@ def _count_anthropic_content(
                         use_default_image_token_count,
                         default_token_count,
                         pdf_pricing,
+                        _content_depth=_content_depth + 1,
                     )
                 else:
                     tokens += count_function(str(field_value))

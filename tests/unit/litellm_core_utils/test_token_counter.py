@@ -2451,6 +2451,23 @@ def test_token_counter_counts_anthropic_tool_readable_content(block: Mapping[str
     assert _count_content_list(len, [block], False, None) == len(expected)
 
 
+def test_token_counter_bounds_nested_server_results_and_honors_the_fallback() -> None:
+    from functools import reduce
+
+    from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+    from litellm.litellm_core_utils.token_counter import UnsupportedContentTypeError, _count_content_list
+
+    def wrap(content: Mapping[str, object], _: int) -> Mapping[str, object]:
+        return {"type": "web_fetch_result", "content": content}
+
+    leaf: Final[Mapping[str, object]] = {"type": "web_fetch_result", "url": "https://example.invalid"}
+    block: Final = reduce(wrap, range(DEFAULT_MAX_RECURSE_DEPTH + 1), leaf)
+
+    with pytest.raises(UnsupportedContentTypeError, match="nesting exceeds the token counter limit"):
+        _count_content_list(len, [block], False, None)
+    assert _count_content_list(len, [block], False, 123) == 123
+
+
 @pytest.mark.parametrize(
     "tool", ("web_search", "web_fetch", "code_execution", "bash_code_execution", "text_editor_code_execution")
 )
