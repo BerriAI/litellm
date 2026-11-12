@@ -18,6 +18,28 @@ The build compiles the proxy and dashboard from this checkout, which takes about
 
 Open http://localhost:4000/ui, sign in as `admin` with the `LITELLM_MASTER_KEY` from `docker/task_insights/.env`, then go to **Usage** and pick the **Task Insights** tab.
 
+### Local preview without building Rust
+
+This is a preview path, not a supported way to run this branch yet. `Dockerfile.light` skips the Rust compile by
+starting from a prebuilt LiteLLM image and copying in a checkout's Python package, migrations and a freshly built
+dashboard (with a 4 GiB Node heap, since the dashboard build runs out of memory under Node's default heap on an 8 GB
+Docker Desktop VM). The Python package calls into the image's compiled extension, so `BASE_IMAGE` must be built from
+the same commit as the checkout. No published image matches this branch today. On 2026-11-12 the newest
+`main-latest` (v1.110.0-rc.2) still lacked 13 extension symbols the branch imports, so use the full build above until
+the branch and its image line up.
+
+```bash
+docker build -f docker/task_insights/Dockerfile.light --build-arg BASE_IMAGE=<image built from this commit> -t litellm-task-insights:light .
+docker compose -f docker/task_insights/docker-compose.yml -f docker/task_insights/docker-compose.light.yml up -d --wait litellm
+docker compose -f docker/task_insights/docker-compose.yml -f docker/task_insights/docker-compose.light.yml run --rm task-insights-seed
+```
+
+The local preview shown on 2026-11-12 was not this branch byte for byte. It ran the feature ported onto
+07c72298956 (three files, `litellm/accounting/worker.py`, `litellm/repositories/accounting_delivery_repository.py`
+and `litellm/proxy/deps/repositories.py`, were adapted by hand to that older accounting worker) on top of
+`ghcr.io/berriai/litellm:main-latest@sha256:56310c2bd785547a370778a9dc8bee7fdb606c3f4f855b36fb4b4c85eb1329c5`. It
+served the seeded sample data only, and live discovery and bucketing were not verified on that runtime.
+
 ## Walkthrough
 
 1. The tab opens on the last 7 days with a **Sample data** badge. The cards show requests, ledger deliveries (retries make deliveries outnumber requests), sessions, task coverage and known spend. The figures never count a missing cost as zero, they say how many requests the spend rests on.

@@ -1,0 +1,15 @@
+# Runs the demo from the image Dockerfile.light builds instead of compiling LiteLLM. Use it together with
+# docker-compose.yml, see "Local preview without building Rust" in docker/task_insights/README.md.
+x-light: &light
+  image: litellm-task-insights:light
+  pull_policy: never
+  read_only: false
+
+services:
+  litellm:
+    <<: *light
+    build: !reset null
+  task-insights-seed:
+    <<: *light
+  task-insights-traffic:
+    <<: *light
