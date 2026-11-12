@@ -5,7 +5,7 @@ import re
 import threading
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from copy import deepcopy
-from itertools import pairwise
+from itertools import count, pairwise
 from typing import Final, List, Literal, cast, get_args
 from unittest.mock import MagicMock, Mock, patch
 
@@ -11284,6 +11284,154 @@ async def test_gemini_stream_keeps_text_and_usage_when_a_part_contains_a_unicode
     text: Final = "".join(c.choices[0].delta.content or "" for c in received if c.choices)
     assert text == "line one\u2028line two and three"
     assert (usage.prompt_tokens, usage.completion_tokens) == (10, 8)
+
+
+def _rejecting(status: int, body: bytes, charset: str) -> Callable[[httpx.Request], httpx.Response]:
+    return lambda request: httpx.Response(
+        status, content=body, headers={"content-type": f"application/json; charset={charset}", "retry-after": "7"}
+    )
+
+
+async def _open_gemini_stream(is_async: bool, upstream: Callable[[httpx.Request], httpx.Response]) -> None:
+    messages: Final = [{"role": "user", "content": "hi"}]
+    transport: Final = httpx.MockTransport(upstream)
+    if is_async:
+        stream: Final = await litellm.acompletion(
+            model="gemini/gemini-3.8-flash",
+            messages=messages,
+            stream=True,
+            api_key="fake-gemini-key",
+            client=AsyncHTTPHandler(transport=transport),
+        )
+        assert isinstance(stream, CustomStreamWrapper), stream
+        await stream.fetch_stream()
+        return
+    sync_stream: Final = litellm.completion(
+        model="gemini/gemini-3.8-flash",
+        messages=messages,
+        stream=True,
+        api_key="fake-gemini-key",
+        client=HTTPHandler(client=httpx.Client(transport=transport)),
+    )
+    assert isinstance(sync_stream, CustomStreamWrapper), sync_stream
+    sync_stream.fetch_sync_stream()
+
+
+@pytest.mark.parametrize("is_async", [pytest.param(True, id="async"), pytest.param(False, id="sync")])
+@pytest.mark.parametrize(
+    ("status", "charset", "error", "expected_error", "message_prefix"),
+    [
+        pytest.param(
+            400,
+            "utf-8",
+            {
+                "error": {
+                    "code": 400,
+                    "message": "The input token count (1200000) exceeds the maximum number of tokens allowed"
+                    " (1048576). Réduisez l'entrée.",
+                    "status": "INVALID_ARGUMENT",
+                }
+            },
+            litellm.ContextWindowExceededError,
+            "",
+            id="context-window",
+        ),
+        pytest.param(
+            503,
+            "utf-8",
+            {"error": {"code": 429, "message": "You've sent too many requests.", "status": "RESOURCE_EXHAUSTED"}},
+            litellm.RateLimitError,
+            "",
+            id="rate-limit-behind-a-503",
+        ),
+        pytest.param(
+            400,
+            "iso-8859-1",
+            {"error": {"code": 400, "message": "Requête refusée : paramètre invalide", "status": "INVALID_ARGUMENT"}},
+            litellm.BadRequestError,
+            "",
+            id="latin-1-body",
+        ),
+        pytest.param(
+            400,
+            "utf-8",
+            {
+                "error": {
+                    "code": 400,
+                    "message": "* GenerateContentRequest.tools[0].function_declarations[0].parameters.properties:"
+                    " should be non-empty for OBJECT type\n",
+                    "status": "INVALID_ARGUMENT",
+                }
+            },
+            litellm.BadRequestError,
+            "Received error from provider - ",
+            id="empty-tool-properties",
+        ),
+    ],
+)
+async def test_a_gemini_stream_that_fails_to_open_is_mapped_from_the_upstream_text_and_keeps_retry_after(
+    is_async: bool,
+    status: int,
+    charset: str,
+    error: Mapping[str, object],
+    expected_error: type[litellm.BadRequestError | litellm.RateLimitError],
+    message_prefix: str,
+) -> None:
+    body: Final = json.dumps(error, ensure_ascii=False, indent=2).encode(charset)
+    with pytest.raises(expected_error) as raised:
+        await _open_gemini_stream(is_async, _rejecting(status, body, charset))
+    assert type(raised.value) is expected_error, str(raised.value)
+    assert f"{message_prefix}{body.decode(charset)}" in str(raised.value), str(raised.value)
+    assert raised.value.litellm_response_headers["retry-after"] == "7"
+
+
+@pytest.mark.parametrize("is_async", [pytest.param(True, id="async"), pytest.param(False, id="sync")])
+@pytest.mark.parametrize(
+    ("charset", "encoding"),
+    [
+        pytest.param("utf-32", "utf-8", id="label-whose-codec-rejects-the-bytes"),
+        pytest.param("undefined", "utf-8", id="label-whose-codec-always-fails"),
+        pytest.param("base64", "utf-8", id="label-that-is-not-a-text-codec"),
+        pytest.param("undefined", "latin-1", id="label-and-bytes-both-wrong"),
+    ],
+)
+async def test_a_gemini_stream_rejection_with_a_wrong_charset_label_is_read_as_utf_8(
+    is_async: bool, charset: str, encoding: str
+) -> None:
+    body: Final = json.dumps(
+        {"error": {"code": 429, "message": "Ressource épuisée (quota).", "status": "RESOURCE_EXHAUSTED"}},
+        ensure_ascii=False,
+        indent=2,
+    ).encode(encoding)
+    with pytest.raises(litellm.RateLimitError) as raised:
+        await _open_gemini_stream(is_async, _rejecting(429, body, charset))
+    assert body.decode("utf-8", errors="replace") in str(raised.value), str(raised.value)
+    assert raised.value.litellm_response_headers["retry-after"] == "7"
+
+
+async def test_a_gemini_stream_rejection_with_an_unread_body_is_mapped_from_the_upstream_text() -> None:
+    body: Final = json.dumps(
+        {
+            "error": {
+                "code": 400,
+                "message": "The input token count (1200000) exceeds the maximum number of tokens allowed (1048576).",
+                "status": "INVALID_ARGUMENT",
+            }
+        },
+        indent=2,
+    ).encode()
+    attempts: Final = count()
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        if next(attempts) == 0:
+            raise httpx.ConnectError("connection reset by peer", request=request)
+        return httpx.Response(
+            400, stream=_BodyInChunks((body,)), headers={"content-type": "application/json; charset=UTF-8"}
+        )
+
+    with pytest.raises(litellm.ContextWindowExceededError) as raised:
+        await _open_gemini_stream(True, upstream)
+    assert body.decode() in str(raised.value), str(raised.value)
 
 
 @pytest.mark.parametrize("chunk_indices", [[0, 1], [2, 1, 0]])
