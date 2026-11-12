@@ -99,6 +99,10 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
         isAdmin={isAdmin}
         accessToken={accessToken}
         onPublishClick={onPublishSuccess}
+        onRestored={(restored) => {
+          setSelectedSkill({ ...selectedSkill, ...restored, enabled: restored.visibility === "public" });
+          onPublishSuccess?.();
+        }}
       />
     );
   }

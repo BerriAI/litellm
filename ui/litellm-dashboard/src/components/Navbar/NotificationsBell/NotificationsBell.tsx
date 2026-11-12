@@ -18,7 +18,11 @@ import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/cva.config";
 import { isNewerVersion } from "@/utils/versionUtils";
 import { AlertTriangle, ArrowUpRight, Bell } from "lucide-react";
-import DeprecationAlertItem from "@/components/ModelDeprecationAlerts/DeprecationAlertItem";
+import { useCurrentUser } from "@/app/(dashboard)/hooks/currentUser/useCurrentUser";
+import { metricValue, presentAlert, type AlertItem, type SavedAlert } from "@/components/Alerts/alertPresentation";
+import { useAlerts } from "@/components/Alerts/useAlerts";
+import { effectiveSessionRole, isProxyAdminTierRole } from "@/utils/roles";
+import { uiHref } from "@/utils/uiHref";
 import { type DeprecationAlert } from "@/components/ModelDeprecationAlerts/deprecationAlerts";
 import { useDeprecationAlerts } from "@/components/ModelDeprecationAlerts/useDeprecationAlerts";
 import { AlertStatus, effectiveAlertStatus } from "@/components/ModelDeprecationAlerts/migrationState";
@@ -115,6 +119,9 @@ const AnnouncementItem: React.FC<{ announcement: Announcement }> = ({ announceme
 
 interface NotificationsBellViewProps {
   deprecationAlerts?: readonly DeprecationAlert[];
+  performanceAlerts?: readonly SavedAlert[];
+  performanceError?: boolean;
+  deprecationError?: boolean;
   deploymentHealthLink?: React.ReactNode;
   currentVersion: string | null | undefined;
   latestRelease: LatestReleaseInfo | null | undefined;
@@ -125,21 +132,48 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
   latestRelease,
   deploymentHealthLink,
   deprecationAlerts,
+  performanceAlerts,
+  performanceError,
+  deprecationError,
 }) => {
   const { t } = useTranslation();
   const upgrade = upgradeAnnouncement(currentVersion, latestRelease);
   const announcements = upgrade ? [upgrade, autoRouterAnnouncement()] : [autoRouterAnnouncement()];
   const unreadCount = useUnreadAnnouncementCount(announcements.map((announcement) => announcement.readKey));
 
-  const openAlerts = (deprecationAlerts ?? []).filter((alert) => effectiveAlertStatus(alert) === AlertStatus.Open);
-  const openDeprecations = openAlerts.length;
-  let label =
+  const items: AlertItem[] = [
+    ...(deprecationAlerts ?? []).map((alert): AlertItem => ({ source: "deprecation", alert })),
+    ...(performanceAlerts ?? []).map((alert): AlertItem => ({ source: "performance", alert })),
+  ];
+  const openAlerts = items
+    .filter(
+      (item) =>
+        (item.source === "deprecation" ? effectiveAlertStatus(item.alert) : item.alert.status) === AlertStatus.Open,
+    )
+    .slice(0, 5)
+    .map((item) => {
+      const alert = presentAlert(item);
+      const description =
+        item.source === "performance" && "value" in item.alert.evidence
+          ? t("shell.notifications.bell.comparison", {
+              value: metricValue(item.alert.evidence.value, item.alert.evidence.unit),
+              baseline: metricValue(item.alert.evidence.baseline, item.alert.evidence.unit),
+            })
+          : alert.description;
+      const href =
+        item.source === "deprecation"
+          ? migrationHref(item.alert.usageModel)
+          : `${uiHref("alerts")}?alert=${encodeURIComponent(alert.id)}`;
+      return { id: `${item.source}:${alert.id}`, title: alert.title, description, href };
+    });
+  const hasAlerts = openAlerts.length > 0;
+  const hasError = performanceError || deprecationError;
+  const showAlerts = Boolean(deprecationAlerts || performanceAlerts || hasError);
+  const announcementLabel =
     unreadCount > 0
       ? t("shell.notifications.bell.triggerUnread", { unread: unreadCount })
       : t("shell.notifications.bell.trigger");
-  if (openDeprecations > 0) {
-    label = t("shell.notifications.bell.triggerDeprecations", { count: openDeprecations });
-  }
+  const label = hasAlerts ? t("shell.notifications.bell.triggerAlerts") : announcementLabel;
 
   return (
     <Popover>
@@ -148,13 +182,13 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
         aria-label={label}
       >
         <span className="relative inline-flex">
-          <Bell className={cn("size-4", openDeprecations > 0 && "text-amber-700")} aria-hidden />
-          {openDeprecations > 0 ? (
+          <Bell className={cn("size-4", hasAlerts && "text-amber-700")} aria-hidden />
+          {hasAlerts ? (
             <span className="absolute -top-2 -right-2 rounded-full bg-background p-px text-amber-600" aria-hidden>
               <AlertTriangle className="size-3" fill="currentColor" stroke="var(--background)" strokeWidth={1.5} />
             </span>
           ) : null}
-          {openDeprecations === 0 && unreadCount > 0 ? (
+          {!hasAlerts && unreadCount > 0 ? (
             <Badge className="absolute -top-0.5 -right-1 size-1.5 p-0" aria-hidden />
           ) : null}
         </span>
@@ -169,35 +203,42 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
         </PopoverTitle>
         <div className="max-h-[min(32rem,calc(100dvh-10rem))] overflow-y-auto">
           <div className="space-y-4 p-4">
-            {openAlerts.length > 0 && (
-              <>
-                <div>
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="text-sm font-semibold">{t("shell.notifications.bell.deprecationsTitle")}</p>
-                    <a className="text-xs text-primary hover:underline" href={migrationHref()}>
-                      {t("shell.notifications.bell.viewAllDeprecations", { total: openDeprecations })}
-                    </a>
-                  </div>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {t("shell.notifications.bell.deprecationsDescription")}
-                  </p>
+            {showAlerts && (
+              <section aria-label={t("alerts.unified.title")}>
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="text-sm font-semibold">{t("alerts.unified.title")}</h3>
+                  <a className="text-xs text-primary hover:underline" href={uiHref("alerts")}>
+                    {t("shell.notifications.bell.seeAll")}
+                  </a>
                 </div>
-                {openAlerts.slice(0, 3).map((alert) => (
-                  <Fragment key={alert.id}>
-                    <Separator />
-                    <DeprecationAlertItem alert={alert} />
-                  </Fragment>
-                ))}
+                <ul className="mt-2 divide-y divide-border">
+                  {openAlerts.map((alert) => (
+                    <li key={alert.id}>
+                      <a href={alert.href} className="-mx-2 block rounded-md px-2 py-3 hover:bg-accent">
+                        <p className="line-clamp-2 break-words text-sm font-medium">{alert.title}</p>
+                        <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">{alert.description}</p>
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+                {deprecationError && (
+                  <p className="mt-2 text-xs text-muted-foreground">{t("alerts.unified.deprecationsError")}</p>
+                )}
+                {performanceError && (
+                  <p className="mt-2 text-xs text-muted-foreground">{t("alerts.unified.performanceError")}</p>
+                )}
+                {!hasAlerts && !hasError && (
+                  <p className="mt-2 text-xs text-muted-foreground">{t("shell.notifications.bell.noOpenAlerts")}</p>
+                )}
+              </section>
+            )}
+            {showAlerts && (
+              <>
                 <Separator />
                 <p className="text-xs font-medium text-muted-foreground">
                   {t("shell.notifications.bell.announcementsHeading")}
                 </p>
               </>
-            )}
-            {deprecationAlerts && openAlerts.length === 0 && (
-              <a href={migrationHref()} className="text-sm font-medium text-primary hover:underline">
-                {t("shell.notifications.bell.viewDeprecations")}
-              </a>
             )}
 
             {announcements.map((announcement, index) => (
@@ -220,12 +261,20 @@ export const NotificationsBell: React.FC<{ accessToken: string | null; deploymen
 }) => {
   const { data: healthData } = useHealthReadinessDetails(accessToken);
   const { data: latestRelease } = useLatestReleaseInfo(accessToken);
-  const { data: deprecationAlerts } = useDeprecationAlerts(accessToken);
+  const { data: currentUser, isError: userError } = useCurrentUser(accessToken);
+  const authenticated = Boolean(accessToken && currentUser?.user_id && !userError);
+  const allowed = authenticated && isProxyAdminTierRole(currentUser?.user_role ?? "");
+  const scope = JSON.stringify([currentUser?.user_id, effectiveSessionRole(currentUser?.user_role ?? undefined)]);
+  const performance = useAlerts(scope, allowed, AlertStatus.Open, "all");
+  const deprecations = useDeprecationAlerts(accessToken);
   return (
     <NotificationsBellView
       currentVersion={healthData?.litellm_version}
       latestRelease={latestRelease}
-      deprecationAlerts={deprecationAlerts}
+      deprecationAlerts={deprecations.isError ? undefined : deprecations.data}
+      performanceAlerts={allowed && !performance.isError ? performance.data?.pages[0]?.data : undefined}
+      performanceError={allowed && performance.isError}
+      deprecationError={deprecations.isError}
       deploymentHealthLink={deploymentHealthLink}
     />
   );

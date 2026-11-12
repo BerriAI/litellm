@@ -32,7 +32,10 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   }),
 }));
 
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock("next/navigation", () => ({
+  usePathname: () => "/ui/",
+  useRouter: () => ({ push: vi.fn() }),
+}));
 
 vi.mock("@/components/networking", () => ({
   serverRootPath: "",

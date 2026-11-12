@@ -67,8 +67,10 @@ function CatalogSkillDetail({
   onEdit,
 }: CatalogSkillDetailProps) {
   const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const detailKey = [...queryScope, "detail", skill.id, skill.name];
   const detail = useQuery({
-    queryKey: [...queryScope, "detail", skill.id, skill.name],
+    queryKey: detailKey,
     queryFn: () => getSkillHubSkill(accessToken!, skill.name),
     enabled: Boolean(accessToken),
   });
@@ -87,6 +89,7 @@ function CatalogSkillDetail({
         onBack={onBack}
         accessToken={accessToken}
         isAdmin={isAdmin}
+        onRestored={(restored) => queryClient.setQueryData(detailKey, restored)}
         onEditClick={canWrite && detail.isSuccess && !detail.isFetching ? () => onEdit(detail.data) : undefined}
       />
     </>

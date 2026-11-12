@@ -28,6 +28,7 @@ from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import delete_cached_project_object
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.registry_read_through import model_router_reconciled_with_db
+from litellm.proxy.guardrails.guardrail_helpers import validate_guardrail_names
 from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN, TeamAccess, is_team_admin, is_team_member
 from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management.users.service import org_admin_org_ids
@@ -617,6 +618,13 @@ async def new_project(
                     "error": f"Only admins or team admins can create projects. Your role is {user_api_key_dict.user_role}"
                 },
             )
+        await validate_guardrail_names(
+            None,
+            data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+            None,
+            prisma_client,
+            license_first=False,
+        )
 
         quota_policy: Final = _project_model_quota_policy(general_settings_view())
         if quota_policy is not None:
@@ -851,6 +859,13 @@ async def update_project(
                     status_code=403,
                     detail={"error": "Cannot reassign project to a team you are not an admin of"},
                 )
+        await validate_guardrail_names(
+            None,
+            data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+            existing_project.metadata if isinstance(existing_project.metadata, dict) else None,
+            prisma_client,
+            license_first=False,
+        )
 
         # Validate project limits against team limits
         if target_team_obj is not None:
