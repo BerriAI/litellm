@@ -8,7 +8,8 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Final, Literal
 
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
+from redis.exceptions import RedisError
 
 import litellm
 from litellm import Router
@@ -367,7 +368,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             members: Final = await self.active_teams.touch(
                 model, user_api_key_dict.team_id, priority_class, self.v3_limiter.window_size
             )
-        except Exception as e:
+        except (RedisError, ValidationError) as e:
             verbose_proxy_logger.warning(
                 "Active team registry unavailable for %s, holding team %s to the class pool: %s",
                 model,

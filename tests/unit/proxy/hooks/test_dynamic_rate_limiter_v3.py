@@ -2238,7 +2238,9 @@ async def test_a_team_active_on_another_model_does_not_shrink_this_models_shares
 
 class _UnavailableRegistry:
     async def touch(self, model: str, team_id: str, priority: str, window: int) -> Mapping[str, str]:
-        raise ConnectionError("redis is down")
+        from redis.exceptions import ConnectionError as RedisConnectionError
+
+        raise RedisConnectionError("redis is down")
 
 
 @pytest.mark.asyncio
