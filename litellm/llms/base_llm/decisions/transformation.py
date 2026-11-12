@@ -224,6 +224,72 @@ def with_inlined_images(
             assert_never(decision_input)
 
 
+def instruction_roles(decision_input: DecisionsIRState | DecisionsIRMessages) -> tuple[str, ...]:
+    match decision_input:
+        case DecisionsIRState():
+            return ()
+        case DecisionsIRMessages():
+            return tuple(dict.fromkeys(message.role for message in decision_input.messages if message.role != "user"))
+        case _:
+            assert_never(decision_input)
+
+
+def without_instruction_messages(
+    decision_input: DecisionsIRState | DecisionsIRMessages,
+) -> DecisionsIRState | DecisionsIRMessages:
+    match decision_input:
+        case DecisionsIRState():
+            return decision_input
+        case DecisionsIRMessages():
+            return DecisionsIRMessages(
+                messages=tuple(message for message in decision_input.messages if message.role == "user")
+            )
+        case _:
+            assert_never(decision_input)
+
+
+def _content_parts(
+    message: OpenAIDecisionInputMessage,
+) -> tuple[OpenAIDecisionInputText | OpenAIDecisionInputImage, ...]:
+    return () if isinstance(message.content, str) else tuple(message.content)
+
+
+def _message_has_breakpoint(message: OpenAIDecisionInputMessage) -> bool:
+    return any(part.prompt_cache_breakpoint is not None for part in _content_parts(message))
+
+
+def has_prompt_cache_breakpoint(decision_input: DecisionsIRState | DecisionsIRMessages) -> bool:
+    match decision_input:
+        case DecisionsIRState():
+            return False
+        case DecisionsIRMessages():
+            return any(_message_has_breakpoint(message) for message in decision_input.messages)
+        case _:
+            assert_never(decision_input)
+
+
+def _message_without_breakpoints(message: OpenAIDecisionInputMessage) -> OpenAIDecisionInputMessage:
+    if isinstance(message.content, str):
+        return message
+    return message.model_copy(
+        update={"content": tuple(part.model_copy(update={"prompt_cache_breakpoint": None}) for part in message.content)}
+    )
+
+
+def without_prompt_cache_breakpoints(
+    decision_input: DecisionsIRState | DecisionsIRMessages,
+) -> DecisionsIRState | DecisionsIRMessages:
+    match decision_input:
+        case DecisionsIRState():
+            return decision_input
+        case DecisionsIRMessages():
+            return DecisionsIRMessages(
+                messages=tuple(_message_without_breakpoints(message) for message in decision_input.messages)
+            )
+        case _:
+            assert_never(decision_input)
+
+
 def _message_texts(message: OpenAIDecisionInputMessage) -> tuple[str, ...]:
     if isinstance(message.content, str):
         return (message.content,)
@@ -532,6 +598,8 @@ class BaseDecisionsConfig(ABC):
     api_base_env: tuple[str, ...] = ()
     api_key_required: bool = True
     supports_safety_identifier: bool = False
+    supports_prompt_cache: bool = False
+    supports_instruction_messages: bool = False
     supports_images: bool = False
     max_images: int | None = None
     max_image_bytes: int | None = None

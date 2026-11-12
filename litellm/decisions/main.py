@@ -10,6 +10,7 @@ from pydantic import TypeAdapter
 from litellm.decisions.call import (
     DecisionsAudioClips,
     DecisionsCall,
+    DecisionsPromptCacheOptions,
     DecisionsVideoClips,
     OpenAIDecisionQuestions,
     OpenAIDecisionRequestFields,
@@ -20,6 +21,7 @@ from litellm.decisions.call import (
     log_caller_request,
     prepare_call,
     reject_images_next_to_input,
+    reject_prompt_cache_next_to_state,
     send,
 )
 from litellm.types.decisions import DecisionsJSON, DecisionsResponse, OpenAIDecisionInput, OpenAIDecisionResponse
@@ -31,15 +33,17 @@ _OPENAI_QUESTIONS_ADAPTER: Final[TypeAdapter[OpenAIDecisionQuestions | None]] = 
     OpenAIDecisionQuestions | None
 )
 _SYSTEMONE_FIELDS: Final = frozenset({"state", "images", "assets"})
-_OPENAI_CACHE_FIELDS: Final = frozenset({"prompt_cache_key", "prompt_cache_options"})
 
 
 def _request_fields(
+    *,
     model: str,
     decision_input: OpenAIDecisionInput | None,
     questions: OpenAIDecisionQuestions | SystemOneQuestions | None,
     audio: DecisionsAudioClips | None,
     videos: DecisionsVideoClips | None,
+    prompt_cache_key: str | None,
+    prompt_cache_options: DecisionsPromptCacheOptions | None,
     kwargs: Mapping[str, object],
 ) -> RequestFields:
     if "state" not in kwargs:
@@ -49,9 +53,12 @@ def _request_fields(
             questions=_OPENAI_QUESTIONS_ADAPTER.validate_python(questions),
             audio=audio,
             videos=videos,
-            prompt_cache_key=kwargs.get("prompt_cache_key"),
-            prompt_cache_options=kwargs.get("prompt_cache_options"),
+            prompt_cache_key=prompt_cache_key,
+            prompt_cache_options=prompt_cache_options,
         )
+    reject_prompt_cache_next_to_state(
+        model=model, kwargs=kwargs, prompt_cache_key=prompt_cache_key, prompt_cache_options=prompt_cache_options
+    )
     warnings.warn(
         "litellm.decisions(state=...) is deprecated, call litellm.systemone for the System One request format",
         UserWarning,
@@ -75,6 +82,8 @@ def _prepare_decisions_call(
     safety_identifier: str | None,
     audio: DecisionsAudioClips | None,
     videos: DecisionsVideoClips | None,
+    prompt_cache_key: str | None,
+    prompt_cache_options: DecisionsPromptCacheOptions | None,
     api_key: str | None,
     api_base: str | None,
     timeout: float | httpx.Timeout | None,
@@ -89,12 +98,23 @@ def _prepare_decisions_call(
             "questions": questions,
             "audio": audio,
             "videos": videos,
-            **{key: kwargs[key] for key in _SYSTEMONE_FIELDS | _OPENAI_CACHE_FIELDS if key in kwargs},
+            "prompt_cache_key": prompt_cache_key,
+            "prompt_cache_options": prompt_cache_options,
+            **{key: kwargs[key] for key in _SYSTEMONE_FIELDS if key in kwargs},
         },
     )
     return prepare_call(
         model=model,
-        fields=_request_fields(model, decision_input, questions, audio, videos, kwargs),
+        fields=_request_fields(
+            model=model,
+            decision_input=decision_input,
+            questions=questions,
+            audio=audio,
+            videos=videos,
+            prompt_cache_key=prompt_cache_key,
+            prompt_cache_options=prompt_cache_options,
+            kwargs=kwargs,
+        ),
         safety_identifier=safety_identifier,
         api_key=api_key,
         api_base=api_base,
@@ -118,6 +138,8 @@ async def adecisions(
     extra_headers: Mapping[str, str] | None = None,
     audio: DecisionsAudioClips | None = None,
     videos: DecisionsVideoClips | None = None,
+    prompt_cache_key: str | None = None,
+    prompt_cache_options: DecisionsPromptCacheOptions | None = None,
     **kwargs: object,
 ) -> OpenAIDecisionResponse | DecisionsResponse:
     call: Final = await asyncio.to_thread(
@@ -129,6 +151,8 @@ async def adecisions(
             safety_identifier=safety_identifier,
             audio=audio,
             videos=videos,
+            prompt_cache_key=prompt_cache_key,
+            prompt_cache_options=prompt_cache_options,
             api_key=api_key,
             api_base=api_base,
             timeout=timeout,
@@ -153,6 +177,8 @@ def decisions(
     extra_headers: Mapping[str, str] | None = None,
     audio: DecisionsAudioClips | None = None,
     videos: DecisionsVideoClips | None = None,
+    prompt_cache_key: str | None = None,
+    prompt_cache_options: DecisionsPromptCacheOptions | None = None,
     **kwargs: object,
 ) -> OpenAIDecisionResponse | DecisionsResponse:
     call: Final = _prepare_decisions_call(
@@ -162,6 +188,8 @@ def decisions(
         safety_identifier=safety_identifier,
         audio=audio,
         videos=videos,
+        prompt_cache_key=prompt_cache_key,
+        prompt_cache_options=prompt_cache_options,
         api_key=api_key,
         api_base=api_base,
         timeout=timeout,

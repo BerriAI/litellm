@@ -26,15 +26,19 @@ from litellm.llms.base_llm.decisions.transformation import (
     BaseDecisionsConfig,
     DecisionsResponseValidationError,
     catalog_mode,
+    has_prompt_cache_breakpoint,
     image_media_type,
     image_param,
     input_images,
+    instruction_roles,
     ir_to_systemone_request,
     ir_to_systemone_response,
     remote_image_urls,
     systemone_request_to_ir,
     with_images_where,
     with_inlined_images,
+    without_instruction_messages,
+    without_prompt_cache_breakpoints,
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.decisions.transformation import ir_to_openai_response, openai_request_to_ir
@@ -59,6 +63,7 @@ from litellm.types.decisions import (
     DecisionsResponse,
     DecisionsVideo,
     OpenAIDecisionInput,
+    OpenAIDecisionPromptCacheOptions,
     OpenAIDecisionQuestion,
     OpenAIDecisionRequestBody,
     OpenAIDecisionResponse,
@@ -74,6 +79,7 @@ DecisionsImages: TypeAlias = Sequence[str | DecisionsBase64Image | Mapping[str, 
 DecisionsAssetEntries: TypeAlias = Mapping[str, DecisionsAsset | Mapping[str, object]]
 DecisionsAudioClips: TypeAlias = Sequence[DecisionsAudio | Mapping[str, object]]
 DecisionsVideoClips: TypeAlias = Sequence[DecisionsVideo | Mapping[str, object]]
+DecisionsPromptCacheOptions: TypeAlias = OpenAIDecisionPromptCacheOptions | Mapping[str, object]
 DecisionsRequestFormat: TypeAlias = DecisionsRequestBody | OpenAIDecisionRequestBody
 
 _SYSTEMONE_REQUEST_ADAPTER: Final[TypeAdapter[DecisionsRequestBody]] = TypeAdapter(DecisionsRequestBody)
@@ -181,8 +187,8 @@ class OpenAIDecisionRequestFields:
     questions: OpenAIDecisionQuestions | None
     audio: DecisionsAudioClips | None = None
     videos: DecisionsVideoClips | None = None
-    prompt_cache_key: object = None
-    prompt_cache_options: object = None
+    prompt_cache_key: str | None = None
+    prompt_cache_options: DecisionsPromptCacheOptions | None = None
 
     def validate(self, *, safety_identifier: str | None, drops_params: bool) -> OpenAIDecisionRequestBody:
         return _OPENAI_REQUEST_ADAPTER.validate_python(
@@ -411,6 +417,10 @@ def _unsupported_params(
     refuses_box_questions: Final = _has_box_question(ir_request.questions) and not support.box_questions
     refuses_audio: Final = bool(ir_request.audio) and not support.audio
     refuses_videos: Final = bool(ir_request.videos) and not support.videos
+    refused_prompt_cache_params: Final = (
+        () if provider_config.supports_prompt_cache else _prompt_cache_params(ir_request)
+    )
+    refused_roles: Final = () if provider_config.supports_instruction_messages else instruction_roles(ir_request.input)
     return (
         *(("safety_identifier",) if refuses_safety_identifier else ()),
         *(() if refused_image_param is None else (refused_image_param,)),
@@ -418,6 +428,16 @@ def _unsupported_params(
         *(("box questions",) if refuses_box_questions else ()),
         *(("audio",) if refuses_audio else ()),
         *(("videos",) if refuses_videos else ()),
+        *refused_prompt_cache_params,
+        *(f"{role} messages" for role in refused_roles),
+    )
+
+
+def _prompt_cache_params(ir_request: DecisionsIRRequest) -> tuple[str, ...]:
+    return (
+        *(("prompt_cache_key",) if ir_request.prompt_cache_key is not None else ()),
+        *(("prompt_cache_options",) if ir_request.prompt_cache_options is not None else ()),
+        *(("prompt_cache_breakpoint",) if has_prompt_cache_breakpoint(ir_request.input) else ()),
     )
 
 
@@ -429,6 +449,26 @@ def _is_not_box_question(question: DecisionsIRQuestion) -> bool:
     return not isinstance(question, DecisionsIRBoxQuestion)
 
 
+def _supported_input(
+    decision_input: DecisionsIRState | DecisionsIRMessages,
+    provider_config: BaseDecisionsConfig,
+    headers: Mapping[str, str],
+) -> DecisionsIRState | DecisionsIRMessages:
+    with_images: Final = (
+        decision_input
+        if provider_config.supports_images_in(decision_input, headers)
+        else with_images_where(decision_input, _no_image)
+    )
+    with_breakpoints: Final = (
+        with_images if provider_config.supports_prompt_cache else without_prompt_cache_breakpoints(with_images)
+    )
+    return (
+        with_breakpoints
+        if provider_config.supports_instruction_messages
+        else without_instruction_messages(with_breakpoints)
+    )
+
+
 def _without_unsupported_params(
     ir_request: DecisionsIRRequest,
     provider_config: BaseDecisionsConfig,
@@ -437,12 +477,10 @@ def _without_unsupported_params(
 ) -> DecisionsIRRequest:
     return replace(
         ir_request,
-        input=(
-            ir_request.input
-            if provider_config.supports_images_in(ir_request.input, headers)
-            else with_images_where(ir_request.input, _no_image)
-        ),
+        input=_supported_input(ir_request.input, provider_config, headers),
         safety_identifier=ir_request.safety_identifier if provider_config.supports_safety_identifier else None,
+        prompt_cache_key=ir_request.prompt_cache_key if provider_config.supports_prompt_cache else None,
+        prompt_cache_options=ir_request.prompt_cache_options if provider_config.supports_prompt_cache else None,
         assets=ir_request.assets if provider_config.supports_assets(headers) else MappingProxyType({}),
         questions=(
             ir_request.questions if support.box_questions else tuple(filter(_is_not_box_question, ir_request.questions))
@@ -944,6 +982,25 @@ def reject_images_next_to_input(*, model: str, kwargs: Mapping[str, object]) -> 
         message=(
             "images belongs to the System One format; with input (OpenAI format), "
             "send images as input_image content parts"
+        ),
+        model=model,
+        llm_provider="",
+    )
+
+
+def reject_prompt_cache_next_to_state(
+    *,
+    model: str,
+    kwargs: Mapping[str, object],
+    prompt_cache_key: str | None,
+    prompt_cache_options: DecisionsPromptCacheOptions | None,
+) -> None:
+    if (prompt_cache_key is None and prompt_cache_options is None) or _drops_params(kwargs):
+        return
+    raise litellm.BadRequestError(
+        message=(
+            "prompt_cache_key and prompt_cache_options belong to the OpenAI format; "
+            "send input instead of state to use them"
         ),
         model=model,
         llm_provider="",

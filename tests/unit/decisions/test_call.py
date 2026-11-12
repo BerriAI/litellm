@@ -66,68 +66,24 @@ def test_systemone_logs_every_request_field_the_caller_sent():
     assert set(logged) == {"state", "questions"}
 
 
-def test_openai_prompt_cache_fields_are_forwarded_and_logged():
+def test_prompt_cache_fields_are_logged_even_when_the_provider_refuses_them():
     logging_obj: Final = _logging_obj("adecisions")
-    decision_input: Final[Sequence[Mapping[str, object]]] = (
-        {
-            "type": "message",
-            "role": "developer",
-            "content": [
-                {
-                    "type": "input_text",
-                    "text": "Categories stay here.",
-                    "prompt_cache_breakpoint": {"mode": "explicit"},
-                }
-            ],
-        },
-        {"type": "message", "role": "user", "content": "Sim."},
-    )
 
-    call: Final = _prepare_decisions_call(
-        model="openai/gpt-6-luna",
-        decision_input=decision_input,
-        questions=[{"type": "predicate", "instructions": QUESTION_TEXT}],
-        safety_identifier=None,
-        api_key="sk-test",
-        api_base="https://example.invalid",
-        timeout=None,
-        custom_llm_provider=None,
-        extra_headers=None,
-        audio=None,
-        videos=None,
-        kwargs={
-            "litellm_logging_obj": logging_obj,
-            "prompt_cache_key": "mora-moderation",
-            "prompt_cache_options": {"mode": "explicit", "ttl": "30m"},
-        },
-    )
-    body: Final = call.provider_config.transform_decisions_request(
-        model=call.model, request=call.ir_request, custom_llm_provider=call.custom_llm_provider
-    )
+    with pytest.raises(litellm.UnsupportedParamsError):
+        _prepare_decisions_call(
+            **CONNECTION,
+            decision_input="My card was charged twice.",
+            questions=[{"type": "predicate", "instructions": QUESTION_TEXT}],
+            audio=None,
+            videos=None,
+            prompt_cache_key="billing-triage",
+            prompt_cache_options={"mode": "explicit", "ttl": "30m"},
+            kwargs={"litellm_logging_obj": logging_obj},
+        )
 
-    assert body["prompt_cache_key"] == "mora-moderation"
-    assert body["prompt_cache_options"] == {"mode": "explicit", "ttl": "30m"}
-    assert body["input"][0]["content"][0]["prompt_cache_breakpoint"] == {"mode": "explicit"}
     logged: Final = _logged_request(logging_obj)
-    assert logged["prompt_cache_key"] == "mora-moderation"
+    assert logged["prompt_cache_key"] == "billing-triage"
     assert logged["prompt_cache_options"] == {"mode": "explicit", "ttl": "30m"}
-
-
-def test_a_non_openai_decisions_provider_does_not_receive_prompt_cache_fields():
-    call: Final = _prepare_decisions_call(
-        **CONNECTION,
-        decision_input="My card was charged twice.",
-        questions=[{"type": "predicate", "instructions": QUESTION_TEXT}],
-        audio=None,
-        videos=None,
-        kwargs={"prompt_cache_key": "mora-moderation", "prompt_cache_options": {"mode": "explicit"}},
-    )
-    body: Final = call.provider_config.transform_decisions_request(
-        model=call.model, request=call.ir_request, custom_llm_provider=call.custom_llm_provider
-    )
-
-    assert "prompt_cache_key" not in body
-    assert "prompt_cache_options" not in body
 
 
 def test_decisions_logs_every_request_field_the_caller_sent():
@@ -139,6 +95,8 @@ def test_decisions_logs_every_request_field_the_caller_sent():
         questions=[{"type": "predicate", "instructions": QUESTION_TEXT}],
         audio=None,
         videos=None,
+        prompt_cache_key=None,
+        prompt_cache_options=None,
         kwargs={"litellm_logging_obj": logging_obj},
     )
 
@@ -177,6 +135,8 @@ def test_decisions_request_is_logged_even_when_its_questions_fail_validation():
             questions=[{"type": "not-a-question-type", "instructions": QUESTION_TEXT}],
             audio=None,
             videos=None,
+            prompt_cache_key=None,
+            prompt_cache_options=None,
             kwargs={"litellm_logging_obj": logging_obj},
         )
 
@@ -195,6 +155,8 @@ def test_non_utf8_bytes_in_the_request_are_logged_and_rejected_with_a_400():
             questions=[{"type": "predicate", "instructions": QUESTION_TEXT}],
             audio=None,
             videos=None,
+            prompt_cache_key=None,
+            prompt_cache_options=None,
             kwargs={"litellm_logging_obj": logging_obj},
         )
 
