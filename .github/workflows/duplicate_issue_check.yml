@@ -13,8 +13,10 @@ on:
       - .github/workflows/duplicate_issue_check.yml
       - .github/prompts/duplicate-issue-check.md
       - .github/prompts/duplicate-issue-check.schema.json
+      - .github/issue-labels.json
       - scripts/flag-duplicate-issue.ts
       - scripts/flag-duplicate-issue.test.ts
+      - scripts/issue-labels.ts
       - scripts/auto-close-duplicates.ts
 
 permissions: {}
@@ -125,7 +127,9 @@ jobs:
       - name: Checkout scripts
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
-          sparse-checkout: scripts
+          sparse-checkout: |
+            .github
+            scripts
           persist-credentials: false
 
       - name: Setup Bun

@@ -1,0 +1,85 @@
+name: Issue triage dispatch
+
+on:
+  issues:
+    types: [labeled, unlabeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Issue number to run the gate on manually."
+        required: true
+  pull_request:
+    paths:
+      - .github/workflows/issue_triage_dispatch.yml
+      - .github/issue-labels.json
+      - scripts/dispatch-issue-triage.ts
+      - scripts/dispatch-issue-triage.test.ts
+      - scripts/flag-duplicate-issue.ts
+      - scripts/issue-labels.ts
+      - scripts/auto-close-duplicates.ts
+
+permissions: {}
+
+# Runs for one issue queue instead of cancelling, so two label events land one after the other and the second sees the lock the first added
+concurrency:
+  group: issue-triage-dispatch-${{ github.event.issue.number || github.event.inputs.issue_number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  dispatch-issue-triage-tests:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.4.0"
+
+      - name: Test the gate
+        run: bun test scripts/dispatch-issue-triage.test.ts
+
+  dispatch-issue-triage:
+    # Only the labels the gate reads can change its answer; every other label event is dropped here without a checkout
+    if: >-
+      github.event_name != 'pull_request'
+      && github.repository == 'BerriAI/litellm'
+      && (
+        github.event_name == 'workflow_dispatch'
+        || (github.event.action == 'labeled' && (github.event.label.name == 'kind:bug' || github.event.label.name == 'dup:clear'))
+        || (github.event.action == 'unlabeled' && (startsWith(github.event.label.name, 'needs:') || startsWith(github.event.label.name, 'repro:') || github.event.label.name == 'potential-duplicate'))
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout scripts
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          sparse-checkout: |
+            .github
+            scripts
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          # Exact version, never latest: the next step holds an issues: write token
+          bun-version: "1.4.0"
+
+      # The issue is read through the API inside the script, so its text never reaches a shell
+      - name: Gate the issue and add the repro:running lock when it passes
+        run: bun run scripts/dispatch-issue-triage.ts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
+          DRY_RUN: ${{ vars.TRIAGE_DISPATCH_ENABLED != 'true' }}
