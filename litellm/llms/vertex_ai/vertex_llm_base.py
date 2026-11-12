@@ -449,8 +449,11 @@ class VertexBase:
     def _refresh_rejected(error: Exception) -> bool:
         from google.auth.exceptions import RefreshError
 
-        retryable: Final[object] = getattr(error, "retryable", False)
-        return (isinstance(error, RefreshError) and retryable is not True) or "Reauthentication is needed" in str(error)
+        match error:
+            case RefreshError(args=(str(), {"error": "invalid_grant"})):
+                return True
+            case _:
+                return "Reauthentication is needed" in str(error)
 
     def _acquire_async_refresh_lock(self, credential_cache_key: _VertexCredentialCacheKey) -> asyncio.Lock:
         """Increment the refcount and return the lock for ``credential_cache_key``.
@@ -911,7 +914,7 @@ class VertexBase:
         try:
             return self.get_access_token(
                 credentials=credentials,
-                project_id=project_id,
+                project_id=credential_cache_key[1],
                 _retry_reauth=True,
             )
         except Exception as retry_error:

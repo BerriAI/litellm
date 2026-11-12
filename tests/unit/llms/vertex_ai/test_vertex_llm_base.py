@@ -2651,12 +2651,16 @@ def test_callers_that_join_a_rejected_google_token_fetch_share_its_error_and_the
         assert len(oauth.calls) == 2
 
 
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("project", ["unit-project", None], ids=["explicit", "inferred"])
 @pytest.mark.asyncio
-async def test_async_callers_reload_a_rotated_key_file_when_google_rejects_the_old_key(tmp_path: pathlib.Path) -> None:
+async def test_callers_reload_a_rotated_key_file_once_when_google_rejects_the_old_key(
+    tmp_path: pathlib.Path, is_async: bool, project: str | None
+) -> None:
     vertex: Final = VertexBase()
     now: Final = datetime(2025, 1, 1)
     key_file: Final = tmp_path / "vertex-key.json"
-    key_file.write_text(_authorized_user_cache_credentials("old-key"))
+    key_file.write_text(_authorized_user_cache_credentials("old-key", quota_project="unit-project"))
     old_key_revoked: Final = Event()
 
     def token_response(request: requests.PreparedRequest) -> tuple[int, dict[str, str], str]:
@@ -2666,19 +2670,30 @@ async def test_async_callers_reload_a_rotated_key_file_when_google_rejects_the_o
             return 400, {}, json.dumps({"error": "invalid_grant", "error_description": "Token has been expired or revoked."})
         return 200, {}, json.dumps({"access_token": "old-token" if is_old_key else "new-token", "expires_in": 3600})
 
+    fetch: Final = vertex.get_access_token_async if is_async else partial(asyncio.to_thread, vertex.get_access_token)
     with patch("google.auth._helpers.utcnow", return_value=now) as clock, responses.RequestsMock() as oauth:
         oauth.add_callback(responses.POST, "https://oauth2.googleapis.com/token", callback=token_response)
-        assert await vertex.get_access_token_async(str(key_file), "unit-project") == ("old-token", "unit-project")
-        key_file.write_text(_authorized_user_cache_credentials("new-key"))
+        assert await fetch(str(key_file), project) == ("old-token", "unit-project")
+        key_file.write_text(_authorized_user_cache_credentials("new-key", quota_project="unit-project"))
         old_key_revoked.set()
         clock.return_value = now + timedelta(seconds=7200)
-        assert await vertex.get_access_token_async(str(key_file), "unit-project") == ("new-token", "unit-project")
+        assert await fetch(str(key_file), project) == ("new-token", "unit-project")
+        assert await fetch(str(key_file), project) == ("new-token", "unit-project")
+        assert len(oauth.calls) == 3
 
 
 @pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("outage_status", "outage_body"),
+    [
+        (503, json.dumps({"error": "server_error", "error_description": "Service unavailable."})),
+        (502, "<html>Bad Gateway</html>"),
+    ],
+    ids=["503", "502"],
+)
 @pytest.mark.asyncio
 async def test_a_google_outage_during_refresh_keeps_the_cached_key_instead_of_reloading_it(
-    tmp_path: pathlib.Path, is_async: bool
+    tmp_path: pathlib.Path, is_async: bool, outage_status: int, outage_body: str
 ) -> None:
     vertex: Final = VertexBase()
     now: Final = datetime(2025, 1, 1)
@@ -2688,7 +2703,7 @@ async def test_a_google_outage_during_refresh_keeps_the_cached_key_instead_of_re
 
     def token_response(request: requests.PreparedRequest) -> tuple[int, dict[str, str], str]:
         if google_down.is_set():
-            return 503, {}, json.dumps({"error": "server_error", "error_description": "Service unavailable."})
+            return outage_status, {}, outage_body
         return 200, {}, json.dumps({"access_token": "old-token", "expires_in": 3600})
 
     fetch: Final = vertex.get_access_token_async if is_async else partial(asyncio.to_thread, vertex.get_access_token)
@@ -2702,19 +2717,19 @@ async def test_a_google_outage_during_refresh_keeps_the_cached_key_instead_of_re
         key_file.write_text(_authorized_user_cache_credentials("new-key"))
         google_down.set()
         clock.return_value = now + timedelta(seconds=7200)
-        with pytest.raises(google.auth.exceptions.RefreshError, match="server_error"):
+        with pytest.raises(google.auth.exceptions.RefreshError):
             await fetch(str(key_file), "unit-project")
         assert not any("new-key" in str(call.request.body) for call in oauth.calls)
 
 
-def _authorized_user_cache_credentials(identity: str) -> str:
+def _authorized_user_cache_credentials(identity: str, quota_project: str | None = None) -> str:
     return json.dumps(
         {
             "type": "authorized_user",
             "client_id": identity,
             "client_secret": "synthetic-secret",
             "refresh_token": identity,
-            "quota_project_id": identity,
+            "quota_project_id": quota_project or identity,
         }
     )
 
