@@ -43,23 +43,14 @@ def web_search_requests_from_tool_usage(payload: object) -> int | None:
     return calls if calls > 0 else None
 
 
-def _model_map_function_calling(model: str, custom_llm_provider: str) -> bool | None:
-    from litellm.utils import get_model_info_helper
-
-    try:
-        value: Final = get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider).get(
-            "supports_function_calling"
-        )
-    except Exception:  # noqa: BLE001  # get_model_info_helper raises bare Exception for unmapped models
-        return None
-    return value if isinstance(value, bool) else None
-
-
 def _function_calling_disabled(model: str, provider: SimpleProviderConfig) -> bool:
-    from_model_map: Final = _model_map_function_calling(model=model, custom_llm_provider=provider.slug)
-    if from_model_map is not None:
-        return not from_model_map
-    return provider.provider_info.get("supports_function_calling") is False
+    from litellm.utils import is_explicitly_disabled_factory, supports_function_calling
+
+    if supports_function_calling(model=model, custom_llm_provider=provider.slug):
+        return False
+    return provider.provider_info.get("supports_function_calling") is False or is_explicitly_disabled_factory(
+        model=model, custom_llm_provider=provider.slug, key="supports_function_calling"
+    )
 
 
 def create_config_class(provider: SimpleProviderConfig):

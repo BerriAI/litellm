@@ -198,6 +198,27 @@ class TestToolParamsFollowTheModelMap:
         assert ("tools" in optional_params) is tools_forwarded
         assert ("tool_choice" in optional_params) is tools_forwarded
 
+    def test_unprefixed_model_row_overrides_a_provider_that_says_unsupported(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setitem(litellm.model_cost, "publicai/twin-model", {"litellm_provider": "publicai", "mode": "chat"})
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "twin-model",
+            {"litellm_provider": "openai", "mode": "chat", "supports_function_calling": True},
+        )
+        config: Final = create_config_class(_provider("publicai", provider_info={"supports_function_calling": False}))()
+
+        optional_params: Final = config.map_openai_params(
+            non_default_params={"tools": self._TOOLS, "tool_choice": "auto"},
+            optional_params={},
+            model="twin-model",
+            drop_params=True,
+        )
+
+        assert optional_params["tools"] == self._TOOLS
+        assert optional_params["tool_choice"] == "auto"
+
 
 class TestWebSearchRequestsFromToolUsage:
     def test_counts_only_paid_search_tools(self):

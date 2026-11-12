@@ -66,7 +66,8 @@ That's it! The provider will be automatically loaded and available.
     },
 
     // Optional: Capabilities every model of this provider has, used when a
-    // model has no cost map row or its row leaves the field unset
+    // model has no cost map row or its row leaves the field unset. Tool params
+    // reach every such model unless supports_function_calling is false here
     "provider_info": {
       "supports_function_calling": true
     }
