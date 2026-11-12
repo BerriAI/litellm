@@ -1,0 +1,162 @@
+from collections.abc import Callable, Mapping
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, TypeAlias
+
+import httpx
+
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig, TextToSpeechRequestData
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
+    get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # shared HTTP factory lacks typed params
+    get_httpx_client,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # shared HTTP factory is private
+)
+from litellm.llms.replicate.common_utils import (
+    ReplicateError,
+    async_wait_for_replicate_prediction,
+    replicate_api_base,
+    replicate_auth_headers,
+    replicate_output_urls,
+    replicate_prediction_failure,
+    replicate_prediction_request,
+    wait_for_replicate_prediction,
+)
+from litellm.types.utils import LlmProviders
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.llms.openai import HttpxBinaryResponseContent
+
+_SpeechParams: TypeAlias = dict[str, object]
+_SpeechHeaders: TypeAlias = dict[str, str]
+_VOICE_KEY_BY_OWNER: Final[Mapping[str, str]] = MappingProxyType(
+    {"minimax": "voice_id", "inworld": "voice_id", "qwen": "speaker"}
+)
+
+
+def _voice_key(model: str) -> str:
+    return _VOICE_KEY_BY_OWNER.get(model.split("/", 1)[0], "voice")
+
+
+def _get_replicate_async_httpx_client() -> AsyncHTTPHandler:
+    return get_async_httpx_client(llm_provider=LlmProviders.REPLICATE)
+
+
+class ReplicateTextToSpeechConfig(BaseTextToSpeechConfig):
+    def __init__(
+        self,
+        sync_client_factory: Callable[[], HTTPHandler] = get_httpx_client,
+        async_client_factory: Callable[[], AsyncHTTPHandler] = _get_replicate_async_httpx_client,
+    ) -> None:
+        super().__init__()
+        self._sync_client_factory: Final = sync_client_factory
+        self._async_client_factory: Final = async_client_factory
+
+    def get_supported_openai_params(
+        self, model: str
+    ) -> list[str]:  # mutable-ok: base class contract returns a plain list
+        return ["voice", "speed"]
+
+    def map_openai_params(
+        self,
+        model: str,
+        optional_params: Mapping[str, object],
+        voice: object = None,
+        drop_params: bool = False,
+        kwargs: Mapping[str, object] | None = None,
+    ) -> tuple[str | None, _SpeechParams]:
+        speed: Final = optional_params.get("speed")
+        return (
+            voice if isinstance(voice, str) and voice else None,
+            {"speed": speed} if isinstance(speed, (int, float)) and not isinstance(speed, bool) else {},
+        )
+
+    def validate_environment(
+        self,
+        headers: Mapping[str, str],
+        model: str,
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> _SpeechHeaders:
+        return {**replicate_auth_headers(headers, api_key), "Prefer": "wait"}
+
+    def get_complete_url(self, model: str, api_base: str | None, litellm_params: Mapping[str, object]) -> str:
+        return replicate_prediction_request(replicate_api_base(api_base), model, MappingProxyType({})).url
+
+    def transform_text_to_speech_request(
+        self,
+        model: str,
+        input: str,
+        voice: str | None,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, str],
+    ) -> TextToSpeechRequestData:
+        prediction_input: Final = {
+            "text": input,
+            **({_voice_key(model): voice} if voice else {}),
+            **optional_params,
+        }
+        return {"dict_body": dict(replicate_prediction_request("", model, prediction_input).body)}
+
+    @staticmethod
+    def _audio_url(prediction: Mapping[str, object], raw_response: httpx.Response) -> str:
+        failure: Final = replicate_prediction_failure(prediction)
+        if failure is not None:
+            raise ReplicateError(status_code=raw_response.status_code, message=failure, headers=raw_response.headers)
+        urls: Final = replicate_output_urls(prediction.get("output"))
+        if not urls:
+            raise ReplicateError(
+                status_code=raw_response.status_code,
+                message="Replicate prediction finished without audio output",
+                headers=raw_response.headers,
+            )
+        return urls[0]
+
+    @staticmethod
+    def _binary_response(audio_response: httpx.Response, raw_response: httpx.Response) -> "HttpxBinaryResponseContent":
+        from litellm.types.llms.openai import HttpxBinaryResponseContent
+
+        audio_response.raise_for_status()
+        return HttpxBinaryResponseContent(
+            httpx.Response(
+                status_code=200,
+                headers={
+                    "content-type": audio_response.headers.get("content-type", "application/octet-stream"),
+                    "content-length": str(len(audio_response.content)),
+                },
+                content=audio_response.content,
+                request=raw_response.request,
+            )
+        )
+
+    def transform_text_to_speech_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: "LiteLLMLoggingObj",
+    ) -> "HttpxBinaryResponseContent":
+        client: Final = self._sync_client_factory()
+        audio_url: Final = self._audio_url(wait_for_replicate_prediction(raw_response, client), raw_response)
+        return self._binary_response(client.get(audio_url), raw_response)  # pyright: ignore[reportUnknownMemberType]  # HTTP handler stubs are untyped
+
+    async def async_transform_text_to_speech_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: "LiteLLMLoggingObj",
+    ) -> "HttpxBinaryResponseContent":
+        client: Final = self._async_client_factory()
+        audio_url: Final = self._audio_url(
+            await async_wait_for_replicate_prediction(raw_response, client), raw_response
+        )
+        return self._binary_response(await client.get(audio_url), raw_response)  # pyright: ignore[reportUnknownMemberType]  # HTTP handler stubs are untyped
+
+    def get_error_class(
+        self,
+        error_message: str,
+        status_code: int,
+        headers: _SpeechHeaders | httpx.Headers,
+    ) -> BaseLLMException:
+        return ReplicateError(status_code=status_code, message=error_message, headers=headers)
