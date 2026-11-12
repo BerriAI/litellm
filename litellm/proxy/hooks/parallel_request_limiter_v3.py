@@ -167,19 +167,64 @@ class RateLimitedModel:
         return requested_limit if requested_limit is not None else limits.get(self.group)
 
 
-def team_model_soft_limit_covers(model_group: str) -> bool:
+def dynamic_rate_limiter_covers(model_group: str) -> bool:
     from litellm.proxy.hooks.dynamic_rate_limiter_v3 import PROXY_DynamicRateLimitHandlerV3
     from litellm.proxy.proxy_server import llm_router
 
     if llm_router is None:
         return False
     group: Final = llm_router.registry().group(model_group)
-    if group is None or group.tpm is None:
+    if group is None or (group.tpm is None and group.rpm is None):
         return False
     return any(
         callback == "dynamic_rate_limiter_v3" or isinstance(callback, PROXY_DynamicRateLimitHandlerV3)
         for callback in litellm.callbacks
     )
+
+
+def inherited_team_model_limit(
+    user_api_key_dict: UserAPIKeyAuth,
+    model: RateLimitedModel,
+    rate_limit_key: Literal["model_rpm_limit", "model_tpm_limit"],
+) -> int | None:
+    """The team's per-model limit a key inherits, or None when the key sets its own limit for that model."""
+    team_limit: Final = model.limit_in(
+        get_model_rate_limit_from_metadata(user_api_key_dict, "team_metadata", rate_limit_key)
+    )
+    if (
+        team_limit is None
+        or model.limit_in(get_key_own_model_rate_limit(user_api_key_dict, rate_limit_key)) is not None
+    ):
+        return None
+    return team_limit
+
+
+@dataclass(frozen=True, slots=True)
+class BorrowingTeamModelLimits:
+    """Inherited team per-model limits the dynamic rate limiter enforces at saturation instead of the regular limiter."""
+
+    tpm: int | None
+    rpm: int | None
+
+
+NO_BORROWING: Final = BorrowingTeamModelLimits(tpm=None, rpm=None)
+
+
+def borrowing_team_model_limits(user_api_key_dict: UserAPIKeyAuth, model: RateLimitedModel) -> BorrowingTeamModelLimits:
+    settings: Final = litellm.priority_reservation_settings
+    if (
+        settings is None
+        or not settings.team_model_limit_borrows_idle_capacity_from_other_teams
+        or user_api_key_dict.team_id is None
+    ):
+        return NO_BORROWING
+    limits: Final = BorrowingTeamModelLimits(
+        tpm=inherited_team_model_limit(user_api_key_dict, model, "model_tpm_limit"),
+        rpm=inherited_team_model_limit(user_api_key_dict, model, "model_rpm_limit"),
+    )
+    if limits == NO_BORROWING or not dynamic_rate_limiter_covers(model.group):
+        return NO_BORROWING
+    return limits
 
 
 def _resolve_media_models(router: "Router | None", model: str, team_id: str | None) -> tuple[str, ...]:
@@ -528,6 +573,7 @@ class RequestRateLimiterStash:
     otpm_reserved_window_identities: frozenset[ReservationWindowIdentity] = field(default_factory=frozenset)
     batch_enqueued_reservation: BatchEnqueuedTokenReservation | None = None
     batch_tpd_refund_ops: tuple[ReservationOperation, ...] = ()
+    borrowing_team_model_limit: RateLimitDescriptor | None = None
     reservation_released: bool = False
     io_reservation_released: bool = False
     tpm_limited_tags: frozenset[str] = field(default_factory=frozenset)
@@ -2567,13 +2613,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         model: Final = self._rate_limited_model(requested_model)
         if model is None:
             return
+        borrowing: Final = borrowing_team_model_limits(user_api_key_dict, model)
         model_specific_tpm_limit: Final = (
             None
-            if self._team_model_tpm_is_soft(user_api_key_dict, model)
+            if borrowing.tpm is not None
             else model.limit_in(get_key_model_tpm_limit(user_api_key_dict, model_name=model.group))
         )
-        model_specific_rpm_limit: Final = model.limit_in(
-            get_key_model_rpm_limit(user_api_key_dict, model_name=model.group)
+        model_specific_rpm_limit: Final = (
+            None
+            if borrowing.rpm is not None
+            else model.limit_in(get_key_model_rpm_limit(user_api_key_dict, model_name=model.group))
         )
         if model_specific_tpm_limit is None and model_specific_rpm_limit is None:
             return
@@ -3146,29 +3195,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     ) -> bool:
         return model.limit_in(get_key_own_model_rate_limit(user_api_key_dict, rate_limit_key)) is not None
 
-    def _team_model_tpm_is_soft(self, user_api_key_dict: UserAPIKeyAuth, model: RateLimitedModel) -> bool:
-        settings: Final = litellm.priority_reservation_settings
-        if settings is None or not settings.team_model_limit_mode == "soft":
-            return False
-        if self._key_owns_model_limit(user_api_key_dict, model, "model_tpm_limit"):
-            return False
-        team_limit: Final = model.limit_in(
-            get_model_rate_limit_from_metadata(user_api_key_dict, "team_metadata", "model_tpm_limit")
-        )
-        return team_limit is not None and team_model_soft_limit_covers(model.group)
-
     def _inherited_team_model_limit(
         self,
         user_api_key_dict: UserAPIKeyAuth,
         model: RateLimitedModel,
         rate_limit_key: Literal["model_rpm_limit", "model_tpm_limit"],
     ) -> int | None:
-        team_limit: Final = model.limit_in(
-            get_model_rate_limit_from_metadata(user_api_key_dict, "team_metadata", rate_limit_key)
-        )
-        if team_limit is None or self._key_owns_model_limit(user_api_key_dict, model, rate_limit_key):
-            return None
-        return team_limit
+        return inherited_team_model_limit(user_api_key_dict, model, rate_limit_key)
 
     def _key_owns_model_tpm_limit_from_request_metadata(
         self,
@@ -3194,11 +3227,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         model: Final = self._rate_limited_model(requested_model)
         if model is None:
             return
-        team_rpm_limit: Final = self._inherited_team_model_limit(user_api_key_dict, model, "model_rpm_limit")
+        borrowing: Final = borrowing_team_model_limits(user_api_key_dict, model)
+        team_rpm_limit: Final = (
+            None
+            if borrowing.rpm is not None
+            else inherited_team_model_limit(user_api_key_dict, model, "model_rpm_limit")
+        )
         team_tpm_limit: Final = (
             None
-            if self._team_model_tpm_is_soft(user_api_key_dict, model)
-            else self._inherited_team_model_limit(user_api_key_dict, model, "model_tpm_limit")
+            if borrowing.tpm is not None
+            else inherited_team_model_limit(user_api_key_dict, model, "model_tpm_limit")
         )
         if team_rpm_limit is None and team_tpm_limit is None:
             return

@@ -10113,20 +10113,37 @@ async def test_success_tpm_accounting_ignores_a_client_supplied_model_group_with
 
 
 @pytest.mark.parametrize(
-    "soft, second_request_passes",
+    "rate_limit_type, team_limits, data",
+    [
+        (
+            "tokens",
+            {"model_tpm_limit": {"test-model": 500}},
+            {"model": "test-model", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 200},
+        ),
+        ("requests", {"model_rpm_limit": {"test-model": 2}}, {"model": "test-model"}),
+    ],
+    ids=["model_tpm_limit", "model_rpm_limit"],
+)
+@pytest.mark.parametrize(
+    "borrows, third_request_passes",
     [(False, False), (True, True)],
-    ids=["hard_mode_keeps_team_model_tpm_a_ceiling", "soft_mode_leaves_team_model_tpm_to_the_dynamic_limiter"],
+    ids=["by_default_the_team_limit_stays_a_ceiling", "with_borrowing_on_the_dynamic_limiter_takes_over_the_limit"],
 )
 @pytest.mark.asyncio
-async def test_team_model_tpm_limit_stops_being_a_hard_cap_in_soft_mode(
-    monkeypatch: pytest.MonkeyPatch, soft: bool, second_request_passes: bool
+async def test_team_model_limits_stop_being_hard_caps_when_borrowing_is_on(
+    monkeypatch: pytest.MonkeyPatch,
+    borrows: bool,
+    third_request_passes: bool,
+    rate_limit_type: str,
+    team_limits: dict[str, dict[str, int]],
+    data: dict[str, object],
 ):
     from litellm.types.utils import PriorityReservationSettings
 
     monkeypatch.setattr(
         litellm,
         "priority_reservation_settings",
-        PriorityReservationSettings(team_model_limit_mode="soft" if soft else "hard"),
+        PriorityReservationSettings(team_model_limit_borrows_idle_capacity_from_other_teams=borrows),
     )
     monkeypatch.setattr(litellm, "callbacks", ["dynamic_rate_limiter_v3"])
     monkeypatch.setattr(
@@ -10143,66 +10160,21 @@ async def test_team_model_tpm_limit_stops_being_a_hard_cap_in_soft_mode(
     cache = DualCache()
     handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
     auth = UserAPIKeyAuth(
-        api_key=hash_token("sk-soft"),
+        api_key=hash_token("sk-borrow"),
         team_id="t",
-        team_metadata={"model_rpm_limit": {"test-model": 5}, "model_tpm_limit": {"test-model": 500}},
+        team_metadata=team_limits,
     )
 
     async def request():
-        await handler.async_pre_call_hook(
-            user_api_key_dict=auth,
-            cache=cache,
-            data={"model": "test-model", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 300},
-            call_type="acompletion",
-        )
+        await handler.async_pre_call_hook(user_api_key_dict=auth, cache=cache, data=dict(data), call_type="acompletion")
 
     await request()
-    if second_request_passes:
+    await request()
+    if third_request_passes:
         await request()
         return
     with pytest.raises(HTTPException) as exc:
         await request()
     assert exc.value.status_code == 429
     assert exc.value.headers is not None
-    assert exc.value.headers["rate_limit_type"] == "tokens"
-
-
-@pytest.mark.asyncio
-async def test_team_model_rpm_limit_stays_a_hard_cap_in_soft_mode(monkeypatch: pytest.MonkeyPatch):
-    from litellm.types.utils import PriorityReservationSettings
-
-    monkeypatch.setattr(
-        litellm, "priority_reservation_settings", PriorityReservationSettings(team_model_limit_mode="soft")
-    )
-    monkeypatch.setattr(litellm, "callbacks", ["dynamic_rate_limiter_v3"])
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server.llm_router",
-        Router(
-            model_list=[
-                {
-                    "model_name": "test-model",
-                    "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "k", "api_base": "b", "tpm": 1000},
-                }
-            ]
-        ),
-    )
-    cache = DualCache()
-    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
-    auth = UserAPIKeyAuth(
-        api_key=hash_token("sk-soft-rpm"),
-        team_id="t",
-        team_metadata={"model_rpm_limit": {"test-model": 2}, "model_tpm_limit": {"test-model": 500}},
-    )
-
-    async def request():
-        await handler.async_pre_call_hook(
-            user_api_key_dict=auth, cache=cache, data={"model": "test-model"}, call_type="acompletion"
-        )
-
-    await request()
-    await request()
-    with pytest.raises(HTTPException) as exc:
-        await request()
-    assert exc.value.status_code == 429
-    assert exc.value.headers is not None
-    assert exc.value.headers["rate_limit_type"] == "requests"
+    assert exc.value.headers["rate_limit_type"] == rate_limit_type
