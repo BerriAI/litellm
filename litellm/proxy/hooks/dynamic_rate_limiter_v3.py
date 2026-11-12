@@ -32,7 +32,9 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (  # noqa: F401  # l
     RateLimitDescriptorRateLimitObject,
     RateLimitedModel,
     RateLimitResponse,
+    RateLimitStatus,
     _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _socket_turn_tpm_windows,  # pyright: ignore[reportPrivateUsage]  # same per-turn TPM window the regular limiter checks
     borrowing_team_model_limits,
     claim_request_stash_for_data,
     get_or_create_request_stash,
@@ -409,6 +411,67 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             },
         )
 
+    def _team_limit_error(
+        self,
+        model: str,
+        status: RateLimitStatus,
+        saturation: float,
+        priority: str | None,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> ProxyRateLimitError:
+        resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(model)
+        return ProxyRateLimitError(
+            detail={
+                "error": f"Team {_team_limit_name(status['rate_limit_type'])} reached for {model} "
+                "and the model is saturated, so there is no idle capacity to borrow. "
+                f"Team: {user_api_key_dict.team_id}, "
+                f"Rate limit type: {status['rate_limit_type']}, "
+                f"Team {_team_limit_name(status['rate_limit_type'])}: {status['current_limit']}, "
+                f"Remaining: {status['limit_remaining']}, "
+                f"Model saturation: {saturation:.1%}"
+            },
+            headers={
+                "retry-after": str(self.v3_limiter.window_size),
+                "rate_limit_type": str(status["rate_limit_type"]),
+                "rate_limited_by": TEAM_MODEL_LIMIT_AT_SATURATION,
+                "x-litellm-priority": priority or "default",
+                "x-litellm-saturation": f"{saturation:.2%}",
+            },
+            rate_limit_type=map_v3_rate_limit_type(status["rate_limit_type"]),
+            model=resolved_model,
+            llm_provider=llm_provider,
+        )
+
+    async def enforce_token_limits_for_frame(
+        self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None
+    ) -> None:
+        """Hold a Responses WebSocket turn to the team's share once the model saturates, like the regular limiter does."""
+        if requested_model is None:
+            return
+        team_limit_descriptor: Final = self._create_borrowing_team_model_limit_descriptor(
+            model=requested_model, user_api_key_dict=user_api_key_dict
+        )
+        model_group_info: Final = self.llm_router.registry().group(requested_model)
+        if team_limit_descriptor is None or model_group_info is None:
+            return
+        saturation: Final = await self._check_model_saturation(requested_model, model_group_info)
+        if saturation < _get_priority_settings().saturation_threshold:
+            return
+        tpm_windows: Final = _socket_turn_tpm_windows((team_limit_descriptor,))
+        response: Final = await self.v3_limiter.should_rate_limit(
+            tpm_windows, parent_otel_span=user_api_key_dict.parent_otel_span, read_only=True, skip_parallel_check=True
+        )
+        over_limit: Final = next((s for s in response["statuses"] if s["code"] == "OVER_LIMIT"), None)
+        if over_limit is None:
+            return
+        raise self._team_limit_error(
+            requested_model,
+            over_limit,
+            saturation,
+            self._get_priority_from_user_api_key_dict(user_api_key_dict),
+            user_api_key_dict,
+        )
+
     def _create_model_tracking_descriptor(
         self,
         model: str,
@@ -582,27 +645,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                     )
 
                 if descriptor_key == TEAM_MODEL_LIMIT_AT_SATURATION:
-                    raise ProxyRateLimitError(
-                        detail={
-                            "error": f"Team {_team_limit_name(status['rate_limit_type'])} reached for {model} "
-                            "and the model is saturated, so there is no idle capacity to borrow. "
-                            f"Team: {user_api_key_dict.team_id}, "
-                            f"Rate limit type: {status['rate_limit_type']}, "
-                            f"Team {_team_limit_name(status['rate_limit_type'])}: {status['current_limit']}, "
-                            f"Remaining: {status['limit_remaining']}, "
-                            f"Model saturation: {saturation:.1%}"
-                        },
-                        headers={
-                            "retry-after": str(self.v3_limiter.window_size),
-                            "rate_limit_type": str(status["rate_limit_type"]),
-                            "rate_limited_by": descriptor_key,
-                            "x-litellm-priority": priority or "default",
-                            "x-litellm-saturation": f"{saturation:.2%}",
-                        },
-                        rate_limit_type=map_v3_rate_limit_type(status["rate_limit_type"]),
-                        model=resolved_model,
-                        llm_provider=llm_provider,
-                    )
+                    raise self._team_limit_error(model, status, saturation, priority, user_api_key_dict)
 
             # Fail-closed guard: overall_code says OVER_LIMIT but no status
             # matched a descriptor key we know how to translate into a 429.

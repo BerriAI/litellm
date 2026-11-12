@@ -2064,3 +2064,19 @@ async def test_an_alias_request_counts_against_the_same_team_share_as_its_target
     with pytest.raises(ProxyRateLimitError) as exc:
         await _check(handler, _team_key(), saturation=0.5)
     _held_to_team_limit(exc.value, "tokens", "model_tpm_limit")
+
+
+@pytest.mark.asyncio
+async def test_a_websocket_turn_is_held_to_the_team_limit_once_the_model_saturates(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.1)
+    await _admit_then_settle(handler, _team_key(), 150)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await handler.enforce_token_limits_for_frame(user_api_key_dict=_team_key(), requested_model="shared-model")
+    _held_to_team_limit(exc.value, "tokens", "model_tpm_limit")
+
+
+@pytest.mark.asyncio
+async def test_a_websocket_turn_still_borrows_while_the_model_is_idle(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.5)
+    await _admit_then_settle(handler, _team_key(), 150)
+    await handler.enforce_token_limits_for_frame(user_api_key_dict=_team_key(), requested_model="shared-model")
