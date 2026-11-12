@@ -64,6 +64,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     select_cost_metric_for_model,
 )
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import response_ms_since_logging_start
+from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.llms.anthropic.cost_calculation import (
     cost_per_token as anthropic_cost_per_token,
 )
@@ -964,6 +965,19 @@ def _bedrock_registration_has_prices(entry: Mapping[str, object]) -> bool:
     )
 
 
+def _bedrock_cost_registration(model: str | None) -> tuple[str, Mapping[str, object]] | None:
+    if model is None:
+        return None
+    return next(
+        (
+            (key, entry)
+            for key, entry in runtime_model_cost_registrations(model, "bedrock")
+            if _bedrock_registration_has_prices(entry)
+        ),
+        None,
+    )
+
+
 def _bedrock_pricing_info(
     model: str | None,
     invoked_model_id: str | None,
@@ -972,14 +986,7 @@ def _bedrock_pricing_info(
 ) -> ModelInfo | None:
     if explicit_pricing or custom_llm_provider != "bedrock" or not model:
         return None
-    registration: Final = next(
-        (
-            (key, entry)
-            for key, entry in runtime_model_cost_registrations(model, "bedrock")
-            if _bedrock_registration_has_prices(entry)
-        ),
-        None,
-    )
+    registration: Final = _bedrock_cost_registration(model)
     profile: Final = _cost_map_model_info(invoked_model_id, "bedrock") if invoked_model_id else None
     if profile is None or not _declares_rates(profile):
         return _cost_map_model_info(registration[0], None) if registration is not None else None
@@ -1659,6 +1666,14 @@ def _response_time_ms_for_cost(
     return litellm_logging_obj.get_response_ms()
 
 
+def _model_is_none_error(completion_response_text: str, litellm_logging_obj: LitellmLoggingObject | None) -> ValueError:
+    message: Final = "Model is None and does not exist in passed completion_response."
+    model_call_details: Final = {} if litellm_logging_obj is None else litellm_logging_obj.model_call_details
+    if should_redact_message_logging(model_call_details) or model_call_details.get("query_image") is not None:
+        return ValueError(message)
+    return ValueError(f"{message} Passed completion_response={completion_response_text}, model=None")
+
+
 def _breakdown_total(litellm_logging_obj: LitellmLoggingObject | None) -> float | None:
     breakdown: Final = None if litellm_logging_obj is None else litellm_logging_obj.cost_breakdown
     total: Final[object] = None if breakdown is None else breakdown.get("total_cost")
@@ -2007,9 +2022,7 @@ def completion_cost(
 
                 else:
                     if model is None:
-                        raise ValueError(
-                            f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
-                        )
+                        raise _model_is_none_error(f"{completion_response}", litellm_logging_obj)
                     if len(messages) > 0:
                         prompt_tokens = token_counter(model=model, messages=messages)
                     elif len(prompt) > 0:
@@ -2023,9 +2036,7 @@ def completion_cost(
                     return A2ACostCalculator.calculate_a2a_cost(litellm_logging_obj=litellm_logging_obj)
 
                 if model is None:
-                    raise ValueError(
-                        f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
-                    )
+                    raise _model_is_none_error(f"{completion_response}", litellm_logging_obj)
                 if custom_llm_provider is None:
                     try:
                         model, custom_llm_provider, _, _ = litellm.get_llm_provider(
@@ -2270,9 +2281,7 @@ def completion_cost(
                     return get_replicate_completion_pricing(completion_response, response_time_ms)
 
                 if model is None:
-                    raise ValueError(
-                        f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
-                    )
+                    raise _model_is_none_error(f"{completion_response}", litellm_logging_obj)
 
                 if custom_llm_provider is not None and custom_llm_provider == "vertex_ai":
                     # Calculate the prompt characters + response characters
@@ -2770,7 +2779,14 @@ def pricing_entry_for_cost_calc(
         custom_pricing is True or base_model is not None,
     )
     if bedrock_model_info is not None:
-        return bedrock_model_info["key"], bedrock_model_info
+        key: Final = bedrock_model_info["key"]
+        declared_pricing: Final = declared_cost_map_pricing(key, model or key, custom_llm_provider)
+        registration: Final = _bedrock_cost_registration(model)
+        declared_keys: Final = frozenset(declared_pricing) | (
+            frozenset(registration[1]) if registration is not None else frozenset[str]()
+        )
+        selected_entry: Final[Mapping[str, object]] = bedrock_model_info
+        return key, MappingProxyType({name: value for name, value in selected_entry.items() if name in declared_keys})
     candidates: Final = (selected_model, _get_response_model(completion_response), model)
     resolved: Final = next(
         (info for info in (_cost_map_model_info(name, custom_llm_provider) for name in candidates if name) if info),
@@ -2778,7 +2794,7 @@ def pricing_entry_for_cost_calc(
     )
     if resolved is None:
         return None
-    return resolved["key"], _raw_cost_map_entry(resolved["key"]) or resolved
+    return resolved["key"], declared_cost_map_pricing(resolved["key"], model or resolved["key"], custom_llm_provider)
 
 
 def ocr_cost(

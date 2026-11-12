@@ -37,10 +37,12 @@ This module provides a single proxy-side error class that:
 
 import json
 from collections.abc import Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final
 
 from fastapi import HTTPException
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import RateLimitError, RateLimitErrorCategory, RateLimitType
@@ -71,6 +73,94 @@ def per_model_rate_limits_disable_fallbacks(general_settings: Mapping[str, objec
             raw_value,
         )
         return False
+
+
+RATE_LIMIT_FALLBACK_METADATA_KEY: Final = "rate_limit_fallback"
+RATE_LIMIT_FALLBACK_REASON_HEADER: Final = "x-litellm-fallback-reason"
+ATTEMPTED_FALLBACKS_HEADER: Final = "x-litellm-attempted-fallbacks"
+
+
+@dataclass(frozen=True, slots=True)
+class RateLimitFallback:
+    original_model_group: str
+    descriptor_key: str
+    attempts: int = 1
+
+    def stamp(self) -> Mapping[str, object]:
+        return MappingProxyType(
+            {
+                "original_model_group": self.original_model_group,
+                "descriptor_key": self.descriptor_key,
+                "attempts": self.attempts,
+            }
+        )
+
+    @property
+    def reason(self) -> str:
+        return f"rate_limit:{self.descriptor_key}"
+
+
+class _StampedBucket(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    rate_limit_fallback: RateLimitFallback | None = None
+
+
+class _StampedRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    metadata: _StampedBucket | None = None
+    litellm_metadata: _StampedBucket | None = None
+
+
+_STAMPED_REQUEST: Final[TypeAdapter[_StampedRequest]] = TypeAdapter(_StampedRequest)
+_ROUTER_HOPS: Final[TypeAdapter[int]] = TypeAdapter(int)
+
+
+def rate_limit_fallback_from_request_data(request_data: Mapping[str, object]) -> RateLimitFallback | None:
+    try:
+        stamped: Final = _STAMPED_REQUEST.validate_python(request_data)
+    except ValidationError:
+        return None
+    buckets: Final = (stamped.metadata, stamped.litellm_metadata)
+    return next(
+        (bucket.rate_limit_fallback for bucket in buckets if bucket is not None and bucket.rate_limit_fallback), None
+    )
+
+
+_METADATA_BUCKET: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def _metadata_bucket(value: object) -> Mapping[str, object]:
+    try:
+        return _METADATA_BUCKET.validate_python(value)
+    except ValidationError:
+        return MappingProxyType({})
+
+
+def with_rate_limit_fallback(
+    request_data: Mapping[str, object], bucket_name: str, fallback: RateLimitFallback
+) -> Mapping[str, object]:
+    bucket: Final = _metadata_bucket(request_data.get(bucket_name))
+    return MappingProxyType(
+        {**request_data, bucket_name: {**bucket, RATE_LIMIT_FALLBACK_METADATA_KEY: dict(fallback.stamp())}}
+    )
+
+
+def rate_limit_fallback_headers(fallback: RateLimitFallback, attempted_fallbacks: object) -> Mapping[str, str]:
+    try:
+        router_hops: Final = _ROUTER_HOPS.validate_python(attempted_fallbacks)
+    except ValidationError:
+        return MappingProxyType(
+            {
+                ATTEMPTED_FALLBACKS_HEADER: str(max(fallback.attempts, 1)),
+                RATE_LIMIT_FALLBACK_REASON_HEADER: fallback.reason,
+            }
+        )
+    return MappingProxyType(
+        {
+            ATTEMPTED_FALLBACKS_HEADER: str(max(router_hops, 0) + max(fallback.attempts, 1)),
+            RATE_LIMIT_FALLBACK_REASON_HEADER: fallback.reason,
+        }
+    )
 
 
 def map_v3_rate_limit_type(

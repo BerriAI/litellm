@@ -187,7 +187,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self.request_input: str | ResponseInputParam = request_input
         self.responses_api_request: ResponsesAPIOptionalRequestParams = responses_api_request
         self.custom_llm_provider: str | None = custom_llm_provider
-        self.litellm_metadata: dict | None = litellm_metadata or {}
+        self.litellm_metadata: dict[str, object] | None = litellm_metadata or {}
         self.tool_call_provider_fields: Final = tool_call_provider_fields
         # Store lightweight dict snapshots for stream_chunk_builder to reduce
         # repeated Pydantic attribute access in end-of-stream assembly.
@@ -1331,7 +1331,12 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def _stamp_sequence_number(self, event: BaseLiteLLMOpenAIResponseObject) -> BaseLiteLLMOpenAIResponseObject:
         stamped: Final = event.model_copy(update={"sequence_number": self._sequence_number})
         self._sequence_number += 1
-        return stamped
+        affinity_model_id: Final = ResponsesAPIRequestUtils.affinity_model_id(self.litellm_metadata)
+        return (
+            stamped
+            if affinity_model_id is None
+            else ResponsesAPIRequestUtils.encode_stream_event_for_affinity(stamped, affinity_model_id)
+        )
 
     async def __anext__(
         self,

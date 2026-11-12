@@ -460,7 +460,6 @@ jobs:
               tests/unit/ocr
               tests/unit/passthrough
               tests/unit/rag
-              tests/unit/cookbook
               tests/unit/realtime_api
               tests/unit/rerank_api
               tests/unit/search
@@ -591,6 +590,7 @@ jobs:
               tests/unit/proxy/credential_endpoints
               tests/unit/proxy/discovery_endpoints
               tests/unit/proxy/shutdown
+              tests/unit/proxy/rust_forward
               tests/unit/proxy/public_endpoints
               tests/unit/proxy/prompts
               tests/unit/proxy/rag_endpoints

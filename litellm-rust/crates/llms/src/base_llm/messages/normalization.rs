@@ -1,6 +1,9 @@
-use litellm_llms_types::formats::messages::{
-    CacheControl, ContentBlock, Message, MessageContent, MessagesOptionalParams, MessagesRequest,
-    SystemPrompt,
+use litellm_llms_types::{
+    formats::messages::{
+        CacheControl, ContentBlock, Message, MessageContent, MessagesOptionalParams,
+        MessagesRequest, SystemPrompt,
+    },
+    recognized::{Recognized, map_known_runs},
 };
 
 use crate::{
@@ -22,15 +25,22 @@ pub fn normalize_system_role_messages(
     let leading_count = request
         .messages
         .iter()
-        .take_while(|message| is_system_role_message(message))
+        .take_while(|message| message.known().is_some_and(is_system_role_message))
         .count();
     let mut messages = request.messages.into_iter();
-    let hoisted: Vec<Message> = messages.by_ref().take(leading_count).collect();
-    let remaining: Vec<Message> = messages.collect();
+    let hoisted: Vec<Message> = messages
+        .by_ref()
+        .take(leading_count)
+        .filter_map(|message| match message {
+            Recognized::Known(message) => Some(message),
+            Recognized::Unrecognized(_) => None,
+        })
+        .collect();
+    let remaining: Vec<Recognized<Message>> = messages.collect();
     let remaining = if supports_mid_conversation_system {
         remaining
     } else {
-        convert_mid_conversation_system_turns(remaining)
+        map_known_runs(remaining, convert_mid_conversation_system_turns)
     };
     let system = if hoisted.is_empty() {
         request.params.system
@@ -94,7 +104,7 @@ pub fn strip_cache_control_scope(request: MessagesRequest) -> MessagesRequest {
         messages: request
             .messages
             .into_iter()
-            .map(strip_scope_from_message)
+            .map(|message| message.map_known(strip_scope_from_message))
             .collect(),
         params: MessagesOptionalParams {
             system: request.params.system.map(strip_scope_from_system),
