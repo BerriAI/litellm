@@ -1769,7 +1769,7 @@ _ANTHROPIC_SERVER_TOOL_FIELDS: Final = MappingProxyType(
         "bash_code_execution_tool_result": ("content",),
         "text_editor_code_execution_tool_result": ("content",),
         "mcp_tool_result": ("content",),
-        "web_search_result": ("url", "title"),
+        "web_search_result": ("url", "title", "snippet"),
         "web_fetch_result": ("url", "content"),
         "code_execution_result": ("stdout", "stderr", "content"),
         "bash_code_execution_result": ("stdout", "stderr", "content"),

@@ -169,7 +169,14 @@ async def test_select_without_messages_or_input_runs_no_context_window_check(mak
 
 
 @pytest.mark.asyncio
-async def test_server_tool_history_does_not_bypass_the_context_window_check(make_core: MakeCore) -> None:
+@pytest.mark.parametrize(
+    ("title", "snippet"),
+    [("release notes " * 100, ""), ("Release", "release notes " * 100)],
+    ids=["title", "snippet"],
+)
+async def test_server_tool_history_does_not_bypass_the_context_window_check(
+    make_core: MakeCore, title: str, snippet: str
+) -> None:
     core: Final = make_core(model_list=[windowed("g", "server-tools", 50)], enable_pre_call_checks=True)
     messages: Final = [
         {"role": "user", "content": "Search release notes"},
@@ -184,7 +191,8 @@ async def test_server_tool_history_does_not_bypass_the_context_window_check(make
                         {
                             "type": "web_search_result",
                             "url": "https://example.invalid",
-                            "title": "release notes " * 100,
+                            "title": title,
+                            "snippet": snippet,
                             "encrypted_content": "opaque",
                         }
                     ],

@@ -2334,12 +2334,13 @@ def test_anthropic_image_block_with_empty_base64_data():
                         "type": "web_search_result",
                         "url": "https://example.invalid",
                         "title": "Release",
+                        "snippet": "Streaming added.",
                         "encrypted_content": "opaque" * 1000,
                         "page_age": "yesterday",
                     }
                 ],
             },
-            "https://example.invalidRelease",
+            "https://example.invalidReleaseStreaming added.",
         ),
         (
             {
