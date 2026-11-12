@@ -2,6 +2,7 @@
 
 import asyncio
 import importlib
+import inspect
 import os
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from datetime import datetime, timezone
@@ -88,6 +89,17 @@ def _class_path(instance_path: str, cls: type) -> str:
     return f"{module}.{cls.__name__}"
 
 
+def _constructor_note(cls: type) -> str:
+    try:
+        inspect.signature(cls).bind_partial(guardrail_name="", event_hook=None, default_on=False)
+    except TypeError:
+        return (
+            f" {cls.__name__}.__init__ does not accept them, so give it **kwargs and pass those to "
+            "super().__init__, or the proxy will skip the guardrail."
+        )
+    return ""
+
+
 def _guardrail_path_error(
     guardrail_name: str, guardrail_path: str, resolved: object
 ) -> CustomGuardrailPathError | None:
@@ -99,7 +111,7 @@ def _guardrail_path_error(
             "instance, but the proxy builds each guardrail itself and needs the class. Point it at the class, e.g. "
             f"`guardrail: {_class_path(guardrail_path, type(resolved))}`. The proxy calls it with guardrail_name, "
             "event_hook, default_on, and this guardrail's other litellm_params as keyword arguments, so set any "
-            "constructor arguments under litellm_params."
+            f"constructor arguments under litellm_params.{_constructor_note(type(resolved))}"
         )
     if isinstance(resolved, CustomLogger):
         return CustomGuardrailPathError(

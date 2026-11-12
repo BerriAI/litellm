@@ -475,7 +475,31 @@ def test_init_guardrails_v2_stops_boot_when_a_custom_guardrail_path_names_an_ins
     assert "custom_callbacks.proxy_handler_instance" in message
     assert f"guardrail: {class_path}`" in message
     assert "constructor arguments under litellm_params" in message
+    assert "**kwargs" not in message
     assert issubclass(get_instance_fn(class_path, config_file_path=config_file_path), CustomGuardrail)
+
+
+def test_init_guardrails_v2_tells_an_instance_with_a_no_argument_init_to_accept_kwargs(tmp_path: Path) -> None:
+    (tmp_path / "custom_callbacks.py").write_text(
+        "from litellm.integrations.custom_guardrail import CustomGuardrail\n\n\n"
+        "class Blocker(CustomGuardrail):\n"
+        "    def __init__(self):\n"
+        "        super().__init__(guardrail_name='my-guard', event_hook='pre_call', default_on=True)\n\n\n"
+        "proxy_handler_instance = Blocker()\n"
+    )
+    all_guardrails: Final = [
+        {
+            "guardrail_name": "my-guard",
+            "litellm_params": {"guardrail": "custom_callbacks.proxy_handler_instance", "mode": "pre_call"},
+        },
+    ]
+
+    with pytest.raises(CustomGuardrailPathError) as exc_info:
+        init_guardrails_v2(all_guardrails=all_guardrails, config_file_path=str(tmp_path / "config.yaml"))
+
+    message: Final = str(exc_info.value)
+    assert "`guardrail: custom_callbacks.Blocker`" in message
+    assert "Blocker.__init__ does not accept them, so give it **kwargs" in message
 
 
 def test_custom_guardrail_path_error_hints_the_class_in_the_same_remote_module() -> None:
