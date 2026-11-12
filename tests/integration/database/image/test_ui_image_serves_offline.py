@@ -133,7 +133,7 @@ def test_ui_serves_as_arbitrary_uid_read_only(ui_container: tuple[str, str]) -> 
         )
 
     for payload in ("/__next._tree.txt", "/login/index.txt", "/login/__next._tree.txt", "/projects/__next._full.txt"):
-        exported: Final = _docker("exec", container, "cat", f"/usr/share/nginx/html{payload}").stdout
+        exported: Final = _docker("exec", container, "cat", f"/var/lib/litellm/ui{payload}").stdout
         assert exported, f"empty exported payload at {payload}"
         for prefix in ("", "/ui"):
             response: Final = _docker(

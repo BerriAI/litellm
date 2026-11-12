@@ -331,6 +331,9 @@ describe("LoginPage", () => {
       [null, "/ui/?login=success"],
       ["/ui/teams/?tab=all", "/ui/teams/?tab=all"],
       ["https://untrusted.example/ui/", "/ui/?login=success"],
+      ["/\\attacker.example/ui/", "/ui/?login=success"],
+      ["/\t/attacker.example/ui/", "/ui/?login=success"],
+      ["javascript://localhost/%0Aalert(1)", "/ui/?login=success"],
     ])("loads the dashboard document after password login with return URL %s", async (returnUrl, expectedUrl) => {
       if (returnUrl) document.cookie = `litellm_return_url=${encodeURIComponent(returnUrl)}; Path=/`;
       mockMutate.mockImplementation((_input, options) => options.onSuccess({ redirect_url: "/ui/?login=success" }));
@@ -363,6 +366,18 @@ describe("LoginPage", () => {
       await waitFor(() => expect(mockReplaceDocument).toHaveBeenCalledWith("/ui/teams/"));
       expect(mockReplace).not.toHaveBeenCalled();
     });
+
+    it.each(["/\\attacker.example/ui/", "javascript://localhost/%0Aalert(1)"])(
+      "keeps an existing session on the dashboard for unsafe return URL %j",
+      async (returnUrl) => {
+        window.location.search = `?redirect_to=${encodeURIComponent(returnUrl)}`;
+        vi.mocked(getCookieFromDocument).mockReturnValue("valid-session");
+        vi.mocked(isJwtExpired).mockReturnValue(false);
+        renderLogin();
+
+        await waitFor(() => expect(mockReplaceDocument).toHaveBeenCalledWith("/ui"));
+      },
+    );
   });
 
   describe("URL ?token= legacy path is rejected (security regression test)", () => {
