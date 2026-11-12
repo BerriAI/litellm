@@ -6,6 +6,7 @@ from litellm.models.alert import AlertStore
 from litellm.models.deployment_warning import DeploymentWarningIgnoreStore
 from litellm.models.fallback import RouterFallbackStore
 from litellm.models.gateway_activity import GatewayActivityStore
+from litellm.models.performance_alert import AlertMonitoringStore
 from litellm.models.plugin_upload import PluginUploadStore
 from litellm.models.skill_submission import SkillSubmissionStore
 from litellm.models.user_banner import UserBannerStore
@@ -14,6 +15,7 @@ from litellm.repositories.alert_repository import AlertRepository
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.deployment_warning_ignore_repository import DeploymentWarningIgnoreRepository
 from litellm.repositories.gateway_activity_repository import GatewayActivityRepository
+from litellm.repositories.performance_alert_repository import PerformanceAlertRepository
 from litellm.repositories.plugin_upload_repository import PluginUploadRepository
 from litellm.repositories.skill_submission_repository import SkillSubmissionRepository
 from litellm.repositories.user_banner_repository import UserBannerRepository
@@ -65,6 +67,25 @@ async def get_alert_repository(database: DatabaseDep) -> AlertStore | None:
 
 
 AlertRepositoryDep: TypeAlias = Annotated[AlertStore | None, Depends(get_alert_repository)]
+
+
+async def get_alert_monitoring_repository(database: DatabaseDep) -> AlertMonitoringStore | None:
+    from litellm.proxy.proxy_server import general_settings_view, premium_user
+
+    return (
+        None
+        if database is None
+        else PerformanceAlertRepository(
+            database.prisma,
+            enterprise=premium_user is True,
+            configured=general_settings_view().get("performance_alerts_enabled", True) is True,
+        )
+    )
+
+
+AlertMonitoringRepositoryDep: TypeAlias = Annotated[
+    AlertMonitoringStore | None, Depends(get_alert_monitoring_repository)
+]
 
 
 async def get_router_fallback_repository(database: DatabaseDep) -> RouterFallbackStore | None:

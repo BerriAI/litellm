@@ -10,6 +10,7 @@ from litellm.models.alert import MAX_ALERT_ID, AlertDetection, AlertType, Metric
 PerformanceScope: TypeAlias = Literal["gateway", "model", "team", "user", "key"]
 SCOPES: Final[tuple[PerformanceScope, ...]] = ("gateway", "model", "team", "user", "key")
 BASELINE_DAYS: Final = 7
+FREE_ALERT_LIMIT: Final = 5
 
 MIN_ACTIVE_DAYS: Final = 4
 SPEND_MULTIPLIER: Final = 3
@@ -83,11 +84,35 @@ class ResourceUnreadableError(Exception):
     Any other database error ends the run so the next run resumes from the same place."""
 
 
+class AlertMonitoring(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    enabled: bool = Field(description="Whether performance monitoring is enabled. Defaults to true.")
+    alerts_used: int = Field(ge=0, le=FREE_ALERT_LIMIT, description="Lifetime free allowance consumed, capped at five.")
+    alert_limit: int | None = Field(description="Free allowance, or null for Enterprise.")
+    disabled_by_config: bool = Field(description="Whether performance_alerts_enabled is false in proxy settings.")
+
+    @property
+    def active(self) -> bool:
+        return self.enabled and (self.alert_limit is None or self.alerts_used < self.alert_limit)
+
+
+class AlertMonitoringUpdate(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    enabled: bool = Field(strict=True, description="Enable or disable performance monitoring for this gateway.")
+
+
+class AlertMonitoringStore(Protocol):
+    async def monitoring(self) -> AlertMonitoring: ...
+    async def set_enabled(self, enabled: bool) -> AlertMonitoring: ...
+
+
 class PerformanceAlertStore(Protocol):
     async def claim(self, interval: timedelta) -> Claim | None: ...
     async def key_index_ready(self) -> bool: ...
-    async def evaluate_page(self, owner: str, state: SweepState, limit: int) -> SweepState: ...
-    async def skip_next(self, owner: str, state: SweepState) -> SweepState: ...
+    async def evaluate_page(self, owner: str, state: SweepState, limit: int) -> SweepState | None: ...
+    async def skip_next(self, owner: str, state: SweepState) -> SweepState | None: ...
 
 
 def target_day(now: datetime) -> date:

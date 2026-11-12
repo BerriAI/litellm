@@ -201,11 +201,13 @@ async def test_live_auth_denies_nonadmins_and_viewers_cannot_write(alerts: Alert
         for role in ("internal_user", "proxy_admin_viewer"):
             user: Final = scenario.user(user_role=role)
             key: Final = scenario.key(user_id=user)
-            for path in ("/alerts", f"/alerts/{saved.id}"):
+            for path in ("/alerts", f"/alerts/{saved.id}", "/alerts/monitoring"):
                 response: Final = gateway.request("GET", path, key=key)
                 assert response.status_code in ((200,) if role == "proxy_admin_viewer" else (401, 403)), response.text
             write: Final = gateway.request("PATCH", f"/alerts/{saved.id}", {"status": "dismissed"}, key=key)
             assert write.status_code in (401, 403), write.text
+            monitoring: Final = gateway.request("PATCH", "/alerts/monitoring", {"enabled": False}, key=key)
+            assert monitoring.status_code in (401, 403), monitoring.text
     assert await alerts.repository.get(int(saved.id)) == saved
 
 

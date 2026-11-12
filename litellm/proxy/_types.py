@@ -2968,10 +2968,11 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         ),
     )
     performance_alerts_enabled: bool = Field(
-        False,
+        True,
         description=(
             "Check yesterday's usage for the gateway, models, teams, users and keys against the week before, "
-            "and save unusual spend, traffic, response time and failure rate changes as alerts. Off by default."
+            "and save unusual spend, traffic, response time and failure rate changes as alerts. On by default. "
+            "Set false to disable monitoring. Free gateways stop after five saved performance alerts."
         ),
     )
     spend_capture_rate_check: SpendCaptureRateCheckSettings | None = Field(

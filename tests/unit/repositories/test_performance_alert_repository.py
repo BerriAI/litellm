@@ -1,5 +1,5 @@
 from collections.abc import Mapping, Sequence
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Final
 from unittest.mock import ANY, AsyncMock, MagicMock
 
@@ -7,6 +7,7 @@ import pytest
 from pydantic import TypeAdapter
 
 from litellm.models.performance_alert import ResourceUnreadableError, SweepOwnershipLostError, SweepState
+from litellm.proxy.spend_tracking.performance_alerts import run_performance_alerts
 from litellm.repositories.performance_alert_repository import PerformanceAlertRepository
 
 
@@ -38,13 +39,17 @@ async def test_only_a_statement_timeout_marks_a_resource_unreadable(message: str
 
 def _repository(
     rows: Sequence[Mapping[str, object]] | Exception,
+    *,
+    enabled: bool = True,
+    used: int = 0,
+    enterprise: bool = False,
 ) -> tuple[PerformanceAlertRepository, AsyncMock, AsyncMock]:
-    query: Final = AsyncMock(side_effect=((), rows))
+    query: Final = AsyncMock(side_effect=((), ({"enabled": enabled, "alerts_used": used},), rows))
     execute: Final = AsyncMock(return_value=1)
     transaction: Final = MagicMock(query_raw=query, execute_raw=execute)
     context: Final = MagicMock(__aenter__=AsyncMock(return_value=transaction), __aexit__=AsyncMock(return_value=False))
     client: Final = MagicMock(writer_db=MagicMock(tx=MagicMock(return_value=context)))
-    return PerformanceAlertRepository(client), query, execute
+    return PerformanceAlertRepository(client, enterprise=enterprise), query, execute
 
 
 @pytest.mark.asyncio
@@ -129,7 +134,7 @@ async def test_a_page_saves_the_detected_evidence_and_its_resume_position(spend_
 @pytest.mark.asyncio
 async def test_lost_ownership_aborts_the_page_transaction(spend_window: Mapping[str, object]) -> None:
     repository, _query, execute = _repository((spend_window,))
-    execute.side_effect = (1, 0)
+    execute.side_effect = (1, 1, 0)
     with pytest.raises(SweepOwnershipLostError):
         await repository.evaluate_page("previous-worker", SweepState(day=date(2026, 1, 8), scope="model"), 1)
 
@@ -157,3 +162,60 @@ async def test_skipping_an_unreadable_resource_saves_progress_without_counting_i
     execute.assert_awaited_once_with(
         ANY, "worker-a", "2026-01-08", "team", "team-b", wrapped, 0, 1, False, "team", "team-z"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("enabled", "used"), ((True, 5), (False, 0)))
+async def test_stopped_monitoring_never_reads_usage_or_claims_work(enabled: bool, used: int) -> None:
+    repository, query, execute = _repository((), enabled=enabled, used=used)
+    await run_performance_alerts(repository, now=lambda: datetime(2026, 1, 9, tzinfo=timezone.utc))
+    assert query.await_count == 2
+    execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enterprise", (False, True))
+async def test_first_read_initializes_the_allowance_once(enterprise: bool) -> None:
+    repository, query, execute = _repository((), enterprise=enterprise)
+    saved: Final = ({"enabled": True, "alerts_used": 3},)
+    query.side_effect = ((), (), ({"enabled": True, "alerts_used": None},), saved, (), saved)
+    first: Final = await repository.monitoring()
+    assert first.alerts_used == 3
+    assert first.alert_limit == (None if enterprise else 5)
+    assert first.active
+    assert await repository.monitoring() == first
+    assert execute.await_count == 2
+    execute.assert_awaited_with(ANY, 5)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", (False, True))
+async def test_admin_toggle_persists_the_requested_value(enabled: bool) -> None:
+    repository, query, execute = _repository(())
+    query.side_effect = ((), ({"enabled": not enabled, "alerts_used": 2},), ({"enabled": enabled, "alerts_used": 2},))
+    result: Final = await repository.set_enabled(enabled)
+    assert result.enabled is enabled
+    assert result.active is enabled
+    assert result.alerts_used == 2
+    execute.assert_awaited_once_with(ANY, enabled)
+
+
+@pytest.mark.asyncio
+async def test_last_free_alert_keeps_the_page_available_for_an_enterprise_upgrade(
+    spend_window: Mapping[str, object],
+) -> None:
+    repository, _query, execute = _repository((spend_window,), used=4)
+    state: Final = SweepState(day=date(2026, 1, 8), scope="model")
+    assert await repository.evaluate_page("worker-a", state, 1) is None
+    execute.assert_any_await(ANY, ANY, 1)
+    execute.assert_any_await(ANY, 5, 1)
+    execute.assert_awaited_with(ANY, "worker-a", "2026-01-08", "model", "", False, 0, 0, False, None, "")
+
+
+@pytest.mark.asyncio
+async def test_enterprise_keeps_saving_alerts_after_the_free_allowance(spend_window: Mapping[str, object]) -> None:
+    repository, _query, execute = _repository((spend_window,), used=5, enterprise=True)
+    state: Final = SweepState(day=date(2026, 1, 8), scope="model")
+    result: Final = await repository.evaluate_page("worker-a", state, 1)
+    assert result == state.model_copy(update={"cursor": "model-a", "checked": 1})
+    execute.assert_any_await(ANY, ANY, None)

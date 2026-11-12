@@ -11,6 +11,8 @@ from typing_extensions import LiteralString
 
 from litellm.models.performance_alert import (
     BASELINE_DAYS,
+    FREE_ALERT_LIMIT,
+    AlertMonitoring,
     Claim,
     PerformanceScope,
     ResourceUnreadableError,
@@ -38,6 +40,13 @@ class _Transaction(Protocol):
 
 class _Database(Protocol):
     def tx(self, *, timeout: timedelta) -> AbstractAsyncContextManager[_Transaction]: ...
+
+
+class _MonitoringRow(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    enabled: bool
+    alerts_used: int | None
 
 
 class _StateRow(BaseModel):
@@ -164,10 +173,55 @@ _INDEX_READY: Final = """SELECT 1 AS resource_id FROM pg_index WHERE indexrelid 
 
 
 class PerformanceAlertRepository:
-    def __init__(self, prisma_client: "PrismaClient") -> None:
+    def __init__(self, prisma_client: "PrismaClient", *, enterprise: bool = False, configured: bool = True) -> None:
         self._database: Final = cast(  # cast-ok: generated Prisma transactions expose the bounded SQL surface
             _Database, prisma_client.writer_db
         )
+        self._enterprise: Final = enterprise
+        self._configured: Final = configured
+
+    async def _monitoring(self, transaction: _Transaction, *, lock: bool = False) -> AlertMonitoring:
+        query: Final = 'SELECT enabled, alerts_used FROM "LiteLLM_PerformanceAlertState" WHERE id = 1'
+        rows: Final = await transaction.query_raw(query + (" FOR UPDATE" if lock else ""))
+        if not rows:
+            await transaction.execute_raw(
+                """INSERT INTO "LiteLLM_PerformanceAlertState" (id, owner, next_run_at, updated_at)
+                VALUES (1, '', now(), now() AT TIME ZONE 'UTC') ON CONFLICT (id) DO NOTHING"""
+            )
+            return await self._monitoring(transaction, lock=lock)
+        row: Final = _MonitoringRow.model_validate(rows[0])
+        if row.alerts_used is None:
+            await transaction.execute_raw(
+                """UPDATE "LiteLLM_PerformanceAlertState" SET alerts_used = (
+                    SELECT COUNT(*) FROM (SELECT 1 FROM "LiteLLM_Alert"
+                    WHERE type != 'model_deprecation' LIMIT $1) existing
+                ) WHERE id = 1 AND alerts_used IS NULL""",
+                FREE_ALERT_LIMIT,
+            )
+            return await self._monitoring(transaction, lock=lock)
+        return AlertMonitoring(
+            enabled=self._configured and row.enabled,
+            alerts_used=row.alerts_used,
+            alert_limit=None if self._enterprise else FREE_ALERT_LIMIT,
+            disabled_by_config=not self._configured,
+        )
+
+    async def monitoring(self) -> AlertMonitoring:
+        async with self._transaction() as transaction:
+            return await self._monitoring(transaction)
+
+    async def set_enabled(self, enabled: bool) -> AlertMonitoring:
+        async with self._database.tx(timeout=timedelta(seconds=10)) as transaction:
+            await transaction.query_raw(
+                "SELECT set_config('statement_timeout', '6s', true), set_config('lock_timeout', '5s', true)"
+            )
+            await self._monitoring(transaction, lock=True)
+            await transaction.execute_raw(
+                """UPDATE "LiteLLM_PerformanceAlertState" SET enabled = $1,
+                updated_at = now() AT TIME ZONE 'UTC' WHERE id = 1""",
+                enabled,
+            )
+            return await self._monitoring(transaction)
 
     @asynccontextmanager
     async def _transaction(self) -> AsyncGenerator[_Transaction]:
@@ -181,6 +235,8 @@ class PerformanceAlertRepository:
         interval."""
         owner: Final = uuid.uuid4().hex
         async with self._transaction() as transaction:
+            if not (await self._monitoring(transaction)).active:
+                return None
             rows: Final = _STATE_ROWS.validate_python(
                 await transaction.query_raw(_CLAIM, owner, f"{int(interval.total_seconds())} seconds")
             )
@@ -195,7 +251,7 @@ class PerformanceAlertRepository:
         async with self._transaction() as transaction:
             return bool(await transaction.query_raw(_INDEX_READY, f'"{KEY_DATE_INDEX}"'))
 
-    async def evaluate_page(self, owner: str, state: SweepState, limit: int) -> SweepState:
+    async def evaluate_page(self, owner: str, state: SweepState, limit: int) -> SweepState | None:
         """Evaluate the next `limit` resources and save their alerts together with the new position."""
         from prisma.errors import RawQueryError
 
@@ -208,21 +264,38 @@ class PerformanceAlertRepository:
                 raise ResourceUnreadableError() from exc
             raise
 
-    async def _evaluate_page(self, owner: str, state: SweepState, limit: int) -> SweepState:
+    async def _evaluate_page(self, owner: str, state: SweepState, limit: int) -> SweepState | None:
         async with self._transaction() as transaction:
+            monitoring: Final = await self._monitoring(transaction, lock=True)
+            if not monitoring.active:
+                return None
             windows: Final = _WINDOWS.validate_python(
                 await transaction.query_raw(_page_sql(state.scope, state.wrapped), *self._arguments(state, limit))
             )
-            await record_alerts(
-                transaction, tuple(chain.from_iterable(detect(state.scope, window, state.day) for window in windows))
+            saved: Final = await record_alerts(
+                transaction,
+                tuple(chain.from_iterable(detect(state.scope, window, state.day) for window in windows)),
+                None if self._enterprise else FREE_ALERT_LIMIT - monitoring.alerts_used,
             )
+            if saved:
+                await transaction.execute_raw(
+                    """UPDATE "LiteLLM_PerformanceAlertState"
+                    SET alerts_used = LEAST($1, alerts_used + $2) WHERE id = 1""",
+                    FREE_ALERT_LIMIT,
+                    saved,
+                )
+            if not self._enterprise and monitoring.alerts_used + saved >= FREE_ALERT_LIMIT:
+                await self._save(transaction, owner, state)
+                return None
             advanced: Final = advance(state, tuple(window.resource_id for window in windows), limit)
             await self._save(transaction, owner, advanced)
             return advanced
 
-    async def skip_next(self, owner: str, state: SweepState) -> SweepState:
+    async def skip_next(self, owner: str, state: SweepState) -> SweepState | None:
         """Step over the next resource without evaluating it, for one that cannot be read within the limits."""
         async with self._transaction() as transaction:
+            if not (await self._monitoring(transaction, lock=True)).active:
+                return None
             rows: Final = (
                 (_IdRow(resource_id="gateway"),)
                 if state.scope == "gateway"

@@ -1022,6 +1022,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/alerts/monitoring": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read performance monitoring settings
+         * @description Read the gateway's opt-out setting and free allowance. Requires a gateway admin or view-only admin.
+         */
+        get: operations["get_monitoring_alerts_monitoring_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Enable or disable performance monitoring
+         * @description Change monitoring for every worker using this database. Only gateway admins can write. Keeps saved alerts.
+         */
+        patch: operations["update_monitoring_alerts_monitoring_patch"];
+        trace?: never;
+    };
     "/alerts/{alert_id}": {
         parameters: {
             query?: never;
@@ -27229,6 +27253,37 @@ export interface components {
              */
             value: number;
         };
+        /** AlertMonitoring */
+        AlertMonitoring: {
+            /**
+             * Alert Limit
+             * @description Free allowance, or null for Enterprise.
+             */
+            alert_limit: number | null;
+            /**
+             * Alerts Used
+             * @description Lifetime free allowance consumed, capped at five.
+             */
+            alerts_used: number;
+            /**
+             * Disabled By Config
+             * @description Whether performance_alerts_enabled is false in proxy settings.
+             */
+            disabled_by_config: boolean;
+            /**
+             * Enabled
+             * @description Whether performance monitoring is enabled. Defaults to true.
+             */
+            enabled: boolean;
+        };
+        /** AlertMonitoringUpdate */
+        AlertMonitoringUpdate: {
+            /**
+             * Enabled
+             * @description Enable or disable performance monitoring for this gateway.
+             */
+            enabled: boolean;
+        };
         /**
          * AlertType
          * @description Enum for alert types and management event types
@@ -31596,8 +31651,8 @@ export interface components {
             password_policy_require_uppercase?: boolean | null;
             /**
              * Performance Alerts Enabled
-             * @description Check yesterday's usage for the gateway, models, teams, users and keys against the week before, and save unusual spend, traffic, response time and failure rate changes as alerts. Off by default.
-             * @default false
+             * @description Check yesterday's usage for the gateway, models, teams, users and keys against the week before, and save unusual spend, traffic, response time and failure rate changes as alerts. On by default. Set false to disable monitoring. Free gateways stop after five saved performance alerts.
+             * @default true
              */
             performance_alerts_enabled: boolean;
             /**
@@ -54820,6 +54875,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AlertViewPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_monitoring_alerts_monitoring_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertMonitoring"];
+                };
+            };
+        };
+    };
+    update_monitoring_alerts_monitoring_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlertMonitoringUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertMonitoring"];
                 };
             };
             /** @description Validation Error */

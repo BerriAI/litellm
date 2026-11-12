@@ -22,7 +22,7 @@ PAGE_SIZE: Final = 25
 PAUSE_SECONDS: Final = 0.1
 
 
-async def _step(store: PerformanceAlertStore, owner: str, state: SweepState) -> SweepState:
+async def _step(store: PerformanceAlertStore, owner: str, state: SweepState) -> SweepState | None:
     """One page, falling back to a single resource and then stepping over it, so one bad resource
     cannot hold up the rest of the sweep."""
     try:
@@ -78,6 +78,8 @@ async def run_performance_alerts(
                 verbose_proxy_logger.info("Performance alerts waiting for %s before checking keys", KEY_DATE_INDEX)
                 break
             state = await _step(store, claim.owner, state)
+            if state is None:
+                return
             await sleep(PAUSE_SECONDS)
         if state.completed:
             verbose_proxy_logger.info(

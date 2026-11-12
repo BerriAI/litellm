@@ -12,7 +12,9 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.alerting_endpoints.alerts import router
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.deps.database import get_database
+from litellm.proxy.deps.repositories import get_alert_monitoring_repository
 from litellm.repositories.database import Database
+from litellm.repositories.performance_alert_repository import PerformanceAlertRepository
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
 from tests._support.native_database import native_database
 
@@ -91,6 +93,50 @@ def test_permissions_precede_database_access(
 def test_invalid_page_never_reads_database(client: TestClient, table: MagicMock, query: str) -> None:
     assert client.get(f"/alerts?{query}").status_code == 422
     table.find_many.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "role", (LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, LitellmUserRoles.PROXY_ADMIN)
+)
+@pytest.mark.parametrize("method", ("GET", "PATCH"))
+def test_monitoring_authorization_precedes_missing_database(app: FastAPI, role: LitellmUserRoles, method: str) -> None:
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=role)
+    app.dependency_overrides[get_database] = lambda: None
+    with TestClient(app) as client:
+        response: Final = client.request(
+            method, "/alerts/monitoring", json={"enabled": False} if method == "PATCH" else None
+        )
+    allowed: Final = role == LitellmUserRoles.PROXY_ADMIN or (
+        role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY and method == "GET"
+    )
+    assert response.status_code == (503 if allowed else 403), response.text
+
+
+@pytest.mark.parametrize(
+    "body", ({"enabled": True, "alerts_used": 0}, {"enabled": True, "alert_limit": None}, {"enabled": "false"}, {})
+)
+def test_monitoring_only_accepts_a_boolean_opt_out(
+    client: TestClient, history_query: AsyncMock, body: dict[str, object]
+) -> None:
+    response: Final = client.patch("/alerts/monitoring", json=body)
+    assert response.status_code == 422, response.text
+    history_query.assert_not_awaited()
+
+
+def test_config_opt_out_cannot_be_enabled_from_the_api(app: FastAPI) -> None:
+    prisma: Final = MagicMock()
+    transaction: Final = prisma.writer_db.tx.return_value.__aenter__.return_value
+    transaction.query_raw = AsyncMock(return_value=[{"enabled": True, "alerts_used": 0}])
+    transaction.execute_raw = AsyncMock()
+    app.dependency_overrides[get_alert_monitoring_repository] = lambda: PerformanceAlertRepository(
+        prisma, configured=False
+    )
+    with TestClient(app) as client:
+        status: Final = client.get("/alerts/monitoring")
+        response: Final = client.patch("/alerts/monitoring", json={"enabled": True})
+    assert status.json() == {"enabled": False, "alerts_used": 0, "alert_limit": 5, "disabled_by_config": True}
+    assert response.status_code == 409, response.text
+    transaction.execute_raw.assert_not_awaited()
 
 
 @pytest.mark.parametrize("alert_id", ("0", "-1", "01", "1.0", "oops", "9223372036854775808", "1" * 20))

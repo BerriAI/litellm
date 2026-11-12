@@ -3,6 +3,7 @@
 import { parseAsBoolean, parseAsString, parseAsStringEnum, parseAsStringLiteral, useQueryStates } from "nuqs";
 import { RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { useQueryClient } from "@tanstack/react-query";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { Page, PageTabs, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
 import { Button } from "@/components/ui/button";
@@ -17,6 +18,7 @@ import { ALERT_TYPES, AlertFilter, AlertItem, TYPE_LABEL_KEYS, presentAlert } fr
 import AlertActions from "./AlertActions";
 import AlertChart from "./AlertChart";
 import AlertDetail from "./AlertDetail";
+import PerformanceMonitoring from "./PerformanceMonitoring";
 
 const parsers = {
   alert: parseAsString,
@@ -97,6 +99,7 @@ function SelectedAlert({ auth, onBack }: { auth: ReturnType<typeof useAuthorized
 
 function AlertsInbox({ auth }: { auth: ReturnType<typeof useAuthorized> }) {
   const { t } = useTranslation();
+  const client = useQueryClient();
   const [params, setParams] = useQueryStates(parsers);
   const scope = JSON.stringify([auth.userId, auth.userRole]);
   const showDeprecations = params.type === "all" || params.type === "model-deprecations";
@@ -113,9 +116,15 @@ function AlertsInbox({ auth }: { auth: ReturnType<typeof useAuthorized> }) {
   const items = [...retirementItems, ...performanceItems];
   const loading = list.isLoading || deprecations.isLoading;
   const hasError = (showPerformance && list.isError) || (showDeprecations && deprecations.isError);
+  function refresh() {
+    void client.invalidateQueries({ queryKey: ["alert-monitoring"] });
+    if (showPerformance) void list.refetch();
+    if (showDeprecations) void deprecations.refetch();
+  }
   return (
     <>
       <h1 className="text-2xl font-semibold">{t("alerts.unified.title")}</h1>
+      <PerformanceMonitoring scope={scope} readOnly={Boolean(auth.isViewOnly)} />
       <PageTabs
         value={params.state}
         onValueChange={(value) => void setParams({ state: value as AlertStatus })}
@@ -142,15 +151,7 @@ function AlertsInbox({ auth }: { auth: ReturnType<typeof useAuthorized> }) {
             ))}
           </SelectContent>
         </Select>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={list.isFetching || deprecations.isFetching}
-          onClick={() => {
-            if (showPerformance) void list.refetch();
-            if (showDeprecations) void deprecations.refetch();
-          }}
-        >
+        <Button variant="outline" size="sm" disabled={list.isFetching || deprecations.isFetching} onClick={refresh}>
           <RefreshCw className="size-3.5" />
           {t("alerts.unified.refresh")}
         </Button>
