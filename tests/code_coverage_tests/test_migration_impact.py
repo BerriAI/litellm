@@ -151,6 +151,31 @@ def test_split_statements_drops_comments() -> None:
     assert statements == ('ALTER TABLE "T" ADD COLUMN "c" TEXT',)
 
 
+@pytest.mark.parametrize("literal", ("'--'", "'/* value */'", "'one;two'", "'it''s -- text'", r"E'can\'t -- text'"))
+def test_quoted_delimiters_do_not_hide_a_required_column(literal: str) -> None:
+    sql = f'ALTER TABLE "T" ADD COLUMN "note" TEXT DEFAULT {literal}, ADD COLUMN "required" TEXT NOT NULL;'
+    statements = impact.split_statements(sql)
+    assert len(statements) == 1
+    assert literal in statements[0]
+    assert _classify(statements[0]).severity == impact.BREAKING
+
+
+def test_split_statements_handles_nested_comments_and_a_tagged_do_block() -> None:
+    sql = """
+    /* outer /* nested -- comment */ DROP TABLE \"Hidden\"; */
+    DO $tag1$ BEGIN
+        PERFORM '-- inside a literal';
+        ALTER TABLE \"T\" ADD COLUMN \"required\" TEXT NOT NULL;
+    END $tag1$;
+    """
+    statements = impact.split_statements(sql)
+    assert all('DROP TABLE "Hidden"' not in statement for statement in statements)
+    assert any(
+        'ADD COLUMN "required"' in statement and _classify(statement).severity == impact.BREAKING
+        for statement in statements
+    )
+
+
 def test_star_read_discovery_records_table_alias_and_joins() -> None:
     read = _auth_read()
     assert read.table == "LiteLLM_VerificationToken"
@@ -539,6 +564,61 @@ def test_report_rates_migrations_against_the_queries_the_old_pods_run(tmp_path: 
     assert widened_key.severity == impact.LOCK  # widens the key it drops, so nothing new is rejected
     assert report.schema_tables == 4
     assert report.worst == impact.BREAKING
+
+
+@pytest.mark.parametrize("previous_index", ("active_key_name", "LiteLLM_VerificationToken_key_name_key"))
+def test_report_does_not_treat_a_partial_base_index_as_a_full_unique_key(tmp_path: Path, previous_index: str) -> None:
+    repo = _two_version_repo(tmp_path)
+    _write_migration(
+        repo,
+        "20250301000000_partial_key",
+        f'CREATE UNIQUE INDEX "{previous_index}" ON "LiteLLM_VerificationToken"("key_name") '
+        "WHERE \"key_type\" = 'active';",
+    )
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "partial base")
+    _git(repo, "tag", "partial-base")
+    _write_migration(
+        repo,
+        "20250302000000_full_key",
+        f'DROP INDEX "{previous_index}";\n'
+        'CREATE UNIQUE INDEX "all_key_names" ON "LiteLLM_VerificationToken"("key_name");',
+    )
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "full index")
+    report = impact.build_report(repo, "partial-base", "HEAD")
+    finding = next(f for f in report.findings if 'CREATE UNIQUE INDEX "all_key_names"' in f.statement)
+    assert finding.severity == impact.WRITE_REJECT
+
+
+@pytest.mark.parametrize(
+    "retirement",
+    (
+        'DROP INDEX IF EXISTS "other", "old_key";',
+        'ALTER INDEX "old_key" RENAME TO "renamed_key";',
+    ),
+)
+def test_report_does_not_reuse_an_index_retired_before_the_base(tmp_path: Path, retirement: str) -> None:
+    repo = _two_version_repo(tmp_path)
+    _write_migration(
+        repo,
+        "20250301000000_old_key",
+        'CREATE UNIQUE INDEX "old_key" ON "LiteLLM_VerificationToken"("key_name");',
+    )
+    _write_migration(repo, "20250302000000_retire_key", retirement)
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "retire before base")
+    _git(repo, "tag", "retired-base")
+    _write_migration(
+        repo,
+        "20250303000000_new_key",
+        'DROP INDEX IF EXISTS "old_key";\nCREATE UNIQUE INDEX "new_key" ON "LiteLLM_VerificationToken"("key_name");',
+    )
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "new key")
+    report = impact.build_report(repo, "retired-base", "HEAD")
+    finding = next(f for f in report.findings if 'CREATE UNIQUE INDEX "new_key"' in f.statement)
+    assert finding.severity == impact.WRITE_REJECT
 
 
 def test_report_for_the_same_ref_twice_has_nothing_to_say(tmp_path: Path) -> None:

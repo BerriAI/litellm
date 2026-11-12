@@ -40,7 +40,7 @@ import json
 import re
 import subprocess
 import sys
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import chain
 from pathlib import Path
@@ -118,8 +118,16 @@ ALIAS_STOPWORDS: Final = frozenset(
 )
 
 _LINE_COMMENT: Final = re.compile(r"--[^\n]*")
-_BLOCK_COMMENT: Final = re.compile(r"/\*.*?\*/", re.DOTALL)
-_DOLLAR_QUOTED: Final = re.compile(r"\$(?P<tag>[A-Za-z_]*)\$(?P<body>.*?)\$(?P=tag)\$", re.DOTALL)
+_DOLLAR_QUOTED: Final = re.compile(r"\$(?P<tag>(?:[A-Za-z_][A-Za-z_0-9]*)?)\$(?P<body>.*?)\$(?P=tag)\$", re.DOTALL)
+_SQL_TOKEN: Final = re.compile(
+    r"(?P<quoted>[Ee]'(?:\\.|''|[^'\\])*'|'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\")"
+    r"|(?P<dollar>\$(?P<tag>(?:[A-Za-z_][A-Za-z_0-9]*)?)\$.*?\$(?P=tag)\$)"
+    r"|(?P<line>--[^\n]*)|(?P<block>/\*)|(?P<semicolon>;)",
+    re.DOTALL,
+)
+_COMMENT_EDGE: Final = re.compile(r"/\*|\*/")
+_WHERE: Final = re.compile(r"\bWHERE\b", re.IGNORECASE)
+_INDEX_CHANGE: Final = re.compile(r"\b(?:DROP|ALTER)\s+INDEX\b(?P<body>.*)", re.IGNORECASE | re.DOTALL)
 
 _CREATE_TABLE: Final = re.compile(r'\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"?(?P<table>\w+)"?', re.IGNORECASE)
 _ALTER_TABLE: Final = re.compile(r'\bALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?"?(?P<table>\w+)"?', re.IGNORECASE)
@@ -309,12 +317,42 @@ def normalize(statement: str) -> str:
     return " ".join(statement.split()).strip()
 
 
+def _end_block_comment(sql: str, start: int) -> int:
+    depth = 1  # rebind-ok: nested block comments require a depth counter
+    for edge in _COMMENT_EDGE.finditer(sql, start):
+        depth += 1 if edge.group() == "/*" else -1
+        if depth == 0:
+            return edge.end()
+    return len(sql)
+
+
+def _sql_tokens(sql: str) -> Iterator[tuple[str, str]]:
+    position = 0  # rebind-ok: scan the SQL once from left to right
+    while match := _SQL_TOKEN.search(sql, position):
+        if match.start() > position:
+            yield "text", sql[position : match.start()]
+        if match.lastgroup == "block":
+            yield "comment", " "
+            position = _end_block_comment(sql, match.end())
+        else:
+            yield match.lastgroup or "text", " " if match.lastgroup == "line" else match.group()
+            position = match.end()
+    yield "text", sql[position:]
+
+
 def split_statements(sql: str) -> tuple[str, ...]:
-    """Split a migration into single-line statements, descending into `DO $$ ... $$` bodies."""
-    cleaned: Final = _BLOCK_COMMENT.sub(" ", _LINE_COMMENT.sub(" ", sql))
-    bodies: Final = tuple(match.group("body") for match in _DOLLAR_QUOTED.finditer(cleaned))
-    outer: Final = _DOLLAR_QUOTED.sub(" ", cleaned)
-    top_level: Final = tuple(normalize(part) for part in outer.split(";"))
+    """Split a migration into single-line statements, descending into dollar-quoted bodies."""
+    tokens: Final = tuple(_sql_tokens(sql))
+    ends: Final = (0, *(i + 1 for i, (kind, _) in enumerate(tokens) if kind == "semicolon"), len(tokens) + 1)
+    top_level: Final = tuple(
+        normalize("".join(" " if kind == "dollar" else text for kind, text in tokens[start : end - 1]))
+        for start, end in zip(ends, ends[1:])
+    )
+    bodies: Final = (
+        match.group("body")
+        for kind, text in tokens
+        if kind == "dollar" and (match := _DOLLAR_QUOTED.fullmatch(text)) is not None
+    )
     nested: Final = tuple(chain.from_iterable(split_statements(body) for body in bodies))
     return tuple(statement for statement in top_level + nested if statement)
 
@@ -406,21 +444,30 @@ def _defaulted_columns(statements: Iterable[str]) -> frozenset[tuple[str, str]]:
 
 
 def unique_indexes_at(repo: Path, ref: str) -> Mapping[str, tuple[str, tuple[str, ...]]]:
-    """Every unique index some migration at `ref` creates, by name: its table and columns.
-
-    Read statement by statement, not line by line, because Prisma wraps long index definitions.
-    """
-    listing: Final = _git_or_none(
-        repo, "grep", "-l", "-i", "--fixed-strings", "CREATE UNIQUE INDEX", ref, "--", f"{MIGRATIONS_DIR}/"
-    )
+    """Non-partial unique indexes without ambiguous history at the base ref."""
+    listing: Final = _git_or_none(repo, "grep", "-l", "-i", "--fixed-strings", "INDEX", ref, "--", f"{MIGRATIONS_DIR}/")
     paths: Final = tuple(line.split(":", 1)[1] if ":" in line else line for line in (listing or "").splitlines())
     sources: Final = tuple(text for path in paths if (text := _git_or_none(repo, "show", f"{ref}:{path}")) is not None)
-    statements: Final = chain.from_iterable(split_statements(source) for source in sources)
+    statements: Final = tuple(chain.from_iterable(split_statements(source) for source in sources))
+    definitions: Final = {
+        named.group("index"): statement
+        for statement in statements
+        if _UNIQUE_INDEX.search(statement) is not None and (named := _INDEX_NAME.search(statement)) is not None
+    }
+    partial: Final = frozenset(
+        partial_named.group("index")
+        for statement in statements
+        if _UNIQUE_INDEX.search(statement) is not None
+        and _WHERE.search(statement) is not None
+        and (partial_named := _INDEX_NAME.search(statement)) is not None
+    )
+    changed: Final = (match.group("body") for statement in statements if (match := _INDEX_CHANGE.search(statement)))
+    ambiguous: Final = partial | frozenset(chain.from_iterable(_identifiers(body) for body in changed))
     return MappingProxyType(
         {
-            named.group("index"): (statement_table(statement), _index_columns(statement))
-            for statement in statements
-            if _UNIQUE_INDEX.search(statement) is not None and (named := _INDEX_NAME.search(statement)) is not None
+            name: (statement_table(statement), _index_columns(statement))
+            for name, statement in definitions.items()
+            if name not in ambiguous
         }
     )
 
