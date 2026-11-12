@@ -1670,18 +1670,26 @@ class TestRunAgent:
         assert calls["args"] == ("claude", "--resume")
 
     @pytest.mark.parametrize(
-        ("project_local", "user", "exports_the_key"),
+        ("project_local", "user", "key_from_stored_login", "exports_the_key"),
         [
-            ({}, {"apiKeyHelper": LITE_HELPER}, False),
-            ({}, {"apiKeyHelper": LITE_HELPER.replace("localhost:4000", "other-proxy:4000")}, True),
-            ({}, {"apiKeyHelper": "/opt/mine/helper"}, True),
-            ({"apiKeyHelper": "/opt/mine/helper"}, {"apiKeyHelper": LITE_HELPER}, True),
-            ({}, {}, True),
+            ({}, {"apiKeyHelper": LITE_HELPER}, True, False),
+            ({}, {"apiKeyHelper": LITE_HELPER}, False, True),
+            ({}, {"apiKeyHelper": LITE_HELPER.replace("localhost:4000", "other-proxy:4000")}, True, True),
+            ({}, {"apiKeyHelper": "/opt/mine/helper"}, True, True),
+            ({"apiKeyHelper": "/opt/mine/helper"}, {"apiKeyHelper": LITE_HELPER}, True, True),
+            ({}, {}, True, True),
         ],
-        ids=["lites-helper-for-this-proxy", "another-proxy", "users-own-helper", "project-helper-wins", "no-helper"],
+        ids=[
+            "lites-helper-for-this-proxy",
+            "key-passed-with-api-key",
+            "another-proxy",
+            "users-own-helper",
+            "project-helper-wins",
+            "no-helper",
+        ],
     )
     def test_claude_takes_the_key_from_lites_renewing_helper_only_when_it_is_the_one_claude_code_runs(
-        self, tmp_path, project_local, user, exports_the_key
+        self, tmp_path, project_local, user, key_from_stored_login, exports_the_key
     ):
         files = {
             tmp_path / "repo" / ".claude" / "settings.local.json": project_local,
@@ -1698,6 +1706,7 @@ class TestRunAgent:
             launcher=lambda p, a, e: launched.update(env=dict(e)),
             read_settings=lambda path: files.get(path, {}),
             project_dir=tmp_path / "repo",
+            key_from_stored_login=key_from_stored_login,
         )
         assert launched["env"]["ANTHROPIC_BASE_URL"] == "http://localhost:4000"
         assert launched["env"].get("ANTHROPIC_AUTH_TOKEN") == ("sk-key" if exports_the_key else None)
@@ -2494,6 +2503,27 @@ class TestAgentCommands:
         assert captured["command"] == ["claude", "--resume", "-p", "hi"]
         assert captured["skip_verify"] is False
         assert "routing Claude Code through proxy at http://localhost:4000" in result.output
+
+    @pytest.mark.parametrize(
+        ("obj", "key_from_stored_login"),
+        [
+            ({"api_key": "sk-stored", "api_key_from_token_file": True}, True),
+            ({"api_key": "sk-explicit", "api_key_from_token_file": False}, False),
+        ],
+        ids=["stored-login", "api-key-flag-or-env"],
+    )
+    def test_only_a_stored_login_key_lets_lites_helper_stand_in_for_it(self, obj, key_from_stored_login):
+        captured = {}
+        with patch(
+            f"{AGENTS_MODULE}.run_agent",
+            side_effect=lambda b, k, c, **kw: captured.update(api_key=k, stored=kw.get("key_from_stored_login")),
+        ):
+            result = self.runner.invoke(
+                _agent_command("claude"), [], obj={"base_url": "http://localhost:4000", **obj}
+            )
+
+        assert result.exit_code == 0, result.output
+        assert captured == {"api_key": obj["api_key"], "stored": key_from_stored_login}
 
     def test_codex_shows_friendly_name(self):
         captured = {}

@@ -1131,13 +1131,16 @@ def run_agent(
     read_settings: Callable[[Path], Mapping[str, JsonValue]] = load_json_or_empty,
     write_overlay: Callable[[str, Mapping[str, str]], Path] = write_settings_overlay,
     project_dir: Path | None = None,
+    key_from_stored_login: bool = False,
 ) -> None:
     """Validate, wire the environment, and hand off to the agent.
 
     On success this replaces the current process and never returns. Raises
     AgentRunError for missing binaries, an unreachable proxy, a rejected key, or
     a failed pre-launch config sync (pi). reattach_terminal, when given, runs
-    just before handoff to restore stdin.
+    just before handoff to restore stdin. key_from_stored_login says api_key is the
+    stored `lite login` key, the only one lite's apiKeyHelper may stand in for, since
+    it prints that login's key and would replace a key passed with --api-key.
     """
     if not command:
         raise AgentRunError("Nothing to run.")
@@ -1155,7 +1158,8 @@ def run_agent(
     env_before_sync: Final = base_env if base_env is not None else os.environ
     project: Final = project_dir if project_dir is not None else Path.cwd()
     helper_renews_key: Final = (
-        not subscription
+        key_from_stored_login
+        and not subscription
         and PROFILE_ANTHROPIC in profiles
         and lite_helper_renews_key(base_url, _readable_settings_files(read_settings, env_before_sync, project), which)
     )
@@ -1251,6 +1255,7 @@ def _launch(
     ctx_obj: Final = cli_context_obj(ctx)
     base_url: Final = ctx_obj["base_url"]
     started_interactive: Final = _is_interactive()
+    key_from_stored_login: Final = ctx_obj.get("api_key_from_token_file", False) or not ctx_obj.get("api_key")
     api_key: Final = resolve_api_key(ctx)
 
     display_name, _profiles = agent_profile(binary)
@@ -1266,6 +1271,7 @@ def _launch(
             skip_verify=skip_verify,
             subscription=use_subscription,
             reattach_terminal=(_restore_controlling_terminal if started_interactive else None),
+            key_from_stored_login=key_from_stored_login,
         )
     except AgentRunError as e:
         raise click.ClickException(str(e))

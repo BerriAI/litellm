@@ -12,6 +12,8 @@ any other key, so writing one credential strips the other.
 
 import hashlib
 import json
+import ntpath
+import posixpath
 import shlex
 import shutil
 import sys
@@ -319,18 +321,22 @@ def _land(
 def lite_api_key_helper(
     base_url: str, platform: str = sys.platform, which: Callable[[str], str | None] = shutil.which
 ) -> ApiKeyHelper | None:
-    """The helper for a renewing login, or None when `lite` is not on PATH to be run by absolute path.
+    """The helper for a renewing login, or None when `lite` is not on PATH.
 
     Claude Code hands the string to `sh` on POSIX and cmd.exe on Windows, so every token is quoted for
-    that shell. `--base-url` makes `print-token` refuse a key a later `lite login` minted for another
-    proxy, and it belongs to the top-level group, so it goes before the subcommand.
+    that shell. The path is made absolute, since a relative PATH entry would otherwise run whichever `lite`
+    the directory Claude Code starts in holds. `--base-url` makes `print-token` refuse a key a later
+    `lite login` minted for another proxy, and it belongs to the top-level group, so it goes before the
+    subcommand.
     """
     lite_path: Final = which("lite")
     if lite_path is None:
         return None
-    quote: Final = quote_for_cmd if platform.startswith("win") else shlex.quote
+    windows: Final = platform.startswith("win")
+    quote: Final = quote_for_cmd if windows else shlex.quote
+    absolute_path: Final = (ntpath if windows else posixpath).abspath(lite_path)
     return ApiKeyHelper(
-        " ".join(quote(token) for token in (lite_path, "--base-url", base_url.rstrip("/"), "auth", "print-token"))
+        " ".join(quote(token) for token in (absolute_path, "--base-url", base_url.rstrip("/"), "auth", "print-token"))
     )
 
 

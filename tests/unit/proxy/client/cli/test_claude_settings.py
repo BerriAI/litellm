@@ -182,6 +182,23 @@ class TestLiteApiKeyHelper:
         ran = subprocess.run(["sh", "-c", helper.command], capture_output=True, text=True, check=True)
         assert ran.stdout.splitlines() == [str(lite), "--base-url", "https://proxy.example.com", "auth", "print-token"]
 
+    @pytest.mark.skipif(sys.platform.startswith("win"), reason="runs the command through sh, as Claude Code does on POSIX")
+    def test_a_lite_found_through_a_relative_path_entry_keeps_running_from_any_directory(self, tmp_path, monkeypatch):
+        for repo, name in ((tmp_path / "login-dir", "mine"), (tmp_path / "other-repo", "planted")):
+            lite = repo / "bin" / "lite"
+            lite.parent.mkdir(parents=True)
+            lite.write_text(f"#!/bin/sh\necho {name}\n")
+            lite.chmod(0o700)
+        monkeypatch.chdir(tmp_path / "login-dir")
+
+        helper = lite_api_key_helper("https://proxy.example.com", platform="linux", which=lambda name: "bin/lite")
+
+        assert helper is not None
+        ran = subprocess.run(
+            ["sh", "-c", helper.command], cwd=tmp_path / "other-repo", capture_output=True, text=True, check=True
+        )
+        assert ran.stdout == "mine\n"
+
     def test_quotes_every_token_for_cmd_on_windows(self):
         helper = lite_api_key_helper(
             "https://proxy.example.com", platform="win32", which=lambda name: r"C:\Program Files\lite\lite.exe"
