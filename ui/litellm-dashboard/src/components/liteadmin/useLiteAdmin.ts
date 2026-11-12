@@ -6,7 +6,7 @@ import { getProxyBaseUrl } from "@/components/networking";
 import i18n from "@/i18n/i18n";
 import { extractProxyErrorMessage } from "@/lib/http/client";
 import { toast } from "@/lib/toast";
-import { getAuthToken } from "@/utils/cookieUtils";
+import { getCookie } from "@/utils/cookieUtils";
 import { checkTokenValidity } from "@/utils/jwtUtils";
 import { runLiteAdmin } from "./agent";
 import type { ActionResult, AriaAccess, LiteAdminAction } from "./operations";
@@ -119,7 +119,7 @@ export function useLiteAdmin(session: LiteAdminSession) {
     setEntries((current) => [...current, { kind: "message", id: message.id, message }]);
     setPhase("thinking");
     const sameSession = () =>
-      getAuthToken() === session.token &&
+      getCookie("token") === session.token &&
       checkTokenValidity(session.token) &&
       getProxyBaseUrl() === session.managementBaseUrl;
     const assertCurrent = () => {

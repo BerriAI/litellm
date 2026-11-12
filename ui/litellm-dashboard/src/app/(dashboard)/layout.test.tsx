@@ -21,13 +21,6 @@ const currentUserRequests = () =>
 
 let searchParamsValue = new URLSearchParams();
 
-const sessionCookie = (claims: Record<string, unknown>) => {
-  const encode = (part: Record<string, unknown>) =>
-    btoa(JSON.stringify(part)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  const exp = Math.floor(Date.now() / 1000) + 3600;
-  return `${encode({ alg: "HS256", typ: "JWT" })}.${encode({ ...claims, exp })}.sig`;
-};
-
 vi.mock("@/lib/telemetry/uiEvents", () => ({
   recordUiEvent: vi.fn(() => Promise.resolve()),
 }));
@@ -105,12 +98,9 @@ describe("(dashboard) Layout", () => {
       pathOf(input) === CURRENT_USER_PATH ? currentUserReply() : Promise.resolve(Response.json({}, { status: 404 })),
     );
     vi.stubGlobal("fetch", fetchMock);
-    clearTokenCookies();
-    storeLoginToken(sessionCookie({ user_id: "normal-user", key: "sk-normal-session" }));
   });
 
   afterEach(() => {
-    clearTokenCookies();
     vi.unstubAllGlobals();
   });
 
@@ -244,6 +234,13 @@ describe("(dashboard) Layout", () => {
   });
 
   describe("forced password reset routing", () => {
+    const sessionCookie = (claims: Record<string, unknown>) => {
+      const encode = (part: Record<string, unknown>) =>
+        btoa(JSON.stringify(part)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+      const exp = Math.floor(Date.now() / 1000) + 3600;
+      return `${encode({ alg: "HS256", typ: "JWT" })}.${encode({ ...claims, exp })}.sig`;
+    };
+
     afterEach(() => {
       clearTokenCookies();
       document.cookie = "token=; Max-Age=0; Path=/";
@@ -254,18 +251,6 @@ describe("(dashboard) Layout", () => {
       const { authLoading, userEmail, userRole } = useAuth();
       if (authLoading) return <div>Loading session</div>;
       return <div>{userEmail ? `${userEmail} (${userRole})` : "Signed out"}</div>;
-    }
-
-    function SessionDetails() {
-      const { authLoading, token, userID, userEmail, userRole, accessToken, premiumUser, showSSOBanner } = useAuth();
-      if (authLoading) return <div>Loading session</div>;
-      return (
-        <div>
-          {token ? "Token present" : "No token"} | {userID ?? "No user"} | {userEmail ?? "No email"} |{" "}
-          {userRole || "No role"} | {accessToken ?? "No key"} | {premiumUser ? "Premium" : "Standard"} |{" "}
-          {showSSOBanner ? "SSO banner" : "No SSO banner"}
-        </div>
-      );
     }
 
     it("updates the mounted session after login and when a different user signs in", async () => {
@@ -283,69 +268,6 @@ describe("(dashboard) Layout", () => {
 
       act(() => storeLoginToken(sessionCookie({ user_email: "user@example.test", user_role: "internal_user" })));
       expect(await screen.findByText("user@example.test (Internal User)")).toBeInTheDocument();
-    });
-
-    it("clears the previous principal's missing email and premium status when switching users", async () => {
-      clearTokenCookies();
-      const adminClaims = {
-        user_id: "admin",
-        user_email: "admin@example.test",
-        user_role: "proxy_admin",
-        key: "admin-key",
-        premium_user: true,
-        login_method: "sso",
-      };
-      storeLoginToken(sessionCookie(adminClaims));
-      render(
-        <AuthProvider>
-          <SessionDetails />
-        </AuthProvider>,
-      );
-      pendingUiConfig.resolve();
-      expect(
-        await screen.findByText(
-          "Token present | admin | admin@example.test | Admin | admin-key | Premium | No SSO banner",
-        ),
-      ).toBeInTheDocument();
-
-      act(() =>
-        storeLoginToken(sessionCookie({ user_id: "internal", user_role: "internal_user", key: "internal-key" })),
-      );
-
-      expect(
-        await screen.findByText(
-          "Token present | internal | No email | Internal User | internal-key | Standard | SSO banner",
-        ),
-      ).toBeInTheDocument();
-    });
-
-    it("clears the token and all identity fields for mounted consumers on sign out", async () => {
-      clearTokenCookies();
-      const adminClaims = {
-        user_id: "admin",
-        user_email: "admin@example.test",
-        user_role: "proxy_admin",
-        key: "admin-key",
-        premium_user: true,
-      };
-      storeLoginToken(sessionCookie(adminClaims));
-      render(
-        <AuthProvider>
-          <SessionDetails />
-        </AuthProvider>,
-      );
-      pendingUiConfig.resolve();
-      expect(
-        await screen.findByText(
-          "Token present | admin | admin@example.test | Admin | admin-key | Premium | SSO banner",
-        ),
-      ).toBeInTheDocument();
-
-      act(() => clearTokenCookies());
-
-      expect(
-        await screen.findByText("No token | No user | No email | No role | No key | Standard | SSO banner"),
-      ).toBeInTheDocument();
     });
 
     it.each(["", "   ", "invalid-token"])("does not authenticate a stored invalid token %j", async (token) => {
@@ -463,33 +385,6 @@ describe("(dashboard) Layout", () => {
         expect(screen.queryByTestId("sidebar")).not.toBeInTheDocument();
         expect(screen.queryByTestId("page-content")).not.toBeInTheDocument();
         expect(currentUserRequests()).toHaveLength(2);
-      } finally {
-        Object.defineProperty(window, "location", { value: originalLocation, writable: true });
-      }
-    });
-
-    it("redirects a signed-out session without mounting the shell", async () => {
-      clearTokenCookies();
-      const originalLocation = window.location;
-      const locationReplace = vi.fn();
-      Object.defineProperty(window, "location", {
-        value: { ...originalLocation, replace: locationReplace },
-        writable: true,
-      });
-      try {
-        render(
-          <AuthProvider>
-            <Layout>
-              <div data-testid="page-content" />
-            </Layout>
-          </AuthProvider>,
-        );
-        pendingUiConfig.resolve();
-
-        await waitFor(() => expect(locationReplace).toHaveBeenCalledWith(expect.stringContaining("/login")));
-        expect(screen.queryByTestId("sidebar")).not.toBeInTheDocument();
-        expect(screen.queryByTestId("page-content")).not.toBeInTheDocument();
-        expect(currentUserRequests()).toHaveLength(0);
       } finally {
         Object.defineProperty(window, "location", { value: originalLocation, writable: true });
       }

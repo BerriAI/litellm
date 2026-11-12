@@ -240,14 +240,13 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const { accessToken, token, authLoading, passwordResetRequired } = useAuth();
-  const redirectingToLogin = useRef(false);
   const session = decodeToken(token);
   const { isLoading: currentUserLoading, isError: currentUserFailed } = useCurrentUser(
     session?.key ?? null,
     session?.auth_header_name,
   );
   const isInvitationFlow = Boolean(searchParams.get("invitation_id"));
-  const identityPending = !token || currentUserLoading || currentUserFailed;
+  const identityPending = currentUserLoading || currentUserFailed;
 
   // Legacy invitation links point at /ui/?invitation_id=; the onboarding form now lives at its own
   // /onboarding route. Redirect once ui-config has loaded so uiHref resolves the SERVER_ROOT_PATH base.
@@ -266,12 +265,10 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
   }, [authLoading, passwordResetRequired, pathname, router]);
 
   useEffect(() => {
-    if (authLoading || isInvitationFlow || redirectingToLogin.current) return;
-    if (token && !currentUserFailed) return;
-    redirectingToLogin.current = true;
-    if (currentUserFailed) clearTokenCookies();
+    if (!currentUserFailed || isInvitationFlow) return;
+    clearTokenCookies();
     redirectToLogin();
-  }, [authLoading, currentUserFailed, isInvitationFlow, token]);
+  }, [currentUserFailed, isInvitationFlow]);
 
   if (authLoading || identityPending || isInvitationFlow) {
     return <LoadingScreen />;

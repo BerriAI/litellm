@@ -46,7 +46,7 @@ import { prism } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { useSyntaxTheme } from "@/hooks/useSyntaxTheme";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { checkTokenValidity } from "@/utils/jwtUtils";
-import { useAuthToken } from "@/utils/cookieUtils";
+import { getCookie } from "@/utils/cookieUtils";
 import { getLoginUrl } from "@/utils/returnUrlUtils";
 import { uiHref } from "@/utils/uiHref";
 import {
@@ -154,7 +154,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
   const [skillLoading, setSkillLoading] = useState<boolean>(false);
   const [isMakeSkillPublicModalVisible, setIsMakeSkillPublicModalVisible] = useState(false);
   const { data: uiSettings, isLoading: isUISettingsLoading } = useUISettings();
-  const token = useAuthToken();
 
   // Check authentication requirement for public AI Hub
   useEffect(() => {
@@ -167,6 +166,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
 
     // If require_auth_for_public_ai_hub is true, verify token
     if (requireAuth === true) {
+      const token = getCookie("token");
       const isTokenValid = checkTokenValidity(token);
 
       // If token is invalid, redirect to login
@@ -176,7 +176,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
       }
     }
     // If require_auth_for_public_ai_hub is false, allow public access (no change)
-  }, [isUISettingsLoading, publicPage, uiSettings, token]);
+  }, [isUISettingsLoading, publicPage, uiSettings]);
 
   useEffect(() => {
     const fetchData = async (accessToken: string) => {

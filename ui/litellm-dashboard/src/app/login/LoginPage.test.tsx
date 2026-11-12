@@ -20,7 +20,6 @@ vi.mock("@/app/(dashboard)/hooks/uiConfig/useUIConfig", () => ({
 vi.mock("@/utils/cookieUtils", () => ({
   clearTokenCookies: vi.fn(),
   getCookieFromDocument: vi.fn(),
-  getAuthToken: vi.fn(() => null),
 }));
 
 vi.mock("@/utils/jwtUtils", () => ({

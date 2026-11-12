@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { clearTokenCookies, getAuthToken, getCookie, storeLoginToken, subscribeAuthToken } from "./cookieUtils";
+import { clearTokenCookies, getCookie, storeLoginToken } from "./cookieUtils";
 import { getToken, setToken } from "./mcpTokenStore";
 
 describe("cookieUtils", () => {
@@ -12,39 +12,6 @@ describe("cookieUtils", () => {
     sessionStorage.clear();
 
     vi.spyOn(console, "log").mockImplementation(() => {});
-  });
-
-  describe("auth token snapshots", () => {
-    const jwt = (exp: number) => `eyJhbGciOiJub25lIn0.${btoa(JSON.stringify({ exp }))}.sig`;
-
-    it("reads a stable valid snapshot from the session fallback", () => {
-      const token = jwt(Math.floor(Date.now() / 1000) + 3600);
-      sessionStorage.setItem("token", token);
-
-      expect(getAuthToken()).toBe(token);
-      expect(getAuthToken()).toBe(getAuthToken());
-    });
-
-    it.each(["invalid-token", jwt(0)])("returns null without mutating invalid storage for %s", (token) => {
-      sessionStorage.setItem("token", token);
-
-      expect(getAuthToken()).toBeNull();
-      expect(sessionStorage.getItem("token")).toBe(token);
-    });
-
-    it("notifies subscribers after writes and clears and stops after unsubscribe", () => {
-      const snapshots: (string | null)[] = [];
-      const token = jwt(Math.floor(Date.now() / 1000) + 3600);
-      const unsubscribe = subscribeAuthToken(() => snapshots.push(getAuthToken()));
-
-      storeLoginToken(token);
-      clearTokenCookies();
-      unsubscribe();
-      storeLoginToken(token);
-
-      expect(snapshots).toEqual([token, null]);
-      clearTokenCookies();
-    });
   });
 
   describe("clearTokenCookies", () => {

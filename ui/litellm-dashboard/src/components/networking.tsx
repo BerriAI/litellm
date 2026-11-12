@@ -88,7 +88,7 @@ export const getAutoRouterAssembledPromptCall = async (
  */
 import i18n from "@/i18n/i18n";
 import { toast } from "@/lib/toast";
-import { clearTokenCookies, getAuthToken, storeLoginToken } from "@/utils/cookieUtils";
+import { clearTokenCookies, getCookie, storeLoginToken } from "@/utils/cookieUtils";
 import { decodeToken } from "@/utils/jwtUtils";
 import { normalizeBackendPageUrlToUiOrigin } from "@/utils/returnUrlUtils";
 import { TagNewRequest, TagUpdateRequest, TagListResponse, TagInfoResponse } from "./tag_management/types";
@@ -545,7 +545,7 @@ const gatewayApiClient = createApiClient({
 
 registerBaseUrlGetter(getProxyBaseUrl);
 registerAuthHeaderNameGetter(getGlobalLitellmHeaderName);
-registerAuthTokenGetter(() => decodeToken(getAuthToken())?.key ?? null);
+registerAuthTokenGetter(() => decodeToken(getCookie("token"))?.key ?? null);
 registerErrorHandler(handleError);
 
 export const makeModelGroupPublic = async (accessToken: string, modelGroups: string[]) => {

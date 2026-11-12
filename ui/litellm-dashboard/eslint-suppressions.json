@@ -1740,7 +1740,7 @@
       "count": 5
     },
     "no-restricted-syntax": {
-      "count": 131
+      "count": 132
     },
     "prefer-const": {
       "count": 26
@@ -2076,6 +2076,11 @@
   },
   "src/components/view_model/model_name_display.tsx": {
     "local/filename-pascal-case": {
+      "count": 1
+    }
+  },
+  "src/contexts/AuthContext.tsx": {
+    "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },

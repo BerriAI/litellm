@@ -1,6 +1,6 @@
 "use client";
 
-import { clearTokenCookies, getCookie, useAuthToken } from "@/utils/cookieUtils";
+import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 import { checkTokenValidity, decodeToken } from "@/utils/jwtUtils";
 import { useEffect, useMemo } from "react";
 import { effectiveSessionRole, formatUserRole, isViewOnlySessionRole, userRoleDisplayLabel } from "@/utils/roles";
@@ -11,7 +11,7 @@ import { useUIConfig } from "./uiConfig/useUIConfig";
 const useAuthorized = () => {
   const { data: uiConfig, isLoading: isUIConfigLoading } = useUIConfig();
 
-  const token = useAuthToken();
+  const token = typeof document !== "undefined" ? getCookie("token") : null;
 
   const decoded = useMemo(() => decodeToken(token), [token]);
   const isTokenValid = useMemo(() => checkTokenValidity(token), [token]);
@@ -29,7 +29,7 @@ const useAuthorized = () => {
     if (isLoading) return;
 
     if (!isAuthorized) {
-      if (token || getCookie("token")) {
+      if (token) {
         clearTokenCookies();
       }
       redirectToLogin();

@@ -8,7 +8,7 @@ import { renderWithProviders, screen, testQueryClient, waitFor, within } from ".
 import ModelHubTable from "./ModelHubTable";
 
 const mockUseUISettings = vi.hoisted(() => vi.fn());
-const mockUseAuthToken = vi.hoisted(() => vi.fn());
+const mockGetCookie = vi.hoisted(() => vi.fn());
 const mockCheckTokenValidity = vi.hoisted(() => vi.fn());
 const mockRouterReplace = vi.hoisted(() => vi.fn());
 const mockLocationReplace = vi.hoisted(() => vi.fn());
@@ -73,7 +73,7 @@ vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
 }));
 
 vi.mock("@/utils/cookieUtils", () => ({
-  useAuthToken: mockUseAuthToken,
+  getCookie: mockGetCookie,
 }));
 
 vi.mock("@/utils/jwtUtils", () => ({
@@ -117,7 +117,7 @@ describe("ModelHubTable", () => {
       },
       isLoading: false,
     });
-    mockUseAuthToken.mockReturnValue(tokenValue);
+    mockGetCookie.mockReturnValue(tokenValue);
     mockCheckTokenValidity.mockReturnValue(isTokenValid);
     mockRouterReplace.mockClear();
     mockLocationReplace.mockClear();

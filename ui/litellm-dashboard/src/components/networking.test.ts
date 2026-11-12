@@ -5,7 +5,7 @@ import { uiHref } from "@/utils/uiHref";
 
 vi.mock("@/utils/cookieUtils", () => ({
   clearTokenCookies: vi.fn(),
-  getAuthToken: vi.fn(),
+  getCookie: vi.fn(),
   storeLoginToken: vi.fn(),
 }));
 
