@@ -163,7 +163,7 @@ from litellm.litellm_core_utils.served_output_texts import (
 )
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
-from litellm.llms.base_llm.search.transformation import SearchResponse
+from litellm.llms.base_llm.search.transformation import FetchResponse, SearchResponse
 from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.containers.main import ContainerObject
@@ -3575,6 +3575,7 @@ class Logging(LiteLLMLoggingBaseClass):
             or isinstance(logging_result, OpenAIModerationResponse)
             or isinstance(logging_result, OCRResponse)  # OCR
             or isinstance(logging_result, SearchResponse)  # Search API
+            or isinstance(logging_result, FetchResponse)  # Fetch API
             or isinstance(logging_result, DecisionsResponse)
             or isinstance(logging_result, OpenAIDecisionResponse)
             or isinstance(logging_result, ExtractionResponse)
@@ -3587,6 +3588,8 @@ class Logging(LiteLLMLoggingBaseClass):
             and logging_result.get("object") == "vector_store.search_results.page"
             or isinstance(logging_result, dict)
             and logging_result.get("object") == "search"  # Search API (dict format)
+            or isinstance(logging_result, dict)
+            and logging_result.get("object") == "fetch"  # Fetch API (dict format)
             or isinstance(logging_result, VideoObject)
             or isinstance(logging_result, ContainerObject)
             or isinstance(logging_result, LiteLLMSendMessageResponse)  # A2A

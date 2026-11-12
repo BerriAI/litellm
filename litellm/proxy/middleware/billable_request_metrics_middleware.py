@@ -81,6 +81,7 @@ _LLM_ROUTE_SUFFIXES: Final[tuple[str, ...]] = (
     "/remix",  # /v1/videos/{id}/remix
     "/ocr",
     "/search",  # /v1/search and /v1/vector_stores/{id}/search
+    "/fetch",
     "/rag/query",
     "/rag/ingest",
     ":generateContent",  # Gemini-native /v1beta/models/{model}:generateContent

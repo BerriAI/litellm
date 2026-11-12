@@ -7700,6 +7700,46 @@ def _interactions_logging_obj(stream: bool, call_type: str = "acreate"):
     return logging_obj
 
 
+def test_fetch_response_is_recognized_and_priced_for_spend():
+    import datetime as dt
+
+    from litellm.llms.base_llm.search.transformation import FetchResponse
+
+    logging_obj = LitellmLogging(
+        model="deepseek/fetch",
+        messages=[],
+        stream=False,
+        call_type="asearch",
+        start_time=dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc).timestamp(),
+        litellm_call_id="fetch-call-id",
+        function_id="fetch-fn-id",
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={},
+        optional_params={},
+        model="deepseek/fetch",
+        custom_llm_provider="deepseek",
+        input="https://example.com/article",
+    )
+    page = FetchResponse(title="Example", content="page body", url="https://example.com/article")
+    priced = litellm.model_cost["deepseek/fetch"]["input_cost_per_query"]
+
+    assert logging_obj._is_recognized_call_type_for_logging(logging_result=page) is True
+    fetch_payload: Final = {"object": "fetch", "content": "page"}
+    assert logging_obj._is_recognized_call_type_for_logging(logging_result=fetch_payload) is True
+
+    logging_obj._success_handler_helper_fn(
+        result=page,
+        start_time=dt.datetime.now(),
+        end_time=dt.datetime.now(),
+        cache_hit=False,
+    )
+
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(priced)
+    assert logging_obj.model_call_details["standard_logging_object"]["response_cost"] == pytest.approx(priced)
+    assert priced > 0
+
+
 @pytest.mark.parametrize("call_type", ["create", "acreate", "create_interaction", "acreate_interaction"])
 def test_interactions_response_is_recognized_for_logging(call_type):
     from litellm.types.interactions import InteractionsAPIResponse

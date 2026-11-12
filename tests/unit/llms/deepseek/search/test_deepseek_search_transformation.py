@@ -128,6 +128,83 @@ def test_missing_api_key_raises(monkeypatch):
         DeepSeekSearchConfig().validate_environment(headers={})
 
 
+@pytest.mark.asyncio
+async def test_afetch_posts_the_page_url_and_returns_markdown(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-deepseek-key")
+    monkeypatch.delenv("DEEPSEEK_API_BASE", raising=False)
+    mock_response: Final = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"title": "Example article", "content": "# Example article\n\nArticle content."}
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ) as mock_post:
+        page: Final = await litellm.afetch(url="https://example.com/article")
+
+    call: Final = mock_post.call_args
+    assert call.kwargs["url"] == "https://api.deepseek.com/v1/tools/fetch"
+    assert call.kwargs["headers"]["Authorization"] == "Bearer test-deepseek-key"
+    assert call.kwargs["json"] == {"url": "https://example.com/article"}
+    assert page.object == "fetch"
+    assert page.title == "Example article"
+    assert page.content == "# Example article\n\nArticle content."
+    assert page.url == "https://example.com/article"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "",
+        "   ",
+        "ftp://example.com/file",
+        "https://user:pass@example.com/a",
+        "https://user@example.com/a",
+        "not-a-url",
+        "https:///missing-host",
+        "https://example.com/" + ("a" * 8200),
+    ],
+)
+def test_fetch_rejects_a_url_deepseek_will_not_accept(url):
+    with pytest.raises(litellm.BadRequestError, match="DeepSeek Fetch needs an http or https URL"):
+        DeepSeekSearchConfig().transform_search_request(query=url, optional_params={"fetch_url": url})
+
+
+def test_fetch_from_a_chat_style_api_base_uses_the_fetch_route(monkeypatch):
+    monkeypatch.delenv("DEEPSEEK_API_BASE", raising=False)
+    url: Final = DeepSeekSearchConfig().get_complete_url(
+        api_base="https://api.deepseek.com/v1",
+        optional_params={"fetch_url": "https://example.com/article"},
+    )
+    assert url == "https://api.deepseek.com/v1/tools/fetch"
+
+
+def test_fetch_cost_matches_search_and_an_empty_page_is_free(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-deepseek-key")
+    search_price: Final = litellm.model_cost["deepseek/search"]["input_cost_per_query"]
+    fetch_price: Final = litellm.model_cost["deepseek/fetch"]["input_cost_per_query"]
+    assert fetch_price == search_price
+    assert fetch_price > 0
+    filled: Final = MagicMock()
+    filled.status_code = 200
+    filled.json.return_value = {"title": "t", "content": "page"}
+    empty: Final = MagicMock()
+    empty.status_code = 200
+    empty.json.return_value = {"title": "", "content": ""}
+    with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post", return_value=filled):
+        billed: Final = litellm.fetch(url="https://example.com/article")
+    with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post", return_value=empty):
+        free: Final = litellm.fetch(url="https://example.com/empty")
+    assert billed._hidden_params["response_cost"] == pytest.approx(fetch_price)
+    assert free._hidden_params["response_cost"] == 0
+
+
+def test_other_providers_cannot_fetch():
+    with pytest.raises(litellm.BadRequestError, match="only supported for the deepseek provider"):
+        litellm.fetch(url="https://example.com", fetch_provider="tavily")
+
+
 def test_search_cost_comes_from_cost_map(monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-deepseek-key")
     priced: Final[float] = litellm.model_cost["deepseek/search"]["input_cost_per_query"]

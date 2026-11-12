@@ -286,6 +286,96 @@ def test_direct_search_authorizes_the_requested_tool_over_completion_model(
     assert tavily.call_count == (1 if expected_status == 200 else 0)
 
 
+def _deepseek_router() -> Router:
+    return Router(
+        model_list=[],
+        search_tools=[
+            {
+                "search_tool_name": "deepseek-web",
+                "litellm_params": {"search_provider": "deepseek", "api_key": "test-deepseek-key"},
+            }
+        ],
+        num_retries=0,
+    )
+
+
+@pytest.fixture
+def deepseek_http(monkeypatch: pytest.MonkeyPatch) -> Iterator[respx.MockRouter]:
+    monkeypatch.setattr(  # test-quality-ok: respx needs HTTPX enabled to fake the provider HTTP boundary.
+        litellm,
+        "disable_aiohttp_transport",
+        True,
+    )
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "llm_router", _deepseek_router())
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    with respx.mock(assert_all_called=False) as mock:
+        yield mock
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+def test_tools_fetch_returns_the_page_and_bills_the_configured_tool(deepseek_http: respx.MockRouter) -> None:
+    deepseek_http.post("https://api.deepseek.com/v1/tools/fetch").respond(
+        200, json={"title": "Example article", "content": "# Example article"}
+    )
+
+    response: Final = _client(UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)).post(
+        "/v1/tools/fetch/deepseek-web", json={"url": "https://example.com/article"}
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "object": "fetch",
+        "title": "Example article",
+        "content": "# Example article",
+        "url": "https://example.com/article",
+    }
+    sent: Final = deepseek_http.calls.last.request
+    assert sent.url == "https://api.deepseek.com/v1/tools/fetch"
+    assert sent.headers["authorization"] == "Bearer test-deepseek-key"
+    assert orjson.loads(sent.content) == {"url": "https://example.com/article"}
+
+
+def test_tools_search_sends_count_as_deepseek_count(deepseek_http: respx.MockRouter) -> None:
+    deepseek_http.post("https://api.deepseek.com/v1/tools/search").respond(
+        200,
+        json={"results": [{"title": "LiteLLM", "url": "https://docs.litellm.ai", "snippet": "gateway"}]},
+    )
+
+    response: Final = _client(UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)).post(
+        "/v1/tools/search/deepseek-web",
+        json={"query": "litellm", "count": 500, "need_content": True},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["results"][0]["url"] == "https://docs.litellm.ai"
+    assert orjson.loads(deepseek_http.calls.last.request.content) == {
+        "query": "litellm",
+        "count": 50,
+        "need_content": True,
+    }
+
+
+def test_fetch_on_a_non_deepseek_tool_is_rejected_before_the_call(monkeypatch, cache, tavily) -> None:
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+
+    response: Final = _client(UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)).post(
+        "/v1/tools/fetch/search-a", json={"url": "https://example.com/article"}
+    )
+
+    assert response.status_code == 400, response.text
+    assert "deepseek" in response.json()["error"]["message"]
+    assert tavily.call_count == 0
+
+
+def test_fetch_routes_count_as_llm_api_routes() -> None:
+    from litellm.proxy.auth.route_checks import RouteChecks
+
+    assert RouteChecks.is_llm_api_route("/v1/tools/fetch/deepseek-web")
+    assert RouteChecks.is_llm_api_route("/v1/fetch/deepseek-web")
+    assert RouteChecks.is_llm_api_route("/v1/tools/search/deepseek-web")
+
+
 def test_list_search_tools_reads_the_router_search_tools(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(proxy_server, "llm_router", _search_router())
 

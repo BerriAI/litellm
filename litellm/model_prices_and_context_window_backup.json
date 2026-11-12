@@ -25621,6 +25621,15 @@
         "litellm_provider": "deepseek",
         "mode": "search"
     },
+    "deepseek/fetch": {
+        "input_cost_per_query": 0.00075,
+        "litellm_provider": "deepseek",
+        "mode": "search",
+        "source": "https://api-docs.deepseek.com/guides/search",
+        "metadata": {
+            "notes": "DeepSeek Fetch, $0.75 per 1,000 successful requests that return page content. Checked 2026-11-08."
+        }
+    },
     "tinyfish/search": {
         "input_cost_per_query": 0.0,
         "litellm_provider": "tinyfish",

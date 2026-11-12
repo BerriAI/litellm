@@ -5678,6 +5678,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/fetch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fetch Page
+         * @description Fetch one web page through a configured search tool whose provider is deepseek.
+         *
+         *     The body is DeepSeek's fetch request, `{"url": "https://example.com/article"}`.
+         *     `search_tool_name` can be the path (`/v1/tools/fetch/{search_tool_name}`) or a body field.
+         *     A successful call returns the page title and markdown content.
+         */
+        post: operations["fetch_page_fetch_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/fetch/{search_tool_name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fetch Page
+         * @description Fetch one web page through a configured search tool whose provider is deepseek.
+         *
+         *     The body is DeepSeek's fetch request, `{"url": "https://example.com/article"}`.
+         *     `search_tool_name` can be the path (`/v1/tools/fetch/{search_tool_name}`) or a body field.
+         *     A successful call returns the page title and markdown content.
+         */
+        post: operations["fetch_page_fetch__search_tool_name__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/files": {
         parameters: {
             query?: never;
@@ -18756,6 +18804,102 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tools/fetch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fetch Page
+         * @description Fetch one web page through a configured search tool whose provider is deepseek.
+         *
+         *     The body is DeepSeek's fetch request, `{"url": "https://example.com/article"}`.
+         *     `search_tool_name` can be the path (`/v1/tools/fetch/{search_tool_name}`) or a body field.
+         *     A successful call returns the page title and markdown content.
+         */
+        post: operations["fetch_page_tools_fetch_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tools/fetch/{search_tool_name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fetch Page
+         * @description Fetch one web page through a configured search tool whose provider is deepseek.
+         *
+         *     The body is DeepSeek's fetch request, `{"url": "https://example.com/article"}`.
+         *     `search_tool_name` can be the path (`/v1/tools/fetch/{search_tool_name}`) or a body field.
+         *     A successful call returns the page title and markdown content.
+         */
+        post: operations["fetch_page_tools_fetch__search_tool_name__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tools/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Tool Search
+         * @description Search through a configured search tool using the DeepSeek search body.
+         *
+         *     `count` is sent as the unified `max_results` and clamped to the provider range.
+         *     `search_tool_name` can be the path (`/v1/tools/search/{search_tool_name}`) or a body field.
+         *     Provider fields such as `need_content` are forwarded.
+         */
+        post: operations["tool_search_tools_search_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tools/search/{search_tool_name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Tool Search
+         * @description Search through a configured search tool using the DeepSeek search body.
+         *
+         *     `count` is sent as the unified `max_results` and clamped to the provider range.
+         *     `search_tool_name` can be the path (`/v1/tools/search/{search_tool_name}`) or a body field.
+         *     Provider fields such as `need_content` are forwarded.
+         */
+        post: operations["tool_search_tools_search__search_tool_name__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/toolset/{toolset_name}/mcp": {
         parameters: {
             query?: never;
@@ -21127,6 +21271,54 @@ export interface paths {
          *     provider's format.
          */
         post: operations["extraction_v1_extraction_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/fetch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fetch Page
+         * @description Fetch one web page through a configured search tool whose provider is deepseek.
+         *
+         *     The body is DeepSeek's fetch request, `{"url": "https://example.com/article"}`.
+         *     `search_tool_name` can be the path (`/v1/tools/fetch/{search_tool_name}`) or a body field.
+         *     A successful call returns the page title and markdown content.
+         */
+        post: operations["fetch_page_v1_fetch_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/fetch/{search_tool_name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fetch Page
+         * @description Fetch one web page through a configured search tool whose provider is deepseek.
+         *
+         *     The body is DeepSeek's fetch request, `{"url": "https://example.com/article"}`.
+         *     `search_tool_name` can be the path (`/v1/tools/fetch/{search_tool_name}`) or a body field.
+         *     A successful call returns the page title and markdown content.
+         */
+        post: operations["fetch_page_v1_fetch__search_tool_name__post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -23569,6 +23761,102 @@ export interface paths {
          *     (exactly one required).
          */
         delete: operations["delete_tool_policy_override_v1_tool__tool_name__overrides_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tools/fetch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fetch Page
+         * @description Fetch one web page through a configured search tool whose provider is deepseek.
+         *
+         *     The body is DeepSeek's fetch request, `{"url": "https://example.com/article"}`.
+         *     `search_tool_name` can be the path (`/v1/tools/fetch/{search_tool_name}`) or a body field.
+         *     A successful call returns the page title and markdown content.
+         */
+        post: operations["fetch_page_v1_tools_fetch_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tools/fetch/{search_tool_name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fetch Page
+         * @description Fetch one web page through a configured search tool whose provider is deepseek.
+         *
+         *     The body is DeepSeek's fetch request, `{"url": "https://example.com/article"}`.
+         *     `search_tool_name` can be the path (`/v1/tools/fetch/{search_tool_name}`) or a body field.
+         *     A successful call returns the page title and markdown content.
+         */
+        post: operations["fetch_page_v1_tools_fetch__search_tool_name__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tools/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Tool Search
+         * @description Search through a configured search tool using the DeepSeek search body.
+         *
+         *     `count` is sent as the unified `max_results` and clamped to the provider range.
+         *     `search_tool_name` can be the path (`/v1/tools/search/{search_tool_name}`) or a body field.
+         *     Provider fields such as `need_content` are forwarded.
+         */
+        post: operations["tool_search_v1_tools_search_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tools/search/{search_tool_name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Tool Search
+         * @description Search through a configured search tool using the DeepSeek search body.
+         *
+         *     `count` is sent as the unified `max_results` and clamped to the provider range.
+         *     `search_tool_name` can be the path (`/v1/tools/search/{search_tool_name}`) or a body field.
+         *     Provider fields such as `need_content` are forwarded.
+         */
+        post: operations["tool_search_v1_tools_search__search_tool_name__post"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -33700,6 +33988,32 @@ export interface components {
              * @description The model name
              */
             model: string;
+        };
+        /** FetchPageRequest */
+        FetchPageRequest: {
+            /** Search Tool Name */
+            search_tool_name?: string | null;
+            /** Url */
+            url: string;
+        };
+        /**
+         * FetchResponse
+         * @description One page fetched from a provider tool, in the DeepSeek Fetch shape.
+         */
+        FetchResponse: {
+            /** Content */
+            content: string;
+            /**
+             * Object
+             * @default fetch
+             */
+            object: string;
+            /** Title */
+            title: string;
+            /** Url */
+            url: string;
+        } & {
+            [key: string]: unknown;
         };
         /** FieldDetail */
         FieldDetail: {
@@ -46699,6 +47013,40 @@ export interface components {
             [key: string]: unknown;
         };
         /**
+         * SearchResponse
+         * @description Standard Search response format.
+         *     Standardized to Perplexity Search format - other providers should transform to this format.
+         */
+        SearchResponse: {
+            /**
+             * Object
+             * @default search
+             */
+            object: string;
+            /** Results */
+            results: components["schemas"]["SearchResult"][];
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * SearchResult
+         * @description Single search result.
+         */
+        SearchResult: {
+            /** Date */
+            date?: string | null;
+            /** Last Updated */
+            last_updated?: string | null;
+            /** Snippet */
+            snippet: string;
+            /** Title */
+            title: string;
+            /** Url */
+            url: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
          * SearchTool
          * @description Search tool configuration.
          *
@@ -49485,6 +49833,31 @@ export interface components {
              * @constant
              */
             type: "tool_search_call";
+        };
+        /** ToolSearchRequest */
+        ToolSearchRequest: {
+            /** Count */
+            count?: number | null;
+            /** Country */
+            country?: string | null;
+            /** Localization */
+            localization?: string | null;
+            /** Max Results */
+            max_results?: number | null;
+            /** Max Tokens Per Page */
+            max_tokens_per_page?: number | null;
+            /** Need Content */
+            need_content?: boolean | null;
+            /** Ori Question */
+            ori_question?: string | null;
+            /** Query */
+            query: string | string[];
+            /** Search Domain Filter */
+            search_domain_filter?: string[] | null;
+            /** Search Tool Name */
+            search_tool_name?: string | null;
+        } & {
+            [key: string]: unknown;
         };
         /**
          * ToolSearchTool
@@ -62422,6 +62795,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FallbackDeleteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fetch_page_fetch_post: {
+        parameters: {
+            query?: {
+                search_tool_name?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FetchPageRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FetchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fetch_page_fetch__search_tool_name__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                search_tool_name: string | null;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FetchPageRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FetchResponse"];
                 };
             };
             /** @description Validation Error */
@@ -79049,6 +79492,146 @@ export interface operations {
             };
         };
     };
+    fetch_page_tools_fetch_post: {
+        parameters: {
+            query?: {
+                search_tool_name?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FetchPageRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FetchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fetch_page_tools_fetch__search_tool_name__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                search_tool_name: string | null;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FetchPageRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FetchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    tool_search_tools_search_post: {
+        parameters: {
+            query?: {
+                search_tool_name?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ToolSearchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    tool_search_tools_search__search_tool_name__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                search_tool_name: string | null;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ToolSearchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     toolset_mcp_route_toolset__toolset_name__mcp_get: {
         parameters: {
             query?: never;
@@ -83068,6 +83651,76 @@ export interface operations {
             };
         };
     };
+    fetch_page_v1_fetch_post: {
+        parameters: {
+            query?: {
+                search_tool_name?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FetchPageRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FetchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fetch_page_v1_fetch__search_tool_name__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                search_tool_name: string | null;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FetchPageRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FetchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_files_v1_files_get: {
         parameters: {
             query?: {
@@ -86566,6 +87219,146 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fetch_page_v1_tools_fetch_post: {
+        parameters: {
+            query?: {
+                search_tool_name?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FetchPageRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FetchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fetch_page_v1_tools_fetch__search_tool_name__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                search_tool_name: string | null;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FetchPageRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FetchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    tool_search_v1_tools_search_post: {
+        parameters: {
+            query?: {
+                search_tool_name?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ToolSearchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    tool_search_v1_tools_search__search_tool_name__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                search_tool_name: string | null;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ToolSearchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchResponse"];
                 };
             };
             /** @description Validation Error */
