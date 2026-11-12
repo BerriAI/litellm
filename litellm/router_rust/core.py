@@ -1009,6 +1009,36 @@ def _listing_team_id(request: Mapping[str, object]) -> str | None:
 
 # Request fallback settings, which replace the router's for the call.
 _REQUEST_FALLBACK_KEYS: Final = ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks", "max_fallbacks")
+_FALLBACK_LIST_KEYS: Final = ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks")
+
+
+def _request_fallback_fields(request: Mapping[str, object]) -> Mapping[str, object]:
+    """The request's fallback lists and limit as router-core reads them.
+
+    A fallback list key holding a non-list value replaces the router's list with no fallback
+    targets (matching the Python fallback walk's ``_as_list`` behavior). A ``max_fallbacks``
+    setting is normalized to a ``u32`` count; non-count values leave the router's limit in place.
+    """
+    fields: dict[str, object] = {}
+    for key in _FALLBACK_LIST_KEYS:
+        if key in request:
+            val = request[key]
+            if val is None:
+                fields[key] = None
+            elif isinstance(val, list | tuple):
+                fields[key] = _plain(list(val))
+            else:
+                fields[key] = []
+    if "max_fallbacks" in request:
+        raw_max = request["max_fallbacks"]
+        if isinstance(raw_max, int) and not isinstance(raw_max, bool):
+            fields["max_fallbacks"] = _crate_count(raw_max)
+        elif isinstance(raw_max, str):
+            try:
+                fields["max_fallbacks"] = _crate_count(int(raw_max))
+            except ValueError:
+                pass
+    return fields
 
 
 def _strings(value: object) -> "tuple[str, ...]":
@@ -1040,7 +1070,7 @@ def _start_fields(request: Mapping[str, object]) -> Mapping[str, object]:
     specific: Final = {"specific_deployment": True} if request.get("specific_deployment") is True else {}
     # `record_disable_fallbacks(kwargs, disable_fallbacks is True)`: only True turns them off.
     disabled: Final = {"disable_fallbacks": True} if request.get("disable_fallbacks") is True else {}
-    lists: Final = {key: _plain(request[key]) for key in _REQUEST_FALLBACK_KEYS if key in request}
+    lists: Final = _request_fallback_fields(request)
     weights: Final = request.get("_router_weights")
     team_id: Final = get_request_team_id(request)
     listing_team_id: Final = _listing_team_id(request)

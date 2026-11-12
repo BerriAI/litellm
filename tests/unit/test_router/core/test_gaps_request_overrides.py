@@ -225,3 +225,111 @@ def test_get_num_retries_from_retry_policy_reads_a_router_policy_that_is_no_mapp
     assert retries_for(error, model_group="a") == 4
     with pytest.raises(TypeError, match="string indices must be integers"):
         retries_for(error, model_group="x")
+
+
+# --- fallback and max_fallbacks request shape normalization --------------------------------------
+
+
+def test_request_fallback_fields_shape_normalization() -> None:
+    from litellm.router_rust.core import _request_fallback_fields
+
+    # Empty request has no fallback fields
+    assert _request_fallback_fields({}) == {}
+
+    # Non-list fallback values normalize to empty list (disabling fallbacks, matching _as_list)
+    assert _request_fallback_fields({"fallbacks": "default"}) == {"fallbacks": []}
+    assert _request_fallback_fields({"context_window_fallbacks": "default"}) == {"context_window_fallbacks": []}
+    assert _request_fallback_fields({"content_policy_fallbacks": "default"}) == {"content_policy_fallbacks": []}
+    assert _request_fallback_fields({"fallbacks": 123, "context_window_fallbacks": {}}) == {
+        "fallbacks": [],
+        "context_window_fallbacks": [],
+    }
+
+    # None is preserved as None (clears fallbacks in router-core)
+    assert _request_fallback_fields({"fallbacks": None}) == {"fallbacks": None}
+
+    # Valid lists and tuples are preserved as plain sequences
+    valid_fallbacks = [{"primary": ["backup"]}]
+    assert _request_fallback_fields({"fallbacks": valid_fallbacks}) == {"fallbacks": valid_fallbacks}
+    assert _request_fallback_fields({"fallbacks": ("backup",)}) == {"fallbacks": ["backup"]}
+
+    # max_fallbacks: integer and string counts are normalized; non-counts leave router limit in place
+    assert _request_fallback_fields({"max_fallbacks": 2}) == {"max_fallbacks": 2}
+    assert _request_fallback_fields({"max_fallbacks": "2"}) == {"max_fallbacks": 2}
+    assert _request_fallback_fields({"max_fallbacks": -1}) == {"max_fallbacks": 0}
+    assert _request_fallback_fields({"max_fallbacks": "default"}) == {}
+    assert _request_fallback_fields({"max_fallbacks": None}) == {}
+    assert _request_fallback_fields({"max_fallbacks": True}) == {}
+    assert _request_fallback_fields({"max_fallbacks": [1, 2]}) == {}
+
+
+def test_router_completion_with_malformed_fallback_kwargs_does_not_crash_router_core() -> None:
+    from litellm.router import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-fake"},
+            }
+        ]
+    )
+
+    for kwargs in (
+        {},
+        {"fallbacks": "default"},
+        {"context_window_fallbacks": "default"},
+        {"content_policy_fallbacks": "default"},
+        {"max_fallbacks": "2"},
+        {"max_fallbacks": -1},
+        {"max_fallbacks": "default"},
+        {"max_fallbacks": 2},
+        {"fallbacks": None},
+        {"fallbacks": [{"model_group": "claude", "tier": 1}]},
+    ):
+        response = router.completion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="ok",
+            **kwargs,
+        )
+        assert response.choices[0].message.content == "ok"
+
+
+def test_router_completion_non_list_fallback_overrides_router_fallbacks_with_no_targets() -> None:
+    from litellm.router import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    "model": "openai/primary",
+                    "api_key": "sk-fake",
+                    "mock_response": Exception("primary failed"),
+                },
+            },
+            {
+                "model_name": "backup",
+                "litellm_params": {
+                    "model": "openai/backup",
+                    "api_key": "sk-fake",
+                    "mock_response": "backup succeeded",
+                },
+            },
+        ],
+        fallbacks=[{"primary": ["backup"]}],
+    )
+
+    # Default router fallback succeeds
+    res_default = router.completion(model="primary", messages=[{"role": "user", "content": "hi"}])
+    assert res_default.choices[0].message.content == "backup succeeded"
+
+    # With fallbacks="default", request replaces router fallbacks with no targets and raises
+    with pytest.raises(Exception) as exc_info:
+        router.completion(
+            model="primary",
+            messages=[{"role": "user", "content": "hi"}],
+            fallbacks="default",
+        )
+    assert "primary failed" in str(exc_info.value)
