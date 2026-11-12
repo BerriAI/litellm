@@ -2545,7 +2545,7 @@ async def test_a_served_fallbacks_hold_is_not_refunded_again_under_the_name_the_
 
 
 @pytest.mark.asyncio
-async def test_a_steered_requests_images_are_counted_for_the_model_that_serves_it(monkeypatch: pytest.MonkeyPatch):
+async def test_a_request_served_by_another_model_counts_its_images_for_that_model(monkeypatch: pytest.MonkeyPatch):
     from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
 
     handler = _borrowing_handler(monkeypatch, borrows=True, saturation_threshold=0.0)
@@ -3334,40 +3334,18 @@ async def test_a_class_share_refusal_is_counted_under_the_teams_priority(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_an_alternates_refusal_is_not_counted_while_the_preferred_model_admits(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(litellm, "priority_reservation", None)
-    monkeypatch.setattr(litellm.priority_reservation_settings, "saturation_threshold", 0.5)
-    monkeypatch.setattr(
-        litellm.priority_reservation_settings, "team_model_limit_borrows_idle_capacity_from_other_teams", True
-    )
-    registry = _prometheus_sink(monkeypatch)
-    handler: Final[_PROXY_DynamicRateLimitHandlerV3] = _steering_handler()
-    router: Final = _steering_router("luna", "opus", preferred_rpm=4)
-    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
-    handler.update_variables(llm_router=router)
-    flexible: Final = UserAPIKeyAuth(
-        team_id="flexible-team",
-        team_models=["luna", "opus"],
-        team_metadata={
-            "model_preferences": [{"model": "luna", "alternates": ["opus"]}],
-            "model_rpm_limit": {"opus": 1, "luna": 1},
-            "team_model_limit_max_borrow_multiple": 1,
-        },
-    )
-    await _saturate(handler, "luna", requests=2)
-    assert await handler.async_pre_call_hook(flexible, DualCache(), {"model": "luna"}, "completion") == {
-        "model": "opus"
-    }
-    assert await handler.async_pre_call_hook(flexible, DualCache(), {"model": "luna"}, "completion") is None
-    assert _sample(registry, "litellm_dynamic_limiter_throttled_total", team="flexible-team") is None
+async def test_a_saturation_fallback_handoff_is_not_counted_as_a_throttle(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy.common_utils.proxy_rate_limit_error import SATURATION_FALLBACK_DESCRIPTOR_KEY
 
-    refusal: Final = await _refused_at_the_hook(handler, flexible, model="luna")
-    assert refusal.headers is not None
-    assert refusal.headers["rate_limited_by"] == "model_per_team_saturated"
-    assert _sample(registry, "litellm_dynamic_limiter_throttled_total", team="flexible-team", model_group="luna") == 1
-    assert (
-        _sample(registry, "litellm_dynamic_limiter_throttled_total", team="flexible-team", model_group="opus") is None
-    )
+    handler = _saturation_fallback_handler(monkeypatch)
+    registry = _prometheus_sink(monkeypatch)
+    key: Final = _interactive_key("sk-flexible", "team-a")
+    await _saturate_to_threshold(handler, key)
+
+    with pytest.raises(ProxyRateLimitError) as handed_off:
+        await handler.async_pre_call_hook(key, DualCache(), _opted_in(), "acompletion")
+    assert handed_off.value.descriptor_key == SATURATION_FALLBACK_DESCRIPTOR_KEY
+    assert _sample(registry, "litellm_dynamic_limiter_throttled_total", team="team-a") is None
 
 
 @pytest.mark.asyncio
