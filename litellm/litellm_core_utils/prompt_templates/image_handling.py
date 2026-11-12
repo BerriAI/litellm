@@ -130,24 +130,27 @@ async def async_convert_url_to_base64(
             f"Error: Image URL download is disabled (MAX_IMAGE_URL_DOWNLOAD_SIZE_MB=0). url={url}"
         )
 
-    cached_result: Final = _cached_image(url, max_bytes)
+    download_limit: Final = (
+        min(int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024), max_bytes)
+        if max_bytes is not None
+        else int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)
+    )
+    cached_result: Final = _cached_image(url, download_limit)
     if cached_result:
         return cached_result
 
     client: Final = litellm.module_level_aclient
     for attempt_timeout in _attempt_timeouts(timeout):
         try:
-            response = (
-                await async_safe_get(client, url, timeout=attempt_timeout)
-                if max_bytes is None
-                else await async_safe_get(
-                    _AsyncBodyPrefixReader(client.client),
+            return _process_image_response(
+                await async_safe_get(
+                    _AsyncImageBodyReader(client.client, download_limit + 1),
                     url,
                     timeout=attempt_timeout,
-                    max_response_bytes=max_bytes + 1,
-                )
+                ),
+                url,
+                max_bytes,
             )
-            return _process_image_response(response, url, max_bytes)
         except litellm.ImageFetchError:
             raise
         except SSRFError as e:
@@ -169,7 +172,12 @@ def convert_url_to_base64(
             f"Error: Image URL download is disabled (MAX_IMAGE_URL_DOWNLOAD_SIZE_MB=0). url={url}"
         )
 
-    cached_result: Final = _cached_image(url, max_bytes)
+    download_limit: Final = (
+        min(int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024), max_bytes)
+        if max_bytes is not None
+        else int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)
+    )
+    cached_result: Final = _cached_image(url, download_limit)
     if cached_result:
         return cached_result
 
@@ -177,7 +185,7 @@ def convert_url_to_base64(
     for attempt_timeout in _attempt_timeouts(timeout):
         try:
             response = safe_get(
-                client if max_bytes is None else _ImageBodyReader(client.client, max_bytes + 1),
+                _ImageBodyReader(client.client, download_limit + 1),
                 url,
                 timeout=attempt_timeout,
             )
@@ -346,11 +354,43 @@ class _ImageBodyReader:
         with self.client.stream(
             "GET",
             url,
-            headers=headers,
+            headers={**(headers or {}), "accept-encoding": "identity"},
             follow_redirects=follow_redirects,
             timeout=USE_CLIENT_DEFAULT if timeout is None else timeout,
         ) as response:
+            _validate_image_encoding(response)
             return _with_body_prefix(response, next(response.iter_bytes(self.max_bytes), b""))
+
+
+def _validate_image_encoding(response: Response) -> None:
+    encoding: Final = _header_value(response, "content-encoding") or "identity"
+    if encoding.lower() != "identity":
+        raise litellm.ImageFetchError("Image download size limits require an uncompressed response")
+
+
+@dataclass(frozen=True, slots=True)
+class _AsyncImageBodyReader:
+    client: httpx.AsyncClient
+    max_bytes: int
+
+    async def get(
+        self,
+        url: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        follow_redirects: bool = False,
+        timeout: float | httpx.Timeout | None = None,
+        max_response_bytes: int | None = None,
+    ) -> Response:
+        async with self.client.stream(
+            "GET",
+            url,
+            headers={**(headers or {}), "accept-encoding": "identity"},
+            follow_redirects=follow_redirects,
+            timeout=USE_CLIENT_DEFAULT if timeout is None else timeout,
+        ) as response:
+            _validate_image_encoding(response)
+            return _with_body_prefix(response, await anext(response.aiter_bytes(self.max_bytes), b""))
 
 
 @dataclass(frozen=True, slots=True)

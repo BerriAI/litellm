@@ -70,7 +70,7 @@ describe("Auto-router classifier selection", () => {
     expect(onChange).toHaveBeenCalledWith({
       ...initial,
       classifier_type: "jev",
-      jev_classifier_config: { ...jevConfig, provider: "nace", model: "drex-max" },
+      jev_classifier_config: { ...jevConfig, provider: "nace", model: "drex-max-v1.1" },
     });
   });
 

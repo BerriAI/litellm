@@ -19,7 +19,7 @@ describe("hydrateOssClassifier", () => {
   it("keeps a stored Nace classifier instead of falling back to Jev", () => {
     const stored = {
       provider: "nace",
-      model: "drex-max",
+      model: "drex-max-v1.1",
       timeout_ms: 3000,
     };
 

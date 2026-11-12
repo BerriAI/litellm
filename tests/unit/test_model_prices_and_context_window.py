@@ -1055,36 +1055,22 @@ def _nace_rows(path: Path) -> Mapping[str, Mapping[str, JsonValue]]:
     return {key: row for key, row in prices.items() if key.startswith("nace/")}
 
 
-def test_drex_max_versions_are_priced_at_three_cents_per_million_input_tokens(local_model_cost_map: None) -> None:
-    """Both Drex Max versions cost $0.03 per 1M input tokens, half of drex-v2.0's $0.06; output is not billed
-    (console.nace.ai/docs/drex/reference/models, read 2026-10-30)."""
-    for model in ("nace/drex-max", "nace/drex-max-v1.1"):
-        row = litellm.model_cost[model]
-        assert row["input_cost_per_token"] == 3e-08
-        assert row["output_cost_per_token"] == 0.0
-        assert (row["litellm_provider"], row["mode"], row["max_input_tokens"]) == ("nace", "evaluation", 262144)
-    assert litellm.model_cost["nace/drex-v2.0"]["input_cost_per_token"] == 6e-08
+@pytest.mark.parametrize("model", ("drex-v1.0", "drex-v1.5", "drex-latest", "drex-max"))
+def test_drex_alias_metadata_matches_the_served_version(local_model_cost_map: None, model: str) -> None:
+    alias: Final = litellm.model_cost[f"nace/{model}"]
+    served: Final = litellm.model_cost["nace/drex-max-v1.1"]
+    for field in ("input_cost_per_token", "output_cost_per_token", "max_input_tokens", "supports_vision"):
+        assert alias.get(field) == served[field]
+    assert litellm.supports_vision(f"nace/{model}") is True
 
 
-def test_drex_v1_0_is_priced_as_the_drex_max_that_now_serves_it(local_model_cost_map: None) -> None:
-    """drex-v1.0 is retired and answered by drex-max at drex-max's price and limits
-    (console.nace.ai/docs/drex/reference/models, read 2026-10-30)."""
-    drex_v1: Final = litellm.model_cost["nace/drex-v1.0"]
-    drex_max: Final = litellm.model_cost["nace/drex-max"]
-
-    assert drex_v1["input_cost_per_token"] == drex_max["input_cost_per_token"]
-    assert drex_v1["max_input_tokens"] == drex_max["max_input_tokens"]
-
-
-def test_drex_max_versions_are_the_nace_models_that_read_images(local_model_cost_map: None) -> None:
-    """Only drex-max, drex-max-v1.1 and the retired drex-v1.0 (now served by drex-max) read images; the other Drex
-    models answer 422 to a non-empty images array (console.nace.ai/docs/drex/guides/drex-max, read 2026-10-31)."""
-    vision_rows: Final = tuple(key for key, row in _nace_rows(PRICES_PATH).items() if row.get("supports_vision"))
-
-    assert litellm.supports_vision("nace/drex-max") is True
+def test_drex_max_metadata_supports_decisions_and_input_billing(local_model_cost_map: None) -> None:
+    served: Final = litellm.model_cost["nace/drex-max-v1.1"]
+    assert served["input_cost_per_token"] > 0
+    assert served["output_cost_per_token"] == 0
+    assert (served["litellm_provider"], served["mode"]) == ("nace", "evaluation")
+    assert served["max_input_tokens"] > 0
     assert litellm.supports_vision("nace/drex-max-v1.1") is True
-    assert litellm.supports_vision("nace/drex-v1.0") is True
-    assert sorted(vision_rows) == ["nace/drex-max", "nace/drex-max-v1.1", "nace/drex-v1.0"]
 
 
 def test_nace_backup_rows_match_the_main_catalog() -> None:

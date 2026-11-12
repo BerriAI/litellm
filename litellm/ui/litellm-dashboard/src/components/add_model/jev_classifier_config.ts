@@ -15,14 +15,16 @@ export const isOssClassifierProvider = (value: unknown): value is OssClassifierP
 const DEFAULT_TIMEOUT_MS = 3000;
 const SERVING_ENDPOINT_NAME = /^[A-Za-z0-9_-][A-Za-z0-9._-]*$/;
 const DATABRICKS_AI_DECIDE_MODEL = "ai_decide";
-const NACE_DEFAULT_MODEL = "drex-max";
+const NACE_DEFAULT_MODEL = "drex-max-v1.1";
 
 export const fixedClassifierModels = (provider: OssClassifierProvider | undefined): readonly string[] | undefined =>
   provider === "laya" || provider === "bespoke" ? OSS_CLASSIFIER_MODELS[provider] : undefined;
 
-const defaultClassifierModel = (provider: OssClassifierProvider | undefined): string =>
-  fixedClassifierModels(provider)?.[0] ??
-  (provider === "databricks" ? DATABRICKS_AI_DECIDE_MODEL : provider === "nace" ? NACE_DEFAULT_MODEL : "jev-latest");
+const defaultClassifierModel = (provider: OssClassifierProvider | undefined): string => {
+  if (provider === "databricks") return DATABRICKS_AI_DECIDE_MODEL;
+  if (provider === "nace") return NACE_DEFAULT_MODEL;
+  return fixedClassifierModels(provider)?.[0] ?? "jev-latest";
+};
 
 const isSupportedClassifierModel = (provider: OssClassifierProvider | undefined, model: string): boolean => {
   if (provider === "databricks") return SERVING_ENDPOINT_NAME.test(model);
