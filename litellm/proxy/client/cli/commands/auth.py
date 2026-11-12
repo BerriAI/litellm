@@ -239,8 +239,12 @@ def load_token(*, vault: SecretVault = SYSTEM_KEYRING) -> Mapping[str, object] |
     return None if record is None else record.model_dump(exclude_none=True)
 
 
-def is_pkce_login(token_data: Mapping[str, object] | None) -> bool:
-    return token_data is not None and token_data.get("refresh_token") is not None
+def is_pkce_login(token_data: Mapping[str, object] | None, base_url: str) -> bool:
+    return (
+        token_data is not None
+        and token_data.get("refresh_token") is not None
+        and token_data.get("base_url") == base_url.rstrip("/")
+    )
 
 
 def _login_left_in_keychain(vault: SecretVault) -> Mapping[str, object] | None:
@@ -847,7 +851,7 @@ def _claude_credential(base_url: str, api_key: str, renews: bool, stored: Secret
         return StaticToken(api_key)
     helper: Final = lite_api_key_helper(base_url)
     if helper is None:
-        click.echo("`lite` is not on your PATH, so Claude Code cannot run it to renew this login's key.")
+        click.echo("Could not find the `lite` command, so Claude Code cannot run it to renew this login's key.")
         return StaticToken(api_key)
     return helper
 

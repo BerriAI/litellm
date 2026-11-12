@@ -7,7 +7,8 @@ shared parts live here rather than in any one command module. The credential is 
 static token in `env.ANTHROPIC_AUTH_TOKEN`, except for a login `lite` renews on its own,
 which gets an `apiKeyHelper` running `lite auth print-token`: Claude Code reruns it
 every few minutes, so the key it sends follows each renewal. A helper is owned like
-any other key, so writing one credential strips the other.
+any other key, so writing one credential strips the other, and it blanks
+`env.ANTHROPIC_AUTH_TOKEN`, since a token exported in the shell would win over it.
 """
 
 import hashlib
@@ -440,9 +441,10 @@ def merge_claude_settings(
 ) -> Mapping[str, JsonValue]:
     """Return a new settings mapping wired to route Claude Code through the proxy.
 
-    A StaticToken lands in env.ANTHROPIC_AUTH_TOKEN, an ApiKeyHelper in the top-level apiKeyHelper; the
-    other credential slots are removed either way, since Claude Code given two credentials may send the
-    wrong one, and ANTHROPIC_AUTH_TOKEN would win over the helper.
+    A StaticToken lands in env.ANTHROPIC_AUTH_TOKEN, an ApiKeyHelper in the top-level apiKeyHelper with
+    env.ANTHROPIC_AUTH_TOKEN blank, since Claude Code reads a blank one as unset and an ANTHROPIC_AUTH_TOKEN
+    exported in the shell would otherwise win over the helper. The other credential slots are removed either
+    way, since Claude Code given two credentials may send the wrong one.
     ENABLE_TOOL_SEARCH and CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY get their defaults only when
     missing. `default_model` is the top-level `model` and env.ANTHROPIC_MODEL (see StartOn);
     `tier_model` is `lite autoroute start`'s knob that points every ANTHROPIC_DEFAULT_*_MODEL at one
@@ -458,7 +460,7 @@ def merge_claude_settings(
             ),
             ((key, value) for key, value in current_env.items() if key not in _CREDENTIAL_ENV_KEYS),
             ((ANTHROPIC_BASE_URL_KEY, base_url.rstrip("/")),),
-            ((ANTHROPIC_AUTH_TOKEN_KEY, credential.token),) if isinstance(credential, StaticToken) else (),
+            ((ANTHROPIC_AUTH_TOKEN_KEY, credential.token if isinstance(credential, StaticToken) else ""),),
             ((ANTHROPIC_MODEL_KEY, default_model),) if default_model is not None else (),
             ((key, tier_model) for key in ANTHROPIC_DEFAULT_MODEL_ENV_KEYS if tier_model is not None),
         )

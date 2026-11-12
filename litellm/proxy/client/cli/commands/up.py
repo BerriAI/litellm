@@ -135,7 +135,7 @@ def ensure_fresh_login(ctx: click.Context) -> None:
     if _usable_login(_key_resolved_on_the_way_in(ctx_obj, base_url, vault), vault):
         return
 
-    pkce: Final = is_pkce_login(load_token(vault=vault)) or pkce_default()
+    pkce: Final = is_pkce_login(load_token(vault=vault), base_url) or pkce_default()
     login_command: Final = "lite login --pkce" if pkce else "lite login"
     if not sys.stdin.isatty():
         raise UpError(f"No fresh LiteLLM login found for this proxy. Run `{login_command}` first.")

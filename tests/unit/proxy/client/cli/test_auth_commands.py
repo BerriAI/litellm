@@ -1663,7 +1663,7 @@ class TestLoginConfigClaude:
         assert result.exit_code == 0, result.output
         written = json.loads(settings_path.read_text())
         assert written["env"]["ANTHROPIC_BASE_URL"] == PKCE_BASE_URL
-        assert "ANTHROPIC_AUTH_TOKEN" not in written["env"]
+        assert written["env"]["ANTHROPIC_AUTH_TOKEN"] == ""
         assert str(lite.parent) in written["apiKeyHelper"]
         assert written["apiKeyHelper"].endswith(f"--base-url {PKCE_BASE_URL} auth print-token")
         assert "sk-cli-fresh" not in settings_path.read_text()
@@ -1672,7 +1672,7 @@ class TestLoginConfigClaude:
     @pytest.mark.parametrize(
         ("lite_on_path", "stored", "reason"),
         [
-            (False, SecretStored(), "`lite` is not on your PATH"),
+            (False, SecretStored(), "Could not find the `lite` command"),
             (True, CredentialNotSaved("read-only ~/.litellm"), "even though the CLI itself could not keep it"),
             (True, CredentialNotRecorded(), "even though the CLI itself could not keep it"),
         ],

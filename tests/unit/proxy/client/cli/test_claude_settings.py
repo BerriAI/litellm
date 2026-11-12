@@ -416,12 +416,12 @@ class TestMergeClaudeSettings:
         assert "model" not in merged
         assert not any(key in merged["env"] for key in ANTHROPIC_DEFAULT_MODEL_ENV_KEYS)
 
-    def test_a_helper_lands_top_level_and_every_static_credential_is_cleared(self):
+    def test_a_helper_lands_top_level_and_blanks_the_token_a_shell_export_would_win_with(self):
         settings = {"env": {"ANTHROPIC_AUTH_TOKEN": "sk-expired-login", "ANTHROPIC_API_KEY": "leaked"}}
         merged = merge_claude_settings(settings, "http://127.0.0.1:4000/", HELPER)
         assert merged["apiKeyHelper"] == HELPER.command
         assert merged["env"]["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:4000"
-        assert "ANTHROPIC_AUTH_TOKEN" not in merged["env"]
+        assert merged["env"]["ANTHROPIC_AUTH_TOKEN"] == ""
         assert "ANTHROPIC_API_KEY" not in merged["env"]
 
     def test_keeps_existing_switch_values_and_unrelated_keys_without_mutating_the_input(self):

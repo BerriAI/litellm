@@ -1682,7 +1682,6 @@ class TestRunAgent:
             ((), {}, {}, True, True),
             (("--settings", '{"apiKeyHelper":""}'), {}, {"apiKeyHelper": LITE_HELPER}, True, True),
             (("--settings={}",), {}, {"apiKeyHelper": LITE_HELPER}, True, False),
-            (("--settings", "missing.json"), {}, {"apiKeyHelper": LITE_HELPER}, True, True),
         ],
         ids=[
             "lites-helper-for-this-proxy",
@@ -1693,7 +1692,6 @@ class TestRunAgent:
             "no-helper",
             "settings-flag-disables-the-helper",
             "settings-flag-without-a-helper",
-            "unreadable-settings-flag",
         ],
     )
     def test_claude_takes_the_key_from_lites_renewing_helper_only_when_it_is_the_one_claude_code_runs(
@@ -1722,22 +1720,34 @@ class TestRunAgent:
         assert launched["env"].get("ANTHROPIC_AUTH_TOKEN") == ("sk-key" if exports_the_key else None)
 
     @pytest.mark.parametrize(
-        ("args", "user", "key_from_stored_login", "expected_args"),
+        ("args", "user", "key_from_stored_login", "expected_overlay"),
         [
-            ((), {"apiKeyHelper": LITE_HELPER}, False, ("claude", "--settings", '{"apiKeyHelper":""}')),
+            ((), {"apiKeyHelper": LITE_HELPER}, False, {"apiKeyHelper": "", "env": {"ANTHROPIC_AUTH_TOKEN": "sk-key"}}),
             (
                 (),
                 {"apiKeyHelper": LITE_HELPER.replace("/usr/local/bin/lite", "/opt/old-venv/bin/lite")},
                 True,
-                ("claude", "--settings", '{"apiKeyHelper":""}'),
+                {"apiKeyHelper": "", "env": {"ANTHROPIC_AUTH_TOKEN": "sk-key"}},
             ),
-            ((), {"apiKeyHelper": LITE_HELPER}, True, ("claude",)),
-            ((), {"apiKeyHelper": "/opt/mine/helper"}, False, ("claude",)),
+            ((), {"apiKeyHelper": LITE_HELPER}, True, None),
+            ((), {"apiKeyHelper": "/opt/mine/helper"}, False, None),
             (
                 ("--settings", '{"model":"opus"}'),
                 {"apiKeyHelper": LITE_HELPER},
                 False,
-                ("claude", "--settings", '{"model":"opus"}'),
+                {"apiKeyHelper": "", "model": "opus", "env": {"ANTHROPIC_AUTH_TOKEN": "sk-key"}},
+            ),
+            (
+                ("--settings", '{"apiKeyHelper":"","env":{"FOO":"1"}}'),
+                {"apiKeyHelper": LITE_HELPER},
+                True,
+                {"apiKeyHelper": "", "env": {"ANTHROPIC_AUTH_TOKEN": "sk-key", "FOO": "1"}},
+            ),
+            (
+                ("--settings", '{"apiKeyHelper":"/opt/mine/helper","env":{"ANTHROPIC_AUTH_TOKEN":"sk-mine"}}'),
+                {"apiKeyHelper": LITE_HELPER},
+                False,
+                {"apiKeyHelper": "/opt/mine/helper", "env": {"ANTHROPIC_AUTH_TOKEN": "sk-mine"}},
             ),
         ],
         ids=[
@@ -1745,12 +1755,16 @@ class TestRunAgent:
             "helper-from-another-lite-install",
             "lites-helper-renews-the-stored-key",
             "users-own-helper",
-            "users-own-settings-flag",
+            "users-settings-flag-is-merged",
+            "users-settings-flag-turns-the-helper-off",
+            "users-settings-flag-keeps-its-own-credentials",
         ],
     )
-    def test_claude_runs_lites_helper_only_when_the_launch_does_not_export_a_key_of_its_own(
-        self, tmp_path, args, user, key_from_stored_login, expected_args
+    def test_claude_sends_the_key_the_launch_resolved_when_lites_helper_would_not_renew_it(
+        self, tmp_path, args, user, key_from_stored_login, expected_overlay
     ):
+        """`lite login --pkce --config-claude` blanks ANTHROPIC_AUTH_TOKEN beside its helper, so an exported key
+        would be dropped and only a `--settings` overlay can carry it."""
         launched = {}
         run_agent(
             "http://localhost:4000",
@@ -1761,11 +1775,34 @@ class TestRunAgent:
             verify=lambda *a: None,
             launcher=lambda p, a, e: launched.update(args=tuple(a)),
             read_settings=lambda path: user if path == tmp_path / "cfg" / "settings.json" else {},
+            write_overlay=_overlay_writer(tmp_path),
             project_dir=tmp_path / "repo",
             key_from_stored_login=key_from_stored_login,
             which_lite=lambda name: f"/usr/local/bin/{name}",
         )
-        assert launched["args"] == expected_args
+        if expected_overlay is None:
+            assert launched["args"] == ("claude", *args)
+        else:
+            assert launched["args"][:2] == ("claude", "--settings") and len(launched["args"]) == 3
+            assert _overlay(launched["args"]) == expected_overlay
+
+    def test_an_unreadable_settings_flag_beside_lites_helper_fails_before_launch(self, tmp_path):
+        launched = {}
+        with pytest.raises(AgentRunError, match="file not found"):
+            run_agent(
+                "http://localhost:4000",
+                "sk-key",
+                ["claude", "--settings", "missing.json"],
+                base_env={"CLAUDE_CONFIG_DIR": str(tmp_path / "cfg")},
+                which=lambda name: f"/usr/local/bin/{name}",
+                verify=lambda *a: None,
+                launcher=lambda p, a, e: launched.update(args=tuple(a)),
+                read_settings=lambda path: {"apiKeyHelper": LITE_HELPER},
+                write_overlay=_overlay_writer(tmp_path),
+                project_dir=tmp_path / "repo",
+                which_lite=lambda name: f"/usr/local/bin/{name}",
+            )
+        assert launched == {}
 
     def test_a_malformed_settings_file_still_launches_claude_with_the_key(self, tmp_path):
         def unreadable(path):
@@ -2764,8 +2801,12 @@ class TestAgentCommands:
 
     @pytest.mark.parametrize(
         ("stored", "expected_pkce"),
-        [({"refresh_token": "llm_srefresh_old"}, True), ({}, False)],
-        ids=["renewing-login-stored", "plain-login-stored"],
+        [
+            ({"refresh_token": "llm_srefresh_old"}, True),
+            ({}, False),
+            ({"refresh_token": "llm_srefresh_old", "base_url": "http://other-proxy:4000"}, False),
+        ],
+        ids=["renewing-login-stored", "plain-login-stored", "renewing-login-for-another-proxy"],
     )
     def test_the_login_lite_claude_starts_again_renews_like_the_stored_one(
         self, tmp_path, monkeypatch, secret_vault_factory, stored, expected_pkce

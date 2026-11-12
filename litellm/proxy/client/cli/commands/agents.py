@@ -309,16 +309,30 @@ def lite_helper_renews_key(base_url: str, configured: JsonValue, which: Callable
     return helper is not None and configured == helper.command
 
 
-_NO_API_KEY_HELPER_SETTINGS: Final = json.dumps({API_KEY_HELPER_KEY: ""}, separators=(",", ":"))
-
-
-def _lite_helper_off_args(configured: JsonValue, renews: bool, args: Sequence[str]) -> tuple[str, ...]:
-    """A `--settings` that turns off a `lite auth print-token` helper when the launch exports its own key, since
-    Claude Code warns when it has both and also sends the helper's key in x-api-key. A `--settings` the user
-    passed is left as it is, since Claude Code keeps only the last one."""
-    if renews or not is_lite_api_key_helper(configured) or _settings_flag_spans(args):
-        return ()
-    return (_SETTINGS_FLAG, _NO_API_KEY_HELPER_SETTINGS)
+def _launch_key_overlay_args(
+    command: Sequence[str],
+    api_key: str,
+    settings_helper: JsonValue,
+    renews: bool,
+    environ: Mapping[str, str],
+    write_overlay: Callable[[str, Mapping[str, str]], Path],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """The `--settings` that makes Claude Code send the key this launch resolved when its settings files run a
+    `lite auth print-token` helper, plus the user's remaining args. Those files also blank ANTHROPIC_AUTH_TOKEN,
+    so the exported key would be dropped, and the helper would send the stored login's key in its place. The
+    overlay turns the helper off and carries the key, in a private file for the same reason as the subscription
+    overlay. The user's last `--settings` is merged in and its own apiKeyHelper or ANTHROPIC_AUTH_TOKEN kept,
+    since Claude Code keeps only the last `--settings`."""
+    if renews or not is_lite_api_key_helper(settings_helper):
+        return (), tuple(command[1:])
+    user_value, rest = _split_settings_flags(tuple(command[1:]))
+    base: Final[Mapping[str, JsonValue]] = _load_settings_override(user_value) if user_value is not None else {}
+    overlay: Final = {
+        API_KEY_HELPER_KEY: "",
+        **base,
+        ENV_KEY: {ANTHROPIC_AUTH_TOKEN_ENV: api_key, **_settings_env(base)},
+    }
+    return (_SETTINGS_FLAG, str(write_overlay(json.dumps(overlay, separators=(",", ":")), environ))), rest
 
 
 def _readable_settings_files(
@@ -1186,10 +1200,12 @@ def run_agent(
 
     env_before_sync: Final = base_env if base_env is not None else os.environ
     project: Final = project_dir if project_dir is not None else Path.cwd()
+    reads_helper: Final = not subscription and PROFILE_ANTHROPIC in profiles
     configured_helper: Final = (
-        claude_api_key_helper(command[1:], read_settings, env_before_sync, project)
-        if not subscription and PROFILE_ANTHROPIC in profiles
-        else None
+        claude_api_key_helper(command[1:], read_settings, env_before_sync, project) if reads_helper else None
+    )
+    settings_helper: Final = (
+        claude_api_key_helper((), read_settings, env_before_sync, project) if reads_helper else None
     )
     helper_renews_key: Final = key_from_stored_login and lite_helper_renews_key(base_url, configured_helper, which_lite)
     synced: Final = (
@@ -1229,7 +1245,9 @@ def run_agent(
             write_overlay,
         )
         if subscription and os.path.basename(command[0]) == "claude"
-        else (_lite_helper_off_args(configured_helper, helper_renews_key, command[1:]), tuple(command[1:]))
+        else _launch_key_overlay_args(
+            command, api_key, settings_helper, helper_renews_key, env_before_sync, write_overlay
+        )
     )
     if reattach_terminal is not None:
         reattach_terminal()
@@ -1248,7 +1266,7 @@ def resolve_api_key(ctx: click.Context) -> str:
         return api_key
 
     vault: Final = context_secret_vault(ctx)
-    pkce: Final = is_pkce_login(load_token(vault=vault)) or pkce_default()
+    pkce: Final = is_pkce_login(load_token(vault=vault), base_url) or pkce_default()
     if not _is_interactive():
         raise click.ClickException(
             "No LiteLLM key found. Set LITELLM_PROXY_API_KEY (or pass --api-key) for "
