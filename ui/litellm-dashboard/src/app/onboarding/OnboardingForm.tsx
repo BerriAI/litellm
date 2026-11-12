@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useSearchParams } from "next/navigation";
 import { jwtDecode } from "jwt-decode";
 import { useOnboardingCredentials, useClaimOnboardingToken } from "@/app/(dashboard)/hooks/onboarding/useOnboarding";
-import { getProxyBaseUrl, getUiPageUrl } from "@/components/networking";
+import { getProxyBaseUrl, getUiPageUrl, setGlobalLitellmHeaderName } from "@/components/networking";
 import { clearTokenCookies, storeLoginToken } from "@/utils/cookieUtils";
 import { OnboardingLoadingView } from "./OnboardingLoadingView";
 import { OnboardingErrorView } from "./OnboardingErrorView";
@@ -37,6 +37,7 @@ export function OnboardingForm({ variant }: OnboardingFormProps) {
     if (!accessToken || !userId || !inviteId) return;
 
     setClaimError(null);
+    setGlobalLitellmHeaderName(decoded?.auth_header_name ?? "Authorization");
 
     claimToken(
       { accessToken, inviteId, userId, password: formValues.password },
