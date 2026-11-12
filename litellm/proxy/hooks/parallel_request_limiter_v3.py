@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
+    Annotated,
     Any,
     Final,
     Literal,
@@ -27,7 +28,7 @@ from typing import (
 )
 
 from fastapi import HTTPException
-from pydantic import TypeAdapter, ValidationError
+from pydantic import Field, TypeAdapter, ValidationError
 from starlette.status import HTTP_400_BAD_REQUEST, HTTP_503_SERVICE_UNAVAILABLE
 from typing_extensions import NotRequired, ReadOnly
 
@@ -199,15 +200,52 @@ def inherited_team_model_limit(
     return team_limit
 
 
+TEAM_MODEL_LIMIT_MAX_BORROW_MULTIPLE: Final = "team_model_limit_max_borrow_multiple"
+MAX_BORROW_MULTIPLE_CEILING: Final = 1_000_000
+_MAX_BORROW_MULTIPLE: Final[TypeAdapter[float]] = TypeAdapter(
+    Annotated[float, Field(ge=1, le=MAX_BORROW_MULTIPLE_CEILING, allow_inf_nan=False)]
+)
+
+
 @dataclass(frozen=True, slots=True)
 class BorrowingTeamModelLimits:
     """Inherited team per-model limits the dynamic rate limiter enforces at saturation instead of the regular limiter."""
 
     tpm: int | None
     rpm: int | None
+    max_borrow_multiple: float | None = None
+
+    def share(self, rate_limit_type: str) -> int | None:
+        return self.rpm if rate_limit_type == "requests" else self.tpm
+
+    def borrow_ceiling(self) -> "BorrowingTeamModelLimits | None":
+        """The most the team may use while borrowing, or None when it may borrow up to the model's own limit."""
+        if self.max_borrow_multiple is None:
+            return None
+        return BorrowingTeamModelLimits(
+            tpm=None if self.tpm is None else int(self.tpm * self.max_borrow_multiple),
+            rpm=None if self.rpm is None else int(self.rpm * self.max_borrow_multiple),
+        )
 
 
 NO_BORROWING: Final = BorrowingTeamModelLimits(tpm=None, rpm=None)
+
+
+def team_model_limit_max_borrow_multiple(user_api_key_dict: UserAPIKeyAuth) -> float | None:
+    raw: Final[object] = (user_api_key_dict.team_metadata or {}).get(TEAM_MODEL_LIMIT_MAX_BORROW_MULTIPLE)
+    if raw is None:
+        return None
+    try:
+        return _MAX_BORROW_MULTIPLE.validate_python(raw)
+    except ValidationError:
+        verbose_proxy_logger.warning(
+            "Ignoring %s=%r on team %s: expected a number from 1 to %d, so the team borrows up to the model limit",
+            TEAM_MODEL_LIMIT_MAX_BORROW_MULTIPLE,
+            raw,
+            user_api_key_dict.team_id,
+            MAX_BORROW_MULTIPLE_CEILING,
+        )
+        return None
 
 
 def borrowing_team_model_limits(user_api_key_dict: UserAPIKeyAuth, model: RateLimitedModel) -> BorrowingTeamModelLimits:
@@ -224,7 +262,9 @@ def borrowing_team_model_limits(user_api_key_dict: UserAPIKeyAuth, model: RateLi
     )
     if limits == NO_BORROWING or not dynamic_rate_limiter_covers(model.group):
         return NO_BORROWING
-    return limits
+    return BorrowingTeamModelLimits(
+        tpm=limits.tpm, rpm=limits.rpm, max_borrow_multiple=team_model_limit_max_borrow_multiple(user_api_key_dict)
+    )
 
 
 def _resolve_media_models(router: "Router | None", model: str, team_id: str | None) -> tuple[str, ...]:
