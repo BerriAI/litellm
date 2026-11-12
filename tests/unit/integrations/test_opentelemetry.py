@@ -6390,7 +6390,7 @@ class TestOpenTelemetryMetricAttributeFiltering(unittest.TestCase):
             response_obj = json.load(f)
         return kwargs, response_obj
 
-    def _record(self, attributes):
+    def _record(self, attributes, requester_metadata=None):
         """Run a real success hook with metrics enabled and return the reader."""
         metric_reader = InMemoryMetricReader()
         meter_provider = MeterProvider(metric_readers=[metric_reader])
@@ -6406,13 +6406,15 @@ class TestOpenTelemetryMetricAttributeFiltering(unittest.TestCase):
         otel.tracer = tracer_provider.get_tracer(__name__)
 
         kwargs, response_obj = self._load_fixtures()
+        if requester_metadata is not None:
+            kwargs["standard_logging_object"]["metadata"]["requester_metadata"] = requester_metadata
         start = datetime.utcnow()
         end = start + timedelta(seconds=1)
         otel._handle_success(kwargs, response_obj, start, end)
         return metric_reader
 
-    def _keysets(self, reader, metric_name):
-        """Attribute-key sets, one per recorded data point of `metric_name`."""
+    def _attributes(self, reader, metric_name):
+        """Attribute dicts, one per recorded data point of `metric_name`."""
         deadline = time.time() + self.POLL_TIMEOUT
         while time.time() < deadline:
             data = reader.get_metrics_data()
@@ -6421,12 +6423,14 @@ class TestOpenTelemetryMetricAttributeFiltering(unittest.TestCase):
                     for sm in rm.scope_metrics:
                         for m in sm.metrics:
                             if m.name == metric_name:
-                                return [
-                                    set(dp.attributes.keys())
-                                    for dp in m.data.data_points
-                                ]
+                                return [dict(dp.attributes) for dp in m.data.data_points]
             time.sleep(self.POLL_INTERVAL)
         return None
+
+    def _keysets(self, reader, metric_name):
+        """Attribute-key sets, one per recorded data point of `metric_name`."""
+        attributes = self._attributes(reader, metric_name)
+        return None if attributes is None else [set(attrs) for attrs in attributes]
 
     def test_exclude_list_strips_high_cardinality_keys_across_metrics(self):
         """The bug: high-cardinality metadata/hidden_params explode metric
@@ -6466,6 +6470,61 @@ class TestOpenTelemetryMetricAttributeFiltering(unittest.TestCase):
         self.assertTrue(token_keysets, "token-usage metric was not recorded")
         for keys in token_keysets:
             self.assertEqual(keys - {"gen_ai.token.type"}, allowed)
+
+    def test_include_list_deep_metadata_path_emits_only_that_value(self):
+        """A metadata.<field>.<path> entry stamps the scalar at that path as its own
+        attribute, so a bounded value inside requester_metadata can be kept on
+        metrics without the per-request blob around it. Containers and missing
+        paths are skipped rather than serialized."""
+        include = [
+            "gen_ai.request.model",
+            "metadata.requester_metadata.component",
+            "metadata.requester_metadata.context.platform",
+            "metadata.requester_metadata.context",
+            "metadata.requester_metadata.missing",
+        ]
+        reader = self._record(
+            OTELMetricAttributeFilter(include_list=include),
+            requester_metadata={
+                "component": "gateway",
+                "context": {"platform": "aws", "traceparent": "00-abc-def-01"},
+                "traceparent": "00-abc-def-01",
+            },
+        )
+
+        duration_attributes = self._attributes(reader, self.DURATION_METRIC)
+        self.assertTrue(duration_attributes, "duration metric was not recorded")
+        for attrs in duration_attributes:
+            self.assertEqual(
+                {k: v for k, v in attrs.items() if k != self.RETAINED_LOW_CARDINALITY_KEY},
+                {
+                    "metadata.requester_metadata.component": "gateway",
+                    "metadata.requester_metadata.context.platform": "aws",
+                },
+            )
+            self.assertIn(self.RETAINED_LOW_CARDINALITY_KEY, attrs)
+
+    def test_deep_metadata_path_rejected_in_exclude_list(self):
+        with self.assertRaises(ValueError):
+            OpenTelemetry(
+                config=OpenTelemetryConfig(
+                    exporter="console",
+                    attributes=OTELMetricAttributeFilter(
+                        exclude_list=["metadata.requester_metadata.traceparent"]
+                    ),
+                )
+            )
+
+    def test_deep_path_under_unknown_metadata_field_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            OpenTelemetry(
+                config=OpenTelemetryConfig(
+                    exporter="console",
+                    attributes=OTELMetricAttributeFilter(
+                        include_list=["metadata.does_not_exist.component"]
+                    ),
+                )
+            )
 
     def test_no_filter_preserves_high_cardinality_keys(self):
         """Backward compatibility: with no attributes config, every
