@@ -6,6 +6,7 @@ Core tests to validate that priority weights are respected (0.9/0.1) instead of 
 
 import asyncio
 import time
+from collections.abc import Mapping
 from datetime import datetime, timedelta
 from typing import Final
 from unittest.mock import AsyncMock, patch
@@ -1831,6 +1832,7 @@ def _borrowing_handler(
     saturation_threshold: float = 0.5,
     model_group_alias: dict[str, str] | None = None,
     splits: bool = False,
+    rpm: int = 100,
 ) -> _PROXY_DynamicRateLimitHandlerV3:
     from litellm.types.utils import PriorityReservationSettings
 
@@ -1850,7 +1852,7 @@ def _borrowing_handler(
         model_list=[
             {
                 "model_name": "shared-model",
-                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "k", "api_base": "b", "tpm": 1000, "rpm": 100},
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "k", "api_base": "b", "tpm": 1000, "rpm": rpm},
             },
             {
                 "model_name": "other-model",
@@ -2232,3 +2234,73 @@ async def test_a_team_active_on_another_model_does_not_shrink_this_models_shares
     await _check(handler, _class_team("team-b"), saturation=0.0, priority="interactive", model="other-model")
     await _burn(handler, _class_team("team-a"), "interactive", 700)
     await _check(handler, _class_team("team-a"), saturation=0.7, priority="interactive")
+
+
+class _UnavailableRegistry:
+    async def touch(self, model: str, team_id: str, priority: str, window: int) -> Mapping[str, str]:
+        raise ConnectionError("redis is down")
+
+
+@pytest.mark.asyncio
+async def test_a_registry_failure_falls_back_to_the_class_pool_instead_of_skipping_the_limits(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    handler.active_teams = _UnavailableRegistry()  # pyright: ignore[reportAttributeAccessIssue]  # injected failing registry
+    await _burn(handler, _class_team("team-a"), "interactive", 650)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _class_team("team-a"), saturation=0.65, priority="interactive")
+    assert exc.value.headers is not None
+    assert "rate_limited_by" not in exc.value.headers
+    assert "Priority-based rate limit exceeded" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_one_team_using_keys_of_two_priorities_still_spends_one_share(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
+    await _burn(handler, _class_team("team-b"), "interactive", 20)
+    await _burn(handler, _class_team("team-a", "interactive"), "interactive", 300)
+    await _burn(handler, _class_team("team-a", "batch"), "batch", 300)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _class_team("team-a", "batch"), saturation=0.62, priority="batch")
+    _held_to_class_share(exc.value)
+    assert "Team: team-a, Priority: batch, Active teams in class: 1, Active classes: 2, " in str(exc.value.detail)
+    assert "Team share: 400, Remaining: 0," in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_a_share_smaller_than_one_request_still_lets_each_team_send_one(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True, rpm=2)
+    for team in ("team-a", "team-b", "team-c"):
+        await handler.active_teams.touch("shared-model", team, "interactive", 60)
+    await _check(handler, _class_team("team-d"), saturation=0.9, priority="interactive")
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _class_team("team-d"), saturation=0.9, priority="interactive")
+    assert exc.value.headers is not None
+    assert exc.value.headers["rate_limited_by"] == "priority_class_share_saturated"
+    assert exc.value.headers["rate_limit_type"] == "requests"
+
+
+@pytest.mark.asyncio
+async def test_a_websocket_turn_is_held_to_the_class_share_once_the_model_saturates(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=False, splits=True, saturation_threshold=0.1)
+    await _burn(handler, _class_team("team-a"), "interactive", 20)
+    await _burn(handler, _class_team("team-b"), "interactive", 600)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await handler.enforce_token_limits_for_frame(
+            user_api_key_dict=_class_team("team-b"), requested_model="shared-model"
+        )
+    _held_to_class_share(exc.value)
+    await handler.enforce_token_limits_for_frame(
+        user_api_key_dict=_class_team("team-a"), requested_model="shared-model"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_websocket_turn_ignores_the_class_share_while_the_split_is_off(monkeypatch: pytest.MonkeyPatch):
+    handler = _borrowing_handler(monkeypatch, borrows=False, saturation_threshold=0.1)
+    await _burn(handler, _class_team("team-a"), "interactive", 20)
+    await _burn(handler, _class_team("team-b"), "interactive", 600)
+    await handler.enforce_token_limits_for_frame(
+        user_api_key_dict=_class_team("team-b"), requested_model="shared-model"
+    )

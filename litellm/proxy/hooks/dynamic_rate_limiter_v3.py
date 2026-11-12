@@ -363,9 +363,18 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         ):
             return None
         priority_class: Final = self._priority_class(priority)
-        members: Final = await self.active_teams.touch(
-            model, user_api_key_dict.team_id, priority_class, self.v3_limiter.window_size
-        )
+        try:
+            members: Final = await self.active_teams.touch(
+                model, user_api_key_dict.team_id, priority_class, self.v3_limiter.window_size
+            )
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                "Active team registry unavailable for %s, holding team %s to the class pool: %s",
+                model,
+                user_api_key_dict.team_id,
+                e,
+            )
+            return None
         return team_share(priority_class, members, normalized_weights, _get_priority_settings().default_priority)
 
     def _create_priority_based_descriptors(
@@ -404,14 +413,15 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
         rate_limit_config: Final[RateLimitDescriptorRateLimitObject] = {}
         weight: Final = priority_weight if share is None else share.fraction
+        floor: Final = 0 if share is None else 1
 
         # Apply priority weight to model limits
         if model_group_info.tpm is not None:
-            reserved_tpm: Final = int(model_group_info.tpm * weight)
+            reserved_tpm: Final = max(floor, int(model_group_info.tpm * weight))
             rate_limit_config["tokens_per_unit"] = reserved_tpm
 
         if model_group_info.rpm is not None:
-            reserved_rpm: Final = int(model_group_info.rpm * weight)
+            reserved_rpm: Final = max(floor, int(model_group_info.rpm * weight))
             rate_limit_config["requests_per_unit"] = reserved_rpm
 
         if rate_limit_config:
@@ -420,7 +430,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             descriptors.append(
                 RateLimitDescriptor(
                     key="priority_model" if share is None else PRIORITY_CLASS_SHARE_AT_SATURATION,
-                    value=priority_key if share is None else f"{priority_key}:{user_api_key_dict.team_id}",
+                    value=priority_key if share is None else f"{model}:{user_api_key_dict.team_id}",
                     rate_limit=rate_limit_config,
                 )
             )
@@ -515,32 +525,44 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
     async def enforce_token_limits_for_frame(
         self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None
     ) -> None:
-        """Hold a Responses WebSocket turn to the team's share once the model saturates, like the regular limiter does."""
+        """Hold a Responses WebSocket turn to the team's shares once the model saturates, like the regular limiter does."""
         if requested_model is None:
             return
+        model_group_info: Final = self.llm_router.registry().group(requested_model)
+        if model_group_info is None:
+            return
+        priority: Final = self._get_priority_from_user_api_key_dict(user_api_key_dict)
+        share: Final = await self._team_class_share(
+            requested_model, user_api_key_dict, priority, self._normalize_priority_weights(model_group_info)
+        )
+        share_descriptors: Final = (
+            ()
+            if share is None
+            else tuple(
+                self._create_priority_based_descriptors(
+                    model=requested_model, user_api_key_dict=user_api_key_dict, priority=priority, share=share
+                )
+            )
+        )
         team_limit_descriptor: Final = self._create_borrowing_team_model_limit_descriptor(
             model=requested_model, user_api_key_dict=user_api_key_dict
         )
-        model_group_info: Final = self.llm_router.registry().group(requested_model)
-        if team_limit_descriptor is None or model_group_info is None:
+        descriptors: Final = share_descriptors + ((team_limit_descriptor,) if team_limit_descriptor else ())
+        if not descriptors:
             return
         saturation: Final = await self._check_model_saturation(requested_model, model_group_info)
         if saturation < _get_priority_settings().saturation_threshold:
             return
-        tpm_windows: Final = _socket_turn_tpm_windows((team_limit_descriptor,))
+        tpm_windows: Final = _socket_turn_tpm_windows(descriptors)
         response: Final = await self.v3_limiter.should_rate_limit(
             tpm_windows, parent_otel_span=user_api_key_dict.parent_otel_span, read_only=True, skip_parallel_check=True
         )
         over_limit: Final = next((s for s in response["statuses"] if s["code"] == "OVER_LIMIT"), None)
         if over_limit is None:
             return
-        raise self._team_limit_error(
-            requested_model,
-            over_limit,
-            saturation,
-            self._get_priority_from_user_api_key_dict(user_api_key_dict),
-            user_api_key_dict,
-        )
+        if over_limit["descriptor_key"] == PRIORITY_CLASS_SHARE_AT_SATURATION and share is not None:
+            raise self._class_share_error(requested_model, over_limit, saturation, priority, user_api_key_dict, share)
+        raise self._team_limit_error(requested_model, over_limit, saturation, priority, user_api_key_dict)
 
     def _create_model_tracking_descriptor(
         self,

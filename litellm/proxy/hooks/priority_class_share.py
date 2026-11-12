@@ -11,8 +11,10 @@ from typing import Final, Protocol
 
 from pydantic import TypeAdapter
 
+from litellm._internal_context import with_service_target
 from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET
 
 ACTIVE_TEAMS_KEY_PREFIX: Final = "dynamic_rate_limiter:active_teams:"
 MEMBER_SEPARATOR: Final = "\x1f"
@@ -72,6 +74,7 @@ class ActiveTeamRegistry:
         self._local: _LocalMembers = InMemoryCache()
         self._now = time_provider
 
+    @with_service_target(RATE_LIMITS_TARGET)
     async def touch(self, model: str, team_id: str, priority: str, window: int) -> Mapping[str, str]:
         """Record ``team_id`` as active on ``model`` and return every team active on it, the caller included."""
         key: Final = f"{ACTIVE_TEAMS_KEY_PREFIX}{model}"
