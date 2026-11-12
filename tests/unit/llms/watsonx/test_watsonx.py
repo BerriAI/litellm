@@ -471,6 +471,69 @@ async def test_watsonx_async_streamed_tool_choice_reaches_the_stream_endpoint(mo
     assert chunks[-1].choices[0].finish_reason == "tool_calls"
 
 
+async def _call_watsonx_rejecting_with(is_async: bool, stream: bool, body: bytes, charset: str) -> None:
+    transport: Final = httpx.MockTransport(
+        lambda request: httpx.Response(400, content=body, headers={"content-type": f"application/json; charset={charset}"})
+    )
+    messages: Final = [{"role": "user", "content": "Summarize the attached contract."}]
+    if is_async:
+        await litellm.acompletion(
+            model="watsonx/ibm/granite-3-3-8b-instruct",
+            messages=messages,
+            stream=stream,
+            api_base="https://us-south.ml.cloud.ibm.com",
+            token="mock-watsonx-token",
+            project_id="mock-project-id",
+            client=AsyncHTTPHandler(transport=transport),
+        )
+        return
+    with httpx.Client(transport=transport) as http_client:
+        completion(
+            model="watsonx/ibm/granite-3-3-8b-instruct",
+            messages=messages,
+            stream=stream,
+            api_base="https://us-south.ml.cloud.ibm.com",
+            token="mock-watsonx-token",
+            project_id="mock-project-id",
+            client=HTTPHandler(client=http_client),
+        )
+
+
+@pytest.mark.parametrize("is_async", [pytest.param(True, id="async"), pytest.param(False, id="sync")])
+@pytest.mark.parametrize("stream", [pytest.param(True, id="streamed"), pytest.param(False, id="buffered")])
+@pytest.mark.parametrize(
+    ("error_body", "charset", "expected_error"),
+    [
+        pytest.param(
+            '{"errors": [{"code": "invalid_input_argument", "message": "This model\'s maximum context length is'
+            ' 131072 tokens. However, you requested 140000 tokens."}], "status_code": 400}',
+            "utf-8",
+            litellm.ContextWindowExceededError,
+            id="context-window",
+        ),
+        pytest.param(
+            '{"errors": [{"code": "invalid_input_argument", "message": "Requête refusée : paramètre invalide"}],'
+            ' "status_code": 400}',
+            "iso-8859-1",
+            litellm.BadRequestError,
+            id="latin-1-body",
+        ),
+    ],
+)
+async def test_a_watsonx_rejection_maps_to_the_same_error_whether_or_not_it_streams(
+    is_async: bool,
+    stream: bool,
+    error_body: str,
+    charset: str,
+    expected_error: type[litellm.BadRequestError],
+) -> None:
+    with pytest.raises(expected_error) as raised:
+        await _call_watsonx_rejecting_with(is_async, stream, error_body.encode(charset), charset)
+
+    assert type(raised.value) is expected_error, str(raised.value)
+    assert error_body in str(raised.value), str(raised.value)
+
+
 @pytest.mark.usefixtures("watsonx_env_vars", "_vcr_outcome_gate", "setup_and_teardown")
 def test_watsonx_chat_completions_endpoint_space_id(monkeypatch, watsonx_chat_completion_call):
     my_fake_space_id = "xxx-xxx-xxx-xxx-xxx"

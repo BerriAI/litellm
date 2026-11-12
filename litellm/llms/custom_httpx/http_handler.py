@@ -541,12 +541,9 @@ def realtime_ssl_for_url(url: str) -> bool | str | ssl.SSLContext | None:
     return unverified
 
 
-def mask_sensitive_info(error_message):
+def mask_sensitive_info(error_message: str) -> str:
     # Find the start of the key parameter
-    if isinstance(error_message, str):
-        key_index: Final = error_message.find("key=")
-    else:
-        return error_message
+    key_index: Final = error_message.find("key=")
 
     # If key is found
     if key_index != -1:
@@ -571,6 +568,13 @@ def _safe_get_response_text(response: httpx.Response) -> str:
         return response.text
     except Exception:
         return ""
+
+
+def _decoded_body(body: bytes, charset: str | None) -> str:
+    try:
+        return body.decode(charset or "utf-8")
+    except (LookupError, UnicodeError):
+        return body.decode("utf-8", errors="replace")
 
 
 def header_value(headers: Mapping[str, str], name: str) -> str | None:
@@ -608,9 +612,9 @@ def _raise_masked_sync_error(e: httpx.HTTPStatusError, stream: bool) -> NoReturn
     if stream:
         try:
             _body: Final = mask_sensitive_info(
-                _safe_read_response(
-                    e.response,
-                    timeout=_STREAMING_ERROR_BODY_READ_TIMEOUT_SECONDS,
+                _decoded_body(
+                    _safe_read_response(e.response, timeout=_STREAMING_ERROR_BODY_READ_TIMEOUT_SECONDS),
+                    e.response.charset_encoding,
                 )
             )
             raise MaskedHTTPStatusError(e, message=_body, text=_body) from None
@@ -650,9 +654,9 @@ async def _raise_masked_async_error(e: httpx.HTTPStatusError, stream: bool) -> N
     if stream:
         try:
             _body: Final = mask_sensitive_info(
-                await _safe_aread_response(
-                    e.response,
-                    timeout=_STREAMING_ERROR_BODY_READ_TIMEOUT_SECONDS,
+                _decoded_body(
+                    await _safe_aread_response(e.response, timeout=_STREAMING_ERROR_BODY_READ_TIMEOUT_SECONDS),
+                    e.response.charset_encoding,
                 )
             )
             raise MaskedHTTPStatusError(e, message=_body, text=_body) from None

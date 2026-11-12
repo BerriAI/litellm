@@ -116,8 +116,8 @@ def _gemini_stream_that_fails_to_open(sync: bool) -> Callable[..., CustomStreamW
     body: Final = b'{"error": {"code": 400, "message": "gemini said no", "status": "INVALID_ARGUMENT"}}'
     sync_error: Final = MaskedHTTPStatusError(
         httpx.HTTPStatusError("gemini said no", request=request, response=httpx.Response(400, request=request)),
-        message=body,  # pyright: ignore[reportArgumentType]  # the sync stream handler passes the raw body bytes
-        text=body,  # pyright: ignore[reportArgumentType]  # the sync stream handler passes the raw body bytes
+        message=body.decode(),
+        text=body.decode(),
     )
 
     def make_sync_call(client: object) -> NoReturn:
